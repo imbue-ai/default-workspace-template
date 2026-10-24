@@ -16,7 +16,10 @@
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
  * ``shell:capabilities``, ``shell:location``, ``shell:focused``, ``shell:open``, ``shell:start-with-text``,
- * ``shell:message``, and ``shell:open-link``. Messages cross through ``relay.ts``.
+ * ``shell:message``, and ``shell:open-link``. A widget's frame (``widgetFrames.ts``) is no window's: of its messages
+ * this layer takes the ones that ask the shell to do something (an open, a text, a message, a link) for the app
+ * the widget frames layer names, and drops the ones about a window (a location, a focus, capabilities). Messages
+ * cross through ``relay.ts``.
  *
  * The phone layout mounts differently (plan-phone-interface.md): under the ``shown`` policy only the shown
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
@@ -38,6 +41,7 @@ import {
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
   SHELL_START_WITH_TEXT,
+  SHELL_WIDGET_PLACEMENT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { windowPageZIndex } from "../geometry/stacking";
@@ -134,6 +138,8 @@ export class LivePagesLayer implements PageDriver {
   /** The shell's layout revision the pages last followed: an independent window's stored path arrives with it. */
   private followedLayoutLoadsRevision = 0;
   private mountPolicy: MountPolicy = { kind: "all" };
+  /** Whose widget a frame that is no page shows, or null; set while the widget frames layer is up. */
+  private widgetAppOf: ((frame: HTMLIFrameElement) => string | null) | null = null;
 
   constructor(
     private readonly host: HTMLElement,
@@ -151,9 +157,20 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
     setChildFrameMessageHandler(SHELL_MESSAGE, (frame, payload) => this.takeMessage(frame, payload));
     setChildFrameMessageHandler(SHELL_OPEN_LINK, (frame, payload) => this.takeOpenLink(frame, payload));
+    setChildFrameMessageHandler(SHELL_WIDGET_PLACEMENT, (frame, payload) => this.takeWidgetPlacement(frame, payload));
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
+  }
+
+  /** Name the widget frames' apps, so what a widget's page asks of the shell is done for its app. */
+  setWidgetFrameResolver(resolver: ((frame: HTMLIFrameElement) => string | null) | null): void {
+    this.widgetAppOf = resolver;
+  }
+
+  /** The app a frame the shell created belongs to: a page's window's, or a widget's; null for any other frame. */
+  private appOfFrame(frame: HTMLIFrameElement): string | null {
+    return this.pageOfFrame(frame)?.app ?? this.widgetAppOf?.(frame) ?? null;
   }
 
   /** Set which pages live; applied by the next reconcile. */
@@ -598,10 +615,12 @@ export class LivePagesLayer implements PageDriver {
 
   /** ``shell:focused`` from a page: its window is raised. A page that is not shown (minimized, pulled out into the
    *  chrome's own window, or being pulled out) cannot have been chosen by the user, and a raise would bring its
-   *  window back onto the desktop. */
+   *  window back onto the desktop. A taskbar widget's open popover closes: the press that focused the page was one
+   *  elsewhere, which the shell's document never hears. */
   private takeFocused(frame: HTMLIFrameElement): void {
     const page = this.pageOfFrame(frame);
     if (page === undefined || !this.isShown(page)) return;
+    if (this.store.getState().trayPopoverApp !== null) this.store.closeTrayPopover();
     this.store.raiseWindow(page.windowId);
   }
 
@@ -622,7 +641,7 @@ export class LivePagesLayer implements PageDriver {
   /** The text a page's text-carrying message holds: null when the frame is not one the shell created, or when
    *  the payload carries no string text (warned, with the message's type). */
   private textFromPage(frame: HTMLIFrameElement, payload: Record<string, unknown>, type: string): string | null {
-    if (this.pageOfFrame(frame) === undefined) return null;
+    if (this.appOfFrame(frame) === null) return null;
     const text = payload.text;
     if (typeof text !== "string") {
       console.warn(`[si] ${type} ignored: it carried no text (${JSON.stringify(payload)})`);
@@ -635,39 +654,49 @@ export class LivePagesLayer implements PageDriver {
    *  ``open:file``), delivered to the apps registered for its type, with the page's app as its sender. The frame has
    *  to be one the shell created. */
   private takeMessage(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    const page = this.pageOfFrame(frame);
-    if (page === undefined) return;
+    const app = this.appOfFrame(frame);
+    if (app === null) return;
     const message = payload.message;
     if (message === null || typeof message !== "object" || typeof (message as { type?: unknown }).type !== "string") {
       console.warn(`[si] shell:message ignored: it carried no message with a type (${JSON.stringify(payload)})`);
       return;
     }
-    void this.store.relayEmbedderMessage(message as EmbedderMessage, page.app);
+    void this.store.relayEmbedderMessage(message as EmbedderMessage, app);
   }
 
   /** ``shell:open-link {url}`` from a page: a link that is not the page's own (a local URL, a ``file:`` URL, another
    *  app's address or another workspace's, an external web, ``mailto:`` or ``tel:`` link), which the shell opens where
    *  ``openLink`` says, or refuses with a notice. The frame has to be one the shell created. */
   private takeOpenLink(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
-    const page = this.pageOfFrame(frame);
-    if (page === undefined) return;
+    const app = this.appOfFrame(frame);
+    if (app === null) return;
     const url = payload.url;
     if (typeof url !== "string" || url === "") {
       console.warn(`[si] shell:open-link ignored: it carried no url (${JSON.stringify(payload)})`);
       return;
     }
-    void this.store.openLink(url, window.location.host, page.app);
+    void this.store.openLink(url, window.location.host, app);
+  }
+
+  /** A page of an app asked to put the app's widget on the desktop or in the taskbar, for this client. */
+  private takeWidgetPlacement(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
+    const app = this.appOfFrame(frame);
+    const { placement } = payload;
+    if (app === null || (placement !== "desktop" && placement !== "tray" && placement !== "toolbar")) return;
+    void this.store.placeWidgetFromApp(app, placement);
   }
 
   private takeOpen(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
     const page = this.pageOfFrame(frame);
-    if (page === undefined) return;
+    const widgetApp = page === undefined ? (this.widgetAppOf?.(frame) ?? null) : null;
+    if (page === undefined && widgetApp === null) return;
     const path = payload.path;
     if (typeof path !== "string") {
       console.warn(`[si] shell:open ignored: it carried no path (${JSON.stringify(payload)})`);
       return;
     }
     const ifPresent = payload.ifPresent === "new" ? "new" : "focus";
-    void this.store.openPathFromWindow(page.windowId, path, ifPresent);
+    if (page !== undefined) void this.store.openPathFromWindow(page.windowId, path, ifPresent);
+    else if (widgetApp !== null) void this.store.openPathFromApp(widgetApp, path, ifPresent);
   }
 }

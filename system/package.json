@@ -9,7 +9,8 @@
     "apps/chat/frontend",
     "apps/getting_started/frontend",
     "apps/files/frontend",
-    "apps/routines/frontend"
+    "apps/routines/frontend",
+    "apps/usage_dashboard/frontend"
   ],
   "scripts": {
     "prebuild": "bash scripts/fetch_mngr_assets.sh",

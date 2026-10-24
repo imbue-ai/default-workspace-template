@@ -38,6 +38,23 @@
  * A call that names a frame of the page stays the browser's, and one that names ``_self`` follows
  * the rule for a plain click: the page's own origin navigates the page, any other link goes to the
  * shell.
+ *
+ * A widget's page is dragged by a press anywhere on it (``widgetDragTracker``): once a primary press travels
+ * ``WIDGET_DRAG_THRESHOLD_PX``, the page reports the drag to the shell as ``shell:widget-drag`` (start, every move,
+ * then end or cancel), in screen coordinates, which stay true while the shell moves the frame under the pointer;
+ * the click that would end it is swallowed. A press that never travels that far is the page's click, and a press
+ * on a control (a button, a field, an element marked ``data-no-drag``) is never a drag.
+ *
+ * A widget's page gives an element a tooltip with ``data-widget-tooltip`` (``widgetTooltipTracker``): the page's own
+ * bubble would be clipped by its small frame, so the page says which element the pointer entered, with its text and
+ * where it is in the frame, as ``shell:widget-tooltip``, and the shell shows the workspace's tooltip there; leaving
+ * every such element, or pressing, sends the same type with no text.
+ *
+ * A right-click on a widget's page asks the shell for the widget's menu (``shell:widget-menu``) rather than opening
+ * the browser's. In the taskbar (mode ``tray``, or ``toolbar`` in the taskbar's row) a widget does not move, and a
+ * click on it is not the page's: it asks the shell to open or close the widget's popover (``shell:widget-press``), and
+ * Escape on it asks the shell to close the popover (``shell:widget-dismiss``), since the page then holds the keyboard;
+ * a page in the taskbar needs no code for any.
  */
 
 /** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
@@ -73,6 +90,33 @@ export const SHELL_MESSAGE = "shell:message";
  *  ``<label>.localhost`` host or registered port it is, else the workspace's browser), the file in Files, an
  *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
+/** Shell to app, to a widget only: how the client draws it (``WidgetMode``), after every handshake and on a change. */
+export const SHELL_WIDGET_MODE = "shell:widget-mode";
+/** App to shell, from a widget only: the CSS pixel size of its content in its current mode. */
+export const SHELL_WIDGET_SIZE = "shell:widget-size";
+/** App to shell, from a widget only: whether it has nothing to show, so the shell draws nothing for it. */
+export const SHELL_WIDGET_HIDDEN = "shell:widget-hidden";
+/** App to shell, from a widget only: a press on the page is dragging the widget (see the module docs). */
+export const SHELL_WIDGET_DRAG = "shell:widget-drag";
+
+/** App to shell, from a widget only: the tooltip of the element the pointer is over, or none (see the module docs). */
+export const SHELL_WIDGET_TOOLTIP = "shell:widget-tooltip";
+/** App to shell, from a widget in the taskbar only: a click on the page, which opens or closes its popover. */
+export const SHELL_WIDGET_PRESS = "shell:widget-press";
+/** App to shell, from a widget only: a right-click on the page at ``x``, ``y`` (the frame's pixels), which opens the
+ *  shell's menu for the widget. */
+export const SHELL_WIDGET_MENU = "shell:widget-menu";
+/** App to shell, from a widget only: Escape was pressed on the page, which closes the widget's popover if it is
+ *  open. */
+export const SHELL_WIDGET_DISMISS = "shell:widget-dismiss";
+/** App to shell, from any page of an app that declares a widget: put the app's widget on the desktop, in the taskbar's
+ *  tray or in its row, for this client, as its menu's Move items do (app-widgets plan section 4.10). */
+export const SHELL_WIDGET_PLACEMENT = "shell:widget-placement";
+/** The attribute a widget page's element carries its tooltip's text in. */
+export const WIDGET_TOOLTIP_ATTRIBUTE = "data-widget-tooltip";
+
+/** How far a press on a widget's page travels before it is a drag rather than a click, in CSS pixels. */
+export const WIDGET_DRAG_THRESHOLD_PX = 4;
 
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
 export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -139,17 +183,31 @@ export function hasWorkspaceCoordinate(host: string): boolean {
   return host.split(".").some((label) => WORKSPACE_COORDINATE_LABEL.test(label));
 }
 
+/** What frames the page: a window, or a widget on the desktop (app-widgets plan section 6). */
+export type ShellSurface = "window" | "widget";
+
+/** How the client draws a widget: in full, as its one-line pill, in the taskbar's tray, or in the taskbar's row
+ *  among the windows' entries (each only for a page the manifest says draws that form; app-widgets plan section
+ *  4.10). */
+export type WidgetMode = "expanded" | "collapsed" | "tray" | "toolbar";
+
+/** Where a client draws an app's widget: on the desktop, in the taskbar's tray, or in the taskbar's row. */
+export type WidgetPlacement = "desktop" | "tray" | "toolbar";
+
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
  * the window belongs to, and the path the window is at (desktop-interface contracts.md section
  * 7). The client id is required; a field the shell does not send, a page reads as "".
+ * ``surface`` says whether that frame is a window or a widget.
  */
 export interface ShellHandshake {
   clientId: string;
+  /** The window's id; empty for a widget, which has none. */
   windowId: string;
   desktopId: string;
   app: string;
   path: string;
+  surface: ShellSurface;
 }
 
 /**
@@ -173,6 +231,8 @@ export interface ShellConnectionHandlers {
   onHidden?: () => void;
   onCloseRequest?: () => void;
   onNavigate?: (path: string) => void;
+  /** A widget's mode, after every handshake and whenever the client changes it; never sent to a window. */
+  onWidgetMode?: (mode: WidgetMode) => void;
   capabilities?: ShellCapabilities;
 }
 
@@ -181,9 +241,11 @@ export interface ShellConnection {
   readonly isFramed: boolean;
   /** Whether a shell frames this page: its handshake has arrived. */
   hasShell(): boolean;
-  /** Tell the shell this page received focus. */
+  /** What frames this page, as the last handshake said; a window until one arrives. */
+  surface(): ShellSurface;
+  /** Tell the shell this page received focus; nothing from a widget. */
   focused(): void;
-  /** Report where this page is now (a path under the app's origin) and what it is called. */
+  /** Report where this page is now (a path under the app's origin) and what it is called; nothing from a widget. */
   location(path: string, title: string): void;
   /** Ask the shell to open a page of this app at a path beside this one. */
   openPath(path: string, ifPresent: OpenIfPresent): void;
@@ -198,6 +260,13 @@ export interface ShellConnection {
    *  URL in Files, or an external web, ``mailto:``, ``tel:`` or custom-scheme link in the app registered for it, else
    *  outside the workspace. */
   openLink(url: string): void;
+  /** Tell the shell how big a widget's content is in its current mode, in CSS pixels; nothing from a window. */
+  widgetSize(width: number, height: number): void;
+  /** Tell the shell a widget has nothing to show (true) or has again (false); nothing from a window. */
+  widgetHidden(isHidden: boolean): void;
+  /** Ask the shell to put this app's widget on the desktop, in the taskbar's tray or in its row, for this client; the
+   *  shell does so only for an app that declares a widget (and, in the taskbar, one whose page draws that form). */
+  placeWidget(placement: WidgetPlacement): void;
   /** Stop listening to the shell. */
   disconnect(): void;
 }
@@ -212,7 +281,7 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path } = data;
+  const { clientId, windowId, desktopId, app, path, surface } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -220,7 +289,12 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     desktopId: optionalString(desktopId),
     app: optionalString(app),
     path: optionalString(path),
+    surface: surface === "widget" ? "widget" : "window",
   };
+}
+
+function readWidgetMode(value: unknown): WidgetMode | null {
+  return value === "expanded" || value === "collapsed" || value === "tray" || value === "toolbar" ? value : null;
 }
 
 function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabilities {
@@ -340,6 +414,155 @@ function popupHandedOn(
   return !isExternalUrl(target) || isOnPageCoordinate ? openLink : null;
 }
 
+/** The elements a press on which is never a drag: the page's controls, and anything it marks ``data-no-drag``. */
+const UNDRAGGABLE_SELECTOR = "button, input, textarea, select, [contenteditable], [data-no-drag]";
+
+/** Where a widget drag's press began: in the frame (the page's client pixels) and on the screen. */
+interface WidgetPress {
+  readonly pointerId: number;
+  readonly clientX: number;
+  readonly clientY: number;
+  readonly screenX: number;
+  readonly screenY: number;
+  isDragging: boolean;
+}
+
+/**
+ * Turn presses on a widget's page into drags reported to the shell (see the module docs); ``isWidget`` says whether
+ * a shell frames the page as a widget now. Returns the listeners to add to the page's window, each named by its
+ * event.
+ */
+function widgetDragTracker(
+  isWidget: () => boolean,
+  send: (type: string, payload: Record<string, unknown>) => void,
+): Readonly<Record<string, (event: Event) => void>> {
+  let press: WidgetPress | null = null;
+  let isClickSwallowed = false;
+  const end = (event: PointerEvent, phase: "end" | "cancel"): void => {
+    if (press === null || event.pointerId !== press.pointerId) return;
+    if (press.isDragging) {
+      send(SHELL_WIDGET_DRAG, phase === "end" ? { phase, screenX: event.screenX, screenY: event.screenY } : { phase });
+      isClickSwallowed = phase === "end";
+    }
+    press = null;
+  };
+  return {
+    pointerdown: (event) => {
+      const pointer = event as PointerEvent;
+      isClickSwallowed = false;
+      if (!isWidget() || pointer.button !== PRIMARY_BUTTON || !pointer.isPrimary) return;
+      const target = pointer.target;
+      if (target instanceof Element && target.closest(UNDRAGGABLE_SELECTOR) !== null) return;
+      press = {
+        pointerId: pointer.pointerId,
+        clientX: pointer.clientX,
+        clientY: pointer.clientY,
+        screenX: pointer.screenX,
+        screenY: pointer.screenY,
+        isDragging: false,
+      };
+    },
+    pointermove: (event) => {
+      const pointer = event as PointerEvent;
+      if (press === null || pointer.pointerId !== press.pointerId) return;
+      if (!press.isDragging) {
+        const travel = Math.hypot(pointer.screenX - press.screenX, pointer.screenY - press.screenY);
+        if (travel < WIDGET_DRAG_THRESHOLD_PX) return;
+        press.isDragging = true;
+        // Keep the moves coming once the pointer outruns the frame, as it does at the backdrop's edge.
+        if (pointer.target instanceof Element) pointer.target.setPointerCapture?.(pointer.pointerId);
+        send(SHELL_WIDGET_DRAG, {
+          phase: "start",
+          pressX: press.clientX,
+          pressY: press.clientY,
+          pressScreenX: press.screenX,
+          pressScreenY: press.screenY,
+          screenX: pointer.screenX,
+          screenY: pointer.screenY,
+        });
+        return;
+      }
+      send(SHELL_WIDGET_DRAG, { phase: "move", screenX: pointer.screenX, screenY: pointer.screenY });
+    },
+    pointerup: (event) => end(event as PointerEvent, "end"),
+    pointercancel: (event) => end(event as PointerEvent, "cancel"),
+    // A press on a link would otherwise start the browser's own drag of it, which ends the pointer's events.
+    dragstart: (event) => {
+      if (isWidget()) event.preventDefault();
+    },
+    click: (event) => {
+      if (!isClickSwallowed) return;
+      isClickSwallowed = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+  };
+}
+
+/**
+ * Report the tooltip of the element under the pointer on a widget's page to the shell (see the module docs);
+ * ``isWidget`` says whether a shell frames the page as a widget now. Returns the listeners to add to the page's
+ * window, each named by its event.
+ */
+function widgetTooltipTracker(
+  isWidget: () => boolean,
+  send: (type: string, payload: Record<string, unknown>) => void,
+): Readonly<Record<string, (event: Event) => void>> {
+  let shown: Element | null = null;
+  const hide = (): void => {
+    if (shown === null) return;
+    shown = null;
+    send(SHELL_WIDGET_TOOLTIP, { text: null });
+  };
+  return {
+    mouseover: (event) => {
+      if (!isWidget()) return;
+      const trigger = event.target instanceof Element ? event.target.closest(`[${WIDGET_TOOLTIP_ATTRIBUTE}]`) : null;
+      const text = trigger?.getAttribute(WIDGET_TOOLTIP_ATTRIBUTE) ?? null;
+      if (trigger === null || text === null || text === "") {
+        hide();
+        return;
+      }
+      if (trigger === shown) return;
+      shown = trigger;
+      const box = trigger.getBoundingClientRect();
+      send(SHELL_WIDGET_TOOLTIP, { text, left: box.left, top: box.top, width: box.width, height: box.height });
+    },
+    mouseout: (event) => {
+      if ((event as MouseEvent).relatedTarget === null) hide();
+    },
+    pointerdown: () => hide(),
+  };
+}
+
+/**
+ * Hand a widget page's right-click, and in the taskbar its click, to the shell (see the module docs). Returns the
+ * listeners to add to the page's window, each named by its event.
+ */
+function widgetPressTracker(
+  isWidget: () => boolean,
+  isInTaskbar: () => boolean,
+  send: (type: string, payload: Record<string, unknown>) => void,
+): Readonly<Record<string, (event: Event) => void>> {
+  return {
+    contextmenu: (event) => {
+      if (!isWidget()) return;
+      event.preventDefault();
+      const mouse = event as MouseEvent;
+      send(SHELL_WIDGET_MENU, { x: mouse.clientX, y: mouse.clientY });
+    },
+    keydown: (event) => {
+      if (isWidget() && (event as KeyboardEvent).key === "Escape") send(SHELL_WIDGET_DISMISS, {});
+    },
+    click: (event) => {
+      if (!isInTaskbar() || (event as MouseEvent).button !== PRIMARY_BUTTON) return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      send(SHELL_WIDGET_PRESS, {});
+    },
+  };
+}
+
 /**
  * Connect this page to the shell that frames it. Safe to call on a top-level page: nothing
  * arrives, and every send is a no-op, so an app behaves the same visited directly. Once a
@@ -351,6 +574,8 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   const boundWindow = window;
   const isFramed = boundWindow.parent !== boundWindow;
   let hasShell = false;
+  let surface: ShellSurface = "window";
+  let widgetMode: WidgetMode | null = null;
 
   function onMessage(event: MessageEvent): void {
     if (!isFramed || event.source !== boundWindow.parent) return;
@@ -362,7 +587,15 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         const handshake = readHandshake(message);
         if (handshake === null) return;
         hasShell = true;
+        surface = handshake.surface;
         handlers.onHandshake?.(handshake);
+        return;
+      }
+      case SHELL_WIDGET_MODE: {
+        const mode = readWidgetMode(message.mode);
+        if (mode === null || surface !== "widget") return;
+        widgetMode = mode;
+        handlers.onWidgetMode?.(mode);
         return;
       }
       case SHELL_SHOWN:
@@ -403,28 +636,55 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     },
   });
 
+  const isWidget = (): boolean => hasShell && surface === "widget";
+  const isInTaskbar = (): boolean => isWidget() && (widgetMode === "tray" || widgetMode === "toolbar");
+  const dragListeners = widgetDragTracker(() => isWidget() && !isInTaskbar(), send);
+  const tooltipListeners = widgetTooltipTracker(isWidget, send);
+  const pressListeners = widgetPressTracker(isWidget, isInTaskbar, send);
+
   boundWindow.addEventListener("message", onMessage);
   if (isFramed) {
     boundWindow.addEventListener("click", onLinkClick);
     boundWindow.addEventListener("auxclick", onLinkClick);
+    // In the capture phase, so a swallowed click never reaches the page's handlers or the link rule.
+    for (const [type, listener] of Object.entries(dragListeners)) boundWindow.addEventListener(type, listener, true);
+    for (const listeners of [tooltipListeners, pressListeners]) {
+      for (const [type, listener] of Object.entries(listeners)) boundWindow.addEventListener(type, listener, true);
+    }
     boundWindow.open = routedOpen;
   }
   send(SHELL_CAPABILITIES, { navigation: capabilities.navigation, closeChord: capabilities.closeChord });
   return {
     isFramed,
     hasShell: () => hasShell,
-    focused: () => send(SHELL_FOCUSED, {}),
-    location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
+    surface: () => surface,
+    focused: () => {
+      if (surface === "window") send(SHELL_FOCUSED, {});
+    },
+    location: (path: string, title: string) => {
+      if (surface === "window") send(SHELL_LOCATION, { path, title });
+    },
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),
     openLink: (url: string) => send(SHELL_OPEN_LINK, { url }),
+    widgetSize: (width: number, height: number) => {
+      if (surface === "widget") send(SHELL_WIDGET_SIZE, { width, height });
+    },
+    widgetHidden: (isHidden: boolean) => {
+      if (surface === "widget") send(SHELL_WIDGET_HIDDEN, { isHidden });
+    },
+    placeWidget: (placement: WidgetPlacement) => send(SHELL_WIDGET_PLACEMENT, { placement }),
     disconnect: () => {
       boundWindow.removeEventListener("message", onMessage);
       boundWindow.removeEventListener("click", onLinkClick);
       boundWindow.removeEventListener("auxclick", onLinkClick);
+      for (const listeners of [dragListeners, tooltipListeners, pressListeners]) {
+        for (const [type, listener] of Object.entries(listeners))
+          boundWindow.removeEventListener(type, listener, true);
+      }
       if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
     },
   };

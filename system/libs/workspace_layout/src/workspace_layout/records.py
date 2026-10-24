@@ -24,6 +24,8 @@ from workspace_layout.primitives import ShortcutTargetKind
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WallpaperKind
 from workspace_layout.primitives import WallpaperName
+from workspace_layout.primitives import WidgetMode
+from workspace_layout.primitives import WidgetPlacement
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPath
 from workspace_layout.primitives import WindowState
@@ -194,6 +196,27 @@ class EntryPresentation(FrozenModel):
     position: FloatingPosition | None = Field(default=None, description="The floating position; None for the default")
 
 
+class WidgetPosition(FrozenModel):
+    """Where a client keeps a widget it has moved (app-widgets plan section 3.3): the corner of the widget's box
+    nearest the backdrop's corner of the quadrant the point is in, in fractions of the backdrop, so a widget grows
+    away from the edges it sits by."""
+
+    x: float = Field(ge=0.0, le=1.0, description="The anchoring corner's x, 0..1")
+    y: float = Field(ge=0.0, le=1.0, description="The anchoring corner's y, 0..1")
+
+
+class WidgetPresentation(FrozenModel):
+    """How one client shows one widget (app-widgets plan section 3.3); global across desktops."""
+
+    position: WidgetPosition | None = Field(
+        default=None, description="Where it was moved to; None for the default, stacked top right"
+    )
+    mode: WidgetMode = Field(default=WidgetMode.EXPANDED, description="In full, or as its one-line pill")
+    placement: WidgetPlacement = Field(
+        default=WidgetPlacement.DESKTOP, description="On the desktop, in the taskbar's tray, or in the taskbar's row"
+    )
+
+
 class ClientRecord(FrozenModel):
     """What the shell keeps about one browser context (desktop contracts.md section 4.3)."""
 
@@ -206,6 +229,9 @@ class ClientRecord(FrozenModel):
     )
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
+    )
+    widgets: dict[str, WidgetPresentation] = Field(
+        default_factory=dict, description="The client's presentation of each widget, by app name"
     )
     shown_history: tuple[str, ...] = Field(
         default=(),

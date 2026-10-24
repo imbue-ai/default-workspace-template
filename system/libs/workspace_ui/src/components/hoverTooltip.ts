@@ -38,6 +38,13 @@
  * rows below the pointer are what a bubble would cover. ``placeTooltip`` takes
  * an optional ``placement`` for those, defaulting to the shared centered-below
  * behavior everywhere else.
+ *
+ * A trigger the document cannot hear the pointer on -- an element of a page in
+ * a frame of its own, such as a desktop widget's, whose own bubble the small
+ * frame would clip -- is shown through ``showTooltipAtRect`` instead, with the
+ * frame's owner saying where the trigger is, and taken down by
+ * ``hideTooltipAtRect``: the same bubble, delay and placement, under the
+ * trigger's rectangle rather than an element.
  */
 
 import type m from "mithril";
@@ -174,6 +181,9 @@ let bubbleElement: HTMLDivElement | null = null;
 let pendingTimer: number | null = null;
 let pendingFor: Element | null = null;
 let shownFor: Element | null = null;
+// The trigger a scheduled or visible bubble shown by rectangle belongs to (``showTooltipAtRect``), as a key of its
+// source, text and rectangle, so a repeat of the same one does not restart the delay.
+let rectKey: string | null = null;
 let isWired = false;
 // Watches a SHOWN bubble's trigger, and only then: the trigger can lose its
 // text or leave the document while the bubble is up, and neither fires an
@@ -196,6 +206,7 @@ function cancelPending(): void {
     pendingTimer = null;
   }
   pendingFor = null;
+  rectKey = null;
 }
 
 function hideBubble(): void {
@@ -203,6 +214,7 @@ function hideBubble(): void {
     bubbleElement.style.display = "none";
   }
   shownFor = null;
+  rectKey = null;
   shownObserver?.disconnect();
 }
 
@@ -213,9 +225,16 @@ function dropTooltip(): void {
 }
 
 function showBubble(target: Element, text: string, placement: TooltipPlacement): void {
+  const maxWidth = target.getAttribute(MAX_WIDTH_ATTR);
+  placeBubble(target.getBoundingClientRect(), text, placement, maxWidth === null ? null : Number(maxWidth));
+  shownFor = target;
+  watchShownTrigger(target);
+}
+
+/** Put the bubble up with ``text`` at its place for ``anchor``, in viewport pixels. */
+function placeBubble(anchor: TooltipAnchor, text: string, placement: TooltipPlacement, maxWidth: number | null): void {
   const element = ensureBubble();
   element.textContent = text;
-  const maxWidth = target.getAttribute(MAX_WIDTH_ATTR);
   element.style.maxWidth = maxWidth === null ? "" : `${maxWidth}px`;
   // Measure at the natural width: clear the width a previous show fixed, and
   // park the bubble at the origin first, since a stale ``left`` would cap the
@@ -230,19 +249,12 @@ function showBubble(target: Element, text: string, placement: TooltipPlacement):
   // content a fraction short and wraps the last word. Ceil instead.
   const measured = element.getBoundingClientRect();
   const size = { width: Math.ceil(measured.width), height: Math.ceil(measured.height) };
-  const position = placeTooltip(
-    target.getBoundingClientRect(),
-    size,
-    { width: window.innerWidth, height: window.innerHeight },
-    placement,
-  );
+  const position = placeTooltip(anchor, size, { width: window.innerWidth, height: window.innerHeight }, placement);
   // Fix the width so the bubble does not reflow if the viewport later changes.
   element.style.width = `${size.width}px`;
   element.style.left = `${position.left}px`;
   element.style.top = `${position.top}px`;
   element.style.visibility = "visible";
-  shownFor = target;
-  watchShownTrigger(target);
 }
 
 /** The text a trigger is offering right now, or null when it is offering none.
@@ -378,6 +390,29 @@ function wireListeners(): void {
   window.addEventListener("scroll", dropTooltip, true);
   window.addEventListener("resize", dropTooltip);
   window.addEventListener("blur", dropTooltip);
+}
+
+/**
+ * Show ``text`` for a trigger this document cannot hear the pointer on, at ``anchor`` (viewport pixels): after the
+ * usual delay, at the usual place, in the one bubble. ``source`` names who asks (a widget's frame), so a repeat of
+ * the same trigger keeps its delay running and ``hideTooltipAtRect`` takes down only that source's bubble. Any
+ * click, scroll, resize or blur in this document drops it, as it does every tooltip.
+ */
+export function showTooltipAtRect(source: string, anchor: TooltipAnchor, text: string): void {
+  wireListeners();
+  const key = `${source}\n${text}\n${anchor.left},${anchor.top},${anchor.bottom},${anchor.width}`;
+  if (key === rectKey) return;
+  dropTooltip();
+  rectKey = key;
+  pendingTimer = window.setTimeout(() => {
+    pendingTimer = null;
+    placeBubble(anchor, text, "below", null);
+  }, TOOLTIP_DELAY_MS);
+}
+
+/** Take down the bubble ``source`` put up or scheduled with ``showTooltipAtRect``, and nothing else. */
+export function hideTooltipAtRect(source: string): void {
+  if (rectKey !== null && rectKey.startsWith(`${source}\n`)) dropTooltip();
 }
 
 /**

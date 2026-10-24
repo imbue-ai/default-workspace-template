@@ -147,6 +147,53 @@ export interface AppPin {
   readonly default_mode: EntryMode;
 }
 
+/** An app's desktop widget, as its manifest declares it (app-widgets plan section 3.1). */
+export interface AppWidget {
+  /** The widget page: the page of the app the shell frames on the desktop. */
+  readonly path: string;
+  /** Whether the widget shows in a workspace that has made no choice about it. */
+  readonly default_enabled: boolean;
+  /** Whether the page draws a tray form, so a client may put the widget in the taskbar's tray. */
+  readonly tray: boolean;
+  /** Whether the page draws a toolbar form, so a client may put the widget in the taskbar's row. */
+  readonly toolbar: boolean;
+}
+
+/** Where a client keeps a widget it has moved: the corner of the widget's box nearest the backdrop's corner of
+ *  the quadrant the point is in, in fractions of the backdrop, so a widget grows away from the edges it sits by. */
+export interface WidgetPosition {
+  readonly x: number;
+  readonly y: number;
+}
+
+/** Whether one client draws a widget in full or as its one-line pill. */
+export type WidgetMode = "expanded" | "collapsed";
+
+/** Where one client draws a widget: on the desktop, in the taskbar's tray, or in the taskbar's row beside the
+ *  launcher, among the windows' entries (app-widgets plan section 4.10). */
+export type WidgetPlacement = "desktop" | "tray" | "toolbar";
+
+/** How one client shows one widget (app-widgets plan section 3.3); global across desktops. */
+export interface WidgetPresentation {
+  /** Where it was moved to on the desktop; null for the default, stacked top right. */
+  readonly position: WidgetPosition | null;
+  readonly mode: WidgetMode;
+  readonly placement: WidgetPlacement;
+}
+
+/** How a client with no presentation of a widget draws it. */
+export const DEFAULT_WIDGET_PRESENTATION: WidgetPresentation = {
+  position: null,
+  mode: "expanded",
+  placement: "desktop",
+};
+
+/** Whether the workspace shows one app's widget: the stored choice, else the manifest's default. */
+export interface WidgetSwitch {
+  readonly app: string;
+  readonly is_enabled: boolean;
+}
+
 /** One message an app registered for (contracts.md section 2): its type, and either the route the shell posts it to
  *  or the page template the shell shows for it (``null`` for the form it does not use). */
 export interface MessageHandler {
@@ -174,6 +221,7 @@ export interface AppRecord {
   readonly default_shortcut: DefaultShortcut | null;
   readonly launcher_rank: number | null;
   readonly pin: AppPin | null;
+  readonly widget: AppWidget | null;
   /** The messages the app takes, from the Imbue Studio chrome or from other apps' pages, which the shell relays. */
   readonly message_handlers: readonly MessageHandler[];
   readonly is_running: boolean;
@@ -201,6 +249,8 @@ export interface ClientRecord {
   readonly is_connected: boolean;
   /** The client's presentation of each pinned entry, by app name. */
   readonly entries: Readonly<Record<string, EntryPresentation>>;
+  /** The client's presentation of each widget, by app name. */
+  readonly widgets: Readonly<Record<string, WidgetPresentation>>;
   /** What the client's phone layout has shown (plan-phone-interface.md), most recent last: window ids, and
    *  ``SHOWN_HOME`` for the home grid. */
   readonly shown_history: readonly string[];
@@ -245,6 +295,8 @@ export interface WallpaperListing {
 export interface Inventory {
   readonly desktops: readonly Desktop[];
   readonly apps: readonly AppRecord[];
+  /** Whether the workspace shows each declared widget, in registry order. */
+  readonly widgets: readonly WidgetSwitch[];
   readonly clients: readonly ClientRecord[];
   /** What the workspace is called. */
   readonly workspace_name: string;
@@ -485,6 +537,17 @@ function parsePin(raw: unknown): AppPin | null {
   };
 }
 
+function parseWidget(raw: unknown): AppWidget | null {
+  if (raw === null || raw === undefined) return null;
+  const record = asObject(raw, "widget");
+  return {
+    path: asString(record.path, "widget.path"),
+    default_enabled: asBoolean(record.default_enabled ?? true, "widget.default_enabled"),
+    tray: asBoolean(record.tray ?? false, "widget.tray"),
+    toolbar: asBoolean(record.toolbar ?? false, "widget.toolbar"),
+  };
+}
+
 function parseMessageHandler(raw: unknown): MessageHandler {
   const record = asObject(raw, "message handler");
   return {
@@ -512,6 +575,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     default_shortcut: parseDefaultShortcut(record.default_shortcut),
     launcher_rank: typeof rank === "number" && Number.isFinite(rank) ? rank : null,
     pin: parsePin(record.pin),
+    widget: parseWidget(record.widget),
     message_handlers: asArray(record.message_handlers ?? [], "app.message_handlers").map(parseMessageHandler),
     is_running: record.is_running === true,
     share_url: typeof record.share_url === "string" && record.share_url !== "" ? record.share_url : null,
@@ -548,6 +612,41 @@ export function parseEntries(raw: unknown): Record<string, EntryPresentation> {
   return Object.fromEntries(Object.entries(record).map(([app, entry]) => [app, parseEntryPresentation(entry)]));
 }
 
+export function parseWidgetPresentation(raw: unknown): WidgetPresentation {
+  const record = asObject(raw, "widget presentation");
+  return {
+    position: parseFloatingPosition(record.position),
+    mode: asOneOf(record.mode ?? DEFAULT_WIDGET_PRESENTATION.mode, ["expanded", "collapsed"], "widget.mode"),
+    placement: asOneOf(
+      record.placement ?? DEFAULT_WIDGET_PRESENTATION.placement,
+      ["desktop", "tray", "toolbar"],
+      "widget.placement",
+    ),
+  };
+}
+
+/** The ``widgets`` map of a client record or a ``client_widgets_changed`` message; absent reads as none. */
+export function parseWidgetPresentations(raw: unknown): Record<string, WidgetPresentation> {
+  if (raw === undefined) return {};
+  const record = asObject(raw, "widgets");
+  return Object.fromEntries(
+    Object.entries(record).map(([app, presentation]) => [app, parseWidgetPresentation(presentation)]),
+  );
+}
+
+/** The widget switches of the inventory, ``GET /api/widgets``, or a ``widgets_updated`` message; absent reads as
+ *  none (an older shell). */
+export function parseWidgetSwitches(raw: unknown): WidgetSwitch[] {
+  if (raw === undefined) return [];
+  return asArray(raw, "widgets").map((entry, index) => {
+    const record = asObject(entry, `widgets[${index}]`);
+    return {
+      app: asString(record.app, `widgets[${index}].app`),
+      is_enabled: asBoolean(record.is_enabled, `widgets[${index}].is_enabled`),
+    };
+  });
+}
+
 export function parseClientRecord(raw: unknown): ClientRecord {
   const record = asObject(raw, "client");
   return {
@@ -556,6 +655,7 @@ export function parseClientRecord(raw: unknown): ClientRecord {
     last_seen: asString(record.last_seen, "client.last_seen"),
     is_connected: record.is_connected === true,
     entries: parseEntries(record.entries),
+    widgets: parseWidgetPresentations(record.widgets),
     shown_history: asArray(record.shown_history ?? [], "client.shown_history").map((entry, index) =>
       asString(entry, `client.shown_history[${index}]`),
     ),
@@ -635,6 +735,7 @@ export function parseInventory(raw: unknown): Inventory {
   return {
     desktops: parseDesktops(record.desktops),
     apps: parseAppRecords(record.apps),
+    widgets: parseWidgetSwitches(record.widgets),
     clients: parseClientRecords(record.clients),
     workspace_name: asString(record.workspace_name ?? "", "inventory.workspace_name"),
   };

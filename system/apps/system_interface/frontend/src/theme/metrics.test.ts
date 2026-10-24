@@ -44,6 +44,12 @@ const CONTRACT_TOKENS: Record<string, string> = {
   "--desk-floating-entry-size": "56px",
   "--desk-floating-entry-inset-x": "16px",
   "--desk-floating-entry-inset-y": "12px",
+  "--desk-widget-inset": "16px",
+  "--desk-widget-gap": "8px",
+  "--desk-widget-max-width": "320px",
+  "--desk-widget-max-height": "240px",
+  "--desk-widget-min-size": "24px",
+  "--desk-widget-rim": "6px",
 };
 
 describe("the theme file", () => {

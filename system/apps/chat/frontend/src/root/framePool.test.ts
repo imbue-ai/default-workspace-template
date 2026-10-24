@@ -16,6 +16,7 @@ const HANDSHAKE: ShellHandshake = {
   desktopId: "home",
   app: "chat",
   path: "/",
+  surface: "window",
 };
 
 let container: HTMLElement;

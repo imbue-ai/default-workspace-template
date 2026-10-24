@@ -68,6 +68,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     default_shortcut: { launch: "new", mode: "focus" },
     launcher_rank: null,
     pin: null,
+    widget: null,
     message_handlers: [],
     is_running: true,
     share_url: null,
@@ -163,6 +164,7 @@ export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}):
     last_seen: "2026-09-19T00:00:00Z",
     is_connected: true,
     entries: {},
+    widgets: {},
     shown_history: [],
     desktop_revision: 0,
     ...overrides,
@@ -243,6 +245,12 @@ export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): Theme
     floatingEntrySize: 56,
     floatingEntryInsetX: 16,
     floatingEntryInsetY: 12,
+    widgetInset: 16,
+    widgetGap: 8,
+    widgetMaxWidth: 320,
+    widgetMaxHeight: 240,
+    widgetMinSize: 24,
+    widgetRim: 6,
     ...overrides,
   };
 }

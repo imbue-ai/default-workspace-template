@@ -1,0 +1,35 @@
+[project]
+name = "usage-collector"
+version = "0.1.0"
+description = "The workspace's usage collector: stores one model_call event per model call made in the workspace (from workspace_usage emitters and Claude Code's OpenTelemetry logs) in SQLite, and serves cost and token totals and a live event stream on 127.0.0.1"
+readme = "README.md"
+# imbue-mngr-usage, which defines the model_call schema, needs 3.12.
+requires-python = ">=3.12"
+dependencies = [
+    "flask>=3.0",
+    "imbue-common",
+    "imbue-mngr-usage",
+    "loguru>=0.7.0",
+    "pydantic>=2.0",
+    "werkzeug>=3.1",
+    "workspace-usage",
+]
+
+[project.scripts]
+usage-collector = "usage_collector.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/usage_collector"]
+
+[dependency-groups]
+dev = [
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.85",
+]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

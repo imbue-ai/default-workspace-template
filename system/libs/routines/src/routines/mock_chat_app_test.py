@@ -40,6 +40,9 @@ class ScriptedChatApp(ChatAppInterface):
         default_factory=set, description="Which status polls, counted from 0 over every chat, the app cannot answer"
     )
     poll_attempts: int = Field(default=0, description="How many status polls were asked for, refused ones included")
+    usage_attributions: list[tuple[str, str]] = Field(
+        default_factory=list, description="Every chat whose usage was attributed, with the context, in order"
+    )
 
     def script(self, chat_id: str, statuses: tuple[ChatStatusWord, ...], reply: str | None) -> None:
         self.chats[chat_id] = ScriptedChat(statuses=statuses, reply=reply)
@@ -95,6 +98,9 @@ class ScriptedChatApp(ChatAppInterface):
             raise ChatCreateError("The chat could not be created: sign in to a provider first.")
         self.created.append((name, routine_id, first_message))
         return self.next_created_id
+
+    def attribute_usage(self, chat_id: str, usage_context: str) -> None:
+        self.usage_attributions.append((chat_id, usage_context))
 
 
 class BrokenChatApp(ScriptedChatApp):

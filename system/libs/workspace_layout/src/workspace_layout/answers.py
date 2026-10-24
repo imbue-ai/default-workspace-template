@@ -12,6 +12,7 @@ from typing import TypeVar
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import Pin
+from app_manifest.manifest import Widget
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppName
 from app_manifest.primitives import AppUrl
@@ -123,11 +124,25 @@ class InventoryApp(FrozenModel):
     default_shortcut: DefaultShortcut | None = Field(description="The shortcut a new desktop is seeded with")
     launcher_rank: int | None = Field(description="Where the app sits in the launcher")
     pin: Pin | None = Field(description="The app's pinned taskbar entry")
+    widget: Widget | None = Field(default=None, description="The app's desktop widget; None from an older shell")
     message_handlers: tuple[MessageHandler, ...] = Field(description="The message types the app handles")
     is_running: bool = Field(description="Derived from supervisord or a TCP probe, never stored")
     share_url: str | None = Field(
         description="The app's address on the domain the workspace was last shared under; None when it never was"
     )
+
+
+class WidgetState(FrozenModel):
+    """Whether the workspace shows one app's widget (app-widgets plan section 3.2): the effective value."""
+
+    app: AppName = Field(description="The app declaring the widget")
+    is_enabled: bool = Field(description="The stored choice, else the manifest's default")
+
+
+class WidgetsListing(FrozenModel):
+    """``GET /api/widgets`` (desktop contracts.md section 5.5): one entry per app declaring a widget."""
+
+    widgets: tuple[WidgetState, ...] = Field(description="Every declared widget, in registry order")
 
 
 class InventoryDocument(FrozenModel):
@@ -137,6 +152,9 @@ class InventoryDocument(FrozenModel):
     workspace_name: str = Field(description="The workspace's name")
     desktops: tuple[DesktopView, ...] = Field(description="Every desktop, in the shell's order")
     apps: tuple[InventoryApp, ...] = Field(description="Every registered app")
+    widgets: tuple[WidgetState, ...] = Field(
+        default=(), description="Whether each declared widget is enabled; none from an older shell"
+    )
     clients: tuple[InventoryClient, ...] = Field(description="Every known client")
 
 

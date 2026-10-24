@@ -225,6 +225,22 @@ describe("parseAppRecord", () => {
     ).toThrow(WireShapeError);
   });
 
+  it("reads an app's widget with its defaults, and refuses one off the wire's shape", () => {
+    const wire = { name: "gauge", url: "http://127.0.0.1:1" };
+    expect(parseAppRecord(wire).widget).toBeNull();
+    expect(parseAppRecord({ ...wire, widget: { path: "/widget" } }).widget).toEqual({
+      path: "/widget",
+      default_enabled: true,
+      tray: false,
+      toolbar: false,
+    });
+    expect(
+      parseAppRecord({ ...wire, widget: { path: "/w", default_enabled: false, tray: true, toolbar: true } }).widget,
+    ).toEqual({ path: "/w", default_enabled: false, tray: true, toolbar: true });
+    expect(() => parseAppRecord({ ...wire, widget: "/widget" })).toThrow(WireShapeError);
+    expect(() => parseAppRecord({ ...wire, widget: { path: "/w", tray: "yes" } })).toThrow(WireShapeError);
+  });
+
   it("reads a focus shortcut and a null rank", () => {
     const app = parseAppRecord({
       name: "files",
@@ -294,6 +310,7 @@ describe("the small helpers", () => {
       last_seen: "now",
       is_connected: true,
       entries: {},
+      widgets: {},
       shown_history: [],
       desktop_revision: 0,
     });

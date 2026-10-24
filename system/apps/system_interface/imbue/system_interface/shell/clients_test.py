@@ -9,9 +9,12 @@ from app_manifest.primitives import AppName
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import UserId
+from workspace_layout.primitives import WidgetMode
 from workspace_layout.primitives import WindowId
 from workspace_layout.records import EntryPresentation
 from workspace_layout.records import FloatingPosition
+from workspace_layout.records import WidgetPosition
+from workspace_layout.records import WidgetPresentation
 
 from imbue.system_interface.shell.clients import CLIENTS_FILENAME
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
@@ -51,6 +54,7 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
         "is_connected": True,
         "user_id": None,
         "entries": {},
+        "widgets": {},
         "shown_history": [],
         "desktop_revision": 2,
     }
@@ -128,6 +132,25 @@ def test_an_entry_presentation_is_kept_on_the_client_across_its_reports_and_refu
         store.set_entry_presentation(ClientId("nobody"), AppName("chat"), bar, TEST_NOW)
 
 
+def test_a_widget_presentation_is_kept_on_the_client_across_its_reports_and_arrivals(tmp_path: Path) -> None:
+    store = ClientStore(state_directory=tmp_path)
+    store.record_report(client_report("c1", "home"), TEST_NOW, is_redirected=False)
+    collapsed = WidgetPresentation(position=WidgetPosition(x=0.02, y=0.9), mode=WidgetMode.COLLAPSED)
+    record = store.set_widget_presentation(
+        ClientId("c1"), AppName("gauge"), collapsed, TEST_NOW + timedelta(minutes=1)
+    )
+    assert record.widgets == {"gauge": collapsed}
+    assert record.last_seen == TEST_NOW + timedelta(minutes=1)
+    store.record_report(client_report("c1", "research"), TEST_NOW + timedelta(minutes=2), is_redirected=False)
+    arrived = store.record_arrival(ClientId("c1"), None, DesktopId("home"), TEST_NOW + timedelta(minutes=3))
+    assert arrived.record.widgets == {"gauge": collapsed}
+    assert client_view(arrived.record, False).model_dump(mode="json")["widgets"] == {
+        "gauge": {"position": {"x": 0.02, "y": 0.9}, "mode": "collapsed", "placement": "desktop"}
+    }
+    with pytest.raises(ClientNotFoundError):
+        store.set_widget_presentation(ClientId("nobody"), AppName("gauge"), collapsed, TEST_NOW)
+
+
 def test_clients_unseen_for_the_retention_period_are_pruned(tmp_path: Path) -> None:
     store = ClientStore(state_directory=tmp_path)
     store.record_report(
@@ -170,6 +193,7 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
         "last_seen",
         "user_id",
         "entries",
+        "widgets",
         "shown_history",
         "desktop_revision",
         "desktop_moved_by",

@@ -10,6 +10,7 @@ import pytest
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
+from imbue.system_interface.shell.app_lifecycle import EnabledWidgetsReader
 from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import ProgramAction
@@ -107,6 +108,7 @@ def _manager_over(
     supervisor: FakeSupervisor,
     count_windows_by_app: WindowCountsReader | None = None,
     granted_app_names: GrantedAppsReader | None = None,
+    enabled_widget_app_names: EnabledWidgetsReader | None = None,
     program_states: ProgramStatesReader | None = None,
     start_program: ProgramAction | None = None,
     clock: Callable[[], float] | None = None,
@@ -119,6 +121,7 @@ def _manager_over(
         is_enabled=is_enabled,
         count_windows_by_app=count_windows_by_app if count_windows_by_app is not None else lambda: {},
         granted_app_names=granted_app_names if granted_app_names is not None else lambda: set(),
+        enabled_widget_app_names=enabled_widget_app_names if enabled_widget_app_names is not None else frozenset,
         program_states=program_states if program_states is not None else supervisor.states,
         start_program=start_program if start_program is not None else supervisor.start,
         stop_program=supervisor.stop,
@@ -645,6 +648,45 @@ def test_an_app_with_a_per_app_share_grant_is_kept_running_until_the_grant_goes(
     share_grants.granted = set()
     manager.sweep_once()
     _assert_docs_stops_only_once_the_grace_elapses(manager, supervisor)
+
+
+@pytest.mark.parametrize("is_internal", [False, True])
+def test_an_app_whose_widget_is_enabled_is_kept_running_until_it_is_hidden(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, closed_port: int, supervisor: FakeSupervisor, is_internal: bool
+) -> None:
+    """An enabled widget holds its app up as a window does, whether or not a browser draws it; an internal app's
+    widget is never drawn, so it holds nothing up."""
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml(
+            "docs",
+            f"http://127.0.0.1:{closed_port}",
+            program="docs",
+            is_internal=is_internal,
+            stop_when_no_windows=True,
+        ),
+    )
+    supervisor.statename_by_program["docs"] = "RUNNING"
+    enabled: set[str] = {"docs"}
+    manager = _manager_over(
+        build_inventory(registry_path, broadcaster), supervisor, enabled_widget_app_names=lambda: set(enabled)
+    )
+    try:
+        clock = _clock_of(manager)
+        manager.mark_visited()
+        manager.sweep_once()
+        clock.now += NO_WINDOWS_GRACE_SECONDS * 2
+        manager.sweep_once()
+        if is_internal:
+            assert supervisor.stopped == ["docs"]
+            return
+        assert supervisor.stopped == []
+
+        enabled.clear()
+        manager.sweep_once()
+        _assert_docs_stops_only_once_the_grace_elapses(manager, supervisor)
+    finally:
+        manager.stop()
 
 
 def _granted_docs_manager(

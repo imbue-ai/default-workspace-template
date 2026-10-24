@@ -20,6 +20,8 @@ import {
   parseAvatarStatus,
   parseDesktops,
   parseEntries,
+  parseWidgetPresentations,
+  parseWidgetSwitches,
   parsePresentUsers,
   parseUpdateNoticeChanged,
 } from "../model/records";
@@ -28,6 +30,8 @@ import type {
   AvatarStatus,
   Desktop,
   EntryPresentation,
+  WidgetPresentation,
+  WidgetSwitch,
   PresentUser,
   UpdateNoticeWire,
 } from "../model/records";
@@ -81,12 +85,20 @@ export interface ClientEntriesChangedEvent {
   readonly entries: Readonly<Record<string, EntryPresentation>>;
 }
 
+export interface ClientWidgetsChangedEvent {
+  readonly clientId: string;
+  readonly widgets: Readonly<Record<string, WidgetPresentation>>;
+}
+
 export interface SocketHandlers {
   onAppsUpdated(apps: AppRecord[]): void;
   onDesktopsUpdated(desktops: Desktop[]): void;
   onPlacementsUpdated(event: PlacementsUpdatedEvent): void;
   onActiveDesktopChanged(event: ActiveDesktopChangedEvent): void;
   onClientEntriesChanged(event: ClientEntriesChangedEvent): void;
+  onClientWidgetsChanged(event: ClientWidgetsChangedEvent): void;
+  /** Whether the workspace shows each declared widget, on connect and after every change. */
+  onWidgetsUpdated(switches: WidgetSwitch[]): void;
   onAvatarStatus(status: AvatarStatus): void;
   onAvatarSelectionChanged(design: string): void;
   /** The update notice as the shell now holds it, null once the record is cleared. */
@@ -121,6 +133,7 @@ interface RawSocketEvent {
   client_id?: unknown;
   save_id?: unknown;
   entries?: unknown;
+  widgets?: unknown;
   revision?: unknown;
   report_id?: unknown;
 }
@@ -232,6 +245,15 @@ export class ShellSocket implements DesktopSocket {
           clientId: String(event.client_id ?? ""),
           entries: parseEntries(event.entries),
         });
+        return;
+      case "client_widgets_changed":
+        handlers.onClientWidgetsChanged({
+          clientId: String(event.client_id ?? ""),
+          widgets: parseWidgetPresentations(event.widgets),
+        });
+        return;
+      case "widgets_updated":
+        handlers.onWidgetsUpdated(parseWidgetSwitches(event.widgets));
         return;
       case "avatar_status":
         handlers.onAvatarStatus(parseAvatarStatus(event));

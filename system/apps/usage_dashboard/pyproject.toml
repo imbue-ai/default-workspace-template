@@ -1,0 +1,60 @@
+[project]
+name = "usage-dashboard"
+version = "0.1.0"
+description = "The Usage app: the workspace's model usage over the last 30 minutes, 24 hours, 7 days and this month, read from the usage collector"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "app-manifest",
+    "app-schema",
+    "flask>=3.0",
+    "httpx>=0.27",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    "routines",
+    "werkzeug>=3.0",
+]
+
+[dependency-groups]
+dev = [
+    "app-schema[testing]",
+    "pytest>=9.0",
+    "pytest-timeout>=2.3.0",
+    "inline-snapshot>=0.13",
+    "ruff~=0.12.8",
+    "usage-collector",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.85",
+]
+
+[project.scripts]
+usage-dashboard = "usage_dashboard.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+artifacts = [
+    "src/usage_dashboard/static/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/usage_dashboard"]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP006", "UP007"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+case-sensitive = true
+order-by-type = false
+known-first-party = ["usage_dashboard", "usage_collector", "imbue", "app_manifest", "app_schema", "routines"]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

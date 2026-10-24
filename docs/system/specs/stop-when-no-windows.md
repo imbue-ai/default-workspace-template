@@ -199,7 +199,7 @@ The visitor's next request wakes the app through the parker exactly as the owner
 On every pass of the lifecycle sweep, for each app that is stoppable, whose row carries `stop_when_no_windows = true`, and whose program is `RUNNING` or `STARTING`:
 
 - count the windows of the app across every desktop (the owner's and every visitor's; minimized, detached, pinned, linked, and independent alike);
-- with at least one window, or not `internal` and with a per-app share grant (decision 12), clear the app's idle mark;
+- with at least one window, or not `internal` and with a per-app share grant (decision 12), or not `internal` and with an enabled widget (the app-widgets plan, section 3.5), clear the app's idle mark;
 - with none, and once a client has arrived at the shell since it started (decision 5), set the idle mark to now when it is unset, and stop the program when the mark is at least 60 seconds old.
 
 A stop is `stopProcess(program, wait=False)`, logged at info, followed by a liveness refresh; the next pass parks the port.
@@ -215,6 +215,7 @@ The close hint of window-bound-resources section 4.6 still goes out first, from 
 
 A window that exists but is minimized keeps its app running, though the frontend creates no page for it; the rule is the user's arrangement, not the browser's.
 Closing the window is what says the user is done with it.
+An enabled widget counts the same way: it is the user's arrangement, shared, whether or not a browser is drawing it, and disabling it is what says the user is done with it.
 
 ## 7. Part E: Quit
 

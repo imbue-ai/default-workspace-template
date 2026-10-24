@@ -22,6 +22,7 @@ from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.records import ClientRecord
 from workspace_layout.records import EntryPresentation
+from workspace_layout.records import WidgetPresentation
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -62,6 +63,9 @@ class _StoredClient(FrozenModel):
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
     )
+    widgets: dict[str, WidgetPresentation] = Field(
+        default_factory=dict, description="The client's presentation of each widget, by app name"
+    )
     shown_history: tuple[str, ...] = Field(
         default=(), description="What the client has shown on the phone layout, most recent last"
     )
@@ -90,6 +94,12 @@ def entries_wire_json(entries: Mapping[str, EntryPresentation]) -> dict[str, Any
 
 
 @pure
+def widgets_wire_json(widgets: Mapping[str, WidgetPresentation]) -> dict[str, Any]:
+    """The ``widgets`` map of the client object (desktop contracts.md section 4.3)."""
+    return {app: presentation.model_dump(mode="json") for app, presentation in widgets.items()}
+
+
+@pure
 def client_view(record: ClientRecord, is_connected: bool) -> ClientView:
     """The ``client`` object of desktop contracts.md section 5.5."""
     return ClientView.model_validate({**dict(record), "is_connected": is_connected})
@@ -103,6 +113,7 @@ def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
         last_seen=stored.last_seen,
         user_id=stored.user_id,
         entries=stored.entries,
+        widgets=stored.widgets,
         shown_history=stored.shown_history,
         desktop_revision=stored.desktop_revision,
     )
@@ -215,6 +226,7 @@ class ClientStore(MutableModel):
                     last_seen=stamped,
                     user_id=previous.user_id if previous is not None else None,
                     entries=previous.entries if previous is not None else {},
+                    widgets=previous.widgets if previous is not None else {},
                     shown_history=previous.shown_history if previous is not None else (),
                 ),
                 is_revised_regardless=is_redirected,
@@ -252,6 +264,7 @@ class ClientStore(MutableModel):
                 last_seen=stamped,
                 user_id=user_id,
                 entries=previous.entries if previous is not None else {},
+                widgets=previous.widgets if previous is not None else {},
                 shown_history=previous.shown_history if previous is not None else (),
             ),
             is_revised_regardless=False,
@@ -311,6 +324,19 @@ class ClientStore(MutableModel):
             client_id,
             lambda previous: previous.model_copy_update(
                 to_update(previous.field_ref().entries, {**previous.entries, str(app): presentation}),
+                to_update(previous.field_ref().last_seen, stamped),
+            ),
+        )
+
+    def set_widget_presentation(
+        self, client_id: ClientId, app: AppName, presentation: WidgetPresentation, now: datetime
+    ) -> ClientRecord:
+        """Store how a recorded client shows one widget; raises ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        return self._update_recorded_client(
+            client_id,
+            lambda previous: previous.model_copy_update(
+                to_update(previous.field_ref().widgets, {**previous.widgets, str(app): presentation}),
                 to_update(previous.field_ref().last_seen, stamped),
             ),
         )

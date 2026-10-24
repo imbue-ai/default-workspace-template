@@ -1,10 +1,10 @@
 /**
- * The backdrop (concepts.md section 2.4): over the active desktop's wallpaper, its shortcut grid
- * fitted to the current backdrop at render time, its windows in stacking order (each over the
- * live page the pages layer positions for it), the floating pinned entries above them, and the snap
- * preview. A shortcut being dragged needs no layer of its own: the icon carries its own lift, and the
- * store's placement carries the room made for it. Every pixel comes from the store's geometry; nothing
- * here measures the DOM or listens for gestures.
+ * The backdrop (concepts.md section 2.4): over the active desktop's wallpaper, its shortcut grid fitted to the current
+ * backdrop at render time, its windows in stacking order (each over the live page the pages layer positions for it),
+ * the floating pinned entries and the widgets above them (each widget's page laid over its chrome by the widget frames
+ * layer), and the snap preview. A shortcut being dragged needs no layer of its own: the icon carries its own lift, and
+ * the store's placement carries the room made for it. Every pixel comes from the store's geometry; nothing here
+ * measures the DOM or listens for gestures.
  */
 
 import m from "mithril";
@@ -13,12 +13,14 @@ import type { PixelPoint } from "../geometry/frames";
 import type { Desktop, DesktopShortcut, Placement } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { appByName, effectiveWindowTitle, isAppShownStopped } from "../reducers/desktopState";
-import type { TaskbarEntry } from "../reducers/desktopState";
+import type { ShownWidget, TaskbarEntry } from "../reducers/desktopState";
+import type { PixelRect } from "../geometry/frames";
 import type { DesktopStore } from "../store/DesktopStore";
 import { DetachedWindowGhost } from "./DetachedWindowGhost";
 import { FloatingEntries } from "./FloatingEntries";
 import { ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
+import { Widgets } from "./Widgets";
 import { Window } from "./Window";
 import type { WindowControl } from "./TitleBar";
 
@@ -49,6 +51,15 @@ export interface BackdropAttrs {
   readonly onBringBackWindow: (windowId: string) => void;
   /** The element the live pages are appended to, created once and never re-rendered. */
   readonly onPagesHostCreated: (host: HTMLElement) => void;
+  /** The widgets this client draws, and where each drawn one's box is. */
+  readonly widgets: readonly ShownWidget[];
+  readonly widgetRects: ReadonlyMap<string, PixelRect>;
+  readonly openWidgetMenuApp: string | null;
+  readonly onWidgetToggleMode: (app: string) => void;
+  readonly onWidgetContextMenu: (app: string, x: number, y: number, target: Element) => void;
+  /** The element the widgets' frames are appended to, created once and never re-rendered, and its removal. */
+  readonly onWidgetFramesHostCreated: (host: HTMLElement) => void;
+  readonly onWidgetFramesHostRemoved: (host: HTMLElement) => void;
 }
 
 export function Backdrop(): m.Component<BackdropAttrs> {
@@ -173,6 +184,21 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             openMenuWindowId: attrs.openEntryMenuWindowId,
             onClick: attrs.onEntryClick,
             onContextMenu: attrs.onEntryContextMenu,
+          }),
+          m(Widgets, {
+            widgets: attrs.widgets,
+            rects: attrs.widgetRects,
+            openMenuApp: attrs.openWidgetMenuApp,
+            onToggleMode: attrs.onWidgetToggleMode,
+            onContextMenu: attrs.onWidgetContextMenu,
+          }),
+          // The widgets' frames' host, over their chrome at the same level; its frames lie over the content boxes.
+          m("div", {
+            "data-widget-frames": "",
+            class: "widget-frames pointer-events-none absolute inset-0 z-(--z-sticky) [&>*]:pointer-events-auto",
+            oncreate: (created: m.VnodeDOM) => attrs.onWidgetFramesHostCreated(created.dom as HTMLElement),
+            onremove: (removed: m.VnodeDOM) => attrs.onWidgetFramesHostRemoved(removed.dom as HTMLElement),
+            onbeforeupdate: () => false,
           }),
           m(SnapPreview, { rect: snapRect }),
         ],

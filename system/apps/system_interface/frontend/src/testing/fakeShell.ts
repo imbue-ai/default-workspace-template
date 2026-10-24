@@ -28,6 +28,8 @@ import type {
   MessageRelay,
   StoredWindowPath,
   Wallpaper,
+  WidgetPresentation,
+  WidgetSwitch,
   WindowRecord,
 } from "../model/records";
 import { withWindowMinimized, withWindowPlacedOnOpen, withWindowRaised, withoutPlacement } from "../geometry/stack";
@@ -44,6 +46,8 @@ export class FakeDesktopApi implements DesktopApi {
   /** The apps the inventory answers; the socket's ``apps_updated`` is delivered by hand. */
   apps: AppRecord[] = [];
   clients: ClientRecord[] = [];
+  /** The widget switches the inventory answers and ``setWidgetEnabled`` edits. */
+  widgetSwitches: WidgetSwitch[] = [];
   workspaceName = "Test workspace";
   /** What the next arrival answers beyond the client's recorded desktop: a desktop seeded for the user (added to
    *  the desktops as the shell would), and the name of the one it replaced. */
@@ -162,6 +166,7 @@ export class FakeDesktopApi implements DesktopApi {
     return {
       desktops: [...this.desktops],
       apps: [...this.apps],
+      widgets: [...this.widgetSwitches],
       clients: [...this.clients],
       workspace_name: this.workspaceName,
     };
@@ -444,6 +449,28 @@ export class FakeDesktopApi implements DesktopApi {
     const updated = { ...existing, entries: { ...existing.entries, [app]: presentation } };
     this.clients = [...this.clients.filter((client) => client.id !== clientId), updated];
     return updated;
+  }
+
+  async setWidgetPresentation(clientId: string, app: string, presentation: WidgetPresentation): Promise<ClientRecord> {
+    const position =
+      presentation.position === null ? "default" : `${presentation.position.x},${presentation.position.y}`;
+    this.calls.push(
+      `setWidgetPresentation:${clientId}:${app}:${position}:${presentation.mode}:${presentation.placement}`,
+    );
+    this.refuse();
+    const existing = this.clients.find((client) => client.id === clientId) ?? clientRecord(clientId);
+    const updated = { ...existing, widgets: { ...existing.widgets, [app]: presentation } };
+    this.clients = [...this.clients.filter((client) => client.id !== clientId), updated];
+    return updated;
+  }
+
+  async setWidgetEnabled(app: string, isEnabled: boolean): Promise<WidgetSwitch[]> {
+    this.calls.push(`setWidgetEnabled:${app}:${isEnabled}`);
+    this.refuse();
+    this.widgetSwitches = this.widgetSwitches.map((entry) =>
+      entry.app === app ? { ...entry, is_enabled: isEnabled } : entry,
+    );
+    return [...this.widgetSwitches];
   }
 
   async fetchAvatars(): Promise<AvatarCatalog> {

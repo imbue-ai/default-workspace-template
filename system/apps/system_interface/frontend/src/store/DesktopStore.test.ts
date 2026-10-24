@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
 import { placementOf } from "../geometry/stack";
 import { getPresentUsers, resetPresenceForTesting } from "../model/Presence";
-import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
+import {
+  activeFocusedWindowId,
+  activePlacements,
+  isLayoutDirty,
+  shownWidgets,
+  taskbarWidgets,
+} from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
@@ -2738,5 +2744,266 @@ describe("the phone layout", () => {
     store.onVisibilityChange(false);
     socket.deliver().onConnected();
     expect(reloaded).toEqual(["win-1"]);
+  });
+});
+
+describe("widgets", () => {
+  const gauge = appRecord("gauge", { widget: { path: "/widget", default_enabled: true, tray: true, toolbar: true } });
+
+  async function widgetStore(): Promise<DesktopStore> {
+    api.apps = [appRecord("docs"), gauge];
+    api.widgetSwitches = [{ app: "gauge", is_enabled: true }];
+    api.clients = [
+      clientRecord(CLIENT, {
+        widgets: { gauge: { position: { x: 0.016, y: 0.98 }, mode: "expanded", placement: "desktop" } },
+      }),
+    ];
+    return startedStore();
+  }
+
+  it("loads the switches and this client's presentations with the inventory, and takes the shell's pushes", async () => {
+    const store = await widgetStore();
+    expect(shownWidgets(store.getState()).map((widget) => [widget.app.name, widget.presentation])).toEqual([
+      ["gauge", { position: { x: 0.016, y: 0.98 }, mode: "expanded", placement: "desktop" }],
+    ]);
+    socket.deliver().onClientWidgetsChanged({ clientId: "other", widgets: {} });
+    expect(store.getState().widgets.gauge.position).toEqual({ x: 0.016, y: 0.98 });
+    socket.deliver().onClientWidgetsChanged({ clientId: CLIENT, widgets: {} });
+    // A client with no presentation draws the default.
+    expect(shownWidgets(store.getState())[0].presentation).toEqual({
+      position: null,
+      mode: "expanded",
+      placement: "desktop",
+    });
+    socket.deliver().onWidgetsUpdated([{ app: "gauge", is_enabled: false }]);
+    expect(shownWidgets(store.getState())).toEqual([]);
+  });
+
+  it("draws a widget only once its page has reported a size and while it has not asked to be hidden", async () => {
+    // Moved near the bottom-left corner, it is anchored there by its bottom-left corner.
+    const store = await widgetStore();
+    expect(store.widgetRects().size).toBe(0);
+    store.reportWidgetSize("gauge", { width: 180, height: 64 });
+    expect(store.widgetRects().get("gauge")).toEqual({ x: 16, y: 800 - 16 - 76, width: 192, height: 76 });
+    store.reportWidgetHidden("gauge", true);
+    expect(store.widgetRects().size).toBe(0);
+    store.reportWidgetHidden("gauge", false);
+    store.resetWidgetReport("gauge");
+    expect(store.widgetRects().size).toBe(0);
+  });
+
+  it("writes a mode at once, and puts the old presentation back when the shell refuses", async () => {
+    const store = await widgetStore();
+    await store.setWidgetMode("gauge", "collapsed");
+    expect(last(api.calls)).toBe("setWidgetPresentation:client-1:gauge:0.016,0.98:collapsed:desktop");
+    expect(store.getState().widgets.gauge.mode).toBe("collapsed");
+    api.refusal = "no such client";
+    await store.setWidgetMode("gauge", "expanded");
+    expect(notices()).toEqual(["Could not change the widget: no such client"]);
+    expect(store.getState().widgets.gauge.mode).toBe("collapsed");
+  });
+
+  it("toggles a widget between collapsed and expanded", async () => {
+    const store = await widgetStore();
+    await store.toggleWidgetMode("gauge");
+    expect(store.getState().widgets.gauge.mode).toBe("collapsed");
+    await store.toggleWidgetMode("gauge");
+    expect(store.getState().widgets.gauge.mode).toBe("expanded");
+  });
+
+  it("drags a widget by its rim and leaves it where it is let go, anchored by its corner nearest the edges", async () => {
+    const store = await widgetStore();
+    store.reportWidgetSize("gauge", { width: 180, height: 64 });
+    store.beginWidgetDrag("gauge", { x: 20, y: 712 }, { x: 4, y: 4 });
+    store.updateWidgetDrag({ x: 604, y: 104 });
+    expect(store.widgetRectOf("gauge")).toEqual({ x: 600, y: 100, width: 192, height: 76 });
+    // Held inside the backdrop, as a floating entry is.
+    store.updateWidgetDrag({ x: 994, y: 104 });
+    expect(store.widgetRectOf("gauge")).toEqual({ x: 808, y: 100, width: 192, height: 76 });
+    store.endWidgetDrag({ x: 994, y: 104 });
+    expect(store.getGesture()).toBeNull();
+    // Let go in the upper right, it is kept by its top-right corner, at the backdrop's right edge.
+    expect(store.getState().widgets.gauge.position).toEqual({ x: 1, y: 0.125 });
+    await settle();
+    expect(last(api.calls)).toBe("setWidgetPresentation:client-1:gauge:1,0.125:expanded:desktop");
+    expect(store.widgetRectOf("gauge")).toEqual({ x: 808, y: 100, width: 192, height: 76 });
+    // Collapsed to a smaller box, it shrinks towards that corner.
+    store.reportWidgetSize("gauge", { width: 60, height: 40 });
+    expect(store.widgetRectOf("gauge")).toEqual({ x: 1000 - 72, y: 100, width: 72, height: 52 });
+    // A drop where it already is writes nothing.
+    const writes = api.calls.length;
+    store.beginWidgetDrag("gauge", { x: 950, y: 110 }, { x: 22, y: 10 });
+    store.endWidgetDrag({ x: 950, y: 110 });
+    await settle();
+    expect(api.calls).toHaveLength(writes);
+  });
+
+  it("moves a widget to the tray, out of the desktop's geometry, with its tray size kept apart and a popover", async () => {
+    const store = await widgetStore();
+    store.reportWidgetSize("gauge", { width: 180, height: 64 });
+    expect(store.widgetRects().has("gauge")).toBe(true);
+
+    await store.setWidgetPlacement("gauge", "tray");
+    expect(last(api.calls)).toBe("setWidgetPresentation:client-1:gauge:0.016,0.98:expanded:tray");
+    expect(store.widgetRects().has("gauge")).toBe(false);
+    expect(taskbarWidgets(store.getState(), "tray").map((widget) => widget.app.name)).toEqual(["gauge"]);
+    expect(taskbarWidgets(store.getState(), "toolbar")).toEqual([]);
+
+    // The tray form's size is kept apart from the expanded one the popover shows.
+    store.reportWidgetSize("gauge", { width: 60, height: 24 }, true);
+    expect(store.getState().widgetReports.gauge).toMatchObject({
+      size: { width: 180, height: 64 },
+      traySize: { width: 60, height: 24 },
+    });
+
+    store.toggleTrayPopover("gauge");
+    expect(store.getState().trayPopoverApp).toBe("gauge");
+    store.toggleTrayPopover("gauge");
+    expect(store.getState().trayPopoverApp).toBeNull();
+    store.toggleTrayPopover("gauge");
+    // Opening its app from the popover closes it, and so does moving the widget back.
+    await store.openPathFromApp("gauge", "/", "focus");
+    expect(store.getState().trayPopoverApp).toBeNull();
+    store.toggleTrayPopover("gauge");
+    await store.setWidgetPlacement("gauge", "desktop");
+    expect(store.getState().trayPopoverApp).toBeNull();
+    expect(store.widgetRects().has("gauge")).toBe(true);
+
+    // A popover whose widget leaves the taskbar by a push, hidden for the workspace or moved by another window of
+    // this client, closes with it rather than reopen when the widget comes back.
+    await store.setWidgetPlacement("gauge", "tray");
+    store.toggleTrayPopover("gauge");
+    socket.deliver().onWidgetsUpdated([{ app: "gauge", is_enabled: false }]);
+    expect(store.getState().trayPopoverApp).toBeNull();
+    socket.deliver().onWidgetsUpdated([{ app: "gauge", is_enabled: true }]);
+    store.toggleTrayPopover("gauge");
+    socket.deliver().onClientWidgetsChanged({
+      clientId: CLIENT,
+      widgets: { gauge: { position: null, mode: "expanded", placement: "desktop" } },
+    });
+    expect(store.getState().trayPopoverApp).toBeNull();
+
+    // In the bar's row, it is out of the desktop's geometry too.
+    await store.setWidgetPlacement("gauge", "toolbar");
+    expect(store.widgetRects().has("gauge")).toBe(false);
+    expect(taskbarWidgets(store.getState(), "toolbar").map((widget) => widget.app.name)).toEqual(["gauge"]);
+    expect(taskbarWidgets(store.getState(), "tray")).toEqual([]);
+  });
+
+  it("puts a widget in the tray or back when a page of its app asks, and only a widget that draws a tray form", async () => {
+    const store = await widgetStore();
+    await store.placeWidgetFromApp("gauge", "tray");
+    expect(store.getState().widgets.gauge.placement).toBe("tray");
+    const writes = api.calls.length;
+    // Asked again, nothing is written.
+    await store.placeWidgetFromApp("gauge", "tray");
+    expect(api.calls).toHaveLength(writes);
+    await store.placeWidgetFromApp("gauge", "desktop");
+    expect(store.getState().widgets.gauge.placement).toBe("desktop");
+    await store.placeWidgetFromApp("gauge", "toolbar");
+    expect(store.getState().widgets.gauge.placement).toBe("toolbar");
+    // An app with no widget is ignored.
+    await store.placeWidgetFromApp("docs", "tray");
+    expect(store.getState().widgets.docs).toBeUndefined();
+  });
+
+  it("puts a widget in the bar's row only when its page draws a toolbar form", async () => {
+    api.apps = [
+      appRecord("docs"),
+      appRecord("gauge", { widget: { path: "/widget", default_enabled: true, tray: true, toolbar: false } }),
+    ];
+    api.widgetSwitches = [{ app: "gauge", is_enabled: true }];
+    const store = await startedStore();
+    await store.placeWidgetFromApp("gauge", "toolbar");
+    expect(store.getState().widgets.gauge).toBeUndefined();
+  });
+
+  it("raises any window of a widget's app, whatever its page, and opens one only when the app has none", async () => {
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a")] }),
+      desktopRecord("work", { windows: [windowRecord("win-7", "gauge", "/p/subscription:anthropic")] }),
+    ];
+    const store = await widgetStore();
+    store.minimizeWindow("win-1");
+
+    await store.openPathFromApp("gauge", "/", "focus");
+
+    // The app's one window is on another desktop, at another page: the client goes there and raises it.
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-7");
+    expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
+    // ``new`` still always opens one.
+    await store.openPathFromApp("gauge", "/", "new");
+    expect(api.calls.some((call) => call.startsWith("openWindow:work:gauge:/:new"))).toBe(true);
+  });
+
+  it("shows or hides a widget for the whole workspace, and opens its app's page on the active desktop", async () => {
+    const store = await widgetStore();
+    await store.setWidgetEnabled("gauge", false);
+    expect(last(api.calls)).toBe("setWidgetEnabled:gauge:false");
+    expect(shownWidgets(store.getState())).toEqual([]);
+    await store.openPathFromApp("gauge", "/", "focus");
+    expect(api.calls.some((call) => call.startsWith("openWindow:home:gauge:/"))).toBe(true);
+  });
+
+  it("keeps a widget's switch and says so when the shell refuses to show or hide it", async () => {
+    const store = await widgetStore();
+    api.refusal = "no such widget";
+    await store.setWidgetEnabled("gauge", false);
+    expect(notices()).toEqual(["Could not hide the widget: no such widget"]);
+    expect(shownWidgets(store.getState()).map((widget) => widget.app.name)).toEqual(["gauge"]);
+  });
+
+  it("redraws nothing when a page reports the size it last reported", async () => {
+    api.apps = [appRecord("docs"), gauge];
+    api.widgetSwitches = [{ app: "gauge", is_enabled: true }];
+    let redraws = 0;
+    const store = await startedStore(() => void (redraws += 1));
+    store.reportWidgetSize("gauge", { width: 180, height: 64 });
+    store.reportWidgetSize("gauge", { width: 60, height: 24 }, true);
+    const before = redraws;
+    store.reportWidgetSize("gauge", { width: 180, height: 64 });
+    store.reportWidgetSize("gauge", { width: 60, height: 24 }, true);
+    expect(redraws).toBe(before);
+    store.reportWidgetSize("gauge", { width: 181, height: 64 });
+    expect(redraws).toBeGreaterThan(before);
+  });
+
+  it("on a phone, shows the window of a widget's app rather than raise it on the desktop", async () => {
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-7", "gauge", "/")] }),
+      desktopRecord("work"),
+    ];
+    const store = await widgetStore();
+    store.setThemeMetrics(METRICS, { isPhone: true, isTouch: false });
+    await store.openPathFromApp("gauge", "/", "focus");
+    expect(store.getState().phone.shown).toEqual({ kind: "window", windowId: "win-7" });
+    expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
+  });
+
+  it("asks the chrome to show a widget's app's pulled-out window instead of raising it in the desktop", async () => {
+    api.apps = [appRecord("docs"), gauge];
+    api.widgetSwitches = [{ app: "gauge", is_enabled: true }];
+    api.desktops = [
+      desktopRecord("home", { windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-7", "gauge", "/")] }),
+      desktopRecord("work"),
+    ];
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-7", { is_detached: true }), placementRecord("win-1")],
+    });
+    const requests: unknown[] = [];
+    const popOut: PopOutBridge = {
+      requestPopOut: (request) => void requests.push(request),
+      beginWindowDrag: () => undefined,
+      endWindowDrag: () => undefined,
+      reportDetachedWindows: () => undefined,
+    };
+    const store = makeStore(() => undefined, { popOut });
+    await store.start(NO_LINK);
+    await store.openPathFromApp("gauge", "/", "focus");
+    expect(requests).toEqual([expect.objectContaining({ windowId: "win-7", title: "Gauge" })]);
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(placementOf(store.getState().layout, "win-7").is_detached).toBe(true);
   });
 });

@@ -16,6 +16,7 @@ from typing import Final
 
 from loguru import logger
 from pydantic import Field
+from workspace_usage.context import USAGE_CONTEXT_ENV_VAR
 
 from chat_background_tasks.markers import is_process_live
 from chat_background_tasks.markers import process_start_time
@@ -61,6 +62,7 @@ from routines.primitives import RunWarning
 from routines.schedule import is_switched_on
 from routines.schedule import next_due
 from routines.tails import read_tail
+from routines.usage import routine_usage_context
 from routines.wake import slash_command_of
 from routines.wake import wake_skill
 
@@ -278,6 +280,8 @@ class Runner(MutableModel):
             RUN_DIR_ENV: str(run_dir),
             RUN_ID_ENV: str(run_id),
             ROUTINE_ID_ENV: str(routine_id),
+            # Model calls the command makes, and those of any agent it starts, count toward this run.
+            USAGE_CONTEXT_ENV_VAR: routine_usage_context(routine_id, run_id),
         }
         with log_path.open("ab") as log_handle:
             try:
@@ -383,6 +387,7 @@ class Runner(MutableModel):
             clock=self.clock,
             on_blocked=on_blocked,
             on_chat_known=on_chat_known,
+            usage_context=routine_usage_context(run_routine_id or routine_id, run_id),
         )
 
     def _append_to_log(self, routine_id: RoutineId, run_id: RunId, text: str) -> None:

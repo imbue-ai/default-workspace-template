@@ -12,7 +12,7 @@ import m from "mithril";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { appLaunchesOf, launchRowKindOf } from "../../model/launch";
-import { appByName, findWindow, isAppShownStopped } from "../../reducers/desktopState";
+import { appByName, findWindow, isAppShownStopped, shownWidgets } from "../../reducers/desktopState";
 import { defaultHighlightIndex, isRowEnabled } from "../../reducers/launcherRows";
 import type { LauncherRow } from "../../reducers/launcherRows";
 import {
@@ -33,6 +33,7 @@ import { stoppedPlaceholder } from "../Window";
 import { MENU_MIN_WIDTH, openShareSettings, phoneWindowMenuRows } from "../WindowMenu";
 import { HomeGrid } from "./HomeGrid";
 import { PhoneBar } from "./PhoneBar";
+import { PhoneWidgets } from "./PhoneWidgets";
 import { StartSheet } from "./StartSheet";
 import { WindowsSheet } from "./WindowsSheet";
 
@@ -43,6 +44,9 @@ export interface PhoneLayoutAttrs {
   readonly store: DesktopStore;
   /** The element the live pages are appended to, created once and never re-rendered. */
   readonly onPagesHostCreated: (host: HTMLElement) => void;
+  /** The element the widgets' frames are appended to, created once and never re-rendered, and its removal. */
+  readonly onWidgetFramesHostCreated: (host: HTMLElement) => void;
+  readonly onWidgetFramesHostRemoved: (host: HTMLElement) => void;
 }
 
 /** Whether a chrome embeds this page (the Imbue Studio app), which is where a share surface exists. */
@@ -202,7 +206,7 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
       root = null;
     },
     view(vnode) {
-      const { store, onPagesHostCreated } = vnode.attrs;
+      const { store, onPagesHostCreated, onWidgetFramesHostCreated, onWidgetFramesHostRemoved } = vnode.attrs;
       const state = store.getState();
       const shownWindow = shownWindowOf(state);
       const shownApp = shownWindow === null ? undefined : appByName(state, shownWindow.app);
@@ -252,6 +256,11 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
                 : null,
             ],
           ),
+          m(PhoneWidgets, {
+            widgets: shownWidgets(state),
+            reports: state.widgetReports,
+            metrics: store.getMetrics(),
+          }),
           m(PhoneBar, {
             pill: phonePillOf(state),
             count: openWindowCount(state),
@@ -275,6 +284,14 @@ export function PhoneLayout(): m.Component<PhoneLayoutAttrs> {
             toasts: store.toasts.current(),
             placementClass:
               "absolute bottom-[calc(var(--desk-phone-bar-height)+var(--desk-phone-safe-bottom)+var(--desk-toast-gap))]",
+          }),
+          // The widgets' frames' host, over the whole layout; its frames lie over the strip's widget boxes.
+          m("div", {
+            "data-widget-frames": "",
+            class: "widget-frames pointer-events-none absolute inset-0 z-(--z-content) [&>*]:pointer-events-auto",
+            oncreate: (created: m.VnodeDOM) => onWidgetFramesHostCreated(created.dom as HTMLElement),
+            onremove: (removed: m.VnodeDOM) => onWidgetFramesHostRemoved(removed.dom as HTMLElement),
+            onbeforeupdate: () => false,
           }),
           sheetView(store),
           menuRows === null ? null : menu.view(menuRows),

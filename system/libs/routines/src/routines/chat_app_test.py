@@ -168,7 +168,24 @@ def test_the_chat_is_created_through_mngr_and_named_by_its_created_event(tmp_pat
     assert argv[:4] == ["run", "--no-sync", "mngr", "create"]
     assert "--template" in argv and argv[argv.index("--template") + 1] == "automation"
     assert "--label" in argv and "routine=digest" in argv and "display_name=Morning digest" in argv
+    assert "IMBUE_USAGE_CONTEXT=origin_kind=ROUTINE,origin_id=digest" in argv
     assert argv[-2:] == ["--message", "/digest"]
+
+
+def test_a_runs_usage_is_attributed_through_the_agents_usage_context_file(tmp_path: Path, clock: FakeClock) -> None:
+    state_dir = tmp_path / "host" / "agents" / "agent-routine"
+    state_dir.mkdir(parents=True)
+    registry = tmp_path / "apps.toml"
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
+    chat_app = HttpChatApp(
+        repo_root=tmp_path, registry_path=registry, environ={"MNGR_HOST_DIR": str(tmp_path / "host")}, clock=clock
+    )
+
+    chat_app.attribute_usage("agent-routine", "origin_kind=ROUTINE,origin_id=digest,run_id=r-1")
+    chat_app.attribute_usage("agent-elsewhere", "origin_kind=ROUTINE,origin_id=digest,run_id=r-1")
+
+    assert (state_dir / "usage_context").read_text() == "origin_kind=ROUTINE,origin_id=digest,run_id=r-1\n"
+    assert not (tmp_path / "host" / "agents" / "agent-elsewhere").exists()
 
 
 def test_an_agent_of_the_routine_is_found_through_mngr_list_by_either_label(tmp_path: Path, clock: FakeClock) -> None:

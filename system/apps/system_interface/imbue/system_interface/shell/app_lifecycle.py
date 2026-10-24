@@ -73,6 +73,12 @@ ProgramStatesReader = Callable[[], dict[str, str] | None]
 ProgramAction = Callable[[str], None]
 # How many windows across every desktop show each app, by app name; an app with none may be absent.
 WindowCountsReader = Callable[[], Mapping[str, int]]
+# The names of every app whose widget the workspace shows, read once per sweep pass.
+EnabledWidgetsReader = Callable[[], AbstractSet[str]]
+
+
+def _no_enabled_widgets() -> AbstractSet[str]:
+    return frozenset()
 
 
 def read_supervisor_program_statenames() -> dict[str, str] | None:
@@ -121,6 +127,13 @@ class AppLifecycleManager(MutableModel):
         description="Every app with a per-app share grant in one read (the gateway's grants document), taken at most "
         "once per sweep pass and only when a pass finds a running app that declares stop_when_no_windows and has no "
         "window: a visitor admitted to one app's origin alone never loads the shell, so no window of theirs exists",
+    )
+    enabled_widget_app_names: EnabledWidgetsReader = Field(
+        default=_no_enabled_widgets,
+        frozen=True,
+        description="Every app whose widget the workspace shows in one read (widgets.json and the registry), taken "
+        "at most once per sweep pass and only when a pass finds a running app that declares stop_when_no_windows "
+        "and has no window: an enabled widget holds its app up as a window does (the app-widgets plan, section 3.5)",
     )
     no_windows_grace_seconds: float = Field(
         default=NO_WINDOWS_GRACE_SECONDS,
@@ -342,6 +355,7 @@ class AppLifecycleManager(MutableModel):
         # rule to, and none is made when no app needs it.
         window_counts = functools.cache(self.count_windows_by_app)
         granted_apps = functools.cache(self.granted_app_names)
+        widget_apps = functools.cache(self.enabled_widget_app_names)
         reconciled_apps: set[str] = set()
         is_any_between_states = False
         for entry in entries:
@@ -352,7 +366,9 @@ class AppLifecycleManager(MutableModel):
             if statename is None:
                 continue
             reconciled_apps.add(str(entry.row.name))
-            is_settled = self._reconcile_app(entry, program, statename, states_read_at, window_counts, granted_apps)
+            is_settled = self._reconcile_app(
+                entry, program, statename, states_read_at, window_counts, granted_apps, widget_apps
+            )
             is_any_between_states = is_any_between_states or not is_settled
         with self._lock:
             self._is_any_app_between_states = is_any_between_states
@@ -384,13 +400,14 @@ class AppLifecycleManager(MutableModel):
         states_read_at: float,
         window_counts: WindowCountsReader,
         granted_apps: GrantedAppsReader,
+        widget_apps: EnabledWidgetsReader,
     ) -> bool:
         """Bring one app's parker in line with its program's state, and answer whether the app is settled: running
         and left running, or down with its port parked (or unparkable). A program starting, retrying, or stopping,
         one the no-window rule just stopped, and one woken after the pass read its state are between states, and
         the sweep keeps its transition pace until they settle, so the pass that parks a stopped port comes soon
-        after the program exits. ``window_counts`` and ``granted_apps`` are the pass's one read of every app's
-        windows and of the per-app share grants."""
+        after the program exits. ``window_counts``, ``granted_apps``, and ``widget_apps`` are the pass's one read of
+        every app's windows, of the per-app share grants, and of the enabled widgets."""
         app = str(entry.row.name)
         if statename in (SUPERVISOR_RUNNING_STATENAME, SUPERVISOR_STARTING_STATENAME, SUPERVISOR_BACKOFF_STATENAME):
             # Up, or about to bind again on its own: the port must be free.
@@ -404,7 +421,7 @@ class AppLifecycleManager(MutableModel):
                 parked.release()
             if statename == SUPERVISOR_BACKOFF_STATENAME:
                 return False
-            is_stopped_now = self._apply_no_window_rule(entry, program, window_counts, granted_apps)
+            is_stopped_now = self._apply_no_window_rule(entry, program, window_counts, granted_apps, widget_apps)
             return statename == SUPERVISOR_RUNNING_STATENAME and not is_stopped_now
         with self._lock:
             self._idle_since_by_app.pop(app, None)
@@ -465,17 +482,20 @@ class AppLifecycleManager(MutableModel):
         program: str,
         window_counts: WindowCountsReader,
         granted_apps: GrantedAppsReader,
+        widget_apps: EnabledWidgetsReader,
     ) -> bool:
         """Stop a running app that declares ``stop_when_no_windows`` once no window has shown it for the grace
         period, and only once the workspace has been visited (spec section 6.1); True when the program was told to
         stop. An app with a per-app share grant counts as one with windows: its visitors reach it without the
         shell, so their use leaves no window to count. The gateway admits nobody through a grant on an internal
-        app, so such a grant keeps nothing running."""
+        app, so such a grant keeps nothing running. An app whose widget is enabled counts as one with windows too:
+        the widget is the user's arrangement, shown whether or not a browser draws it now."""
         app = str(entry.row.name)
         if (
             not entry.row.stop_when_no_windows
             or window_counts().get(app, 0) > 0
             or (not entry.row.internal and app in granted_apps())
+            or (not entry.row.internal and app in widget_apps())
         ):
             with self._lock:
                 self._idle_since_by_app.pop(app, None)
@@ -536,6 +556,7 @@ def build_app_lifecycle_manager(
     is_enabled: bool,
     count_windows_by_app: WindowCountsReader,
     granted_app_names: GrantedAppsReader,
+    enabled_widget_app_names: EnabledWidgetsReader,
     no_windows_grace_seconds: float = NO_WINDOWS_GRACE_SECONDS,
     idle_sweep_interval_seconds: float = IDLE_SWEEP_INTERVAL_SECONDS,
 ) -> AppLifecycleManager:
@@ -544,6 +565,7 @@ def build_app_lifecycle_manager(
         is_enabled=is_enabled,
         count_windows_by_app=count_windows_by_app,
         granted_app_names=granted_app_names,
+        enabled_widget_app_names=enabled_widget_app_names,
         no_windows_grace_seconds=no_windows_grace_seconds,
         idle_sweep_interval_seconds=idle_sweep_interval_seconds,
     )

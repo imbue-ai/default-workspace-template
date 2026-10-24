@@ -764,6 +764,14 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: 
             json.dumps({"type": "update_notice_changed", "notice": notice.wire_json() if notice is not None else None})
         )
         websocket.send(json.dumps({"type": "presence_updated", "users": initial_presence}))
+        websocket.send(
+            json.dumps(
+                {
+                    "type": "widgets_updated",
+                    "widgets": [widget.model_dump(mode="json") for widget in shell.widget_states()],
+                }
+            )
+        )
 
         is_client_registered = False
         shutdown = False

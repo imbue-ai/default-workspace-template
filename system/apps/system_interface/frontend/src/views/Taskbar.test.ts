@@ -68,7 +68,15 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
       onSwitchDesktop: vi.fn(),
       onOpenDesktopsMenu: vi.fn(),
       onDesktopContextMenu: vi.fn(),
+      widgets: [],
+      widgetPopoverApp: null,
+      onWidgetPress: vi.fn(),
+      onWidgetContextMenu: vi.fn(),
     },
+    toolbarWidgets: [],
+    widgetPopover: null,
+    onTrayFramesHostCreated: vi.fn(),
+    onTrayFramesHostRemoved: vi.fn(),
     onEntryClick: vi.fn(),
     onEntryContextMenu: vi.fn(),
     ...overrides,
@@ -190,6 +198,10 @@ describe("Taskbar", () => {
         onSwitchDesktop,
         onOpenDesktopsMenu: vi.fn(),
         onDesktopContextMenu: vi.fn(),
+        widgets: [],
+        widgetPopoverApp: null,
+        onWidgetPress: vi.fn(),
+        onWidgetContextMenu: vi.fn(),
       },
     });
     expect(taskbar.querySelector("[data-launcher-field]")).not.toBeNull();
@@ -242,5 +254,107 @@ describe("Taskbar", () => {
     } finally {
       document.removeEventListener("keydown", onDocumentKeyDown);
     }
+  });
+});
+
+describe("the tray's widgets", () => {
+  const gauge = appRecord("gauge", { widget: { path: "/widget", default_enabled: true, tray: true, toolbar: true } });
+
+  it("draws a slot per tray widget at its tray size, and the open one's popover above the bar", () => {
+    const tray = {
+      desktops: [desktopRecord("home")],
+      activeDesktopId: "home",
+      isDesktopsMenuOpen: false,
+      onSwitchDesktop: vi.fn(),
+      onOpenDesktopsMenu: vi.fn(),
+      onDesktopContextMenu: vi.fn(),
+      widgets: [{ app: gauge, size: { width: 64, height: 24 } }],
+      widgetPopoverApp: "gauge",
+      onWidgetPress: vi.fn(),
+      onWidgetContextMenu: vi.fn(),
+    };
+    const taskbar = render({ tray, widgetPopover: { app: "gauge", spot: "tray", size: { width: 180, height: 90 } } });
+
+    const slot = taskbar.querySelector('[data-tray-widget="gauge"]') as HTMLElement;
+    expect([slot.style.width, slot.style.height]).toEqual(["64px", "24px"]);
+    expect(slot.getAttribute("data-popover-open")).toBe("true");
+    expect(slot.querySelector("[data-widget-content]")).not.toBeNull();
+    const content = taskbar.querySelector('[data-widget-popover="gauge"] [data-widget-content]') as HTMLElement;
+    expect([content.style.width, content.style.height]).toEqual(["180px", "90px"]);
+    expect(taskbar.querySelector("[data-tray-widget-frames]")).not.toBeNull();
+
+    const closed = render({ tray: { ...tray, widgetPopoverApp: null }, widgetPopover: null });
+    expect(closed.querySelector("[data-widget-popover]")).toBeNull();
+    expect(closed.querySelector("[data-toolbar-widgets]")).toBeNull();
+  });
+
+  it("draws a toolbar widget in the bar's row after the launcher, with its popover over that end of the bar", () => {
+    const taskbar = render({
+      toolbarWidgets: [{ app: gauge, size: { width: 120, height: 28 } }],
+      widgetPopover: { app: "gauge", spot: "toolbar", size: { width: 180, height: 90 } },
+    });
+
+    const row = taskbar.querySelector("[data-taskbar-content]") as HTMLElement;
+    const group = row.querySelector("[data-toolbar-widgets]") as HTMLElement;
+    expect(group.previousElementSibling?.querySelector("[data-launcher-field]")).not.toBeNull();
+    expect(group.nextElementSibling?.hasAttribute("data-taskbar-entries")).toBe(true);
+    const slot = group.querySelector('[data-toolbar-widget="gauge"]') as HTMLElement;
+    expect([slot.style.width, slot.style.height]).toEqual(["120px", "28px"]);
+    expect(slot.getAttribute("data-popover-open")).toBe("true");
+    expect(group.querySelector('[data-widget-popover="gauge"] [data-widget-content]')).not.toBeNull();
+    expect(taskbar.querySelector('[data-tray-widget="gauge"]')).toBeNull();
+  });
+
+  it("reports a click on a bare slot in the tray or the row as the widget's press", () => {
+    const onWidgetPress = vi.fn();
+    const meter = appRecord("meter", {
+      widget: { path: "/widget", default_enabled: true, tray: true, toolbar: true },
+    });
+    const taskbar = render({
+      tray: {
+        desktops: [desktopRecord("home")],
+        activeDesktopId: "home",
+        isDesktopsMenuOpen: false,
+        onSwitchDesktop: vi.fn(),
+        onOpenDesktopsMenu: vi.fn(),
+        onDesktopContextMenu: vi.fn(),
+        widgets: [{ app: gauge, size: { width: 64, height: 24 } }],
+        widgetPopoverApp: "gauge",
+        onWidgetPress,
+        onWidgetContextMenu: vi.fn(),
+      },
+      toolbarWidgets: [{ app: meter, size: { width: 120, height: 28 } }],
+    });
+
+    (taskbar.querySelector('[data-tray-widget="gauge"]') as HTMLElement).click();
+    (taskbar.querySelector('[data-toolbar-widget="meter"]') as HTMLElement).click();
+    expect(onWidgetPress.mock.calls).toEqual([["gauge"], ["meter"]]);
+  });
+
+  it("asks for a widget's menu on a right-click on its bare slot, where it was made, and takes no other button as a press", () => {
+    const onWidgetPress = vi.fn();
+    const onWidgetContextMenu = vi.fn();
+    const taskbar = render({
+      tray: {
+        desktops: [desktopRecord("home")],
+        activeDesktopId: "home",
+        isDesktopsMenuOpen: false,
+        onSwitchDesktop: vi.fn(),
+        onOpenDesktopsMenu: vi.fn(),
+        onDesktopContextMenu: vi.fn(),
+        widgets: [{ app: gauge, size: { width: 64, height: 24 } }],
+        widgetPopoverApp: null,
+        onWidgetPress,
+        onWidgetContextMenu,
+      },
+    });
+
+    const slot = taskbar.querySelector('[data-tray-widget="gauge"]') as HTMLElement;
+    slot.dispatchEvent(new MouseEvent("click", { bubbles: true, button: 1 }));
+    expect(onWidgetPress).not.toHaveBeenCalled();
+    const click = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 900, clientY: 820 });
+    slot.dispatchEvent(click);
+    expect(click.defaultPrevented).toBe(true);
+    expect(onWidgetContextMenu).toHaveBeenCalledWith("gauge", 900, 820, slot);
   });
 });

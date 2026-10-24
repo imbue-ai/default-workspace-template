@@ -585,11 +585,12 @@ def test_an_unknown_api_path_is_a_json_404_not_the_app_shell(client: FlaskClient
 @pytest.mark.flaky
 @pytest.mark.timeout(15)
 def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
-    """On connect the socket sends the shell's inventory, desktops, the avatar's status, and the update notice."""
+    """On connect the socket sends the shell's inventory, desktops, the avatar's status, the update notice, the
+    connected users, and the widget switches."""
     with serve_app(app) as served:
         ws = open_ws(served, "/api/ws")
         try:
-            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(4)]
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(6)]
         finally:
             close_ws(ws)
 
@@ -598,7 +599,10 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
         "desktops_updated",
         "avatar_status",
         "update_notice_changed",
+        "presence_updated",
+        "widgets_updated",
     ]
+    assert messages[5]["widgets"] == []
     assert messages[0]["apps"] == []
     assert messages[1]["desktops"] == []
     assert messages[2] == {"type": "avatar_status", "mood": "idle", "is_stale": True}

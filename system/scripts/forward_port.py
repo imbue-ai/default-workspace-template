@@ -25,7 +25,9 @@ and copies its static fields onto the row: ``display_name``, ``description``, ``
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
 the names of the params, and ``method``, ``presets``, ``text_param``, and
 ``draft_param`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), ``window_closed_path``, and ``message_handlers`` (type, and path or show and showing);
+default_mode when given), ``widget`` (path, and default_enabled, tray, and
+toolbar when given), ``window_closed_path``, and ``message_handlers`` (type,
+and path or show and showing);
 the icon is read from the file the manifest names, relative to the manifest. Every manifest
 field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
@@ -138,7 +140,7 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # the first label of every standalone supervisord program with a hyphen in
 # its name: an app named ``share`` would claim ``share-gateway`` as its
 # ``share-<role>`` sidecar when its footprint is computed.
-RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
+RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent", "usage"})
 
 # Cap on the stored SVG markup. Generous for a hand-drawn or exported glyph
 # (icons in this repo run from a few hundred bytes to a couple of kilobytes)
@@ -166,7 +168,7 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 
 # The manifest keys copied verbatim onto the row, with the type each must have.
 # ``name`` (validated separately), ``icon`` (read from the named file), and the
-# structured keys (``default_shortcut``, ``launch_paths``, ``pin``,
+# structured keys (``default_shortcut``, ``launch_paths``, ``pin``, ``widget``,
 # ``message_handlers``) are handled on their own. ``program`` defaults to the
 # name when the manifest omits it.
 _MANIFEST_STRING_KEYS = (
@@ -206,6 +208,7 @@ _MANIFEST_OWNED_KEYS = (
     "actions",
     "launch_paths",
     "pin",
+    "widget",
     "window_closed_path",
     "message_handlers",
 )
@@ -213,6 +216,8 @@ _MANIFEST_OWNED_KEYS = (
 # The optional keys of a manifest's ``[pin]`` table, each a string when present; ``path`` is
 # required. The row carries only what the manifest wrote, and the reader fills the defaults.
 _PIN_OPTIONAL_STRING_KEYS = ("style", "scope", "default_mode")
+# The optional keys of a manifest's ``[widget]`` table, each a boolean when present; ``path`` is required.
+_WIDGET_OPTIONAL_BOOL_KEYS = ("default_enabled", "tray", "toolbar")
 # The optional string keys of a launch path entry, copied when the manifest wrote them; the reader fills the defaults.
 _LAUNCH_PATH_OPTIONAL_STRING_KEYS = ("method", "text_param", "draft_param")
 
@@ -609,6 +614,13 @@ def _read_manifest(
             return {}, None, pin_error
         fields["pin"] = copied_pin
 
+    widget = raw.get("widget")
+    if widget is not None:
+        copied_widget, widget_error = _copied_widget(widget, path)
+        if copied_widget is None:
+            return {}, None, widget_error
+        fields["widget"] = copied_widget
+
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
         entries = raw.get(key)
         if entries is not None:
@@ -673,6 +685,21 @@ def _copied_pin(pin: Any, path: Path) -> tuple[dict[str, object] | None, str | N
             if not isinstance(pin[key], str):
                 return None, f"manifest {str(path)!r}: pin.{key} must be a string"
             copied[key] = pin[key]
+    return copied, None
+
+
+def _copied_widget(widget: Any, path: Path) -> tuple[dict[str, object] | None, str | None]:
+    """The manifest's ``[widget]`` table as the registry row carries it: ``path``, and ``default_enabled``, ``tray``
+    and ``toolbar`` when the manifest wrote them. Returns ``(copied, None)``, or ``(None, error)`` when the value is
+    not shaped as the manifest requires."""
+    if not (isinstance(widget, dict) and isinstance(widget.get("path"), str)):
+        return None, f"manifest {str(path)!r}: widget must be a table with a string 'path'"
+    copied: dict[str, object] = {"path": widget["path"]}
+    for key in _WIDGET_OPTIONAL_BOOL_KEYS:
+        if key in widget:
+            if not isinstance(widget[key], bool):
+                return None, f"manifest {str(path)!r}: widget.{key} must be a boolean"
+            copied[key] = widget[key]
     return copied, None
 
 
@@ -902,8 +929,8 @@ def main() -> None:
         help=(
             "Path to the app's app.toml. Its name, icon, and static fields (display_name, "
             "critical, priority, program, internal, system, launcher_rank, default_shortcut, "
-            "launch_paths with their text_param, pin, window_closed_path, message_handlers) are copied onto the row on "
-            "every call."
+            "launch_paths with their text_param, pin, widget, window_closed_path, message_handlers) are copied onto "
+            "the row on every call."
         ),
     )
     parser.add_argument(

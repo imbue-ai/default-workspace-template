@@ -2880,3 +2880,305 @@ def test_files_answers_a_missing_path_with_its_own_page_naming_it_and_the_neares
             poll_interval=0.1,
             error_message="the not-found page's window was never titled after the missing name",
         )
+
+
+# App widgets (app-widgets plan section 10)
+
+_WIDGET_APP_NAME = "gauge"
+_WIDGET_PATH = "/widget"
+# The stub widget page's content in each mode, in CSS pixels: what it reports, and the shell draws below the grip.
+_WIDGET_EXPANDED_SIZE = (150, 50)
+_WIDGET_COLLAPSED_SIZE = (60, 28)
+_WIDGET_TRAY_SIZE = (50, 20)
+# The rim a widget's box draws round its page, on each side.
+_WIDGET_RIM = 6
+
+# A widget's page: it reports the size of its content for each mode the shell tells it, and its one link opens a
+# window of its own app (``target="_blank"``, which the contract's link rule turns into a focused open).
+_WIDGET_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Gauge</title></head><body>
+<a id="open" href="/" target="_blank">Open</a> <span id="mode"></span>
+<script type="module">
+import { connectToShell } from "__BASE_URL__/_static/app_contract.js";
+const sizes = { expanded: [__EXPANDED__], collapsed: [__COLLAPSED__], tray: [__TRAY__] };
+window.__modes = [];
+const connection = connectToShell({
+  onHandshake(handshake) { window.__handshake = handshake; },
+  onWidgetMode(mode) {
+    window.__modes.push(mode);
+    document.getElementById("mode").textContent = mode;
+    connection.widgetSize(...sizes[mode]);
+  },
+});
+window.__hide = (isHidden) => connection.widgetHidden(isHidden);
+</script></body></html>"""
+
+
+def _widget_app(shell: dict[str, str]) -> Flask:
+    """An app declaring a widget: its widget page at ``_WIDGET_PATH`` and the ordinary stub page everywhere else.
+    ``shell["base_url"]`` names the shell, set once it runs (before any page is asked for)."""
+    app = Flask("widget-stub")
+
+    def _widget_page() -> Response:
+        html = (
+            _WIDGET_PAGE_TEMPLATE.replace("__BASE_URL__", shell["base_url"])
+            .replace("__EXPANDED__", ", ".join(str(side) for side in _WIDGET_EXPANDED_SIZE))
+            .replace("__COLLAPSED__", ", ".join(str(side) for side in _WIDGET_COLLAPSED_SIZE))
+            .replace("__TRAY__", ", ".join(str(side) for side in _WIDGET_TRAY_SIZE))
+        )
+        return Response(html, mimetype="text/html")
+
+    def _page(path: str = "") -> Response:
+        return Response(_stub_page_html(shell["base_url"], True), mimetype="text/html")
+
+    app.add_url_rule(_WIDGET_PATH, view_func=_widget_page, endpoint="widget_page", methods=["GET"])
+    app.add_url_rule("/", view_func=_page, endpoint="widget_app_root", methods=["GET"])
+    app.add_url_rule("/<path:path>", view_func=_page, endpoint="widget_app_page", methods=["GET"])
+    return app
+
+
+@contextlib.contextmanager
+def _running_widget_server(tmp_path: Path, is_tray_drawn: bool = False) -> Generator[E2EServer, None, None]:
+    """The shell over the stub apps and the ``gauge`` app, whose widget is on by default; ``is_tray_drawn`` says its
+    page draws a tray form."""
+    shell: dict[str, str] = {}
+    with serve_app(_widget_app(shell)) as widget_served:
+        widget_row = registry_row_toml(
+            _WIDGET_APP_NAME,
+            widget_served.http_url,
+            display_name="Gauge",
+            widget=(_WIDGET_PATH, True),
+            widget_tray=is_tray_drawn,
+        )
+        with _running_e2e_server(tmp_path, extra_rows=(widget_row,)) as server:
+            shell["base_url"] = server.base_url
+            yield server
+
+
+def _widget(page: Page) -> Locator:
+    return page.locator(f'[data-widget="{_WIDGET_APP_NAME}"]')
+
+
+def _widget_frame(page: Page) -> Frame:
+    handle = page.locator(f'iframe[data-widget-frame="{_WIDGET_APP_NAME}"]').element_handle(timeout=15000)
+    assert handle is not None
+    frame = handle.content_frame()
+    assert frame is not None
+    return frame
+
+
+def _client_widgets(base_url: str, client_id: str) -> dict[str, Any]:
+    clients = {client["id"]: client for client in _get_json(f"{base_url}/api/clients")["clients"]}
+    return clients[client_id]["widgets"]
+
+
+def _windows_of(base_url: str, app: str) -> list[dict[str, Any]]:
+    desktops = _get_json(f"{base_url}/api/desktops")["desktops"]
+    return [window for desktop in desktops for window in desktop["windows"] if window["app"] == app]
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_widget_shows_top_right_collapses_moves_anywhere_opens_its_app_and_hides_for_everyone(
+    tmp_path: Path, page: Page
+) -> None:
+    """An app declaring a widget is drawn top right once its page reports a size, over every window; a double-click on
+    its rim collapses it to the size the page reports for that mode; a drag of its rim, or of its page, leaves it
+    wherever it is let go, kept on the client record across a reload, and a drag opens nothing; its link raises one
+    window of its app however often it is clicked; and its menu hides it for the whole workspace."""
+    with _running_widget_server(tmp_path) as server:
+        _land(page, server)
+        client_id = _client_id(page)
+        widget = _widget(page)
+        expect(widget).to_be_visible(timeout=15000)
+        expect(widget).to_have_attribute("data-widget-moved", "false")
+        expect(widget).to_have_attribute("data-widget-mode", "expanded")
+        frame = _widget_frame(page)
+        handshake = frame.evaluate("() => window.__handshake")
+        assert handshake["surface"] == "widget"
+        assert handshake["windowId"] == ""
+        assert handshake["app"] == _WIDGET_APP_NAME
+
+        backdrop = _box(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]'))
+        box = _box(widget)
+        _assert_close(box["width"], _WIDGET_EXPANDED_SIZE[0] + 2 * _WIDGET_RIM, "expanded width")
+        _assert_close(box["height"], _WIDGET_EXPANDED_SIZE[1] + 2 * _WIDGET_RIM, "expanded height")
+        _assert_close(box["x"] + box["width"], backdrop["x"] + backdrop["width"] - 16, "top-right x")
+        # Below a title bar's height too, so a maximized window's controls stay clear of it.
+        _assert_close(box["y"], backdrop["y"] + 36 + 16, "top-right y")
+
+        widget.dblclick(position={"x": 30, "y": 2})
+        expect(widget).to_have_attribute("data-widget-mode", "collapsed")
+        wait_for(
+            lambda: abs(_box(widget)["height"] - (_WIDGET_COLLAPSED_SIZE[1] + 2 * _WIDGET_RIM)) <= 1,
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="the collapsed widget never took the size its page reported",
+        )
+        assert frame.evaluate("() => window.__modes") == ["expanded", "collapsed"]
+
+        # Dragged by its rim to a spot in the lower left that is no corner, it stays where it is let go.
+        rim = _box(widget)
+        target = (backdrop["x"] + 300, backdrop["y"] + backdrop["height"] - 200)
+        _drag(page, (rim["x"] + 30, rim["y"] + 2), target)
+        expect(widget).to_have_attribute("data-widget-moved", "true")
+        dropped = _box(widget)
+        _assert_close(dropped["x"], target[0] - 30, "dropped x")
+        _assert_close(dropped["y"], target[1] - 2, "dropped y")
+        wait_for(
+            lambda: (_client_widgets(server.base_url, client_id).get(_WIDGET_APP_NAME) or {}).get("position")
+            is not None,
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="the drag never wrote the position",
+        )
+        stored = _client_widgets(server.base_url, client_id)[_WIDGET_APP_NAME]
+        assert stored["mode"] == "collapsed"
+        # Kept by its bottom-left corner, the one nearest the edges it sits by.
+        _assert_close(stored["position"]["x"] * backdrop["width"], dropped["x"] - backdrop["x"], "stored x")
+        _assert_close(
+            stored["position"]["y"] * backdrop["height"],
+            dropped["y"] + dropped["height"] - backdrop["y"],
+            "stored y",
+        )
+
+        page.reload()
+        expect(_widget(page)).to_have_attribute("data-widget-moved", "true", timeout=15000)
+        expect(_widget(page)).to_have_attribute("data-widget-mode", "collapsed")
+        moved = _box(_widget(page))
+        _assert_close(moved["x"], dropped["x"], "moved x after a reload")
+        _assert_close(moved["y"], dropped["y"], "moved y after a reload")
+
+        # A press anywhere on the widget's page drags it too, through the page's contract, and the click that
+        # ends the drag opens nothing.
+        grab = (moved["x"] + _WIDGET_RIM + 8, moved["y"] + _WIDGET_RIM + 8)
+        target = (backdrop["x"] + backdrop["width"] - 300, backdrop["y"] + 200)
+        _drag(page, grab, target)
+        wait_for(
+            lambda: abs(_box(_widget(page))["x"] - (target[0] - (grab[0] - moved["x"]))) <= _GEOMETRY_TOLERANCE_PX,
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="a drag on the widget's page never moved it",
+        )
+        _assert_close(_box(_widget(page))["y"], target[1] - (grab[1] - moved["y"]), "page-dragged y")
+        wait_for(
+            lambda: _client_widgets(server.base_url, client_id)[_WIDGET_APP_NAME]["position"] != stored["position"],
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="the page's drag never wrote the position",
+        )
+        page.wait_for_timeout(500)
+        assert _windows_of(server.base_url, _WIDGET_APP_NAME) == []
+
+        link = _widget_frame(page).locator("#open")
+        link.click()
+        wait_for(
+            lambda: len(_windows_of(server.base_url, _WIDGET_APP_NAME)) == 1,
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="the widget's link never opened its app",
+        )
+        # The window moves to another page of its app; the widget's link still raises it rather than opening a
+        # second window at its own path.
+        (opened,) = _windows_of(server.base_url, _WIDGET_APP_NAME)
+        app_handle = page.locator(f'iframe[data-live-page="{opened["id"]}"]').element_handle(timeout=10000)
+        assert app_handle is not None
+        app_page = app_handle.content_frame()
+        assert app_page is not None
+        app_page.wait_for_function("() => window.__handshake !== undefined", timeout=10000)
+        app_page.evaluate("() => window.__navigateTo('/detail')")
+        wait_for(
+            lambda: _windows_of(server.base_url, _WIDGET_APP_NAME)[0]["path"] == "/detail",
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="the app's window never reported its new page",
+        )
+        link.click()
+        page.wait_for_timeout(500)
+        assert [window["path"] for window in _windows_of(server.base_url, _WIDGET_APP_NAME)] == ["/detail"]
+
+        _widget(page).click(button="right", position={"x": 30, "y": 2})
+        menu = page.locator(".widget-menu")
+        expect(menu).to_be_visible(timeout=5000)
+        menu.locator('[data-menu-row="widget-hide"]').click()
+        expect(_widget(page)).to_have_count(0, timeout=10000)
+        assert _get_json(f"{server.base_url}/api/widgets")["widgets"] == [
+            {"app": _WIDGET_APP_NAME, "is_enabled": False}
+        ]
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_widget_moves_to_the_tray_from_its_menu_and_a_click_opens_its_popover_until_escape(
+    tmp_path: Path, page: Page
+) -> None:
+    """A right-click on a widget's page opens its menu; "Move to tray" puts a widget whose page draws a tray form in
+    the tray, told mode tray, at the size its page reports for that; a click on it opens its popover, the same page
+    told expanded, opening no window; Escape on the page closes it; and the tray's menu moves it back."""
+    with _running_widget_server(tmp_path, is_tray_drawn=True) as server:
+        _land(page, server)
+        client_id = _client_id(page)
+        on_desktop = page.locator(f'[data-widgets] [data-widget="{_WIDGET_APP_NAME}"]')
+        expect(on_desktop).to_be_visible(timeout=15000)
+
+        frame_box = _box(page.locator(f'iframe[data-widget-frame="{_WIDGET_APP_NAME}"]'))
+        page.mouse.click(frame_box["x"] + 20, frame_box["y"] + 10, button="right")
+        page.locator('[data-menu-row="widget-to-tray"]').click()
+        slot = page.locator(f'[data-tray-widget="{_WIDGET_APP_NAME}"]')
+        expect(slot).to_be_visible(timeout=10000)
+        expect(on_desktop).to_have_count(0)
+        wait_for(
+            lambda: _client_widgets(server.base_url, client_id)[_WIDGET_APP_NAME]["placement"] == "tray",
+            timeout=10.0,
+            poll_interval=0.1,
+            error_message="the move never wrote the placement",
+        )
+        # The page is framed anew in the taskbar's host and told its tray form.
+        frame = _widget_frame(page)
+        frame.wait_for_function("() => window.__modes.at(-1) === 'tray'", timeout=10000)
+        box = _box(slot)
+        _assert_close(box["width"], _WIDGET_TRAY_SIZE[0], "tray slot width")
+        _assert_close(box["height"], _WIDGET_TRAY_SIZE[1], "tray slot height")
+        taskbar = _box(page.locator("[data-taskbar]"))
+        assert taskbar["y"] <= box["y"] and box["y"] + box["height"] <= taskbar["y"] + taskbar["height"]
+
+        page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+        popover = page.locator(f'[data-widget-popover="{_WIDGET_APP_NAME}"]')
+        expect(popover).to_be_visible(timeout=10000)
+        frame.wait_for_function("() => window.__modes.at(-1) === 'expanded'", timeout=10000)
+        assert _box(popover)["y"] + _box(popover)["height"] <= taskbar["y"] + 1, "the popover is not above the bar"
+        page.wait_for_timeout(300)
+        assert _windows_of(server.base_url, _WIDGET_APP_NAME) == []
+
+        page.keyboard.press("Escape")
+        expect(popover).to_have_count(0, timeout=10000)
+        frame.wait_for_function("() => window.__modes.at(-1) === 'tray'", timeout=10000)
+
+        page.mouse.click(box["x"] + box["width"] / 2, box["y"] + box["height"] / 2, button="right")
+        page.locator('[data-menu-row="widget-to-desktop"]').click()
+        expect(on_desktop).to_be_visible(timeout=10000)
+        expect(slot).to_have_count(0)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_phone_draws_each_widget_collapsed_above_its_bar_and_a_tap_shows_its_app(tmp_path: Path, page: Page) -> None:
+    """A phone has no floating layer: the widget is drawn in the strip above the bar, told it is collapsed whatever the
+    client chose, at the size its page reports for that; a tap on its link opens its app's window, which the phone
+    shows."""
+    with _running_widget_server(tmp_path) as server:
+        with _phone_client(page, server) as phone:
+            widget = phone.locator(f'[data-phone-widget="{_WIDGET_APP_NAME}"]')
+            expect(widget).to_be_visible(timeout=15000)
+            frame = _widget_frame(phone)
+            assert frame.evaluate("() => window.__modes") == ["collapsed"]
+            box = _box(widget)
+            _assert_close(box["width"], _WIDGET_COLLAPSED_SIZE[0], "phone widget width")
+            _assert_close(box["height"], _WIDGET_COLLAPSED_SIZE[1], "phone widget height")
+            bar = _box(phone.locator("[data-phone-bar]"))
+            assert box["y"] + box["height"] <= bar["y"] + 1, "the widget is not above the bar"
+
+            frame.locator("#open").tap()
+            wait_for(
+                lambda: len(_windows_of(server.base_url, _WIDGET_APP_NAME)) == 1,
+                timeout=10.0,
+                poll_interval=0.1,
+                error_message="the widget's link never opened its app",
+            )
+            _phone_shows(phone, _windows_of(server.base_url, _WIDGET_APP_NAME)[0]["id"])

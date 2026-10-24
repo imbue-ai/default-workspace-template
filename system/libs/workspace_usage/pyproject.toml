@@ -1,0 +1,31 @@
+[project]
+name = "workspace-usage"
+version = "0.1.0"
+description = "Records every model call a workspace app makes in the workspace's usage: the IMBUE_USAGE_CONTEXT attribution, model_call events appended to the event files the usage collector follows, claude -p one-shots read from their session logs, and a LiteLLM callback."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "app-manifest",
+    # The model_call contract, and the standard-library session-log reader one-shots record with.
+    "imbue-mngr-usage",
+    "loguru>=0.7.0",
+]
+
+[project.optional-dependencies]
+litellm = ["litellm>=1.88.1"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/workspace_usage"]
+
+[dependency-groups]
+dev = [
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.85",
+]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

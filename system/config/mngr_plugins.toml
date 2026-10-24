@@ -48,3 +48,33 @@ package = "imbue-mngr-autocompact"
 subdirectory = "libs/mngr_autocompact"
 tools = ["mngr", "chat"]
 
+
+# `mngr usage`: per-agent cost and rate-limit windows for the mngr CLI. Only a CLI
+# command, so no app's tool needs it.
+[[plugins]]
+package = "imbue-mngr-usage"
+subdirectory = "libs/mngr_usage"
+tools = ["mngr"]
+
+# The harness usage writers: each provisions its agent type's writer, which appends one
+# model_call event per model call to the agent's usage events file (followed by the
+# usage collector). Only provisioning, which the mngr CLI runs, needs them.
+[[plugins]]
+package = "imbue-mngr-claude-usage"
+subdirectory = "libs/mngr_claude_usage"
+tools = ["mngr"]
+
+[[plugins]]
+package = "imbue-mngr-codex-usage"
+subdirectory = "libs/mngr_codex_usage"
+tools = ["mngr"]
+
+[[plugins]]
+package = "imbue-mngr-opencode-usage"
+subdirectory = "libs/mngr_opencode_usage"
+tools = ["mngr"]
+
+[[plugins]]
+package = "imbue-mngr-pi-coding-usage"
+subdirectory = "libs/mngr_pi_coding_usage"
+tools = ["mngr"]

@@ -21,7 +21,7 @@ import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
-import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
+import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing, WidgetPlacement } from "../model/records";
 import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
@@ -36,7 +36,12 @@ import {
   entryLook,
   floatingEntries,
   pinnedWindowOf,
+  shownWidgets,
+  taskbarSpotOf,
+  taskbarWidgets,
+  widgetSwitchOf,
 } from "../reducers/desktopState";
+import type { TaskbarSpot } from "../reducers/desktopState";
 import {
   defaultHighlightIndex,
   isRowEnabled,
@@ -50,6 +55,11 @@ import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE } from "../gestures/pointerG
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { MountPolicy } from "../pages/livePages";
+import { WIDGET_ATTRIBUTE, WIDGET_POPOVER_ATTRIBUTE, WidgetFramesLayer } from "../pages/widgetFrames";
+import type { ViewportPoint, WidgetDragStep } from "../pages/widgetFrames";
+import { clampedWidgetSize } from "../geometry/widgets";
+import { TOOLBAR_WIDGET_ATTRIBUTE, TRAY_WIDGET_ATTRIBUTE } from "./TrayWidgets";
+import type { TrayWidget, TrayWidgetPopoverAttrs } from "./TrayWidgets";
 import type { DesktopStore } from "../store/DesktopStore";
 import type { TourController } from "../model/tour";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
@@ -80,6 +90,7 @@ type OpenMenu =
   | { readonly kind: "entry"; readonly windowId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "app-shortcut"; readonly app: string; readonly referenceRows: readonly MenuRow[] }
+  | { readonly kind: "widget"; readonly app: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "desktops" }
   | { readonly kind: "desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
@@ -164,6 +175,10 @@ export function App(): m.Component<AppAttrs> {
   let launcherFieldRise = 0;
   let selectedShortcutKey: string | null = null;
   let pages: LivePagesLayer | null = null;
+  // The widgets' frames, while the desktop layout (whose backdrop holds their host) is drawn.
+  let widgetFrames: WidgetFramesLayer | null = null;
+  // The taskbar's host for the tray widgets' frames, while the desktop layout draws a taskbar.
+  let trayFramesHost: HTMLElement | null = null;
   // The window the last redraw painted as dragged, for one more paint once the gesture is gone.
   let draggedWindowId: string | null = null;
   let backdropArea: HTMLElement | null = null;
@@ -250,6 +265,11 @@ export function App(): m.Component<AppAttrs> {
     // One layer per Escape: a dialog (the settings dialog, the avatar chooser) takes it through the
     // Modal's own listener, an open menu through the menu's own, and the layer under it stays.
     if (document.querySelector('.modal-overlay, [data-menu-part="menu"]') !== null) return;
+    if (store !== null && store.getState().trayPopoverApp !== null) {
+      store.closeTrayPopover();
+      m.redraw();
+      return;
+    }
     if (store?.isLauncherOpen() === true) {
       closeLauncher();
       m.redraw();
@@ -260,6 +280,20 @@ export function App(): m.Component<AppAttrs> {
   };
 
   const onDocumentPointerDown = (event: Event): void => {
+    // A taskbar widget's popover closes on a press anywhere but on it or its own slot (whose own click toggles it);
+    // the tray's own items (the desktop switcher, the presence strip) are not its slot.
+    const popoverApp = store?.getState().trayPopoverApp ?? null;
+    if (store !== null && popoverApp !== null) {
+      const target = event.target;
+      const app = CSS.escape(popoverApp);
+      const own =
+        `[${WIDGET_POPOVER_ATTRIBUTE}], [${TRAY_WIDGET_ATTRIBUTE}="${app}"], ` +
+        `[${TOOLBAR_WIDGET_ATTRIBUTE}="${app}"]`;
+      if (!(target instanceof Element && target.closest(own) !== null)) {
+        store.closeTrayPopover();
+        m.redraw();
+      }
+    }
     if (store?.isLauncherOpen() !== true) return;
     const target = event.target;
     if (
@@ -320,6 +354,35 @@ export function App(): m.Component<AppAttrs> {
     pages.setMountPolicy(mountPolicyOf(current));
     pages.start();
     pages.reconcile();
+  }
+
+  /** Build the widget frames layer over ``host`` once the render that made it is over, and name its frames to the
+   *  live pages layer, which takes what a widget's page asks of the shell. */
+  function startWidgetFramesLayer(current: DesktopStore, host: HTMLElement, attrs: AppAttrs): void {
+    widgetFrames?.stop();
+    widgetFrames = new WidgetFramesLayer(host, current, {
+      host: attrs.host,
+      protocol: attrs.protocol,
+      onDrag: (app, step) => followWidgetDrag(current, app, step),
+      onMenu: (app, point, frame) => {
+        openWidgetMenuAt(current, app, point.x, point.y, frame);
+        m.redraw();
+      },
+    });
+    widgetFrames.setTrayHost(trayFramesHost);
+    const layer = widgetFrames;
+    pages?.setWidgetFrameResolver((frame) => layer.appOfFrame(frame));
+    widgetFrames.start();
+    widgetFrames.reconcile();
+  }
+
+  /** The layout that held the widget frames' host is gone (the phone layout took over from the desktop's, or back):
+   *  so are its frames, unless a layer over the next layout's host has already started. */
+  function stopWidgetFramesLayer(host: HTMLElement | null): void {
+    if (widgetFrames === null || (host !== null && !widgetFrames.isOver(host))) return;
+    widgetFrames.stop();
+    widgetFrames = null;
+    pages?.setWidgetFrameResolver(null);
   }
 
   /** Which pages the layout mounts: the phone's shown page and the pages it keeps, else every page. */
@@ -383,6 +446,47 @@ export function App(): m.Component<AppAttrs> {
     if (element !== undefined && element !== null) applyRectStyle(element, current.floatingEntryRectOf(app));
   }
 
+  /** Paint a widget as the store now has it, straight onto its box, and lay its page over it again: the per-move
+   *  step of its drag, and once more when the drag ends or is cancelled. */
+  function paintWidget(current: DesktopStore, app: string): void {
+    const element = backdropArea?.querySelector<HTMLElement>(`[${WIDGET_ATTRIBUTE}="${CSS.escape(app)}"]`);
+    const rect = current.widgetRectOf(app);
+    if (element !== undefined && element !== null && rect !== null) applyRectStyle(element, rect);
+    widgetFrames?.placeFrame(app);
+  }
+
+  /** A drag a widget's page reported (a press anywhere on the widget): the same drag a press on its rim makes,
+   *  but from the page's points, and none on a phone, where a widget does not move or while another gesture runs. */
+  function followWidgetDrag(current: DesktopStore, app: string, step: WidgetDragStep): void {
+    const origin = backdropArea?.getBoundingClientRect();
+    if (origin === undefined) return;
+    const toBackdrop = (point: ViewportPoint): PixelPoint => ({ x: point.x - origin.left, y: point.y - origin.top });
+    const gesture = current.getGesture();
+    const isThisDrag = gesture !== null && gesture.kind === "widget" && gesture.app === app;
+    switch (step.phase) {
+      case "start": {
+        const rect = current.widgetRectOf(app);
+        if (gesture !== null || current.isPhoneLayout() || rect === null) return;
+        const press = toBackdrop(step.press);
+        current.beginWidgetDrag(app, toBackdrop(step.point), { x: press.x - rect.x, y: press.y - rect.y });
+        break;
+      }
+      case "move":
+        if (!isThisDrag) return;
+        current.updateWidgetDrag(toBackdrop(step.point));
+        break;
+      case "end":
+        if (!isThisDrag) return;
+        current.endWidgetDrag(toBackdrop(step.point));
+        break;
+      case "cancel":
+        if (!isThisDrag) return;
+        current.cancelGesture();
+        break;
+    }
+    paintWidget(current, app);
+  }
+
   /** Paint a lifted shortcut's travel straight onto its icon: the per-move step of its drag, and once more
    *  when the drag ends or is cancelled, for the same reason ``paintWindow`` exists. With the drag over it
    *  settles the icon into the cell it landed in instead. */
@@ -426,10 +530,12 @@ export function App(): m.Component<AppAttrs> {
         // What the browser would have done with a press whose default the gesture source did not prevent.
         pages?.takeFocusFromOtherPages(pressedWindowId);
         pages?.setGestureActive(true);
+        widgetFrames?.setGestureActive(true);
         root.setAttribute(WINDOW_MOTION_ATTRIBUTE, "off");
       },
       onPressEnd: () => {
         pages?.setGestureActive(false);
+        widgetFrames?.setGestureActive(false);
         root.removeAttribute(WINDOW_MOTION_ATTRIBUTE);
       },
       onBegin: (binding, rootPoint, rootPress) => {
@@ -453,6 +559,9 @@ export function App(): m.Component<AppAttrs> {
               grabOffsetInside(binding.element, toBackdrop(rootPress)),
             );
             return;
+          case "widget":
+            current.beginWidgetDrag(binding.app, point, grabOffsetInside(binding.element, toBackdrop(rootPress)));
+            return;
           case "taskbar-entry":
             return;
         }
@@ -475,6 +584,10 @@ export function App(): m.Component<AppAttrs> {
           case "floating-entry":
             current.updateFloatingEntryDrag(point);
             paintFloatingEntry(current, binding.app);
+            return;
+          case "widget":
+            current.updateWidgetDrag(point);
+            paintWidget(current, binding.app);
             return;
           case "taskbar-entry":
             return;
@@ -501,6 +614,10 @@ export function App(): m.Component<AppAttrs> {
             current.endFloatingEntryDrag(point);
             paintFloatingEntry(current, binding.app);
             break;
+          case "widget":
+            current.endWidgetDrag(point);
+            paintWidget(current, binding.app);
+            break;
           case "taskbar-entry":
             break;
         }
@@ -511,6 +628,7 @@ export function App(): m.Component<AppAttrs> {
         current.cancelGesture();
         if (binding.kind === "window-move" || binding.kind === "window-resize") paintWindow(current, binding.windowId);
         if (binding.kind === "floating-entry") paintFloatingEntry(current, binding.app);
+        if (binding.kind === "widget") paintWidget(current, binding.app);
         if (binding.kind === "shortcut") paintShortcut(current, binding.app, binding.launch);
       },
       onLongPress: (binding, client) => {
@@ -538,6 +656,9 @@ export function App(): m.Component<AppAttrs> {
             if (windowId !== null) openMenuAt({ kind: "entry", windowId, referenceRows: referenceRows() }, anchor);
             break;
           }
+          case "widget":
+            openMenuAt({ kind: "widget", app: binding.app, referenceRows: referenceRows() }, anchor);
+            break;
         }
         m.redraw();
       },
@@ -648,16 +769,15 @@ export function App(): m.Component<AppAttrs> {
         },
       });
     }
-    rows.push(
-      {
-        kind: "action",
-        key: "change-mode",
-        label: otherMode === "new" ? "Always open a new window" : "Focus the last window instead",
-        onSelect: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
-      },
-      { kind: "divider" },
-      removeFromDesktopRow(current, shortcut.target.app, shortcut.target.launch),
-    );
+    rows.push({
+      kind: "action",
+      key: "change-mode",
+      label: otherMode === "new" ? "Always open a new window" : "Focus the last window instead",
+      onSelect: () => void current.setShortcut(desktop.id, { ...shortcut, mode: otherMode }),
+    });
+    const widgetRow = widgetSwitchRow(current, shortcut.target.app);
+    if (widgetRow !== null) rows.push(widgetRow);
+    rows.push({ kind: "divider" }, removeFromDesktopRow(current, shortcut.target.app, shortcut.target.launch));
     return rows;
   }
 
@@ -690,8 +810,107 @@ export function App(): m.Component<AppAttrs> {
   }
 
   function rowsOfAppShortcutMenu(current: DesktopStore, appName: string): MenuRow[] | null {
-    const row = desktopShortcutRow(current, appName);
-    return row === null ? null : [row];
+    const rows = [desktopShortcutRow(current, appName), widgetSwitchRow(current, appName)].filter(
+      (row): row is MenuRow => row !== null,
+    );
+    return rows.length === 0 ? null : rows;
+  }
+
+  /** Show the app's widget to everyone on the workspace, or hide it (app-widgets plan section 4.6); null for an app
+   *  that declares no widget. */
+  function widgetSwitchRow(current: DesktopStore, appName: string): MenuRow | null {
+    const widgetSwitch = widgetSwitchOf(current.getState(), appName);
+    if (widgetSwitch === null) return null;
+    const isEnabled = widgetSwitch.is_enabled;
+    return {
+      kind: "action",
+      key: isEnabled ? "widget-hide" : "widget-show",
+      label: isEnabled ? "Hide widget" : "Show widget",
+      tooltip: `${isEnabled ? "Hide" : "Show"} it for everyone on this workspace`,
+      onSelect: () => void current.setWidgetEnabled(appName, !isEnabled),
+    };
+  }
+
+  /** The widgets at ``spot`` in the taskbar whose page has reported its form's size there and has not asked to be
+   *  hidden. */
+  function taskbarWidgetsOf(current: DesktopStore, spot: TaskbarSpot): TrayWidget[] {
+    const reports = current.getState().widgetReports;
+    return taskbarWidgets(current.getState(), spot).flatMap(({ app }) => {
+      const report = reports[app.name];
+      if (report === undefined || report.traySize === null || report.isHidden) return [];
+      return [{ app, size: report.traySize }];
+    });
+  }
+
+  /** The open popover of a widget in the taskbar, once its page has reported its expanded size; null otherwise. */
+  function trayPopoverOf(current: DesktopStore): TrayWidgetPopoverAttrs | null {
+    const app = current.getState().trayPopoverApp;
+    if (app === null) return null;
+    const spot = (["tray", "toolbar"] as const).find((candidate) =>
+      taskbarWidgetsOf(current, candidate).some((widget) => widget.app.name === app),
+    );
+    const size = current.getState().widgetReports[app]?.size ?? null;
+    return spot === undefined || size === null
+      ? null
+      : { app, spot, size: clampedWidgetSize(size, current.getMetrics()) };
+  }
+
+  /** The taskbar's host for the tray widgets' frames was made, or is gone. */
+  function setTrayFramesHost(host: HTMLElement | null): void {
+    trayFramesHost = host;
+    widgetFrames?.setTrayHost(host);
+  }
+
+  /** Open a widget's menu at ``x``, ``y`` in the viewport, from a right-click or a press on ``target``. Not on a phone,
+   *  whose layout draws no such menu: one opened there would show only once the client is back on the desktop. */
+  function openWidgetMenuAt(current: DesktopStore, app: string, x: number, y: number, target: Element): void {
+    if (current.isPhoneLayout()) return;
+    openMenuAt({ kind: "widget", app, referenceRows: referenceRowsFor(current, target, x, y) }, anchorForPoint(x, y));
+  }
+
+  /** A widget's menu: collapse or expand it and move it to each other place its page draws a form for (the desktop,
+   *  the taskbar's tray, the bar's row), neither on a phone, which draws every widget collapsed in its strip; open
+   *  its app, or hide it for the whole workspace. */
+  function rowsOfWidgetMenu(current: DesktopStore, appName: string): MenuRow[] | null {
+    const state = current.getState();
+    const shown = shownWidgets(state).find((widget) => widget.app.name === appName);
+    if (shown === undefined) return null;
+    const isCollapsed = shown.presentation.mode === "collapsed";
+    const spot = taskbarSpotOf(shown);
+    const rows: MenuRow[] = [];
+    if (spot === null && !current.isPhoneLayout()) {
+      rows.push({
+        kind: "action",
+        key: isCollapsed ? "widget-expand" : "widget-collapse",
+        label: isCollapsed ? "Expand" : "Collapse",
+        onSelect: () => void current.toggleWidgetMode(appName),
+      });
+    }
+    if (!current.isPhoneLayout()) {
+      const moves: readonly [WidgetPlacement, string, boolean][] = [
+        ["desktop", "Move to desktop", spot !== null],
+        ["toolbar", "Move to toolbar", spot !== "toolbar" && shown.app.widget?.toolbar === true],
+        ["tray", "Move to tray", spot !== "tray" && shown.app.widget?.tray === true],
+      ];
+      for (const [placement, label, isOffered] of moves) {
+        if (!isOffered) continue;
+        rows.push({
+          kind: "action",
+          key: `widget-to-${placement}`,
+          label,
+          onSelect: () => void current.setWidgetPlacement(appName, placement),
+        });
+      }
+    }
+    rows.push({
+      kind: "action",
+      key: "widget-open",
+      label: `Open ${shown.app.display_name}`,
+      onSelect: () => void current.openPathFromApp(appName, "/", "focus"),
+    });
+    const hide = widgetSwitchRow(current, appName);
+    if (hide !== null) rows.push({ kind: "divider" }, hide);
+    return rows;
   }
 
   function rowsOfDesktopsMenu(current: DesktopStore): MenuRow[] {
@@ -762,6 +981,8 @@ export function App(): m.Component<AppAttrs> {
         return withReferenceRows(rowsOfShortcutMenu(current, open.shortcut), open.referenceRows);
       case "app-shortcut":
         return withReferenceRows(rowsOfAppShortcutMenu(current, open.app), open.referenceRows);
+      case "widget":
+        return withReferenceRows(rowsOfWidgetMenu(current, open.app), open.referenceRows);
       case "desktops":
         return rowsOfDesktopsMenu(current);
       case "desktop":
@@ -991,6 +1212,7 @@ export function App(): m.Component<AppAttrs> {
       draggedWindowId = movingWindowId;
       if (store !== null) pages?.setMountPolicy(mountPolicyOf(store));
       pages?.reconcile();
+      widgetFrames?.reconcile();
     },
     onremove() {
       document.removeEventListener("keydown", onDocumentKeyDown);
@@ -999,6 +1221,7 @@ export function App(): m.Component<AppAttrs> {
       menu.dispose();
       uninstallContextMenu?.();
       detachGestures?.();
+      stopWidgetFramesLayer(null);
       resizeObserver?.disconnect();
       if (travelFrame !== null) cancelAnimationFrame(travelFrame);
     },
@@ -1028,6 +1251,8 @@ export function App(): m.Component<AppAttrs> {
       if (current.isPhoneLayout()) {
         return m(PhoneLayout, {
           store: current,
+          onWidgetFramesHostCreated: (host) => startWidgetFramesLayer(current, host, vnode.attrs),
+          onWidgetFramesHostRemoved: (host) => stopWidgetFramesLayer(host),
           onPagesHostCreated: (host) => {
             startPagesLayer(current, host, vnode.attrs);
             // The host shrinks under a soft keyboard and turns with the phone; the shown page follows it.
@@ -1117,6 +1342,13 @@ export function App(): m.Component<AppAttrs> {
                     onHideWindowGhost: (windowId) => current.minimizeWindow(windowId),
                     onBringBackWindow: (windowId) => void current.reattachWindow(windowId, null),
                     onPagesHostCreated: (host) => startPagesLayer(current, host, vnode.attrs),
+                    widgets: shownWidgets(state),
+                    widgetRects: current.widgetRects(),
+                    openWidgetMenuApp: openMenu?.kind === "widget" ? openMenu.app : null,
+                    onWidgetToggleMode: (app) => void current.toggleWidgetMode(app),
+                    onWidgetContextMenu: (app, x, y, target) => openWidgetMenuAt(current, app, x, y, target),
+                    onWidgetFramesHostCreated: (host) => startWidgetFramesLayer(current, host, vnode.attrs),
+                    onWidgetFramesHostRemoved: (host) => stopWidgetFramesLayer(host),
                   }),
               isLauncherOpen
                 ? m(LauncherMenu, {
@@ -1166,6 +1398,10 @@ export function App(): m.Component<AppAttrs> {
               },
             },
             tray: {
+              widgets: taskbarWidgetsOf(current, "tray"),
+              widgetPopoverApp: state.trayPopoverApp,
+              onWidgetPress: (app) => current.toggleTrayPopover(app),
+              onWidgetContextMenu: (app, x, y, target) => openWidgetMenuAt(current, app, x, y, target),
               desktops: state.desktops,
               activeDesktopId: state.activeDesktopId,
               isDesktopsMenuOpen: openMenu?.kind === "desktops",
@@ -1180,6 +1416,12 @@ export function App(): m.Component<AppAttrs> {
                   anchorForPoint(x, y),
                 );
               },
+            },
+            toolbarWidgets: taskbarWidgetsOf(current, "toolbar"),
+            widgetPopover: trayPopoverOf(current),
+            onTrayFramesHostCreated: (host) => setTrayFramesHost(host),
+            onTrayFramesHostRemoved: (host) => {
+              if (trayFramesHost === host) setTrayFramesHost(null);
             },
             onEntryClick,
             onEntryContextMenu,

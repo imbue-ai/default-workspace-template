@@ -23,6 +23,7 @@ from imbue.chat.harnesses.codex.model import write_codex_model_options
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.harnesses.one_shot import OneShotCompletionTimeoutError
+from imbue.chat.harnesses.one_shot import OneShotUsage
 from imbue.chat.harnesses.one_shot import answer_on_first_model
 from imbue.chat.harnesses.one_shot import describe_model_name
 from imbue.concurrency_group.errors import ProcessError
@@ -118,8 +119,11 @@ def _account_models(account_dir: Path) -> tuple[CodexModel, ...]:
 class CodexOneShotCompletion(OneShotCompletion):
     """Runs ``codex exec`` from an empty directory with no tools that can write, and no session kept."""
 
-    def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
-        """The answer on the account's cheapest model; on the default model when that one is refused."""
+    def complete(self, account_dir: Path, system_prompt: str, prompt: str, usage: OneShotUsage | None = None) -> str:
+        """The answer on the account's cheapest model; on the default model when that one is refused.
+
+        ``usage`` is not reported yet: codex's one-shot usage arrives with its usage writer.
+        """
         choice = choose_codex_one_shot_model(_account_models(account_dir))
         # codex exec takes no system prompt of its own, so the instructions lead the prompt.
         full_prompt = f"{system_prompt}\n\n{prompt}"

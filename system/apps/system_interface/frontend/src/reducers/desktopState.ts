@@ -1,8 +1,9 @@
 /**
  * The desktop's state and the reducers over it (desktop-interface plan section 6.2): one frozen
  * record of what this client knows (the apps, the desktops, the active desktop, this client's
- * layout of it, the render modes, this client's presentation of each pinned entry, the avatar,
- * and what the phone layout shows),
+ * layout of it, the render modes, this client's presentation of each pinned entry and each widget, which
+ * widgets the workspace shows and what each widget's page last said of itself, the avatar, and what the phone
+ * layout shows),
  * and every verb of plan section 4 as a pure ``(state, event) -> state`` step. The store applies
  * these, schedules redraws, and saves when a step marked the layout dirty; nothing here reads the
  * DOM or the network.
@@ -21,10 +22,13 @@ import type {
   PinStyle,
   Placement,
   StoredWindowPath,
+  WidgetPresentation,
+  WidgetSwitch,
   WindowRecord,
   WindowState,
 } from "../model/records";
-import { EMPTY_LAYOUT, SHOWN_HOME } from "../model/records";
+import { DEFAULT_WIDGET_PRESENTATION, EMPTY_LAYOUT, SHOWN_HOME } from "../model/records";
+import type { PixelSize } from "../geometry/frames";
 import type { UpdateNotice } from "../model/UpdateNotice";
 import {
   effectivePlacements,
@@ -63,6 +67,14 @@ export interface DesktopState {
   readonly modes: RenderModes;
   /** This client's presentation of each pinned entry, by app name (global across desktops). */
   readonly entries: Readonly<Record<string, EntryPresentation>>;
+  /** Whether the workspace shows each declared widget, in the shell's order (app-widgets plan section 3.2). */
+  readonly widgetSwitches: readonly WidgetSwitch[];
+  /** This client's presentation of each widget, by app name (global across desktops). */
+  readonly widgets: Readonly<Record<string, WidgetPresentation>>;
+  /** What each widget's page last said of itself since it loaded, by app name. */
+  readonly widgetReports: Readonly<Record<string, WidgetReport>>;
+  /** The tray widget whose popover is open in this client, or null (app-widgets plan section 4.10). */
+  readonly trayPopoverApp: string | null;
   /** The avatar every window of the workspace draws (pinned-taskbar-entries plan section 4.6). */
   readonly avatar: AvatarState;
   /** The rollback point the last update-app careful-flow apply kept, until a person closes its notice. */
@@ -71,6 +83,23 @@ export interface DesktopState {
   readonly workspaceName: string;
   /** What the phone layout shows and has shown (plan-phone-interface.md). */
   readonly phone: PhoneState;
+}
+
+/** What a widget's page has said of itself since it loaded: the size of its content in its current mode (null
+ *  until its first report, and the widget is not drawn until then), the size of its tray form, kept apart so a tray
+ *  widget's slot keeps its size while its popover shows it expanded, and whether it has nothing to show. */
+export interface WidgetReport {
+  readonly size: PixelSize | null;
+  readonly traySize: PixelSize | null;
+  readonly isHidden: boolean;
+}
+
+export const INITIAL_WIDGET_REPORT: WidgetReport = { size: null, traySize: null, isHidden: false };
+
+/** A widget this client draws: its app and the client's presentation of it. */
+export interface ShownWidget {
+  readonly app: AppRecord;
+  readonly presentation: WidgetPresentation;
 }
 
 /** What the phone layout puts on the screen: the home grid, or one window's page. */
@@ -125,6 +154,10 @@ export function initialDesktopState(clientId: string, modes: RenderModes): Deskt
     savedLayoutVersion: 0,
     modes,
     entries: {},
+    widgetSwitches: [],
+    widgets: {},
+    widgetReports: {},
+    trayPopoverApp: null,
     avatar: INITIAL_AVATAR_STATE,
     updateNotice: null,
     workspaceName: "",
@@ -170,6 +203,18 @@ export type DesktopEvent =
   | { readonly type: "render_modes_changed"; readonly modes: RenderModes }
   /** This client's entry presentations, as its record or a ``client_entries_changed`` says. */
   | { readonly type: "entries_updated"; readonly entries: Readonly<Record<string, EntryPresentation>> }
+  /** Which widgets the workspace shows, as the inventory or a ``widgets_updated`` says. */
+  | { readonly type: "widget_switches_updated"; readonly switches: readonly WidgetSwitch[] }
+  /** This client's widget presentations, as its record or a ``client_widgets_changed`` says. */
+  | { readonly type: "widgets_updated"; readonly widgets: Readonly<Record<string, WidgetPresentation>> }
+  /** A widget's page reported its size in its current mode; ``isTray`` for its tray form. */
+  | { readonly type: "widget_size_reported"; readonly app: string; readonly size: PixelSize; readonly isTray: boolean }
+  /** A tray widget's popover opened, or every one closed (null). */
+  | { readonly type: "tray_popover_set"; readonly app: string | null }
+  /** A widget's page said it has nothing to show, or has again. */
+  | { readonly type: "widget_hidden_reported"; readonly app: string; readonly isHidden: boolean }
+  /** A widget's page (re)loaded or went away: it has said nothing yet. */
+  | { readonly type: "widget_report_reset"; readonly app: string }
   /** The ``avatar_status`` the shell pushed. */
   | { readonly type: "avatar_status_updated"; readonly status: AvatarStatus }
   /** The workspace's design, as the catalog or an ``avatar_selection_changed`` says. */
@@ -297,7 +342,7 @@ function withWindowLocationReported(state: DesktopState, desktopId: string, wind
 export function reduceDesktopState(state: DesktopState, event: DesktopEvent): DesktopState {
   switch (event.type) {
     case "apps_updated":
-      return { ...state, apps: event.apps, isAppsLoaded: true };
+      return withTrayPopoverInTaskbar({ ...state, apps: event.apps, isAppsLoaded: true });
     case "desktops_updated":
       return withDesktopsUpdated(state, event.desktops);
     case "desktop_activated":
@@ -347,6 +392,21 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
       return { ...state, modes: event.modes };
     case "entries_updated":
       return { ...state, entries: event.entries };
+    case "widget_switches_updated":
+      return withTrayPopoverInTaskbar({ ...state, widgetSwitches: event.switches });
+    case "widgets_updated":
+      return withTrayPopoverInTaskbar({ ...state, widgets: event.widgets });
+    case "widget_size_reported":
+      return withWidgetReport(state, event.app, event.isTray ? { traySize: event.size } : { size: event.size });
+    case "tray_popover_set":
+      return state.trayPopoverApp === event.app ? state : { ...state, trayPopoverApp: event.app };
+    case "widget_hidden_reported":
+      return withWidgetReport(state, event.app, { isHidden: event.isHidden });
+    case "widget_report_reset": {
+      if (!(event.app in state.widgetReports)) return state;
+      const reports = Object.fromEntries(Object.entries(state.widgetReports).filter(([app]) => app !== event.app));
+      return { ...state, widgetReports: reports };
+    }
     case "avatar_status_updated":
       return { ...state, avatar: { ...state.avatar, status: event.status } };
     case "avatar_selection_updated":
@@ -370,6 +430,61 @@ export function reduceDesktopState(state: DesktopState, event: DesktopEvent): De
       if (state.phone.sheet === event.sheet) return state;
       return { ...state, phone: { ...state.phone, sheet: event.sheet } };
   }
+}
+
+/** The state with its open popover closed unless its widget is still drawn in the taskbar: a widget hidden for the
+ *  workspace, moved out of the taskbar by another window of this client, or withdrawn takes its popover with it. */
+function withTrayPopoverInTaskbar(state: DesktopState): DesktopState {
+  const app = state.trayPopoverApp;
+  if (app === null) return state;
+  const isInBar = shownWidgets(state).some((widget) => widget.app.name === app && isInTaskbar(widget));
+  return isInBar ? state : { ...state, trayPopoverApp: null };
+}
+
+function withWidgetReport(state: DesktopState, app: string, change: Partial<WidgetReport>): DesktopState {
+  const report = { ...(state.widgetReports[app] ?? INITIAL_WIDGET_REPORT), ...change };
+  return { ...state, widgetReports: { ...state.widgetReports, [app]: report } };
+}
+
+/** The widgets this client draws, in the shell's order: every enabled widget of a registered, non-internal app
+ *  that declares one, with this client's presentation of it (the default when it chose none). Whether its page
+ *  has reported a size, or asked to be hidden, is the caller's to read from ``widgetReports``. */
+export function shownWidgets(state: DesktopState): ShownWidget[] {
+  const shown: ShownWidget[] = [];
+  for (const widgetSwitch of state.widgetSwitches) {
+    if (!widgetSwitch.is_enabled) continue;
+    const app = appByName(state, widgetSwitch.app);
+    if (app === undefined || app.internal || app.widget === null) continue;
+    shown.push({ app, presentation: state.widgets[app.name] ?? DEFAULT_WIDGET_PRESENTATION });
+  }
+  return shown;
+}
+
+/** The two places in the taskbar a widget can be drawn: its tray, or its row among the windows' entries. */
+export type TaskbarSpot = "tray" | "toolbar";
+
+/** Where in the taskbar a shown widget is drawn: where it was placed, by an app whose page draws a form for there;
+ *  null on the desktop. */
+export function taskbarSpotOf(widget: ShownWidget): TaskbarSpot | null {
+  const { placement } = widget.presentation;
+  if (placement === "desktop") return null;
+  return widget.app.widget?.[placement] === true ? placement : null;
+}
+
+/** Whether a shown widget is drawn in the taskbar, in its tray or its row. */
+export function isInTaskbar(widget: ShownWidget): boolean {
+  return taskbarSpotOf(widget) !== null;
+}
+
+/** The shown widgets this client draws at ``spot`` in the taskbar, in the shell's order. */
+export function taskbarWidgets(state: DesktopState, spot: TaskbarSpot): ShownWidget[] {
+  return shownWidgets(state).filter((widget) => taskbarSpotOf(widget) === spot);
+}
+
+/** Whether ``app`` declares a widget the workspace can show or hide, and whether it shows it now; null for an
+ *  app with no widget. */
+export function widgetSwitchOf(state: DesktopState, app: string): WidgetSwitch | null {
+  return state.widgetSwitches.find((widgetSwitch) => widgetSwitch.app === app) ?? null;
 }
 
 export function activeDesktop(state: DesktopState): Desktop | null {

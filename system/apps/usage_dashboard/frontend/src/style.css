@@ -1,0 +1,130 @@
+@import "tailwindcss" source(none);
+/* The design system shared with every other frontend of the workspace (see system/libs/workspace_ui). */
+@import "@imbue/workspace-ui/src/base.css";
+
+@source "./**/*.ts";
+
+/* The chart's series colours: the data-viz reference palette's categorical slots, in its fixed order, and a
+   neutral for the series folded into "Other". The workspace has one (light) theme. */
+:root {
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
+  --series-3: #1baf7a;
+  --series-4: #eda100;
+  --series-5: #e87ba4;
+  --series-6: #008300;
+  --series-7: #6250d6;
+  --series-other: #a3a29c;
+}
+
+/* The pager's fields stand at its buttons' height, so the row reads as one control. */
+.calls-pages .calls-go-to,
+.calls-pages [data-dropdown-part="trigger"] {
+  height: 34px;
+  padding-block: 0;
+}
+
+/* The widget (app-widgets plan section 7) draws on the shell's light widget panel, in the manner of a system
+   monitor: a faint track under each ring, and a hue per limit while it is comfortable (the 5-hour limit cyan, the
+   weekly one violet) that gives way to the level's colour as it nears the cap. */
+.usage-widget {
+  --widget-text: rgb(0 0 0 / 0.85);
+  --widget-muted: rgb(0 0 0 / 0.5);
+  --widget-faint: rgb(0 0 0 / 0.38);
+  --widget-track: rgb(0 0 0 / 0.08);
+  --widget-heading: #007aff;
+  --widget-short: #32ade6;
+  --widget-long: #af52de;
+  --widget-high: #ff9500;
+  --widget-critical: #ff3b30;
+  --widget-spend: rgb(0 0 0 / 0.45);
+}
+
+/* The widget's sizes: its base text (which every other text is set against in em), the ring's side and the figure in
+   it, the collapsed bars' length and the two bars' thickness, and the expanded widget's width. */
+.usage-widget {
+  font-size: var(--w-font);
+  line-height: 1.35;
+}
+.usage-widget[data-widget-size="small"] {
+  --w-font: 11px;
+  --w-ring: 32px;
+  --w-ring-figure: 8px;
+  --w-bar: 44px;
+  --w-bar-short: 4px;
+  --w-bar-long: 3px;
+  --w-width: 212px;
+}
+.usage-widget[data-widget-size="medium"] {
+  --w-font: 12px;
+  --w-ring: 40px;
+  --w-ring-figure: 10px;
+  --w-bar: 60px;
+  --w-bar-short: 6px;
+  --w-bar-long: 4px;
+  --w-width: 224px;
+}
+.usage-widget[data-widget-size="large"] {
+  --w-font: 14px;
+  --w-ring: 56px;
+  --w-ring-figure: 14px;
+  --w-bar: 84px;
+  --w-bar-short: 8px;
+  --w-bar-long: 5px;
+  --w-width: 284px;
+}
+
+/* The minimal rings collapsed: the same rings a size smaller. */
+.usage-widget[data-widget-variant="minimal"][data-widget-mode="collapsed"][data-widget-size="small"] {
+  --w-ring: 26px;
+  --w-ring-figure: 7px;
+}
+.usage-widget[data-widget-variant="minimal"][data-widget-mode="collapsed"][data-widget-size="medium"] {
+  --w-ring: 32px;
+  --w-ring-figure: 8px;
+}
+.usage-widget[data-widget-variant="minimal"][data-widget-mode="collapsed"][data-widget-size="large"] {
+  --w-ring: 44px;
+  --w-ring-figure: 11px;
+}
+
+/* In the taskbar's tray the widget takes the tray's own size, whatever size the workspace picked. */
+.usage-widget[data-widget-mode="tray"] {
+  --w-font: 11px;
+  --w-ring: 22px;
+  --w-bar: 30px;
+  --w-bar-short: 4px;
+  --w-bar-long: 3px;
+  line-height: 1.15;
+}
+/* The tray's bars sit closer together, so a name over two bars stays well within the tray's height. */
+.usage-widget[data-widget-mode="tray"] [data-widget-bar-line] {
+  height: 0.8em;
+}
+
+/* In the taskbar's row the widget is as tall as a window's entry and its text the bar's own size. */
+.usage-widget[data-widget-mode="toolbar"] {
+  --w-font: 13px;
+  --w-ring: 22px;
+  --w-meter: 24px;
+  height: 36px;
+  line-height: 1.2;
+}
+
+/* The widget's page lets the shell's panel show through (base.css paints every page's body). */
+body.usage-widget-body {
+  background-color: transparent;
+}
+
+/* The widget is the root's flex item, not an inline box on a line of the page's own text, which would push a widget
+   shorter than that line (the tray form) down inside its frame. It never shrinks to the frame: the frame is sized from
+   what the widget reports, so a widget squeezed into a frame still at an earlier, narrower look's width would report
+   that width and stay there. */
+body.usage-widget-body #app {
+  display: flex;
+  align-items: flex-start;
+}
+
+body.usage-widget-body #app > * {
+  flex-shrink: 0;
+}

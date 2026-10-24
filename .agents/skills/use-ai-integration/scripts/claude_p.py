@@ -6,7 +6,8 @@
 """Copyable helper for calling headless ``claude -p`` from a service.
 
 COPY THIS FILE into your service and adapt it -- it is a reference snippet, not an
-importable package. It is the **keyless** path for an AI-driven service: when an
+importable package. Your app depends on ``workspace-usage`` (add it to the app's
+pyproject ``dependencies``): every call is recorded in the workspace's usage through it. It is the **keyless** path for an AI-driven service: when an
 ``ANTHROPIC_API_KEY`` is configured for the workspace, call ``litellm`` directly
 instead (cheaper for non-agentic work; see the use-ai-integration skill). With no
 key, ``claude -p`` runs on the local Claude subscription's programmatic pool.
@@ -64,10 +65,13 @@ import json
 import os
 import subprocess
 import tempfile
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from workspace_usage.claude_one_shot import record_claude_one_shot
 
 _MAIN_CLAUDE_SESSION_ID = "MAIN_CLAUDE_SESSION_ID"
 # mngr identity vars its own subagent proxy strips; dropping them is defense in
@@ -75,6 +79,10 @@ _MAIN_CLAUDE_SESSION_ID = "MAIN_CLAUDE_SESSION_ID"
 _MNGR_AGENT_VARS = ("MNGR_AGENT_STATE_DIR", "MNGR_AGENT_NAME", "MNGR_HOST_DIR")
 
 _DEFAULT_MODEL = "claude-haiku-4-5"
+
+# Every call is recorded in the workspace's usage: once claude -p exits, workspace_usage reads
+# the call's tokens from its session log (system/libs/workspace_usage, claude_one_shot).
+_APP_CALL_PURPOSE = "APP_CALL"
 
 
 class ClaudeCLIError(RuntimeError):
@@ -284,7 +292,7 @@ def _build_argv(
     append_system: str | None,
     tools: str | None,
     permission_mode: str | None,
-    is_session_persisted: bool,
+    session_id: str,
 ) -> list[str]:
     """Assemble the ``claude -p`` argv. Pure, so flag emission is unit-testable.
 
@@ -307,17 +315,18 @@ def _build_argv(
         argv += ["--tools", tools]
     if permission_mode is not None:
         argv += ["--permission-mode", permission_mode]
-    if not is_session_persisted:
-        argv.append("--no-session-persistence")
+    # The session log under this id is where the usage collector reads the call's usage.
+    argv += ["--session-id", session_id]
     return argv + ["--", prompt]
 
 
-def _completion_argv(prompt: str, *, system: str, model: str) -> list[str]:
+def _completion_argv(
+    prompt: str, *, system: str, model: str, session_id: str
+) -> list[str]:
     """The argv of one non-agentic completion.
 
-    Not persisted: every completion runs from its own throwaway cwd, and claude files a
-    persisted session under a ``projects/`` directory named for that cwd, so each call
-    would leave a directory behind in the account's projects tree for good.
+    Its session is logged so the usage collector can read the call's usage; the collector
+    deletes the log once read, so a completion leaves nothing in the account's projects tree.
     """
     return _build_argv(
         prompt,
@@ -326,7 +335,7 @@ def _completion_argv(prompt: str, *, system: str, model: str) -> list[str]:
         append_system=None,
         tools="",
         permission_mode=None,
-        is_session_persisted=False,
+        session_id=session_id,
     )
 
 
@@ -337,6 +346,7 @@ def _task_argv(
     append_system: str | None,
     model: str,
     permission_mode: str | None,
+    session_id: str,
 ) -> list[str]:
     """The argv of one agentic task, persisted like any session run from the repo."""
     return _build_argv(
@@ -346,7 +356,7 @@ def _task_argv(
         append_system=append_system,
         tools=None,
         permission_mode=permission_mode,
-        is_session_persisted=True,
+        session_id=session_id,
     )
 
 
@@ -461,12 +471,16 @@ def claude_p_completion(
 ) -> ClaudeResult:
     """One non-agentic completion. ``system`` is required (see module docstring)."""
     env = _child_env(strip_mngr_agent_vars)
-    argv = _completion_argv(prompt, system=system, model=model)
+    session_id = str(uuid.uuid4())
+    argv = _completion_argv(prompt, system=system, model=model, session_id=session_id)
     # Isolated cwd: claude -p auto-discovers CLAUDE.md / .claude hooks from the
     # working directory, so a throwaway dir keeps that project context out of the
     # answer. Credentials come from the env, not the cwd, so auth is unaffected.
     with tempfile.TemporaryDirectory(prefix="claude_p_completion_") as cwd:
-        return _run_blocking(argv, env=env, cwd=cwd)
+        try:
+            return _run_blocking(argv, env=env, cwd=cwd)
+        finally:
+            _record_usage(env, session_id, delete_log=True)
 
 
 def claude_p_task(
@@ -485,11 +499,29 @@ def claude_p_task(
     default agent here).
     """
     env = _child_env(strip_mngr_agent_vars)
+    session_id = str(uuid.uuid4())
     argv = _task_argv(
         prompt,
         system=system,
         append_system=append_system,
         model=model,
         permission_mode=permission_mode,
+        session_id=session_id,
     )
-    return _run_blocking(argv, env=env, cwd=None)
+    try:
+        return _run_blocking(argv, env=env, cwd=None)
+    finally:
+        # A task's session is a real one the user may resume, so its log stays.
+        _record_usage(env, session_id, delete_log=False)
+
+
+def _record_usage(env: Mapping[str, str], session_id: str, *, delete_log: bool) -> None:
+    """Record a finished call's usage, attributed to this process's app (or its IMBUE_USAGE_CONTEXT). Never raises."""
+    config_dir = env.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    record_claude_one_shot(
+        Path(config_dir),
+        session_id,
+        purpose=_APP_CALL_PURPOSE,
+        environ=env,
+        delete_log=delete_log,
+    )

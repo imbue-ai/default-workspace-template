@@ -165,6 +165,7 @@ Dimming and the focused mark apply in both styles.
 A pinned entry in `floating` mode leaves the bar and is drawn in a layer above every window and every live page, below the launcher overlay, the floating menus, and the modals.
 The layer is a sibling of the windows layer inside the backdrop's own stacking context, at the theme's sticky level, which is what the snap preview and the shortcut ghost already use to sit above the windows.
 The layer is inert; only the entry's own box takes a press, so nothing else on the desktop is shadowed.
+App widgets are drawn in a sibling layer at the same level (`../app-widgets/plan-app-widgets.md`, section 4.1).
 The entry is a square button of the theme's floating-entry size at the client's stored position, drawing the avatar image, or in `plain` style the app's icon on a raised tile.
 It shows whether its window is shown or minimized the way the bar entry does, through `aria-pressed` and a dim state.
 

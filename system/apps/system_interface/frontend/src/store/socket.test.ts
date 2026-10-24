@@ -64,6 +64,8 @@ beforeEach(() => {
     onPlacementsUpdated: vi.fn(),
     onActiveDesktopChanged: vi.fn(),
     onClientEntriesChanged: vi.fn(),
+    onClientWidgetsChanged: vi.fn(),
+    onWidgetsUpdated: vi.fn(),
     onAvatarStatus: vi.fn(),
     onAvatarSelectionChanged: vi.fn(),
     onUpdateNoticeChanged: vi.fn(),
@@ -157,6 +159,17 @@ describe("ShellSocket", () => {
       clientId: "client-1",
       entries: { docs: { mode: "floating", style: "plain", position: { x: 0.5, y: 0.5 } } },
     });
+    current().receive({
+      type: "client_widgets_changed",
+      client_id: "client-1",
+      widgets: { gauge: { position: { x: 0.02, y: 0.9 }, mode: "collapsed" } },
+    });
+    expect(handlers.onClientWidgetsChanged).toHaveBeenCalledWith({
+      clientId: "client-1",
+      widgets: { gauge: { position: { x: 0.02, y: 0.9 }, mode: "collapsed", placement: "desktop" } },
+    });
+    current().receive({ type: "widgets_updated", widgets: [{ app: "gauge", is_enabled: false }] });
+    expect(handlers.onWidgetsUpdated).toHaveBeenCalledWith([{ app: "gauge", is_enabled: false }]);
     const bob = presentUserRecord("user-bob-4471", { display_name: "Bob" });
     current().receive({ type: "presence_updated", users: [bob] });
     expect(handlers.onAppsUpdated).toHaveBeenCalledWith([]);

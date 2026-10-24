@@ -64,6 +64,26 @@
   --desk-floating-entry-size: 56px;
   --desk-floating-entry-inset-x: 16px;
   --desk-floating-entry-inset-y: 12px;
+  /* App widgets (app-widgets plan section 4): how far the default stack in the top-right
+     corner stands off the backdrop's edges, the gap between widgets stacked there, the most
+     and least a widget's page may ask for, the rim around its page (what a press drags it by),
+     and how see-through a widget is when the pointer is elsewhere. A widget is a light panel
+     its page draws on, through a transparent background. */
+  --desk-widget-inset: 16px;
+  --desk-widget-gap: 8px;
+  --desk-widget-max-width: 320px;
+  --desk-widget-max-height: 240px;
+  --desk-widget-min-size: 24px;
+  --desk-widget-rim: 6px;
+  --desk-widget-rest-opacity: 0.72;
+  --desk-widget-radius: 12px;
+  --desk-widget-surface: rgb(255 255 255 / 0.94);
+  --desk-widget-edge: rgb(0 0 0 / 0.08);
+  /* The most a widget's tray form may take in the taskbar, and how wide its toolbar form may grow in the bar's row,
+     where it is as tall as a window's entry (app-widgets plan section 4.10). */
+  --desk-widget-tray-height: 36px;
+  --desk-widget-tray-max-width: 240px;
+  --desk-widget-toolbar-max-width: 320px;
   --desk-resize-edge: 8px;
   --desk-resize-corner: 16px;
   --desk-resize-overhang: 3px;
@@ -86,6 +106,8 @@
   --desk-phone-pill-height: 48px;
   --desk-phone-pill-max-width: 210px;
   --desk-phone-pill-icon: 32px;
+  /* The tallest a widget is drawn in the strip above the phone's bar. */
+  --desk-phone-widget-height: 32px;
   /* The bar's height above its bottom padding, which is --desk-phone-safe-bottom. */
   --desk-phone-bar-height: calc(var(--desk-phone-pill-height) + var(--desk-phone-bar-padding));
   /* Only the inset: in a browser tab the page ends at the toolbar, which already sets the bar off
@@ -117,4 +139,7 @@
   /* A finger needs the whole touch target, and the entry is the drawing as well as the target, so
      the tile grows to it rather than sitting in a box larger than itself. */
   --desk-taskbar-entry-size: var(--desk-touch-target);
+  /* A finger cannot hover, so a widget is never see-through, and its rim is wide enough to press. */
+  --desk-widget-rim: 12px;
+  --desk-widget-rest-opacity: 1;
 }

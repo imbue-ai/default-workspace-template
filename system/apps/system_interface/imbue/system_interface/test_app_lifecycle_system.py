@@ -146,3 +146,48 @@ def test_quit_closes_the_windows_and_stops_the_app_at_once(
     fake_supervisor.statename_by_program["shell"] = "STOPPED"
     _wait_for_sweeps(fake_supervisor, 3)
     assert shell.lifecycle.parked_app_names() == ["docs"]
+
+
+def test_an_app_whose_widget_is_enabled_keeps_running_until_its_widget_is_hidden(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster, fake_supervisor: FakeSupervisorServer, closed_port: int
+) -> None:
+    """A ``docs`` app declaring a widget, enabled by default, keeps running with no window long past the grace
+    period; hiding the widget for the workspace starts the clock, and the app stops a grace period later."""
+    fake_supervisor.statename_by_program["docs"] = "RUNNING"
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml(
+            "docs",
+            f"http://127.0.0.1:{closed_port}",
+            program="docs",
+            stop_when_no_windows=True,
+            widget=("/widget", True),
+        ),
+    )
+    state = build_test_state(
+        broadcaster=broadcaster,
+        shell_state_directory=tmp_path / "state",
+        inventory=build_inventory(registry_path, broadcaster, prober=probe_all_app_liveness),
+        repo_root=tmp_path / "repo",
+        static_directory=tmp_path / "static",
+        is_lifecycle_enabled=True,
+        no_windows_grace_seconds=_GRACE_SECONDS,
+        idle_sweep_interval_seconds=_SWEEP_SECONDS,
+    )
+    application = create_application(state)
+    state.shell.start()
+    try:
+        client = application.test_client()
+        state.shell.arrive_client(ClientId("laptop"), RequestIdentity(owner=True))
+        _wait_for_sweeps(fake_supervisor, 5)
+        assert fake_supervisor.statename_by_program["docs"] == "RUNNING"
+
+        assert client.post("/api/widgets/docs", json={"is_enabled": False}).status_code == 200
+        wait_for(
+            lambda: fake_supervisor.statename_by_program["docs"] == "STOPPED",
+            timeout=5.0,
+            poll_interval=0.05,
+            error_message="the app was not stopped once its widget was hidden",
+        )
+    finally:
+        state.shell.stop()

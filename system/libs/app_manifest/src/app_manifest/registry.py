@@ -19,6 +19,7 @@ from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import Pin
+from app_manifest.manifest import Widget
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppDescription
 from app_manifest.primitives import AppName
@@ -127,6 +128,7 @@ class RegistryRow(FrozenModel):
         default=None, description="The app's place among the launcher's leading tiles; absent reads as none"
     )
     pin: Pin | None = Field(default=None, description="The app's pinned taskbar entry, when its manifest declares one")
+    widget: Widget | None = Field(default=None, description="The app's desktop widget, when its manifest declares one")
     window_closed_path: LaunchPathValue | None = Field(
         default=None, description="Where the shell posts a closed window of the app; absent means no post"
     )

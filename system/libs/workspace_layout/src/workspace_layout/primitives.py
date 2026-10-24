@@ -154,6 +154,22 @@ class IfPresent(LowerCaseStrEnum):
     NEW = auto()
 
 
+class WidgetMode(LowerCaseStrEnum):
+    """Whether one client draws a widget in full or as its one-line pill (app-widgets plan section 3.3)."""
+
+    EXPANDED = auto()
+    COLLAPSED = auto()
+
+
+class WidgetPlacement(LowerCaseStrEnum):
+    """Where one client draws a widget: on the desktop, in the taskbar's tray, or in the taskbar's row beside the
+    launcher like a window's entry (app-widgets plan section 4.10)."""
+
+    DESKTOP = auto()
+    TRAY = auto()
+    TOOLBAR = auto()
+
+
 class WindowState(UpperCaseStrEnum):
     """How one client shows a window: at its frame, snapped to a half, or maximized (a wire value)."""
 

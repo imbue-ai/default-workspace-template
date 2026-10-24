@@ -17,6 +17,7 @@ import {
   parseLayout,
   parseMessageRelay,
   parseWallpaperListings,
+  parseWidgetSwitches,
   parseWindow,
 } from "./records";
 import type {
@@ -35,6 +36,8 @@ import type {
   Placement,
   Wallpaper,
   WallpaperListing,
+  WidgetPresentation,
+  WidgetSwitch,
   WindowRecord,
 } from "./records";
 
@@ -267,6 +270,28 @@ export async function setEntryPresentation(
       presentation,
     ),
   );
+}
+
+/** Write how this client shows one widget; answers the client record. */
+export async function setWidgetPresentation(
+  clientId: string,
+  app: string,
+  presentation: WidgetPresentation,
+): Promise<ClientRecord> {
+  return parseClientRecord(
+    await postJson<unknown>(
+      apiUrl(`/api/clients/${encodeURIComponent(clientId)}/widgets/${encodeURIComponent(app)}`),
+      presentation,
+    ),
+  );
+}
+
+/** Show or hide one app's widget for the whole workspace; answers every widget's switch. */
+export async function setWidgetEnabled(app: string, isEnabled: boolean): Promise<WidgetSwitch[]> {
+  const data = (await postJson<unknown>(apiUrl(`/api/widgets/${encodeURIComponent(app)}`), {
+    is_enabled: isEnabled,
+  })) as { widgets?: unknown };
+  return parseWidgetSwitches(data.widgets ?? []);
 }
 
 export async function fetchWallpapers(): Promise<WallpaperListing[]> {

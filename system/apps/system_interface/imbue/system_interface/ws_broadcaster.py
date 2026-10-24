@@ -10,6 +10,7 @@ from pydantic import Field
 from pydantic import PrivateAttr
 from workspace_layout.answers import InventoryApp
 from workspace_layout.answers import LayoutOpMessage
+from workspace_layout.answers import WidgetState
 from workspace_layout.records import DesktopView
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -245,6 +246,16 @@ class WebSocketBroadcaster(MutableModel):
         """A client's presentation of its pinned entries was written; its own windows take it."""
         self.broadcast_to_client(
             {"type": "client_entries_changed", "client_id": client_id, "entries": entries}, client_id
+        )
+
+    def broadcast_widgets_updated(self, widgets: Sequence[WidgetState]) -> None:
+        """Which widgets the workspace shows was written, or the registry's widgets changed; every window redraws."""
+        self.broadcast({"type": "widgets_updated", "widgets": [widget.model_dump(mode="json") for widget in widgets]})
+
+    def broadcast_client_widgets_changed(self, client_id: str, widgets: Mapping[str, Any]) -> None:
+        """A client's presentation of its widgets was written; its own windows take it."""
+        self.broadcast_to_client(
+            {"type": "client_widgets_changed", "client_id": client_id, "widgets": widgets}, client_id
         )
 
     def broadcast_active_desktop_changed(

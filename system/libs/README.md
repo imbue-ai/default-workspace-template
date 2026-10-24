@@ -39,6 +39,9 @@ README for details.
   job that runs the suites inside the workspace image sets it).
 - `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket
   tracker's command output.
+- `workspace_usage/` - Records the model calls an app makes in the
+  workspace's usage event files: attribution, event building, `claude -p`
+  one-shots read from their session logs, and a LiteLLM callback.
 
 Apps live in `system/apps/`; standalone background services live in
 `system/services/`.

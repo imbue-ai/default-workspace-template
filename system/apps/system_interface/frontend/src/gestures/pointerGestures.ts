@@ -2,7 +2,7 @@
  * The one module that listens to pointer events for window drag and resize, shortcut drag,
  * taskbar entry presses, and floating entry drag (desktop-interface plan section 6.5). It binds
  * by data attribute (``data-drag-handle`` inside a window, ``data-resize-edge``,
- * ``data-shortcut``, ``data-taskbar-entry``, ``data-pinned-entry``), uses pointer capture and a
+ * ``data-shortcut``, ``data-taskbar-entry``, ``data-pinned-entry``, ``data-widget-grip``), uses pointer capture and a
  * start threshold (a press that never travels the threshold is a click, left to the element's
  * own handlers),
  * and sits behind the ``GestureSource`` interface so interact.js could replace it without
@@ -21,6 +21,9 @@ export const SHORTCUT_ATTRIBUTE = "data-shortcut";
 export const TASKBAR_ENTRY_ATTRIBUTE = "data-taskbar-entry";
 /** A pinned entry, in the bar or floating; only the floating one (which is no taskbar entry) drags. */
 export const PINNED_ENTRY_ATTRIBUTE = "data-pinned-entry";
+/** A widget's box, whose rim is its grip (app-widgets plan section 4.4): a drag moves the widget anywhere on the
+ *  backdrop. */
+export const WIDGET_GRIP_ATTRIBUTE = "data-widget-grip";
 /** Marks an element (a menu button) whose press must not start a drag. */
 export const NO_DRAG_ATTRIBUTE = "data-no-drag";
 
@@ -35,7 +38,9 @@ export type GestureBinding =
   /** A taskbar entry never drags, but a long press on it asks for its menu. */
   | { readonly kind: "taskbar-entry"; readonly windowId: string }
   /** A floating pinned entry: a drag moves it, a long press asks for its menu. */
-  | { readonly kind: "floating-entry"; readonly app: string; readonly element: HTMLElement };
+  | { readonly kind: "floating-entry"; readonly app: string; readonly element: HTMLElement }
+  /** A widget's grip: a drag moves the widget, a long press asks for its menu. */
+  | { readonly kind: "widget"; readonly app: string; readonly element: HTMLElement };
 
 export interface GestureListener {
   /** The distance a press travels before it is a drag, in pixels. */
@@ -70,6 +75,11 @@ export function bindingForTarget(target: Element): GestureBinding | null {
   if (entry !== null) {
     const windowId = entry.getAttribute(TASKBAR_ENTRY_ATTRIBUTE) ?? "";
     return windowId === "" ? null : { kind: "taskbar-entry", windowId };
+  }
+  const grip = target.closest<HTMLElement>(`[${WIDGET_GRIP_ATTRIBUTE}]`);
+  if (grip !== null) {
+    const app = grip.getAttribute(WIDGET_GRIP_ATTRIBUTE) ?? "";
+    return app === "" ? null : { kind: "widget", app, element: grip };
   }
   const floating = target.closest<HTMLElement>(`[${PINNED_ENTRY_ATTRIBUTE}]`);
   if (floating !== null) {

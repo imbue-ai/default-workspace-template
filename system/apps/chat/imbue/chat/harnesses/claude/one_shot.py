@@ -1,4 +1,9 @@
-"""Claude's one-shot completion: ``claude -p`` on the cheapest model the account answers on, under its config dir."""
+"""Claude's one-shot completion: ``claude -p`` on the cheapest model the account answers on, under its config dir.
+
+Each run logs under a session id chosen up front; once it exits, its calls are read from that
+session log into the workspace's usage and the log is deleted, so a one-shot is counted
+without leaving a session behind under the account.
+"""
 
 import json
 import os
@@ -12,12 +17,16 @@ from loguru import logger as _loguru_logger
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import ValidationError
+from workspace_usage.claude_one_shot import claude_session_args
+from workspace_usage.claude_one_shot import new_claude_session_id
+from workspace_usage.claude_one_shot import record_claude_one_shot
 
 from imbue.chat.harnesses.claude.account_binding import ClaudeAccountBinding
 from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.harnesses.one_shot import OneShotCompletionTimeoutError
+from imbue.chat.harnesses.one_shot import OneShotUsage
 from imbue.chat.harnesses.one_shot import answer_on_first_model
 from imbue.chat.harnesses.one_shot import describe_model_name
 from imbue.concurrency_group.errors import ProcessError
@@ -50,8 +59,8 @@ class _ClaudePrintResult(BaseModel):
 
 
 @pure
-def claude_one_shot_argv(system_prompt: str, model: str | None) -> list[str]:
-    """The ``claude -p`` argv, on ``model`` or the account's default when None.
+def claude_one_shot_argv(system_prompt: str, model: str | None, session_id: str) -> list[str]:
+    """The ``claude -p`` argv, on ``model`` or the account's default when None, logging under ``session_id``.
 
     The prompt goes on stdin, so a message starting with ``-`` is never read as a flag.
     """
@@ -65,8 +74,8 @@ def claude_one_shot_argv(system_prompt: str, model: str | None) -> list[str]:
         system_prompt,
         "--tools",
         "",
-        # A persisted session would file a projects/ directory under the account for every call.
-        "--no-session-persistence",
+        # The session log is how the call's usage is recorded; the usage collector deletes it once read.
+        *claude_session_args(session_id),
     ]
 
 
@@ -104,21 +113,24 @@ def parse_claude_print_result(stdout: str) -> str:
 class ClaudeOneShotCompletion(OneShotCompletion):
     """Runs ``claude -p`` from an empty directory, so no project instructions or hooks reach the answer."""
 
-    def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
+    def complete(self, account_dir: Path, system_prompt: str, prompt: str, usage: OneShotUsage | None = None) -> str:
         """The answer on the first model in ``ONE_SHOT_MODEL_PREFERENCE`` that gives one."""
         return answer_on_first_model(
             ONE_SHOT_MODEL_PREFERENCE,
-            lambda model: self._complete_on(model, account_dir, system_prompt, prompt),
+            lambda model: self._complete_on(model, account_dir, system_prompt, prompt, usage),
             describe_model_name,
         )
 
-    def _complete_on(self, model: str | None, account_dir: Path, system_prompt: str, prompt: str) -> str:
+    def _complete_on(
+        self, model: str | None, account_dir: Path, system_prompt: str, prompt: str, usage: OneShotUsage | None
+    ) -> str:
         env = claude_one_shot_env(os.environ, account_dir)
+        session_id = new_claude_session_id()
         started_at = time.monotonic()
         with tempfile.TemporaryDirectory(prefix="chat_one_shot_") as isolated_dir:
             try:
                 finished = run_local_command_modern_version(
-                    command=claude_one_shot_argv(system_prompt, model),
+                    command=claude_one_shot_argv(system_prompt, model, session_id),
                     is_checked=False,
                     timeout=_TIMEOUT_SECONDS,
                     cwd=Path(isolated_dir),
@@ -128,6 +140,14 @@ class ClaudeOneShotCompletion(OneShotCompletion):
                 )
             except ProcessError as e:
                 raise OneShotCompletionError(f"claude -p could not run: {e}") from e
+            finally:
+                # A call that failed or timed out may still have used tokens, so it is recorded too.
+                record_claude_one_shot(
+                    account_dir,
+                    session_id,
+                    purpose=usage.purpose if usage is not None else None,
+                    context=usage.context if usage is not None else None,
+                )
         elapsed_seconds = time.monotonic() - started_at
         if finished.is_timed_out:
             raise OneShotCompletionTimeoutError(f"claude -p did not answer within {_TIMEOUT_SECONDS:.0f}s")

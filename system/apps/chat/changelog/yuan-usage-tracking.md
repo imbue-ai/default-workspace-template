@@ -1,0 +1,3 @@
+Chats' model calls are now recorded in the workspace's usage, attributed to the chat. Every chat's agent is created with the chat as the origin of its calls (`IMBUE_USAGE_CONTEXT`), so its own calls, and those of any background worker it launches, count toward the chat. Chat titles run `claude -p` under a known session id and are recorded from that session log, which is then deleted, so naming still leaves no session behind under the account; Codex chats' titles are not recorded yet. Antigravity chats, whose harness reports no usage, record each finished turn as one model call with unknown tokens and cost.
+
+An Antigravity chat's recorded turn now carries its `turn_id`, so the Usage app can group it like other harnesses' turns.

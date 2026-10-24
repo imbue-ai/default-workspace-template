@@ -23,6 +23,7 @@ import {
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
   SHELL_START_WITH_TEXT,
+  SHELL_WIDGET_PLACEMENT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
 import type { Placement } from "../model/records";
@@ -642,6 +643,13 @@ describe("the contract", () => {
     expect(activeFocusedWindowId(store.getState())).toBe("win-1");
   });
 
+  it("closes a taskbar widget's open popover when a page says it took focus", () => {
+    store.toggleTrayPopover("gauge");
+    expect(store.getState().trayPopoverApp).toBe("gauge");
+    messageFromPage("win-1", { type: SHELL_FOCUSED });
+    expect(store.getState().trayPopoverApp).toBeNull();
+  });
+
   it("ignores a focus report from a hidden page, so a pulled-out or minimized window is not brought back by it", async () => {
     // Minimized: its page is hidden, and the browser can still restore focus to it.
     store.minimizeWindow("win-1");
@@ -738,6 +746,44 @@ describe("the contract", () => {
     await settle();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("shell:open ignored"));
     warn.mockRestore();
+  });
+
+  it("opens a widget's shell:open for its app, which raises the app's window rather than open another", async () => {
+    const widgetFrame = document.createElement("iframe");
+    document.body.appendChild(widgetFrame);
+    layer.setWidgetFrameResolver((frame) => (frame === widgetFrame ? "docs" : null));
+    const fromWidget = (data: Record<string, unknown>): void => {
+      window.dispatchEvent(
+        new MessageEvent("message", { data, source: widgetFrame.contentWindow, origin: window.location.origin }),
+      );
+    };
+    store.restoreWindow("win-2");
+    fromWidget({ type: SHELL_OPEN, path: "/?doc=9" });
+    await settle();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
+    fromWidget({ type: SHELL_OPEN, path: "/?doc=9", ifPresent: "new" });
+    await settle();
+    expect(api.calls).toContain("openWindow:home:docs:/?doc=9:new");
+    // A frame that is neither a window's page nor a widget's is ignored.
+    layer.setWidgetFrameResolver(null);
+    fromWidget({ type: SHELL_OPEN, path: "/?doc=10", ifPresent: "new" });
+    await settle();
+    expect(api.calls.filter((call) => call.startsWith("openWindow:"))).toHaveLength(1);
+    widgetFrame.remove();
+  });
+
+  it("puts its app's widget where a page's shell:widget-placement asks, and ignores a place it does not know", async () => {
+    const widget = { path: "/widget", default_enabled: true, tray: true, toolbar: false };
+    offerApps(api, socket, [{ ...docs, widget }, notes]);
+    socket.deliver().onWidgetsUpdated([{ app: "docs", is_enabled: true }]);
+    messageFromPage("win-1", { type: SHELL_WIDGET_PLACEMENT, placement: "sidebar" });
+    await settle();
+    expect(store.getState().widgets.docs).toBeUndefined();
+    messageFromPage("win-1", { type: SHELL_WIDGET_PLACEMENT, placement: "tray" });
+    await settle();
+    expect(store.getState().widgets.docs?.placement).toBe("tray");
+    expect(api.calls).toContain("setWidgetPresentation:client-1:docs:default:expanded:tray");
   });
 
   it("relays a page's shell:message with its app as the sender, and warns about one with no typed message", async () => {

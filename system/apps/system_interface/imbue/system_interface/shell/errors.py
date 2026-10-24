@@ -105,6 +105,10 @@ class StalePlacementsSaveError(ShellError, ValueError):
     """A browser's placements save is based on an older layout than the one stored (answered 409)."""
 
 
+class NoWidgetError(ShellError, LookupError):
+    """No registered, non-internal app of the given name declares a widget (answered 404)."""
+
+
 class WallpaperNotFoundError(ShellError, LookupError):
     """No bundled or file wallpaper has the given kind and name."""
 

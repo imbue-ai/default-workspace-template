@@ -102,6 +102,7 @@ def app_view(entry: AppInventoryEntry, share_domain: str | None) -> InventoryApp
         default_shortcut=row.default_shortcut,
         launcher_rank=row.launcher_rank,
         pin=row.pin,
+        widget=row.widget,
         message_handlers=row.message_handlers,
         is_running=entry.is_running,
         share_url=f"https://{row.label}.{share_domain}/" if share_domain is not None and row.label else None,

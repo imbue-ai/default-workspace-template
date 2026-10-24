@@ -29,6 +29,12 @@ export interface ThemeMetrics {
   readonly floatingEntrySize: number;
   readonly floatingEntryInsetX: number;
   readonly floatingEntryInsetY: number;
+  readonly widgetInset: number;
+  readonly widgetGap: number;
+  readonly widgetMaxWidth: number;
+  readonly widgetMaxHeight: number;
+  readonly widgetMinSize: number;
+  readonly widgetRim: number;
 }
 
 const TOKEN_BY_METRIC: Readonly<Record<keyof ThemeMetrics, string>> = {
@@ -47,6 +53,12 @@ const TOKEN_BY_METRIC: Readonly<Record<keyof ThemeMetrics, string>> = {
   floatingEntrySize: "--desk-floating-entry-size",
   floatingEntryInsetX: "--desk-floating-entry-inset-x",
   floatingEntryInsetY: "--desk-floating-entry-inset-y",
+  widgetInset: "--desk-widget-inset",
+  widgetGap: "--desk-widget-gap",
+  widgetMaxWidth: "--desk-widget-max-width",
+  widgetMaxHeight: "--desk-widget-max-height",
+  widgetMinSize: "--desk-widget-min-size",
+  widgetRim: "--desk-widget-rim",
 };
 
 /** Raised when a token the metrics need is missing from the computed style or is not a pixel length. */

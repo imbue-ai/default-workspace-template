@@ -795,6 +795,12 @@ style = "avatar"
 scope = "independent"
 default_mode = "floating"
 
+[widget]
+path = "/widget"
+default_enabled = false
+tray = true
+toolbar = true
+
 [[message_handlers]]
 type = "minds:focus-chat"
 path = "/api/focus-chat"
@@ -854,6 +860,7 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
         },
     ]
     assert row["pin"] == {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"}
+    assert row["widget"] == {"path": "/widget", "default_enabled": False, "tray": True, "toolbar": True}
     assert row["message_handlers"] == [
         {"type": "minds:focus-chat", "path": "/api/focus-chat"},
         {"type": "open:file", "show": "{path}?view", "showing": ["{path}", "{path}/"]},
@@ -870,6 +877,18 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
 
     assert result.returncode == 0, result.stderr
     assert _read_apps(apps_file)[0]["pin"] == {"path": "/inbox"}
+
+
+def test_manifest_registration_copies_only_the_widget_keys_the_manifest_wrote(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    manifest = _write_manifest(
+        tmp_path, 'name = "files"\ndisplay_name = "Files"\nicon = "icon.svg"\n\n[widget]\npath = "/widget"\n'
+    )
+
+    result = _run(["--manifest", str(manifest), "--url", "http://localhost:8300"], apps_file)
+
+    assert result.returncode == 0, result.stderr
+    assert _read_apps(apps_file)[0]["widget"] == {"path": "/widget"}
 
 
 @pytest.mark.parametrize(
@@ -940,6 +959,16 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
             "pin.scope must be a string",
             id="pin-scope-not-a-string",
         ),
+        pytest.param(
+            '[widget]\ndefault_enabled = true\n',
+            "widget must be a table with a string 'path'",
+            id="widget-without-a-path",
+        ),
+        pytest.param(
+            '[widget]\npath = "/widget"\ndefault_enabled = "yes"\n',
+            "widget.default_enabled must be a boolean",
+            id="widget-default-enabled-not-a-boolean",
+        ),
     ],
 )
 def test_manifest_registration_refuses_a_malformed_manifest_declaration(
@@ -996,6 +1025,7 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
         "launch_paths",
         "launcher_rank",
         "pin",
+        "widget",
         "window_closed_path",
         "message_handlers",
     ):

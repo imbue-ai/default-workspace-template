@@ -296,7 +296,7 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
     ]
 
     document = client.get("/api/inventory").get_json()
-    assert set(document) == {"is_preview", "workspace_name", "desktops", "apps", "clients"}
+    assert set(document) == {"is_preview", "workspace_name", "desktops", "apps", "widgets", "clients"}
     assert document["is_preview"] is False
     assert [desktop["id"] for desktop in document["desktops"]] == ["home"]
     assert [window["id"] for window in document["desktops"][0]["windows"]] == [window["id"]]
@@ -377,6 +377,7 @@ def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_
         "is_connected",
         "user_id",
         "entries",
+        "widgets",
         "shown_history",
         "desktop_revision",
     }
@@ -910,6 +911,97 @@ def test_a_clients_entry_presentation_is_written_announced_to_that_client_and_ch
     )
 
 
+def _widget_shell(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> Flask:
+    """The shell over the two-app registry plus a ``gauge`` app whose widget is on by default, a ``meter`` app whose
+    widget is off by default, and an internal ``probe`` app declaring one."""
+    registry_path = write_two_app_registry(
+        tmp_path,
+        registry_row_toml(
+            "gauge", "http://localhost:7003", widget=("/widget", True), widget_tray=True, widget_toolbar=True
+        ),
+        registry_row_toml("meter", "http://localhost:7004", widget=("/widget", False)),
+        registry_row_toml("probe", "http://localhost:7005", is_internal=True, widget=("/widget", True)),
+    )
+    return shell_application(tmp_path, build_inventory(registry_path, broadcaster), broadcaster)
+
+
+def test_the_widget_switches_default_from_the_manifests_are_written_for_everyone_and_listed_in_the_inventory(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    app = _widget_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    first_queue = _register_client(app, "c1", "home")
+    second_queue = _register_client(app, "c2", "home")
+    drain_messages(first_queue)
+    drain_messages(second_queue)
+
+    defaults = [{"app": "gauge", "is_enabled": True}, {"app": "meter", "is_enabled": False}]
+    assert client.get("/api/widgets").get_json() == {"widgets": defaults}
+    inventory = client.get("/api/inventory").get_json()
+    assert inventory["widgets"] == defaults
+    assert {row["name"]: row["widget"] for row in inventory["apps"]}["gauge"] == {
+        "path": "/widget",
+        "default_enabled": True,
+        "tray": True,
+        "toolbar": True,
+    }
+
+    hidden = client.post("/api/widgets/gauge", json={"is_enabled": False})
+    shown = [{"app": "gauge", "is_enabled": False}, {"app": "meter", "is_enabled": False}]
+    assert hidden.status_code == 200 and hidden.get_json() == {"widgets": shown}
+    for client_queue in (first_queue, second_queue):
+        assert drain_messages(client_queue) == [{"type": "widgets_updated", "widgets": shown}]
+    assert client.get("/api/widgets").get_json() == {"widgets": shown}
+    # An app declaring no widget, an internal app's widget, an unknown app, and a name no app can have are refused.
+    for name in ("files", "probe", "nope", "Not-An-App"):
+        assert client.post(f"/api/widgets/{name}", json={"is_enabled": True}).status_code == 404
+    assert client.post("/api/widgets/gauge", json={"is_enabled": "yes"}).status_code == 400
+
+
+def test_a_clients_widget_presentation_is_written_and_announced_to_that_client_alone(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    app = _widget_shell(tmp_path, broadcaster)
+    client = app.test_client()
+    first_queue = _register_client(app, "c1", "home")
+    second_queue = _register_client(app, "c2", "home")
+    drain_messages(first_queue)
+    drain_messages(second_queue)
+
+    written = client.post(
+        "/api/clients/c1/widgets/gauge", json={"position": {"x": 0.02, "y": 0.9}, "mode": "collapsed"}
+    )
+    assert written.status_code == 200
+    stored = {"position": {"x": 0.02, "y": 0.9}, "mode": "collapsed", "placement": "desktop"}
+    assert written.get_json()["widgets"] == {"gauge": stored}
+    assert drain_messages(first_queue) == [
+        {
+            "type": "client_widgets_changed",
+            "client_id": "c1",
+            "widgets": {"gauge": stored},
+        }
+    ]
+    assert drain_messages(second_queue) == []
+    listed = {entry["id"]: entry for entry in client.get("/api/clients").get_json()["clients"]}
+    assert listed["c2"]["widgets"] == {}
+    # An absent field takes the default; a position off the backdrop is refused, and an app declaring no widget, an
+    # internal app, an unknown app, and an unknown client are not found.
+    defaulted = client.post("/api/clients/c1/widgets/meter", json={})
+    assert defaulted.get_json()["widgets"]["meter"] == {"position": None, "mode": "expanded", "placement": "desktop"}
+    # Only a widget whose page draws a tray form goes in the tray.
+    tray = client.post("/api/clients/c1/widgets/gauge", json={"placement": "tray"})
+    assert tray.get_json()["widgets"]["gauge"]["placement"] == "tray"
+    assert client.post("/api/clients/c1/widgets/meter", json={"placement": "tray"}).status_code == 400
+    toolbar = client.post("/api/clients/c1/widgets/gauge", json={"placement": "toolbar"})
+    assert toolbar.get_json()["widgets"]["gauge"]["placement"] == "toolbar"
+    assert client.post("/api/clients/c1/widgets/meter", json={"placement": "toolbar"}).status_code == 400
+    for name in ("files", "probe"):
+        assert client.post(f"/api/clients/c1/widgets/{name}", json={}).status_code == 404
+    assert client.post("/api/clients/c1/widgets/gauge", json={"position": {"x": 1.5, "y": 0.2}}).status_code == 400
+    assert client.post("/api/clients/c1/widgets/nope", json={}).status_code == 404
+    assert client.post("/api/clients/ghost/widgets/gauge", json={}).status_code == 404
+
+
 # The desktop routes (desktop contracts.md section 5)
 
 
@@ -1208,7 +1300,7 @@ def test_ops_open_and_edit_windows_in_the_target_clients_layout(client: FlaskCli
     listed = _op(client, "desktops", {}, requester)
     assert listed.status_code == 200 and [desktop["id"] for desktop in listed.get_json()["desktops"]] == ["home"]
     # The read ops answer the whole inventory document, apps and clients included.
-    assert set(listed.get_json()) == {"ok", "is_preview", "workspace_name", "desktops", "apps", "clients"}
+    assert set(listed.get_json()) == {"ok", "is_preview", "workspace_name", "desktops", "apps", "widgets", "clients"}
     assert [entry["id"] for entry in listed.get_json()["clients"]] == ["c1"]
 
     # An open at a launch path with params, and one at an explicit path.

@@ -15,7 +15,9 @@ from pathlib import Path
 from typing import TypeVar
 
 from loguru import logger as _loguru_logger
+from pydantic import Field
 
+from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 
 logger = _loguru_logger
@@ -30,6 +32,13 @@ class OneShotCompletionTimeoutError(OneShotCompletionError):
 
 
 _ModelT = TypeVar("_ModelT")
+
+
+class OneShotUsage(FrozenModel):
+    """Who a one-shot's model calls are attributed to in the workspace's usage record."""
+
+    context: dict[str, str] = Field(description="The usage context (workspace_usage.context keys), e.g. the chat")
+    purpose: str = Field(description="Why the call was made, e.g. CHAT_TITLE")
 
 
 @pure
@@ -63,5 +72,9 @@ class OneShotCompletion(ABC):
     """Answers one prompt with the harness's smallest model on an account, with no tools and no session left behind."""
 
     @abstractmethod
-    def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
-        """The model's answer text. Raises ``OneShotCompletionError`` when the call fails."""
+    def complete(self, account_dir: Path, system_prompt: str, prompt: str, usage: OneShotUsage | None = None) -> str:
+        """The model's answer text. Raises ``OneShotCompletionError`` when the call fails.
+
+        A harness that can report its calls' usage attributes them to ``usage``; with None, to
+        the chat app itself.
+        """

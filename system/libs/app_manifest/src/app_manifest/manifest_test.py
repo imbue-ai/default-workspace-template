@@ -52,6 +52,7 @@ def _full_manifest_data() -> dict[str, object]:
         "launch_paths": [_launch_path_data()],
         "launcher_rank": 20,
         "pin": {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"},
+        "widget": {"path": "/widget", "default_enabled": False, "tray": True, "toolbar": True},
         "window_closed_path": "/api/window-closed",
     }
 
@@ -76,6 +77,9 @@ def test_full_manifest_round_trips_every_field() -> None:
     assert manifest.pin.style is PinStyle.AVATAR
     assert manifest.pin.scope is LocationScope.INDEPENDENT
     assert manifest.pin.default_mode is EntryMode.FLOATING
+    assert manifest.widget is not None
+    widget = manifest.widget
+    assert (widget.path, widget.default_enabled, widget.tray, widget.toolbar) == ("/widget", False, True, True)
     assert manifest.window_closed_path == "/api/window-closed"
     assert manifest.stop_when_no_windows is True
 
@@ -117,6 +121,30 @@ def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> No
 def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict[str, object], field: str) -> None:
     with pytest.raises(ValidationError, match=field):
         AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin})
+
+
+def test_a_widget_is_enabled_by_default_and_needs_only_a_path() -> None:
+    manifest = AppManifest.model_validate(
+        {"name": "news", "display_name": "News", "icon": "icon.svg", "widget": {"path": "/widget"}}
+    )
+    assert manifest.widget is not None
+    widget = manifest.widget
+    assert (widget.path, widget.default_enabled, widget.tray, widget.toolbar) == ("/widget", True, False, False)
+    with pytest.raises(ValidationError, match="path"):
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "widget": {}})
+
+
+@pytest.mark.parametrize(
+    ("widget", "field"),
+    [
+        ({"path": "/widget?compact=1"}, "path"),
+        ({"path": "widget"}, "path"),
+        ({"path": "/widget", "corner": "top-left"}, "corner"),
+    ],
+)
+def test_a_widget_follows_the_launch_path_rule_and_takes_no_other_field(widget: dict[str, object], field: str) -> None:
+    with pytest.raises(ValidationError, match=field):
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "widget": widget})
 
 
 @pytest.mark.parametrize("description", ["", "   ", "two\nlines", "x" * 201])
@@ -469,6 +497,7 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
     assert manifest.launch_paths == ()
     assert manifest.launcher_rank is None
     assert manifest.pin is None
+    assert manifest.widget is None
     assert manifest.window_closed_path is None
 
 

@@ -14,13 +14,16 @@ from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
 from workspace_layout.answers import ClientsListing
+from workspace_layout.answers import WidgetsListing
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import parse_op_body
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
+from workspace_layout.primitives import WidgetPlacement
 from workspace_layout.records import EntryPresentation
+from workspace_layout.records import WidgetPresentation
 from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
@@ -60,6 +63,7 @@ from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.errors import LayoutOpError
 from imbue.system_interface.shell.errors import NoMessageHandlerError
 from imbue.system_interface.shell.errors import NoTargetClientError
+from imbue.system_interface.shell.errors import NoWidgetError
 from imbue.system_interface.shell.errors import PinnedWindowError
 from imbue.system_interface.shell.errors import ShellError
 from imbue.system_interface.shell.errors import StalePlacementsSaveError
@@ -87,6 +91,8 @@ from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.tour import TOUR_ROUTE
 from imbue.system_interface.shell.tour import TourProgress
+from imbue.system_interface.shell.widgets import WIDGETS_ROUTE
+from imbue.system_interface.shell.widgets import WidgetEnabledRequest
 
 
 def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
@@ -94,6 +100,7 @@ def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
         case (
             UnknownAppError()
             | NoMessageHandlerError()
+            | NoWidgetError()
             | ClientNotFoundError()
             | DesktopNotFoundError()
             | WindowNotFoundError()
@@ -291,6 +298,35 @@ def set_client_entry(client_id: str, app: str) -> ResponseReturnValue:
     return model_response(client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
+def set_client_widget(client_id: str, app: str) -> ResponseReturnValue:
+    """How one client shows one widget (app-widgets plan section 5.3): its position, mode and placement; 404 for an app
+    that declares no widget, and 400 for a tray (toolbar) placement of one whose page draws no tray (toolbar) form."""
+    body = parse_request_body(WidgetPresentation)
+    shell = _shell()
+    entry = _entry_or_raise(app)
+    if entry.row.widget is None or entry.row.internal:
+        raise NoWidgetError(f"App {app!r} declares no widget")
+    if body.placement is WidgetPlacement.TRAY and not entry.row.widget.tray:
+        raise InvalidShellValueError(f"App {app!r}'s widget draws no tray form")
+    if body.placement is WidgetPlacement.TOOLBAR and not entry.row.widget.toolbar:
+        raise InvalidShellValueError(f"App {app!r}'s widget draws no toolbar form")
+    record = shell.set_client_widget_presentation(ClientId(client_id), AppName(app), body)
+    return model_response(client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+
+
+def list_widgets() -> ResponseReturnValue:
+    """Whether the workspace shows each declared widget (app-widgets plan section 3.2)."""
+    return model_response(WidgetsListing(widgets=_shell().widget_states()))
+
+
+def set_widget_enabled(app: str) -> ResponseReturnValue:
+    """Show or hide one app's widget for the whole workspace; answers every widget's switch. 404 for an app that
+    declares no widget."""
+    body = parse_request_body(WidgetEnabledRequest)
+    _entry_or_raise(app)
+    return model_response(WidgetsListing(widgets=_shell().set_widget_enabled(AppName(app), body.is_enabled)))
+
+
 def record_client_shown(client_id: str) -> ResponseReturnValue:
     """What a client's phone layout now shows (the phone plan's shown history): a window some desktop holds, or
     ``null`` for its home grid; answers the client record."""
@@ -469,6 +505,19 @@ def register_shell_routes(application: Flask) -> None:
         view_func=set_client_entry,
         methods=["POST"],
         endpoint="set_client_entry",
+    )
+    application.add_url_rule(
+        "/api/clients/<client_id>/widgets/<app>",
+        view_func=set_client_widget,
+        methods=["POST"],
+        endpoint="set_client_widget",
+    )
+    application.add_url_rule(WIDGETS_ROUTE, view_func=list_widgets, methods=["GET"], endpoint="list_widgets")
+    application.add_url_rule(
+        "/api/widgets/<app>",
+        view_func=set_widget_enabled,
+        methods=["POST"],
+        endpoint="set_widget_enabled",
     )
     application.add_url_rule(
         "/api/clients/<client_id>/shown",

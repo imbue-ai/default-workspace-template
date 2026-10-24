@@ -2,7 +2,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
-import { hoverTooltipAttrs, placeTooltip, setHoverTooltip } from "./hoverTooltip";
+import {
+  hideTooltipAtRect,
+  hoverTooltipAttrs,
+  placeTooltip,
+  setHoverTooltip,
+  showTooltipAtRect,
+} from "./hoverTooltip";
 import { hoverTooltip, hoverTooltipText, shownTooltipText, unhoverTooltip } from "../testing/tooltip";
 
 const VIEWPORT = { width: 1000, height: 800 };
@@ -304,5 +310,50 @@ describe("hoverTooltipAttrs", () => {
     setHoverTooltip(button, null);
     expect(hoverTooltipText(button)).toBeNull();
     button.remove();
+  });
+});
+
+describe("showTooltipAtRect", () => {
+  afterEach(() => {
+    document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    vi.useRealTimers();
+  });
+
+  it("puts the one bubble up under a rectangle after the delay, and only its own source takes it down", () => {
+    vi.useFakeTimers();
+    const anchor = { left: 400, top: 300, bottom: 320, width: 40 };
+    showTooltipAtRect("widget:gauge", anchor, "5-hour limit: 61% used");
+    expect(shownTooltipText()).toBeNull();
+    // A repeat of the same trigger keeps its delay running rather than restarting it.
+    vi.advanceTimersByTime(200);
+    showTooltipAtRect("widget:gauge", anchor, "5-hour limit: 61% used");
+    vi.advanceTimersByTime(100);
+    expect(shownTooltipText()).toBe("5-hour limit: 61% used");
+
+    hideTooltipAtRect("widget:other");
+    expect(shownTooltipText()).toBe("5-hour limit: 61% used");
+    hideTooltipAtRect("widget:gauge");
+    expect(shownTooltipText()).toBeNull();
+  });
+
+  it("moves to another element of the same source that offers the same text", () => {
+    vi.useFakeTimers();
+    showTooltipAtRect("widget:gauge", { left: 400, top: 300, bottom: 320, width: 40 }, "Claude · 5-hour limit");
+    vi.runAllTimers();
+    expect(shownTooltipText()).toBe("Claude · 5-hour limit");
+
+    showTooltipAtRect("widget:gauge", { left: 450, top: 400, bottom: 420, width: 40 }, "Claude · 5-hour limit");
+    vi.runAllTimers();
+    expect(shownTooltipText()).toBe("Claude · 5-hour limit");
+    expect(document.querySelector<HTMLElement>(".hover-tooltip")?.style.top).toBe("426px");
+  });
+
+  it("is dropped by a click in the document, like every tooltip", () => {
+    vi.useFakeTimers();
+    showTooltipAtRect("widget:gauge", { left: 10, top: 10, bottom: 20, width: 40 }, "Weekly limit");
+    vi.runAllTimers();
+    expect(shownTooltipText()).toBe("Weekly limit");
+    document.body.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(shownTooltipText()).toBeNull();
   });
 });

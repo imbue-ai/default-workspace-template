@@ -136,6 +136,19 @@ def test_a_command_sees_its_run_directory_and_its_result_file_becomes_the_summar
     assert runner.paths.result_path(SYNC, event.run_id).is_file()
 
 
+def test_a_commands_model_calls_are_attributed_to_its_run(runner: Runner, definitions: FileDefinitionStore) -> None:
+    _command_routine(
+        definitions,
+        "sh",
+        "-c",
+        'printf \'{"summary": "%s"}\' "$IMBUE_USAGE_CONTEXT" > "$ROUTINES_RUN_DIR/result.json"',
+    )
+
+    event = runner.run(SYNC, RunTrigger.SCHEDULED, None)
+
+    assert event.summary == f"origin_kind=ROUTINE,origin_id={SYNC},run_id={event.run_id}"
+
+
 def test_a_result_file_can_name_how_a_failed_run_ended_and_what_it_had_to_say(
     runner: Runner, definitions: FileDefinitionStore
 ) -> None:

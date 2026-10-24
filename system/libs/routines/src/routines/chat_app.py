@@ -12,6 +12,8 @@ from uuid import uuid4
 import httpx
 from loguru import logger
 from pydantic import Field
+from workspace_usage.context import USAGE_CONTEXT_ENV_VAR
+from workspace_usage.context import USAGE_CONTEXT_FILENAME
 
 from routines.errors import ChatAppError
 from routines.errors import ChatCreateError
@@ -21,6 +23,8 @@ from routines.primitives import ChatStatusWord
 from routines.primitives import RoutineId
 from routines.primitives import SendVerdict
 from routines.registry import chat_app_url
+from routines.usage import HOST_DIR_ENV_VAR
+from routines.usage import routine_usage_context
 
 # The create template every routine's chat is made from: the one the automation runner used.
 AUTOMATION_TEMPLATE: Final[str] = "automation"
@@ -244,6 +248,20 @@ class HttpChatApp(ChatAppInterface):
         ids = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
         return ids[0] if ids else None
 
+    def attribute_usage(self, chat_id: str, usage_context: str) -> None:
+        """Write the agent's ``usage_context`` file, which its usage writers read ahead of its environment."""
+        host_dir = self.environ.get(HOST_DIR_ENV_VAR, "").strip()
+        if not host_dir:
+            return
+        state_dir = Path(host_dir) / "agents" / chat_id
+        if not state_dir.is_dir():
+            logger.debug("Left the usage of {} unattributed to the run: no state dir at {}", chat_id, state_dir)
+            return
+        try:
+            (state_dir / USAGE_CONTEXT_FILENAME).write_text(usage_context + "\n", encoding="utf-8")
+        except OSError as e:
+            logger.warning("Could not attribute the usage of {} to the run: {}", chat_id, e)
+
     def create_chat(self, name: str, routine_id: RoutineId, first_message: str) -> str:
         argv = [
             "create",
@@ -257,6 +275,9 @@ class HttpChatApp(ChatAppInterface):
             f"{ROUTINE_LABEL}={routine_id}",
             "--label",
             f"display_name={name}",
+            # The chat's model calls count toward the routine; each run adds its own id (attribute_usage).
+            "--env",
+            f"{USAGE_CONTEXT_ENV_VAR}={routine_usage_context(routine_id, None)}",
         ]
         workspace = workspace_label(self.environ)
         if workspace:
