@@ -479,6 +479,15 @@ call to the new model instead of breaking it:
   "luna" model in the account's own model list (the sidecar a model probe keeps
   in the account folder, probed once when there is none) at its lowest reasoning
   effort; the account's default model when it offers no luna, or refuses it.
+- Pi: `pi -p` with no tools, extensions, skills, prompt templates or context
+  files and thinking off, on the newest Haiku, Luna or Flash model
+  `pi --list-models` offers on the provider the account holds a key for; pi's
+  own default model for the account when it offers none of them, or refuses the
+  one chosen. The server's own provider keys are dropped from the call's
+  environment, so it is paid for by the account; and since pi picks that default
+  from every provider it can reach, it is not tried when pi also lists models
+  from other credentials (an `~/.aws` profile, say), so such an account keeps
+  its minted name.
 
 The message goes to the model inside `<message>` tags, with the instruction
 repeated after it, and the system prompt says it is text to title: a small model
@@ -509,9 +518,8 @@ name nobody chose is renamed: exactly "Chat N", or a seed title other than
 user sends in it. A
 name the user or an agent chose is left alone. What has been tried is kept in
 `naming.json` in the chat's folder, so a restart neither renames a named chat
-nor retries past the limit. A harness with no `OneShotCompletion` (Pi,
-Antigravity, OpenCode) keeps the minted name, and a secondary chat names
-nothing.
+nor retries past the limit. A harness with no `OneShotCompletion` (Antigravity,
+OpenCode) keeps the minted name, and a secondary chat names nothing.
 
 ## Compaction
 
