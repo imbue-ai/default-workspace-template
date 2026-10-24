@@ -1,0 +1,26 @@
+# The Usage app: the workspace's model usage -- spend, tokens, calls and latency over the last 30 minutes, 24
+# hours, 7 days and this month, by model, source and billing mode, with the latest turns as they happen. It
+# stores nothing of its own: everything it shows is the usage collector's (system/services/usage_collector),
+# which it reads through its own server, since the page lives on this app's origin and the collector on
+# 127.0.0.1 only.
+name = "usage-dashboard"
+display_name = "Usage"
+description = "The workspace's model usage: spend, tokens, calls and latency by model, source and billing mode."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+critical = false
+# Part of the workspace itself, like System Monitor: the Share tab lists it under System, not up front. Who sees
+# usage is the workspace's sharing grants, as for any app: a workspace-wide grant or a grant on this app.
+system = true
+# Only answers requests: the shell stops it once no window shows it and starts it again on the next request.
+stop_when_no_windows = true
+priority = "usage-dashboard"
+
+[default_shortcut]
+launch = "open"
+mode = "focus"
+
+# A preview serves the pages on a free port over the live collector, which it only reads.
+[preview]
+env = {USAGE_DASHBOARD_PORT = "{port:main}", USAGE_DASHBOARD_HOST = "{host}"}
+health_path = "/api/health"

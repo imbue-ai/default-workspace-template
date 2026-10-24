@@ -30,11 +30,16 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
+from workspace_usage.context import ORIGIN_ID
+from workspace_usage.context import ORIGIN_KIND
+from workspace_usage.context import ORIGIN_KIND_CHAT
+from workspace_usage.events import PURPOSE_CHAT_TITLE
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.harnesses.one_shot import OneShotUsage
 from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import ChatAccountBinding
@@ -316,7 +321,14 @@ class ChatNamer(MutableModel):
             return
 
         try:
-            answer = completion.complete(binding.account_dir, CHAT_NAMING_SYSTEM_PROMPT, chat_naming_prompt(message))
+            answer = completion.complete(
+                binding.account_dir,
+                CHAT_NAMING_SYSTEM_PROMPT,
+                chat_naming_prompt(message),
+                usage=OneShotUsage(
+                    context={ORIGIN_KIND: ORIGIN_KIND_CHAT, ORIGIN_ID: str(chat_id)}, purpose=PURPOSE_CHAT_TITLE
+                ),
+            )
         except OneShotCompletionError as e:
             logger.warning("Failed to generate a name for chat {}: {}", chat_id, e)
             self._record_attempt(chat_dir)

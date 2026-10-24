@@ -156,6 +156,13 @@ class ChatAppInterface(MutableModel, ABC):
     def create_chat(self, name: str, routine_id: RoutineId, first_message: str) -> str:
         """Create the routine's chat with the message as its first; answers the chat id or raises ChatCreateError."""
 
+    @abstractmethod
+    def attribute_usage(self, chat_id: str, usage_context: str) -> None:
+        """Attribute the chat agent's model calls from now on to ``usage_context`` (an IMBUE_USAGE_CONTEXT value).
+
+        Best effort: a chat whose usage cannot be re-attributed keeps the routine's own attribution.
+        """
+
 
 class NotifierInterface(MutableModel, ABC):
     """The Imbue Studio app's notification feed, as far as the runner posts to it."""

@@ -2154,6 +2154,12 @@ def test_chat_create_argv_names_the_chat_in_the_agents_environment() -> None:
     assert "MINDS_CHAT_ID=agent-123" in env_values
 
 
+def test_chat_create_argv_attributes_the_agents_model_calls_to_the_chat() -> None:
+    argv = _chat_create_argv()
+    env_values = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--env"]
+    assert "IMBUE_USAGE_CONTEXT=origin_kind=CHAT,origin_id=agent-123" in env_values
+
+
 def test_codex_chat_create_argv_accepted_by_live_cli() -> None:
     """The codex harness reuses the chat role verbatim; only the `--type` differs."""
     argv = _chat_create_argv(

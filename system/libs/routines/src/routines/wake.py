@@ -283,6 +283,8 @@ def wake_skill(
     on_blocked: Callable[[], None],
     # Told the chat id as soon as one is known, so the state keeps it even if the run is cut short.
     on_chat_known: Callable[[str], None],
+    # What the chat's model calls count toward from this wake on (the run); None leaves them as they were.
+    usage_context: str | None = None,
 ) -> WakeOutcome:
     """Section 6.4 of the spec: find the chat, make sure it is free, start fresh, wait for the turn, summarize."""
     deadline = clock.now() + timeout
@@ -290,6 +292,8 @@ def wake_skill(
     chat = _find_or_create_chat(routine_id, title, command, known_chat_id, chat_app, on_chat_known)
     if isinstance(chat, WakeOutcome):
         return chat
+    if usage_context is not None:
+        chat_app.attribute_usage(chat.chat_id, usage_context)
     warnings: tuple[RunWarning, ...] = ()
     try:
         cursor: str | None = None

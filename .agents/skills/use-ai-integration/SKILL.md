@@ -83,6 +83,14 @@ needs. Pick the weakest -- it is cheaper, faster, and simpler.
    work in the same repo and their changes must not collide. **User- or
    error-triggered only, never an autonomous loop**, with a tightly-scoped task.
 
+## Every call is recorded in the workspace's usage
+
+Make every model call through `workspace_usage` (`system/libs/workspace_usage`), so
+it shows up in the workspace's usage, attributed to your app: add `"workspace-usage"`
+to your app's `pyproject.toml` `dependencies`. The two paths below already do this --
+`claude_p.py` records each `claude -p` call, and the litellm path records each call
+once you install the callback. Never call a model some other way.
+
 ## Scenario 1 -- one-shot completion
 
 For a plain completion with **no tools**. If the step needs a tool at all --
@@ -98,8 +106,13 @@ temperature, etc. with no wrapper of ours in the way. `litellm` is in the root
 
 ```python
 from litellm import completion, completion_cost
+from workspace_usage.litellm_usage import install_litellm_usage_callback
 
 from claude_p import read_workspace_ai_credentials  # the file you copied in
+
+# Once, at startup: records every litellm call (successes and failures) in the
+# workspace's usage, attributed to your app.
+install_litellm_usage_callback()
 
 # Resolve credentials at call time: the data/.secrets/anthropic.env snapshot
 # first (see setup above), then the Claude account's settings, then the process
@@ -120,6 +133,24 @@ resp = completion(
 text = resp.choices[0].message.content
 cost = completion_cost(completion_response=resp)  # USD for this call
 ```
+
+To have the Usage app group an app's calls by task (one group per request, job
+or item), wrap each task in `usage_turn`; every call recorded inside it, by
+litellm or by `claude_p_completion`, carries that turn id. It is optional: an
+app that sets none still has every call counted.
+
+```python
+from workspace_usage.turn import usage_turn
+
+with usage_turn(f"email-{email_id}"):
+    resp = completion(model="claude-haiku-4-5", messages=messages, ...)
+
+# Or name one call's turn on the call itself:
+completion(..., metadata={"imbue_turn_id": f"email-{email_id}"})
+```
+
+With a thread pool, enter `usage_turn` inside the function each worker runs:
+a worker thread does not see the turn its caller was in.
 
 **Keyless (no key): copy this skill's `scripts/claude_p.py` and call `claude_p_completion`.**
 It disables tools and runs from an isolated working directory so the repo's

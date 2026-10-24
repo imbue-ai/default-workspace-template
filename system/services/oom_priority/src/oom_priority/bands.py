@@ -246,6 +246,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # Opt-in runtime/ sync (added by the github-sync skill).
     "github-sync": 40,
     "host-backup": 50,
+    # The usage collector: a small HTTP server over a SQLite file. A shed loses nothing --
+    # every call is in an event file it reads on from where it left off -- but the usage
+    # views stop updating, so it sits with the other background services.
+    "usage-collector": 52,
     # The cron daemon behind the workspace's scheduled jobs. A shed defers those
     # jobs rather than losing them -- the every-minute checkers fire at the due
     # hour when the container is up, or the first minute it is back up after a
@@ -277,6 +281,9 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The Getting Started page: one static page and a cached catalog. A shed costs
     # one reload of a window that shows nothing of the user's.
     "getting-started": 80,
+    # The Usage page: one page over the usage collector's API that stores nothing, so a shed
+    # costs a reload.
+    "usage-dashboard": 82,
     # The System Monitor page: one polling page that writes nothing to disk, so a
     # shed costs a reload. The most expendable built-in service of all, with the
     # sampler that feeds its graphs just below it: a shed sampler costs a gap in

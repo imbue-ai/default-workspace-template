@@ -11,8 +11,8 @@ from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.testing import put_stand_in_cli_on_path
 
 
-def test_claude_one_shot_argv_reads_the_prompt_from_stdin_with_no_tools_and_no_session() -> None:
-    argv = claude_one_shot_argv("Name this chat.", "haiku")
+def test_claude_one_shot_argv_reads_the_prompt_from_stdin_with_no_tools_and_logs_under_the_given_session() -> None:
+    argv = claude_one_shot_argv("Name this chat.", "haiku", "6a1f0c58-2d0b-4f43-9e64-5c3b0a8e7d21")
 
     assert argv == [
         "claude",
@@ -25,12 +25,13 @@ def test_claude_one_shot_argv_reads_the_prompt_from_stdin_with_no_tools_and_no_s
         "Name this chat.",
         "--tools",
         "",
-        "--no-session-persistence",
+        "--session-id",
+        "6a1f0c58-2d0b-4f43-9e64-5c3b0a8e7d21",
     ]
 
 
 def test_claude_one_shot_argv_leaves_the_model_to_the_account_when_none_is_named() -> None:
-    assert "--model" not in claude_one_shot_argv("Name this chat.", None)
+    assert "--model" not in claude_one_shot_argv("Name this chat.", None, "0d6f3c2e-8b41-4a5e-9f07-2e7c1b9a4d63")
 
 
 _SUCCESS_RESULT = json.dumps({"type": "result", "subtype": "success", "is_error": False, "result": "Rome trip: plan"})

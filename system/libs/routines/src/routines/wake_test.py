@@ -49,6 +49,27 @@ def test_the_first_run_creates_the_chat_with_the_skill_as_its_first_message(
     assert known == ["agent-created"]
 
 
+def test_a_wake_attributes_the_chats_usage_to_the_run_before_the_skill_is_sent(
+    chat_app: ScriptedChatApp, clock: FakeClock
+) -> None:
+    chat_app.script("agent-known", (ChatStatusWord.IDLE, ChatStatusWord.WORKING, ChatStatusWord.IDLE), "Ok.")
+
+    wake_skill(
+        routine_id=DIGEST,
+        title="Digest",
+        skill="digest",
+        known_chat_id="agent-known",
+        timeout=timedelta(hours=1),
+        chat_app=chat_app,
+        clock=clock,
+        on_blocked=lambda: None,
+        on_chat_known=lambda _chat_id: None,
+        usage_context="origin_kind=ROUTINE,origin_id=digest,run_id=r-7",
+    )
+
+    assert chat_app.usage_attributions == [("agent-known", "origin_kind=ROUTINE,origin_id=digest,run_id=r-7")]
+
+
 def test_a_fresh_chat_the_app_has_not_listed_yet_is_waited_for(chat_app: ScriptedChatApp, clock: FakeClock) -> None:
     """The chat app lists a just-created agent a moment after mngr made it; that moment is not a stopped agent."""
     chat_app.script("agent-created", (ChatStatusWord.WORKING, ChatStatusWord.IDLE), "Done.")

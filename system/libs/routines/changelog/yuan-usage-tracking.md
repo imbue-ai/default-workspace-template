@@ -1,0 +1,1 @@
+A routine's model calls are attributed to its runs in the workspace's usage. A command run carries the routine and run id in its environment; a skill run marks the routine's chat with its run id before sending the skill, and the chat itself is created attributed to the routine.

@@ -22,6 +22,11 @@ from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import lookup_pid_by_agent_id
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
+from workspace_usage.context import ORIGIN_ID
+from workspace_usage.context import ORIGIN_KIND
+from workspace_usage.context import ORIGIN_KIND_CHAT
+from workspace_usage.context import USAGE_CONTEXT_ENV_VAR
+from workspace_usage.context import format_usage_context
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
@@ -188,6 +193,8 @@ from imbue.chat.presence import PresenceTracker
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import parse_chat_ref
+from imbue.chat.usage_turns import UnreportedTurnRecorder
+from imbue.chat.usage_turns import now_utc
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ConcurrencyGroupError
@@ -402,6 +409,10 @@ def _build_chat_create_command(
         f"display_name={name}",
         "--env",
         f"MINDS_CHAT_ID={chat_id}",
+        # Every model call the chat's agent makes, and those of any agent it launches, is
+        # attributed to the chat in the workspace's usage.
+        "--env",
+        f"{USAGE_CONTEXT_ENV_VAR}={format_usage_context({ORIGIN_KIND: ORIGIN_KIND_CHAT, ORIGIN_ID: str(chat_id)})}",
         "--no-connect",
     ]
     # The project the chat starts out filed in: the one it was created inside
@@ -1133,6 +1144,9 @@ class AgentManager:
     # Per agent, the finished harness tasks whose markers wait for the turn their notice starts, so
     # the chat goes from background to working in one update rather than reading idle in between.
     _finished_tasks_awaiting_turn_by_agent: dict[str, _FinishedTasksAwaitingTurn]
+    # Records the turns of harnesses that report no usage of their own (antigravity) in the
+    # workspace's usage, one model_call per turn.
+    _unreported_turns: UnreportedTurnRecorder
     # The chats whose agent the observe stream last reported in a running lifecycle state.
     _running_chat_ids: frozenset[ChatId]
     # When each chat was last messaged from the UI, kept on disk so a restart seeds the OOM
@@ -1291,6 +1305,7 @@ class AgentManager:
         manager._background_tasks_by_chat = {}
         manager._background_tasks_read_lock = threading.Lock()
         manager._finished_tasks_awaiting_turn_by_agent = {}
+        manager._unreported_turns = UnreportedTurnRecorder()
         manager._running_chat_ids = frozenset()
         manager._background_tasks_poller = AgentFilePoller.build(
             list_paths=manager._list_background_task_dirs,
@@ -5436,9 +5451,20 @@ class AgentManager:
                 ended_chat_id = self._chat_id_of_agent_if_active_locked(agent_id)
             if ended_chat_id is not None:
                 self._recompute_background_tasks(ended_chat_id, broadcast_on_change=False)
+            if recompute_agent_state is not None:
+                model_choice = recompute_agent_state.model_choice
+                self._unreported_turns.turn_ended(
+                    agent_id,
+                    recompute_agent_state.harness,
+                    str(ended_chat_id) if ended_chat_id is not None else None,
+                    model_choice.identity.model_id if model_choice is not None else None,
+                    now_utc(),
+                )
         # The turn a finished task's notice started: its markers go now, in the broadcast that
         # shows the turn.
         if not is_turn_in_flight(old_state) and is_turn_in_flight(new_state):
+            if recompute_agent_state is not None:
+                self._unreported_turns.turn_started(agent_id, recompute_agent_state.harness, now_utc())
             with self._lock:
                 claimed = self._finished_tasks_awaiting_turn_by_agent.pop(agent_id, None)
             if claimed is not None:
