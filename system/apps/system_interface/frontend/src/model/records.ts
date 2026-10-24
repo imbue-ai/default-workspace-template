@@ -181,6 +181,17 @@ export interface AppRecord {
   readonly is_running: boolean;
   /** The app's address on the domain the workspace was last shared under, or null when it never was. */
   readonly share_url: string | null;
+  /** Where the app's Theming submenu stands (docs/system/themeable-apps.md): on or off for a themeable app,
+   *  unthemed for an app that can be made themeable, null for an app that wears the theme itself or is not themed. */
+  readonly theming: AppTheming | null;
+}
+
+export type AppTheming = "on" | "off" | "unthemed";
+
+const APP_THEMINGS: readonly AppTheming[] = ["on", "off", "unthemed"];
+
+function parseAppTheming(raw: unknown): AppTheming | null {
+  return APP_THEMINGS.find((theming) => theming === raw) ?? null;
 }
 
 /** Where a client keeps a floating entry: the top-left corner of its box, in fractions of the backdrop. */
@@ -518,6 +529,7 @@ export function parseAppRecord(raw: unknown): AppRecord {
     message_handlers: asArray(record.message_handlers ?? [], "app.message_handlers").map(parseMessageHandler),
     is_running: record.is_running === true,
     share_url: typeof record.share_url === "string" && record.share_url !== "" ? record.share_url : null,
+    theming: parseAppTheming(record.theming),
   };
 }
 

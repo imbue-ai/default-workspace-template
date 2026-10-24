@@ -11,9 +11,10 @@ from pydantic import Field
 LINTED_SUFFIXES: Final[frozenset[str]] = frozenset(
     {".ts", ".tsx", ".js", ".css", ".html", ".py"}
 )
-# Built output, dependencies, and tests carry literals that never reach a themed page.
+# Built output, dependencies, and tests carry literals that never reach a themed page. An app's own `assets/` is
+# not skipped: build-app keeps a page's hand-written CSS and scripts there.
 SKIPPED_DIRECTORY_NAMES: Final[frozenset[str]] = frozenset(
-    {"node_modules", "static", "dist", "build", "assets"}
+    {"node_modules", "static", "dist", "build"}
 )
 SKIPPED_FILE_SUFFIXES: Final[tuple[str, ...]] = (
     ".test.ts",
@@ -30,7 +31,7 @@ _CSS_WIDE_KEYWORDS: Final[str] = r"inherit|initial|unset|revert"
 _LITERAL_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
     (
         re.compile(
-            r"(?<![\w&/-])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})\b"
+            r"(?<![\w&/-])#(?:[0-9a-fA-F]{8}|[0-9a-fA-F]{6}|[0-9a-fA-F]{4}|[0-9a-fA-F]{3})(?![\w-])"
         ),
         "a literal color; use a color token (text-primary, bg-surface, var(--c-...))",
     ),
@@ -63,6 +64,8 @@ _LITERAL_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
 _COMMENT_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"^\s*(?://|/\*|\*(?![.\[#]|\s*(?:[{,>+~]|::?[a-zA-Z-]))|#\s)"
 )
+# A token with a fallback: the fallback is the look the app keeps while no theme is put in (docs/system/themeable-apps.md).
+_TOKEN_FALLBACK_START: Final[re.Pattern[str]] = re.compile(r"\bvar\(\s*--[\w-]+\s*,")
 
 
 class ThemingLintFinding(FrozenModel):
@@ -75,13 +78,27 @@ class ThemingLintFinding(FrozenModel):
 
 
 @pure
+def _without_token_fallbacks(line: str) -> str:
+    kept: list[str] = []
+    position = 0
+    while (match := _TOKEN_FALLBACK_START.search(line, position)) is not None:
+        kept.append(line[position : match.end()])
+        depth, position = 1, match.end()
+        while position < len(line) and depth > 0:
+            depth += {"(": 1, ")": -1}.get(line[position], 0)
+            position += 1
+    return "".join(kept) + line[position:]
+
+
+@pure
 def find_literal_looks_in_text(path: Path, text: str) -> list[ThemingLintFinding]:
     findings: list[ThemingLintFinding] = []
     for line_number, line in enumerate(text.splitlines(), start=1):
         if _COMMENT_LINE_PATTERN.match(line):
             continue
+        looked_at = _without_token_fallbacks(line)
         for pattern, message in _LITERAL_PATTERNS:
-            if pattern.search(line):
+            if pattern.search(looked_at):
                 findings.append(
                     ThemingLintFinding(
                         path=path,

@@ -104,6 +104,16 @@ which previews it live before they keep it, and can put it on one desktop or mak
 workspace default, which every desktop without a theme of its own wears.
 Do not switch their desktop to it yourself unless they asked you to.
 
+Tell them, in the same message, what the theme reaches on its own and what it does not:
+
+- The desktop, the windows, and the built-in apps wear it at once.
+- An app they built takes the theme only once its theming is enabled: **Theming > Enable
+  theming** in that app's window menu, which has the app rewritten to follow every theme
+  (`docs/system/themeable-apps.md`). After that, **Theming > On / Off** in the same menu turns it
+  on and off.
+- An app keeps its standard icon under the theme unless an icon is drawn for it in this theme,
+  which is asked about next.
+
 Then ask about icons, in one message, with both questions in it. Start from what icons are:
 "Apps can use their standard theme icon in any theme, or each app can have a new icon drawn for
 each theme." Until an app has one drawn, the theme wears its base's icon for it: the standard one,

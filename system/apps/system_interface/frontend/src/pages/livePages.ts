@@ -66,6 +66,7 @@ import {
   onThemeChanged,
   type ThemeRef,
 } from "@imbue/workspace-ui/src/themes/themeClient";
+import { STANDARD_THEME_ID } from "@imbue/workspace-ui/src/themes/themeBoot";
 
 export const LIVE_PAGE_ATTRIBUTE = "data-live-page";
 /** The element of a window's chrome the page is laid over. */
@@ -226,6 +227,24 @@ export class LivePagesLayer implements PageDriver {
     for (const page of this.pages.values()) {
       if (page.app === appName) this.reloadPage(page);
     }
+  }
+
+  resendTheme(appName: string): void {
+    for (const page of this.pages.values()) {
+      if (page.app === appName && page.greetedDesktopId !== null) {
+        sendToChildFrame(
+          page.frame,
+          SHELL_THEME,
+          this.themeMessageFor(page, currentTheme(), isCurrentThemeRemembered()),
+        );
+      }
+    }
+  }
+
+  /** The theme a page is sent: the standard one, which puts nothing on the page, for an app whose theming is off. */
+  private themeMessageFor(page: LivePage, theme: ThemeRef, isRemembered: boolean): ReturnType<typeof themeMessage> {
+    const isThemingOff = appByName(this.store.getState(), page.app)?.theming === "off";
+    return themeMessage(isThemingOff ? { id: STANDARD_THEME_ID, revision: "" } : theme, isRemembered);
   }
 
   /** Reload a page at its window's stored path (the page may have moved since it was first pointed). */
@@ -578,14 +597,14 @@ export class LivePagesLayer implements PageDriver {
       path,
     });
     page.greetedDesktopId = desktopId;
-    sendToChildFrame(page.frame, SHELL_THEME, themeMessage(currentTheme(), isCurrentThemeRemembered()));
+    sendToChildFrame(page.frame, SHELL_THEME, this.themeMessageFor(page, currentTheme(), isCurrentThemeRemembered()));
   }
 
   /** Tell every greeted page the theme the desktop now wears. */
   private sendTheme(theme: ThemeRef, isRemembered: boolean): void {
     for (const page of this.pages.values()) {
       if (page.greetedDesktopId !== null) {
-        sendToChildFrame(page.frame, SHELL_THEME, themeMessage(theme, isRemembered));
+        sendToChildFrame(page.frame, SHELL_THEME, this.themeMessageFor(page, theme, isRemembered));
       }
     }
   }

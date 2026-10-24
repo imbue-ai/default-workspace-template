@@ -19,6 +19,7 @@ from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import Pin
+from app_manifest.manifest import ThemingMode
 from app_manifest.manifest import describe_validation_error
 from app_manifest.primitives import AppDescription
 from app_manifest.primitives import AppName
@@ -132,6 +133,11 @@ class RegistryRow(FrozenModel):
     )
     message_handlers: tuple[MessageHandler, ...] = Field(
         default=(), description="The messages the app takes and where the shell posts each; absent means none"
+    )
+    theming_mode: ThemingMode | None = Field(
+        default=None,
+        description="How the app takes part in workspace themes, when its manifest declares [theming]; absent means "
+        "the app does not wear them yet and can be made themeable",
     )
 
 

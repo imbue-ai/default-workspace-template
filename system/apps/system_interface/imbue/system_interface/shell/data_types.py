@@ -38,6 +38,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.app_theming import theming_of
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import PageId
@@ -85,7 +86,7 @@ def stoppable_program_of(entry: AppInventoryEntry, entries: Sequence[AppInventor
 
 
 @pure
-def app_view(entry: AppInventoryEntry, share_domain: str | None) -> InventoryApp:
+def app_view(entry: AppInventoryEntry, share_domain: str | None, theming_off: frozenset[AppName]) -> InventoryApp:
     """The ``app`` object of desktop contracts.md section 5.5; ``share_domain`` is the domain the workspace was last
     shared under, if it ever was, on which an app with a label has an address."""
     row = entry.row
@@ -106,6 +107,7 @@ def app_view(entry: AppInventoryEntry, share_domain: str | None) -> InventoryApp
         message_handlers=row.message_handlers,
         is_running=entry.is_running,
         share_url=f"https://{row.label}.{share_domain}/" if share_domain is not None and row.label else None,
+        theming=theming_of(row, theming_off),
     )
 
 

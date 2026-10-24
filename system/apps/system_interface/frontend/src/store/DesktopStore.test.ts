@@ -700,6 +700,7 @@ describe("windows", () => {
     store.setPageDriver({
       reload: () => undefined,
       reloadApp: () => undefined,
+      resendTheme: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
     });
@@ -716,6 +717,7 @@ describe("windows", () => {
     store.setPageDriver({
       reload: () => undefined,
       reloadApp: () => undefined,
+      resendTheme: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
     });
@@ -730,6 +732,7 @@ describe("windows", () => {
     store.setPageDriver({
       reload: () => undefined,
       reloadApp: () => undefined,
+      resendTheme: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: (id) => id === "win-1",
     });
@@ -774,6 +777,7 @@ describe("windows", () => {
     store.setPageDriver({
       reload: (id) => void reloaded.push(`window:${id}`),
       reloadApp: (app) => void reloaded.push(`app:${app}`),
+      resendTheme: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
     });
@@ -782,6 +786,23 @@ describe("windows", () => {
     socket.deliver().onLayoutOp({ op: "reload_system_interface", args: {}, requester: "" });
     expect(reloaded).toEqual(["window:win-1", "app:docs"]);
     expect(reloads).toBe(1);
+  });
+
+  it("sends an app's pages the theme again when its theming is turned on or off, and leaves other apps alone", async () => {
+    const store = await startedStore();
+    const resent: string[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: (app) => void resent.push(app),
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs", { theming: "on" }), appRecord("notes")]);
+    resent.length = 0;
+    socket.deliver().onAppsUpdated([appRecord("docs", { theming: "off" }), appRecord("notes")]);
+    socket.deliver().onAppsUpdated([appRecord("docs", { theming: "off" }), appRecord("notes")]);
+    expect(resent).toEqual(["docs"]);
   });
 
   it("follows a pushed desktop switch without re-reporting a previous desktop", async () => {
@@ -2733,6 +2754,7 @@ describe("the phone layout", () => {
     store.setPageDriver({
       reload: (id) => void reloaded.push(id),
       reloadApp: () => undefined,
+      resendTheme: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
     });

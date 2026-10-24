@@ -269,6 +269,9 @@ class ThemingMode(LowerCaseStrEnum):
     PARTS = auto()
     # Shows content whose look is not the workspace's; only the window around it is themed.
     NONE = auto()
+    # Has a look of its own, written on the design tokens with that look as their fallbacks, and loads the page kit; the
+    # user turns its theming on and off from its window menu (docs/system/themeable-apps.md).
+    OUTSIDE = auto()
 
 
 class AppPart(FrozenModel):

@@ -81,6 +81,11 @@ export async function fetchThemes(): Promise<ThemeCatalog> {
   return parseThemeCatalog(await getJson(apiUrl("/api/themes")));
 }
 
+/** Turn a themeable app's theming on or off. */
+export async function setAppTheming(app: string, isOn: boolean): Promise<void> {
+  await postJson<unknown>(apiUrl(`/api/apps/${encodeURIComponent(app)}/theming`), { is_on: isOn });
+}
+
 /** The workspace's default theme; null wears the standard one. */
 export async function setDefaultTheme(theme: string | null): Promise<void> {
   await postJson<unknown>(apiUrl("/api/themes/default"), { theme });

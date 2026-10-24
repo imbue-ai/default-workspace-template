@@ -872,6 +872,24 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(tmp_p
     assert _read_apps(apps_file)[0]["pin"] == {"path": "/inbox"}
 
 
+def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_without_one(tmp_path: Path) -> None:
+    apps_file = tmp_path / "apps.toml"
+    (tmp_path / "chat").mkdir()
+    (tmp_path / "notes").mkdir()
+    themed = _write_manifest(
+        tmp_path / "chat", 'name = "chat"\ndisplay_name = "Chat"\nicon = "icon.svg"\n\n[theming]\nmode = "parts"\n'
+    )
+    plain = _write_manifest(tmp_path / "notes", 'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n')
+
+    for manifest, port in ((themed, 8010), (plain, 8090)):
+        result = _run(["--manifest", str(manifest), "--url", f"http://localhost:{port}"], apps_file)
+        assert result.returncode == 0, result.stderr
+
+    rows = {row["name"]: row for row in _read_apps(apps_file)}
+    assert rows["chat"]["theming_mode"] == "parts"
+    assert "theming_mode" not in rows["notes"]
+
+
 @pytest.mark.parametrize(
     ("declaration", "expected_error"),
     [

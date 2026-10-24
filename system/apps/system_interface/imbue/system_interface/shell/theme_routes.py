@@ -19,10 +19,24 @@ from workspace_themes.serving import theme_file_security_headers
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.shell.app_theming import is_themeable
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.theme_wire import THEME_ICON_ROUTE
 from imbue.system_interface.shell.theme_wire import theme_catalog_wire
+
+
+class AppThemingRequest(FrozenModel):
+    """The body of the app theming route."""
+
+    is_on: bool = Field(description="Whether the app wears the workspace's theme")
+
+
+class AppThemingResponse(FrozenModel):
+    """What turning an app's theming on or off answers."""
+
+    app: str = Field(description="The app")
+    is_on: bool = Field(description="Whether its theming is on now")
 
 
 class ThemeChoiceRequest(FrozenModel):
@@ -68,6 +82,20 @@ def set_default_theme() -> ResponseReturnValue:
     return model_response(DefaultThemeResponse(default=None if choices.default is None else str(choices.default)))
 
 
+def set_app_theming(app_name: str) -> ResponseReturnValue:
+    """Turn a themeable app's theming on or off."""
+    body = parse_request_body(AppThemingRequest)
+    shell = _shell()
+    entry = shell.inventory.entry(app_name)
+    if entry is None:
+        raise InvalidShellValueError(f"there is no app {app_name!r}")
+    if not is_themeable(entry.row):
+        raise InvalidShellValueError(f"{app_name!r} is not written to wear the workspace's theme over its own look")
+    shell.app_theming.set(entry.row.name, body.is_on)
+    shell.inventory.broadcast_if_changed()
+    return model_response(AppThemingResponse(app=app_name, is_on=body.is_on))
+
+
 def serve_theme_icon(theme_id: str, file_name: str) -> ResponseReturnValue:
     """One of a theme's icons, by the URL the theme catalog gives it."""
     try:
@@ -93,3 +121,6 @@ def register_theme_routes(application: Flask) -> None:
         endpoint="serve_theme_icon",
     )
     register_theme_static_route(application, lambda: _shell().themes.load())
+    application.add_url_rule(
+        "/api/apps/<app_name>/theming", view_func=set_app_theming, methods=["POST"], endpoint="set_app_theming"
+    )

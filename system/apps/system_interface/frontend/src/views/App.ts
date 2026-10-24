@@ -22,7 +22,14 @@ import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
-import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
+import type {
+  AppRecord,
+  AppTheming,
+  AvatarDesign,
+  Desktop,
+  DesktopShortcut,
+  WallpaperListing,
+} from "../model/records";
 import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
@@ -73,7 +80,14 @@ import { TourCard } from "./TourCard";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
-import { MENU_MIN_WIDTH, openShareSettings, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
+import {
+  MENU_MIN_WIDTH,
+  openShareSettings,
+  enableThemingPrompt,
+  taskbarEntryMenuRows,
+  windowMenuRows,
+  type WindowThemeActions,
+} from "./WindowMenu";
 import { windowSizeRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
@@ -588,7 +602,18 @@ export function App(): m.Component<AppAttrs> {
       quit: app !== undefined && current.canStopApp(app) ? () => void current.quitApp(app.name) : null,
       popOut: current.getCanPopOut() ? () => void current.detachWindow(windowId) : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
+      theme: app === undefined || app.theming === null ? null : windowThemeActionsOf(current, app, app.theming),
     });
+  }
+
+  function windowThemeActionsOf(current: DesktopStore, app: AppRecord, theming: AppTheming): WindowThemeActions {
+    const canDraft = draftTargetOf(current.getState()) !== null;
+    return {
+      isThemeable: theming !== "unthemed",
+      isOn: theming === "on",
+      setOn: (isOn) => void current.setAppTheming(app.name, isOn),
+      enable: canDraft ? () => void current.draftIntoPinnedWindow(enableThemingPrompt(app.display_name), false) : null,
+    };
   }
 
   function rowsOfEntryMenu(current: DesktopStore, windowId: string): MenuRow[] | null {

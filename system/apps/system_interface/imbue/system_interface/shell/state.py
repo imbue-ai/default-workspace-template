@@ -54,6 +54,7 @@ from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manager
+from imbue.system_interface.shell.app_theming import AppThemingStore
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
@@ -147,6 +148,9 @@ class ShellState(MutableModel):
         frozen=True, description="Parks, wakes, starts, and stops the stoppable apps (the stop-when-no-windows spec)"
     )
     desktops: DesktopStore = Field(frozen=True, description="desktops.json and default_shortcuts_offered.json")
+    app_theming: AppThemingStore = Field(
+        frozen=True, description="app_theming.json: the themeable apps whose theming the user turned off"
+    )
     placements: PlacementStore = Field(frozen=True, description="The per-client layouts of each desktop")
     window_paths: WindowPathStore = Field(
         frozen=True, description="The per-client paths and titles of independent windows"
@@ -857,12 +861,14 @@ def build_shell_state(
     manager owns the live workspace's apps, sweeping them and waking one for a POST launch (the production shell's
     yes; a preview's and a test's no, so neither starts a live app or parks a port by accident), and the two
     timings are the manager's grace period and idle sweep interval, which a test shortens."""
+    app_theming = AppThemingStore(state_directory=state_directory)
     resolved_inventory = (
         inventory
         if inventory is not None
         else AppInventory(
             registry_path=registry_path,
             broadcaster=broadcaster,
+            theming_off=app_theming.read,
             on_registry_read=on_registry_read,
             share_domain_path=_under_repo_root(DEFAULT_SHARE_DOMAIN_PATH, repo_root),
         )
@@ -884,6 +890,7 @@ def build_shell_state(
             idle_sweep_interval_seconds=idle_sweep_interval_seconds,
         ),
         desktops=desktops,
+        app_theming=app_theming,
         placements=PlacementStore(state_directory=state_directory),
         window_paths=WindowPathStore(state_directory=state_directory),
         wallpaper_files_directory=_under_repo_root(wallpaper_files_directory, repo_root),

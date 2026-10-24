@@ -171,6 +171,8 @@ export interface DesktopApi {
   /** The workspace's themes and its default (workspace-themes plan section 5.2). */
   fetchThemes(): Promise<ThemeCatalog>;
   setDefaultTheme(theme: string | null): Promise<void>;
+  /** Turn a themeable app's theming on or off (workspace-themes plan section 7.1). */
+  setAppTheming(app: string, isOn: boolean): Promise<void>;
   deleteDesktop(desktopId: string): Promise<string>;
   setDesktopShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<Desktop>;
   moveDesktopShortcut(desktopId: string, app: string, launch: string, cell: GridCell): Promise<Desktop>;
@@ -223,6 +225,8 @@ export interface PageDriver {
   reload(windowId: string): void;
   /** Reload every page of an app. */
   reloadApp(appName: string): void;
+  /** Send every page of an app the theme it wears again (its theming was turned on or off). */
+  resendTheme(appName: string): void;
   /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
@@ -1021,8 +1025,19 @@ export class DesktopStore {
   }
 
   private takeApps(apps: readonly AppRecord[]): void {
+    const themingBefore = new Map(this.state.apps.map((app) => [app.name, app.theming]));
     this.dispatch({ type: "apps_updated", apps });
     this.markAppsLoaded();
+    for (const app of apps) {
+      const before = themingBefore.get(app.name);
+      if (before !== undefined && before !== app.theming) this.pageDriver?.resendTheme(app.name);
+    }
+  }
+
+  /** Turn a themeable app's theming on or off; every client sends its pages the theme again when the app list says
+   *  so. */
+  async setAppTheming(app: string, isOn: boolean): Promise<void> {
+    await this.deps.api.setAppTheming(app, isOn);
   }
 
   private takePresence(users: PresentUser[]): void {

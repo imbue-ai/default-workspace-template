@@ -455,6 +455,32 @@ def test_lint_app_finds_literal_looks_in_a_tokens_mode_app(tmp_path: Path) -> No
     assert not any(f"style.css:{line}:" in linted.output for line in range(3, 7))
 
 
+def test_lint_app_lints_an_outside_mode_app_and_accepts_the_fallbacks_its_tokens_carry(
+    tmp_path: Path,
+) -> None:
+    root = _workspace(tmp_path)
+    app = root / "system" / "apps" / "files"
+    (app / "app.toml").write_text(
+        _APP_TOML + '\n[theming]\nmode = "outside"\n', encoding="utf-8"
+    )
+    assets = app / "assets"
+    assets.mkdir()
+    (assets / "app.css").write_text(
+        ".card { background: var(--c-surface, #ffffff); color: var(--c-text-primary, rgb(42, 37, 34)); }\n"
+        ".lift { box-shadow: var(--c-shadow-raised, 0 1px 2px rgba(0, 0, 0, 0.2)); }\n"
+        "--accent: var(--c-accent, #d26645);\n"
+        ".edge { border: 1px solid var(--c-border, #e1e6df); color: #123456; }\n"
+        "#add-form, #fade-in { display: flex; }\n",
+        encoding="utf-8",
+    )
+
+    linted = CliRunner().invoke(main, ["lint-app", "files", "--repo-root", str(root)])
+
+    assert linted.exit_code == 1
+    assert "assets/app.css:4: a literal color" in linted.output
+    assert not any(f"app.css:{line}:" in linted.output for line in (1, 2, 3, 5))
+
+
 def test_lint_app_reads_the_markup_a_python_module_builds_but_not_its_comments_or_tests(
     tmp_path: Path,
 ) -> None:

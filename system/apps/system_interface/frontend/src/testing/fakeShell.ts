@@ -218,6 +218,11 @@ export class FakeDesktopApi implements DesktopApi {
     this.themeCatalog = { ...this.themeCatalog, default: theme };
   }
 
+  async setAppTheming(app: string, isOn: boolean): Promise<void> {
+    this.calls.push(`setAppTheming:${app}:${isOn ? "on" : "off"}`);
+    this.refuse();
+  }
+
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {
     this.calls.push(`setDesktopWallpaper:${desktopId}:${wallpaper?.name ?? "null"}`);
     this.refuse();

@@ -20,6 +20,7 @@ from workspace_themes.testing import write_test_theme
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
+from imbue.system_interface.shell.app_theming import AppThemingStore
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
@@ -39,6 +40,7 @@ from imbue.system_interface.shell.testing import message_report
 from imbue.system_interface.shell.testing import read_stub_update_self_calls
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
+from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.testing import write_two_app_registry
@@ -2840,6 +2842,31 @@ def test_a_theme_bundle_imports_its_chain_and_its_files_are_served_from_this_ori
     assert client.get("/_static/themes/paper/theme.toml").status_code == 404
     assert client.get("/_static/themes/paper/../standard/theme.toml").status_code == 404
     assert client.get("/_static/themes/nowhere/theme.css").status_code == 404
+
+
+def test_a_themeable_app_turns_its_theming_on_and_off(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml("notes", "http://localhost:7001", theming_mode="outside"),
+        registry_row_toml("todo", "http://localhost:7002"),
+        registry_row_toml("chat", "http://localhost:8010", theming_mode="parts"),
+    )
+    inventory = build_inventory(
+        registry_path, broadcaster, theming_off=AppThemingStore(state_directory=tmp_path / "state").read
+    )
+    client = shell_application(tmp_path, inventory, broadcaster).test_client()
+
+    def theming() -> dict[str, str | None]:
+        return {app["name"]: app["theming"] for app in client.get("/api/inventory").get_json()["apps"]}
+
+    # A themeable app has its theming on until the user turns it off; an app with no [theming] can be made themeable.
+    assert theming() == {"notes": "on", "todo": "unthemed", "chat": None}
+    assert client.post("/api/apps/notes/theming", json={"is_on": False}).get_json() == {"app": "notes", "is_on": False}
+    assert theming()["notes"] == "off"
+    assert client.post("/api/apps/notes/theming", json={"is_on": True}).status_code == 200
+    assert theming()["notes"] == "on"
+    for app in ("todo", "chat", "nowhere"):
+        assert client.post(f"/api/apps/{app}/theming", json={"is_on": False}).status_code == 400
 
 
 def test_the_tour_record_is_unseen_until_posted_and_round_trips(client: FlaskClient) -> None:

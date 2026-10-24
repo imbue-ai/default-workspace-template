@@ -22,7 +22,7 @@ and `themes/` (made in the workspace).
   the one call an app makes. `register_theme_static_route(app, load_catalog)` serves the same route from a
   `Callable[[], ThemeCatalog]` the caller supplies, as the shell does with its own loader.
 - `workspace_themes.icons`: `fit_icon_image`, `check_icon_image`, `render_pixel_grid`, `icon_install_path`.
-- `workspace_themes.lint`: `lint_app_frontend`, the literal-look finder for tokens-mode apps.
+- `workspace_themes.lint`: `lint_app_frontend`, the literal-look finder for tokens-mode and outside-mode apps; a token's `var()` fallback is not a literal.
 - `workspace_themes.contract`: the parts, tokens, chrome slots, and limits of contract 1.
 
 ## CLI

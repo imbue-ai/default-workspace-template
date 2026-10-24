@@ -547,16 +547,17 @@ def icon_install(icon_path: str, theme_id: str, app_name: str, repo_root: str) -
 @click.argument("app_package")
 @_REPO_ROOT_OPTION
 def lint_app(app_package: str, repo_root: str) -> None:
-    """Find literal colors, fonts, and shadows in a tokens-mode app's frontend; exits 1 when there are any."""
+    """Find literal colors, fonts, and shadows in a tokens-mode or outside-mode app's frontend; exits 1 when there
+    are any."""
     app_directory = Path(repo_root).resolve().joinpath(*APPS_DIRECTORY, app_package)
     manifest_path = app_directory / MANIFEST_FILENAME
     try:
         manifest = load_manifest(manifest_path)
     except ManifestLoadError as error:
         raise click.ClickException(str(error)) from None
-    if manifest.theming.mode != ThemingMode.TOKENS:
+    if manifest.theming.mode not in (ThemingMode.TOKENS, ThemingMode.OUTSIDE):
         click.echo(
-            f"{app_package}: theming mode is {manifest.theming.mode}; only tokens-mode apps are linted"
+            f"{app_package}: theming mode is {manifest.theming.mode}; only tokens-mode and outside-mode apps are linted"
         )
         return
     findings = lint_app_frontend(app_directory)

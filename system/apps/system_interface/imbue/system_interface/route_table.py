@@ -69,6 +69,8 @@ from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
+from imbue.system_interface.shell.theme_routes import AppThemingRequest
+from imbue.system_interface.shell.theme_routes import AppThemingResponse
 from imbue.system_interface.shell.theme_routes import DefaultThemeResponse
 from imbue.system_interface.shell.theme_routes import ThemeChoiceRequest
 from imbue.system_interface.shell.theme_wire import THEME_ICON_ROUTE
@@ -166,6 +168,9 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("POST", "/api/desktops/{desktop_id}/theme"): _edits_desktop(ThemeChoiceRequest),
     ("GET", THEME_ICON_ROUTE): _IMAGE,
     **THEME_STATIC_ROUTE_TABLE,
+    ("POST", "/api/apps/{app_name}/theming"): RouteModels(
+        request_model=AppThemingRequest, response_model=AppThemingResponse
+    ),
     # Section 5.6: the embedder-message relay
     ("POST", "/api/embedder-messages"): RouteModels(
         request_model=EmbedderMessageRelayRequest,

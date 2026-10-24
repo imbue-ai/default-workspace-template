@@ -26,6 +26,7 @@ import {
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
 import { THEME_DESIGN_PROMPT } from "./DesktopSettingsDialog";
 import { App } from "./App";
+import { enableThemingPrompt } from "./WindowMenu";
 
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
@@ -493,6 +494,33 @@ describe("the avatar chooser", () => {
     await settle();
     m.redraw.sync();
     expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
+  });
+});
+
+describe("the window menu's Theming submenu", () => {
+  it("drafts Enable theming into the main chat, not the chat on screen", async () => {
+    offerApps(api, socket, [appRecord("docs", { theming: "unthemed" }), buddy]);
+    api.postLaunchAnswer = "/?chat=agent-1";
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    m.redraw.sync();
+
+    (document.querySelector('[data-window-control="menu"]') as HTMLElement).click();
+    m.redraw.sync();
+    (document.querySelector('[data-menu-row="theme"]') as HTMLElement).click();
+    m.redraw.sync();
+    const enable = document.querySelector('[data-menu-row="theme-enable"]') as HTMLElement;
+    enable.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    enable.click();
+    await settle();
+
+    expect(api.calls).toContain(
+      `launch:home:buddy:draft:${JSON.stringify({ message: enableThemingPrompt("Docs") })}:window:win-9:without-page`,
+    );
   });
 });
 
