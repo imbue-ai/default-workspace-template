@@ -35,8 +35,9 @@ touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.t
 If it says `critical = true` -- the shell (`system_interface`), the chat, the
 terminal, and any user app that declares it -- or if the change is under
 `system/libs/workspace_ui/` (the shared library both critical bundles are built
-from) or `system/libs/workspace_layout/` (the layout wire contract the shell, the
-chat, and the terminal all run), **follow [`references/critical-app.md`](references/critical-app.md) and
+from), `system/libs/workspace_layout/` (the layout wire contract the shell, the
+chat, and the terminal all run), or `system/libs/workspace_themes/` (the theme
+catalog and theme route the same three run), **follow [`references/critical-app.md`](references/critical-app.md) and
 stop reading here** -- for the whole change: when it also touches an ordinary
 app or a skill, those go through that flow with it. A critical app is never
 edited in the served tree: that

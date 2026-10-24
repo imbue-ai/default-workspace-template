@@ -52,6 +52,8 @@ from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
+from workspace_themes.flask_routes import register_workspace_theme_route
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
@@ -2516,13 +2518,15 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     latchkey_endpoints.ROUTE_TABLE,
     focus_chat.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
+    THEME_STATIC_ROUTE_TABLE,
 )
 
 
 def create_application(state: ChatAppState) -> Flask:
     """Assemble the chat app around an already-built ``ChatAppState``.
 
-    A pure assembler: routes and error handling only, no collaborators built, nothing started.
+    A pure assembler: routes and error handling only, nothing started, and no collaborators built but the theme
+    route's own catalog cache, which reads nothing until a page asks for a theme.
     """
     # No static folder: Flask would otherwise add a /static/<path> route beside the document route.
     application = Flask(__name__, static_folder=None)
@@ -2551,6 +2555,7 @@ def create_application(state: ChatAppState) -> Flask:
     )
     sock.route("/api/ws")(_ws_endpoint)
     application.add_url_rule("/plugins/<basename>", view_func=_serve_static_file, methods=["GET"])
+    register_workspace_theme_route(application)
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats", view_func=_list_chats_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats/create", view_func=_create_chat, methods=["POST"])

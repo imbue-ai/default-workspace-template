@@ -17,6 +17,7 @@ import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/cont
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import type { ContextMenuRow } from "@imbue/workspace-ui/src/context_menu_rows";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
+import { wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 import { entryOf, pageUrlOf, readPageData } from "./models/server";
 import { decodePathname, isFolderPath, titleOf } from "./models/paths";
@@ -57,7 +58,10 @@ function bootstrap(): void {
   }
 
   let handshake: ShellHandshake | null = null;
-  const connection = connectToShell({ onHandshake: (received) => (handshake = received) });
+  const connection = connectToShell({
+    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
+    onHandshake: (received) => (handshake = received),
+  });
   window.addEventListener("focus", () => connection.focused());
   const opener = createContextMenuOpener();
   // The pointer hides while text is typed into the editor or a name being changed.

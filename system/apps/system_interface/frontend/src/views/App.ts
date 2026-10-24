@@ -9,6 +9,7 @@
  */
 
 import m from "mithril";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
@@ -54,7 +55,12 @@ import type { DesktopStore } from "../store/DesktopStore";
 import type { TourController } from "../model/tour";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
-import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
+import {
+  DesktopSettingsDialog,
+  THEME_DESIGN_PROMPT,
+  THEME_PREVIEW_APP,
+  isSameWallpaper,
+} from "./DesktopSettingsDialog";
 import { LauncherMenu } from "./LauncherMenu";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyDropStyle, applyLiftStyle } from "./ShortcutIcon";
@@ -834,9 +840,13 @@ export function App(): m.Component<AppAttrs> {
       desktop,
       wallpapers,
       isDeleting: dialog.isDeleting,
-      onSave: async (name, color, glyph, wallpaper) => {
+      onSave: async (name, color, glyph, wallpaper, themeChoice) => {
         await current.updateDesktopSettings(desktop.id, name, color, glyph);
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
+        // A theme made the workspace's default is worn by this desktop as the default, not as its own.
+        if (themeChoice.isWorkspaceDefault) await current.setDefaultTheme(themeChoice.theme);
+        const ownTheme = themeChoice.isWorkspaceDefault ? null : themeChoice.theme;
+        if (ownTheme !== desktop.theme) await current.setDesktopTheme(desktop.id, ownTheme);
         settingsDialog = null;
       },
       onDelete: async () => {
@@ -846,6 +856,18 @@ export function App(): m.Component<AppAttrs> {
       onCancel: () => {
         settingsDialog = null;
       },
+      themes: current.isThemeCatalogKnown() ? current.getThemeCatalog() : null,
+      previewApp: appByName(current.getState(), THEME_PREVIEW_APP) ?? null,
+      onMakeTheme:
+        draftTargetOf(current.getState()) === null
+          ? null
+          : () => {
+              settingsDialog = null;
+              void current.draftIntoPinnedWindow(THEME_DESIGN_PROMPT);
+            },
+      onPreviewTheme: (choice) => current.previewDesktopTheme(desktop.id, choice),
+      isDesktopShown: activeDesktop(current.getState())?.id === desktop.id,
+      onClearPreview: () => current.clearThemePreview(),
     });
   }
 
@@ -1057,7 +1079,9 @@ export function App(): m.Component<AppAttrs> {
       return m(
         "div",
         {
-          class: "app-layout flex h-dvh flex-col bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
+          ...partAttrs("desktop"),
+          class:
+            "app-layout flex h-dvh flex-col bg-(--desk-backdrop) bg-cover bg-center bg-(image:--desk-default-wallpaper)",
           style: wallpaperStyle,
         },
         [

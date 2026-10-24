@@ -85,6 +85,7 @@ from imbue.system_interface.shell.route_helpers import HTTP_PRECONDITION_FAILED
 from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.theme_routes import register_theme_routes
 from imbue.system_interface.shell.tour import TOUR_ROUTE
 from imbue.system_interface.shell.tour import TourProgress
 
@@ -419,6 +420,7 @@ def register_shell_routes(application: Flask) -> None:
     application.register_error_handler(ShellError, _answer_shell_error)
     application.register_error_handler(InvalidLayoutValueError, _answer_layout_value_error)
     register_desktop_routes(application)
+    register_theme_routes(application)
     application.add_url_rule(
         CLIENT_ACTIVITY_ROUTE,
         view_func=client_activity_route,

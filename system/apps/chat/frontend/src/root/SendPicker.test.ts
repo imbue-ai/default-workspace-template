@@ -56,6 +56,9 @@ describe("SendPicker", () => {
     input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
     m.redraw.sync();
     expect(picker.querySelector('[data-send-target="agent-2"]')!.getAttribute("aria-selected")).toBe("true");
+    expect(
+      Array.from(picker.querySelectorAll("[data-send-target]")).map((row) => row.getAttribute("data-highlighted")),
+    ).toEqual(["false", "true"]);
     input.value = "plan";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     m.redraw.sync();

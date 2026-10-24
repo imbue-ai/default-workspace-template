@@ -4,7 +4,9 @@ You are here because the app's `app.toml` says `critical = true` (the shell,
 the chat, the terminal, and any user app that declares it), or because the
 change is under `system/libs/workspace_ui/`, which rebuilds both the shell's and
 the chat's bundles, or under `system/libs/workspace_layout/`, the wire contract
-of the shell's layout routes that the shell, the chat, and the terminal all run.
+of the shell's layout routes that the shell, the chat, and the terminal all run,
+or under `system/libs/workspace_themes/`, the theme catalog and theme route the
+same three run.
 A broken build of one of these is served straight to the user as their
 workspace, or as the surface they would use to fix it. That forces
 three adjustments to `update-app`'s ordinary live loop, and nothing else changes:
@@ -40,7 +42,7 @@ worker, only after the user approves the shape.
 
 **Never edit a critical app's tree in the served checkout.** Do not run
 `Edit`/`Write` on files under its `system/apps/<package>/` (or under
-`system/libs/workspace_ui/` or `system/libs/workspace_layout/`) here, and do not rebuild or restart the live app
+`system/libs/workspace_ui/`, `system/libs/workspace_layout/`, or `system/libs/workspace_themes/`) here, and do not rebuild or restart the live app
 from uncommitted edits. Every change is made in the worktree, built and
 previewed there, and landed on the live tree only through the apply once the
 user has approved it and the worker has hardened it. (A heal of a critical app
@@ -57,8 +59,9 @@ time" describes. Three deltas:
   or to `system/package.json` / `system/package-lock.json` rebuilds every
   frontend, so it takes `system_interface` and `chat`; a change under
   `system/libs/workspace_layout/` changes what the shell, the chat, and the
-  terminal read each other's layout messages with, so it takes
-  `system_interface`, `chat`, and `terminal`. Take them all or none,
+  terminal read each other's layout messages with, and a change under
+  `system/libs/workspace_themes/` changes how all three read and serve their
+  themes, so each takes `system_interface`, `chat`, and `terminal`. Take them all or none,
   before editing any of them: check each one in `tk ready`
   (`grep -E -- "- editing critical app <name>$"`), take them in name order, and
   if any is held by another agent, release the ones you took before surfacing
@@ -154,7 +157,8 @@ registry names. A `workspace_ui` change previews as the shell with the chat:
 `--app system_interface --with chat --instance-key "${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`, and the
 preview shell's copied registry points at that secondary chat. A `workspace_layout`
 change previews the same way, since the chat's ops and the shell's answers are
-where its shapes cross. Exit 0 means it
+where its shapes cross, and so does a `workspace_themes` change, since the shell's
+theme picker and the chat's pages are where a theme is read and worn. Exit 0 means it
 came up healthy; on a non-zero exit, fix the build and re-run, and do not open
 a window on a broken boot. It refuses to boot if another pass's preview of the
 same app is up rather than hijacking it; surface that and coordinate.
@@ -370,7 +374,7 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
        > /tmp/update-$SLUG-paths.txt
    git diff --name-only --no-renames "$BASE" "mngr/update-$SLUG" >> /tmp/update-$SLUG-paths.txt
    git diff --name-only "$BASE" HEAD -- system/libs/workspace_ui/ system/libs/workspace_layout/ \
-       system/package.json system/package-lock.json $(cat /tmp/update-$SLUG-paths.txt)
+       system/libs/workspace_themes/ system/package.json system/package-lock.json $(cat /tmp/update-$SLUG-paths.txt)
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale; do

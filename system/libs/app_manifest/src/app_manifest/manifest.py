@@ -18,6 +18,7 @@ from app_manifest.errors import InvalidManifestValueError
 from app_manifest.errors import ManifestLoadError
 from app_manifest.primitives import AppDescription
 from app_manifest.primitives import AppName
+from app_manifest.primitives import AppPartName
 from app_manifest.primitives import DisplayName
 from app_manifest.primitives import EnvVarName
 from app_manifest.primitives import ExcludeGlob
@@ -259,6 +260,46 @@ class SecretDeclaration(FrozenModel):
         return self
 
 
+class ThemingMode(LowerCaseStrEnum):
+    """How far an app takes part in workspace themes (the workspace-themes plan, section 7)."""
+
+    # Built only from the shared components and the design tokens: every theme styles it.
+    TOKENS = auto()
+    # Also marks elements with a look of its own as declared parts, which a theme may style.
+    PARTS = auto()
+    # Shows content whose look is not the workspace's; only the window around it is themed.
+    NONE = auto()
+
+
+class AppPart(FrozenModel):
+    """An element of the app a theme may style, marked ``data-part="<app>.<name>"`` in its pages."""
+
+    name: AppPartName = Field(description="The part's name within the app")
+    description: NonEmptyStr = Field(description="One line: what the element is")
+
+    @model_validator(mode="after")
+    def _check_description_is_one_line(self) -> Self:
+        if len(self.description.splitlines()) > 1:
+            raise InvalidManifestValueError(f"theming part {str(self.name)!r} must be described in one line")
+        return self
+
+
+class AppTheming(FrozenModel):
+    """The manifest's ``[theming]`` table."""
+
+    mode: ThemingMode = Field(default=ThemingMode.TOKENS, description="How far the app takes part in themes")
+    parts: tuple[AppPart, ...] = Field(default=(), description="The elements a theme may style, for mode parts")
+
+    @model_validator(mode="after")
+    def _check_parts_match_mode(self) -> Self:
+        names = [part.name for part in self.parts]
+        if len(set(names)) != len(names):
+            raise InvalidManifestValueError(f"theming part names must be unique, got {names}")
+        if self.parts and self.mode != ThemingMode.PARTS:
+            raise InvalidManifestValueError(f"theming parts are declared only with mode = \"parts\", not {str(self.mode)!r}")
+        return self
+
+
 class DefaultShortcut(FrozenModel):
     """The shortcut a new desktop is seeded with for this app."""
 
@@ -422,6 +463,9 @@ class AppManifest(FrozenModel):
     secrets: tuple[SecretDeclaration, ...] = Field(
         default=(), description="The secret files the app runs under, for publish-template to aggregate"
     )
+    theming: AppTheming = Field(
+        default_factory=AppTheming, description="How far the app takes part in workspace themes"
+    )
     preview: PreviewSpec = Field(description="How a throwaway instance boots for a preview (the scaffold convention by default)")
 
     @model_validator(mode="before")
@@ -582,7 +626,7 @@ def load_manifest(path: Path, *, repo_root: Path | None = None) -> AppManifest:
     """
     try:
         raw_text = path.read_text(encoding="utf-8")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise ManifestLoadError(f"cannot read manifest {path}: {e}") from e
     try:
         data = tomllib.loads(raw_text)

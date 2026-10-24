@@ -1178,6 +1178,8 @@ describe("the combo card", () => {
     expect(submenu.querySelector(".autocompact-help")?.textContent).toBe(
       "Saves ~50% by compacting right before the cache expires.",
     );
+    // The rule above "New chats start with" is the menu's own separator part, which themes dress.
+    expect(submenu.querySelector('[role="separator"]')?.getAttribute("data-part")).toBe("menu-separator");
 
     click('[data-autocompact="on"]');
     expect(autocompactWrites).toEqual([]);

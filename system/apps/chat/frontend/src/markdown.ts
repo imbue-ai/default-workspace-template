@@ -1,9 +1,11 @@
 import m from "mithril";
 import DOMPurify from "dompurify";
 import { Marked } from "marked";
+import { applyPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { classifyLink, fileUrl } from "@imbue/workspace-ui/src/links";
 import { openImageLightbox } from "./lightbox";
 import { isBlockExpanded, setBlockExpanded } from "./views/expansion-state";
+import { TOOL_CALL_PART } from "./views/ToolCallBlock";
 
 const marked = new Marked({
   breaks: true,
@@ -128,6 +130,7 @@ function wrapToolCallBlocks(container: HTMLElement, expansionKeyPrefix: string |
 
     const wrapper = document.createElement("div");
     wrapper.className = "tool-call-block";
+    applyPartAttrs(wrapper, TOOL_CALL_PART);
     // Keyed store keeps the expansion across full innerHTML rewrites and row
     // remounts; the index within the message is stable because the source
     // markdown is. Without a prefix (no stable message identity) the DOM

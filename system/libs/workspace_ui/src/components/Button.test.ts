@@ -93,3 +93,17 @@ describe("Button selected option", () => {
     expect(onclick).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Button theme part", () => {
+  it("marks the button as the contract's button part, with its variant and shape", () => {
+    const text = renderButton({ variant: "primary" });
+    const iconOnly = renderButton({ variant: "ghost", icon: true });
+
+    expect([text.dataset.part, text.dataset.variant, text.dataset.shape]).toEqual(["button", "primary", "text"]);
+    expect([iconOnly.dataset.part, iconOnly.dataset.variant, iconOnly.dataset.shape]).toEqual([
+      "button",
+      "ghost",
+      "icon",
+    ]);
+  });
+});

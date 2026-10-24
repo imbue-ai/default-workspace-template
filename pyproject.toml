@@ -22,6 +22,9 @@ dependencies = [
     # Agents run `uv run --no-sync workspace-layout` from the repo root, so its console script
     # must survive a sync of the root closure.
     "workspace-layout",
+    # Agents run `uv run workspace-themes` from the repo root (the create-theme, make-theme-icon, and build-app
+    # skills), so its console script must survive a sync of the root closure too.
+    "workspace-themes",
     # The cron tick, the boot migration, the Caretaker's check and the skills run
     # `uv run --no-sync routines ...` from the repo root, so its console script must
     # survive a sync of the root closure too.
@@ -117,6 +120,7 @@ tk-command-parsing = { workspace = true }
 chat-background-tasks = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
+workspace-themes = { workspace = true }
 app-schema = { workspace = true }
 workspace-layout = { workspace = true }
 routines = { workspace = true }
