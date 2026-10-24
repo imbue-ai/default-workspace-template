@@ -86,7 +86,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <title>__TITLE__</title>
 <style>
   html { height: 100%; }
-  body { display: flex; flex-direction: column; height: 100%; height: 100dvh; margin: 0; background: #000; color: #ddd; font-family: system-ui, sans-serif; }
+  /* ttyd's own default background, so the moment before it draws its terminal reads as the terminal. */
+  body { display: flex; flex-direction: column; height: 100%; height: 100dvh; margin: 0; background: #2b2b2b; color: #ddd; font-family: system-ui, sans-serif; }
   iframe { display: block; flex: 1 1 0; min-height: 0; width: 100%; border: 0; }
   #empty { display: flex; flex: 1 1 0; align-items: center; justify-content: center; font-size: 14px; color: #888; }
   /* The phone's key strip: the keys a soft keyboard lacks, under the terminal and so above the keyboard. */
