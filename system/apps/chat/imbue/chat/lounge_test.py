@@ -144,9 +144,9 @@ def test_a_fresh_roster_makes_the_lounge_once_someone_besides_the_owner_is_in_it
     manager.stop()
 
 
-def test_the_keeper_polls_the_roster_and_makes_the_lounge_for_an_invitation_nobody_reported(tmp_path: Path) -> None:
-    """The once-a-minute read (the multiplayer spec, section 7.5): with no page or send reading the roster, the
-    keeper's own poll reads it, and the Lounge is made."""
+def test_the_keeper_polls_the_roster_and_makes_the_lounge_once_it_holds_an_invitation(tmp_path: Path) -> None:
+    """The once-a-minute read (the multiplayer spec, section 7.5): the keeper's own poll reads the roster, finds
+    someone besides the owner in it, and makes the Lounge."""
     mngr_binary, _log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
     manager.note_agent_list_known()
