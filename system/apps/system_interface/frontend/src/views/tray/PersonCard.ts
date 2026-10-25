@@ -133,7 +133,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
             m(
               "div",
               { class: "text-(length:--font-size-helper) text-faint" },
-              isOwn ? "Your desktops" : `${isAnonymousOwner ? "Your" : entry.display_name + "'s"} desktops`,
+              isOwn ? "Your desktops" : `${entry.display_name}'s desktops`,
             ),
             desktops.map((desktop) =>
               m(
