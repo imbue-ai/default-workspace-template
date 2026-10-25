@@ -36,8 +36,7 @@ from imbue.imbue_common.pure import pure
 
 # How much of a message a bubble shows (the multiplayer spec, section 6.5).
 BUBBLE_TEXT_LIMIT: Final[int] = 200
-# How often the last chats-activity report is posted again: the shell keeps it in memory, so one restarted since
-# the last chat-list change paints the agent's card from this.
+# How often the last chats-activity report is posted again, for a shell restarted since.
 CHATS_ACTIVITY_REPOST_INTERVAL_SECONDS: Final[float] = 60.0
 
 
@@ -179,7 +178,7 @@ class TrayFeed(MutableModel):
 
     def start(self) -> None:
         """Post the last chats-activity report again every ``repost_interval_seconds``, for a shell restarted since
-        the last chat-list change (it keeps the report in memory alone)."""
+        the last chat-list change."""
         if self._thread is not None:
             return
         thread = threading.Thread(target=self._repost, daemon=True, name="tray-feed-repost")
