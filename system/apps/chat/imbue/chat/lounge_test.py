@@ -75,6 +75,8 @@ def test_the_keeper_answers_the_room_there_is_and_makes_one_only_once(tmp_path: 
     seeded.note_agent_list_known()
     seed_agent_state(seeded, _LOUNGE_ID, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
     assert LoungeKeeper(agent_manager=seeded).ensure() == ChatId(_LOUNGE_ID)
+    manager.stop()
+    seeded.stop()
 
 
 def test_a_fresh_roster_makes_the_lounge_once_someone_besides_the_owner_is_in_it(tmp_path: Path) -> None:
@@ -92,3 +94,4 @@ def test_a_fresh_roster_makes_the_lounge_once_someone_besides_the_owner_is_in_it
 
     [lounge] = manager.get_provisional_chats()
     assert lounge.name == LOUNGE_TITLE
+    manager.stop()
