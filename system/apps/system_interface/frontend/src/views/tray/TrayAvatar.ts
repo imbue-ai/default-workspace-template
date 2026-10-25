@@ -63,14 +63,13 @@ export const TrayAvatar: m.Component<TrayAvatarAttrs> = {
       );
     }
     const hasPicture = entry.profile_picture_url !== null;
-    if (!hasPicture) {
-      style.backgroundColor = entry.color;
-      style.color = "#ffffff";
-    }
+    if (!hasPicture) style.backgroundColor = entry.color;
     return m(
       "span",
       {
-        class: `${BASE_CLASS}rounded-full bg-surface text-(length:--font-size-helper) font-semibold text-secondary`,
+        class:
+          `${BASE_CLASS}rounded-full bg-surface text-(length:--font-size-helper) font-semibold ` +
+          (hasPicture ? "text-secondary" : "text-on-accent"),
         style,
         "data-tray-avatar": "person",
       },
