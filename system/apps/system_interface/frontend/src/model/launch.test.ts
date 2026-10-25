@@ -8,10 +8,10 @@ import {
   freeTextRowsOf,
   launchPathOf,
   launchRowKindOf,
-  orderAppLaunches,
-  textRowDisabledReason,
   mentionParams,
   mentionRowsOf,
+  orderAppLaunches,
+  textRowDisabledReason,
 } from "./launch";
 import { appRecord, launchPathRecord } from "../testing/records";
 

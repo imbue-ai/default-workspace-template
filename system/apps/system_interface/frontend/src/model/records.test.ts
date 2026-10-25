@@ -7,19 +7,19 @@ import {
   parseAppRecord,
   parseAvatarCatalog,
   parseAvatarStatus,
+  parseBubble,
+  parseChatsActivity,
   parseClientRecord,
   parseClientRecords,
   parseDesktop,
   parseInventory,
+  parseLaunchPath,
   parseLayout,
   parseMessageRelay,
   parsePresentUsers,
+  parseRoster,
   parseWallpaperListings,
   shortcutKey,
-  parseRoster,
-  parseChatsActivity,
-  parseBubble,
-  parseLaunchPath,
 } from "./records";
 
 const DESKTOP_WIRE = {

@@ -33,9 +33,9 @@ import {
   freeTextRowsOf,
   launchPathOf,
   launchRowKindOf,
-  textRowDisabledReason,
   mentionParams,
   mentionRowsOf,
+  textRowDisabledReason,
 } from "../model/launch";
 import { applyPresence, getOwnParticipant } from "../model/Presence";
 import { applyRoster } from "../model/Roster";
@@ -45,6 +45,7 @@ import type { BubbleStack } from "../model/Bubbles";
 import { labelForApp, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
 import type {
   AppRecord,
+  BubbleWire,
   AvatarCatalog,
   AvatarDesign,
   ClientArrival,
@@ -68,7 +69,6 @@ import type {
   Wallpaper,
   WindowRecord,
   WindowState,
-  BubbleWire,
 } from "../model/records";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
