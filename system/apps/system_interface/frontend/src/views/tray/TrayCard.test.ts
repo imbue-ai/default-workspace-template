@@ -27,9 +27,9 @@ afterEach(() => {
 });
 
 describe("createTrayCardHover", () => {
-  it("opens an entry's card after the hover delay, anchored on the entry, and not when the pointer leaves first", () => {
-    const redraw = vi.fn();
-    const hover = createTrayCardHover(redraw);
+  it("opens an entry's card after the hover delay, anchored on the entry, telling the caller, and not when the pointer leaves first", () => {
+    const onChange = vi.fn();
+    const hover = createTrayCardHover(onChange);
     const entry = document.createElement("button");
     hover.enterEntry(BOB, entry);
     vi.advanceTimersByTime(CARD_HOVER_DELAY_MS - 1);
@@ -37,10 +37,12 @@ describe("createTrayCardHover", () => {
     vi.advanceTimersByTime(1);
     expect(hover.current()).toEqual(BOB);
     expect(hover.anchor()).toEqual(entry.getBoundingClientRect());
-    expect(redraw).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(BOB);
 
     hover.close();
     expect(hover.current()).toBeNull();
+    expect(onChange).toHaveBeenLastCalledWith(null);
     hover.enterEntry(BOB, entry);
     hover.leaveEntry();
     vi.advanceTimersByTime(CARD_HOVER_DELAY_MS);

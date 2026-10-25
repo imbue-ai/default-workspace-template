@@ -1,7 +1,7 @@
 /**
  * The cards that hang above the tray's entries (the multiplayer spec, sections 6.3 and 6.4): one opens after
  * `CARD_HOVER_DELAY_MS` over an entry and stays while the pointer is on the entry or the card. This is the hover
- * bookkeeping; the person and agent cards are the content.
+ * bookkeeping, which tells its caller whenever the open card changes; the person and agent cards are the content.
  */
 
 import m from "mithril";
@@ -37,7 +37,8 @@ export interface TrayCardHover {
   readonly dispose: () => void;
 }
 
-export function createTrayCardHover(redraw: () => void): TrayCardHover {
+/** The hover bookkeeping; `onChange` is told the card that opened, or null when the open one went away. */
+export function createTrayCardHover(onChange: (card: OpenCard | null) => void): TrayCardHover {
   let open: OpenCard | null = null;
   let anchorElement: HTMLElement | null = null;
   let openTimer: ReturnType<typeof setTimeout> | null = null;
@@ -53,7 +54,7 @@ export function createTrayCardHover(redraw: () => void): TrayCardHover {
   function show(card: OpenCard, element: HTMLElement): void {
     open = card;
     anchorElement = element;
-    redraw();
+    onChange(card);
   }
 
   return {
@@ -79,7 +80,7 @@ export function createTrayCardHover(redraw: () => void): TrayCardHover {
         closeTimer = null;
         open = null;
         anchorElement = null;
-        redraw();
+        onChange(null);
       }, CARD_LEAVE_GRACE_MS);
     },
     enterCard: () => {
@@ -92,14 +93,14 @@ export function createTrayCardHover(redraw: () => void): TrayCardHover {
         closeTimer = null;
         open = null;
         anchorElement = null;
-        redraw();
+        onChange(null);
       }, CARD_LEAVE_GRACE_MS);
     },
     close: () => {
       clearTimers();
       open = null;
       anchorElement = null;
-      redraw();
+      onChange(null);
     },
     dispose: clearTimers,
   };

@@ -188,7 +188,11 @@ export function App(): m.Component<AppAttrs> {
   let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
   // The tray's card: which entry's, and the hover bookkeeping that opens and closes it.
-  const trayCard = createTrayCardHover(() => m.redraw());
+  const trayCard = createTrayCardHover((card) => {
+    // A person's card reads what they are looking at as it opens (the multiplayer spec, section 6.3).
+    if (card?.kind === "person" && store !== null) void store.refreshClients();
+    m.redraw();
+  });
   // The roster entries that were connected at the last redraw, so one that just became connected hops once.
   let connectedKeys: ReadonlySet<string> = new Set();
   // Each speaker's bubble as last seen, by its message id, so a new bubble makes its speaker's entry hop once.
@@ -1293,10 +1297,7 @@ export function App(): m.Component<AppAttrs> {
                 trayCard.close();
                 void current.openMainChat();
               },
-              onPersonHoverStart: (entry, element) => {
-                trayCard.enterEntry({ kind: "person", key: entry.key }, element);
-                void current.refreshClients();
-              },
+              onPersonHoverStart: (entry, element) => trayCard.enterEntry({ kind: "person", key: entry.key }, element),
               onAgentHoverStart: (element) => trayCard.enterEntry({ kind: "agent" }, element),
               onHoverEnd: trayCard.leaveEntry,
             },
