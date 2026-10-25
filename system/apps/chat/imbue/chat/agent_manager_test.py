@@ -34,6 +34,7 @@ from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FAST_ROLE_TEMPLATE
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
+from imbue.chat.agent_manager import FirstMessage
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
@@ -1846,7 +1847,7 @@ def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails
             tmp_path,
             {},
             HarnessType.CLAUDE,
-            deferred_message="hello",
+            first_message=FirstMessage(text="hello", message_id="m-hello"),
         )
 
     assert agent_manager.get_agent_by_id("test-id") is not None
@@ -1857,6 +1858,46 @@ def test_run_creation_tells_the_page_the_chat_landed_even_when_settling_it_fails
         messages.append(json.loads(raw))
     completed = [message for message in messages if message["type"] == "provisional_chat_completed"]
     assert completed == [{"type": "provisional_chat_completed", "chat_id": "test-id", "success": True, "error": None}]
+
+
+def test_a_first_message_that_landed_is_told_of_under_its_own_id_and_a_refused_one_is_not(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """The message a create leaves out is handed over under the id the sender's annotation carries, and what a
+    landed message does next (a room's mentions) runs only for one that landed."""
+    sent: list[tuple[str, str, str]] = []
+    told: list[tuple[ChatId, str]] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        sent.append((agent_info.id, text, message_id))
+        return SendOutcome.OK if text != "refused" else SendOutcome.NOT_READY
+
+    agent_manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: ListTranscriptReader([]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    for chat_id, text in (("test-id", "@agent hello"), ("test-id-2", "refused")):
+        _seed_creating_chat(agent_manager, ChatId(chat_id), f"Chat {chat_id}")
+        agent_manager._run_creation(
+            ChatId(chat_id),
+            chat_id,
+            f"agent-{chat_id}",
+            ["true"],
+            tmp_path,
+            {},
+            HarnessType.ROOM,
+            first_message=FirstMessage(
+                text=text,
+                message_id=f"m-{chat_id}",
+                on_delivered=lambda chat, message_id: told.append((chat, message_id)),
+            ),
+        )
+
+    assert sent == [("test-id", "@agent hello", "m-test-id"), ("test-id-2", "refused", "m-test-id-2")]
+    assert told == [(ChatId("test-id"), "m-test-id")]
 
 
 def test_run_creation_leaves_a_failed_chat_in_the_failed_phase_with_the_output_tail(

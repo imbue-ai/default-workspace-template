@@ -106,6 +106,7 @@ from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _open_chat_stream
 from imbue.chat.server import _record_room_first_message_author
 from imbue.chat.server import _revive_and_retry_send
+from imbue.chat.server import _room_first_message_hook
 from imbue.chat.server import _send_room_mention
 from imbue.chat.server import _stream_events
 from imbue.chat.server import _stream_filtered_events
@@ -5552,12 +5553,34 @@ def test_a_rooms_first_message_from_a_visitor_is_recorded_as_theirs_before_the_r
     state = state_of(_peopled_app(tmp_path, RecordingMngrMessenger()))
     room_id = ChatId("agent-00000000000000000000000000000043")
 
-    _record_room_first_message_author(state, room_id, "first words", _VISITOR)
-    _record_room_first_message_author(state, room_id, "", _VISITOR)
-    _record_room_first_message_author(state, room_id, "the owner's own", _JOSH)
+    _record_room_first_message_author(state, room_id, "first words", _VISITOR, "m-first")
+    _record_room_first_message_author(state, room_id, "", _VISITOR, "m-none")
+    _record_room_first_message_author(state, room_id, "the owner's own", _JOSH, "m-owner")
 
     annotations = state.authors.annotations(room_id)
-    assert [(str(annotation.author), annotation.display_name) for annotation in annotations] == [
-        ("user:user-bob-4471", "Bob")
-    ]
+    assert [
+        (str(annotation.author), annotation.display_name, annotation.message_id) for annotation in annotations
+    ] == [("user:user-bob-4471", "Bob", "m-first")]
     assert annotations[0].text_sha256 == text_sha256("first words")
+
+
+def test_a_rooms_first_message_acts_on_its_mentions_once_the_room_has_it(tmp_path: Path) -> None:
+    """A room launched from the chooser with ``@agent`` in its first message: the message lands by the create's
+    own thread, so the hook the create route hands the manager is what sends the agent the message, as the
+    visitor who typed it, and marks the room as waiting on the main chat."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    state = state_of(app)
+    with app.app_context():
+        hook = _room_first_message_hook(state, "@agent is the build green?", _VISITOR, app.app_context())
+
+    hook(ChatId(_LOUNGE_ID), "m-first")
+
+    wait_until_true(lambda: len(messenger.sent) == 1, 10.0, "the mention to reach the main chat")
+    assert messenger.sent == [(_MAIN_ID, author_prefix("Bob", "Lounge") + "@agent is the build green?")]
+    lounge = state.agent_manager.get_chat_snapshot(_LOUNGE_ID)
+    assert lounge is not None and lounge.awaiting_chat_ids == (ChatId(_MAIN_ID),)
+    annotations = state.authors.annotations(ChatId(_MAIN_ID))
+    assert [(str(annotation.author), annotation.message_id) for annotation in annotations] == [
+        ("user:user-bob-4471", "m-first")
+    ]

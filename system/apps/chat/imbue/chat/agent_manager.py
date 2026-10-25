@@ -968,6 +968,21 @@ class _CreatedAgentAwaitingObserve(FrozenModel):
         return self.model_copy_update(to_update(self.field_ref().snapshots_without_it, self.snapshots_without_it + 1))
 
 
+class FirstMessage(FrozenModel):
+    """A new chat's first message when it follows the create rather than riding it: handed to the agent through
+    the send path once the create has landed, under the id the sender's annotation carries."""
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    text: str = Field(description="The message, verbatim")
+    message_id: str = Field(description="The send's id, which the annotation that names its sender is keyed by")
+    on_delivered: Callable[[ChatId, str], None] | None = Field(
+        default=None,
+        description="Told the chat and the message id once the send landed, for what a landed send does next "
+        "(a room's mentions)",
+    )
+
+
 class HandoffCapabilities(FrozenModel):
     """What a handoff needs from the app state and the routes, bound by the composition root."""
 
@@ -3645,6 +3660,8 @@ class AgentManager:
         is_installation_check_skipped: bool = False,
         model_pick: ModelPick | None = None,
         kind: ChatKind = ChatKind.AGENT,
+        message_id: str = "",
+        on_message_delivered: Callable[[ChatId, str], None] | None = None,
     ) -> CreatedChat:
         """Create a chat, as an agent in the primary agent's work dir on the given harness.
 
@@ -3819,7 +3836,11 @@ class AgentManager:
         # With a pick the message follows the create rather than riding it: the model has to be
         # set before the first turn, and ``mngr create --message`` starts that turn itself. A room's follows it
         # too: typed into the reader's pane it would be the workspace agent's words, not the sender's.
-        deferred_message = launch_message if model_pick is not None or harness is HarnessType.ROOM else ""
+        first_message = (
+            FirstMessage(text=launch_message, message_id=message_id or uuid4().hex, on_delivered=on_message_delivered)
+            if launch_message and (model_pick is not None or harness is HarnessType.ROOM)
+            else None
+        )
         create_labels = [
             *membership_labels,
             autocompact.label,
@@ -3835,7 +3856,7 @@ class AgentManager:
             role_templates,
             project_id,
             account_args,
-            initial_message="" if deferred_message else launch_message,
+            initial_message="" if first_message is not None else launch_message,
             extra_labels=create_labels,
             settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING] if is_installation_check_skipped else [],
         )
@@ -3864,7 +3885,7 @@ class AgentManager:
             harness,
             record_entry,
             model_pick,
-            deferred_message,
+            first_message,
         )
 
         return CreatedChat(chat_id=launched_chat_id, name=canonical_name, display_name=display_name)
@@ -3932,7 +3953,7 @@ class AgentManager:
         harness: HarnessType,
         record_entry: ChatAgentEntry | None = None,
         model_pick: ModelPick | None = None,
-        deferred_message: str = "",
+        first_message: FirstMessage | None = None,
     ) -> None:
         """Start a background thread to run agent creation."""
         self._creation_cg.start_new_thread(
@@ -3947,7 +3968,7 @@ class AgentManager:
                 harness,
                 record_entry,
                 model_pick,
-                deferred_message,
+                first_message,
             ),
             name=f"create-{agent_id[:8]}",
             is_checked=False,
@@ -3973,7 +3994,7 @@ class AgentManager:
         harness: HarnessType,
         record_entry: ChatAgentEntry | None = None,
         model_pick: ModelPick | None = None,
-        deferred_message: str = "",
+        first_message: FirstMessage | None = None,
     ) -> None:
         """Run mngr create in the background and always settle the provisional chat.
 
@@ -3986,7 +4007,7 @@ class AgentManager:
         succeeded, so a settling step that fails is not reported as a failed create -- it is logged,
         with its traceback, by the thread that runs this.
 
-        ``model_pick`` and ``deferred_message`` follow a successful create, in that order: the
+        ``model_pick`` and ``first_message`` follow a successful create, in that order: the
         pick so the first turn runs on it, then the message the create was told to leave out.
         ``record_entry`` is the agent's membership of a seeded chat, on the record since before
         the create (``create_chat``); a create that fails takes it back off, so the chat is
@@ -4055,7 +4076,7 @@ class AgentManager:
                 self._ensure_activity_tracking(agent_id)
                 self._ensure_model_tracking(agent_id)
                 self._broadcast_chats_updated()
-                self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message)
+                self._settle_new_chat(chat_id, agent_id, model_pick, first_message)
             else:
                 # The pages show what the record holds: the reason and the output behind it.
                 failed = self.get_provisional_chat(chat_id)
@@ -4120,15 +4141,17 @@ class AgentManager:
         except AgentDestroyError as e:
             _loguru_logger.debug("Chat {}: no half-made agent {} to destroy: {}", chat_id, agent_id, e)
 
-    def _settle_new_chat(self, chat_id: ChatId, agent_id: str, model_pick: ModelPick | None, message: str) -> None:
+    def _settle_new_chat(
+        self, chat_id: ChatId, agent_id: str, model_pick: ModelPick | None, first_message: FirstMessage | None
+    ) -> None:
         """Put a just-created chat on its pick and hand it the message its create left out.
 
         A pick the agent refuses is logged and the chat stays on its harness's default: a new
         chat has nothing to lose to a wrong model, unlike a handoff's successor, whose pick is
         what the user chose the switch by. The message goes through the send path a held send
-        takes; a refusal is logged the same way.
+        takes; a refusal is logged the same way, and only a message that landed is told of.
         """
-        if model_pick is None and not message:
+        if model_pick is None and first_message is None:
             return
         agent_info = self.get_agent_info_by_id(agent_id)
         capabilities = self._handoff_capabilities
@@ -4142,18 +4165,21 @@ class AgentManager:
                 self.apply_model_pick(agent_info, model_pick)
             except ModelApplyError as e:
                 _loguru_logger.warning("Chat {}: could not set model {}: {}", chat_id, model_pick.model_id, e)
-        if message:
-            deliver_held_send(
-                capabilities.deliver,
-                agent_info,
-                HeldSend(
-                    message_id=uuid4().hex,
-                    text=message,
-                    origin=HeldSendOrigin.CLIENT,
-                    received_at=datetime.now(timezone.utc),
-                ),
-                chat_id,
-            )
+        if first_message is None:
+            return
+        is_delivered = deliver_held_send(
+            capabilities.deliver,
+            agent_info,
+            HeldSend(
+                message_id=first_message.message_id,
+                text=first_message.text,
+                origin=HeldSendOrigin.CLIENT,
+                received_at=datetime.now(timezone.utc),
+            ),
+            chat_id,
+        )
+        if is_delivered and first_message.on_delivered is not None:
+            first_message.on_delivered(chat_id, first_message.message_id)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can

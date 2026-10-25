@@ -1041,8 +1041,8 @@ class HandoffRunner:
 
 def deliver_held_send(
     deliver: Callable[[AgentInfo, str, str], SendOutcome], agent_info: AgentInfo, held: HeldSend, chat_id: ChatId
-) -> None:
-    """Hand one held send to an agent through the message route's path.
+) -> bool:
+    """Hand one held send to an agent through the message route's path; whether it landed.
 
     A refusal or a miss is logged rather than raised: the send was answered 202 when it was
     held, and one that cannot land must not stop the ones behind it.
@@ -1057,7 +1057,7 @@ def deliver_held_send(
             agent_info.id,
             e.detail,
         )
-        return
+        return False
     if outcome is not SendOutcome.OK:
         logger.warning(
             "Handoff of chat {}: held send {} to agent {} did not land ({})",
@@ -1066,6 +1066,8 @@ def deliver_held_send(
             agent_info.id,
             outcome.value,
         )
+        return False
+    return True
 
 
 # The environment a room's ``mngr create`` carries, which the workspace's create guard

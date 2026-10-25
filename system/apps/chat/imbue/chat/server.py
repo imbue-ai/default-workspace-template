@@ -1714,8 +1714,18 @@ def _run_create_chat() -> CreatedChat | Response:
     ``system/scripts/message_chat.py --create``) holds its "starting..." state until the
     chat exists, without polling.
     """
-    agent_manager: AgentManager = get_state().agent_manager
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
     create_request = parse_request_body(CreateChatRequest)
+    identity = request_identity()
+    # A room's first message is appended once its agent is up, by a thread with no identity of its own: who sent
+    # it is annotated under this id before the create, and what its mentions do runs once it has landed.
+    first_message_id = uuid4().hex if create_request.kind is ChatKind.ROOM else ""
+    on_message_delivered = (
+        _room_first_message_hook(state, create_request.message, identity, current_app.app_context())
+        if create_request.kind is ChatKind.ROOM
+        else None
+    )
     created = _created_chat_or_refusal(
         lambda: agent_manager.create_chat(
             create_request.name,
@@ -1730,14 +1740,16 @@ def _run_create_chat() -> CreatedChat | Response:
             is_installation_check_skipped=create_request.is_installation_check_skipped,
             model_pick=create_request.model,
             kind=create_request.kind,
+            message_id=first_message_id,
+            on_message_delivered=on_message_delivered,
         )
     )
     if isinstance(created, Response):
         return created
     if create_request.kind is ChatKind.ROOM:
-        _record_room_first_message_author(get_state(), created.chat_id, create_request.message, request_identity())
+        _record_room_first_message_author(state, created.chat_id, create_request.message, identity, first_message_id)
     else:
-        _consider_naming_chat(get_state(), created.chat_id, create_request.message)
+        _consider_naming_chat(state, created.chat_id, create_request.message)
     if not create_request.should_wait:
         return created
     outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
@@ -1751,15 +1763,30 @@ def _run_create_chat() -> CreatedChat | Response:
 
 
 def _record_room_first_message_author(
-    state: ChatAppState, chat_id: ChatId, message: str, identity: RequestIdentity
+    state: ChatAppState, chat_id: ChatId, message: str, identity: RequestIdentity, message_id: str
 ) -> None:
     """Record who a new room's first message is from (the multiplayer spec, section 5.1): the message is appended
-    once the room's agent is up, with no identity of its own, so a sender other than the owner is annotated here."""
+    once the room's agent is up, with no identity of its own, so a sender other than the owner is annotated here,
+    under the id the append will carry."""
     if not message or is_owner_participant(identity):
         return
     sender = participant_key_of(identity)
     display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
-    state.authors.record(chat_id, new_author_annotation(uuid4().hex, sender, display_name, message))
+    state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, message))
+
+
+def _room_first_message_hook(
+    state: ChatAppState, message: str, identity: RequestIdentity, app_context: AppContext
+) -> Callable[[ChatId, str], None]:
+    """What a new room's first message does once it has landed (the multiplayer spec, section 7.4): its mentions
+    act as a message-route send's do, for the sender the create's request vouched for, under the app's context,
+    since the create's thread has none of its own."""
+
+    def act(chat_id: ChatId, message_id: str) -> None:
+        with app_context:
+            _act_on_room_mentions(state, chat_id, message_id, message, identity)
+
+    return act
 
 
 def _create_chat() -> Response:
