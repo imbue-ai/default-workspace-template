@@ -2811,11 +2811,29 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     expect(api.calls).toContain("launch:home:chat:new:{}:window:win-chat");
   });
 
-  it("tells the user when no app takes a mention or shows a chat, and offers the share button only under a chrome", async () => {
+  it("tells the user when no app takes a mention or shows a chat, keeping the chat's bubbles, and offers the share button only under a chrome", async () => {
     const store = await startedStore();
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    socket.deliver().onBubble({
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-1",
+      chat_title: "Lounge",
+      text: "@Josh look",
+      message_id: "m-1",
+      mentions: [VIEWER],
+    });
     expect(await store.mentionPerson("Bob")).toBe(false);
     expect(await store.showChat("agent-1")).toBe(false);
     expect(notices()).toEqual([NO_MENTION_APP_REASON, NO_CHAT_APP_REASON]);
+    // Nothing opened the chat, so the mention of the viewer is still up.
+    expect(store.getBubbles().map((bubble) => [bubble.speaker, bubble.isMention])).toEqual([
+      ["user:user-bob-4471", true],
+    ]);
     expect(store.getIsEmbedderPresent()).toBe(false);
     store.setEmbedderPresent(true);
     expect(store.getIsEmbedderPresent()).toBe(true);
