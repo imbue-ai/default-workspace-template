@@ -126,7 +126,7 @@ def test_a_renamed_lounge_is_no_longer_the_lounge_and_the_next_need_makes_a_new_
     manager.stop()
 
 
-def test_a_fresh_roster_makes_the_lounge_once_someone_besides_the_owner_is_in_it(tmp_path: Path) -> None:
+def test_a_roster_makes_the_lounge_once_someone_besides_the_owner_is_in_it(tmp_path: Path) -> None:
     mngr_binary, _log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
     keeper = LoungeKeeper(agent_manager=manager)
