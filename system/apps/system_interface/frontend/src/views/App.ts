@@ -712,6 +712,16 @@ export function App(): m.Component<AppAttrs> {
     return row === null ? null : [row];
   }
 
+  /** Create a desktop with the next free name and the next squiggle glyph in its colour. */
+  function createNextDesktop(current: DesktopStore): void {
+    const desktops = current.getState().desktops;
+    const glyphIndex = nextGlyphIndex(
+      desktops.map((desktop) => desktop.glyph),
+      SQUIGGLE_GLYPHS.length,
+    );
+    void current.createDesktop(nextDesktopName(desktops), SQUIGGLE_GLYPHS[glyphIndex].color, glyphIndex);
+  }
+
   function rowsOfDesktopsMenu(current: DesktopStore): MenuRow[] {
     const state = current.getState();
     const active = state.activeDesktopId;
@@ -720,13 +730,7 @@ export function App(): m.Component<AppAttrs> {
         kind: "action",
         key: "new-desktop",
         label: "New desktop",
-        onSelect: () => {
-          const glyphIndex = nextGlyphIndex(
-            state.desktops.map((desktop) => desktop.glyph),
-            SQUIGGLE_GLYPHS.length,
-          );
-          void current.createDesktop(nextDesktopName(state.desktops), SQUIGGLE_GLYPHS[glyphIndex].color, glyphIndex);
-        },
+        onSelect: () => createNextDesktop(current),
       },
       { kind: "divider" },
       {
@@ -879,11 +883,7 @@ export function App(): m.Component<AppAttrs> {
       },
       onNewDesktop: () => {
         trayCard.close();
-        const glyphIndex = nextGlyphIndex(
-          state.desktops.map((desktop) => desktop.glyph),
-          SQUIGGLE_GLYPHS.length,
-        );
-        void current.createDesktop(nextDesktopName(state.desktops), SQUIGGLE_GLYPHS[glyphIndex].color, glyphIndex);
+        createNextDesktop(current);
       },
     });
   }
