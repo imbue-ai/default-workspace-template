@@ -1083,25 +1083,15 @@ export class DesktopStore {
   }
 
   /** A click on a person's tray entry (the multiplayer spec, section 7.5): a mention of them is drafted through the
-   *  first launch path of the machine that takes one, into its app's pinned window on this desktop when there is
-   *  one (restored and raised), else a new window; with no such launch path the user is told. */
+   *  first launch path of the machine that takes one, pinned-first as a free-text row runs; with no such launch
+   *  path the user is told. */
   async mentionPerson(handle: string): Promise<boolean> {
     const [row] = mentionRowsOf(openableApps(this.state));
     if (row === undefined) {
       this.toast(NO_MENTION_APP_REASON);
       return false;
     }
-    const params = mentionParams(row.launchPath, `@${handle} `);
-    const pinned = pinnedWindowOf(this.state, row.app.name);
-    if (pinned !== null) {
-      const launched = await this.launchAt(row.app.name, row.launchPath.id, params, {
-        kind: "window",
-        windowId: pinned.id,
-      });
-      this.restoreWindow(pinned.id);
-      return launched !== null;
-    }
-    return (await this.launchAt(row.app.name, row.launchPath.id, params, { kind: "new" })) !== null;
+    return this.launchPinnedFirst(row.app.name, row.launchPath.id, mentionParams(row.launchPath, `@${handle} `));
   }
 
   /** A click on the agent's tray entry: the main chat opens, with its composer focused, through the primary text
@@ -1746,17 +1736,23 @@ export class DesktopStore {
       this.toast(disabledReason);
       return false;
     }
-    const params = freeTextParams(found.launchPath, text);
-    const pinned = pinnedWindowOf(this.state, found.app.name);
+    return this.launchPinnedFirst(found.app.name, found.launchPath.id, freeTextParams(found.launchPath, text));
+  }
+
+  /** Run a launch path with ``params`` into the app's pinned window on the active desktop when there is one (the
+   *  window restored and raised), else into a new window. Whether the shell accepted the launch. */
+  private async launchPinnedFirst(
+    appName: string,
+    launchId: string,
+    params: Record<string, string>,
+  ): Promise<boolean> {
+    const pinned = pinnedWindowOf(this.state, appName);
     if (pinned !== null) {
-      const launched = await this.launchAt(found.app.name, found.launchPath.id, params, {
-        kind: "window",
-        windowId: pinned.id,
-      });
+      const launched = await this.launchAt(appName, launchId, params, { kind: "window", windowId: pinned.id });
       this.restoreWindow(pinned.id);
       return launched !== null;
     }
-    return (await this.launchAt(found.app.name, found.launchPath.id, params, { kind: "new" })) !== null;
+    return (await this.launchAt(appName, launchId, params, { kind: "new" })) !== null;
   }
 
   /** A page's ``shell:draft-text`` (element-reference-menu plan section 6): the text is drafted into the pinned
