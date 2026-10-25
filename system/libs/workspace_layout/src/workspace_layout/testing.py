@@ -32,6 +32,8 @@ from workspace_layout.answers import TransientOpAnswer
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.errors import ShellOpError
 from workspace_layout.errors import ShellRefusedOpError
+from workspace_layout.feed import BubblePost
+from workspace_layout.feed import ChatsActivityReport
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import NavigateArgs
@@ -206,6 +208,8 @@ class FakeShell(ShellLayoutInterface):
     closes: list[WindowArgs] = Field(default_factory=list, description="Every close asked for")
     refreshes: list[RefreshArgs] = Field(default_factory=list, description="Every refresh asked for")
     activities: list[ClientActivityReport] = Field(default_factory=list, description="Every activity reported")
+    bubbles: list[BubblePost] = Field(default_factory=list, description="Every bubble posted")
+    chats_activity: list[ChatsActivityReport] = Field(default_factory=list, description="Every chats-activity report")
     roster_document: RosterDocument = Field(
         default_factory=lambda: RosterDocument(participants=()), description="The roster the shell answers"
     )
@@ -282,6 +286,12 @@ class FakeShell(ShellLayoutInterface):
 
     def record_client_activity(self, report: ClientActivityReport) -> None:
         self.activities.append(report)
+
+    def post_bubble(self, bubble: BubblePost) -> None:
+        self.bubbles.append(bubble)
+
+    def report_chats_activity(self, report: ChatsActivityReport) -> None:
+        self.chats_activity.append(report)
 
     def roster(self) -> RosterDocument:
         if self.listing_error is not None:

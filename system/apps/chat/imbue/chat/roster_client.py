@@ -48,6 +48,10 @@ class RosterClient(MutableModel):
     shell: ShellLayoutInterface = Field(frozen=True, description="The shell the roster is asked of")
     cache_seconds: float = Field(default=ROSTER_CACHE_SECONDS, frozen=True, description="How long one answer lasts")
     clock: Callable[[], float] = Field(default=time.monotonic, frozen=True, description="Monotonic seconds")
+    on_refreshed: Callable[[RosterDocument], None] | None = Field(
+        default=None,
+        description="Told every roster the shell answers afresh (the Lounge is made from one), outside the lock",
+    )
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _document: RosterDocument | None = PrivateAttr(default=None)
@@ -55,6 +59,7 @@ class RosterClient(MutableModel):
 
     def document(self) -> RosterDocument:
         """The roster as the shell last answered it; empty when it has never answered."""
+        fresh: RosterDocument | None = None
         with self._lock:
             now = self.clock()
             if (
@@ -64,11 +69,15 @@ class RosterClient(MutableModel):
             ):
                 return self._document
             try:
-                self._document = self.shell.roster()
+                fresh = self.shell.roster()
+                self._document = fresh
             except ShellOpError as e:
                 logger.debug("Could not read the roster from the shell; keeping the last one: {}", e)
             self._fetched_at = now
-            return self._document if self._document is not None else RosterDocument(participants=())
+            document = self._document if self._document is not None else RosterDocument(participants=())
+        if fresh is not None and self.on_refreshed is not None:
+            self.on_refreshed(fresh)
+        return document
 
     def participant(self, key: ParticipantKey) -> RosterParticipant | None:
         for entry in self.document().participants:

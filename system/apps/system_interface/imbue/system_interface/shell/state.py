@@ -119,6 +119,7 @@ from imbue.system_interface.shell.share_grants import DEFAULT_AGENT_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.tray_feed import ChatsActivityStore
 from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
 from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
@@ -170,6 +171,11 @@ class ShellState(MutableModel):
     )
     update_notice: UpdateNoticeWatch = Field(
         frozen=True, description="The kept rollback point of the last careful-flow apply, watched for the windows"
+    )
+    chats_activity: ChatsActivityStore = Field(
+        default_factory=ChatsActivityStore,
+        frozen=True,
+        description="What every chat is doing, as the chat app last reported it, for the tray's agent card",
     )
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"

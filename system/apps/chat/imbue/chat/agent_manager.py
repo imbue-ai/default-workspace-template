@@ -1221,6 +1221,9 @@ class AgentManager:
     # UI. Set once at composition (``set_transcript_broadcaster``) because the manager is built
     # before the event-queue fan-out exists; ``None`` (tests) makes ledger user-turns a no-op.
     _transcript_broadcaster: Callable[[str, list[dict[str, Any]]], None] | None
+    # Hears every chat-list push beside the pages: the tray's feed to the shell. Set once at composition
+    # (``set_chats_updated_listener``); ``None`` (tests, a secondary) = nobody beside the pages.
+    _chats_updated_listener: Callable[[list[ChatSnapshot]], object] | None
     # Evicts one agent's session watcher (releasing its resident transcript, thread, and
     # filesystem watches). Set once at composition (``set_watcher_eviction_callback``) --
     # the watcher registry lives on the app state, which the manager must not import; the
@@ -1362,6 +1365,7 @@ class AgentManager:
         manager._keeps_main_chat_awake = keeps_main_chat_awake
         manager._main_chat_wake_started_at = {}
         manager._transcript_broadcaster = None
+        manager._chats_updated_listener = None
         manager._watcher_eviction_callback = None
         manager._unviewed_transcript_release = None
         manager._session_watcher_check = None
@@ -1520,10 +1524,19 @@ class AgentManager:
             self._is_agent_list_known = True
 
     def _broadcast_chats_updated(self) -> None:
-        """Push every chat's snapshot, and which is the main chat, to every WebSocket client; and wake the main
-        chat if the list now shows it stopped."""
-        self._broadcaster.broadcast_chats_updated(self.get_chat_snapshots(), self.get_main_chat_id())
+        """Push every chat's snapshot, and which is the main chat, to every WebSocket client (and to the listener
+        the composition root installed, which tells the shell's tray); and wake the main chat if the list now shows
+        it stopped."""
+        snapshots = self.get_chat_snapshots()
+        self._broadcaster.broadcast_chats_updated(snapshots, self.get_main_chat_id())
+        if self._chats_updated_listener is not None:
+            self._chats_updated_listener(snapshots)
         self._wake_main_chat_if_stopped()
+
+    def set_chats_updated_listener(self, listener: Callable[[list[ChatSnapshot]], object]) -> None:
+        """Install what hears every chat-list push beside the pages: the tray's feed to the shell (the multiplayer
+        spec, section 6.4). The composition root calls this once."""
+        self._chats_updated_listener = listener
 
     def _wake_main_chat_if_stopped(self) -> None:
         """Start the main chat's agent, on a thread of its own, when it is stopped: the main chat never sleeps.

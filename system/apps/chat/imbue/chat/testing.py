@@ -84,6 +84,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.lounge import LoungeKeeper
 from imbue.chat.mentions import MentionStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
@@ -102,6 +103,7 @@ from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import build_chat_shell_client
 from imbue.chat.state import ChatAppState
+from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -730,6 +732,7 @@ def build_test_state(
     chat_namer: ChatNamer | None = None,
     authors: AuthorStore | None = None,
     mentions: MentionStore | None = None,
+    is_tray_fed: bool = True,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -741,6 +744,8 @@ def build_test_state(
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     event_queues = AgentEventQueues()
+    tray_feed = TrayFeed(shell=shell if shell is not None else DisconnectedShell()) if is_tray_fed else None
+    lounge = LoungeKeeper(agent_manager=manager)
     # Match production: route the codex ledger's live user-turns onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
     state = ChatAppState(
@@ -769,11 +774,18 @@ def build_test_state(
         chat_namer=chat_namer,
         # Never this package's own data/: a test that reads the annotations back injects a store under its tmp_path.
         authors=authors if authors is not None else AuthorStore(root=Path(tempfile.mkdtemp(prefix="chat-authors-"))),
-        roster=RosterClient(shell=shell if shell is not None else DisconnectedShell()),
+        roster=RosterClient(
+            shell=shell if shell is not None else DisconnectedShell(), on_refreshed=lounge.consider_roster
+        ),
         mentions=mentions
         if mentions is not None
         else MentionStore(root=Path(tempfile.mkdtemp(prefix="chat-mentions-"))),
+        # The tray's feed goes to the shell given (a fake records it); a disconnected one drops it.
+        tray_feed=tray_feed,
+        lounge=lounge,
     )
+    if tray_feed is not None:
+        manager.set_chats_updated_listener(tray_feed.report_chats)
     # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's
     # that nobody is streaming, and removing a chat's active agent ends the chat's streams.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)

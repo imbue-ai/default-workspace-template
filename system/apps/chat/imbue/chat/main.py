@@ -37,6 +37,7 @@ from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.registry import build_one_shot_completion
 from imbue.chat.latchkey_gateway import GatewayAccess
+from imbue.chat.lounge import LoungeKeeper
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MainChatStore
 from imbue.chat.mentions import MENTIONS_DIRNAME
@@ -51,6 +52,7 @@ from imbue.chat.server import create_application
 from imbue.chat.shell_client import build_live_chat_shell_client
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
+from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 
@@ -162,6 +164,11 @@ def build_production_state(
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
     agent_manager.set_transcript_broadcaster(event_queues.broadcast_batch)
+    # The shell's tray hears every message and every chat-list change from here; a secondary's are a preview's.
+    tray_feed = None if is_secondary else TrayFeed(shell=shell)
+    if tray_feed is not None:
+        agent_manager.set_chats_updated_listener(tray_feed.report_chats)
+    lounge = None if is_secondary else LoungeKeeper(agent_manager=agent_manager)
     state = ChatAppState(
         config=config,
         provider_names=provider_names,
@@ -199,8 +206,10 @@ def build_production_state(
             requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
         ),
         authors=AuthorStore(root=chat_records_root),
-        roster=RosterClient(shell=shell),
+        roster=RosterClient(shell=shell, on_refreshed=lounge.consider_roster if lounge is not None else None),
         mentions=MentionStore(root=data_dir / MENTIONS_DIRNAME),
+        tray_feed=tray_feed,
+        lounge=lounge,
     )
     # Eviction wiring: the state drops what an agent holds resident -- the transcript,
     # watch thread, and inotify watches -- when the manager sees it destroyed (the whole
@@ -299,6 +308,8 @@ def main() -> None:
         # the one place the follower is started; ``build_application`` only constructs, so
         # tests that build an app never follow anything.
         state.agent_manager.start()
+        if state.lounge is not None:
+            state.lounge.start(state.roster)
 
     # Tear down the broadcaster, watchers, agent manager, and http clients on
     # exit. ``atexit`` covers a normal return; the signal handlers cover

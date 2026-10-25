@@ -63,3 +63,24 @@ def test_the_fallback_name_prefers_an_agents_grant_name_then_the_emails_local_pa
     assert fallback_display_name(_BOB, RequestIdentity(owner=False, user_id="user-bob-4471", email="@nowhere")) == str(
         _BOB
     )
+
+
+def test_every_fresh_roster_is_told_of_and_a_cached_read_is_not() -> None:
+    shell = FakeShell(roster_document=_roster("Bob"))
+    now = [100.0]
+    told: list[RosterDocument] = []
+    client = RosterClient(shell=shell, cache_seconds=5.0, clock=lambda: now[0], on_refreshed=told.append)
+
+    client.document()
+    client.document()
+    now[0] = 106.0
+    shell.roster_document = _roster("Bob", "Carol")
+    client.document()
+    shell.listing_error = ShellUnreachableError("down")
+    now[0] = 112.0
+    client.document()
+
+    assert [[entry.display_name for entry in document.participants] for document in told] == [
+        ["Bob"],
+        ["Bob", "Carol"],
+    ]

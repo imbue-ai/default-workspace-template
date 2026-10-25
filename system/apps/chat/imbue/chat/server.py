@@ -50,6 +50,7 @@ from werkzeug.exceptions import NotFound
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.shell_url import shell_base_url
 
@@ -915,6 +916,24 @@ def _is_author_prefixed(chat_id: ChatId) -> bool:
     return agent_info is None or get_harness_spec(agent_info.harness).is_author_prefixed
 
 
+def _bubble_for_send(
+    state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
+) -> None:
+    """Raise the speech bubble a person's or a visiting agent's accepted send does over their tray entry (the
+    multiplayer spec, section 6.5), naming the people it mentions when the chat is a room, so their clients mark
+    it as a mention."""
+    feed = state.tray_feed
+    snapshot = state.agent_manager.get_chat_snapshot(str(chat_id))
+    if feed is None or snapshot is None:
+        return
+    mentions: tuple[ParticipantKey, ...] = ()
+    if snapshot.kind is ChatKind.ROOM and state.mention_handler is not None and "@" in text:
+        mentions = tuple(
+            target.key for target in state.mention_handler.resolve(text) if target.is_person and target.key is not None
+        )
+    feed.post_bubble(participant_key_of(identity), chat_id, snapshot.title, text, message_id, mentions)
+
+
 def _act_on_room_mentions(
     state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
 ) -> None:
@@ -1002,6 +1021,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     )
     if isinstance(accepted, _SendRefused):
         return model_response(accepted.answer, accepted.status)
+    _bubble_for_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
     _act_on_room_mentions(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
@@ -1775,18 +1795,29 @@ def _record_room_first_message_author(
     state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, message))
 
 
+def _act_on_room_first_message(
+    state: ChatAppState,
+    message: str,
+    identity: RequestIdentity,
+    app_context: AppContext,
+    chat_id: ChatId,
+    message_id: str,
+) -> None:
+    """What a new room's first message does once it has landed (the multiplayer spec, sections 6.5 and 7.4): it
+    raises its bubble and its mentions act as a message-route send's do, for the sender the create's request vouched
+    for, under the app's context, since the create's thread has none of its own."""
+    with app_context:
+        _bubble_for_send(state, chat_id, message_id, message, identity)
+        _act_on_room_mentions(state, chat_id, message_id, message, identity)
+
+
 def _room_first_message_hook(
     state: ChatAppState, message: str, identity: RequestIdentity, app_context: AppContext
 ) -> Callable[[ChatId, str], None]:
-    """What a new room's first message does once it has landed (the multiplayer spec, section 7.4): its mentions
-    act as a message-route send's do, for the sender the create's request vouched for, under the app's context,
-    since the create's thread has none of its own."""
-
-    def act(chat_id: ChatId, message_id: str) -> None:
-        with app_context:
-            _act_on_room_mentions(state, chat_id, message_id, message, identity)
-
-    return act
+    """The hook the create route hands the manager for a room's first message, bound to the sender and the app."""
+    return lambda chat_id, message_id: _act_on_room_first_message(
+        state, message, identity, app_context, chat_id, message_id
+    )
 
 
 def _create_chat() -> Response:
@@ -1863,14 +1894,30 @@ def _main_or_most_recent_intake_chat(
     return _ResolvedIntakeChat(chat_id=most_recently_messaged_chat_id(snapshots))
 
 
-def _resolve_intake_chat(agent_manager: AgentManager, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
+def _lounge_or_refusal(state: ChatAppState) -> _ResolvedIntakeChat | Response:
+    """The Lounge, made when there is none (the multiplayer spec, section 7.5), or the refusal: a secondary chat
+    makes no room, and a room's create may be refused as the create route refuses one."""
+    if state.lounge is None:
+        return error_response("A secondary chat has no Lounge", 403)
+    lounge = state.lounge
+    created = _created_chat_or_refusal(lambda: CreatedChat(chat_id=lounge.ensure(), name="", display_name=""))
+    if isinstance(created, Response):
+        return created
+    return _ResolvedIntakeChat(chat_id=created.chat_id)
+
+
+def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
     """The chat an intake's target names (spec 3.5), or the 404 for an explicit chat the app does not list.
 
     ``new_chat`` answers no chat: the caller creates or mints one. ``current_chat``,
-    ``main_chat`` and ``chat_selector`` fall back to that when nothing qualifies.
+    ``main_chat`` and ``chat_selector`` fall back to that when nothing qualifies; ``lounge`` is the Lounge, made
+    when there is none.
     """
+    agent_manager = state.agent_manager
     snapshots = agent_manager.get_chat_snapshots()
     match intake.target:
+        case IntakeTarget.LOUNGE:
+            return _lounge_or_refusal(state)
         case IntakeTarget.CHAT:
             parsed = parse_chat_ref(intake.chat_id)
             if parsed is None or not agent_manager.knows_chat(parsed):
@@ -1927,6 +1974,7 @@ def _deliver_intake_send(
     )
     if isinstance(accepted, _SendRefused):
         return accepted
+    _bubble_for_send(state, chat_id, message_id, intake.message, identity)
     _act_on_room_mentions(state, chat_id, message_id, intake.message, identity)
     return None
 
@@ -1980,7 +2028,7 @@ def _intake_chat() -> Response:
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     intake = parse_request_body(IntakeRequest)
-    resolved = _resolve_intake_chat(agent_manager, intake)
+    resolved = _resolve_intake_chat(state, intake)
     if isinstance(resolved, Response):
         return resolved
     if resolved.needs_pick:

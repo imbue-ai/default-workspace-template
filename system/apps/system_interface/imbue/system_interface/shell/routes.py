@@ -15,12 +15,16 @@ from flask.typing import ResponseReturnValue
 from loguru import logger
 from workspace_layout.answers import ClientsListing
 from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.feed import BubblePost
+from workspace_layout.feed import ChatsActivityReport
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import OpRequester
 from workspace_layout.ops import parse_op_body
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 from workspace_layout.records import EntryPresentation
+from workspace_layout.shell_url import BUBBLES_ROUTE
+from workspace_layout.shell_url import CHATS_ACTIVITY_ROUTE
 from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
@@ -28,6 +32,7 @@ from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 from workspace_layout.shell_url import POPPED_OUT_REFUSAL_STATUS
 
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.presence import utc_now
 from imbue.system_interface.shell.api_models import AppRunningState
 from imbue.system_interface.shell.api_models import EmbedderMessageRelayResponse
 from imbue.system_interface.shell.api_models import PendingUpdateResponse
@@ -85,6 +90,7 @@ from imbue.system_interface.shell.route_helpers import HTTP_PRECONDITION_FAILED
 from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.tray_feed import speakers_client_ids
 
 
 def _answer_shell_error(error: ShellError) -> ResponseReturnValue:
@@ -174,6 +180,39 @@ def client_activity_route() -> ResponseReturnValue:
             shell.activity.append_message(report)
         case _ as unreachable:
             assert_never(unreachable)
+    return "", HTTP_NO_CONTENT
+
+
+# The tray's feed (the multiplayer spec, sections 6.4 and 6.5)
+
+
+def bubbles_route() -> ResponseReturnValue:
+    """A message somebody just said, for the speech bubble over their tray entry: broadcast to every window but the
+    speaker's own clients; loopback only."""
+    refusal = require_loopback()
+    if refusal is not None:
+        return refusal
+    bubble = parse_request_body(BubblePost)
+    shell = _shell()
+    state = get_state()
+    owner = next((entry for entry in state.roster.document(utc_now()).participants if entry.is_owner), None)
+    excluded = speakers_client_ids(
+        bubble.speaker, owner is not None and owner.key == bubble.speaker, shell.clients.list_clients()
+    )
+    shell.broadcaster.broadcast_bubble(bubble.model_dump(mode="json"), excluded)
+    return "", HTTP_NO_CONTENT
+
+
+def chats_activity_route() -> ResponseReturnValue:
+    """What every chat is doing, as the chat app lists them: kept for the windows that connect later, and broadcast
+    to the ones connected now; loopback only."""
+    refusal = require_loopback()
+    if refusal is not None:
+        return refusal
+    report = parse_request_body(ChatsActivityReport)
+    shell = _shell()
+    shell.chats_activity.replace(report)
+    shell.broadcaster.broadcast_chats_activity(report.model_dump(mode="json"))
     return "", HTTP_NO_CONTENT
 
 
@@ -404,6 +443,10 @@ def register_shell_routes(application: Flask) -> None:
         view_func=client_activity_route,
         methods=["POST"],
         endpoint="client_activity_route",
+    )
+    application.add_url_rule(BUBBLES_ROUTE, view_func=bubbles_route, methods=["POST"], endpoint="bubbles_route")
+    application.add_url_rule(
+        CHATS_ACTIVITY_ROUTE, view_func=chats_activity_route, methods=["POST"], endpoint="chats_activity_route"
     )
     application.add_url_rule(
         "/api/updates/pending",

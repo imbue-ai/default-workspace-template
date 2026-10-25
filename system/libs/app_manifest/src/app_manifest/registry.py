@@ -45,7 +45,10 @@ SHELL_CONTEXT_MENU_PATH: Final[Path] = Path(
 )
 CONTEXT_MENU_ROUTE: Final[str] = "/_static/context_menu.js"
 # Every shell module an app's pages import.
-SHELL_MODULE_PATHS: Final[tuple[Path, ...]] = (SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH)
+SHELL_MODULE_PATHS: Final[tuple[Path, ...]] = (
+    SHELL_APP_CONTRACT_PATH,
+    SHELL_CONTEXT_MENU_PATH,
+)
 
 # The registration script, relative to the repo root every supervised program runs from.
 FORWARD_PORT_SCRIPT: Final[Path] = Path("system/scripts/forward_port.py")
@@ -58,26 +61,36 @@ REGISTRATION_TIMEOUT_SECONDS: Final[float] = 15.0
 
 class RegistryLaunchPath(FrozenModel):
     """A launch path as copied onto a registry row: the id, the label, the path and its method, the names of its
-    params, its presets, and which param takes typed or drafted text. A row an older release wrote lacks the method,
-    the presets, and the draft param, and reads as the GET launch path it was."""
+    params, its presets, and which param takes typed or drafted text, or a mention. A row an older release wrote
+    lacks the method, the presets, the draft param, and the mention param, and reads as the GET launch path it
+    was."""
 
     id: LaunchPathId = Field(description="The declared launch path id")
     label: NonEmptyStr = Field(description="The launch path's user-facing label")
     path: LaunchPathValue = Field(description="The path under the app origin")
     method: LaunchPathMethod = Field(
-        default=LaunchPathMethod.GET, description="GET opens at the path; POST posts to it for the path to open"
+        default=LaunchPathMethod.GET,
+        description="GET opens at the path; POST posts to it for the path to open",
     )
     params: tuple[LaunchParamName, ...] = Field(
-        default=(), description="The names of the params a caller may supply, in manifest order"
+        default=(),
+        description="The names of the params a caller may supply, in manifest order",
     )
     presets: dict[LaunchParamName, str] = Field(
-        default_factory=dict, description="The fixed name-value pairs sent with every launch of the path"
+        default_factory=dict,
+        description="The fixed name-value pairs sent with every launch of the path",
     )
     text_param: LaunchParamName | None = Field(
-        default=None, description="The param the launcher fills with typed text; absent means the path takes none"
+        default=None,
+        description="The param the launcher fills with typed text; absent means the path takes none",
     )
     draft_param: LaunchParamName | None = Field(
-        default=None, description="The param the shell fills with text to be drafted; absent means the path takes none"
+        default=None,
+        description="The param the shell fills with text to be drafted; absent means the path takes none",
+    )
+    mention_param: LaunchParamName | None = Field(
+        default=None,
+        description="The param the shell fills with a mention of a clicked person; absent means the path takes none",
     )
 
 
@@ -88,20 +101,33 @@ class RegistryRow(FrozenModel):
     reader, and a key a newer registration script added must not hide an app from an older shell.
     """
 
-    model_config = ConfigDict(frozen=True, extra="ignore", arbitrary_types_allowed=False)
+    model_config = ConfigDict(
+        frozen=True, extra="ignore", arbitrary_types_allowed=False
+    )
 
     name: AppName = Field(description="The registered app name")
-    url: AppUrl = Field(description="Where the app is reachable from inside the workspace")
-    label: str = Field(default="", description="The unguessable origin label; never an identifier")
-    icon: str | None = Field(default=None, description="The registered SVG markup, verbatim")
+    url: AppUrl = Field(
+        description="Where the app is reachable from inside the workspace"
+    )
+    label: str = Field(
+        default="", description="The unguessable origin label; never an identifier"
+    )
+    icon: str | None = Field(
+        default=None, description="The registered SVG markup, verbatim"
+    )
     internal: bool = Field(default=False, description="Hidden from every open surface")
     system: bool = Field(
         default=False,
         description="Part of the workspace itself rather than an app built on it: the minds Share tab lists it under "
         "its System group instead of offering it up front",
     )
-    program: str | None = Field(default=None, description="The supervisord program that runs the app, when supervised")
-    display_name: DisplayName | None = Field(default=None, description="What users see; absent on manifest-less rows")
+    program: str | None = Field(
+        default=None,
+        description="The supervisord program that runs the app, when supervised",
+    )
+    display_name: DisplayName | None = Field(
+        default=None, description="What users see; absent on manifest-less rows"
+    )
     description: AppDescription | None = Field(
         default=None,
         description="One line saying what the app is for, when its manifest declares one",
@@ -116,22 +142,33 @@ class RegistryRow(FrozenModel):
         "update apply",
     )
     stop_when_no_windows: bool = Field(
-        default=False, description="Whether the shell may stop the app's program once no window shows it"
+        default=False,
+        description="Whether the shell may stop the app's program once no window shows it",
     )
-    priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new desktop is seeded with")
+    priority: PriorityName = Field(
+        default=DEFAULT_PRIORITY, description="The memory-shedding band name"
+    )
+    default_shortcut: DefaultShortcut | None = Field(
+        default=None, description="The shortcut a new desktop is seeded with"
+    )
     launch_paths: tuple[RegistryLaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at"
     )
     launcher_rank: int | None = Field(
-        default=None, description="The app's place among the launcher's leading tiles; absent reads as none"
+        default=None,
+        description="The app's place among the launcher's leading tiles; absent reads as none",
     )
-    pin: Pin | None = Field(default=None, description="The app's pinned taskbar entry, when its manifest declares one")
+    pin: Pin | None = Field(
+        default=None,
+        description="The app's pinned taskbar entry, when its manifest declares one",
+    )
     window_closed_path: LaunchPathValue | None = Field(
-        default=None, description="Where the shell posts a closed window of the app; absent means no post"
+        default=None,
+        description="Where the shell posts a closed window of the app; absent means no post",
     )
     message_handlers: tuple[MessageHandler, ...] = Field(
-        default=(), description="The messages the app takes and where the shell posts each; absent means none"
+        default=(),
+        description="The messages the app takes and where the shell posts each; absent means none",
     )
 
 
@@ -152,7 +189,9 @@ def read_registry(path: Path) -> list[RegistryRow]:
         raise RegistryReadError(f"registry {path} is not valid TOML: {e}") from e
     raw_rows = data.get("apps", [])
     if not isinstance(raw_rows, list):
-        raise RegistryReadError(f"registry {path} has an 'apps' key that is not an array of tables")
+        raise RegistryReadError(
+            f"registry {path} has an 'apps' key that is not an array of tables"
+        )
     rows: list[RegistryRow] = []
     for row_idx, raw_row in enumerate(raw_rows):
         try:
@@ -180,7 +219,9 @@ def read_origin_label(path: Path, name: AppName) -> str:
     try:
         rows = read_registry(path)
     except RegistryReadError as e:
-        logger.warning("Could not read the app registry for the origin label of {}: {}", name, e)
+        logger.warning(
+            "Could not read the app registry for the origin label of {}: {}", name, e
+        )
         return ""
     for row in rows:
         if row.name == name:
@@ -198,10 +239,22 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
         raise AppRegistrationError(
             f"registration script {FORWARD_PORT_SCRIPT} not found; the app must run from the repo root"
         )
-    command = [sys.executable, str(FORWARD_PORT_SCRIPT), "--manifest", str(manifest_path), "--url", app_url]
+    command = [
+        sys.executable,
+        str(FORWARD_PORT_SCRIPT),
+        "--manifest",
+        str(manifest_path),
+        "--url",
+        app_url,
+    ]
     started_at = time.monotonic()
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=REGISTRATION_TIMEOUT_SECONDS)
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=REGISTRATION_TIMEOUT_SECONDS,
+        )
     except subprocess.TimeoutExpired as e:
         raise AppRegistrationError(
             f"registration of {manifest_path} did not finish within {REGISTRATION_TIMEOUT_SECONDS}s"

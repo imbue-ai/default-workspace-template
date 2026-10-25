@@ -83,6 +83,17 @@ params = [{name = "message", label = "Draft message", required = false}]
 presets = {target = "current_chat", is_draft = "true"}
 draft_param = "message"
 
+# A click on a person in the desktop's tray (the multiplayer spec, section 7.5): a mention of them is drafted,
+# unsent, into the Lounge, the room among the people here, made when there is none. Never a launcher row.
+[[launch_paths]]
+id = "lounge"
+label = "Mention in the Lounge"
+path = "/api/chats/intake"
+method = "POST"
+params = [{name = "message", label = "Mention", required = false}]
+presets = {target = "lounge", is_draft = "true"}
+mention_param = "message"
+
 # A chat's launch stacks on the ``chat`` create template the committed mngr settings hold, and the
 # chat's create defaults resolve beside that file, so a change to it can break chat creation.
 [[references]]

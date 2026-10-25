@@ -602,6 +602,23 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert messages[3]["notice"] is None
 
 
+@pytest.mark.flaky
+@pytest.mark.timeout(15)
+def test_websocket_connect_sends_the_chats_activity_once_the_chat_app_has_reported_it(app: Flask) -> None:
+    """A window that connects after the chat app's report paints the agent's card from it, after the roster."""
+    report = {"chats": [{"chat_id": "agent-1", "title": "Main chat", "status": "idle", "kind": "agent"}]}
+    assert app.test_client().post("/api/chats-activity", json=report).status_code == 204
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(7)]
+        finally:
+            close_ws(ws)
+
+    assert [message["type"] for message in messages[4:]] == ["presence_updated", "roster_updated", "chats_activity"]
+    assert messages[6] == {"type": "chats_activity", **report}
+
+
 _VISITOR_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _OWNER_IDENTITY = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 

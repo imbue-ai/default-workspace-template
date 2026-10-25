@@ -45,6 +45,7 @@ from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _NOT_LOOPBACK = {"REMOTE_ADDR": "10.0.0.7"}
+_BOB_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _TERMINAL_REQUESTER = {"app": "terminal", "marker": "terminal-7"}
 
 
@@ -128,6 +129,66 @@ def test_client_activity_is_appended_with_its_desktop(client: FlaskClient, app: 
         ("message", "c1", "home")
     ]
     assert events[0]["key"] == "agent-1" and events[0]["text"] == "hi"
+
+
+# The tray's feed (the multiplayer spec, sections 6.4 and 6.5)
+
+
+def _bubble_body(speaker: str) -> dict[str, Any]:
+    return {
+        "speaker": speaker,
+        "chat_id": "agent-00000000000000000000000000000042",
+        "chat_title": "Lounge",
+        "text": "hi all",
+        "message_id": "m-1",
+        "mentions": ["user:user-josh-0001"],
+    }
+
+
+def test_a_bubble_reaches_every_window_but_the_speakers_own_clients(
+    client: FlaskClient, app: Flask, broadcaster: WebSocketBroadcaster
+) -> None:
+    """Bob's laptop arrived as Bob and the owner's as the owner (unshared, so under the synthetic key); Bob's bubble
+    is sent to the owner's window and to a window that has not registered yet, and not to Bob's own."""
+    assert client.post("/api/clients/bob-laptop/arrive", headers=identity_headers(_BOB_IDENTITY)).status_code == 200
+    assert client.post("/api/clients/owner-laptop/arrive").status_code == 200
+    bobs = broadcaster.register()
+    broadcaster.set_client_info(bobs, "bob-laptop", "home")
+    owners = broadcaster.register()
+    broadcaster.set_client_info(owners, "owner-laptop", "home")
+    unregistered = broadcaster.register()
+
+    assert client.post("/api/bubbles", json=_bubble_body("user:user-bob-4471")).status_code == 204
+
+    assert drain_messages(bobs) == []
+    assert drain_messages(owners) == [{"type": "bubble", **_bubble_body("user:user-bob-4471")}]
+    assert drain_messages(unregistered) == [{"type": "bubble", **_bubble_body("user:user-bob-4471")}]
+    assert (
+        client.post("/api/bubbles", json=_bubble_body("user:user-bob-4471"), environ_base=_NOT_LOOPBACK).status_code
+        == 403
+    )
+    assert client.post("/api/bubbles", json={"speaker": "user:x"}).status_code == 400
+
+
+def test_the_chats_activity_is_kept_and_broadcast(
+    client: FlaskClient, app: Flask, broadcaster: WebSocketBroadcaster
+) -> None:
+    window = broadcaster.register()
+    report = {
+        "chats": [
+            {"chat_id": "agent-1", "title": "Main chat", "status": "working", "kind": "agent"},
+            {"chat_id": "agent-2", "title": "Lounge", "status": "idle", "kind": "room"},
+        ]
+    }
+
+    assert client.post("/api/chats-activity", json=report).status_code == 204
+
+    assert drain_messages(window) == [{"type": "chats_activity", **report}]
+    kept = state_of(app).shell.chats_activity.current()
+    assert kept is not None and kept.model_dump(mode="json") == report
+    assert client.post("/api/chats-activity", json=report, environ_base=_NOT_LOOPBACK).status_code == 403
+    napping = {"chats": [{"chat_id": "x", "title": "", "status": "napping", "kind": "agent"}]}
+    assert client.post("/api/chats-activity", json=napping).status_code == 400
 
 
 # Section 5: stop and start

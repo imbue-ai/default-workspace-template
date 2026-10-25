@@ -853,6 +853,9 @@ class IntakeTarget(LowerCaseStrEnum):
     CHAT_SELECTOR = auto()
     # The chat ``chat_id`` names.
     CHAT = auto()
+    # The Lounge (the multiplayer spec, section 7.5), made when there is none: what a click on a person in the
+    # desktop's tray drafts a mention into.
+    LOUNGE = auto()
 
 
 class IntakeRequest(FrozenModel):

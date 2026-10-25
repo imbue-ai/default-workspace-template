@@ -12,6 +12,8 @@ CLIENTS_ROUTE: Final[str] = "/api/clients"
 DESKTOPS_ROUTE: Final[str] = "/api/desktops"
 CLIENT_ACTIVITY_ROUTE: Final[str] = "/api/client-activity"
 ROSTER_ROUTE: Final[str] = "/api/roster"
+BUBBLES_ROUTE: Final[str] = "/api/bubbles"
+CHATS_ACTIVITY_ROUTE: Final[str] = "/api/chats-activity"
 
 # The status the op route refuses an op with when it would change where a window the target client has popped out
 # into its own window sits, and the op did not carry ``force`` (plan-popped-out-layout-ops.md).
