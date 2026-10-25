@@ -512,7 +512,7 @@ export function parseLaunchPath(raw: unknown): LaunchPath {
     params: asArray(record.params ?? [], "launch_path.params").map((param) => asString(param, "launch_path.param")),
     presets: parsePresets(record.presets),
     text_param: asOptionalString(record.text_param, "launch_path.text_param"),
-    mention_param: typeof record.mention_param === "string" ? record.mention_param : null,
+    mention_param: asOptionalString(record.mention_param, "launch_path.mention_param"),
     draft_param: asOptionalString(record.draft_param, "launch_path.draft_param"),
   };
 }
@@ -612,7 +612,7 @@ export function parseClientRecord(raw: unknown): ClientRecord {
       asString(entry, `client.shown_history[${index}]`),
     ),
     desktop_revision: asNumber(record.desktop_revision ?? 0, "client.desktop_revision"),
-    participant: typeof record.participant === "string" ? record.participant : null,
+    participant: asOptionalString(record.participant, "client.participant"),
     shown: asArray(record.shown ?? [], "client.shown").map((entry, index) =>
       asString(entry, `client.shown[${index}]`),
     ),
@@ -734,22 +734,18 @@ const CHAT_ACTIVITY_STATUSES: readonly ChatActivityStatus[] = [
 
 function parseRosterParticipant(raw: unknown): RosterParticipant {
   const record = asObject(raw, "participant");
-  const kind = record.kind;
-  if (typeof kind !== "string" || !PARTICIPANT_KINDS.includes(kind as ParticipantKind)) {
-    throw new Error(`participant.kind is not a participant kind: ${String(kind)}`);
-  }
   return {
     key: asString(record.key, "participant.key"),
-    kind: kind as ParticipantKind,
-    display_name: typeof record.display_name === "string" ? record.display_name : "",
-    profile_picture_url: typeof record.profile_picture_url === "string" ? record.profile_picture_url : null,
-    email: typeof record.email === "string" ? record.email : null,
-    handle: typeof record.handle === "string" ? record.handle : "",
-    color: typeof record.color === "string" ? record.color : "",
-    is_owner: record.is_owner === true,
-    is_connected: record.is_connected === true,
-    last_seen: typeof record.last_seen === "string" ? record.last_seen : null,
-    last_input_at: typeof record.last_input_at === "string" ? record.last_input_at : null,
+    kind: asOneOf(record.kind, PARTICIPANT_KINDS, "participant.kind"),
+    display_name: asString(record.display_name, "participant.display_name"),
+    profile_picture_url: asOptionalString(record.profile_picture_url, "participant.profile_picture_url"),
+    email: asOptionalString(record.email, "participant.email"),
+    handle: asString(record.handle, "participant.handle"),
+    color: asString(record.color, "participant.color"),
+    is_owner: asBoolean(record.is_owner, "participant.is_owner"),
+    is_connected: asBoolean(record.is_connected, "participant.is_connected"),
+    last_seen: asOptionalString(record.last_seen, "participant.last_seen"),
+    last_input_at: asOptionalString(record.last_input_at, "participant.last_input_at"),
   };
 }
 
@@ -760,15 +756,11 @@ export function parseRoster(raw: unknown): RosterParticipant[] {
 
 function parseChatActivity(raw: unknown): ChatActivity {
   const record = asObject(raw, "chat activity");
-  const status = record.status;
-  if (typeof status !== "string" || !CHAT_ACTIVITY_STATUSES.includes(status as ChatActivityStatus)) {
-    throw new Error(`chat.status is not a chat status: ${String(status)}`);
-  }
   return {
     chat_id: asString(record.chat_id, "chat.chat_id"),
-    title: typeof record.title === "string" ? record.title : "",
-    status: status as ChatActivityStatus,
-    kind: record.kind === "room" ? "room" : "agent",
+    title: asString(record.title, "chat.title"),
+    status: asOneOf(record.status, CHAT_ACTIVITY_STATUSES, "chat.status"),
+    kind: asOneOf(record.kind, ["agent", "room"], "chat.kind"),
   };
 }
 
@@ -783,11 +775,11 @@ export function parseBubble(raw: unknown): BubbleWire {
   return {
     speaker: asString(record.speaker, "bubble.speaker"),
     chat_id: asString(record.chat_id, "bubble.chat_id"),
-    chat_title: typeof record.chat_title === "string" ? record.chat_title : "",
-    text: typeof record.text === "string" ? record.text : "",
-    message_id: typeof record.message_id === "string" ? record.message_id : "",
-    mentions: asArray(record.mentions ?? [], "bubble.mentions").filter(
-      (mention): mention is string => typeof mention === "string",
+    chat_title: asString(record.chat_title, "bubble.chat_title"),
+    text: asString(record.text, "bubble.text"),
+    message_id: asString(record.message_id, "bubble.message_id"),
+    mentions: asArray(record.mentions ?? [], "bubble.mentions").map((mention, index) =>
+      asString(mention, `bubble.mentions[${index}]`),
     ),
   };
 }

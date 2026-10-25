@@ -395,12 +395,16 @@ describe("the tray's records (the multiplayer spec)", () => {
       last_input_at: null,
     };
     expect(parseRoster([participant])).toEqual([participant]);
-    expect(() => parseRoster([{ ...participant, kind: "ghost" }])).toThrow(/participant kind/);
+    expect(() => parseRoster([{ ...participant, kind: "ghost" }])).toThrow(WireShapeError);
+    expect(() => parseRoster([{ ...participant, is_connected: "yes" }])).toThrow(WireShapeError);
     expect(parseChatsActivity([{ chat_id: "agent-1", title: "Main chat", status: "working", kind: "agent" }])).toEqual(
       [{ chat_id: "agent-1", title: "Main chat", status: "working", kind: "agent" }],
     );
     expect(() => parseChatsActivity([{ chat_id: "agent-1", title: "x", status: "napping", kind: "agent" }])).toThrow(
-      /chat status/,
+      WireShapeError,
+    );
+    expect(() => parseChatsActivity([{ chat_id: "agent-1", title: "x", status: "idle", kind: "voice" }])).toThrow(
+      WireShapeError,
     );
     expect(
       parseBubble({
@@ -410,7 +414,7 @@ describe("the tray's records (the multiplayer spec)", () => {
         chat_title: "Lounge",
         text: "hi",
         message_id: "m-1",
-        mentions: ["user:user-josh-0001", 7],
+        mentions: ["user:user-josh-0001"],
       }),
     ).toEqual({
       speaker: "user:user-bob-4471",
@@ -420,6 +424,16 @@ describe("the tray's records (the multiplayer spec)", () => {
       message_id: "m-1",
       mentions: ["user:user-josh-0001"],
     });
+    expect(() =>
+      parseBubble({
+        speaker: "user:x",
+        chat_id: "agent-2",
+        chat_title: "",
+        text: "hi",
+        message_id: "m",
+        mentions: [7],
+      }),
+    ).toThrow(WireShapeError);
     expect(
       parseLaunchPath({ id: "lounge", label: "Lounge", path: "/x", mention_param: "message" }).mention_param,
     ).toBe("message");
