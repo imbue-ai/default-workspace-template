@@ -71,7 +71,7 @@ def test_a_post_after_shutdown_is_dropped_and_settles_without_raising() -> None:
     feed = TrayFeed(shell=shell)
     feed.shutdown()
 
-    feed.post_bubble(_BOB, _CHAT, "Lounge", "late", "m-9").result(timeout=10)
+    feed.post_bubble(_BOB, _CHAT, "Lounge", "late", "m-9", ()).result(timeout=10)
     feed.report_chats([make_chat_snapshot("agent-1", name="Late")]).result(timeout=10)
 
     assert shell.bubbles == [] and shell.chats_activity == []

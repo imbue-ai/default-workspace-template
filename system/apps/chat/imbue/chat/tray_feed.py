@@ -92,7 +92,7 @@ class TrayFeed(MutableModel):
         chat_title: str,
         text: str,
         message_id: str,
-        mentions: Sequence[ParticipantKey] = (),
+        mentions: Sequence[ParticipantKey],
     ) -> Future[None]:
         """Queue the bubble a message raises; the future settles once it has been posted, or dropped."""
         bubble = BubblePost(
