@@ -51,7 +51,6 @@ from werkzeug.exceptions import NotFound
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
-from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.shell_url import shell_base_url
 
@@ -134,6 +133,7 @@ from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.identity import request_identity
 from imbue.chat.identity import request_participant
 from imbue.chat.main_chat import MAIN_CHAT_NAME
+from imbue.chat.mention_parser import MentionTarget
 from imbue.chat.mentions import BackgroundMentionDeliverer
 from imbue.chat.mentions import MentionHandler
 from imbue.chat.models import AgentCreationError
@@ -917,38 +917,28 @@ def _is_author_prefixed(chat_id: ChatId) -> bool:
     return agent_info is None or get_harness_spec(agent_info.harness).is_author_prefixed
 
 
-def _bubble_for_send(
+def _act_on_accepted_send(
     state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
 ) -> None:
-    """Raise the speech bubble a person's or a visiting agent's accepted send does over their tray entry (the
-    multiplayer spec, section 6.5), naming the people it mentions when the chat is a room, so their clients mark
-    it as a mention."""
-    feed = state.tray_feed
+    """What a person's or a visiting agent's send does once it was accepted (the multiplayer spec, sections 6.5 and
+    7.4): their speech bubble is raised over their tray entry, naming the people a room message mentions so their
+    clients mark it; and in a room the mentions act, people marked and the agent or a chat sent the message. In an
+    agent chat a handle is a word the agent reads like any other. Takes the sender's ``identity`` rather than reading
+    the request's, since an intake nobody waits on and a room's first message land on threads of their own."""
     snapshot = state.agent_manager.get_chat_snapshot(str(chat_id))
-    if feed is None or snapshot is None:
+    if snapshot is None:
         return
-    mentions: tuple[ParticipantKey, ...] = ()
-    if snapshot.kind is ChatKind.ROOM and state.mention_handler is not None and "@" in text:
-        mentions = tuple(
-            target.key for target in state.mention_handler.resolve(text) if target.is_person and target.key is not None
-        )
-    feed.post_bubble(participant_key_of(identity), chat_id, snapshot.title, text, message_id, mentions)
-
-
-def _act_on_room_mentions(
-    state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
-) -> None:
-    """What a send's mentions do once it was accepted (the multiplayer spec, section 7.4): in a room, people are
-    marked and the agent or a chat is sent the message; in an agent chat nothing, a handle being a word the agent
-    reads like any other. Takes the sender's ``identity`` rather than reading the request's, since an intake nobody
-    waits on is delivered on a thread of its own."""
     handler = state.mention_handler
-    snapshot = state.agent_manager.get_chat_snapshot(str(chat_id))
-    if handler is None or snapshot is None or snapshot.kind is not ChatKind.ROOM or "@" not in text:
-        return
+    targets: tuple[MentionTarget, ...] = ()
+    if snapshot.kind is ChatKind.ROOM and handler is not None and "@" in text:
+        targets = handler.resolve(text)
     sender = participant_key_of(identity)
-    sender_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
-    handler.act(chat_id, snapshot.title, message_id, text, sender, sender_name)
+    if state.tray_feed is not None:
+        mentioned = tuple(target.key for target in targets if target.is_person and target.key is not None)
+        state.tray_feed.post_bubble(sender, chat_id, snapshot.title, text, message_id, mentioned)
+    if handler is not None and targets:
+        sender_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
+        handler.act(targets, chat_id, snapshot.title, message_id, text, sender, sender_name)
 
 
 def _me_endpoint() -> Response:
@@ -1022,8 +1012,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     )
     if isinstance(accepted, _SendRefused):
         return model_response(accepted.answer, accepted.status)
-    _bubble_for_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
-    _act_on_room_mentions(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
+    _act_on_accepted_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
     if accepted.held_phase is not None:
@@ -1807,12 +1796,11 @@ def _act_on_room_first_message(
     chat_id: ChatId,
     message_id: str,
 ) -> None:
-    """What a new room's first message does once it has landed (the multiplayer spec, sections 6.5 and 7.4): it
-    raises its bubble and its mentions act as a message-route send's do, for the sender the create's request vouched
-    for, under the app's context, since the create's thread has none of its own."""
+    """What a new room's first message does once it has landed: what a message-route send's does (its bubble, its
+    mentions), for the sender the create's request vouched for, under the app's context, since the create's thread
+    has none of its own."""
     with app_context:
-        _bubble_for_send(state, chat_id, message_id, message, identity)
-        _act_on_room_mentions(state, chat_id, message_id, message, identity)
+        _act_on_accepted_send(state, chat_id, message_id, message, identity)
 
 
 def _room_first_message_hook(
@@ -1977,8 +1965,7 @@ def _deliver_intake_send(
     )
     if isinstance(accepted, _SendRefused):
         return accepted
-    _bubble_for_send(state, chat_id, message_id, intake.message, identity)
-    _act_on_room_mentions(state, chat_id, message_id, intake.message, identity)
+    _act_on_accepted_send(state, chat_id, message_id, intake.message, identity)
     return None
 
 
