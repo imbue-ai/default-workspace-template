@@ -59,7 +59,7 @@ class LoungeKeeper(MutableModel):
 
     agent_manager: AgentManager = Field(frozen=True, description="The chats, and how a room is created")
     poll_interval_seconds: float = Field(
-        default=ROSTER_POLL_INTERVAL_SECONDS, frozen=True, description="How often the roster is read again"
+        default=ROSTER_POLL_INTERVAL_SECONDS, frozen=True, description="How often the roster is read for an invitation"
     )
 
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
