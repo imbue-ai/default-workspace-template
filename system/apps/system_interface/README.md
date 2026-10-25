@@ -381,8 +381,9 @@ roster entry in roster order (a profile picture, else a monogram on the person's
 colour; a dashed envelope for an invited email; a monogram tile for a visiting
 agent; faded while the entry is not here; stacked from four entries on, each
 tucked under the one before it, spread while the pointer is over them; hopping
-once when it arrives), the viewer's own picture, and the agent's avatar at 36px
-in its mood, attending while the pinned avatar-style window is focused. Hovering
+once when it arrives and when a bubble of its appears), the viewer's own
+picture, and the agent's avatar at 36px in its mood, attending while the pinned
+avatar-style window is focused. Hovering
 an entry for 180ms opens its card above it: a person's shows the picture, the name
 ("(you)", "(owner)"; "You" for the owner of an unshared workspace), the status
 line ("Active", "Idle · 4m", "Offline · last seen 3h ago", "Invited"), what they

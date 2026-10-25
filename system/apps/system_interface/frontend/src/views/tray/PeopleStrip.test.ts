@@ -42,7 +42,7 @@ function render(overrides: Partial<PeopleStripAttrs> = {}): HTMLElement {
     roster: [josh, bob, carol, seer, atlas],
     viewer: josh.key,
     now: NOW,
-    arrived: new Set(),
+    hopping: new Set(),
     onPersonClick: vi.fn(),
     onHoverStart: vi.fn(),
     onHoverEnd: vi.fn(),
@@ -108,12 +108,12 @@ describe("PeopleStrip", () => {
     expect(onPersonClick.mock.calls.map(([entry]) => entry.key)).toEqual([bob.key]);
   });
 
-  it("hops an entry that just arrived, and tells the caller where the pointer is", () => {
+  it("hops an entry that just arrived or spoke, and tells the caller where the pointer is", () => {
     const onHoverStart = vi.fn();
     const onHoverEnd = vi.fn();
-    const root = render({ arrived: new Set([bob.key]), onHoverStart, onHoverEnd });
+    const root = render({ hopping: new Set([bob.key]), onHoverStart, onHoverEnd });
     const [first] = entries(root);
-    expect(first.getAttribute("data-tray-arrived")).toBe("true");
+    expect(first.getAttribute("data-tray-hopping")).toBe("true");
     expect(first.classList.contains("tray-hop")).toBe(true);
     first.dispatchEvent(new MouseEvent("mouseenter"));
     first.dispatchEvent(new MouseEvent("mouseleave"));

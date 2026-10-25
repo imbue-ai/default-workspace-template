@@ -1,7 +1,8 @@
 /**
  * The people in the tray (the multiplayer spec, section 6.2): one 32px picture per roster entry other than the
  * viewer and the workspace agent, in roster order, then the viewer's own. An entry that is not here is faded; an
- * invited email is a dashed circle; a visiting agent a monogram tile. An entry that becomes connected hops once.
+ * invited email is a dashed circle; a visiting agent a monogram tile. An entry hops once when it becomes connected
+ * and when a bubble of its appears.
  * With four or more entries the pictures stack, each tucked under the one before it with a ring of the bar's
  * colour, and the row spreads while the pointer is over it. A click on a person opens the Lounge with a mention of
  * them; a click on your own picture or an invited email does nothing. Hovering an entry opens its card (the caller's).
@@ -38,8 +39,8 @@ export interface PeopleStripAttrs {
   readonly roster: readonly RosterParticipant[];
   readonly viewer: string | null;
   readonly now: Date;
-  /** The keys of the entries that just became connected, which hop once. */
-  readonly arrived: ReadonlySet<string>;
+  /** The keys of the entries hopping now: they just arrived, or a bubble of theirs just appeared. */
+  readonly hopping: ReadonlySet<string>;
   readonly onPersonClick: (entry: RosterParticipant) => void;
   readonly onHoverStart: (entry: RosterParticipant, element: HTMLElement) => void;
   readonly onHoverEnd: () => void;
@@ -63,7 +64,7 @@ export const PeopleStrip: m.Component<PeopleStripAttrs> = {
         const isOwn = entry.key === attrs.viewer;
         const isFaded = presenceStateOf(entry, attrs.now) === "offline";
         const isClickable = !isOwn && entry.kind !== "invited";
-        const isArrived = attrs.arrived.has(entry.key);
+        const isHopping = attrs.hopping.has(entry.key);
         return m(
           "button",
           {
@@ -71,14 +72,14 @@ export const PeopleStrip: m.Component<PeopleStripAttrs> = {
             type: "button",
             "data-tray-person": entry.key,
             "data-tray-self": isOwn ? "true" : null,
-            "data-tray-arrived": isArrived ? "true" : null,
+            "data-tray-hopping": isHopping ? "true" : null,
             class:
               "tray-person relative flex shrink-0 items-center justify-center rounded-full border-0 p-0 " +
               "outline-none focus-visible:ring-2 focus-visible:ring-accent " +
               // The bar's surface under a faded picture, so it never shows the one tucked under it.
               (isFaded ? "bg-(--desk-taskbar-surface) " : "bg-transparent ") +
               (isClickable ? "cursor-pointer " : "cursor-default ") +
-              (isArrived ? "tray-hop " : "") +
+              (isHopping ? "tray-hop " : "") +
               (stacked ? "ring-2 ring-(--desk-taskbar-surface) " : "") +
               (stacked && index > 0
                 ? "-ml-(--desk-tray-stack-overlap) transition-[margin] group-hover/people:ml-0 "

@@ -5,6 +5,7 @@
  */
 
 import m from "mithril";
+import { WORKSPACE_AGENT_KEY } from "../model/Bubbles";
 import type { RosterParticipant } from "../model/records";
 import type { AvatarState } from "../reducers/desktopState";
 import { AgentEntry } from "./tray/AgentEntry";
@@ -15,12 +16,12 @@ export interface SystemTrayAttrs {
   readonly roster: readonly RosterParticipant[];
   readonly viewer: string | null;
   readonly now: Date;
-  readonly arrived: ReadonlySet<string>;
+  /** The keys of the entries hopping now: they just arrived, or a bubble of theirs just appeared. */
+  readonly hopping: ReadonlySet<string>;
   readonly isShareOffered: boolean;
   readonly avatar: AvatarState;
   readonly workspaceName: string;
   readonly isAgentAttending: boolean;
-  readonly isAgentHopping: boolean;
   readonly onPersonClick: (entry: RosterParticipant) => void;
   readonly onAgentClick: () => void;
   readonly onPersonHoverStart: (entry: RosterParticipant, element: HTMLElement) => void;
@@ -37,7 +38,7 @@ export const SystemTray: m.Component<SystemTrayAttrs> = {
         roster: attrs.roster,
         viewer: attrs.viewer,
         now: attrs.now,
-        arrived: attrs.arrived,
+        hopping: attrs.hopping,
         onPersonClick: attrs.onPersonClick,
         onHoverStart: attrs.onPersonHoverStart,
         onHoverEnd: attrs.onHoverEnd,
@@ -46,7 +47,7 @@ export const SystemTray: m.Component<SystemTrayAttrs> = {
         avatar: attrs.avatar,
         workspaceName: attrs.workspaceName,
         isAttending: attrs.isAgentAttending,
-        isHopping: attrs.isAgentHopping,
+        isHopping: attrs.hopping.has(WORKSPACE_AGENT_KEY),
         onClick: attrs.onAgentClick,
         onHoverStart: attrs.onAgentHoverStart,
         onHoverEnd: attrs.onHoverEnd,
