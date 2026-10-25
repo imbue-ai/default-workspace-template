@@ -2854,16 +2854,14 @@ describe("the tray's hops", () => {
 
     socket.deliver().onRosterUpdated([{ ...bob, is_connected: true }, carol]);
     expect(store.getHopping()).toEqual(new Set([bob.key]));
-    socket
-      .deliver()
-      .onBubble({
-        speaker: carol.key,
-        chat_id: "agent-2",
-        chat_title: "Lounge",
-        text: "hi",
-        message_id: "m-1",
-        mentions: [],
-      });
+    socket.deliver().onBubble({
+      speaker: carol.key,
+      chat_id: "agent-2",
+      chat_title: "Lounge",
+      text: "hi",
+      message_id: "m-1",
+      mentions: [],
+    });
     expect(store.getHopping()).toEqual(new Set([bob.key, carol.key]));
 
     vi.advanceTimersByTime(TRAY_HOP_MS + 1);
