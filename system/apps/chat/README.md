@@ -966,7 +966,11 @@ visiting agent sends (the send route, an intake's send, a room's first message) 
 to the shell as a speech bubble (`POST /api/bubbles`, with the people it mentions when the
 chat is a room), as is every turn the workspace agent closes with text (an assistant turn
 of the chat's live agent's own session, or its post into a room), cut to the bubble's
-length; and every chat-list push is posted as what each chat is doing
+length. The agent's turns reach the feed through the session watcher a page's stream
+builds (`ChatAppState.bubble_agent_turns`, in its `on_events`), which memory shedding
+evicts, so the agent's bubbles rise for the turns of the chats a page is reading: a turn in
+a chat nobody has open raises none (the spec's section 11). And every chat-list push is
+posted as what each chat is doing
 (`POST /api/chats-activity`). Both go through `ShellLayoutInterface`, best-effort, on a
 thread of their own, the activity reports coalesced; a secondary chat posts neither.
 
