@@ -372,6 +372,7 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
                 "presets": {},
                 "text_param": None,
                 "draft_param": None,
+                "mention_param": None,
             }
         ],
         "files": [
@@ -384,6 +385,7 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
                 "presets": {},
                 "text_param": None,
                 "draft_param": None,
+                "mention_param": None,
             }
         ],
     }

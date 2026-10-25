@@ -1245,7 +1245,8 @@ def running_workspace(
 
     registry_path = tmp_path / "registry" / "apps.toml"
     # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
-    # the four POST launch paths onto the intake route (post-launch-paths plan section 7.1).
+    # the five POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
+    # section 7.5, for the mention into the Lounge).
     write_registry(
         registry_path,
         registry_row_toml(
@@ -1260,21 +1261,25 @@ def running_workspace(
                 ("new", "New Chat", "/api/chats/intake"),
                 ("send", "Send to chat...", "/api/chats/intake"),
                 ("draft", "Draft into chat", "/api/chats/intake"),
+                ("lounge", "Mention in the Lounge", "/api/chats/intake"),
             ),
             launch_params={
                 "main": ("message",),
                 "new": ("account_id", "message"),
                 "send": ("message",),
                 "draft": ("message",),
+                "lounge": ("message",),
             },
             launch_text_params={"main": "message", "new": "message", "send": "message"},
             launch_draft_params={"draft": "message"},
-            launch_methods={"main": "POST", "new": "POST", "send": "POST", "draft": "POST"},
+            launch_mention_params={"lounge": "message"},
+            launch_methods={"main": "POST", "new": "POST", "send": "POST", "draft": "POST", "lounge": "POST"},
             launch_presets={
                 "main": {"target": "main_chat"},
                 "new": {"target": "new_chat"},
                 "send": {"target": "chat_selector"},
                 "draft": {"target": "current_chat", "is_draft": "true"},
+                "lounge": {"target": "lounge", "is_draft": "true"},
             },
         ),
         *extra_rows,

@@ -39,6 +39,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
             "presets": {},
             "text_param": None,
             "draft_param": None,
+            "mention_param": None,
         }
     ]
     assert serialized[0]["default_shortcut"] == {"launch": "new", "mode": "new"}
@@ -53,6 +54,7 @@ def test_the_registry_read_lists_every_app_with_its_launch_paths(
             "presets": {},
             "text_param": None,
             "draft_param": None,
+            "mention_param": None,
         }
     ]
     assert set(serialized[1]) == {
