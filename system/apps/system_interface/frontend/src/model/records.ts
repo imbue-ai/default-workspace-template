@@ -722,7 +722,6 @@ export function parseWallpaperListing(raw: unknown): WallpaperListing {
   };
 }
 
-/** The ``users`` of a ``presence_updated`` message or of ``GET /api/presence``. */
 const PARTICIPANT_KINDS: readonly ParticipantKind[] = ["person", "invited", "visiting_agent", "workspace_agent"];
 const CHAT_ACTIVITY_STATUSES: readonly ChatActivityStatus[] = [
   "working",
@@ -793,6 +792,7 @@ export function parseBubble(raw: unknown): BubbleWire {
   };
 }
 
+/** The ``users`` of a ``presence_updated`` message or of ``GET /api/presence``. */
 export function parsePresentUsers(raw: unknown): PresentUser[] {
   return asArray(raw, "users").map(parsePresentUser);
 }

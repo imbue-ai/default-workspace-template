@@ -207,6 +207,9 @@ export const EMBEDDER_SENDER = "embedder";
 export const OTHER_WORKSPACE_LINK_NOTICE = "That link belongs to another workspace, so it cannot open here.";
 
 /** What a page shown or a window opened on this client's desktop gets while the client has only pop-outs open. */
+export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
+  "It opened on your desktop. Reopen the main Imbue Studio window to see it.";
+
 /** Why a click on a person's tray entry went nowhere: no app takes a mention of them. */
 export const NO_MENTION_APP_REASON = "No app in this workspace can open a chat with them";
 /** Why a chat could not be shown: no app takes the message that shows one. */
@@ -215,9 +218,6 @@ export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
 export const FOCUS_CHAT_MESSAGE_TYPE = "minds:focus-chat";
 /** The sender a message of the shell's own is relayed as (for the relay's logs). */
 export const SHELL_SENDER = "system_interface";
-
-export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
-  "It opened on your desktop. Reopen the main Imbue Studio window to see it.";
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
 export interface PageDriver {
