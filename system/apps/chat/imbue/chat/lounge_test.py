@@ -23,6 +23,7 @@ from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.model_update import to_update
 
 _LOUNGE_ID = "agent-00000000000000000000000000000042"
+_AGENT_LOUNGE_ID = "agent-00000000000000000000000000000043"
 
 
 def _owner_only() -> RosterDocument:
@@ -43,14 +44,20 @@ def _with(kind: ParticipantKind, key: str) -> RosterDocument:
     )
 
 
-def test_the_lounge_is_the_room_so_titled_and_not_an_agent_chat_of_that_name() -> None:
+def test_the_lounge_is_the_chat_so_titled_of_either_kind() -> None:
+    """The Lounge is found by title alone (the multiplayer spec, section 7.5): a Lounge converted into an agent chat,
+    or a chat the user named so, is the Lounge, and a room under any other title is not."""
     agent_chat = make_chat_snapshot("agent-1", name="Lounge")
     room = make_chat_snapshot(_LOUNGE_ID, name="Lounge").model_copy_update(
         to_update(agent_chat.field_ref().kind, ChatKind.ROOM)
     )
+    other_room = make_chat_snapshot("agent-3", name="Team").model_copy_update(
+        to_update(agent_chat.field_ref().kind, ChatKind.ROOM)
+    )
 
-    assert find_lounge([agent_chat]) is None
-    assert find_lounge([agent_chat, room]) == ChatId(_LOUNGE_ID)
+    assert find_lounge([other_room, agent_chat]) == ChatId("agent-1")
+    assert find_lounge([other_room, room]) == ChatId(_LOUNGE_ID)
+    assert find_lounge([other_room, make_chat_snapshot("agent-4", name="Lounge-2")]) is None
 
 
 def test_anyone_invited_counts_but_the_owner_and_the_workspace_agent_do_not() -> None:
@@ -60,7 +67,7 @@ def test_anyone_invited_counts_but_the_owner_and_the_workspace_agent_do_not() ->
     assert has_anyone_besides_the_owner(_with(ParticipantKind.VISITING_AGENT, "agent:agent-7"))
 
 
-def test_the_keeper_answers_the_room_there_is_and_makes_one_only_once(tmp_path: Path) -> None:
+def test_the_keeper_answers_the_chat_there_is_and_makes_a_room_only_once(tmp_path: Path) -> None:
     mngr_binary, _log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
     manager.note_agent_list_known()
@@ -77,8 +84,18 @@ def test_the_keeper_answers_the_room_there_is_and_makes_one_only_once(tmp_path: 
     seeded.note_agent_list_known()
     seed_agent_state(seeded, _LOUNGE_ID, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
     assert LoungeKeeper(agent_manager=seeded).ensure() == ChatId(_LOUNGE_ID)
+
+    # An agent chat titled Lounge (a converted Lounge, or a chat so named) is the Lounge too: nothing is created.
+    converted = AgentManager.build(
+        WebSocketBroadcaster(), mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats3"
+    )
+    converted.note_agent_list_known()
+    seed_agent_state(converted, _AGENT_LOUNGE_ID, name="Lounge", labels={"display_name": "Lounge"})
+    assert LoungeKeeper(agent_manager=converted).ensure() == ChatId(_AGENT_LOUNGE_ID)
+    assert not converted.get_provisional_chats()
     manager.stop()
     seeded.stop()
+    converted.stop()
 
 
 def test_a_renamed_lounge_is_no_longer_the_lounge_and_the_next_need_makes_a_new_one(

@@ -1,9 +1,12 @@
-"""The Lounge (the multiplayer spec, section 7.5): the room a click on a person in the desktop's tray opens, with a
-mention of them drafted into its composer.
+"""The Lounge (the multiplayer spec, section 7.5): the chat a click on a person in the desktop's tray opens, with a
+mention of them drafted into its composer. It is the chat titled "Lounge" of either kind, found by title alone: the
+room this keeper makes, or what that room became (an agent chat, through the switch of section 7.6), or a chat the
+user named so.
 
-It is made the first time the roster holds anyone besides the owner (a person, an invited email, or a visiting
-agent), from the roster the shell answers, and again whenever something needs it after it was deleted (a click on a
-person); idempotent by title, so two needs at once make one. A workspace nobody is invited into has none.
+A room so titled is made the first time the roster holds anyone besides the owner (a person, an invited email, or a
+visiting agent), from the roster the shell answers, and again whenever something needs the Lounge after it was deleted
+or renamed (a click on a person), only when no chat of any kind carries the title; two needs at once make one. A
+workspace nobody is invited into has none.
 """
 
 import threading
@@ -33,9 +36,9 @@ ROSTER_POLL_INTERVAL_SECONDS: Final[float] = 60.0
 
 @pure
 def find_lounge(snapshots: Sequence[ChatSnapshot]) -> ChatId | None:
-    """The room titled "Lounge", when there is one."""
+    """The chat titled "Lounge", of either kind, when there is one."""
     for snapshot in snapshots:
-        if snapshot.kind is ChatKind.ROOM and snapshot.title == LOUNGE_TITLE:
+        if snapshot.title == LOUNGE_TITLE:
             return snapshot.chat_id
     return None
 
@@ -51,7 +54,7 @@ def has_anyone_besides_the_owner(document: RosterDocument) -> bool:
 
 
 class LoungeKeeper(MutableModel):
-    """Makes the Lounge when it is needed, once."""
+    """Makes the Lounge, a room, when it is needed and no chat of any kind carries its title."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
@@ -68,7 +71,8 @@ class LoungeKeeper(MutableModel):
     _created: ChatId | None = PrivateAttr(default=None)
 
     def ensure(self) -> ChatId:
-        """The Lounge's chat id, creating the room when there is none; raises what a room's create raises."""
+        """The Lounge's chat id: the chat so titled of either kind, else a room created under the title; raises what a
+        room's create raises."""
         with self._lock:
             found = find_lounge(self.agent_manager.get_chat_snapshots())
             if found is not None:

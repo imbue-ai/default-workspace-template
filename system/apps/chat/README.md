@@ -949,15 +949,17 @@ that chat (the main chat for `@agent`) the room's message as `[from: <name> in #
 the room. In an agent chat a handle is a word the agent reads like any other, and the
 composer offers no popover.
 
-The Lounge (`lounge.py`, section 7.5) is the room titled "Lounge" a click on a person in
-the desktop's tray opens: made the first time the roster the shell answers holds anyone
-besides the owner (a person, an invited email, or a visiting agent; the roster is read on
-every page and send, and once a minute), idempotent by title, and again when a click needs
-it after it was deleted. The `lounge` intake target resolves to it, making it when there
-is none; the manifest's `lounge` launch path (`presets = {target = "lounge", is_draft =
-"true"}`, `mention_param = "message"`) is what the shell runs with `@<handle> ` when a
-person's entry is clicked, so the mention lands in the Lounge's composer, unsent. A
-secondary chat makes no Lounge (403).
+The Lounge (`lounge.py`, section 7.5) is the chat titled "Lounge", of either kind, that a
+click on a person in the desktop's tray opens: found by title alone, so a Lounge converted
+into an agent chat through the switch, or a chat the user named so, is the Lounge. A room
+under that title is made the first time the roster the shell answers holds anyone besides
+the owner (a person, an invited email, or a visiting agent; the roster is read on every
+page and send, and once a minute), and again when a click needs the Lounge after it was
+deleted or renamed, only while no chat of any kind carries the title. The `lounge` intake
+target resolves to it, making the room when there is no such chat; the manifest's `lounge`
+launch path (`presets = {target = "lounge", is_draft = "true"}`, `mention_param =
+"message"`) is what the shell runs with `@<handle> ` when a person's entry is clicked, so
+the mention lands in the Lounge's composer, unsent. A secondary chat makes no Lounge (403).
 
 The tray's feed (`tray_feed.py`, sections 6.4 and 6.5): every message a person or a
 visiting agent sends (the send route, an intake's send, a room's first message) is posted
