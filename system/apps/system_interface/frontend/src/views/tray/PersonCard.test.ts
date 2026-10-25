@@ -104,11 +104,12 @@ describe("PersonCard", () => {
     expect(onNewDesktop).toHaveBeenCalledTimes(1);
   });
 
-  it("reads You for the owner of an unshared workspace, and Visiting agent with no desktops for a visiting agent", () => {
+  it("reads You with a silhouette for the owner of an unshared workspace, and Visiting agent with no desktops for a visiting agent", () => {
     const anonymous = rosterParticipantRecord("owner", { display_name: "Owner", is_owner: true, is_connected: true });
-    expect(
-      render({ entry: anonymous, isOwn: true, clients: [] }).querySelector("[data-tray-card-name]")?.textContent,
-    ).toBe("You");
+    const anonymousCard = render({ entry: anonymous, isOwn: true, clients: [] });
+    expect(anonymousCard.querySelector("[data-tray-card-name]")?.textContent).toBe("You");
+    expect(anonymousCard.querySelector("[data-tray-avatar='owner']")).not.toBeNull();
+    expect(anonymousCard.querySelector("[data-tray-avatar='owner']")?.textContent).toBe("");
     unmountViews();
     const seer = rosterParticipantRecord("agent:agent-7", {
       kind: "visiting_agent",

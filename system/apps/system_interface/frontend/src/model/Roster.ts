@@ -6,6 +6,9 @@
 
 import type { RosterParticipant } from "./records";
 
+/** The owner's key on a workspace that has not shared (the multiplayer spec, section 4.1): no account, so a neutral
+ *  "You". */
+export const OWNER_KEY = "owner";
 /** How long after a page's last input a connected person still counts as active (the multiplayer spec, 4.3). */
 export const ACTIVE_INPUT_WINDOW_MS = 60_000;
 

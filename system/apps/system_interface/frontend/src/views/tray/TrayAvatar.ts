@@ -1,13 +1,14 @@
 /**
  * One picture in the tray (the multiplayer spec, section 6.2): a person's profile picture, a monogram on their
- * colour when there is none, an invited email's dashed circle with an envelope, or a visiting agent's monogram
- * tile. Drawn at the size the caller gives, faded while the entry is not here.
+ * colour when there is none, an invited email's dashed circle with an envelope, a visiting agent's monogram
+ * tile, or the neutral silhouette of the owner of a workspace that has not shared (section 6.3). Drawn at the size
+ * the caller gives, faded while the entry is not here.
  */
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { RosterParticipant } from "../../model/records";
-import { monogramOf } from "../../model/Roster";
+import { OWNER_KEY, monogramOf } from "../../model/Roster";
 
 /** The opacity of an entry that is not here: faint, over the bar's surface so a faded face never shows the one
  *  behind it. */
@@ -20,6 +21,7 @@ export interface TrayAvatarAttrs {
 }
 
 const ENVELOPE_GLYPH_SIZE = 14;
+const SILHOUETTE_GLYPH_SIZE = 18;
 const BASE_CLASS = "tray-avatar flex shrink-0 items-center justify-center overflow-hidden select-none ";
 
 export const TrayAvatar: m.Component<TrayAvatarAttrs> = {
@@ -47,6 +49,17 @@ export const TrayAvatar: m.Component<TrayAvatarAttrs> = {
           "data-tray-avatar": "visiting-agent",
         },
         monogramOf(entry),
+      );
+    }
+    if (entry.key === OWNER_KEY) {
+      return m(
+        "span",
+        {
+          class: `${BASE_CLASS}rounded-full bg-surface-secondary text-secondary`,
+          style,
+          "data-tray-avatar": "owner",
+        },
+        m.trust(icon("user", { size: SILHOUETTE_GLYPH_SIZE })),
       );
     }
     const hasPicture = entry.profile_picture_url !== null;

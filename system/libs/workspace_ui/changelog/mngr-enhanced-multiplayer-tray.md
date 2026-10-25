@@ -1,1 +1,1 @@
-The icon set gains `mail`, an envelope, which the desktop's tray draws for an invited email (the mngr repo's `specs/multiplayer-refinements/spec.md`, section 6.2).
+The icon set gains `mail`, an envelope, which the desktop's tray draws for an invited email, and `user`, a person's silhouette, which it draws for the owner of a workspace that has not shared (the mngr repo's `specs/multiplayer-refinements/spec.md`, sections 6.2 and 6.3).

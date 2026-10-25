@@ -10,7 +10,7 @@
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { AppRecord, ClientRecord, Desktop, RosterParticipant, WindowRecord } from "../../model/records";
-import { presenceStateOf, statusLineOf } from "../../model/Roster";
+import { OWNER_KEY, presenceStateOf, statusLineOf } from "../../model/Roster";
 import { appGlyph } from "../glyphs";
 import { TrayAvatar } from "./TrayAvatar";
 import { TrayCardFrame } from "./TrayCard";
@@ -19,7 +19,6 @@ import type { TrayCardFrameAttrs } from "./TrayCard";
 const CARD_PICTURE_SIZE_PX = 32;
 const LOOKING_AT_ICON_SIZE = 16;
 const MONITOR_GLYPH_SIZE = 14;
-const OWNER_KEY = "owner";
 
 /** What a person is looking at: the window at the top of the stack on the active desktop of their newest connected
  *  client; null when they have no window open or no client of theirs is known. */

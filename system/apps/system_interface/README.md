@@ -380,7 +380,8 @@ what it can do, which it asks to open the share panel on the whole workspace
 through `minds:open-share-settings` with no service named), one 32px picture per
 roster entry in roster order (a profile picture, else a monogram on the person's
 colour; a dashed envelope for an invited email; a monogram tile for a visiting
-agent; faded while the entry is not here; stacked from four entries on, each
+agent; a neutral silhouette for the owner of a workspace that has not shared;
+faded while the entry is not here; stacked from four entries on, each
 tucked under the one before it, spread while the pointer is over them; hopping
 once when it arrives and when a bubble of its appears), the viewer's own
 picture, and the agent's avatar at 36px in its mood, attending while the pinned
