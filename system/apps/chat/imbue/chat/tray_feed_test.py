@@ -85,6 +85,25 @@ def test_a_post_after_shutdown_is_dropped_and_settles_without_raising() -> None:
     feed.shutdown()
 
 
+class _BrokenShell(FakeShell):
+    """A shell whose bubble post raises something the shell client never answers itself."""
+
+    def post_bubble(self, bubble: BubblePost) -> None:
+        raise RuntimeError("the body could not be built")
+
+
+def test_a_post_that_fails_for_a_reason_the_client_does_not_handle_is_logged(loguru_records: list[str]) -> None:
+    feed = TrayFeed(shell=_BrokenShell())
+
+    future = feed.post_bubble(_BOB, _CHAT, "Lounge", "hi", "m-1", ())
+    assert isinstance(future.exception(timeout=10), RuntimeError)
+    feed.shutdown()
+
+    assert [record for record in loguru_records if record.startswith("WARNING")] == [
+        "WARNING Posting a bubble to the shell's tray failed"
+    ]
+
+
 class _HeldShell(FakeShell):
     """A shell whose first chats-activity post waits, once begun, until the test lets it through."""
 

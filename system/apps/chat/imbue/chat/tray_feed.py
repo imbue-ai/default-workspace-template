@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Final
 from typing import assert_never
 
+from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from workspace_layout.feed import BubblePost
@@ -56,6 +57,16 @@ def _settled_future() -> Future[None]:
     settled: Future[None] = Future()
     settled.set_result(None)
     return settled
+
+
+def _log_failed_post(described: str, future: Future[None]) -> None:
+    """Log what ended a post the shell client did not handle itself (it answers an unreachable or refusing shell
+    with a log of its own); nothing else reads the future."""
+    if future.cancelled():
+        return
+    error = future.exception()
+    if error is not None:
+        logger.opt(exception=error).warning("Posting {} to the shell's tray failed", described)
 
 
 @pure
@@ -138,7 +149,7 @@ class TrayFeed(MutableModel):
             message_id=message_id,
             mentions=tuple(mentions),
         )
-        return self._submit(self.shell.post_bubble, bubble)
+        return self._submit("a bubble", self.shell.post_bubble, bubble)
 
     def report_chats(self, snapshots: Sequence[ChatSnapshot]) -> Future[None]:
         """Queue what every chat is doing; a report queued behind one not yet posted replaces it."""
@@ -148,7 +159,7 @@ class TrayFeed(MutableModel):
             self._pending_report = report
         if is_post_queued:
             return _settled_future()
-        return self._submit(self._post_pending_report)
+        return self._submit("the chats' activity", self._post_pending_report)
 
     def shutdown(self) -> None:
         """Drop the posts not yet started, and every later one, and let the one in flight finish on its own.
@@ -157,13 +168,16 @@ class TrayFeed(MutableModel):
             self._is_shut_down = True
         self._executor.shutdown(wait=False, cancel_futures=True)
 
-    def _submit(self, post: Callable[..., None], *args: object) -> Future[None]:
-        """Queue one post. A feed that is shut down drops it and answers a settled future: the manager's threads
-        still push the chat list while they wind down, and a post is best-effort, never an error."""
+    def _submit(self, described: str, post: Callable[..., None], *args: object) -> Future[None]:
+        """Queue one post, logged as ``described`` should it fail. A feed that is shut down drops it and answers a
+        settled future: the manager's threads still push the chat list while they wind down, and a post is
+        best-effort, never an error."""
         with self._lock:
             if self._is_shut_down:
                 return _settled_future()
-            return self._executor.submit(post, *args)
+            future = self._executor.submit(post, *args)
+        future.add_done_callback(lambda done: _log_failed_post(described, done))
+        return future
 
     def _post_pending_report(self) -> None:
         with self._lock:
