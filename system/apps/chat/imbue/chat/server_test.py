@@ -5624,12 +5624,13 @@ def test_every_chat_list_push_tells_the_shell_what_each_chat_is_doing(tmp_path: 
     app = _peopled_app(tmp_path, RecordingMngrMessenger())
     shell = _fake_shell_of(app)
 
-    assert app.test_client().post(f"/api/chats/{_LOUNGE_ID}/rename", json={"title": "Lounge 2"}).status_code == 200
+    # A chat-list push with no mngr behind it: the room starting to wait on the main chat.
+    state_of(app).agent_manager.note_chat_awaiting(ChatId(_LOUNGE_ID), ChatId(_MAIN_ID))
 
     wait_until_true(lambda: bool(shell.chats_activity), 10.0, "the chats' activity to reach the shell")
     latest = shell.chats_activity[-1]
     assert sorted((chat.chat_id, chat.title, chat.kind.value) for chat in latest.chats) == sorted(
-        [(_MAIN_ID, "Main", "agent"), (_LOUNGE_ID, "Lounge 2", "room")]
+        [(_MAIN_ID, "Main", "agent"), (_LOUNGE_ID, "Lounge", "room")]
     )
 
 
