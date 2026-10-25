@@ -35,7 +35,7 @@ export const TrayAvatar: m.Component<TrayAvatarAttrs> = {
           style,
           "data-tray-avatar": "invited",
         },
-        m.trust(icon("inbox", { size: ENVELOPE_GLYPH_SIZE })),
+        m.trust(icon("mail", { size: ENVELOPE_GLYPH_SIZE })),
       );
     }
     if (entry.kind === "visiting_agent") {
