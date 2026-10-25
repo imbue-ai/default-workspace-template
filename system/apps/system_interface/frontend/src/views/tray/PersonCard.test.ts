@@ -72,10 +72,9 @@ describe("lookingAtOf and desktopsOf", () => {
     expect(lookingAtOf(bob, [unsharedOwner], [home, work], [files])).toBeNull();
   });
 
-  it("lists the desktops owned by the key, and the ones owned by nobody for the owner, until the desktops phase", () => {
-    const bobs = { ...desktopRecord("bobs", { name: "Bob's" }), owner: bob.key };
-    expect(desktopsOf(bob, [home, bobs]).map((desktop) => desktop.id)).toEqual(["bobs"]);
-    expect(desktopsOf(josh, [home, bobs]).map((desktop) => desktop.id)).toEqual(["home"]);
+  it("lists every desktop for the owner and none for anyone else, until the desktops phase", () => {
+    expect(desktopsOf(josh, [home, work]).map((desktop) => desktop.id)).toEqual(["home", "work"]);
+    expect(desktopsOf(bob, [home, work])).toEqual([]);
   });
 });
 

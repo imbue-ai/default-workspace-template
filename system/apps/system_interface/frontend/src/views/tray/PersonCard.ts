@@ -48,13 +48,10 @@ export function lookingAtOf(
   return { window, app: apps.find((app) => app.name === window.app), desktop };
 }
 
-/** The desktops that are a person's: those whose ``owner`` is their key, and for the owner those owned by nobody
- *  (section 8.1; the field arrives with the desktops phase, and until then every desktop is the owner's). */
+/** The desktops that are a person's. Until the desktops phase gives a desktop an owner (the multiplayer spec,
+ *  section 8.1), every desktop is the owner's and nobody else has any. */
 export function desktopsOf(entry: RosterParticipant, desktops: readonly Desktop[]): Desktop[] {
-  return desktops.filter((desktop) => {
-    const owner = (desktop as Desktop & { readonly owner?: string | null }).owner ?? null;
-    return owner === entry.key || (entry.is_owner && owner === null);
-  });
+  return entry.is_owner ? [...desktops] : [];
 }
 
 export interface PersonCardAttrs extends Omit<TrayCardFrameAttrs, "label"> {
