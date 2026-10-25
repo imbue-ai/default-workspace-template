@@ -65,11 +65,11 @@ import type {
   PinStyle,
   Placement,
   PresentUser,
+  RosterParticipant,
   ShortcutMode,
   Wallpaper,
   WindowRecord,
   WindowState,
-  RosterParticipant,
 } from "../model/records";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";

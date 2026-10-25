@@ -26,9 +26,9 @@ import {
   DesktopStore,
   NO_CHAT_APP_REASON,
   NO_MENTION_APP_REASON,
-  TRAY_HOP_MS,
   OTHER_WORKSPACE_LINK_NOTICE,
   SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
+  TRAY_HOP_MS,
   chooseInitialDesktopId,
 } from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
