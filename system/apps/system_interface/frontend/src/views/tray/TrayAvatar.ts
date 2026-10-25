@@ -72,7 +72,7 @@ export const TrayAvatar: m.Component<TrayAvatarAttrs> = {
       {
         class: `${BASE_CLASS}rounded-full bg-surface text-(length:--font-size-helper) font-semibold text-secondary`,
         style,
-        "data-tray-avatar": entry.kind === "workspace_agent" ? "workspace-agent" : "person",
+        "data-tray-avatar": "person",
       },
       hasPicture
         ? m("img", {
