@@ -66,6 +66,18 @@ def test_a_bubble_is_posted_to_the_shell_off_the_callers_thread() -> None:
     feed.shutdown()
 
 
+def test_a_post_after_shutdown_is_dropped_and_settles_without_raising() -> None:
+    shell = FakeShell()
+    feed = TrayFeed(shell=shell)
+    feed.shutdown()
+
+    feed.post_bubble(_BOB, _CHAT, "Lounge", "late", "m-9").result(timeout=10)
+    feed.report_chats([make_chat_snapshot("agent-1", name="Late")]).result(timeout=10)
+
+    assert shell.bubbles == [] and shell.chats_activity == []
+    feed.shutdown()
+
+
 class _HeldShell(FakeShell):
     """A shell whose first chats-activity post waits, once begun, until the test lets it through."""
 

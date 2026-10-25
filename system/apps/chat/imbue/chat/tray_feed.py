@@ -8,6 +8,7 @@ a report queued behind one not yet posted replaces it.
 """
 
 import threading
+from collections.abc import Callable
 from collections.abc import Sequence
 from concurrent.futures import Future
 from concurrent.futures import ThreadPoolExecutor
@@ -47,6 +48,13 @@ def first_paragraph(text: str) -> str:
     return ""
 
 
+def _settled_future() -> Future[None]:
+    """A future that has already settled: what a post nothing waits on answers."""
+    settled: Future[None] = Future()
+    settled.set_result(None)
+    return settled
+
+
 @pure
 def chats_activity_report(snapshots: Sequence[ChatSnapshot]) -> ChatsActivityReport:
     """Every chat as the tray's agent card lists it: its title, what it is doing, and what it is."""
@@ -75,6 +83,7 @@ class TrayFeed(MutableModel):
     )
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _pending_report: ChatsActivityReport | None = PrivateAttr(default=None)
+    _is_shut_down: bool = PrivateAttr(default=False)
 
     def post_bubble(
         self,
@@ -94,7 +103,7 @@ class TrayFeed(MutableModel):
             message_id=message_id,
             mentions=tuple(mentions),
         )
-        return self._executor.submit(self.shell.post_bubble, bubble)
+        return self._submit(self.shell.post_bubble, bubble)
 
     def report_chats(self, snapshots: Sequence[ChatSnapshot]) -> Future[None]:
         """Queue what every chat is doing; a report queued behind one not yet posted replaces it."""
@@ -103,14 +112,23 @@ class TrayFeed(MutableModel):
             is_post_queued = self._pending_report is not None
             self._pending_report = report
         if is_post_queued:
-            settled: Future[None] = Future()
-            settled.set_result(None)
-            return settled
-        return self._executor.submit(self._post_pending_report)
+            return _settled_future()
+        return self._submit(self._post_pending_report)
 
     def shutdown(self) -> None:
-        """Drop the posts not yet started and let the one in flight finish on its own. Idempotent."""
+        """Drop the posts not yet started, and every later one, and let the one in flight finish on its own.
+        Idempotent."""
+        with self._lock:
+            self._is_shut_down = True
         self._executor.shutdown(wait=False, cancel_futures=True)
+
+    def _submit(self, post: Callable[..., None], *args: object) -> Future[None]:
+        """Queue one post. A feed that is shut down drops it and answers a settled future: the manager's threads
+        still push the chat list while they wind down, and a post is best-effort, never an error."""
+        with self._lock:
+            if self._is_shut_down:
+                return _settled_future()
+            return self._executor.submit(post, *args)
 
     def _post_pending_report(self) -> None:
         with self._lock:
