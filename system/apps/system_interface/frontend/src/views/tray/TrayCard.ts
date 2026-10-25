@@ -12,6 +12,8 @@ export const CARD_HOVER_DELAY_MS = 180;
 export const CARD_LEAVE_GRACE_MS = 120;
 
 export const CARD_WIDTH_PX = 216;
+/** The gap between a card and the top of the entry it hangs over. */
+const CARD_GAP_PX = 6;
 
 /** Which card is open: a person's (by roster key) or the agent's. */
 export type OpenCard = { readonly kind: "person"; readonly key: string } | { readonly kind: "agent" };
@@ -116,7 +118,7 @@ export const TrayCardFrame: m.Component<TrayCardFrameAttrs> = {
   view(vnode) {
     const { anchor } = vnode.attrs;
     const right = anchor === null ? 0 : Math.max(0, window.innerWidth - anchor.right);
-    const bottom = anchor === null ? 0 : Math.max(0, window.innerHeight - anchor.top + 6);
+    const bottom = anchor === null ? 0 : Math.max(0, window.innerHeight - anchor.top + CARD_GAP_PX);
     return m(
       "div",
       {

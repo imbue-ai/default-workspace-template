@@ -11,7 +11,19 @@ import { foldedLabel } from "../../model/Bubbles";
 import type { RosterParticipant } from "../../model/records";
 
 const DISMISS_GLYPH_SIZE = 12;
-export const BUBBLE_WIDTH_PX = 240;
+/** How far a bubble keeps from the viewport's right edge, and where it hangs when its speaker has no entry. */
+const BUBBLE_EDGE_INSET_PX = 16;
+/** The least a bubble keeps from the viewport's right edge when its entry is near it. */
+const BUBBLE_MIN_EDGE_INSET_PX = 8;
+/** How far the bubble's right edge sits past the entry's, so the arrow (inset from the bubble's right) points at
+ *  the entry. */
+const BUBBLE_ARROW_OVERHANG_PX = 4;
+/** The gap between a bubble and the top of the entry it hangs over. */
+const BUBBLE_GAP_PX = 10;
+/** How much higher each further bubble of the stack hangs. */
+const BUBBLE_STACK_STEP_PX = 8;
+/** Where a bubble hangs when its speaker has no entry: clear of the taskbar. */
+const BUBBLE_FALLBACK_BOTTOM_PX = 56;
 
 export interface BubbleLayerAttrs {
   readonly bubbles: BubbleStack;
@@ -36,8 +48,14 @@ export const BubbleLayer: m.Component<BubbleLayerAttrs> = {
       { "data-bubble-layer": "", class: "bubble-layer pointer-events-none fixed inset-0 z-(--z-sticky)" },
       attrs.bubbles.map((bubble, index) => {
         const anchor = attrs.anchorOf(bubble.speaker);
-        const right = anchor === null ? 16 : Math.max(8, window.innerWidth - anchor.right - 4);
-        const bottom = (anchor === null ? 56 : Math.max(0, window.innerHeight - anchor.top)) + 10 + index * 8;
+        const right =
+          anchor === null
+            ? BUBBLE_EDGE_INSET_PX
+            : Math.max(BUBBLE_MIN_EDGE_INSET_PX, window.innerWidth - anchor.right - BUBBLE_ARROW_OVERHANG_PX);
+        const bottom =
+          (anchor === null ? BUBBLE_FALLBACK_BOTTOM_PX : Math.max(0, window.innerHeight - anchor.top)) +
+          BUBBLE_GAP_PX +
+          index * BUBBLE_STACK_STEP_PX;
         const entry = attrs.rosterEntry(bubble.speaker);
         return m(
           "div",
