@@ -1,5 +1,6 @@
 import threading
 
+from pydantic import Field
 from workspace_layout.feed import BubblePost
 from workspace_layout.feed import ChatsActivityReport
 from workspace_layout.primitives import ChatActivityKind
@@ -66,27 +67,31 @@ def test_a_bubble_is_posted_to_the_shell_off_the_callers_thread() -> None:
 
 
 class _HeldShell(FakeShell):
-    """A shell whose first chats-activity post waits until the test lets it through."""
+    """A shell whose first chats-activity post waits, once begun, until the test lets it through."""
+
+    entered: threading.Event = Field(default_factory=threading.Event, description="Set once the first post began")
+    release: threading.Event = Field(default_factory=threading.Event, description="Set to let the first post through")
 
     def report_chats_activity(self, report: ChatsActivityReport) -> None:
         if not self.chats_activity:
-            _RELEASE.wait(timeout=10)
+            self.entered.set()
+            self.release.wait(timeout=10)
         super().report_chats_activity(report)
-
-
-_RELEASE = threading.Event()
 
 
 def test_reports_queued_behind_one_not_yet_posted_collapse_into_the_last() -> None:
     shell = _HeldShell()
     feed = TrayFeed(shell=shell)
     first = feed.report_chats([make_chat_snapshot("agent-1", name="First")])
+    assert shell.entered.wait(timeout=10)
+    # While the first post is in flight: the second queues a post, and the third replaces what it will post.
     second = feed.report_chats([make_chat_snapshot("agent-2", name="Second")])
     third = feed.report_chats([make_chat_snapshot("agent-3", name="Third")])
-    assert second.done() and third.done()
+    assert third.done() and not second.done()
 
-    _RELEASE.set()
+    shell.release.set()
     first.result(timeout=10)
+    second.result(timeout=10)
     feed.report_chats([make_chat_snapshot("agent-4", name="Fourth")]).result(timeout=10)
 
     assert [[chat.title for chat in report.chats] for report in shell.chats_activity] == [
