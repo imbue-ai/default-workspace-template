@@ -334,6 +334,13 @@ def to_options(entries: tuple[tuple[str, tuple[str, ...]], ...]) -> tuple[ModelO
     return tuple(options)
 
 
+class ModelLaunch(FrozenModel):
+    """The create-time settings and native arguments that start an agent on its chosen model."""
+
+    settings: tuple[str, ...] = ()
+    agent_args: tuple[str, ...] = ()
+
+
 class HarnessModelResolver(ABC):
     """Applies (for a switchable harness) ONE agent's model choice.
 
@@ -355,6 +362,15 @@ class HarnessModelResolver(ABC):
     @abstractmethod
     def build(cls, agent_info: AgentInfo) -> "HarnessModelResolver":
         """Construct for one agent, not yet reading anything."""
+
+    @classmethod
+    def launch_choice(cls, identity: ModelIdentity, axes: frozenset[ModelAxis]) -> ModelLaunch | None:
+        """Start directly on a pick, or None when this harness requires a live switch instead.
+
+        Called before an agent exists. Remembered picks set model and effort; an explicit pick
+        may also set speed. Harness-specific configuration stays beside its live switch code.
+        """
+        return None
 
     def list_offered_models(self) -> tuple[str, ...] | None:
         """The model ids to OFFER in the picker right now, or None to offer the whole catalog.

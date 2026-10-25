@@ -72,6 +72,7 @@ from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
 from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
+from imbue.chat.harnesses.model import ModelLaunch
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import PickerMode
 from imbue.chat.harnesses.model import SwitchMode
@@ -283,6 +284,22 @@ class ClaudeModelResolver(HarnessModelResolver):
 
     _config_dir: Path
     _state_dir: Path
+
+    @classmethod
+    def launch_choice(cls, identity: ModelIdentity, axes: frozenset[ModelAxis]) -> ModelLaunch:
+        values: dict[str, Any] = {"model": identity.model_id}
+        if identity.effort is not None:
+            values["effortLevel"] = identity.effort
+        option = next((option for option in CLAUDE_CATALOG.options if option.id == identity.model_id), None)
+        if option is not None and not option.supports_fast:
+            values["fastMode"] = False
+        if ModelAxis.FAST in axes and (option is None or option.supports_fast):
+            values["fastMode"] = identity.fast
+        return ModelLaunch(
+            settings=tuple(
+                f"agent_types.claude.settings_overrides.{key}={json.dumps(value)}" for key, value in values.items()
+            )
+        )
 
     @classmethod
     def build(cls, agent_info: AgentInfo) -> "ClaudeModelResolver":
