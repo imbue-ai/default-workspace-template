@@ -1,9 +1,11 @@
+import threading
 from pathlib import Path
 
 import pytest
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
+from workspace_layout.testing import FakeShell
 from workspace_layout.testing import roster_participant
 
 from imbue.chat.agent_manager import AgentManager
@@ -15,6 +17,7 @@ from imbue.chat.lounge import has_anyone_besides_the_owner
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
+from imbue.chat.roster_client import RosterClient
 from imbue.chat.testing import make_chat_snapshot
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import wait_until_true
@@ -138,4 +141,25 @@ def test_a_fresh_roster_makes_the_lounge_once_someone_besides_the_owner_is_in_it
 
     [lounge] = manager.get_provisional_chats()
     assert lounge.name == LOUNGE_TITLE
+    manager.stop()
+
+
+def test_the_keeper_polls_the_roster_and_makes_the_lounge_for_an_invitation_nobody_reported(tmp_path: Path) -> None:
+    """The once-a-minute read (the multiplayer spec, section 7.5): with no page or send reading the roster, the
+    keeper's own poll reads it afresh through the client, which tells the keeper, and the Lounge is made."""
+    mngr_binary, _log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    keeper = LoungeKeeper(agent_manager=manager, poll_interval_seconds=0.05)
+    shell = FakeShell(roster_document=_with(ParticipantKind.PERSON, "user:user-bob-4471"))
+    roster = RosterClient(shell=shell, cache_seconds=0.0, on_refreshed=keeper.consider_roster)
+
+    keeper.start(roster)
+    keeper.start(roster)
+    wait_until_true(lambda: bool(manager.get_provisional_chats()), 10.0, "the poll to make the Lounge")
+    keeper.stop()
+
+    [lounge] = manager.get_provisional_chats()
+    assert lounge.name == LOUNGE_TITLE
+    assert [thread.name for thread in threading.enumerate() if thread.name == "lounge-keeper"] == []
     manager.stop()
