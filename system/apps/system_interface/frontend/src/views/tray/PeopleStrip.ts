@@ -73,10 +73,13 @@ export const PeopleStrip: m.Component<PeopleStripAttrs> = {
             "data-tray-self": isOwn ? "true" : null,
             "data-tray-arrived": isArrived ? "true" : null,
             class:
-              "tray-person relative flex shrink-0 items-center justify-center rounded-full border-0 bg-transparent p-0 " +
+              "tray-person relative flex shrink-0 items-center justify-center rounded-full border-0 p-0 " +
               "outline-none focus-visible:ring-2 focus-visible:ring-accent " +
+              // The bar's surface under a faded picture, so it never shows the one tucked under it.
+              (isFaded ? "bg-(--desk-taskbar-surface) " : "bg-transparent ") +
               (isClickable ? "cursor-pointer " : "cursor-default ") +
               (isArrived ? "tray-hop " : "") +
+              (stacked ? "ring-2 ring-(--desk-taskbar-surface) " : "") +
               (stacked && index > 0
                 ? "-ml-(--desk-tray-stack-overlap) transition-[margin] group-hover/people:ml-0 "
                 : ""),
@@ -88,12 +91,7 @@ export const PeopleStrip: m.Component<PeopleStripAttrs> = {
             onmouseenter: (event: MouseEvent) => attrs.onHoverStart(entry, event.currentTarget as HTMLElement),
             onmouseleave: attrs.onHoverEnd,
           },
-          m(TrayAvatar, {
-            entry,
-            sizePx: PERSON_PICTURE_SIZE_PX,
-            isFaded,
-            class: stacked ? "ring-2 ring-(--desk-taskbar-surface)" : "",
-          }),
+          m(TrayAvatar, { entry, sizePx: PERSON_PICTURE_SIZE_PX, isFaded }),
         );
       }),
     );

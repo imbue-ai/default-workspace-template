@@ -86,6 +86,10 @@ describe("PeopleStrip", () => {
     ]);
     expect(drawn[0].querySelector("img")?.getAttribute("src")).toBe("https://accounts.example.com/bob.png");
     expect(drawn[0].querySelector("[data-tray-avatar]")?.getAttribute("style")).toContain("opacity: 0.35");
+    // The faded picture sits on the bar's surface, so the entry tucked under it never shows through.
+    expect(drawn[0].classList.contains("bg-(--desk-taskbar-surface)")).toBe(true);
+    expect(drawn[2].classList.contains("bg-transparent")).toBe(true);
+    expect(drawn[2].classList.contains("ring-(--desk-taskbar-surface)")).toBe(true);
     expect(drawn[1].querySelector("[data-tray-avatar='invited']")).not.toBeNull();
     expect(drawn[2].querySelector("[data-tray-avatar='visiting-agent']")?.textContent).toBe("S");
     expect(drawn[3].getAttribute("data-tray-self")).toBe("true");

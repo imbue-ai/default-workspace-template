@@ -17,7 +17,6 @@ export interface TrayAvatarAttrs {
   readonly entry: RosterParticipant;
   readonly sizePx: number;
   readonly isFaded: boolean;
-  readonly class?: string;
 }
 
 const ENVELOPE_GLYPH_SIZE = 14;
@@ -26,14 +25,13 @@ const BASE_CLASS = "tray-avatar flex shrink-0 items-center justify-center overfl
 export const TrayAvatar: m.Component<TrayAvatarAttrs> = {
   view(vnode) {
     const { entry, sizePx, isFaded } = vnode.attrs;
-    const extra = vnode.attrs.class ?? "";
     const style: Record<string, string> = { width: `${sizePx}px`, height: `${sizePx}px` };
     if (isFaded) style.opacity = String(DISCONNECTED_OPACITY);
     if (entry.kind === "invited") {
       return m(
         "span",
         {
-          class: `${BASE_CLASS}rounded-full border border-dashed border-strong bg-surface text-faint ${extra}`,
+          class: `${BASE_CLASS}rounded-full border border-dashed border-strong bg-surface text-faint`,
           style,
           "data-tray-avatar": "invited",
         },
@@ -44,7 +42,7 @@ export const TrayAvatar: m.Component<TrayAvatarAttrs> = {
       return m(
         "span",
         {
-          class: `${BASE_CLASS}rounded-[32%] bg-surface-secondary text-(length:--font-size-helper) font-semibold text-secondary ${extra}`,
+          class: `${BASE_CLASS}rounded-[32%] bg-surface-secondary text-(length:--font-size-helper) font-semibold text-secondary`,
           style,
           "data-tray-avatar": "visiting-agent",
         },
@@ -59,7 +57,7 @@ export const TrayAvatar: m.Component<TrayAvatarAttrs> = {
     return m(
       "span",
       {
-        class: `${BASE_CLASS}rounded-full bg-surface text-(length:--font-size-helper) font-semibold text-secondary ${extra}`,
+        class: `${BASE_CLASS}rounded-full bg-surface text-(length:--font-size-helper) font-semibold text-secondary`,
         style,
         "data-tray-avatar": entry.kind === "workspace_agent" ? "workspace-agent" : "person",
       },
