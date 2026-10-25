@@ -165,10 +165,6 @@ class TrayFeed(MutableModel):
     def report_chats(self, snapshots: Sequence[ChatSnapshot]) -> Future[None]:
         """Queue what every chat is doing; a report queued behind one not yet posted replaces it."""
         report = chats_activity_report(snapshots)
-        return self._queue_report(report)
-
-    def _queue_report(self, report: ChatsActivityReport) -> Future[None]:
-        """Queue one report; a report queued behind one not yet posted replaces it."""
         with self._lock:
             is_post_queued = self._pending_report is not None
             self._pending_report = report
