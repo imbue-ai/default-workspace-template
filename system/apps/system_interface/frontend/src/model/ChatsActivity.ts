@@ -7,20 +7,13 @@
 import type { ChatActivity } from "./records";
 
 let chats: ChatActivity[] = [];
-let isReported = false;
 
 export function getChatsActivity(): ChatActivity[] {
   return chats;
 }
 
-/** Whether the chat app has reported anything yet: before it has, the card says nothing about the chats. */
-export function isChatsActivityReported(): boolean {
-  return isReported;
-}
-
 export function applyChatsActivity(next: ChatActivity[]): void {
   chats = next;
-  isReported = true;
 }
 
 /** The chats the agent is working on: a turn in flight, or a background task about to start one. */
@@ -36,5 +29,4 @@ export function needsYou(): ChatActivity[] {
 /** Forget every report. Test-only. */
 export function resetChatsActivityForTesting(): void {
   chats = [];
-  isReported = false;
 }
