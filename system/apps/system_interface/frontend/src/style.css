@@ -106,6 +106,7 @@
 :root {
   --tray-stack-overlap: 10px;
   --bubble-width: 240px;
+  --bubble-radius: 14px;
 }
 
 .tray-stacked {

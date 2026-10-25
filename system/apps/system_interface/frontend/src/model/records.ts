@@ -760,7 +760,7 @@ export function parseRoster(raw: unknown): RosterParticipant[] {
 }
 
 function parseChatActivity(raw: unknown): ChatActivity {
-  const record = asObject(raw, "chat");
+  const record = asObject(raw, "chat activity");
   const status = record.status;
   if (typeof status !== "string" || !CHAT_ACTIVITY_STATUSES.includes(status as ChatActivityStatus)) {
     throw new Error(`chat.status is not a chat status: ${String(status)}`);
