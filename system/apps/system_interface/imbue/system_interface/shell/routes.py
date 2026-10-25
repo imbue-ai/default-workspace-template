@@ -194,11 +194,8 @@ def bubbles_route() -> ResponseReturnValue:
         return refusal
     bubble = parse_request_body(BubblePost)
     shell = _shell()
-    state = get_state()
-    owner = next((entry for entry in state.roster.document(utc_now()).participants if entry.is_owner), None)
-    excluded = speakers_client_ids(
-        bubble.speaker, owner is not None and owner.key == bubble.speaker, shell.clients.list_clients()
-    )
+    is_owner = get_state().roster.owner_key(utc_now()) == bubble.speaker
+    excluded = speakers_client_ids(bubble.speaker, is_owner, shell.clients.list_clients())
     shell.broadcaster.broadcast_bubble(bubble.model_dump(mode="json"), excluded)
     return "", HTTP_NO_CONTENT
 

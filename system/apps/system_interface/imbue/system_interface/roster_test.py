@@ -85,6 +85,15 @@ def test_an_unshared_workspace_lists_the_anonymous_owner_and_the_workspace_agent
     assert agent.is_connected is True
 
 
+def test_the_owners_key_is_the_synthetic_one_until_their_heartbeats_name_an_account(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    source.presence.heartbeat(_BOB, _T0)
+
+    assert str(source.owner_key(_T0)) == "owner"
+    source.presence.heartbeat(_OWNER, _T0)
+    assert str(source.owner_key(_T0)) == "user:user-owner-9c21"
+
+
 def test_a_shared_workspace_lists_the_owner_first_then_grants_invited_and_visiting_agents(tmp_path: Path) -> None:
     source = _source(tmp_path)
     source.share_grants.share_grants_path.write_text(_GRANTS)
