@@ -20,7 +20,8 @@ const BUBBLE_MIN_EDGE_INSET_PX = 8;
 const BUBBLE_ARROW_OVERHANG_PX = 4;
 /** The gap between a bubble and the top of the entry it hangs over. */
 const BUBBLE_GAP_PX = 10;
-/** How much higher each further bubble of the stack hangs. */
+/** How much higher each further bubble of the stack hangs; a further bubble is also drawn over an earlier one (the
+ *  layer is a stacking context of its own, so the bubbles' z-indices only order the bubbles). */
 const BUBBLE_STACK_STEP_PX = 8;
 /** Where a bubble hangs when its speaker has no entry: clear of the taskbar. */
 const BUBBLE_FALLBACK_BOTTOM_PX = 56;
@@ -67,7 +68,7 @@ export const BubbleLayer: m.Component<BubbleLayerAttrs> = {
               "bubble pointer-events-auto absolute flex max-w-(--desk-bubble-width) cursor-pointer items-start gap-1 rounded-(--desk-bubble-radius) " +
               "border bg-surface px-3 py-2 text-(length:--font-size-row) text-primary shadow-overlay " +
               (bubble.isMention ? "border-accent border-2 " : "border-default "),
-            style: { right: `${right}px`, bottom: `${bottom}px`, zIndex: String(100 + index) },
+            style: { right: `${right}px`, bottom: `${bottom}px`, zIndex: String(index + 1) },
             onclick: () => attrs.onOpen(bubble.speaker),
           },
           [
