@@ -21,8 +21,12 @@ import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
-import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
+import type { AvatarDesign, Desktop, DesktopShortcut, RosterParticipant, WallpaperListing } from "../model/records";
 import { shortcutKey } from "../model/records";
+import { WORKSPACE_AGENT_KEY } from "../model/Bubbles";
+import { needsYou, workingOn } from "../model/ChatsActivity";
+import { getOwnParticipant } from "../model/Presence";
+import { getRoster, rosterEntry } from "../model/Roster";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
 import {
@@ -53,19 +57,6 @@ import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
-import { WORKSPACE_AGENT_KEY } from "../model/Bubbles";
-import { needsYou, workingOn } from "../model/ChatsActivity";
-import { getOwnParticipant } from "../model/Presence";
-import type { RosterParticipant } from "../model/records";
-import { getRoster, rosterEntry } from "../model/Roster";
-import { AgentCard } from "./tray/AgentCard";
-import { BubbleLayer } from "./tray/BubbleLayer";
-import { PersonCard } from "./tray/PersonCard";
-import { createTrayCardHover } from "./tray/TrayCard";
-import type { OpenCard } from "./tray/TrayCard";
-
-/** How long an entry's hop lasts (style.css's ``tray-hop``). */
-const TRAY_HOP_MS = 450;
 import { Backdrop } from "./Backdrop";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import { LauncherMenu } from "./LauncherMenu";
@@ -83,6 +74,15 @@ import { MENU_MIN_WIDTH, openShareSettings, taskbarEntryMenuRows, windowMenuRows
 import { windowSizeRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
+import { AgentCard } from "./tray/AgentCard";
+import { BubbleLayer } from "./tray/BubbleLayer";
+import { PersonCard } from "./tray/PersonCard";
+import { createTrayCardHover } from "./tray/TrayCard";
+import type { OpenCard } from "./tray/TrayCard";
+
+/** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
+ *  the animation. */
+const TRAY_HOP_MS = 450;
 
 /** Which menu is open and what it was opened for. Where it sits, and everything about taking it
  *  down, belongs to the menu component itself. */
