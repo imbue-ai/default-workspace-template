@@ -153,3 +153,26 @@ def test_the_last_report_is_posted_again_on_a_cadence_for_a_shell_restarted_sinc
     feed.shutdown()
 
     assert all(chat.title == "First" for report in shell.chats_activity for chat in report.chats)
+
+
+def test_a_re_post_never_replaces_a_newer_report_queued_behind_a_post_in_flight() -> None:
+    shell = _HeldShell()
+    feed = TrayFeed(shell=shell)
+    first = feed.report_chats([make_chat_snapshot("agent-1", name="First")])
+    assert shell.entered.wait(timeout=10)
+    second = feed.report_chats([make_chat_snapshot("agent-2", name="Second")])
+    # The re-post finds the second queued, and leaves it be.
+    feed.report_chats_again()
+
+    shell.release.set()
+    first.result(timeout=10)
+    second.result(timeout=10)
+    feed.report_chats_again()
+    wait_until_true(lambda: len(shell.chats_activity) == 3, 10.0, "the second report to be posted again")
+    feed.shutdown()
+
+    assert [[chat.title for chat in report.chats] for report in shell.chats_activity] == [
+        ["First"],
+        ["Second"],
+        ["Second"],
+    ]

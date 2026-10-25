@@ -186,12 +186,18 @@ class TrayFeed(MutableModel):
         self._thread = thread
         thread.start()
 
+    def report_chats_again(self) -> None:
+        """Queue the last report posted once more, for a shell restarted since; nothing when none was posted yet, or
+        while a report is queued already (that one is newer, and a re-post never replaces it)."""
+        with self._lock:
+            if self._last_report is None or self._pending_report is not None:
+                return
+            self._pending_report = self._last_report
+        self._submit("the chats' activity", self._post_pending_report)
+
     def _repost(self) -> None:
         while not self._stop.wait(timeout=self.repost_interval_seconds):
-            with self._lock:
-                report = self._last_report
-            if report is not None:
-                self._queue_report(report)
+            self.report_chats_again()
 
     def shutdown(self) -> None:
         """Drop the posts not yet started, and every later one, and let the one in flight finish on its own.
