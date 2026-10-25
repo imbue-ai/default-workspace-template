@@ -127,16 +127,15 @@ class TrayFeed(MutableModel):
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
     shell: ShellLayoutInterface = Field(frozen=True, description="The shell the feed goes to")
-
-    _executor: ThreadPoolExecutor = PrivateAttr(
-        default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="tray-feed")
-    )
     repost_interval_seconds: float = Field(
         default=CHATS_ACTIVITY_REPOST_INTERVAL_SECONDS,
         frozen=True,
         description="How often the last chats-activity report is posted again, for a shell restarted since",
     )
 
+    _executor: ThreadPoolExecutor = PrivateAttr(
+        default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="tray-feed")
+    )
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _pending_report: ChatsActivityReport | None = PrivateAttr(default=None)
     _last_report: ChatsActivityReport | None = PrivateAttr(default=None)
