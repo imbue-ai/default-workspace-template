@@ -84,7 +84,7 @@ describe("BubbleLayer", () => {
     expect(bobs.style.right).toBe(`${window.innerWidth - 900 - 4}px`);
     expect(bobs.style.bottom).toBe(`${window.innerHeight - 700 + 10}px`);
     expect(agents.style.right).toBe("16px");
-    expect(agents.style.bottom).toBe(`${56 + 10 + 8}px`);
+    expect(agents.style.bottom).toBe(`calc(var(--desk-taskbar-height) + ${10 + 8}px)`);
     unmountViews();
     expect(render({ bubbles: [] }).querySelector("[data-bubble-layer]")).toBeNull();
   });
