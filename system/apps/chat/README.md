@@ -953,8 +953,7 @@ The Lounge (`lounge.py`, section 7.5) is the chat titled "Lounge", of either kin
 click on a person in the desktop's tray opens: found by title alone, so a Lounge converted
 into an agent chat through the switch, or a chat the user named so, is the Lounge. A room
 under that title is made the first time the roster the shell answers holds anyone besides
-the owner (a person, an invited email, or a visiting agent; the roster is read on every
-page and send, and once a minute), and again when a click needs the Lounge after it was
+the owner (a person, an invited email, or a visiting agent; the roster is read once a minute), and again when a click needs the Lounge after it was
 deleted or renamed, only while no chat of any kind carries the title. The `lounge` intake
 target resolves to it, making the room when there is no such chat; the manifest's `lounge`
 launch path (`presets = {target = "lounge", is_draft = "true"}`, `mention_param =

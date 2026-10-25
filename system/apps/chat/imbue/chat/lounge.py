@@ -4,9 +4,9 @@ room this keeper makes, or what that room became (an agent chat, through the swi
 user named so.
 
 A room so titled is made the first time the roster holds anyone besides the owner (a person, an invited email, or a
-visiting agent), from the roster the shell answers, and again whenever something needs the Lounge after it was deleted
-or renamed (a click on a person), only when no chat of any kind carries the title; two needs at once make one. A
-workspace nobody is invited into has none.
+visiting agent), from the roster this keeper reads once a minute (the chat app holds no socket to the shell), and
+again whenever something needs the Lounge after it was deleted or renamed (a click on a person), only when no chat of
+any kind carries the title; two needs at once make one. A workspace nobody is invited into has none.
 """
 
 import threading
@@ -29,8 +29,7 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 
 LOUNGE_TITLE: Final[str] = "Lounge"
-# How often the roster is read again for an invitation nothing else has reported (a page's read or a send reads it
-# sooner).
+# How often the roster is read for an invitation.
 ROSTER_POLL_INTERVAL_SECONDS: Final[float] = 60.0
 
 
@@ -83,7 +82,7 @@ class LoungeKeeper(MutableModel):
             return self._created
 
     def consider_roster(self, document: RosterDocument) -> None:
-        """What a fresh roster means for the Lounge: made once someone besides the owner is in it."""
+        """What a roster means for the Lounge: made once someone besides the owner is in it."""
         if not self.agent_manager.is_agent_list_known() or not has_anyone_besides_the_owner(document):
             return
         try:
@@ -92,8 +91,7 @@ class LoungeKeeper(MutableModel):
             logger.warning("Could not make the Lounge for the people invited into the workspace: {}", e)
 
     def start(self, roster: RosterClient) -> None:
-        """Read the roster every ``poll_interval_seconds`` (through its cache, so a fresh read tells this keeper),
-        for an invitation nothing else reported."""
+        """Read the roster every ``poll_interval_seconds`` and make the Lounge once it holds an invitation."""
         if self._thread is not None:
             return
         thread = threading.Thread(target=self._poll, args=(roster,), daemon=True, name="lounge-keeper")
@@ -108,4 +106,4 @@ class LoungeKeeper(MutableModel):
 
     def _poll(self, roster: RosterClient) -> None:
         while not self._stop.wait(timeout=self.poll_interval_seconds):
-            roster.document()
+            self.consider_roster(roster.document())

@@ -35,6 +35,9 @@ from imbue.imbue_common.pure import pure
 
 # How much of a message a bubble shows (the multiplayer spec, section 6.5).
 BUBBLE_TEXT_LIMIT: Final[int] = 200
+# How often the last chats-activity report is posted again: the shell keeps it in memory, so one restarted since
+# the last chat-list change paints the agent's card from this.
+CHATS_ACTIVITY_REPOST_INTERVAL_SECONDS: Final[float] = 60.0
 
 
 @pure
@@ -127,9 +130,18 @@ class TrayFeed(MutableModel):
     _executor: ThreadPoolExecutor = PrivateAttr(
         default_factory=lambda: ThreadPoolExecutor(max_workers=1, thread_name_prefix="tray-feed")
     )
+    repost_interval_seconds: float = Field(
+        default=CHATS_ACTIVITY_REPOST_INTERVAL_SECONDS,
+        frozen=True,
+        description="How often the last chats-activity report is posted again, for a shell restarted since",
+    )
+
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _pending_report: ChatsActivityReport | None = PrivateAttr(default=None)
+    _last_report: ChatsActivityReport | None = PrivateAttr(default=None)
     _is_shut_down: bool = PrivateAttr(default=False)
+    _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _thread: threading.Thread | None = PrivateAttr(default=None)
 
     def post_bubble(
         self,
@@ -154,6 +166,10 @@ class TrayFeed(MutableModel):
     def report_chats(self, snapshots: Sequence[ChatSnapshot]) -> Future[None]:
         """Queue what every chat is doing; a report queued behind one not yet posted replaces it."""
         report = chats_activity_report(snapshots)
+        return self._queue_report(report)
+
+    def _queue_report(self, report: ChatsActivityReport) -> Future[None]:
+        """Queue one report; a report queued behind one not yet posted replaces it."""
         with self._lock:
             is_post_queued = self._pending_report is not None
             self._pending_report = report
@@ -161,9 +177,29 @@ class TrayFeed(MutableModel):
             return _settled_future()
         return self._submit("the chats' activity", self._post_pending_report)
 
+    def start(self) -> None:
+        """Post the last chats-activity report again every ``repost_interval_seconds``, for a shell restarted since
+        the last chat-list change (it keeps the report in memory alone)."""
+        if self._thread is not None:
+            return
+        thread = threading.Thread(target=self._repost, daemon=True, name="tray-feed-repost")
+        self._thread = thread
+        thread.start()
+
+    def _repost(self) -> None:
+        while not self._stop.wait(timeout=self.repost_interval_seconds):
+            with self._lock:
+                report = self._last_report
+            if report is not None:
+                self._queue_report(report)
+
     def shutdown(self) -> None:
         """Drop the posts not yet started, and every later one, and let the one in flight finish on its own.
         Idempotent."""
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+            self._thread = None
         with self._lock:
             self._is_shut_down = True
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -184,4 +220,6 @@ class TrayFeed(MutableModel):
             report = self._pending_report
             self._pending_report = None
         if report is not None:
+            with self._lock:
+                self._last_report = report
             self.shell.report_chats_activity(report)

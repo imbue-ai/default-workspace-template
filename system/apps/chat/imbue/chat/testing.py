@@ -774,10 +774,7 @@ def build_test_state(
         chat_namer=chat_namer,
         # Never this package's own data/: a test that reads the annotations back injects a store under its tmp_path.
         authors=authors if authors is not None else AuthorStore(root=Path(tempfile.mkdtemp(prefix="chat-authors-"))),
-        roster=RosterClient(
-            shell=shell if shell is not None else DisconnectedShell(),
-            on_refreshed=lounge.consider_roster if lounge is not None else None,
-        ),
+        roster=RosterClient(shell=shell if shell is not None else DisconnectedShell()),
         mentions=mentions
         if mentions is not None
         else MentionStore(root=Path(tempfile.mkdtemp(prefix="chat-mentions-"))),

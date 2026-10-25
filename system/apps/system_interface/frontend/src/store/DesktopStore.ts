@@ -69,6 +69,7 @@ import type {
   Wallpaper,
   WindowRecord,
   WindowState,
+  RosterParticipant,
 } from "../model/records";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
@@ -214,6 +215,8 @@ export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
 export const NO_MENTION_APP_REASON = "No app in this workspace can open a chat with them";
 /** Why a chat could not be shown: no app takes the message that shows one. */
 export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
+/** How long a tray entry's hop lasts (style.css's ``tray-hop``). */
+export const TRAY_HOP_MS = 450;
 /** The message that shows a chat, as the Imbue Studio app's notifications send it (the chat app registers for it). */
 export const FOCUS_CHAT_MESSAGE_TYPE = "minds:focus-chat";
 /** The sender a message of the shell's own is relayed as (for the relay's logs). */
@@ -457,6 +460,11 @@ export class DesktopStore {
   /** The speech bubbles up over the tray (the multiplayer spec, section 6.5), in arrival order. */
   private bubbles: BubbleStack = [];
   private bubbleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The roster entries connected at the last push, so one that just became connected hops. */
+  private connectedKeys: ReadonlySet<string> = new Set();
+  /** The tray entries hopping now, and the one timer that ends the hop. */
+  private hopping: ReadonlySet<string> = new Set();
+  private hopTimer: ReturnType<typeof setTimeout> | null = null;
   /** Whether an Imbue Studio chrome frames this page and has said what it can do: the tray's share button is
    *  drawn only then, since it sends the chrome a message. */
   private isEmbedderPresent = false;
@@ -850,10 +858,7 @@ export class DesktopStore {
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
       onLayoutOp: (event) => this.handleLayoutOp(event),
       onPresenceUpdated: (users) => this.takePresence(users),
-      onRosterUpdated: (participants) => {
-        applyRoster(participants);
-        this.deps.redraw();
-      },
+      onRosterUpdated: (participants) => this.takeRoster(participants),
       onChatsActivity: (chats) => {
         applyChatsActivity(chats);
         this.deps.redraw();
@@ -1003,8 +1008,39 @@ export class DesktopStore {
     return this.bubbles;
   }
 
-  /** Somebody just said something: their bubble is raised or refreshed (S11), and the next timeout armed. */
+  /** The tray entries hopping now: they just became connected, or a bubble of theirs just appeared (the
+   *  multiplayer spec, sections 6.2 and 6.5). */
+  getHopping(): ReadonlySet<string> {
+    return this.hopping;
+  }
+
+  /** The roster the shell pushed: the entries that became connected since the last push hop; the first push with
+   *  anyone connected is an arrival of nobody. */
+  private takeRoster(participants: RosterParticipant[]): void {
+    const connected = new Set(participants.filter((entry) => entry.is_connected).map((entry) => entry.key));
+    const arrived = this.connectedKeys.size === 0 ? [] : [...connected].filter((key) => !this.connectedKeys.has(key));
+    this.connectedKeys = connected;
+    applyRoster(participants);
+    this.hop(arrived);
+    this.deps.redraw();
+  }
+
+  /** The tray entries of ``keys`` hop for ``TRAY_HOP_MS``; a hop under way is restarted. */
+  private hop(keys: readonly string[]): void {
+    if (keys.length === 0) return;
+    this.hopping = new Set([...this.hopping, ...keys]);
+    if (this.hopTimer !== null) clearTimeout(this.hopTimer);
+    this.hopTimer = setTimeout(() => {
+      this.hopTimer = null;
+      this.hopping = new Set();
+      this.deps.redraw();
+    }, TRAY_HOP_MS);
+  }
+
+  /** Somebody just said something: their bubble is raised or refreshed (S11), their entry hops, and the next
+   *  timeout is armed. */
   private takeBubble(bubble: BubbleWire): void {
+    this.hop([bubble.speaker]);
     this.setBubbles(withBubble(this.bubbles, bubble, getOwnParticipant(), Date.now()));
   }
 

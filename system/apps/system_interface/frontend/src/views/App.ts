@@ -21,7 +21,7 @@ import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
-import type { AvatarDesign, Desktop, DesktopShortcut, RosterParticipant, WallpaperListing } from "../model/records";
+import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { WORKSPACE_AGENT_KEY } from "../model/Bubbles";
 import { needsYou, workingOn } from "../model/ChatsActivity";
@@ -82,7 +82,6 @@ import type { OpenCard } from "./tray/TrayCard";
 
 /** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
  *  the animation. */
-const TRAY_HOP_MS = 450;
 
 /** Which menu is open and what it was opened for. Where it sits, and everything about taking it
  *  down, belongs to the menu component itself. */
@@ -193,13 +192,6 @@ export function App(): m.Component<AppAttrs> {
     if (card?.kind === "person" && store !== null) void store.refreshClients();
     m.redraw();
   });
-  // The roster entries that were connected at the last redraw, so one that just became connected hops once.
-  let connectedKeys: ReadonlySet<string> = new Set();
-  // Each speaker's bubble as last seen, by its message id, so a new bubble makes its speaker's entry hop once.
-  let bubbleMessageIdBySpeaker: ReadonlyMap<string, string> = new Map();
-  // The tray entries hopping now, and the timer that ends the hop.
-  let hoppingKeys: ReadonlySet<string> = new Set();
-  let hopTimer: ReturnType<typeof setTimeout> | null = null;
 
   // The one menu the desktop ever has open. Which menu it is and what it was opened for is
   // ``openMenu``; opening, placing, dismissing and closing are the component's, and its
@@ -813,36 +805,6 @@ export function App(): m.Component<AppAttrs> {
       .finally(() => m.redraw());
   }
 
-  /** The tray entries of ``keys`` hop for ``TRAY_HOP_MS``; a hop under way is restarted. */
-  function hop(keys: readonly string[]): void {
-    if (keys.length === 0) return;
-    hoppingKeys = new Set([...hoppingKeys, ...keys]);
-    if (hopTimer !== null) clearTimeout(hopTimer);
-    hopTimer = setTimeout(() => {
-      hopTimer = null;
-      hoppingKeys = new Set();
-      m.redraw();
-    }, TRAY_HOP_MS);
-  }
-
-  /** The entries that became connected since the last redraw hop (the multiplayer spec, section 6.2); the first
-   *  roster with anyone connected is an arrival of nobody. */
-  function noteArrivals(roster: readonly RosterParticipant[]): void {
-    const connected = new Set(roster.filter((entry) => entry.is_connected).map((entry) => entry.key));
-    const arrived = connectedKeys.size === 0 ? [] : [...connected].filter((key) => !connectedKeys.has(key));
-    connectedKeys = connected;
-    hop(arrived);
-  }
-
-  /** The speaker of every bubble that appeared or changed since the last redraw hops (the multiplayer spec,
-   *  section 6.5). */
-  function noteBubbles(current: DesktopStore): void {
-    const bubbles = current.getBubbles();
-    const spoken = bubbles.filter((bubble) => bubbleMessageIdBySpeaker.get(bubble.speaker) !== bubble.messageId);
-    bubbleMessageIdBySpeaker = new Map(bubbles.map((bubble) => [bubble.speaker, bubble.messageId]));
-    hop(spoken.map((bubble) => bubble.speaker));
-  }
-
   /** The box of a speaker's tray entry, where its bubble's arrow points. */
   function trayEntryRect(speaker: string): DOMRect | null {
     const selector =
@@ -1094,7 +1056,6 @@ export function App(): m.Component<AppAttrs> {
       resizeObserver?.disconnect();
       if (travelFrame !== null) cancelAnimationFrame(travelFrame);
       trayCard.dispose();
-      if (hopTimer !== null) clearTimeout(hopTimer);
     },
     view(vnode) {
       const current = vnode.attrs.store;
@@ -1144,8 +1105,6 @@ export function App(): m.Component<AppAttrs> {
       const menuRows = openMenu === null ? null : rowsOfOpenMenu(current, openMenu);
       const roster = getRoster();
       const now = new Date();
-      noteArrivals(roster);
-      noteBubbles(current);
       const pinnedChat = avatarPinnedEntryOf(state);
       const openCard = trayCard.current();
       // The wallpaper is painted here rather than on the backdrop so it spans the whole viewport:
@@ -1284,7 +1243,7 @@ export function App(): m.Component<AppAttrs> {
               roster,
               viewer: getOwnParticipant(),
               now,
-              hopping: hoppingKeys,
+              hopping: current.getHopping(),
               isShareOffered: current.getIsEmbedderPresent(),
               avatar: state.avatar,
               workspaceName: state.workspaceName,

@@ -12,6 +12,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import make_chat_snapshot
+from imbue.chat.testing import wait_until_true
 from imbue.chat.tray_feed import BUBBLE_TEXT_LIMIT
 from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.tray_feed import activity_kind_of
@@ -138,3 +139,17 @@ def test_reports_queued_behind_one_not_yet_posted_collapse_into_the_last() -> No
         ["Fourth"],
     ]
     feed.shutdown()
+
+
+def test_the_last_report_is_posted_again_on_a_cadence_for_a_shell_restarted_since() -> None:
+    shell = FakeShell()
+    feed = TrayFeed(shell=shell, repost_interval_seconds=0.05)
+    feed.report_chats([make_chat_snapshot("agent-1", name="First")]).result(timeout=10)
+    assert len(shell.chats_activity) == 1
+
+    feed.start()
+    feed.start()
+    wait_until_true(lambda: len(shell.chats_activity) >= 3, 10.0, "the report to be posted again")
+    feed.shutdown()
+
+    assert all(chat.title == "First" for report in shell.chats_activity for chat in report.chats)

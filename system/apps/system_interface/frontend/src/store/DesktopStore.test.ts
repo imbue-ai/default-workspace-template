@@ -26,6 +26,7 @@ import {
   DesktopStore,
   NO_CHAT_APP_REASON,
   NO_MENTION_APP_REASON,
+  TRAY_HOP_MS,
   OTHER_WORKSPACE_LINK_NOTICE,
   SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
   chooseInitialDesktopId,
@@ -2839,5 +2840,33 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     expect(store.getIsEmbedderPresent()).toBe(false);
     store.setEmbedderPresent(true);
     expect(store.getIsEmbedderPresent()).toBe(true);
+  });
+});
+
+describe("the tray's hops", () => {
+  it("hops an entry that just became connected and a speaker whose bubble just appeared, for one hop's length", async () => {
+    const store = await startedStore();
+    const bob = rosterParticipantRecord("user:user-bob-4471", { is_connected: false });
+    const carol = rosterParticipantRecord("user:user-carol-1d2e", { is_connected: true });
+    // The first roster with anyone connected is an arrival of nobody.
+    socket.deliver().onRosterUpdated([bob, carol]);
+    expect(store.getHopping()).toEqual(new Set());
+
+    socket.deliver().onRosterUpdated([{ ...bob, is_connected: true }, carol]);
+    expect(store.getHopping()).toEqual(new Set([bob.key]));
+    socket
+      .deliver()
+      .onBubble({
+        speaker: carol.key,
+        chat_id: "agent-2",
+        chat_title: "Lounge",
+        text: "hi",
+        message_id: "m-1",
+        mentions: [],
+      });
+    expect(store.getHopping()).toEqual(new Set([bob.key, carol.key]));
+
+    vi.advanceTimersByTime(TRAY_HOP_MS + 1);
+    expect(store.getHopping()).toEqual(new Set());
   });
 });

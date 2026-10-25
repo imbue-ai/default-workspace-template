@@ -206,7 +206,7 @@ def build_production_state(
             requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
         ),
         authors=AuthorStore(root=chat_records_root),
-        roster=RosterClient(shell=shell, on_refreshed=lounge.consider_roster if lounge is not None else None),
+        roster=RosterClient(shell=shell),
         mentions=MentionStore(root=data_dir / MENTIONS_DIRNAME),
         tray_feed=tray_feed,
         lounge=lounge,
@@ -310,6 +310,8 @@ def main() -> None:
         state.agent_manager.start()
         if state.lounge is not None:
             state.lounge.start(state.roster)
+        if state.tray_feed is not None:
+            state.tray_feed.start()
 
     # Tear down the broadcaster, watchers, agent manager, and http clients on
     # exit. ``atexit`` covers a normal return; the signal handlers cover

@@ -146,13 +146,13 @@ def test_a_fresh_roster_makes_the_lounge_once_someone_besides_the_owner_is_in_it
 
 def test_the_keeper_polls_the_roster_and_makes_the_lounge_for_an_invitation_nobody_reported(tmp_path: Path) -> None:
     """The once-a-minute read (the multiplayer spec, section 7.5): with no page or send reading the roster, the
-    keeper's own poll reads it afresh through the client, which tells the keeper, and the Lounge is made."""
+    keeper's own poll reads it, and the Lounge is made."""
     mngr_binary, _log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
     manager.note_agent_list_known()
     keeper = LoungeKeeper(agent_manager=manager, poll_interval_seconds=0.05)
     shell = FakeShell(roster_document=_with(ParticipantKind.PERSON, "user:user-bob-4471"))
-    roster = RosterClient(shell=shell, cache_seconds=0.0, on_refreshed=keeper.consider_roster)
+    roster = RosterClient(shell=shell, cache_seconds=0.0)
 
     keeper.start(roster)
     keeper.start(roster)
