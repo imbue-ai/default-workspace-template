@@ -4,7 +4,8 @@ text, and what every chat is doing whenever the chat list changes.
 
 Both are best-effort loopback posts made off the caller's thread, one at a time: a send and a chat-list push never
 wait on the shell. The chats' activity is coalesced, since the list changes far more often than a tray redraws:
-a report queued behind one not yet posted replaces it.
+a report queued behind one not yet posted replaces it. The last report is posted again once a minute: the shell
+keeps it in memory alone, so one restarted since the last chat-list change paints the agent's card from the re-post.
 """
 
 import threading

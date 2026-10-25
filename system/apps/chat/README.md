@@ -970,9 +970,11 @@ length. The agent's turns reach the feed through the session watcher a page's st
 builds (`ChatAppState.bubble_agent_turns`, in its `on_events`), which memory shedding
 evicts, so the agent's bubbles rise for the turns of the chats a page is reading: a turn in
 a chat nobody has open raises none (the spec's section 11). And every chat-list push is
-posted as what each chat is doing
-(`POST /api/chats-activity`). Both go through `ShellLayoutInterface`, best-effort, on a
-thread of their own, the activity reports coalesced; a secondary chat posts neither.
+posted as what each chat is doing (`POST /api/chats-activity`), the last report posted again
+once a minute, since the shell keeps it in memory alone and one restarted since the last
+chat-list change would otherwise paint nothing on the agent's card. Both go through
+`ShellLayoutInterface`, best-effort, on a thread of their own, the activity reports
+coalesced; a secondary chat posts neither.
 
 ## Memory shedding
 
