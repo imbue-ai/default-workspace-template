@@ -153,6 +153,7 @@ def test_the_last_report_is_posted_again_on_a_cadence_for_a_shell_restarted_sinc
     feed.shutdown()
 
     assert all(chat.title == "First" for report in shell.chats_activity for chat in report.chats)
+    assert [thread.name for thread in threading.enumerate() if thread.name == "tray-feed-repost"] == []
 
 
 def test_a_re_post_never_replaces_a_newer_report_queued_behind_a_post_in_flight() -> None:
