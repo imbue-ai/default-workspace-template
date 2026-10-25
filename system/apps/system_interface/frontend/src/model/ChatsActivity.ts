@@ -8,10 +8,6 @@ import type { ChatActivity } from "./records";
 
 let chats: ChatActivity[] = [];
 
-export function getChatsActivity(): ChatActivity[] {
-  return chats;
-}
-
 export function applyChatsActivity(next: ChatActivity[]): void {
   chats = next;
 }
