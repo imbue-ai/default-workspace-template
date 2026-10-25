@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import TypeVar
 from typing import assert_never
 from uuid import uuid4
 
@@ -1689,9 +1690,12 @@ def _get_screen_capture(chat_id: str) -> Response:
     return model_response(ScreenCaptureResponse(screen=result.stdout))
 
 
-def _created_chat_or_refusal(create: Callable[[], CreatedChat]) -> CreatedChat | Response:
-    """Run one create of a chat: the chat, else its refusal as the create route answers it (a taken name is a 409,
-    anything else the manager refused a 400 with its reason, and a ``kind`` beside it when the account is the
+_CreatedT = TypeVar("_CreatedT")
+
+
+def _created_or_refusal(create: Callable[[], _CreatedT]) -> _CreatedT | Response:
+    """Run one create of a chat: what it answers, else its refusal as the create route answers it (a taken name is
+    a 409, anything else the manager refused a 400 with its reason, and a ``kind`` beside it when the account is the
     reason)."""
     try:
         return create()
@@ -1746,7 +1750,7 @@ def _run_create_chat() -> CreatedChat | Response:
         if create_request.kind is ChatKind.ROOM
         else None
     )
-    created = _created_chat_or_refusal(
+    created = _created_or_refusal(
         lambda: agent_manager.create_chat(
             create_request.name,
             # A client asks for no templates: the manager adds `fast` itself, from the
@@ -1899,11 +1903,10 @@ def _lounge_or_refusal(state: ChatAppState) -> _ResolvedIntakeChat | Response:
     makes no room, and a room's create may be refused as the create route refuses one."""
     if state.lounge is None:
         return error_response("A secondary chat has no Lounge", 403)
-    lounge = state.lounge
-    created = _created_chat_or_refusal(lambda: CreatedChat(chat_id=lounge.ensure(), name="", display_name=""))
-    if isinstance(created, Response):
-        return created
-    return _ResolvedIntakeChat(chat_id=created.chat_id)
+    lounge_id = _created_or_refusal(state.lounge.ensure)
+    if isinstance(lounge_id, Response):
+        return lounge_id
+    return _ResolvedIntakeChat(chat_id=lounge_id)
 
 
 def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
@@ -2050,7 +2053,7 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
     if isinstance(account, Response):
         return account
     if account is not None and not intake.is_draft:
-        created = _created_chat_or_refusal(
+        created = _created_or_refusal(
             lambda: agent_manager.create_chat("", account_id=account, message=intake.message)
         )
         if isinstance(created, Response):
