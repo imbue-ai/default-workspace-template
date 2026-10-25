@@ -732,7 +732,6 @@ def build_test_state(
     chat_namer: ChatNamer | None = None,
     authors: AuthorStore | None = None,
     mentions: MentionStore | None = None,
-    is_tray_fed: bool = True,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -744,8 +743,9 @@ def build_test_state(
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     event_queues = AgentEventQueues()
-    tray_feed = TrayFeed(shell=shell if shell is not None else DisconnectedShell()) if is_tray_fed else None
-    lounge = LoungeKeeper(agent_manager=manager)
+    # Match production: a secondary chat feeds no tray and makes no Lounge (the multiplayer spec, section 11).
+    tray_feed = None if is_secondary else TrayFeed(shell=shell if shell is not None else DisconnectedShell())
+    lounge = None if is_secondary else LoungeKeeper(agent_manager=manager)
     # Match production: route the codex ledger's live user-turns onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
     state = ChatAppState(
@@ -775,7 +775,8 @@ def build_test_state(
         # Never this package's own data/: a test that reads the annotations back injects a store under its tmp_path.
         authors=authors if authors is not None else AuthorStore(root=Path(tempfile.mkdtemp(prefix="chat-authors-"))),
         roster=RosterClient(
-            shell=shell if shell is not None else DisconnectedShell(), on_refreshed=lounge.consider_roster
+            shell=shell if shell is not None else DisconnectedShell(),
+            on_refreshed=lounge.consider_roster if lounge is not None else None,
         ),
         mentions=mentions
         if mentions is not None

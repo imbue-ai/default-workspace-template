@@ -5349,11 +5349,14 @@ _LOUNGE_ID = "agent-00000000000000000000000000000042"
 
 
 def _peopled_app(
-    tmp_path: Path, messenger: RecordingMngrMessenger, imbue_studio_gateway: GatewayAccess | None = None
+    tmp_path: Path,
+    messenger: RecordingMngrMessenger,
+    imbue_studio_gateway: GatewayAccess | None = None,
+    is_secondary: bool = False,
 ) -> Flask:
     """An app whose shell answers a roster of Josh (the owner), Bob, and the workspace agent Atlas, with a running
     main chat Josh started and a room, the Lounge, whose agent's state dir is on disk; ``imbue_studio_gateway`` is
-    where the owner's notifications go, when given."""
+    where the owner's notifications go, when given, and ``is_secondary`` makes it a preview's chat app."""
     shell = FakeShell(
         roster_document=RosterDocument(
             participants=(
@@ -5374,7 +5377,7 @@ def _peopled_app(
         chat_files_root=tmp_path / "chats",
         imbue_studio_gateway=imbue_studio_gateway,
     )
-    state = build_test_state(agent_manager=manager, shell=shell)
+    state = build_test_state(agent_manager=manager, shell=shell, is_secondary=is_secondary)
     manager.note_agent_list_known()
     seed_agent_state(manager, _MAIN_ID, name="Main", labels={"display_name": "Main"})
     seed_agent_state(manager, _LOUNGE_ID, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
@@ -5664,6 +5667,25 @@ def test_a_mention_intake_makes_the_lounge_when_there_is_none(
     # A second click while the room is still being created lands in the same Lounge.
     again = _intake(client, message="@Carol ", target="lounge", is_draft="true")
     assert parse_qs(urlparse(again.get_json()["path"]).query)["chat"] == [chat_id]
+
+
+def test_a_secondary_chat_feeds_no_tray_and_makes_no_lounge(tmp_path: Path) -> None:
+    """A secondary chat's sends and chats are a preview's (the multiplayer spec, section 11): a send raises no bubble,
+    the chat list is never reported, and the ``lounge`` intake target answers 403 rather than making a room."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger(), is_secondary=True)
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    sent = client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "@Josh look at this", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+    refused = _intake(client, message="@Bob ", target="lounge", is_draft="true")
+
+    assert sent.status_code == 200
+    assert refused.status_code == 403
+    assert shell.bubbles == [] and shell.chats_activity == []
 
 
 def test_a_rooms_first_message_from_a_visitor_is_recorded_as_theirs_before_the_room_is_up(tmp_path: Path) -> None:
