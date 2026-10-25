@@ -653,7 +653,7 @@ def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
 
 
 @pure
-def _takes_text(launch_path: RegistryLaunchPath) -> bool:
+def _takes_text_or_mention(launch_path: RegistryLaunchPath) -> bool:
     """Whether the launch path needs something filled in: typed or drafted text, or a mention of a person."""
     return (
         launch_path.text_param is not None
@@ -677,7 +677,7 @@ def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
         return row.default_shortcut if is_offered else None
     if row.program is None:
         return None
-    first = next((path for path in offered if not _takes_text(path)), offered[0])
+    first = next((path for path in offered if not _takes_text_or_mention(path)), offered[0])
     return DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS)
 
 
