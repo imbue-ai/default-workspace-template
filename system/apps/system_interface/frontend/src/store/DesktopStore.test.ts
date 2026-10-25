@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
 import { placementOf } from "../geometry/stack";
-import { getPresentUsers, resetPresenceForTesting } from "../model/Presence";
+import { getPresentUsers, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { BUBBLE_LIFETIME_MS } from "../model/Bubbles";
 import { resetChatsActivityForTesting, workingOn } from "../model/ChatsActivity";
 import { getRoster, resetRosterForTesting } from "../model/Roster";
@@ -36,6 +36,8 @@ import type { ClientStateReport } from "./socket";
 const METRICS = themeMetricsRecord();
 const MODES = { isPhone: false, isTouch: false };
 const CLIENT = "client-1";
+/** The viewer's participant key, as the heartbeat's answer names it. */
+const VIEWER = "user:user-josh-0001";
 const NO_LINK = { desktopId: null, open: null, launch: null };
 const PLAIN_BAR = { mode: "bar", style: "plain", position: null } as const;
 
@@ -2763,6 +2765,24 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     expect(api.relayedMessages).toEqual([
       { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-2" }, sender: "system_interface" },
     ]);
+
+    // A mention of the viewer never times out, but showing its chat from anywhere (the agent card's rows) puts
+    // it away; a bubble of another chat stays.
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    socket.deliver().onBubble({ ...bubble, message_id: "m-4", mentions: [VIEWER] });
+    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-5" });
+    vi.advanceTimersByTime(BUBBLE_LIFETIME_MS * 10);
+    expect(store.getBubbles().map((candidate) => [candidate.speaker, candidate.isMention])).toEqual([
+      ["user:user-bob-4471", true],
+    ]);
+    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-6" });
+    expect(await store.showChat("agent-2")).toBe(true);
+    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-carol-1d2e"]);
   });
 
   it("drafts a mention of a clicked person through the mention launch path into the pinned window, and opens the main chat for the agent", async () => {

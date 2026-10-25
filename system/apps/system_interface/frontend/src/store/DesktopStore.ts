@@ -1013,12 +1013,11 @@ export class DesktopStore {
     this.setBubbles(withoutSpeaker(this.bubbles, speaker));
   }
 
-  /** A bubble was clicked: the chat it was said in is shown, with its composer focused, and every bubble pointing
-   *  at that chat is put away (its mentions are seen). */
+  /** A bubble was clicked: the chat it was said in is shown, with its composer focused, which puts every bubble
+   *  pointing at that chat away. */
   openBubble(speaker: string): void {
     const bubble = this.bubbles.find((candidate) => candidate.speaker === speaker);
     if (bubble === undefined) return;
-    this.setBubbles(withoutChat(this.bubbles, bubble.chatId));
     void this.showChat(bubble.chatId);
   }
 
@@ -1073,8 +1072,11 @@ export class DesktopStore {
   }
 
   /** Show a chat on this client, the way the Imbue Studio app's notifications do (``minds:focus-chat``): the apps
-   *  registered for that message put it on screen; the shell names no app. */
+   *  registered for that message put it on screen; the shell names no app. Every bubble pointing at the chat is
+   *  put away first, whichever surface asked (a bubble's click, the agent card's rows): its mentions are seen (the
+   *  multiplayer spec, section 7.4). */
   async showChat(chatId: string): Promise<boolean> {
+    this.setBubbles(withoutChat(this.bubbles, chatId));
     if (!isEmbedderMessageHandled(this.state, FOCUS_CHAT_MESSAGE_TYPE)) {
       this.toast(NO_CHAT_APP_REASON);
       return false;
