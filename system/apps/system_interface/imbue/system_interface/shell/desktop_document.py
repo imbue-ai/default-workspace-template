@@ -667,8 +667,8 @@ def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
     """The shortcut an app is given on a desktop: its ``default_shortcut`` when it declares one naming a launch path it
     offers, whether or not that path takes text; else, for a supervised app (one whose row names a ``program``), its
     first launch path that takes no typed or drafted text and no mention, or its first launch path when every one
-    takes one, focusing. A manifest-less row with no program (a preview, an isolated test server) gets none, and neither does an
-    internal app."""
+    takes one, focusing. A manifest-less row with no program (a preview, an isolated test server) gets none, and
+    neither does an internal app."""
     if row.internal:
         return None
     offered = effective_launch_paths(row)
