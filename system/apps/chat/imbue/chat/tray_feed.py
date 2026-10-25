@@ -225,7 +225,7 @@ class TrayFeed(MutableModel):
         with self._lock:
             report = self._pending_report
             self._pending_report = None
-        if report is not None:
-            with self._lock:
+            if report is not None:
                 self._last_report = report
+        if report is not None:
             self.shell.report_chats_activity(report)
