@@ -408,7 +408,8 @@ The chat app feeds the tray over loopback: `POST /api/bubbles` with every messag
 somebody sends and every turn the agent closes with text (`{"speaker", "chat_id",
 "chat_title", "text", "message_id", "mentions"}`), which the shell broadcasts as
 `bubble` to every window but the speaker's own clients (the clients whose records
-carry the speaker's key, the synthetic `owner` key's for the owner too); and
+carry the speaker's key; the owner's under either of their keys, the account's or
+the synthetic `owner`, whichever the bubble carries); and
 `POST /api/chats-activity` with what every chat is doing (`{"chats": [{"chat_id",
 "title", "status", "kind"}]}`), kept and broadcast as `chats_activity`, and sent on
 connect once reported. A speech bubble is a rounded card hanging above the tray

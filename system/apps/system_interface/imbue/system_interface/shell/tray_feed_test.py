@@ -32,13 +32,17 @@ _CLIENTS = (
 
 
 def test_a_bubble_skips_every_client_recorded_as_the_speakers() -> None:
-    assert speakers_client_ids(_BOB, False, _CLIENTS) == {"bob-laptop", "bob-phone"}
-
-
-def test_the_owners_bubble_skips_the_clients_recorded_under_the_owner_key_too() -> None:
-    assert speakers_client_ids(_JOSH, True, _CLIENTS) == {"josh-laptop", "josh-before-sharing"}
+    assert speakers_client_ids(_BOB, _JOSH, _CLIENTS) == {"bob-laptop", "bob-phone"}
     # A visitor's bubble reaches the owner's clients, whichever key they carry.
-    assert "josh-before-sharing" not in speakers_client_ids(_BOB, False, _CLIENTS)
+    assert speakers_client_ids(_BOB, _JOSH, _CLIENTS).isdisjoint({"josh-laptop", "josh-before-sharing"})
+
+
+def test_the_owners_bubble_skips_the_clients_recorded_under_either_of_their_keys() -> None:
+    """Once the owner's heartbeats name an account, a bubble of theirs under that key or under the synthetic one (a
+    script's send) skips the clients recorded under both; on an unshared workspace only the synthetic key's exist."""
+    assert speakers_client_ids(_JOSH, _JOSH, _CLIENTS) == {"josh-laptop", "josh-before-sharing"}
+    assert speakers_client_ids(OWNER_PARTICIPANT_KEY, _JOSH, _CLIENTS) == {"josh-laptop", "josh-before-sharing"}
+    assert speakers_client_ids(OWNER_PARTICIPANT_KEY, OWNER_PARTICIPANT_KEY, _CLIENTS) == {"josh-before-sharing"}
 
 
 def test_the_store_keeps_the_last_report_for_the_windows_that_connect_later() -> None:
