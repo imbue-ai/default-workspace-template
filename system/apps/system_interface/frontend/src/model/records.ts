@@ -502,7 +502,7 @@ function parsePresets(raw: unknown): Record<string, string> {
   );
 }
 
-export function parseLaunchPath(raw: unknown): LaunchPath {
+function parseLaunchPath(raw: unknown): LaunchPath {
   const record = asObject(raw, "launch path");
   return {
     id: asString(record.id, "launch_path.id"),

@@ -13,7 +13,6 @@ import {
   parseClientRecords,
   parseDesktop,
   parseInventory,
-  parseLaunchPath,
   parseLayout,
   parseMessageRelay,
   parsePresentUsers,
@@ -434,8 +433,10 @@ describe("the tray's records (the multiplayer spec)", () => {
         mentions: [7],
       }),
     ).toThrow(WireShapeError);
+    const mentioning = { id: "lounge", label: "Lounge", path: "/x", mention_param: "message" };
     expect(
-      parseLaunchPath({ id: "lounge", label: "Lounge", path: "/x", mention_param: "message" }).mention_param,
+      parseAppRecord({ name: "chat", url: "http://127.0.0.1:1", launch_paths: [mentioning] }).launch_paths[0]
+        .mention_param,
     ).toBe("message");
   });
 });
