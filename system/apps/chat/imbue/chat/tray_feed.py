@@ -186,8 +186,9 @@ class TrayFeed(MutableModel):
         thread.start()
 
     def report_chats_again(self) -> None:
-        """Queue the last report posted once more, for a shell restarted since; nothing when none was posted yet, or
-        while a report is queued already (that one is newer, and a re-post never replaces it)."""
+        """Queue once more the last report a post took up (whether the shell took it or not: the re-post is for a
+        shell that was down), for a shell restarted since; nothing when there is none yet, or while a report is
+        queued already (that one is newer, and a re-post never replaces it)."""
         with self._lock:
             if self._last_report is None or self._pending_report is not None:
                 return
