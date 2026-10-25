@@ -93,6 +93,7 @@ from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import CreateChatRequest
+from imbue.chat.models import CreatedChat
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelPick
@@ -103,6 +104,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
+from imbue.chat.server import _bubble_new_chats_first_message
 from imbue.chat.server import _open_chat_stream
 from imbue.chat.server import _record_room_first_message_author
 from imbue.chat.server import _revive_and_retry_send
@@ -5667,6 +5669,27 @@ def test_a_mention_intake_makes_the_lounge_when_there_is_none(
     # A second click while the room is still being created lands in the same Lounge.
     again = _intake(client, message="@Carol ", target="lounge", is_draft="true")
     assert parse_qs(urlparse(again.get_json()["path"]).query)["chat"] == [chat_id]
+
+
+def test_a_new_agent_chats_first_message_raises_a_bubble_as_the_create_is_accepted(tmp_path: Path) -> None:
+    """The first send of an awaiting chat and the launcher's send into a new chat hand the message to the create
+    rather than the send path, so the create route raises the bubble itself (the multiplayer spec, section 6.5),
+    under the chat's minted title and the sender the request vouched for; an empty message raises none."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    state = state_of(app)
+    shell = _fake_shell_of(app)
+    created = CreatedChat(
+        chat_id=ChatId("agent-00000000000000000000000000000044"), name="Chat-2", display_name="Chat 2"
+    )
+
+    _bubble_new_chats_first_message(state, created, "", _VISITOR, "m-none")
+    _bubble_new_chats_first_message(state, created, "first words", _VISITOR, "m-first")
+
+    wait_until_true(lambda: len(shell.bubbles) == 1, 10.0, "the first message's bubble to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
+        for bubble in shell.bubbles
+    ] == [("user:user-bob-4471", str(created.chat_id), "Chat 2", "first words", "m-first", ())]
 
 
 def test_a_secondary_chat_feeds_no_tray_and_makes_no_lounge(tmp_path: Path) -> None:

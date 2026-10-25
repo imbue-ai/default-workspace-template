@@ -1731,9 +1731,10 @@ def _run_create_chat() -> CreatedChat | Response:
     agent_manager: AgentManager = state.agent_manager
     create_request = parse_request_body(CreateChatRequest)
     identity = request_identity()
-    # A room's first message is appended once its agent is up, by a thread with no identity of its own: who sent
-    # it is annotated under this id before the create, and what its mentions do runs once it has landed.
-    first_message_id = uuid4().hex if create_request.kind is ChatKind.ROOM else ""
+    # The first message's id, which its bubble carries. A room's first message is appended once its agent is up,
+    # by a thread with no identity of its own: who sent it is annotated under this id before the create, and what
+    # its mentions do runs once it has landed.
+    first_message_id = uuid4().hex
     on_message_delivered = (
         _room_first_message_hook(state, create_request.message, identity, current_app.app_context())
         if create_request.kind is ChatKind.ROOM
@@ -1763,6 +1764,7 @@ def _run_create_chat() -> CreatedChat | Response:
         _record_room_first_message_author(state, created.chat_id, create_request.message, identity, first_message_id)
     else:
         _consider_naming_chat(state, created.chat_id, create_request.message)
+        _bubble_new_chats_first_message(state, created, create_request.message, identity, first_message_id)
     if not create_request.should_wait:
         return created
     outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
@@ -1773,6 +1775,20 @@ def _run_create_chat() -> CreatedChat | Response:
         detail = outcome.error or f"Creating chat {created.display_name!r} failed"
         return error_response(detail, 500)
     return created
+
+
+def _bubble_new_chats_first_message(
+    state: ChatAppState, created: CreatedChat, message: str, identity: RequestIdentity, message_id: str
+) -> None:
+    """Raise the bubble a new agent chat's first message is due (the multiplayer spec, section 6.5): the message
+    rides or follows the create rather than a send, so it is posted here, under the chat's minted title, as the
+    create is accepted; its mentions act on nothing, since the chat is an agent's. A room's first message raises
+    its bubble once it has landed (``_act_on_room_first_message``), with its mentions."""
+    if not message or state.tray_feed is None:
+        return
+    state.tray_feed.post_bubble(
+        participant_key_of(identity), created.chat_id, created.display_name, message, message_id, ()
+    )
 
 
 def _record_room_first_message_author(
@@ -2040,12 +2056,14 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
     if isinstance(account, Response):
         return account
     if account is not None and not intake.is_draft:
+        message_id = uuid4().hex
         created = _created_or_refusal(
-            lambda: agent_manager.create_chat("", account_id=account, message=intake.message)
+            lambda: agent_manager.create_chat("", account_id=account, message=intake.message, message_id=message_id)
         )
         if isinstance(created, Response):
             return created
         _consider_naming_chat(state, created.chat_id, intake.message)
+        _bubble_new_chats_first_message(state, created, intake.message, request_identity(), message_id)
         return model_response(IntakeResponse(path=intake_path(created.chat_id, None)))
     minted = agent_manager.mint_awaiting_chat(account or "")
     token = state.pending_intakes.mint(intake, minted.chat_id, needs_pick=False)
