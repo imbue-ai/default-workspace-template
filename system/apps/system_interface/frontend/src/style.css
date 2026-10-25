@@ -101,18 +101,8 @@
   }
 }
 
-/* The tray's people and agent (the multiplayer spec, section 6): a stacked picture tucks under the one before
-   it, and an entry hops once when it arrives or when a bubble of its appears. */
-:root {
-  --tray-stack-overlap: 10px;
-  --bubble-width: 240px;
-  --bubble-radius: 14px;
-}
-
-.tray-stacked {
-  margin-left: calc(-1 * var(--tray-stack-overlap));
-}
-
+/* An entry of the tray's people and agent (the multiplayer spec, section 6) hops once when it arrives or when a
+   bubble of its appears. */
 @keyframes tray-hop {
   0% {
     transform: translateY(0);

@@ -78,6 +78,12 @@
      a card wider than the thing it belongs to reads as a second thing. */
   --desk-launcher-menu-width: var(--desk-launcher-field-width);
 
+  /* The tray (the multiplayer spec, section 6): how far a stacked picture tucks under the one before it, and the
+     speech bubbles' box. */
+  --desk-tray-stack-overlap: 10px;
+  --desk-bubble-width: 240px;
+  --desk-bubble-radius: 14px;
+
   /* The phone layout (plan-phone-interface.md): a bar of home, the pill, and plus above the
      safe-area inset, sheets rising over the page, and the home grid on the wallpaper. */
   --desk-phone-bar-padding: 12px;

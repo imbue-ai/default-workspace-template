@@ -77,7 +77,9 @@ export const PeopleStrip: m.Component<PeopleStripAttrs> = {
               "outline-none focus-visible:ring-2 focus-visible:ring-accent " +
               (isClickable ? "cursor-pointer " : "cursor-default ") +
               (isArrived ? "tray-hop " : "") +
-              (stacked && index > 0 ? "tray-stacked transition-[margin] group-hover/people:ml-0 " : ""),
+              (stacked && index > 0
+                ? "-ml-(--desk-tray-stack-overlap) transition-[margin] group-hover/people:ml-0 "
+                : ""),
             style: stacked ? { zIndex: String(entries.length - index) } : {},
             "aria-label": entryTitle(entry, isOwn),
             onclick: () => {

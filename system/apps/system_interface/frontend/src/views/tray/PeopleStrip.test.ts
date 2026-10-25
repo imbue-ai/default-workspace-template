@@ -91,8 +91,9 @@ describe("PeopleStrip", () => {
     expect(drawn[3].getAttribute("data-tray-self")).toBe("true");
     expect(drawn[3].textContent).toBe("J");
     expect(root.querySelector("[data-tray-widget='people']")?.getAttribute("data-stacked")).toBe("true");
-    expect(drawn[1].classList.contains("tray-stacked")).toBe(true);
-    expect(drawn[0].classList.contains("tray-stacked")).toBe(false);
+    expect(drawn[1].classList.contains("-ml-(--desk-tray-stack-overlap)")).toBe(true);
+    expect(drawn[1].classList.contains("group-hover/people:ml-0")).toBe(true);
+    expect(drawn[0].classList.contains("-ml-(--desk-tray-stack-overlap)")).toBe(false);
   });
 
   it("opens the Lounge for a person and a visiting agent, and nothing for yourself or an invited email", () => {

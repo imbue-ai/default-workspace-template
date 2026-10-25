@@ -46,7 +46,7 @@ export const BubbleLayer: m.Component<BubbleLayerAttrs> = {
             "data-bubble": bubble.speaker,
             "data-bubble-mention": bubble.isMention ? "true" : null,
             class:
-              "bubble pointer-events-auto absolute flex max-w-(--bubble-width) cursor-pointer items-start gap-1 rounded-(--bubble-radius) " +
+              "bubble pointer-events-auto absolute flex max-w-(--desk-bubble-width) cursor-pointer items-start gap-1 rounded-(--desk-bubble-radius) " +
               "border bg-surface px-3 py-2 text-(length:--font-size-row) text-primary shadow-overlay " +
               (bubble.isMention ? "border-accent border-2 " : "border-default "),
             style: { right: `${right}px`, bottom: `${bottom}px`, zIndex: String(100 + index) },
