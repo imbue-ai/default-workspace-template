@@ -266,11 +266,12 @@ class ChatAppState(MutableModel):
         room; a retired agent's late words and a subagent's raise none."""
         if self.tray_feed is None:
             return
-        spoken = [
-            (first_paragraph(text), event_id)
-            for text, event_id in (self._agents_words_in(event) for event in events)
-            if first_paragraph(text)
-        ]
+        spoken: list[tuple[str, str]] = []
+        for event in events:
+            words, event_id = self._agents_words_in(event)
+            paragraph = first_paragraph(words)
+            if paragraph:
+                spoken.append((paragraph, event_id))
         if not spoken:
             return
         snapshot = self.agent_manager.get_chat_snapshot(str(chat_id))
