@@ -512,8 +512,8 @@ export function parseLaunchPath(raw: unknown): LaunchPath {
     params: asArray(record.params ?? [], "launch_path.params").map((param) => asString(param, "launch_path.param")),
     presets: parsePresets(record.presets),
     text_param: asOptionalString(record.text_param, "launch_path.text_param"),
-    mention_param: asOptionalString(record.mention_param, "launch_path.mention_param"),
     draft_param: asOptionalString(record.draft_param, "launch_path.draft_param"),
+    mention_param: asOptionalString(record.mention_param, "launch_path.mention_param"),
   };
 }
 

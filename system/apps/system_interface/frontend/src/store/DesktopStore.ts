@@ -45,9 +45,9 @@ import type { BubbleStack } from "../model/Bubbles";
 import { labelForApp, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
 import type {
   AppRecord,
-  BubbleWire,
   AvatarCatalog,
   AvatarDesign,
+  BubbleWire,
   ClientArrival,
   ClientRecord,
   Desktop,
