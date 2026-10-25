@@ -125,8 +125,9 @@ and the profile cache.
   `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's default shortcut (its `default_shortcut`, else, for
-  an app a program runs, its first launch path taking no text, or its first
-  when every one takes text) on the first read after the registry has been read.
+  an app a program runs, its first launch path taking no text and no mention,
+  or its first when every one takes one) on the first read after the registry
+  has been read.
   An app that registers later has its default shortcut added to every
   desktop once, on the registry change and on every read;
   `default_shortcuts_offered.json` lists the apps offered so far, so a
