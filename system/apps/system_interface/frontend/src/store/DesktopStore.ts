@@ -1013,12 +1013,12 @@ export class DesktopStore {
     this.setBubbles(withoutSpeaker(this.bubbles, speaker));
   }
 
-  /** A bubble was clicked: it is put away, and the chat it was said in is shown with its composer focused (which
-   *  puts every other bubble pointing at that chat away too). */
+  /** A bubble was clicked: the chat it was said in is shown with its composer focused, which puts it away along
+   *  with every other bubble pointing at that chat; when nothing can show the chat it stays, so a mention of the
+   *  viewer is not lost to a click that opened nothing. */
   openBubble(speaker: string): void {
     const bubble = this.bubbles.find((candidate) => candidate.speaker === speaker);
     if (bubble === undefined) return;
-    this.dismissBubble(speaker);
     void this.showChat(bubble.chatId);
   }
 

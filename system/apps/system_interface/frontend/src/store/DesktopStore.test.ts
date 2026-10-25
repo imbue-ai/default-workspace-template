@@ -2829,8 +2829,10 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     });
     expect(await store.mentionPerson("Bob")).toBe(false);
     expect(await store.showChat("agent-1")).toBe(false);
-    expect(notices()).toEqual([NO_MENTION_APP_REASON, NO_CHAT_APP_REASON]);
-    // Nothing opened the chat, so the mention of the viewer is still up.
+    store.openBubble("user:user-bob-4471");
+    await settle();
+    expect(notices()).toEqual([NO_MENTION_APP_REASON, NO_CHAT_APP_REASON, NO_CHAT_APP_REASON]);
+    // Nothing opened the chat, the click on its bubble included, so the mention of the viewer is still up.
     expect(store.getBubbles().map((bubble) => [bubble.speaker, bubble.isMention])).toEqual([
       ["user:user-bob-4471", true],
     ]);
