@@ -148,7 +148,7 @@ class WebSocketBroadcaster(MutableModel):
 
     def broadcast(self, message: dict[str, Any]) -> None:
         """Serialize and send a message to all connected clients. Thread-safe."""
-        self._broadcast_to_matching(message, target_client_id=None)
+        self._broadcast_to_matching(message, target_client_id=None, excluded_client_ids=())
 
     def broadcast_to_client(self, message: dict[str, Any], client_id: str) -> None:
         """Send a message only to the windows of one client (every registered connection carrying its id).
@@ -156,7 +156,7 @@ class WebSocketBroadcaster(MutableModel):
         Connections that have not (yet) sent their ``client_state`` registration never match:
         without a report there is no client id to compare against.
         """
-        self._broadcast_to_matching(message, target_client_id=client_id)
+        self._broadcast_to_matching(message, target_client_id=client_id, excluded_client_ids=())
 
     def broadcast_except_clients(self, message: dict[str, Any], excluded_client_ids: Collection[str]) -> None:
         """Send a message to every window but those of ``excluded_client_ids``; a connection that has not registered
@@ -164,7 +164,7 @@ class WebSocketBroadcaster(MutableModel):
         self._broadcast_to_matching(message, target_client_id=None, excluded_client_ids=excluded_client_ids)
 
     def _broadcast_to_matching(
-        self, message: dict[str, Any], target_client_id: str | None, excluded_client_ids: Collection[str] = ()
+        self, message: dict[str, Any], target_client_id: str | None, excluded_client_ids: Collection[str]
     ) -> None:
         text = json.dumps(message)
         with self._lock:
