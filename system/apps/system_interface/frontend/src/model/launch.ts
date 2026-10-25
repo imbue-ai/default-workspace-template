@@ -27,14 +27,35 @@ export const NO_TEXT_APP_REASON = "No app in this workspace can start a chat";
 /** Why a page's ``shell:draft-text`` went nowhere. */
 export const NO_DRAFT_APP_REASON = "No app in this workspace can take a draft";
 
-/** Every launch path of every openable app, in registry and manifest order. */
+/** Every launch path of every openable app, in registry and manifest order, but the ones that take a mention of a
+ *  person: those are the tray's to run (the multiplayer spec, section 7.5), never a row of anything. */
 export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {
   const launches: AppLaunch[] = [];
   for (const app of apps) {
     if (app.internal) continue;
-    for (const launchPath of app.launch_paths) launches.push({ app, launchPath });
+    for (const launchPath of app.launch_paths) {
+      if (launchPath.mention_param === null) launches.push({ app, launchPath });
+    }
   }
   return launches;
+}
+
+/** The launch paths that take a mention of a person, in launcher order: the first is what a click on a person's
+ *  tray entry runs, with ``@<handle> `` as the param. */
+export function mentionRowsOf(apps: readonly AppRecord[]): AppLaunch[] {
+  const launches: AppLaunch[] = [];
+  for (const app of apps) {
+    if (app.internal) continue;
+    for (const launchPath of app.launch_paths) {
+      if (launchPath.mention_param !== null) launches.push({ app, launchPath });
+    }
+  }
+  return orderAppLaunches(launches);
+}
+
+/** The params a mention launch runs with: the mention as its mention param. */
+export function mentionParams(launchPath: LaunchPath, mention: string): Record<string, string> {
+  return launchPath.mention_param === null ? {} : { [launchPath.mention_param]: mention };
 }
 
 /** The launches in launcher order: the apps that declare a ``launcher_rank``, lowest first (registry

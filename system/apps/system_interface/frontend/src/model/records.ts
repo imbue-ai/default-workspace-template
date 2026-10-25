@@ -130,6 +130,9 @@ export interface LaunchPath {
   /** The param the shell fills with text to be drafted rather than sent (a free-text row too, and what the avatar
    *  dialog's draft goes through); null for none. */
   readonly draft_param: string | null;
+  /** The param the shell fills with a mention of the person whose tray entry was clicked (the multiplayer spec,
+   *  section 7.5); never a launcher row; null for none. */
+  readonly mention_param: string | null;
 }
 
 export interface DefaultShortcut {
@@ -207,6 +210,12 @@ export interface ClientRecord {
   /** Counts the moves of the client's stored desktop and the reports the shell redirected off a deleted desktop:
    *  orders what a window hears of its desktop. */
   readonly desktop_revision: number;
+  /** Who the client last arrived as (the multiplayer spec's participant key); null for a record from before the
+   *  key was kept. */
+  readonly participant: string | null;
+  /** The windows of its active desktop its layout does not minimize, top of the stack first: what the client is
+   *  looking at. */
+  readonly shown: readonly string[];
 }
 
 /** The ``shown_history`` entry that stands for the phone's home grid rather than a window. */
@@ -260,6 +269,48 @@ export interface PresentUser {
   readonly owner: boolean;
   readonly first_seen: string;
   readonly last_seen: string;
+}
+
+/** What a roster entry is (the multiplayer spec, section 4.1). */
+export type ParticipantKind = "person" | "invited" | "visiting_agent" | "workspace_agent";
+
+/** One entry of the roster (the multiplayer spec, section 4.2): everyone who may be here, as the shell lists them. */
+export interface RosterParticipant {
+  readonly key: string;
+  readonly kind: ParticipantKind;
+  readonly display_name: string;
+  readonly profile_picture_url: string | null;
+  readonly email: string | null;
+  /** What they are mentioned by, without the ``@``. */
+  readonly handle: string;
+  /** The colour they are drawn in, as ``#RRGGBB``. */
+  readonly color: string;
+  readonly is_owner: boolean;
+  readonly is_connected: boolean;
+  /** When they were last here (ISO 8601), when ever. */
+  readonly last_seen: string | null;
+  /** When their newest page last saw keyboard or pointer input (ISO 8601), when it reports it. */
+  readonly last_input_at: string | null;
+}
+
+/** What a chat is doing, as the chat app reports it for the agent's card (the multiplayer spec, section 6.4). */
+export type ChatActivityStatus = "working" | "background" | "idle" | "attention" | "stopped" | "error";
+
+export interface ChatActivity {
+  readonly chat_id: string;
+  readonly title: string;
+  readonly status: ChatActivityStatus;
+  readonly kind: "agent" | "room";
+}
+
+/** A speech bubble as the shell pushes it (the multiplayer spec, section 6.5): what somebody just said. */
+export interface BubbleWire {
+  readonly speaker: string;
+  readonly chat_id: string;
+  readonly chat_title: string;
+  readonly text: string;
+  readonly message_id: string;
+  readonly mentions: readonly string[];
 }
 
 /** What the avatar's image says about the machine (pinned-taskbar-entries plan section 4.6). */
@@ -451,7 +502,7 @@ function parsePresets(raw: unknown): Record<string, string> {
   );
 }
 
-function parseLaunchPath(raw: unknown): LaunchPath {
+export function parseLaunchPath(raw: unknown): LaunchPath {
   const record = asObject(raw, "launch path");
   return {
     id: asString(record.id, "launch_path.id"),
@@ -461,6 +512,7 @@ function parseLaunchPath(raw: unknown): LaunchPath {
     params: asArray(record.params ?? [], "launch_path.params").map((param) => asString(param, "launch_path.param")),
     presets: parsePresets(record.presets),
     text_param: asOptionalString(record.text_param, "launch_path.text_param"),
+    mention_param: typeof record.mention_param === "string" ? record.mention_param : null,
     draft_param: asOptionalString(record.draft_param, "launch_path.draft_param"),
   };
 }
@@ -560,6 +612,10 @@ export function parseClientRecord(raw: unknown): ClientRecord {
       asString(entry, `client.shown_history[${index}]`),
     ),
     desktop_revision: asNumber(record.desktop_revision ?? 0, "client.desktop_revision"),
+    participant: typeof record.participant === "string" ? record.participant : null,
+    shown: asArray(record.shown ?? [], "client.shown").map((entry, index) =>
+      asString(entry, `client.shown[${index}]`),
+    ),
   };
 }
 
@@ -667,6 +723,76 @@ export function parseWallpaperListing(raw: unknown): WallpaperListing {
 }
 
 /** The ``users`` of a ``presence_updated`` message or of ``GET /api/presence``. */
+const PARTICIPANT_KINDS: readonly ParticipantKind[] = ["person", "invited", "visiting_agent", "workspace_agent"];
+const CHAT_ACTIVITY_STATUSES: readonly ChatActivityStatus[] = [
+  "working",
+  "background",
+  "idle",
+  "attention",
+  "stopped",
+  "error",
+];
+
+function parseRosterParticipant(raw: unknown): RosterParticipant {
+  const record = asObject(raw, "participant");
+  const kind = record.kind;
+  if (typeof kind !== "string" || !PARTICIPANT_KINDS.includes(kind as ParticipantKind)) {
+    throw new Error(`participant.kind is not a participant kind: ${String(kind)}`);
+  }
+  return {
+    key: asString(record.key, "participant.key"),
+    kind: kind as ParticipantKind,
+    display_name: typeof record.display_name === "string" ? record.display_name : "",
+    profile_picture_url: typeof record.profile_picture_url === "string" ? record.profile_picture_url : null,
+    email: typeof record.email === "string" ? record.email : null,
+    handle: typeof record.handle === "string" ? record.handle : "",
+    color: typeof record.color === "string" ? record.color : "",
+    is_owner: record.is_owner === true,
+    is_connected: record.is_connected === true,
+    last_seen: typeof record.last_seen === "string" ? record.last_seen : null,
+    last_input_at: typeof record.last_input_at === "string" ? record.last_input_at : null,
+  };
+}
+
+/** The ``roster_updated`` push's participants, in roster order. */
+export function parseRoster(raw: unknown): RosterParticipant[] {
+  return asArray(raw, "participants").map(parseRosterParticipant);
+}
+
+function parseChatActivity(raw: unknown): ChatActivity {
+  const record = asObject(raw, "chat");
+  const status = record.status;
+  if (typeof status !== "string" || !CHAT_ACTIVITY_STATUSES.includes(status as ChatActivityStatus)) {
+    throw new Error(`chat.status is not a chat status: ${String(status)}`);
+  }
+  return {
+    chat_id: asString(record.chat_id, "chat.chat_id"),
+    title: typeof record.title === "string" ? record.title : "",
+    status: status as ChatActivityStatus,
+    kind: record.kind === "room" ? "room" : "agent",
+  };
+}
+
+/** The ``chats_activity`` push's chats, in the chat app's order. */
+export function parseChatsActivity(raw: unknown): ChatActivity[] {
+  return asArray(raw, "chats").map(parseChatActivity);
+}
+
+/** A ``bubble`` push. */
+export function parseBubble(raw: unknown): BubbleWire {
+  const record = asObject(raw, "bubble");
+  return {
+    speaker: asString(record.speaker, "bubble.speaker"),
+    chat_id: asString(record.chat_id, "bubble.chat_id"),
+    chat_title: typeof record.chat_title === "string" ? record.chat_title : "",
+    text: typeof record.text === "string" ? record.text : "",
+    message_id: typeof record.message_id === "string" ? record.message_id : "",
+    mentions: asArray(record.mentions ?? [], "bubble.mentions").filter(
+      (mention): mention is string => typeof mention === "string",
+    ),
+  };
+}
+
 export function parsePresentUsers(raw: unknown): PresentUser[] {
   return asArray(raw, "users").map(parsePresentUser);
 }

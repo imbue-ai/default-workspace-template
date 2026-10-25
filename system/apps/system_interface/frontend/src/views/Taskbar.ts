@@ -1,11 +1,13 @@
 /**
- * The taskbar (plan section 4.10), left to right: the launcher field, one entry per window of
- * the active desktop in opening order, the system tray. Always visible on the desktop layout; a
- * phone draws its own bar instead.
+ * The taskbar (plan section 4.10), left to right: the launcher field, the desktop switcher, one entry per window
+ * of the active desktop in opening order, the system tray (the share button, the people, you, and the agent).
+ * Always visible on the desktop layout; a phone draws its own bar instead.
  */
 
 import m from "mithril";
 import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
+import { DesktopsWidget } from "./DesktopsWidget";
+import type { DesktopsWidgetAttrs } from "./DesktopsWidget";
 import { LauncherField } from "./LauncherField";
 import type { LauncherFieldAttrs } from "./LauncherField";
 import { SystemTray } from "./SystemTray";
@@ -17,6 +19,9 @@ export interface TaskbarAttrs {
   readonly avatar: AvatarState;
   readonly openEntryMenuWindowId: string | null;
   readonly launcher: LauncherFieldAttrs;
+  /** The desktop switcher, between the launcher field and the window entries (the multiplayer spec, section 6.1,
+   *  where the desktops phase puts the overview button). */
+  readonly desktops: DesktopsWidgetAttrs;
   readonly tray: SystemTrayAttrs;
   readonly onEntryClick: (windowId: string) => void;
   readonly onEntryContextMenu: (windowId: string, x: number, y: number, target: Element) => void;
@@ -37,6 +42,7 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
       // a radius, an inset, and the bar's box stays where the geometry expects it.
       m("div", { "data-taskbar-content": "", class: "taskbar-content flex h-full items-center gap-2 px-2" }, [
         m(LauncherField, attrs.launcher),
+        m(DesktopsWidget, attrs.desktops),
         m(
           "div",
           {

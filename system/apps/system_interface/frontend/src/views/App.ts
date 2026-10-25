@@ -30,6 +30,7 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  avatarPinnedEntryOf,
   barEntries,
   desktopById,
   draftTargetOf,
@@ -52,6 +53,19 @@ import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
+import { WORKSPACE_AGENT_KEY } from "../model/Bubbles";
+import { needsYou, workingOn } from "../model/ChatsActivity";
+import { getOwnParticipant } from "../model/Presence";
+import type { RosterParticipant } from "../model/records";
+import { getRoster, rosterEntry } from "../model/Roster";
+import { AgentCard } from "./tray/AgentCard";
+import { BubbleLayer } from "./tray/BubbleLayer";
+import { PersonCard } from "./tray/PersonCard";
+import { createTrayCardHover } from "./tray/TrayCard";
+import type { OpenCard } from "./tray/TrayCard";
+
+/** How long an entry's hop lasts (style.css's ``tray-hop``). */
+const TRAY_HOP_MS = 450;
 import { Backdrop } from "./Backdrop";
 import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import { LauncherMenu } from "./LauncherMenu";
@@ -173,6 +187,16 @@ export function App(): m.Component<AppAttrs> {
   let gestureRoot: HTMLElement | null = null;
   let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
+  // The tray's card: which entry's, and the hover bookkeeping that opens and closes it.
+  const trayCard = createTrayCardHover(() => m.redraw());
+  // The roster entries that were connected at the last redraw, so one that just became connected hops once.
+  let connectedKeys: ReadonlySet<string> = new Set();
+  let arrivedKeys: ReadonlySet<string> = new Set();
+  let arrivalTimer: ReturnType<typeof setTimeout> | null = null;
+  // The agent's bubbles seen, so a new one makes the agent's entry hop once.
+  let agentBubbleMessageId: string | null = null;
+  let isAgentHopping = false;
+  let agentHopTimer: ReturnType<typeof setTimeout> | null = null;
 
   // The one menu the desktop ever has open. Which menu it is and what it was opened for is
   // ``openMenu``; opening, placing, dismissing and closing are the component's, and its
@@ -782,6 +806,88 @@ export function App(): m.Component<AppAttrs> {
       .finally(() => m.redraw());
   }
 
+  /** The entries that became connected since the last redraw hop for ``TRAY_HOP_MS``. */
+  function noteArrivals(roster: readonly RosterParticipant[]): void {
+    const connected = new Set(roster.filter((entry) => entry.is_connected).map((entry) => entry.key));
+    const arrived = [...connected].filter((key) => !connectedKeys.has(key) && connectedKeys.size > 0);
+    connectedKeys = connected;
+    if (arrived.length === 0) return;
+    arrivedKeys = new Set([...arrivedKeys, ...arrived]);
+    if (arrivalTimer !== null) clearTimeout(arrivalTimer);
+    arrivalTimer = setTimeout(() => {
+      arrivalTimer = null;
+      arrivedKeys = new Set();
+      m.redraw();
+    }, TRAY_HOP_MS);
+  }
+
+  /** The agent's entry hops once for each new bubble of the agent's. */
+  function noteAgentBubble(current: DesktopStore): void {
+    const agentBubble = current.getBubbles().find((bubble) => bubble.speaker === WORKSPACE_AGENT_KEY) ?? null;
+    if (agentBubble === null || agentBubble.messageId === agentBubbleMessageId) return;
+    agentBubbleMessageId = agentBubble.messageId;
+    isAgentHopping = true;
+    if (agentHopTimer !== null) clearTimeout(agentHopTimer);
+    agentHopTimer = setTimeout(() => {
+      agentHopTimer = null;
+      isAgentHopping = false;
+      m.redraw();
+    }, TRAY_HOP_MS);
+  }
+
+  /** The box of a speaker's tray entry, where its bubble's arrow points. */
+  function trayEntryRect(speaker: string): DOMRect | null {
+    const selector =
+      speaker === WORKSPACE_AGENT_KEY ? "[data-tray-agent]" : `[data-tray-person="${CSS.escape(speaker)}"]`;
+    return document.querySelector(selector)?.getBoundingClientRect() ?? null;
+  }
+
+  function trayCardView(current: DesktopStore, open: OpenCard, now: Date): m.Children {
+    const state = current.getState();
+    const frame = { anchor: trayCard.anchor(), onEnter: trayCard.enterCard, onLeave: trayCard.leaveCard };
+    if (open.kind === "agent") {
+      return m(AgentCard, {
+        ...frame,
+        avatar: state.avatar,
+        workspaceName: state.workspaceName,
+        workingOn: workingOn(),
+        needsYou: needsYou(),
+        onChangeAvatar: () => {
+          trayCard.close();
+          openAvatarChooser(current);
+        },
+        onOpenChat: (chatId) => {
+          trayCard.close();
+          void current.showChat(chatId);
+        },
+      });
+    }
+    const entry = rosterEntry(open.key);
+    if (entry === null) return null;
+    return m(PersonCard, {
+      ...frame,
+      entry,
+      isOwn: entry.key === getOwnParticipant(),
+      now,
+      clients: current.getClients(),
+      desktops: state.desktops,
+      apps: state.apps,
+      activeDesktopId: state.activeDesktopId,
+      onSwitchDesktop: (desktopId) => {
+        trayCard.close();
+        void current.switchDesktop(desktopId);
+      },
+      onNewDesktop: () => {
+        trayCard.close();
+        const glyphIndex = nextGlyphIndex(
+          state.desktops.map((desktop) => desktop.glyph),
+          SQUIGGLE_GLYPHS.length,
+        );
+        void current.createDesktop(nextDesktopName(state.desktops), SQUIGGLE_GLYPHS[glyphIndex].color, glyphIndex);
+      },
+    });
+  }
+
   function openAvatarChooser(current: DesktopStore): void {
     const opened: AvatarChooserState = { designs: null, loadError: null };
     avatarChooser = opened;
@@ -983,6 +1089,9 @@ export function App(): m.Component<AppAttrs> {
       detachGestures?.();
       resizeObserver?.disconnect();
       if (travelFrame !== null) cancelAnimationFrame(travelFrame);
+      trayCard.dispose();
+      if (arrivalTimer !== null) clearTimeout(arrivalTimer);
+      if (agentHopTimer !== null) clearTimeout(agentHopTimer);
     },
     view(vnode) {
       const current = vnode.attrs.store;
@@ -1030,6 +1139,12 @@ export function App(): m.Component<AppAttrs> {
         );
       };
       const menuRows = openMenu === null ? null : rowsOfOpenMenu(current, openMenu);
+      const roster = getRoster();
+      const now = new Date();
+      noteArrivals(roster);
+      noteAgentBubble(current);
+      const pinnedChat = avatarPinnedEntryOf(state);
+      const openCard = trayCard.current();
       // The wallpaper is painted here rather than on the backdrop so it spans the whole viewport:
       // the taskbar's translucent surface then has the desktop behind it to blur, and the backdrop
       // stays the viewport less the taskbar height that the geometry rules measure.
@@ -1146,12 +1261,12 @@ export function App(): m.Component<AppAttrs> {
                 queueMicrotask(() => m.redraw.sync());
               },
             },
-            tray: {
+            desktops: {
               desktops: state.desktops,
               activeDesktopId: state.activeDesktopId,
-              isDesktopsMenuOpen: openMenu?.kind === "desktops",
-              onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
-              onOpenDesktopsMenu: (event) => {
+              isMenuOpen: openMenu?.kind === "desktops",
+              onSwitch: (desktopId) => void current.switchDesktop(desktopId),
+              onOpenMenu: (event) => {
                 if (openMenu?.kind === "desktops") menu.close();
                 else openMenuAt({ kind: "desktops" }, anchorForEvent(event));
               },
@@ -1162,9 +1277,42 @@ export function App(): m.Component<AppAttrs> {
                 );
               },
             },
+            tray: {
+              roster,
+              viewer: getOwnParticipant(),
+              now,
+              arrived: arrivedKeys,
+              isShareOffered: current.getIsEmbedderPresent(),
+              avatar: state.avatar,
+              workspaceName: state.workspaceName,
+              isAgentAttending: pinnedChat !== null && pinnedChat.isFocused && !pinnedChat.isMinimized,
+              isAgentHopping,
+              onPersonClick: (entry) => {
+                trayCard.close();
+                void current.mentionPerson(entry.handle);
+              },
+              onAgentClick: () => {
+                trayCard.close();
+                void current.openMainChat();
+              },
+              onPersonHoverStart: (entry, element) => {
+                trayCard.enterEntry({ kind: "person", key: entry.key }, element);
+                void current.refreshClients();
+              },
+              onAgentHoverStart: (element) => trayCard.enterEntry({ kind: "agent" }, element),
+              onHoverEnd: trayCard.leaveEntry,
+            },
             onEntryClick,
             onEntryContextMenu,
           }),
+          m(BubbleLayer, {
+            bubbles: current.getBubbles(),
+            anchorOf: trayEntryRect,
+            rosterEntry,
+            onOpen: (speaker) => current.openBubble(speaker),
+            onDismiss: (speaker) => current.dismissBubble(speaker),
+          }),
+          openCard === null ? null : trayCardView(current, openCard, now),
           m(Toasts, {
             toasts: current.toasts.current(),
             placementClass: "fixed bottom-[calc(var(--desk-taskbar-height)+var(--desk-toast-gap))]",

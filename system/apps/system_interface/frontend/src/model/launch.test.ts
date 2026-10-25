@@ -10,6 +10,8 @@ import {
   launchRowKindOf,
   orderAppLaunches,
   textRowDisabledReason,
+  mentionParams,
+  mentionRowsOf,
 } from "./launch";
 import { appRecord, launchPathRecord } from "../testing/records";
 
@@ -130,5 +132,31 @@ describe("the free-text params", () => {
   it("never stands a POST launch path down for length, and stands one with no text param down outright", () => {
     expect(textRowDisabledReason(drafting, "x".repeat(5000))).toBeNull();
     expect(textRowDisabledReason(launchPathRecord(), "hi")).toBe("No app in this workspace can start a chat");
+  });
+});
+
+describe("the mention rows", () => {
+  it("keeps a launch path taking a mention out of every row and lists it for the tray, in launcher order", () => {
+    const mention = launchPathRecord({
+      id: "lounge",
+      path: "/api/chats/intake",
+      method: "POST",
+      params: ["message"],
+      mention_param: "message",
+    });
+    const chat = appRecord("chat", {
+      launcher_rank: 10,
+      launch_paths: [launchPathRecord({ id: "root", path: "/" }), mention],
+    });
+    const notes = appRecord("notes", {
+      launch_paths: [launchPathRecord({ id: "m", mention_param: "m", params: ["m"] })],
+    });
+    expect(appLaunchesOf([notes, chat]).map((launch) => launch.launchPath.id)).toEqual(["root"]);
+    expect(mentionRowsOf([notes, chat]).map((launch) => `${launch.app.name}:${launch.launchPath.id}`)).toEqual([
+      "chat:lounge",
+      "notes:m",
+    ]);
+    expect(mentionParams(mention, "@Bob ")).toEqual({ message: "@Bob " });
+    expect(mentionParams(launchPathRecord(), "@Bob ")).toEqual({});
   });
 });

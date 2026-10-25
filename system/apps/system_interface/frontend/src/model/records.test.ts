@@ -16,6 +16,10 @@ import {
   parsePresentUsers,
   parseWallpaperListings,
   shortcutKey,
+  parseRoster,
+  parseChatsActivity,
+  parseBubble,
+  parseLaunchPath,
 } from "./records";
 
 const DESKTOP_WIRE = {
@@ -206,7 +210,7 @@ describe("parseAppRecord", () => {
       draft_param: "message",
     };
     const app = parseAppRecord({ ...wire, launch_paths: [drafting] });
-    expect(app.launch_paths[0]).toEqual({ ...drafting, text_param: null });
+    expect(app.launch_paths[0]).toEqual({ ...drafting, mention_param: null, text_param: null });
     expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, method: "PUT" }] })).toThrow(WireShapeError);
     expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, presets: { is_draft: true } }] })).toThrow(
       WireShapeError,
@@ -296,7 +300,19 @@ describe("the small helpers", () => {
       entries: {},
       shown_history: [],
       desktop_revision: 0,
+      participant: null,
+      shown: [],
     });
+    expect(
+      parseClientRecord({
+        id: "c1",
+        active_desktop: "home",
+        last_seen: "now",
+        is_connected: true,
+        participant: "user:user-bob-4471",
+        shown: ["win-2", "win-1"],
+      }),
+    ).toMatchObject({ participant: "user:user-bob-4471", shown: ["win-2", "win-1"] });
     expect(
       parseClientRecord({
         id: "c1",
@@ -360,5 +376,52 @@ describe("the small helpers", () => {
       1,
     );
     expect(() => parseWallpaperListings({})).toThrow(WireShapeError);
+  });
+});
+
+describe("the tray's records (the multiplayer spec)", () => {
+  it("reads the roster, what every chat is doing, and a bubble, refusing an unknown kind or status", () => {
+    const participant = {
+      key: "user:user-bob-4471",
+      kind: "person",
+      display_name: "Bob",
+      profile_picture_url: null,
+      email: "bob@example.com",
+      handle: "Bob",
+      color: "#3b5ba9",
+      is_owner: false,
+      is_connected: true,
+      last_seen: "2026-10-25T11:00:00Z",
+      last_input_at: null,
+    };
+    expect(parseRoster([participant])).toEqual([participant]);
+    expect(() => parseRoster([{ ...participant, kind: "ghost" }])).toThrow(/participant kind/);
+    expect(parseChatsActivity([{ chat_id: "agent-1", title: "Main chat", status: "working", kind: "agent" }])).toEqual(
+      [{ chat_id: "agent-1", title: "Main chat", status: "working", kind: "agent" }],
+    );
+    expect(() => parseChatsActivity([{ chat_id: "agent-1", title: "x", status: "napping", kind: "agent" }])).toThrow(
+      /chat status/,
+    );
+    expect(
+      parseBubble({
+        type: "bubble",
+        speaker: "user:user-bob-4471",
+        chat_id: "agent-2",
+        chat_title: "Lounge",
+        text: "hi",
+        message_id: "m-1",
+        mentions: ["user:user-josh-0001", 7],
+      }),
+    ).toEqual({
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-2",
+      chat_title: "Lounge",
+      text: "hi",
+      message_id: "m-1",
+      mentions: ["user:user-josh-0001"],
+    });
+    expect(
+      parseLaunchPath({ id: "lounge", label: "Lounge", path: "/x", mention_param: "message" }).mention_param,
+    ).toBe("message");
   });
 });

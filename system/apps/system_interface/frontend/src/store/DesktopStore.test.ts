@@ -2,16 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
 import { placementOf } from "../geometry/stack";
 import { getPresentUsers, resetPresenceForTesting } from "../model/Presence";
+import { BUBBLE_LIFETIME_MS } from "../model/Bubbles";
+import { resetChatsActivityForTesting, workingOn } from "../model/ChatsActivity";
+import { getRoster, resetRosterForTesting } from "../model/Roster";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
   appRecord,
+  chatLikeAppRecord,
   clientRecord,
   desktopRecord,
   launchPathRecord,
   placementRecord,
   presentUserRecord,
+  rosterParticipantRecord,
   shortcutRecord,
   themeMetricsRecord,
   windowRecord,
@@ -19,6 +24,8 @@ import {
 import type { GridCell } from "../model/records";
 import {
   DesktopStore,
+  NO_CHAT_APP_REASON,
+  NO_MENTION_APP_REASON,
   OTHER_WORKSPACE_LINK_NOTICE,
   SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
   chooseInitialDesktopId,
@@ -123,6 +130,8 @@ beforeEach(() => {
 
 afterEach(() => {
   resetPresenceForTesting();
+  resetRosterForTesting();
+  resetChatsActivityForTesting();
   vi.useRealTimers();
 });
 
@@ -2704,5 +2713,91 @@ describe("the phone layout", () => {
     store.onVisibilityChange(false);
     socket.deliver().onConnected();
     expect(reloaded).toEqual(["win-1"]);
+  });
+});
+
+describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
+  it("keeps the roster and the chats' activity the socket pushes, and redraws for each", async () => {
+    let redraws = 0;
+    const store = await startedStore(() => void (redraws += 1));
+    const before = redraws;
+    socket.deliver().onRosterUpdated([rosterParticipantRecord("user:user-bob-4471", { display_name: "Bob" })]);
+    socket.deliver().onChatsActivity([{ chat_id: "agent-1", title: "Main chat", status: "working", kind: "agent" }]);
+    expect(getRoster().map((entry) => entry.display_name)).toEqual(["Bob"]);
+    expect(workingOn().map((chat) => chat.title)).toEqual(["Main chat"]);
+    expect(redraws).toBe(before + 2);
+    expect(store.getBubbles()).toEqual([]);
+  });
+
+  it("raises a bubble per speaker, puts it away after its lifetime or on a dismiss, and opens its chat on a click", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [
+      chatLikeAppRecord("chat", {
+        message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat", show: null }],
+      }),
+    ]);
+    const bubble = {
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-2",
+      chat_title: "Lounge",
+      text: "hi",
+      message_id: "m-1",
+      mentions: [],
+    };
+    socket.deliver().onBubble(bubble);
+    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", message_id: "m-2" });
+    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual([
+      "user:user-bob-4471",
+      "user:user-carol-1d2e",
+    ]);
+
+    store.dismissBubble("user:user-carol-1d2e");
+    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-bob-4471"]);
+    vi.advanceTimersByTime(BUBBLE_LIFETIME_MS + 1);
+    expect(store.getBubbles()).toEqual([]);
+
+    socket.deliver().onBubble({ ...bubble, message_id: "m-3" });
+    store.openBubble("user:user-bob-4471");
+    await settle();
+    expect(store.getBubbles()).toEqual([]);
+    expect(api.relayedMessages).toEqual([
+      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-2" }, sender: "system_interface" },
+    ]);
+  });
+
+  it("drafts a mention of a clicked person through the mention launch path into the pinned window, and opens the main chat for the agent", async () => {
+    const store = await startedStore();
+    const chat = chatLikeAppRecord("chat", {
+      launch_paths: [
+        ...chatLikeAppRecord("chat").launch_paths,
+        launchPathRecord({
+          id: "lounge",
+          label: "Mention in the Lounge",
+          path: "/api/chats/intake",
+          method: "POST",
+          params: ["message"],
+          presets: { target: "lounge", is_draft: "true" },
+          mention_param: "message",
+        }),
+      ],
+    });
+    offerApps(api, socket, [chat]);
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-chat", "chat", "/", { is_pinned: true })] })];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+
+    expect(await store.mentionPerson("Bob")).toBe(true);
+    expect(api.calls).toContain('launch:home:chat:lounge:{"message":"@Bob "}:window:win-chat');
+    expect(await store.openMainChat()).toBe(true);
+    expect(api.calls).toContain("launch:home:chat:new:{}:window:win-chat");
+  });
+
+  it("tells the user when no app takes a mention or shows a chat, and offers the share button only under a chrome", async () => {
+    const store = await startedStore();
+    expect(await store.mentionPerson("Bob")).toBe(false);
+    expect(await store.showChat("agent-1")).toBe(false);
+    expect(notices()).toEqual([NO_MENTION_APP_REASON, NO_CHAT_APP_REASON]);
+    expect(store.getIsEmbedderPresent()).toBe(false);
+    store.setEmbedderPresent(true);
+    expect(store.getIsEmbedderPresent()).toBe(true);
   });
 });

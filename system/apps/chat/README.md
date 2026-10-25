@@ -949,6 +949,25 @@ that chat (the main chat for `@agent`) the room's message as `[from: <name> in #
 the room. In an agent chat a handle is a word the agent reads like any other, and the
 composer offers no popover.
 
+The Lounge (`lounge.py`, section 7.5) is the room titled "Lounge" a click on a person in
+the desktop's tray opens: made the first time the roster the shell answers holds anyone
+besides the owner (a person, an invited email, or a visiting agent; the roster is read on
+every page and send, and once a minute), idempotent by title, and again when a click needs
+it after it was deleted. The `lounge` intake target resolves to it, making it when there
+is none; the manifest's `lounge` launch path (`presets = {target = "lounge", is_draft =
+"true"}`, `mention_param = "message"`) is what the shell runs with `@<handle> ` when a
+person's entry is clicked, so the mention lands in the Lounge's composer, unsent. A
+secondary chat makes no Lounge (403).
+
+The tray's feed (`tray_feed.py`, sections 6.4 and 6.5): every message a person or a
+visiting agent sends (the send route, an intake's send, a room's first message) is posted
+to the shell as a speech bubble (`POST /api/bubbles`, with the people it mentions when the
+chat is a room), as is every turn the workspace agent closes with text (an assistant turn
+of the chat's live agent's own session, or its post into a room), cut to the bubble's
+length; and every chat-list push is posted as what each chat is doing
+(`POST /api/chats-activity`). Both go through `ShellLayoutInterface`, best-effort, on a
+thread of their own, the activity reports coalesced; a secondary chat posts neither.
+
 ## Memory shedding
 
 The chat app re-tags chat agents' `oom_score_adj` from live activity

@@ -15,6 +15,7 @@ import type {
   Layout,
   Placement,
   PresentUser,
+  RosterParticipant,
   UpdateNoticeWire,
   WindowRecord,
 } from "../model/records";
@@ -48,6 +49,7 @@ export function launchPathRecord(overrides: Partial<LaunchPath> = {}): LaunchPat
     presets: {},
     text_param: null,
     draft_param: null,
+    mention_param: null,
     ...overrides,
   };
 }
@@ -165,6 +167,8 @@ export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}):
     entries: {},
     shown_history: [],
     desktop_revision: 0,
+    participant: null,
+    shown: [],
     ...overrides,
   };
 }
@@ -243,6 +247,25 @@ export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): Theme
     floatingEntrySize: 56,
     floatingEntryInsetX: 16,
     floatingEntryInsetY: 12,
+    ...overrides,
+  };
+}
+
+/** A connected person with a name made from the key, no picture, a handle of the name, and a fixed colour. */
+export function rosterParticipantRecord(key: string, overrides: Partial<RosterParticipant> = {}): RosterParticipant {
+  const name = overrides.display_name ?? capitalized(key.split(":").pop() ?? key);
+  return {
+    key,
+    kind: "person",
+    display_name: name,
+    profile_picture_url: null,
+    email: null,
+    handle: name.replace(/\s+/g, "-"),
+    color: "#3b5ba9",
+    is_owner: false,
+    is_connected: true,
+    last_seen: null,
+    last_input_at: null,
     ...overrides,
   };
 }
