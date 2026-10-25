@@ -955,11 +955,11 @@ into an agent chat through the switch, or a chat the user named so, is the Loung
 under that title is made the first time the roster the shell answers holds anyone besides
 the owner (a person, an invited email, or a visiting agent; the roster is read once a
 minute), and again when a click needs the Lounge after it was deleted or renamed, only
-while no chat of any kind carries the title. The `lounge` intake
-target resolves to it, making the room when there is no such chat; the manifest's `lounge`
-launch path (`presets = {target = "lounge", is_draft = "true"}`, `mention_param =
-"message"`) is what the shell runs with `@<handle> ` when a person's entry is clicked, so
-the mention lands in the Lounge's composer, unsent. A secondary chat makes no Lounge (403).
+while no chat of any kind carries the title. The `lounge` intake target resolves to it,
+making the room when there is no such chat; the manifest's `lounge` launch path
+(`presets = {target = "lounge", is_draft = "true"}`, `mention_param = "message"`) is what
+the shell runs with `@<handle> ` when a person's entry is clicked, so the mention lands in
+the Lounge's composer, unsent. A secondary chat makes no Lounge (403).
 
 The tray's feed (`tray_feed.py`, sections 6.4 and 6.5): every message a person or a
 visiting agent sends (the send route, an intake's send, a room's first message once it has
@@ -971,9 +971,9 @@ length. The agent's turns reach the feed through the session watcher a page's st
 builds (`ChatAppState.bubble_agent_turns`, in its `on_events`), which memory shedding
 evicts, so the agent's bubbles rise for the turns of the chats a page is reading: a turn in
 a chat nobody has open raises none (the spec's section 11). And every chat-list push is
-posted as what each chat is doing (`POST /api/chats-activity`), the last report posted again
-once a minute, since the shell keeps it in memory alone and one restarted since the last
-chat-list change would otherwise paint nothing on the agent's card. Both go through
+posted as what each chat is doing (`POST /api/chats-activity`), the last report posted
+again once a minute, since the shell keeps it in memory alone and one restarted since the
+last chat-list change would otherwise paint nothing on the agent's card. Both go through
 `ShellLayoutInterface`, best-effort, on a thread of their own, the activity reports
 coalesced; a secondary chat posts neither.
 
