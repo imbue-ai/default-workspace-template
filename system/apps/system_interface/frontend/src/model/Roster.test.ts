@@ -29,24 +29,25 @@ describe("the roster model", () => {
 });
 
 describe("presenceStateOf and statusLineOf", () => {
-  it("reads active from recent input, idle from stale input, offline from no connection, invited from the kind", () => {
+  it("reads active from recent or unreported input, idle from stale input, offline from no connection, invited from the kind", () => {
     const active = rosterParticipantRecord("user:a", { is_connected: true, last_input_at: "2026-10-25T11:59:30Z" });
     const idle = rosterParticipantRecord("user:b", { is_connected: true, last_input_at: "2026-10-25T11:56:00Z" });
     const unknown = rosterParticipantRecord("user:c", { is_connected: true, last_input_at: null });
     const offline = rosterParticipantRecord("user:d", { is_connected: false, last_seen: "2026-10-25T09:00:00Z" });
     const invited = rosterParticipantRecord("email:e@x", { kind: "invited" });
     const agent = rosterParticipantRecord("workspace-agent", { kind: "workspace_agent", is_connected: true });
+    // A page that reports no input (one from before input was reported) is active while connected (spec, section 11).
     expect([active, idle, unknown, offline, invited, agent].map((entry) => presenceStateOf(entry, NOW))).toEqual([
       "active",
       "idle",
-      "idle",
+      "active",
       "offline",
       "invited",
       "active",
     ]);
     expect(statusLineOf(active, NOW)).toBe("Active");
     expect(statusLineOf(idle, NOW)).toBe("Idle · 4m");
-    expect(statusLineOf(unknown, NOW)).toBe("Idle");
+    expect(statusLineOf(unknown, NOW)).toBe("Active");
     expect(statusLineOf(offline, NOW)).toBe("Offline · last seen 3h ago");
     expect(statusLineOf(rosterParticipantRecord("user:f", { is_connected: false }), NOW)).toBe("Offline");
     expect(statusLineOf(invited, NOW)).toBe("Invited");

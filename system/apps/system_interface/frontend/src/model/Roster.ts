@@ -38,8 +38,10 @@ export function presenceStateOf(entry: RosterParticipant, now: Date): PresenceSt
   if (!entry.is_connected) return "offline";
   // A visiting agent never reports input: its presence is the gateway's last-seen record, so connected is active.
   if (entry.kind === "visiting_agent") return "active";
+  // A page from before input was reported says nothing about it: the person is active while connected (the
+  // multiplayer spec, section 11).
   const inputAt = entry.last_input_at === null ? null : Date.parse(entry.last_input_at);
-  if (inputAt === null || Number.isNaN(inputAt)) return "idle";
+  if (inputAt === null || Number.isNaN(inputAt)) return "active";
   return now.getTime() - inputAt < ACTIVE_INPUT_WINDOW_MS ? "active" : "idle";
 }
 
