@@ -14,6 +14,8 @@ from imbue.chat.primitives import ChatStatus
 from imbue.chat.testing import make_chat_snapshot
 from imbue.chat.tray_feed import BUBBLE_TEXT_LIMIT
 from imbue.chat.tray_feed import TrayFeed
+from imbue.chat.tray_feed import activity_kind_of
+from imbue.chat.tray_feed import activity_status_of
 from imbue.chat.tray_feed import bubble_text
 from imbue.chat.tray_feed import chats_activity_report
 from imbue.chat.tray_feed import first_paragraph
@@ -30,6 +32,11 @@ def test_a_bubble_shows_the_first_part_of_a_message_and_the_first_paragraph_of_a
     assert first_paragraph("\n\nDone, see the file.\n\nIt holds the three cases.") == "Done, see the file."
     assert first_paragraph("one\nline\n\nmore") == "one\nline"
     assert first_paragraph("   \n\n  ") == ""
+
+
+def test_every_chat_status_and_kind_is_spelled_the_same_on_the_wire() -> None:
+    assert [activity_status_of(status).name for status in ChatStatus] == [status.name for status in ChatStatus]
+    assert [activity_kind_of(kind).name for kind in ChatKind] == [kind.name for kind in ChatKind]
 
 
 def test_the_chats_activity_report_lists_every_chat_with_its_status_and_kind() -> None:

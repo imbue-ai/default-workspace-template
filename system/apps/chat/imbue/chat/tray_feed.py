@@ -13,6 +13,7 @@ from collections.abc import Sequence
 from concurrent.futures import Future
 from concurrent.futures import ThreadPoolExecutor
 from typing import Final
+from typing import assert_never
 
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -26,6 +27,8 @@ from workspace_layout.primitives import ParticipantKey
 
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
+from imbue.chat.primitives import ChatStatus
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
 
@@ -56,6 +59,38 @@ def _settled_future() -> Future[None]:
 
 
 @pure
+def activity_status_of(status: ChatStatus) -> ChatActivityStatus:
+    """A chat's status as the shell's wire enum spells it, one for one."""
+    match status:
+        case ChatStatus.WORKING:
+            return ChatActivityStatus.WORKING
+        case ChatStatus.BACKGROUND:
+            return ChatActivityStatus.BACKGROUND
+        case ChatStatus.IDLE:
+            return ChatActivityStatus.IDLE
+        case ChatStatus.ATTENTION:
+            return ChatActivityStatus.ATTENTION
+        case ChatStatus.STOPPED:
+            return ChatActivityStatus.STOPPED
+        case ChatStatus.ERROR:
+            return ChatActivityStatus.ERROR
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
+def activity_kind_of(kind: ChatKind) -> ChatActivityKind:
+    """A chat's kind as the shell's wire enum spells it, one for one."""
+    match kind:
+        case ChatKind.AGENT:
+            return ChatActivityKind.AGENT
+        case ChatKind.ROOM:
+            return ChatActivityKind.ROOM
+        case _ as unreachable:
+            assert_never(unreachable)
+
+
+@pure
 def chats_activity_report(snapshots: Sequence[ChatSnapshot]) -> ChatsActivityReport:
     """Every chat as the tray's agent card lists it: its title, what it is doing, and what it is."""
     return ChatsActivityReport(
@@ -63,8 +98,8 @@ def chats_activity_report(snapshots: Sequence[ChatSnapshot]) -> ChatsActivityRep
             ChatActivity(
                 chat_id=str(snapshot.chat_id),
                 title=snapshot.title,
-                status=ChatActivityStatus(snapshot.status.value),
-                kind=ChatActivityKind(snapshot.kind.value),
+                status=activity_status_of(snapshot.status),
+                kind=activity_kind_of(snapshot.kind),
             )
             for snapshot in snapshots
         )
