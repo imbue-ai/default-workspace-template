@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
@@ -16,6 +17,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.testing import make_chat_snapshot
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.model_update import to_update
@@ -77,6 +79,31 @@ def test_the_keeper_answers_the_room_there_is_and_makes_one_only_once(tmp_path: 
     assert LoungeKeeper(agent_manager=seeded).ensure() == ChatId(_LOUNGE_ID)
     manager.stop()
     seeded.stop()
+
+
+def test_a_renamed_lounge_is_no_longer_the_lounge_and_the_next_need_makes_a_new_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Lounge is idempotent by title (the multiplayer spec, section 7.5): the room the keeper made is answered
+    while its create is in flight, and once listed only for as long as it keeps the title."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, _log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    keeper = LoungeKeeper(agent_manager=manager)
+
+    first = keeper.ensure()
+    wait_until_true(lambda: manager.get_provisional_chat(str(first)) is None, 10.0, "the Lounge's create to settle")
+    assert keeper.ensure() == first
+    manager.rename_chat(str(first), "Team")
+
+    second = keeper.ensure()
+
+    assert second != first
+    provisional = manager.get_provisional_chat(str(second))
+    assert provisional is not None and provisional.name == LOUNGE_TITLE
+    manager.stop()
 
 
 def test_a_fresh_roster_makes_the_lounge_once_someone_besides_the_owner_is_in_it(tmp_path: Path) -> None:

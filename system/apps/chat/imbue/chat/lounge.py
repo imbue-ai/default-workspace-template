@@ -63,8 +63,8 @@ class LoungeKeeper(MutableModel):
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
-    # The Lounge this keeper created, while its create is in flight: a chat being created is not listed yet, and
-    # a second create of the name would be refused.
+    # The Lounge this keeper created, for as long as it is provisional: a chat being created is not listed yet,
+    # and a second create of the name would be refused. Once listed, its title says whether it is still the Lounge.
     _created: ChatId | None = PrivateAttr(default=None)
 
     def ensure(self) -> ChatId:
@@ -73,7 +73,7 @@ class LoungeKeeper(MutableModel):
             found = find_lounge(self.agent_manager.get_chat_snapshots())
             if found is not None:
                 return found
-            if self._created is not None and self.agent_manager.knows_chat(self._created):
+            if self._created is not None and self.agent_manager.get_provisional_chat(str(self._created)) is not None:
                 return self._created
             self._created = self.agent_manager.create_chat(LOUNGE_TITLE, kind=ChatKind.ROOM).chat_id
             return self._created
