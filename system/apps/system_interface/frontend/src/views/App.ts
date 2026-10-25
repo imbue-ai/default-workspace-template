@@ -80,9 +80,6 @@ import { PersonCard } from "./tray/PersonCard";
 import { createTrayCardHover } from "./tray/TrayCard";
 import type { OpenCard } from "./tray/TrayCard";
 
-/** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
- *  the animation. */
-
 /** Which menu is open and what it was opened for. Where it sits, and everything about taking it
  *  down, belongs to the menu component itself. */
 type OpenMenu =

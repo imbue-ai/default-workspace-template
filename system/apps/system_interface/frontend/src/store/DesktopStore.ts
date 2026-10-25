@@ -215,7 +215,8 @@ export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
 export const NO_MENTION_APP_REASON = "No app in this workspace can open a chat with them";
 /** Why a chat could not be shown: no app takes the message that shows one. */
 export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
-/** How long a tray entry's hop lasts (style.css's ``tray-hop``). */
+/** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
+ *  the animation. */
 export const TRAY_HOP_MS = 450;
 /** The message that shows a chat, as the Imbue Studio app's notifications send it (the chat app registers for it). */
 export const FOCUS_CHAT_MESSAGE_TYPE = "minds:focus-chat";
