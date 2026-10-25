@@ -196,8 +196,8 @@ class TrayFeed(MutableModel):
             self.report_chats_again()
 
     def shutdown(self) -> None:
-        """Drop the posts not yet started, and every later one, and let the one in flight finish on its own.
-        Idempotent."""
+        """Stop the re-posts, drop the posts not yet started and every later one, and let the one in flight finish
+        on its own. Idempotent."""
         self._stop.set()
         if self._thread is not None:
             self._thread.join(timeout=5)
