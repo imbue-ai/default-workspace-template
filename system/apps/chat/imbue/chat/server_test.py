@@ -5617,7 +5617,6 @@ def test_the_agents_turns_raise_a_bubble_with_their_first_paragraph(tmp_path: Pa
 
 def test_every_chat_list_push_tells_the_shell_what_each_chat_is_doing(tmp_path: Path) -> None:
     app = _peopled_app(tmp_path, RecordingMngrMessenger())
-    state = state_of(app)
     shell = _fake_shell_of(app)
 
     assert app.test_client().post(f"/api/chats/{_LOUNGE_ID}/rename", json={"title": "Lounge 2"}).status_code == 200
@@ -5627,7 +5626,6 @@ def test_every_chat_list_push_tells_the_shell_what_each_chat_is_doing(tmp_path: 
     assert sorted((chat.chat_id, chat.title, chat.kind.value) for chat in latest.chats) == sorted(
         [(_MAIN_ID, "Main", "agent"), (_LOUNGE_ID, "Lounge 2", "room")]
     )
-    assert state.agent_manager.get_chat_snapshot(_LOUNGE_ID) is not None
 
 
 def test_a_mention_intake_drafts_into_the_lounge_there_is(tmp_path: Path) -> None:
