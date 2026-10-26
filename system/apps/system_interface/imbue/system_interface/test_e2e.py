@@ -2534,6 +2534,12 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
         expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
 
 
+def _css_rgb(hex_color: str) -> str:
+    """A ``#rrggbb`` colour as a computed style spells it."""
+    red, green, blue = (int(hex_color[index : index + 2], 16) for index in (1, 3, 5))
+    return f"rgb({red}, {green}, {blue})"
+
+
 @pytest.mark.timeout(90, func_only=False)
 def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chrome_on(
     e2e_server: E2EServer, page: Page
@@ -2579,12 +2585,6 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
         expect(visitor.locator('[data-tray-person="user:user-alice"][data-tray-ringed="true"]')).to_have_count(
             0, timeout=15000
         )
-
-
-def _css_rgb(hex_color: str) -> str:
-    """A ``#rrggbb`` colour as a computed style spells it."""
-    red, green, blue = (int(hex_color[index : index + 2], 16) for index in (1, 3, 5))
-    return f"rgb({red}, {green}, {blue})"
 
 
 @pytest.mark.timeout(120, func_only=False)
