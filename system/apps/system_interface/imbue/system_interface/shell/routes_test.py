@@ -2793,6 +2793,7 @@ def test_a_show_launch_puts_the_page_on_screen_by_the_show_rule_and_lays_it_out_
             LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-9"}),
             LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-9"}),
             LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-10"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-11"}),
         ]
     )
     app = _launching_shell(tmp_path, broadcaster, poster)
@@ -2857,6 +2858,28 @@ def test_a_show_launch_puts_the_page_on_screen_by_the_show_rule_and_lays_it_out_
     assert [(placement["window_id"], placement["state"]) for placement in _placements(client, "c1")] == [
         (terminal["id"], "SNAPPED_LEFT"),
         (pinned["id"], "SNAPPED_RIGHT"),
+    ]
+
+    # Beside a window pulled out into a window of the chrome's own: the pinned window is navigated as before, and
+    # nothing is laid out, since snapping the pulled-out window would pull it back.
+    _pull_out(client, terminal["id"])
+    beside_pulled_out = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "hi"},
+            "target": {"kind": "show", "beside": terminal["id"]},
+        },
+    )
+    assert beside_pulled_out.status_code == 200, beside_pulled_out.get_json()
+    assert beside_pulled_out.get_json()["window"]["path"] == "/?chat=agent-11"
+    assert [
+        (placement["window_id"], placement["state"], placement["is_detached"])
+        for placement in _placements(client, "c1")
+    ] == [
+        (terminal["id"], "SNAPPED_LEFT", True),
+        (pinned["id"], "SNAPPED_RIGHT", False),
     ]
 
     # An app with no pinned window and nothing at the path gets a new window, laid out beside none, and placed

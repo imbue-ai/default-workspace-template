@@ -476,11 +476,15 @@ class ShellState(MutableModel):
                 # The pinned window's own balloon names it as ``beside`` and the show navigates it: one window, nothing
                 # to lay out beside.
                 if beside is not None and beside.id != shown.window_id and not shown.is_raised_in_own_window:
-                    self.edit_desktop_layout(
-                        shown.desktop,
-                        request.client_id,
-                        lambda layout: with_windows_side_by_side(layout, shown.window_id, beside.id),
-                    )
+                    layout = self.read_desktop_layout(shown.desktop, request.client_id)
+                    # A ``beside`` pulled out into a window of the chrome's own is left out, as the shown window is:
+                    # snapping it would pull it back.
+                    if not placement_of(layout, beside.id).is_detached:
+                        self.edit_desktop_layout(
+                            shown.desktop,
+                            request.client_id,
+                            lambda current: with_windows_side_by_side(current, shown.window_id, beside.id),
+                        )
                 window = require_window(shown.desktop, shown.window_id)
                 seen = effective_window(
                     window, self.read_window_paths(shown.desktop, request.client_id).get(window.id)
