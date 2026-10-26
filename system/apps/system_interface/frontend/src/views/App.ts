@@ -1366,10 +1366,10 @@ export function App(): m.Component<AppAttrs> {
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
           // Viewing somebody else's desktop: their colour all the way round, the taskbar included (the
           // multiplayer spec, section 8.3); it runs into the chip at the bar's corner.
-          viewing === null
+          viewing === null || viewed === null
             ? null
             : m("div", {
-                "data-viewing-outline": viewed?.id ?? "",
+                "data-viewing-outline": viewed.id,
                 class: "pointer-events-none absolute inset-0 z-(--z-sticky) border-(length:--desk-viewing-outline)",
                 style: { borderColor: viewing.color },
               }),
