@@ -361,8 +361,8 @@ export class FakeDesktopApi implements DesktopApi {
 
   /** The show rule as the shell's ``show`` launch target applies it: a window of the app already at the path is
    *  raised, else the app's pinned window is pointed at it for this client, else a window is opened; then, beside a
-   *  window other than the shown one and not pulled out, the two are snapped to the halves (the shown one on the half
-   *  its centre is on, the right when it is minimized or never placed), the shown one on top. */
+   *  window other than the shown one, neither of them pulled out, the two are snapped to the halves (the shown one on
+   *  the half its centre is on, the right when it is minimized or never placed), the shown one on top. */
   private async showLaunched(
     desktopId: string,
     request: LaunchRequest,
@@ -393,12 +393,13 @@ export class FakeDesktopApi implements DesktopApi {
       isNew = opened.isNew;
     }
     const layout = this.layoutOf(desktopId, request.clientId);
+    const placement = placementOf(layout, shown.id);
     if (
       besideWindowId !== undefined &&
       besideWindowId !== shown.id &&
+      !placement.is_detached &&
       !placementOf(layout, besideWindowId).is_detached
     ) {
-      const placement = placementOf(layout, shown.id);
       const isPlaced = layout.placements.some((candidate) => candidate.window_id === shown.id);
       const isRight = !isPlaced || placement.is_minimized || placement.frame.x + placement.frame.width / 2 >= 0.5;
       const beside = withWindowState(layout, besideWindowId, isRight ? "SNAPPED_LEFT" : "SNAPPED_RIGHT");
