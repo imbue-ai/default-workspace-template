@@ -1159,10 +1159,12 @@ export class DesktopStore {
   }
 
   /** The desktop this window is viewing: the active one, when it is not the viewer's own (section 8.3); null on
-   *  one of the viewer's own. */
+   *  one of the viewer's own, and until a heartbeat has said who the viewer is, so a visitor's page does not wear
+   *  the viewing chrome on their own desktop while the first heartbeat is on its way. */
   viewedDesktop(): Desktop | null {
     const desktop = activeDesktop(this.state);
-    return desktop !== null && !this.isOwnDesktop(desktop) ? desktop : null;
+    if (desktop === null || getOwnIdentity() === null) return null;
+    return this.isOwnDesktop(desktop) ? null : desktop;
   }
 
   /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop. */

@@ -2973,6 +2973,22 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(store.viewedDesktop()).toBeNull();
   });
 
+  it("views nothing until a heartbeat has said who the viewer is", async () => {
+    api.desktops = [...api.desktops, alices];
+    const store = await startedStore();
+    await store.switchDesktop("alice");
+    expect(store.viewedDesktop()).toBeNull();
+    setOwnIdentityForTesting({
+      owner: false,
+      user_id: "user-alice-0001",
+      email: "alice@example.com",
+      participant: alice.key,
+    });
+    expect(store.viewedDesktop()).toBeNull();
+    setOwnIdentityForTesting({ owner: true, user_id: null, email: null, participant: "owner" });
+    expect(store.viewedDesktop()?.id).toBe("alice");
+  });
+
   it("stops viewing onto its first own desktop when the way back is gone", async () => {
     const store = await viewerStore();
     await store.switchDesktop("work");
