@@ -88,7 +88,7 @@ if [[ -n "$open_steps" ]]; then
     emit_reminder "
 [Step tracking reminder]
 
-You have declared step records but none is currently in_progress. Call \`tk start <id>\` on your next step before doing more work. Steps must be serial -- only one in_progress at a time.
+You have declared step records but none is currently in_progress. Call \`tk start <id>\` on your next step before doing more work. Work on one piece of work at a time -- only its steps are in_progress.
 "
 fi
 

@@ -48,7 +48,7 @@ const REQUIRE_STEPS_NONE =
   "See CLAUDE.md > Task management for the full protocol.\n";
 const REQUIRE_STEPS_NOT_STARTED =
   "\n[Step tracking reminder]\n\n" +
-  "You have declared step records but none is currently in_progress. Call `tk start <id>` on your next step before doing more work. Steps must be serial -- only one in_progress at a time.\n";
+  "You have declared step records but none is currently in_progress. Call `tk start <id>` on your next step before doing more work. Work on one piece of work at a time -- only its steps are in_progress.\n";
 
 /** Run `ticket steps [args]` and return non-empty step lines, or null when tk
  * cannot be consulted (no tickets dir / script). "" means consulted, no steps.
@@ -100,7 +100,7 @@ function carryoverReminder(): string | null {
     "For each one, decide before continuing: keep working on it (call `tk start <id>` if it's not already in_progress), " +
     'replace it with a fresh step, or close it now with `tk close <id> "<summary>"` (the positional summary is required for steps). ' +
     "The summary is a concise one-line description of the *work done* in this step (the caption a non-technical user sees), not the outcome -- " +
-    "the outcome goes in your final assistant message. Steps are sequential: do not start a new step until the previous one is closed.\n\n" +
+    "the outcome goes in your final assistant message. Work on one piece of work at a time: do not start a new step until the previous one is closed, except the steps of several messages one piece of work answers together.\n\n" +
     "See CLAUDE.md > Task management for the full protocol.\n"
   );
 }

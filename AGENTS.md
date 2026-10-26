@@ -35,17 +35,27 @@ When you are following a skill, mirror its rough sequence in the progress view, 
 
 ## Declaring and running steps
 
-The first thing you do on any prompt that warrants real work is decompose it into steps and create them all up front, BEFORE doing any of the work — the step sequence is the user-visible plan. Concretely:
+The first thing you do on any prompt that warrants real work is decompose it into steps and create them all up front, BEFORE doing any of the work — the step sequence is the user-visible plan. A message that arrives with a `[Message step]` note already has its own step (see "Steps made for the user's messages" below), so for it you declare only steps for parts of the work. Concretely:
 
 1. (Optional) one short prose acknowledgement, e.g. "Sure, looking into that now." Keep it to one line; don't narrate the plan here.
 2. `tk create --step "<user facing title>"` for every step you currently expect, in order. You may batch them into one tool call, but each step must be its **own separate `tk create` command** (on its own line or joined with `;`) — each `tk create` makes exactly one step, so never pass multiple `--step`s to a single `tk create` (tk rejects that). **Never redirect the output of a `tk create`/`start`/`close`** (`>`, `>>`, `2>`, `&>`, `| tee`, …): the progress view reads each step from the command's visible output (`Created <id>: <title>`), so a redirect makes the step drop out of the plan. Note the ids. Do NOT `tk start` any yet.
-3. `tk start <id>` the first step **in the same assistant message as the step's first real command** (two tool calls, one message: the `tk start` first, the work second), do its work, then move to the next step with **one tool call** that closes the finished step and starts the next: `tk close <id> "user facing summary"; tk start <next-id>` — again in the same message as the next step's first command. Only one step is `in_progress` at a time. The last step's `tk close` stands alone, before your wrap-up reply.
+3. `tk start <id>` the first step **in the same assistant message as the step's first real command** (two tool calls, one message: the `tk start` first, the work second), do its work, then move to the next step with **one tool call** that closes the finished step and starts the next: `tk close <id> "user facing summary"; tk start <next-id>` — again in the same message as the next step's first command. Work on one piece of work at a time: only its steps are `in_progress` (usually one; see the next section for messages answered together). The last step's `tk close` stands alone, before your wrap-up reply.
 
 **A `tk start` or `tk close` shares its tool call only with other `tk` commands** (`tk create`, `tk start`, `tk close`, joined by `;`, `&&` or a newline) — no `cd` prefix, no real work in the same command (`tk start <id> && pytest` hides the work from the progress view along with the tk call), no `|`, `||` or `&`, no redirection; otherwise the progress view can't place the step. Capturing a new step's id to start it in the same call (`S1=$(tk create --step "..."); tk start "$S1"`) is blocked too: the assignment swallows the `Created <id>` line the view reads, so note the ids from the create output and start the step in a later call. Real work goes in its own tool call, in the same message when you can. A step boundary should cost you one tool call, not two, and the start of a step none at all.
 
 Add steps mid-turn (`tk create --step`) as sub-problems surface; drop ones that turn out unneeded (`tk close <id> "No longer needed — covered by the previous step."`). Granularity follows the user's mental model of the work — "first X, then Y, then Z" is three steps — not one-per-tool-call and not one-for-the-whole-turn. Typically 2–5 per substantive turn.
 
 Titles describe the goal as the user understands it. Summaries (required on close) are ONE plain-English line describing **the work you did** in that step — not the result or finding (that goes in your final message below the timeline), and not a list of tool calls or file names.
+
+## Steps made for the user's messages
+
+A message the user sends while you are busy gets its step from the chat: the chat reserves its id the moment they press send, and a `[Message step]` note beside the message names it. The step appears on their progress timeline a few seconds later, titled with their request. A message with no such note (one sent while you were idle) has no step: declare its steps yourself as above.
+
+- Never create your own step for a request whose message came with a `[Message step]` note. You may add steps for parts of your own work (for example "Check it all works"), as usual.
+- `tk start <id>` it when you begin on the request (the command waits until the step exists), and `tk close <id> "<summary>"` it when the request is done.
+- When one piece of work answers several messages (a follow-up that refines an earlier request, or requests you build together), start their steps together and close each with its own summary when that work is done. Several message steps may be `in_progress` at once.
+- A message that arrives while you are busy with something else keeps its step open until you get to it. Do not close it only to clear the list.
+- A message the chat judges not a task (thanks, a question about progress) gets no step: `tk start` on its id says so at once. Reply or carry on without a step, and do not create one for it.
 
 ## When you don't need records
 
