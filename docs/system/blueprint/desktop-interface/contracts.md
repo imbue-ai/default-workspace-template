@@ -483,7 +483,7 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-window-id`, `data-window-state`, `data-minimized` | each window's root |
 | `data-window-frame`, `data-window-content` | the window's clipping frame, and the content box its page is laid over |
 | `data-drag-handle`, `data-resize-edge="n\|s\|e\|w\|ne\|nw\|se\|sw"` | title bar, resize edges |
-| `data-window-control="minimize\|maximize\|restore\|close\|menu\|refresh\|app-chat"` | the controls (`refresh` and `app-chat` on a focused window alone; `app-chat` only on a window of an app that is not internal, when an app declares a launch path with `app_params`) |
+| `data-window-control="minimize\|maximize\|restore\|close\|menu\|refresh\|app-chat"` | the controls (`menu`, `refresh`, and `app-chat` on a focused window alone; `app-chat` only on a window of an app that is not internal, when an app declares a launch path with `app_params`) |
 | `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"`, `data-connecting="true"`, `data-lifted="true"` | each shortcut; `data-cell` is the cell it is drawn in, which for the one a drag holds is the cell it would land in rather than the cell its box is still at; `data-connecting` only while its app is unknown because no app list has landed; `data-lifted` only on the one a drag holds |
 | `data-taskbar`, `data-taskbar-entry="<window-id>"`, `data-launcher-field`, `data-launcher-overlay` | the taskbar, the launcher field, and its menu (the overlay's name kept from the tiles) |
 | `data-tray-widget="overview"` | the overview button between the launcher field and the window entries (the multiplayer spec, section 8.2), `aria-pressed` while the overview is open; hidden while viewing |
