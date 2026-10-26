@@ -41,7 +41,7 @@ function visibleChatIds(): string[] {
 /** Stand in for the page loading: install its embed API on the frame's window, then fire ``load``. ``posted`` is
  *  what the root posts to the page. */
 function loadPage(chatId: string): { [K in keyof ChatPageEmbedApi | "posted"]: ReturnType<typeof vi.fn> } {
-  const api = { shown: vi.fn(), hidden: vi.fn(), prependDraft: vi.fn(), setCompact: vi.fn() };
+  const api = { shown: vi.fn(), hidden: vi.fn(), prependDraft: vi.fn(), setCompact: vi.fn(), focus: vi.fn() };
   const frame = frameOf(chatId);
   const contentWindow = frame.contentWindow;
   if (contentWindow === null) throw new Error(`frame ${chatId} has no window`);
@@ -96,6 +96,35 @@ describe("InnerFramePool", () => {
     pool.show("agent-fresh");
     expect(pool.heldChatIds()).toEqual([chatIds[1], ...chatIds.slice(3), "agent-fresh"]);
     expect(visibleChatIds()).toEqual(["agent-fresh"]);
+  });
+
+  it("hands the keyboard to a page it switches back to, not to one it already shows or one still loading", () => {
+    pool.setRootShown(true);
+    pool.show("agent-a");
+    const pageA = loadPage("agent-a");
+    pool.show("agent-b");
+    const pageB = loadPage("agent-b");
+    // New pages take the keyboard themselves as they load.
+    expect(pageA.focus).not.toHaveBeenCalled();
+    expect(pageB.focus).not.toHaveBeenCalled();
+
+    pool.show("agent-a");
+    expect(pageA.focus).toHaveBeenCalledTimes(1);
+
+    // Showing the shown chat again (a list refresh) leaves the keyboard where it is, a rename box say.
+    pool.show("agent-a");
+    expect(pageA.focus).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands no keyboard while the root itself is off screen", () => {
+    pool.show("agent-a");
+    const pageA = loadPage("agent-a");
+    pool.show("agent-b");
+    loadPage("agent-b");
+
+    pool.show("agent-a");
+
+    expect(pageA.focus).not.toHaveBeenCalled();
   });
 
   it("drops a destroyed chat's frame and knows its frames' windows", () => {

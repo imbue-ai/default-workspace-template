@@ -223,6 +223,18 @@ function restoreToComposer(chatId: string, text: string, attachments: readonly C
 /** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
  *  the page. An element reference in it is attached as a file first, and only the prompt naming it goes in the
  *  text (``stageElementReferences``). */
+// The page's composer box while it is mounted (a page has one), for the chat root to hand it the keyboard.
+let mountedComposerTextarea: HTMLTextAreaElement | null = null;
+
+/** Put the keyboard in the page's composer; false when there is none to take it (not mounted, or disabled). */
+export function focusComposer(): boolean {
+  if (mountedComposerTextarea === null || mountedComposerTextarea.disabled) {
+    return false;
+  }
+  mountedComposerTextarea.focus();
+  return true;
+}
+
 export function prependToComposer(chatId: string, block: string): void {
   if (!block) {
     return;
@@ -1435,17 +1447,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   value: messageText,
                   oncreate: (textareaVnode: m.VnodeDOM) => {
                     messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                    mountedComposerTextarea = messageTextareaElement;
                     wasComposerDisabled = isComposerDisabled;
                     refitComposer();
                     focusMessageTextarea();
                   },
                   onupdate: (textareaVnode: m.VnodeDOM) => {
                     messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                    mountedComposerTextarea = messageTextareaElement;
                     refitComposer();
                     if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
                     wasComposerDisabled = isComposerDisabled;
                   },
                   onremove: () => {
+                    if (mountedComposerTextarea === messageTextareaElement) mountedComposerTextarea = null;
                     messageTextareaElement = null;
                   },
                   oninput: (event: Event) => {
