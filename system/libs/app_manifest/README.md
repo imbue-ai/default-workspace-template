@@ -34,10 +34,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   clicked, or an `app_params` pair (`name`, `display_name`) naming the two
   distinct params the desktop fills with the app whose window's "Chat about
   this app" button was pressed; `client_id`, `desktop_id`, and `window_path`
-  are reserved for the
-  shell's launch envelope and can name neither a param nor a preset; `open` is
-  reserved for the root launch path the shell synthesizes for an app that
-  declares none), `LaunchPathMethod`,
+  are reserved for the shell's launch envelope and can name neither a param
+  nor a preset; `open` is reserved for the root launch path the shell
+  synthesizes for an app that declares none), `LaunchPathMethod`,
   `MessageHandler` (`type`, a `MessageType`: a lowercase prefix, `:`, and a
   lowercase kebab-case name, never `shell:`, unique within the manifest; and
   exactly one of `path`, the route under the app's origin the shell posts each
