@@ -1003,7 +1003,14 @@ def _show_page(
     spells."""
     client_id = target.client_id
     shown = shell.show_window(
-        client_id, target.desktop, app, path, showing=showing, repoint=repoint, is_every_desktop_searched=True
+        client_id,
+        target.desktop,
+        app,
+        path,
+        showing=showing,
+        repoint=repoint,
+        is_every_desktop_searched=True,
+        is_minimized=False,
     )
     desktop = shown.desktop
     # Switched after the raise, so the layout the client fetches on arriving already has the window on top; a window

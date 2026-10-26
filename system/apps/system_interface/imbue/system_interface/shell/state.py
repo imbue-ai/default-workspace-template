@@ -384,11 +384,13 @@ class ShellState(MutableModel):
         showing: AbstractSet[WindowPath],
         repoint: AbstractSet[WindowPage],
         is_every_desktop_searched: bool,
+        is_minimized: bool,
     ) -> ShownWindow:
         """Put ``path`` of ``app`` on the client's screen by the ``show`` op's rule (desktop contracts.md section 8,
         ``choose_show_target``): a window already at the path raised (on the given desktop, or on any desktop when
         ``is_every_desktop_searched``), else a window on a page in ``repoint`` or the app's pinned window navigated
-        there, else a new window opened on the desktop; a pulled-out window is left where it is."""
+        there, else a new window opened on the desktop (placed minimized for the client when ``is_minimized``, as
+        an open is); a pulled-out window is left where it is."""
         self.require_app_entry(str(app))
         others = (
             [self.client_desktop_view(other, client_id) for other in self.list_desktops() if other.id != desktop.id]
@@ -399,7 +401,9 @@ class ShellState(MutableModel):
         shown_on = self.get_desktop(choice.desktop_id)
         is_raised_in_own_window = False
         if choice.window is None:
-            request = WindowOpenRequest(app=app, path=path, client_id=client_id, if_present=IfPresent.NEW)
+            request = WindowOpenRequest(
+                app=app, path=path, client_id=client_id, if_present=IfPresent.NEW, minimized=is_minimized
+            )
             window_id = self.open_window(shown_on.id, request).window.id
         else:
             window_id = choice.window.id
@@ -467,6 +471,7 @@ class ShellState(MutableModel):
                     showing=set(),
                     repoint=set(),
                     is_every_desktop_searched=False,
+                    is_minimized=request.minimized,
                 )
                 # The pinned window's own balloon names it as ``beside`` and the show navigates it: one window, nothing
                 # to lay out beside.

@@ -2859,12 +2859,26 @@ def test_a_show_launch_puts_the_page_on_screen_by_the_show_rule_and_lays_it_out_
         (pinned["id"], "SNAPPED_RIGHT"),
     ]
 
-    # An app with no pinned window and nothing at the path gets a new window, laid out beside none.
+    # An app with no pinned window and nothing at the path gets a new window, laid out beside none, and placed
+    # minimized for the client when the launch says so (the phone), as an open is.
     opened = _launch(
-        client, {"app": "terminal", "launch": "new", "params": {"workdir": "/tmp"}, "target": {"kind": "show"}}
+        client,
+        {
+            "app": "terminal",
+            "launch": "new",
+            "params": {"workdir": "/tmp"},
+            "target": {"kind": "show"},
+            "minimized": True,
+        },
     )
     assert opened.status_code == 201, opened.get_json()
     assert opened.get_json()["is_new"] is True and opened.get_json()["window"]["app"] == "terminal"
+    (opened_placement,) = [
+        placement
+        for placement in _placements(client, "c1")
+        if placement["window_id"] == opened.get_json()["window"]["id"]
+    ]
+    assert opened_placement["is_minimized"] is True
 
     # The window laid out beside must be on the desktop; only the show kind lays out beside one, and the show kind
     # points no named window at the page.
