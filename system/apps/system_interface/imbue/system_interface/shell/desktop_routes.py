@@ -1002,7 +1002,9 @@ def _show_page(
     """Put the path of the app on the target client's screen, choosing the window by the rule ``choose_show_target``
     spells."""
     client_id = target.client_id
-    shown = shell.show_window(client_id, target.desktop, app, path, showing, repoint, True)
+    shown = shell.show_window(
+        client_id, target.desktop, app, path, showing=showing, repoint=repoint, is_every_desktop_searched=True
+    )
     desktop = shown.desktop
     # Switched after the raise, so the layout the client fetches on arriving already has the window on top; a window
     # raised in its own window leaves the client where ``args.desktop`` put it.

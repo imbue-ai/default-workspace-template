@@ -459,7 +459,15 @@ class ShellState(MutableModel):
             case LaunchTargetKind.SHOW:
                 beside = require_window(desktop, request.target.beside) if request.target.beside is not None else None
                 path = self.launch_destination(entry, launch_path, request.params, request.client_id, desktop.id, None)
-                shown = self.show_window(request.client_id, desktop, request.app, path, set(), set(), False)
+                shown = self.show_window(
+                    request.client_id,
+                    desktop,
+                    request.app,
+                    path,
+                    showing=set(),
+                    repoint=set(),
+                    is_every_desktop_searched=False,
+                )
                 if beside is not None and not shown.is_raised_in_own_window:
                     self.edit_desktop_layout(
                         shown.desktop,
