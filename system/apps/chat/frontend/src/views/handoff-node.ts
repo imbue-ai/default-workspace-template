@@ -14,6 +14,7 @@ import { statusDoneIcon, statusPendingIcon } from "@imbue/workspace-ui/src/compo
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, HandoffState } from "../models/Chats";
 import type { ToolResultEvent } from "../models/Response";
+import { handoffPhaseText } from "./handoff-phase";
 import { harnessLabel } from "./harness-labels";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { StableUserMessage, renderAssistantRun } from "./message-renderers";
@@ -51,8 +52,8 @@ export function handoffNodeText(
   return liveHandoffText(handoff, chat?.active_agent.harness ?? "");
 }
 
-/** The words for a switch still running, from the snapshot: a handoff names the harness it moves to, a
- *  rebind the account the same agent restarts on. */
+/** The words for a switch still running, from the snapshot: its phase while it runs, the one place the page says
+ *  so; a failed handoff names the harness it was moving to, a failed rebind the account. */
 function liveHandoffText(
   handoff: HandoffState,
   retiringHarness: string,
@@ -65,7 +66,7 @@ function liveHandoffText(
       status: "failed",
     };
   }
-  return { title: handoff.kind === "rebind" ? `Restarting ${to}…` : `Handing off to ${to}…`, status: "active" };
+  return { title: handoffPhaseText(handoff, retiringHarness), status: "active" };
 }
 
 function statusIcon(status: HandoffNodeStatus): m.Children {
@@ -174,14 +175,12 @@ export function renderHandoffNode(
   ]);
 }
 
-/** The node for a handoff the transcript does not show yet: the chat is draining, or the summary request has not
- *  reached the stream. Null once the transcript carries the request or the landed switch (``isOnTranscript``), when
- *  nothing is converging, and for a switch with no summary to show (a restart on another account, or a fresh start):
- *  the activity line by the composer is the one place that says it is under way. */
+/** The node for a switch the transcript does not show yet: a handoff draining or whose summary request has not
+ *  reached the stream, a fresh start, or a restart on another account. Null once the transcript carries the request
+ *  or the landed switch (``isOnTranscript``), or when nothing is converging. */
 export function renderHandoffTailNode(chatId: string, isOnTranscript: boolean): m.Vnode | null {
   const chat = getChatById(chatId);
-  const handoff = chat?.handoff ?? null;
-  if (handoff === null || handoff.kind === "rebind" || handoff.is_fresh_start || isOnTranscript) return null;
+  if (chat === undefined || chat.handoff === null || isOnTranscript) return null;
   const node: HandoffNode = { key: `live-${chatId}`, request: null, events: [], switch: null, prompt: null };
   // Keyed like its siblings in the message list: a keyed list refuses an unkeyed member.
   return m(

@@ -35,7 +35,6 @@ import type { CompactionCause, ToolCall, TranscriptEvent } from "../models/Respo
 import { COMPACTING_STATE } from "../models/activityState";
 import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
-import { handoffPhaseText } from "./handoff-phase";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
 
@@ -245,19 +244,15 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
   const activityStrip = (attrs: ActivityIndicatorAttrs, columnClass: string): m.Vnode | null => {
     const { chatId, events } = attrs;
     const chat = getChatById(chatId);
-    // A chat switching harness reports the switch, not the retiring agent's turn: that
-    // agent is busy with the summary it was asked for, which is the switch's own business.
-    // The failed phase has its own notice over the composer and shows nothing here. Once a handoff has
-    // landed, the successor is the chat's agent and its own activity is what the strip reports.
+    // A chat switching agent or account says so in one place, the switch's line in the conversation, so the
+    // strip shows nothing until the switch lands: the agent's turn meanwhile is the switch's own business (the
+    // summary it was asked for). A failed switch has its notice over the composer, and once a handoff has landed
+    // the successor is the chat's agent: both go back to the agent's own activity.
     if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed" && !chat.handoff.has_landed) {
       cancelRelease();
       cancelWake();
       heldToolCaption = null;
-      return renderStrip(
-        handoffPhaseText(chat.handoff, chat.active_agent.harness),
-        `HANDOFF_${chat.handoff.phase}`,
-        columnClass,
-      );
+      return null;
     }
     const state = chat?.active_agent.activity_state ?? null;
     const label = labelForActivityState(
