@@ -242,18 +242,32 @@ def chat_app_url(environ: Mapping[str, str], cwd: Path) -> str:
     return CHAT_APP_FALLBACK_URL
 
 
+def _chat_app_connection(base_url: str) -> http.client.HTTPConnection:
+    """A connection to the chat app at ``base_url`` that gives up connecting after the connect timeout."""
+    parsed = urllib.parse.urlsplit(base_url)
+    return http.client.HTTPConnection(
+        parsed.hostname or "127.0.0.1",
+        parsed.port or 80,
+        timeout=CONNECT_TIMEOUT_SECONDS,
+    )
+
+
+def _answer_of(status: int, raw: bytes) -> ChatAppAnswer:
+    """The answer with ``raw`` as its JSON body, or no body when it is empty or not JSON."""
+    try:
+        parsed_body: object = json.loads(raw.decode("utf-8")) if raw else None
+    except ValueError:
+        parsed_body = None
+    return ChatAppAnswer(status, parsed_body)
+
+
 def get_json(base_url: str, path: str) -> ChatAppAnswer:
     """GET ``path`` and answer what came back.
 
     Raises ``ChatAppUnreachableError`` when the chat app cannot be connected to or answers
     nothing; a read answers no state, so there is nothing acted on to be careful about.
     """
-    parsed = urllib.parse.urlsplit(base_url)
-    connection = http.client.HTTPConnection(
-        parsed.hostname or "127.0.0.1",
-        parsed.port or 80,
-        timeout=CONNECT_TIMEOUT_SECONDS,
-    )
+    connection = _chat_app_connection(base_url)
     try:
         connection.request("GET", path)
         response = connection.getresponse()
@@ -264,11 +278,7 @@ def get_json(base_url: str, path: str) -> ChatAppAnswer:
         ) from exc
     finally:
         connection.close()
-    try:
-        parsed_body: object = json.loads(raw.decode("utf-8")) if raw else None
-    except ValueError:
-        parsed_body = None
-    return ChatAppAnswer(response.status, parsed_body)
+    return _answer_of(response.status, raw)
 
 
 def post_json(base_url: str, path: str, body: Mapping[str, object]) -> ChatAppAnswer:
@@ -279,12 +289,7 @@ def post_json(base_url: str, path: str, body: Mapping[str, object]) -> ChatAppAn
     ``http.client.HTTPException``, which the caller treats as a failure rather than a
     reason to back off, because the request may have been acted on.
     """
-    parsed = urllib.parse.urlsplit(base_url)
-    connection = http.client.HTTPConnection(
-        parsed.hostname or "127.0.0.1",
-        parsed.port or 80,
-        timeout=CONNECT_TIMEOUT_SECONDS,
-    )
+    connection = _chat_app_connection(base_url)
     try:
         connection.connect()
     except OSError as exc:
@@ -310,11 +315,7 @@ def post_json(base_url: str, path: str, body: Mapping[str, object]) -> ChatAppAn
         raw = response.read()
     finally:
         connection.close()
-    try:
-        parsed_body: object = json.loads(raw.decode("utf-8")) if raw else None
-    except ValueError:
-        parsed_body = None
-    return ChatAppAnswer(response.status, parsed_body)
+    return _answer_of(response.status, raw)
 
 
 def _post_until_answered(
