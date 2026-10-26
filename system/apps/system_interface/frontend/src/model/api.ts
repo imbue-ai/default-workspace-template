@@ -37,6 +37,7 @@ import type {
   WallpaperListing,
   WindowRecord,
 } from "./records";
+import { parseThemeCatalog, type ThemeCatalog } from "./themes";
 
 const HTTP_CONFLICT = 409;
 
@@ -68,6 +69,26 @@ export async function updateDesktopSettings(
 
 export async function setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {
   return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/wallpaper"), { wallpaper }));
+}
+
+/** The theme a desktop wears by its own choice; null wears the workspace's default. */
+export async function setDesktopTheme(desktopId: string, theme: string | null): Promise<Desktop> {
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/theme"), { theme }));
+}
+
+/** The workspace's themes and its default (docs/system/blueprint/workspace-themes/, section 5.2). */
+export async function fetchThemes(): Promise<ThemeCatalog> {
+  return parseThemeCatalog(await getJson(apiUrl("/api/themes")));
+}
+
+/** Turn a themeable app's theming on or off. */
+export async function setAppTheming(app: string, isOn: boolean): Promise<void> {
+  await postJson<unknown>(apiUrl(`/api/apps/${encodeURIComponent(app)}/theming`), { is_on: isOn });
+}
+
+/** The workspace's default theme; null wears the standard one. */
+export async function setDefaultTheme(theme: string | null): Promise<void> {
+  await postJson<unknown>(apiUrl("/api/themes/default"), { theme });
 }
 
 /** Delete a desktop; answers the desktop its clients fall back to. The last desktop is refused. */

@@ -226,6 +226,28 @@ marker between them: an archived segment is read through its harness's
 that reaches into it and dropped with the chat, and every event on the wire
 carries its `agent_id`.
 
+A chat page loads its transcript from `GET /api/chats/<chat-id>/events` and
+follows it on `GET /api/chats/<chat-id>/stream`, which carries each new event
+once and buffers nothing, so the route stays the source of truth: when the
+chat's turn ends, and when the page is shown again, the page asks the route
+what follows its last event, appends what the stream did not deliver, and
+reloads the transcript when an event is missing further up. The stream also
+carries `assistant_draft` frames (`reply_drafts.py`): Claude writes a reply to
+its session file only once the text block is finished, so while a page
+streams a chat and reports it shown and focused (its presence, below), and a
+Claude turn is in flight (its `active` marker), the app
+reads the reply being written off the agent's terminal pane three times a
+second, through mngr's `stream_snapshot` converter
+(`harnesses/claude/reply_draft.py`), and sends what changed:
+`{"type": "assistant_draft", "agent_id", "after_event_id", "text"}`. The page
+shows the draft after the transcript while `after_event_id` is still the last
+event it holds, so the reply landing replaces it at once; an empty `text`
+clears it. A draft that matches a reply the transcript already holds is never
+sent. The terminal's rendering loses heading levels and code-fence languages,
+which the landed reply restores. A chat in the background (no page, a hidden
+or unfocused window, or a frame the chat root keeps loaded out of sight) is
+never read.
+
 A handoff (`chat_handoffs.py`) is how a chat moves to another harness:
 `POST /api/chats/<chat-id>/handoff` with an `account_id` and the message typed
 for the new agent. The chat app stops the current agent's turn and hands its

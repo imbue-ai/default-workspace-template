@@ -6,7 +6,7 @@
   its bytes (``?download`` to save them under the file's name), ``?zip`` a folder as a zip, and PUT, MKCOL, MOVE, and
   DELETE change it.
 - ``/__files/assets/`` is the frontend's build, ``/__files/api/connections`` what the user has shared with the
-  workspace from their computers.
+  workspace from their computers (``connections_cache``).
 - ``/__files/api/schema`` is the OpenAPI document of these routes, built from the url map (``app_schema``); the
   manifest's ``api_schema_path``, which the visiting-agent primer links.
 """
@@ -26,6 +26,8 @@ from flask import Response
 from flask import request
 from flask import send_from_directory
 from loguru import logger
+from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
+from workspace_themes.flask_routes import register_workspace_theme_route
 
 from app_schema.api_schema import RouteModels
 from app_schema.api_schema import RouteTable
@@ -33,15 +35,16 @@ from app_schema.api_schema import SchemalessRoute
 from app_schema.api_schema import register_api_schema_route
 from app_schema.routes import error_response
 from app_schema.routes import model_response
-from files_app.connections import SYNCED_FOLDERS
 from files_app.connections import Connections
-from files_app.connections import list_connections
+from files_app.connections import SYNCED_FOLDERS
+from files_app.connections_cache import ConnectionsCache
 from files_app.device_files import DeviceFiles
 from files_app.gateway import Gateway
 from files_app.local_files import LocalFiles
 from files_app.local_files import content_disposition
 from files_app.sources import FileSource
 from files_app.sources import FilesError
+from files_app.sources import FolderStamps
 from files_app.sources import PageData
 
 API_PREFIX: Final[str] = "/__files/api"
@@ -77,6 +80,7 @@ _FILE_VERBS: Final[dict[str, str]] = {
 }
 ROUTE_TABLE: RouteTable = {
     ("GET", f"{API_PREFIX}/connections"): RouteModels(response_model=Connections),
+    ("GET", f"{API_PREFIX}/stamps"): RouteModels(response_model=FolderStamps),
     ("GET", f"{ASSETS_PREFIX}/{{name}}"): SchemalessRoute(reason="a file of the frontend's build"),
     **{
         (method, path): SchemalessRoute(reason=reason)
@@ -88,6 +92,7 @@ ROUTE_TABLE: RouteTable = {
         for path in _REMOTE_PATHS
         for method, reason in _FILE_VERBS.items()
     },
+    **THEME_STATIC_ROUTE_TABLE,
 }
 
 
@@ -110,10 +115,12 @@ def _requested_path() -> str:
 def create_app(
     gateway: Gateway | None,
     static_directory: Path,
+    agent_id: str,
     root: Path = Path("/"),
     synced_root: Path = SYNCED_FOLDERS,
 ) -> Flask:
     app = Flask(__name__, static_folder=None)
+    register_workspace_theme_route(app)
     register_api_schema_route(
         app, f"{API_PREFIX}/schema", title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
     )
@@ -122,6 +129,7 @@ def create_app(
     local = LocalFiles(root)
     # Whether each device's file server is reached under its id, as the last listing of the shares found.
     device_paths: dict[str, bool] = {}
+    cache = ConnectionsCache(gateway, agent_id, synced_root)
 
     def page(data: PageData) -> Response:
         encoded = base64.b64encode(json.dumps(data.model_dump()).encode()).decode()
@@ -196,20 +204,25 @@ def create_app(
     def connections() -> Response:
         """The computers connected to this workspace and what each shares with it.
 
-        Each share says how it reaches the workspace (live, or a synced copy and whether the copy has kept up).
-        Nothing is listed while the workspace is not connected to Imbue Studio; a 502 says when Imbue Studio could
-        not be read.
+        Each share says how it reaches the workspace (live, or a synced copy and how Imbue Studio says its sync
+        stands). Pages ask every few seconds, so a read answers every ask for a couple of seconds after it. Nothing is
+        listed while the workspace is not connected to Imbue Studio; a 502 says when Imbue Studio could not be read.
         """
-        if gateway is None:
-            return model_response(Connections(devices=(), shares=()))
         try:
-            listed = list_connections(gateway, synced_root)
+            listed = cache.current()
         except (httpx.HTTPError, ValueError) as error:
             # ValueError: an answer from the gateway that is not the JSON it should be.
             logger.warning("Couldn't read the shares through the gateway: {}", error)
             return error_response(f"Couldn't read your shares: {error}", 502)
         device_paths.update({device.id: device.has_device_paths for device in listed.devices})
         return model_response(listed)
+
+    @app.get(f"{API_PREFIX}/stamps")
+    def stamps() -> Response:
+        """Where each workspace folder named by a ``path`` param stands: a stamp that moves when anything in it is
+        added, removed or renamed. A page asks every couple of seconds for the folders it shows and lists one again
+        only when its stamp moved, so a file that lands in it shows at once; one stat a folder, nothing held."""
+        return model_response(local.stamps(request.args.getlist("path")))
 
     @app.route(f"{REMOTE_PREFIX}/<device>/", defaults={"path": ""}, methods=_METHODS)
     @app.route(f"{REMOTE_PREFIX}/<device>/<path:path>", methods=_METHODS)

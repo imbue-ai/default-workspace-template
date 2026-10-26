@@ -61,10 +61,13 @@ what this run needs, with no confirmation and no preflight script, you may:
 - stop other chats and background agents, idle or running, through `run-status
   stop-chats` (5b, and earlier with `--agent <name>` when memory runs short),
   which records each so the end of the pass starts it again with a note;
-- stop the browser and the user apps no window is showing
+- stop the browser and the user apps no window is showing, and on a **scheduled**
+  run any user app at all, windows or not
   (`python3 system/services/oom_priority/bin/memory_candidates.py` lists them;
   a browser stops through the browser service, an app through `supervisorctl
-  stop <program>`);
+  stop <program>`). `references/freeing-memory-for-an-update.md` has the rule,
+  how to tell a scheduled run from a pressed one, and what the pass owes the
+  user afterwards;
 - prune the worktrees of workers that are gone (`git worktree list`, then `git
   worktree remove` one whose agent `mngr list` no longer shows, never the
   `update-self` worker's), apply snapshots under
@@ -445,10 +448,10 @@ on a worker" in `.agents/shared/references/lead-proxy.md`.
 
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
 `mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). A
-`question` is one of three things; you answer the first two yourself, and only
-the third reaches the user. For the first two: reply via `create_worker.py
+`question` is one of four things; you answer the first three yourself, and only
+the last reaches the user. For the first three: reply via `create_worker.py
 reply --task-file data/.tasks/update-self/task.md -m "..."`, consume the
-report, re-arm the poll. The third ends the pass, as below.
+report, re-arm the poll. The last ends the pass, as below.
 
 1. **A genuine, unresolvable merge conflict.** Decide it yourself. The default
    is to **keep this workspace's current behavior**: preserve the local
@@ -465,7 +468,17 @@ report, re-arm the poll. The third ends the pass, as below.
    coverage, never less. A `select-tests` output is not silence: what it
    printed for a commit is that commit's whole gate. Escalate only if it
    contains a real question of user intent.
-3. **A customization hold** (its §4b verdict): something the user built that
+3. **Its gate was shed for memory**, and it is asking for room to rerun. Free
+   it yourself per `references/freeing-memory-for-an-update.md`, which says
+   what this pass may stop and how much further a scheduled run may go, then
+   reply with what you stopped and the free memory the candidates command
+   reports *after* it. Memory pressure is never a reason to narrow the gate, so
+   never answer it by telling the worker to skip or trim one. It reaches the
+   user only when the licence is spent and the room is still not there: then
+   ask them, recording the wait with Step 2's `run-status hold` and clearing it
+   with `resume`, and name what is left to stop and what stopping it costs
+   them. The worker keeps its branch and waits; this is not the §4b hold.
+4. **A customization hold** (its §4b verdict): something the user built that
    the update **cannot keep**, after the worker genuinely tried to re-fit it.
    This is the one gate that reaches the user, and it ends the pass; see
    below. A cosmetic shift (the widget moved but still works) is not a hold:
@@ -585,17 +598,17 @@ path below instead.
 `system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
 `system/apps/getting_started/frontend/`, `system/apps/files/frontend/`,
 `system/apps/routines/frontend/`, `system/libs/workspace_ui/`,
-`system/libs/workspace_layout/`, or `system/package.json` /
+`system/libs/workspace_layout/`, `system/libs/workspace_themes/`, or `system/package.json` /
 `system/package-lock.json` at all** (every critical app's tree, plus the
 Getting Started, Files and Routines frontends, the shared library,
 and the npm files, whose change rebuilds every frontend bundle, and the layout
-wire contract the critical apps run), also take the `editing
+wire contract and theme library the critical apps run), also take the `editing
 critical app <name>` lease for each critical app it touches through the apply,
 as `update-app/references/critical-app.md` does (`<name>` is the app's
 `app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
 Started, Files and Routines frontends, `workspace_ui`, and the npm files count as both
-`system_interface` and `chat`; `workspace_layout` counts as `system_interface`,
-`chat`, and `terminal`). Take them all or none, as that reference says:
+`system_interface` and `chat`; `workspace_layout` and `workspace_themes` each count as
+`system_interface`, `chat`, and `terminal`). Take them all or none, as that reference says:
 check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
 anchored so `terminal` does not match `terminal-pty`'s lease), take them in
 name order (`tk create "editing
@@ -840,6 +853,11 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 
 After an apply that landed, give this resume 5b's `--landed` and
 `--wip-commit` too, so a chat it still had to tell hears the same news.
+
+Then put back the apps and browsers this pass stopped for memory, which no
+command records: an apply that landed has already restarted every program, so
+this is for every other ending
+(`references/freeing-memory-for-an-update.md`, "Putting it back").
 
 If a stray preview of a critical app is registered (an older pass may have left
 one; the careful flow refuses its next pass on that app while one is), tear it

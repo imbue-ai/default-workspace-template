@@ -756,6 +756,7 @@ def _register_service(
     *,
     internal: bool = False,
     display_name: str | None = None,
+    theming_mode: str | None = None,
 ) -> None:
     argv = [
         *FORWARD_PORT_CMD,
@@ -769,6 +770,8 @@ def _register_service(
         argv.append("--internal")
     if display_name is not None:
         argv.extend(["--display-name", display_name])
+    if theming_mode is not None:
+        argv.extend(["--theming-mode", theming_mode])
     result = runner.run(
         argv,
         cwd=str(repo_root),
@@ -848,6 +851,7 @@ def up(
     preview_service_name: str | None = None,
     preview_title: str | None = None,
     inner_path: str = "/",
+    theming_mode: str | None = None,
     runner: Runner,
     http: HttpClient,
     spawner: Spawner,
@@ -864,7 +868,9 @@ def up(
     the ``main`` port to serve 200. With ``service_name`` it also registers the
     instance as a service (served at its own origin); with the preview names +
     title it additionally boots the labeled wrapper frame, opening the inner
-    service at ``inner_path``.
+    service at ``inner_path``. ``theming_mode`` is the served app's ``[theming]``
+    mode, recorded on the inner service's row so the workspace themes it as it
+    would the app.
 
     On any failure the partial state is torn down and 1 is returned. On success a
     state file records the servers + services so ``down`` can find them later.
@@ -966,6 +972,7 @@ def up(
                 # Wrapped, the frame is the surface and the inner origin serves the
                 # same page unmarked; unwrapped, the inner origin is the surface.
                 internal=preview_requested,
+                theming_mode=theming_mode,
             )
             services.append(service_name)
 
@@ -1387,6 +1394,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Human-readable label shown in the preview frame banner.",
     )
     up_parser.add_argument(
+        "--theming-mode",
+        default=None,
+        help="The served app's [theming] mode, recorded on the inner service's registry row.",
+    )
+    up_parser.add_argument(
         "--inner-path",
         default="/",
         help="The path the preview frame opens the inner service on (default: /).",
@@ -1446,6 +1458,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             preview_service_name=args.preview_service_name,
             preview_title=args.preview_title,
             inner_path=args.inner_path,
+            theming_mode=args.theming_mode,
             runner=Runner(),
             http=HttpClient(),
             spawner=Spawner(),

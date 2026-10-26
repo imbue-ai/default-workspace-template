@@ -17,6 +17,7 @@ import { UserMessageKind } from "./message-kinds";
 import {
   NOTICE_ROW_SPACING_CLASS,
   USER_BUBBLE_CLASS,
+  USER_MESSAGE_PART,
   USER_MESSAGE_ROW_CLASS,
   renderNoticeRow,
 } from "./user-message-display";
@@ -58,7 +59,7 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
     return renderNoticeRow(bubble.key, rowClass, cls);
   }
   return m("div", { class: rowClass, key: bubble.key }, [
-    m("div", { class: USER_BUBBLE_CLASS }, [
+    m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
     ]),
   ]);

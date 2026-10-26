@@ -23,10 +23,13 @@ from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.primitives import DesignId
 from imbue.system_interface.avatar.testing import png_size
 from imbue.system_interface.config import Config
+from imbue.system_interface.documents import BASE_PATH_META_NAME
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.documents import THEME_GALLERY_ROUTE
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.server import THEME_GALLERY_FILENAME
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
@@ -317,6 +320,22 @@ def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) ->
     # that returns an open tab to the interface once something else restores it
     # -- nothing on the page can produce one, and nothing notifies it.
     assert FRONTEND_BUILT_HEADER in response.text
+
+
+def test_the_theme_gallery_serves_its_own_page_and_the_placeholder_until_it_is_built(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text(_BUILT_INDEX)
+    client = create_application(build_test_state(static_directory=static_dir)).test_client()
+
+    unbuilt = client.get(THEME_GALLERY_ROUTE)
+    (static_dir / THEME_GALLERY_FILENAME).write_text("<html><head><title>Theme gallery</title></head></html>")
+    built = client.get(THEME_GALLERY_ROUTE, base_url="http://localhost/shell")
+
+    assert unbuilt.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert built.headers[FRONTEND_BUILT_HEADER] == "true"
+    assert "<title>Theme gallery</title>" in built.text
+    assert f'<meta name="{BASE_PATH_META_NAME}" content="/shell">' in built.text
 
 
 def test_not_built_placeholder_polls_rather_than_refreshing_the_whole_page(tmp_path: Path) -> None:

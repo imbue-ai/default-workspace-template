@@ -30,6 +30,7 @@ from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 
 from imbue.system_interface.api_models import HeartbeatResponse
 from imbue.system_interface.api_models import PresenceListing
@@ -40,6 +41,7 @@ from imbue.system_interface.avatar.api_models import AvatarsListing
 from imbue.system_interface.avatar.catalog import DesignRegistration
 from imbue.system_interface.avatar.selection import AvatarSelection
 from imbue.system_interface.documents import MANIFEST_PATH
+from imbue.system_interface.documents import THEME_GALLERY_ROUTE
 from imbue.system_interface.documents import TOUCH_ICON_PATH
 from imbue.system_interface.shell.api_models import AppRunningState
 from imbue.system_interface.shell.api_models import ClientArrivalResponse
@@ -67,6 +69,12 @@ from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
+from imbue.system_interface.shell.theme_routes import AppThemingRequest
+from imbue.system_interface.shell.theme_routes import AppThemingResponse
+from imbue.system_interface.shell.theme_routes import DefaultThemeResponse
+from imbue.system_interface.shell.theme_routes import ThemeChoiceRequest
+from imbue.system_interface.shell.theme_wire import THEME_ICON_ROUTE
+from imbue.system_interface.shell.theme_wire import ThemeCatalogWire
 from imbue.system_interface.shell.tour import TOUR_ROUTE
 from imbue.system_interface.shell.tour import TourProgress
 from imbue.system_interface.shell.wallpapers import WALLPAPER_ROUTE_PREFIX
@@ -151,6 +159,18 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("GET", INVENTORY_ROUTE): RouteModels(response_model=InventoryDocument),
     ("GET", "/api/wallpapers"): RouteModels(response_model=WallpapersListing),
     ("GET", f"{WALLPAPER_ROUTE_PREFIX}/{{kind}}/{{name}}"): _IMAGE,
+    # The workspace-themes plan: the gallery, the catalog and its default, each desktop's theme, icons, and theme files
+    ("GET", THEME_GALLERY_ROUTE): SchemalessRoute(reason="the theme gallery page"),
+    ("GET", "/api/themes"): RouteModels(response_model=ThemeCatalogWire),
+    ("POST", "/api/themes/default"): RouteModels(
+        request_model=ThemeChoiceRequest, response_model=DefaultThemeResponse
+    ),
+    ("POST", "/api/desktops/{desktop_id}/theme"): _edits_desktop(ThemeChoiceRequest),
+    ("GET", THEME_ICON_ROUTE): _IMAGE,
+    **THEME_STATIC_ROUTE_TABLE,
+    ("POST", "/api/apps/{app_name}/theming"): RouteModels(
+        request_model=AppThemingRequest, response_model=AppThemingResponse
+    ),
     # Section 5.6: the embedder-message relay
     ("POST", "/api/embedder-messages"): RouteModels(
         request_model=EmbedderMessageRelayRequest,

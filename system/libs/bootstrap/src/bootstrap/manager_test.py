@@ -1048,6 +1048,38 @@ def test_main_boots_without_an_agent_state_dir(
     assert not list(tmp_path.rglob("events.jsonl"))
 
 
+def test_a_workspaces_first_boot_offers_it_the_tour(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The work dir is set, so the main-branch step writes its signal in the same boot: the offer
+    # has to be made before that signal exists.
+    _prepare_boot(monkeypatch, tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+
+    main()
+
+    assert (tmp_path / "data/.state/workspace_main_branch_initialized").exists()
+    assert (tmp_path / "data/.state/system_interface/offer_tour").exists()
+
+
+@pytest.mark.parametrize(
+    "first_boot_signal", ["workspace_main_branch_initialized", "initial_chat_created"]
+)
+def test_a_workspace_that_booted_before_is_never_offered_the_tour(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, first_boot_signal: str
+) -> None:
+    # An existing workspace booting into a build that has the tour, whichever build first booted it.
+    _prepare_boot(monkeypatch, tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    (tmp_path / "data/.state" / first_boot_signal).touch()
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+
+    main()
+
+    assert not (tmp_path / "data/.state/system_interface/offer_tour").exists()
+
+
 def test_recover_names_nobody_when_the_marker_recorded_no_agent(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
