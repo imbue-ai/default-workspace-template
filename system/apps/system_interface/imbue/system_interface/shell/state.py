@@ -367,7 +367,7 @@ class ShellState(MutableModel):
             entry, launch_path, params, client_id, desktop_id, window_path, self.launch_poster
         )
 
-    def client_desktop_view(self, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
+    def _client_desktop_view(self, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
         """The desktop as one client sees it: its layout, and the windows at the client's own paths."""
         return ClientDesktopView(
             desktop=desktop,
@@ -393,11 +393,11 @@ class ShellState(MutableModel):
         an open is); a pulled-out window is left where it is."""
         self.require_app_entry(str(app))
         others = (
-            [self.client_desktop_view(other, client_id) for other in self.list_desktops() if other.id != desktop.id]
+            [self._client_desktop_view(other, client_id) for other in self.list_desktops() if other.id != desktop.id]
             if is_every_desktop_searched
             else []
         )
-        choice = choose_show_target(self.client_desktop_view(desktop, client_id), others, app, path, showing, repoint)
+        choice = choose_show_target(self._client_desktop_view(desktop, client_id), others, app, path, showing, repoint)
         shown_on = self.get_desktop(choice.desktop_id)
         is_raised_in_own_window = False
         if choice.window is None:
