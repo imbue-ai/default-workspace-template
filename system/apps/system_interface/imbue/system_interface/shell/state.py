@@ -294,11 +294,8 @@ class ShellState(MutableModel):
         with STATE_FILES_LOCK:
             is_registry_read = self.inventory.is_registry_read
             rows = self._registry_rows() if is_registry_read else []
-            if is_registry_read:
-                self._reconcile_desktops_with(rows)
-            chosen_glyph = (
-                glyph if glyph is not None else next_glyph_index([desktop.glyph for desktop in self.list_desktops()])
-            )
+            desktops = self._reconcile_desktops_with(rows) if is_registry_read else self.desktops.list_desktops()
+            chosen_glyph = glyph if glyph is not None else next_glyph_index([desktop.glyph for desktop in desktops])
             desktop = self.desktops.create_desktop(
                 name,
                 color if color is not None else DESKTOP_GLYPH_COLORS[chosen_glyph],
