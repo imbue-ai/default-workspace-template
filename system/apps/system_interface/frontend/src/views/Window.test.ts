@@ -20,6 +20,7 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isFocused: true,
     isTouch: false,
     isMenuOpen: false,
+    hasAppChat: true,
     sizeMenuTrigger: {},
     isShielded: false,
     isStopped: false,
@@ -93,9 +94,24 @@ describe("Window", () => {
     const controls = [...element.querySelectorAll("[data-window-control]")].map((control) =>
       control.getAttribute("data-window-control"),
     );
-    expect(controls).toEqual(["refresh", "menu", "minimize", "maximize", "close"]);
+    expect(controls).toEqual(["menu", "refresh", "app-chat", "minimize", "maximize", "close"]);
     (element.querySelector('[data-window-control="close"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
+    (element.querySelector('[data-window-control="app-chat"]') as HTMLElement).click();
+    expect(onControl).toHaveBeenCalledWith("app-chat", expect.anything());
+  });
+
+  it("offers Chat about this app only where the caller says so, and no title action on an unfocused window", () => {
+    const controlsOf = (element: HTMLElement): (string | null)[] =>
+      [...element.querySelectorAll("[data-window-control]")].map((control) =>
+        control.getAttribute("data-window-control"),
+      );
+    expect(controlsOf(render({ hasAppChat: false }))).toEqual(["menu", "refresh", "minimize", "maximize", "close"]);
+    unmountViews();
+    expect(controlsOf(render({ isFocused: false }))).toEqual(["minimize", "maximize", "close"]);
+    unmountViews();
+    const appChat = render().querySelector('[data-window-control="app-chat"]') as HTMLElement;
+    expect(appChat.getAttribute("aria-label")).toBe("Chat about this app");
   });
 
   it("shows Restore when maximized, and no resize edges on a touch screen", () => {

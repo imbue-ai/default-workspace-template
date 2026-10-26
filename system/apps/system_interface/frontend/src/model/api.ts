@@ -146,6 +146,13 @@ export type LaunchTarget =
       readonly windowId: string;
       /** False for a text that is not about the window's page: the app is not told which page it shows. */
       readonly sendsWindowPath?: boolean;
+    }
+  | {
+      /** Wherever the ``show`` op's rule puts the page: a window already there raised, else the app's pinned window
+       *  navigated, else a new window; laid out beside ``besideWindowId`` when one is named (the multiplayer spec,
+       *  section 9.2). */
+      readonly kind: "show";
+      readonly besideWindowId?: string;
     };
 
 export interface LaunchRequest {
@@ -174,6 +181,9 @@ export async function launch(desktopId: string, request: LaunchRequest): Promise
   if (request.target.kind === "window") {
     target.window_id = request.target.windowId;
     if (request.target.sendsWindowPath === false) target.sends_window_path = false;
+  }
+  if (request.target.kind === "show" && request.target.besideWindowId !== undefined) {
+    target.window_id = request.target.besideWindowId;
   }
   const data = await postJson<{ window: unknown; path: string; is_new: boolean }>(desktopUrl(desktopId, "/launch"), {
     app: request.app,

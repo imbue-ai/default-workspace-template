@@ -223,7 +223,14 @@ vi.mock("../models/Providers", () => ({
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
-import { MessageInput, prependToComposer, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
+import {
+  MessageInput,
+  composerHintOf,
+  prependToComposer,
+  restoreComposerDraft,
+  setComposerHint,
+  takeComposerDraft,
+} from "./MessageInput";
 
 type AnyVnode = { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown; text?: unknown };
 
@@ -1472,6 +1479,25 @@ describe("MessageInput switching harness", () => {
     const [, text, messageId] = mocks.sendMessage.mock.calls[0] as unknown as string[];
     expect(text).toBe("hello");
     expect(messageId).toMatch(/^m-/);
+  });
+});
+
+describe("setComposerHint", () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it("shows the hint as the placeholder until a send, and an empty hint is nothing", () => {
+    const component = MessageInput();
+    setComposerHint("agent-1", "How do you want to change Docs?");
+    expect(composerHintOf("agent-1")).toBe("How do you want to change Docs?");
+    const textarea = findByTag(component.view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+    expect(textarea?.attrs?.placeholder).toBe("How do you want to change Docs?");
+    // Another chat's composer keeps its own words.
+    const other = findByTag(component.view!({ attrs: { chatId: "agent-2" } } as never), "textarea");
+    expect(other?.attrs?.placeholder).toBe("Type a message...");
+    setComposerHint("agent-3", "");
+    expect(composerHintOf("agent-3")).toBeNull();
   });
 });
 

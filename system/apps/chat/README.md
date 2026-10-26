@@ -337,11 +337,14 @@ text, how the receiving chat is chosen (`target`: `new_chat`, `main_chat` (the
 main chat, else the most recently messaged chat, else a new one; the desktop launcher's Enter), `current_chat` from
 the `window_path` the text was typed into, else the main chat, else the most recently messaged chat;
 `chat_selector`, the one chat there is or the user's pick; `lounge`, the chat
-titled Lounge, made as a room when there is none; or `chat` with a `chat_id`),
+titled Lounge, made as a room when there is none; `app_chat`, the chat titled
+"<app_display_name> Chat", made on the default account when there is none (a
+window's "Chat about this app"; the intake is held with a `hint` the root puts
+on the composer); or `chat` with a `chat_id`),
 and whether the text is sent or drafted (`is_draft`), plus the sender's
 `client_id` and `desktop_id` for the shell's activity log. The chat's manifest
-declares the desktop's `main`, `new`, `send`, `draft`, and `lounge` launch
-paths as POSTs onto it with those fields preset, so the launcher's rows, the
+declares the desktop's `main`, `new`, `send`, `draft`, `lounge`, and `app-chat`
+launch paths as POSTs onto it with those fields preset, so the launcher's rows, the
 Getting Started tiles, the avatar dialog's "Design your own...", a click on a
 person in the tray, and `workspace-layout open chat --launch new --param
 message=...` all arrive here through the shell. The route

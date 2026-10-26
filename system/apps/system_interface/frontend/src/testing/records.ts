@@ -50,6 +50,7 @@ export function launchPathRecord(overrides: Partial<LaunchPath> = {}): LaunchPat
     text_param: null,
     draft_param: null,
     mention_param: null,
+    app_params: null,
     ...overrides,
   };
 }

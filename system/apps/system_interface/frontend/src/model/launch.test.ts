@@ -9,6 +9,8 @@ import {
   launchPathOf,
   launchRowKindOf,
   mentionParams,
+  appChatLaunchOf,
+  appChatParams,
   mentionRowsOf,
   orderAppLaunches,
   textRowDisabledReason,
@@ -158,5 +160,33 @@ describe("the mention rows", () => {
     ]);
     expect(mentionParams(mention, "@Bob ")).toEqual({ message: "@Bob " });
     expect(mentionParams(launchPathRecord(), "@Bob ")).toEqual({});
+  });
+});
+
+describe("the app-chat launch", () => {
+  it("keeps a launch path about an app out of every row and picks the first in launcher order for the button", () => {
+    const aboutAnApp = launchPathRecord({
+      id: "app-chat",
+      path: "/api/chats/intake",
+      method: "POST",
+      params: ["app", "app_display_name"],
+      app_params: { name: "app", display_name: "app_display_name" },
+    });
+    const chat = appRecord("chat", {
+      launcher_rank: 10,
+      launch_paths: [launchPathRecord({ id: "root", path: "/" }), aboutAnApp],
+    });
+    const notes = appRecord("notes", {
+      launch_paths: [
+        launchPathRecord({ id: "about", params: ["a", "d"], app_params: { name: "a", display_name: "d" } }),
+      ],
+    });
+    const docs = appRecord("docs", { display_name: "Docs" });
+    expect(appLaunchesOf([notes, chat]).map((launch) => launch.launchPath.id)).toEqual(["root"]);
+    const launch = appChatLaunchOf([notes, chat]);
+    expect(launch === null ? null : `${launch.app.name}:${launch.launchPath.id}`).toBe("chat:app-chat");
+    expect(appChatLaunchOf([docs])).toBeNull();
+    expect(appChatParams(aboutAnApp, docs)).toEqual({ app: "docs", app_display_name: "Docs" });
+    expect(appChatParams(launchPathRecord(), docs)).toEqual({});
   });
 });

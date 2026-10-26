@@ -137,6 +137,14 @@ export interface LaunchPath {
   /** The param the shell fills with a mention of the person whose tray entry was clicked (the multiplayer spec,
    *  section 7.5); never a launcher row; null for none. */
   readonly mention_param: string | null;
+  /** The params the shell fills with the name and display name of the app whose window's "Chat about this app"
+   *  button was pressed (the multiplayer spec, section 9.2); never a launcher row; null for none. */
+  readonly app_params: AppParams | null;
+}
+
+export interface AppParams {
+  readonly name: string;
+  readonly display_name: string;
 }
 
 export interface DefaultShortcut {
@@ -519,6 +527,16 @@ function parseLaunchPath(raw: unknown): LaunchPath {
     text_param: asOptionalString(record.text_param, "launch_path.text_param"),
     draft_param: asOptionalString(record.draft_param, "launch_path.draft_param"),
     mention_param: asOptionalString(record.mention_param, "launch_path.mention_param"),
+    app_params: parseAppParams(record.app_params),
+  };
+}
+
+function parseAppParams(raw: unknown): AppParams | null {
+  if (raw === undefined || raw === null) return null;
+  const record = asObject(raw, "launch_path.app_params");
+  return {
+    name: asString(record.name, "launch_path.app_params.name"),
+    display_name: asString(record.display_name, "launch_path.app_params.display_name"),
   };
 }
 

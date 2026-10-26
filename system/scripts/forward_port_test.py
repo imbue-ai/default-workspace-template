@@ -804,6 +804,15 @@ params = [{name = "message", label = "Mention", required = false}]
 presets = {target = "lounge", is_draft = "true"}
 mention_param = "message"
 
+[[launch_paths]]
+id = "app-chat"
+label = "Chat about this app"
+path = "/api/intake"
+method = "POST"
+params = [{name = "app", label = "App", required = true}, {name = "app_display_name", label = "App name", required = true}]
+presets = {target = "app_chat"}
+app_params = {name = "app", display_name = "app_display_name"}
+
 [pin]
 path = "/"
 style = "avatar"
@@ -881,6 +890,15 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
             "mention_param": "message",
             "params": ["message"],
             "presets": {"target": "lounge", "is_draft": "true"},
+        },
+        {
+            "id": "app-chat",
+            "label": "Chat about this app",
+            "path": "/api/intake",
+            "method": "POST",
+            "params": ["app", "app_display_name"],
+            "presets": {"target": "app_chat"},
+            "app_params": {"name": "app", "display_name": "app_display_name"},
         },
     ]
     assert row["pin"] == {

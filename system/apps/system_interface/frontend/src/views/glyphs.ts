@@ -26,6 +26,8 @@ const GLYPH_PATHS = {
     '<circle cx="12" cy="19" r="2" fill="currentColor" stroke="none"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   home: '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>',
+  // Lucide's message-circle: the speech balloon of the title bar's "Chat about this app".
+  balloon: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
   app: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
 } as const;
 

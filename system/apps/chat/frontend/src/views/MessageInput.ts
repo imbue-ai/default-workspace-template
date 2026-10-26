@@ -134,6 +134,12 @@ function messageTextKey(chatId: string): string {
 // survives even if the composer is not currently mounted -- never swallowed (contract A1a).
 const pendingComposerPrepends = new Map<string, string>();
 
+// The hint a chat's composer shows as its placeholder until its next send (the multiplayer spec, section 9.2:
+// "How do you want to change <app>?"), by chat; set from outside the component, as the prepends are, and taken
+// up on the composer's next view pass, which also focuses it once.
+const composerHints = new Map<string, string>();
+const pendingComposerFocuses = new Set<string>();
+
 /** A failure raised from OUTSIDE this component, waiting for the composer to show it. */
 interface PendingFailureNotice {
   title: string;
@@ -224,6 +230,22 @@ function restoreToComposer(chatId: string, text: string, attachments: readonly C
     ...attachments.filter((attachment) => !existingIds.has(attachment.localId)),
     ...existingAttachments,
   ]);
+}
+
+/** Show ``hint`` as ``chatId``'s composer placeholder until its next send, and focus the composer: what the chat
+ *  root hands a page when an intake carried a hint (a window's "Chat about this app"). */
+export function setComposerHint(chatId: string, hint: string): void {
+  if (!hint) {
+    return;
+  }
+  composerHints.set(chatId, hint);
+  pendingComposerFocuses.add(chatId);
+  m.redraw();
+}
+
+/** The hint ``chatId``'s composer shows as its placeholder, or null once a send cleared it or none was set. */
+export function composerHintOf(chatId: string): string | null {
+  return composerHints.get(chatId) ?? null;
 }
 
 /** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
@@ -657,6 +679,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         pendingComposerPrepends.delete(chatId);
         messageText = pendingPrepend;
       }
+      if (pendingComposerFocuses.delete(chatId)) {
+        // After this pass has drawn the textarea the hint is for.
+        queueMicrotask(focusMessageTextarea);
+      }
+      const composerHint = composerHints.get(chatId) ?? null;
 
       /** What a send (or a switch) puts on the wire, with what to put back if it fails. */
       interface PreparedSend {
@@ -765,6 +792,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (prepared === null) {
           return;
         }
+        // The hint asked a question; the send answered it.
+        composerHints.delete(chatId);
         const { text: sentText, finalText, attachments: sentAttachments } = prepared;
 
         // Paint an optimistic "Sending…" bubble at the tail immediately -- the ONE
@@ -1547,11 +1576,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   placeholder:
                     handoff !== null
                       ? handoffComposerPlaceholder(handoff)
-                      : isRoomChat(chatId)
-                        ? "Message (tag @agent to ask the agent)"
-                        : isAgentWorking
-                          ? "Type to queue more messages..."
-                          : "Type a message...",
+                      : composerHint !== null
+                        ? composerHint
+                        : isRoomChat(chatId)
+                          ? "Message (tag @agent to ask the agent)"
+                          : isAgentWorking
+                            ? "Type to queue more messages..."
+                            : "Type a message...",
                   rows: 1,
                   disabled: isComposerDisabled,
                   value: messageText,

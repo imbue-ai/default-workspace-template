@@ -379,8 +379,10 @@ has since left the grants is left behind, listed in the owner's overview under
 ### The desktop, the taskbar, and the launcher
 
 The backdrop shows the active desktop's shortcuts and windows; each window is
-an iframe of an app page under a title bar with the page's title and the
-window menu. The taskbar shows the launcher field, the overview button, one
+an iframe of an app page under a title bar with the window menu, Refresh, and
+"Chat about this app" on the left while it is focused, the page's title
+centred, and the window controls on the right. The taskbar shows the launcher
+field, the overview button, one
 entry per window of the active desktop, and the tray. A pinned window's entry
 may float above the windows instead, drawn as the workspace's avatar (the
 chat's default); its context menu moves it between the bar and the desktop,
@@ -417,6 +419,23 @@ the last read did not list, and a change in who is here, read the clients
 again.
 The launcher's window rows name the owner of a desktop that is not the
 viewer's. The phone layout offers no overview.
+
+**App chat** (the multiplayer spec, section 9; `frontend/src/views/TitleBar.ts`,
+`store/DesktopStore.ts` `openAppChat`). Every window of an app that is not
+internal carries "Chat about this app" (a speech balloon) in its focused title
+bar, the chat app's windows included. It runs the first launch path of the
+machine that declares `app_params` (the chat app's `app-chat`, which names the
+window's app and its display name in the params the path declares) through the
+launch route's `show` target: the shell shows the answered page as the `show` op
+would (a window already at the path raised, else the pinned window pointed at
+it) and lays the two windows out for this client, the chat snapped to the half
+of the backdrop its frame's centre was already on (the right for a pinned window
+never shown) and the app's window to the other, the chat on top. The chat app
+answers the chat titled "<App display name> Chat", made on the default provider
+when there is none (so the chat app's own windows open "Chat Chat"), with a
+pending intake whose `hint` the chat root puts on the composer as its
+placeholder, "How do you want to change <App>?", and focuses. The shell names no
+app in any of this.
 
 **The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
 and `views/tray/`) is where the people and the agent live: the share button (a

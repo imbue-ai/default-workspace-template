@@ -31,7 +31,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   pairs sent with every launch), and an optional `text_param`, `draft_param`,
   or `mention_param` naming the one of its params the desktop fills with typed
   text, sent or drafted, or with a mention of the person whose tray entry was
-  clicked; `client_id`, `desktop_id`, and `window_path` are reserved for the
+  clicked, or an `app_params` pair (`name`, `display_name`) naming the two the
+  desktop fills with the app whose window's "Chat about this app" button was
+  pressed; `client_id`, `desktop_id`, and `window_path` are reserved for the
   shell's launch envelope and can name neither a param nor a preset; `open` is
   reserved for the root launch path the shell synthesizes for an app that
   declares none), `LaunchPathMethod`,

@@ -95,6 +95,20 @@ params = [{name = "message", label = "Mention", required = false}]
 presets = {target = "lounge", is_draft = "true"}
 mention_param = "message"
 
+# A window's "Chat about this app" (the multiplayer spec, section 9.2): the chat titled "<App> Chat", made on the
+# default provider when there is none, opened with the composer asking what to change. Never a launcher row.
+[[launch_paths]]
+id = "app-chat"
+label = "Chat about this app"
+path = "/api/chats/intake"
+method = "POST"
+params = [
+    {name = "app", label = "App", required = true},
+    {name = "app_display_name", label = "App name", required = true},
+]
+presets = {target = "app_chat"}
+app_params = {name = "app", display_name = "app_display_name"}
+
 # A chat's launch stacks on the ``chat`` create template the committed mngr settings hold, and the
 # chat's create defaults resolve beside that file, so a change to it can break chat creation.
 [[references]]

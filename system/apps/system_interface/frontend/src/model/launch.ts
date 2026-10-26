@@ -34,10 +34,29 @@ export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {
   for (const app of apps) {
     if (app.internal) continue;
     for (const launchPath of app.launch_paths) {
-      if (launchPath.mention_param === null) launches.push({ app, launchPath });
+      if (launchPath.mention_param === null && launchPath.app_params === null) launches.push({ app, launchPath });
     }
   }
   return launches;
+}
+
+/** The launch path a window's "Chat about this app" button runs (the multiplayer spec, section 9.2): the first of
+ *  the machine that declares ``app_params``, in launcher order; null when no app declares one. */
+export function appChatLaunchOf(apps: readonly AppRecord[]): AppLaunch | null {
+  const launches: AppLaunch[] = [];
+  for (const app of apps) {
+    if (app.internal) continue;
+    for (const launchPath of app.launch_paths) {
+      if (launchPath.app_params !== null) launches.push({ app, launchPath });
+    }
+  }
+  return orderAppLaunches(launches)[0] ?? null;
+}
+
+/** The params an app-chat launch runs with: the app's name and display name in the params the path declares. */
+export function appChatParams(launchPath: LaunchPath, about: AppRecord): Record<string, string> {
+  if (launchPath.app_params === null) return {};
+  return { [launchPath.app_params.name]: about.name, [launchPath.app_params.display_name]: about.display_name };
 }
 
 /** The launch paths that take a mention of a person, in launcher order: the first is what a click on a person's

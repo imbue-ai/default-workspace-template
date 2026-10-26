@@ -241,9 +241,13 @@ class WindowOpenRequest(FrozenModel):
 class LaunchTarget(FrozenModel):
     """Where a launch's page goes (post-launch-paths plan section 3.3)."""
 
-    kind: LaunchTargetKind = Field(description="A new window, a window already at the path, or a named window")
+    kind: LaunchTargetKind = Field(
+        description="A new window, a window already at the path, a named window, or the show op's choice"
+    )
     window_id: WindowId | None = Field(
-        default=None, description="The window this client points at the page; required for the window kind"
+        default=None,
+        description="For the window kind, the window this client points at the page (required); for the show kind, "
+        "a window the shown one is laid out beside (the multiplayer spec, section 9.2), or none",
     )
     sends_window_path: bool = Field(
         default=True,
@@ -253,8 +257,10 @@ class LaunchTarget(FrozenModel):
 
     @model_validator(mode="after")
     def _check_window_named_for_the_window_kind(self) -> "LaunchTarget":
-        if (self.kind is LaunchTargetKind.WINDOW) != (self.window_id is not None):
-            raise InvalidShellValueError("a launch target names a window exactly when its kind is 'window'")
+        if self.kind is LaunchTargetKind.WINDOW and self.window_id is None:
+            raise InvalidShellValueError("a launch target of the 'window' kind names its window")
+        if self.window_id is not None and self.kind not in (LaunchTargetKind.WINDOW, LaunchTargetKind.SHOW):
+            raise InvalidShellValueError("only a launch target of the 'window' or 'show' kind names a window")
         if not self.sends_window_path and self.kind is not LaunchTargetKind.WINDOW:
             raise InvalidShellValueError("only a launch target of the 'window' kind has a window path to withhold")
         return self
@@ -298,6 +304,19 @@ class ClientDesktopView(FrozenModel):
     desktop: Desktop = Field(description="The shared record")
     layout: DesktopLayout = Field(description="The client's layout of the desktop, pinned windows placed")
     seen_windows: tuple[Window, ...] = Field(description="The desktop's windows as the client sees them")
+
+
+class ShownWindow(FrozenModel):
+    """What showing a path came to for one client (the ``show`` op's rule applied): the desktop the window is on,
+    the window, how it was put on screen, and whether that was a raise of a pulled-out window's own desktop window."""
+
+    desktop: Desktop = Field(description="The desktop the shown window is on, as it stands after the show")
+    window_id: WindowId = Field(description="The window showing the path")
+    outcome: ShowOutcome = Field(description="Raised, navigated, the pinned window navigated, or opened")
+    is_raised_in_own_window: bool = Field(
+        description="The window was pulled out into a desktop window of the embedder's own, so that was raised and "
+        "nothing on the desktop moved"
+    )
 
 
 class ShowChoice(FrozenModel):

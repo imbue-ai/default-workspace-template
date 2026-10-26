@@ -66,6 +66,18 @@ def most_recently_messaged_chat_id(snapshots: Sequence[ChatSnapshot]) -> ChatId 
 
 
 @pure
+def app_chat_title(app_display_name: str) -> str:
+    """The title of the chat about an app (the multiplayer spec, section 9.2): the app's display name and "Chat"."""
+    return f"{app_display_name} Chat"
+
+
+@pure
+def app_chat_hint(app_display_name: str) -> str:
+    """The composer's placeholder when the chat about an app opens from its window's button."""
+    return f"How do you want to change {app_display_name}?"
+
+
+@pure
 def intake_path(chat_id: ChatId | None, token: str | None) -> str:
     """The root path an intake answers: the selection, with the pending intake's token when one is held."""
     params: dict[str, str] = {}
@@ -83,6 +95,7 @@ class PendingIntake(FrozenModel):
     chat_id: ChatId | None = Field(description="The chat it resolved to; None for a choice the user makes")
     needs_pick: bool = Field(description="Whether the root has to offer the picker before applying")
     minted_at: float = Field(description="Wall-clock epoch seconds the intake was held at, for expiry")
+    hint: str = Field(default="", description="A placeholder for the chat's composer, once; empty for none")
 
 
 class PendingIntakeStore(MutableModel):
@@ -98,10 +111,12 @@ class PendingIntakeStore(MutableModel):
     _by_token: dict[str, PendingIntake] = PrivateAttr(default_factory=dict)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
-    def mint(self, request: IntakeRequest, chat_id: ChatId | None, needs_pick: bool) -> str:
+    def mint(self, request: IntakeRequest, chat_id: ChatId | None, needs_pick: bool, hint: str = "") -> str:
         """Hold an intake and answer its one-time token."""
         token = secrets.token_urlsafe(_PENDING_INTAKE_TOKEN_BYTES)
-        pending = PendingIntake(request=request, chat_id=chat_id, needs_pick=needs_pick, minted_at=self.clock())
+        pending = PendingIntake(
+            request=request, chat_id=chat_id, needs_pick=needs_pick, minted_at=self.clock(), hint=hint
+        )
         with self._lock:
             self._expire_locked()
             self._by_token[token] = pending

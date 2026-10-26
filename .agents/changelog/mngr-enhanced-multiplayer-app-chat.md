@@ -1,0 +1,1 @@
+The `build-app` skill gains "Renaming an app": when an app's `display_name` changes, rename the chat titled "<old> Chat" to "<new> Chat" with `system/scripts/rename_chat.py`, so every window's "Chat about this app" keeps finding it (the mngr repo's `specs/multiplayer-refinements/spec.md`, section 9.3).

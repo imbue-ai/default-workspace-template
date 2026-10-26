@@ -3518,18 +3518,18 @@ class AgentManager:
         self._auto_open.request_open(chat_id)
         return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
 
-    def mint_awaiting_chat(self, account_id: str) -> ProvisionalChat:
+    def mint_awaiting_chat(self, account_id: str, name: str = "") -> ProvisionalChat:
         """Mint a chat with no seed that waits for its first send (post-launch-paths plan section 3.7).
 
         What an intake falls back to when it cannot launch a new chat at once: a draft into a new
         chat, or a first message with nothing signed in. The chat is listed as provisional in the
-        ``awaiting_first_send`` phase under a minted "Chat N" name, with the account the intake
-        resolved (or none), and its page shows an empty conversation with the composer; the first
-        send launches it through ``create_chat`` by ``chat_id``. It has no record, so a restart of
-        this app drops it.
+        ``awaiting_first_send`` phase under ``name`` (a minted "Chat N" when none is given; a taken name
+        raises ``AgentNameConflictError``), with the account the intake resolved (or none), and its page
+        shows an empty conversation with the composer; the first send launches it through ``create_chat``
+        by ``chat_id``. It has no record, so a restart of this app drops it.
         """
         with self._lock:
-            provisional = self._mint_awaiting_chat_locked(account_id)
+            provisional = self._mint_awaiting_chat_locked(account_id, name)
         self._broadcast_provisional(provisional)
         self._broadcast_chats_updated()
         return provisional
@@ -3549,11 +3549,11 @@ class AgentManager:
         self._broadcast_chats_updated()
         return minted
 
-    def _mint_awaiting_chat_locked(self, account_id: str) -> ProvisionalChat:
+    def _mint_awaiting_chat_locked(self, account_id: str, name: str = "") -> ProvisionalChat:
         chat_id = ChatId(str(AgentId()))
         provisional = ProvisionalChat(
             chat_id=chat_id,
-            name=self._mint_display_name_locked(""),
+            name=self._mint_display_name_locked(name),
             account_id=account_id,
             phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
         )

@@ -99,8 +99,9 @@ A page that ends up somewhere else reports its real path, and the window follows
 
 ### 2.7 Title bar and window controls
 
-Left to right: the app icon, the title, the window menu (three dots, directly after the title), then at the right edge minimize, maximize (restore when maximized), close.
+Left to right: while the window is focused, the window menu (three dots), Refresh, and "Chat about this app" (a speech balloon, on every window of an app that is not internal; the multiplayer spec, section 9); the app icon and the title centred over the bar; then at the right edge minimize, maximize (restore when maximized), close.
 No status indicator.
+"Chat about this app" opens the chat titled "<App display name> Chat" (made on the default provider when there is none; the chat app's own windows open "Chat Chat") through the chat app's `app-chat` launch path, and lays the two windows out side by side for this client, the chat on the half it was already nearer and on top (section 9.2 of the spec).
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.
 The window menu offers Refresh, Open in its own window (where the embedding chrome can pull windows out), Share, Quit the app (which closes every window of it and stops it; `docs/system/specs/stop-when-no-windows.md`), and Close.
 Close removes the window from the desktop for everyone; there is no separate "remove from desktop".

@@ -60,7 +60,7 @@ import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } from "./selection";
 import type { SlotFill } from "./selection";
-import { prependToComposer } from "../views/MessageInput";
+import { prependToComposer, setComposerHint } from "../views/MessageInput";
 
 const ROOT_TITLE = "Chats";
 
@@ -248,13 +248,22 @@ function isReferenceDraftAvailable(): boolean {
   return selectedChatId !== null || (connection?.hasShell() ?? false);
 }
 
+/** Put ``hint`` on a chat's composer as its placeholder, focused: the live page's when it is loaded, else where the
+ *  composer reads it on mount. */
+function hintInto(chatId: string, hint: string): void {
+  if (pool?.hintComposer(chatId, hint) === true) return;
+  setComposerHint(chatId, hint);
+}
+
 /** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft
- *  goes into its composer, a first message launches it. */
+ *  goes into its composer, a first message launches it, a hint becomes its composer's placeholder (the multiplayer
+ *  spec, section 9.2). */
 function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
   settleIntake(applied.chatId);
   if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
   if (applied.firstMessage !== null) void launchWithFirstMessage(applied.chatId, applied.firstMessage);
+  if (applied.hint !== null) hintInto(applied.chatId, applied.hint);
 }
 
 /** Apply a held intake on the chat it resolved to, or on ``pickedChatId``; a token already gone (another client

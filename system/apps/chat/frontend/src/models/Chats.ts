@@ -627,6 +627,8 @@ export interface PendingIntake {
   needsPick: boolean;
   // The chat the intake resolved to; null for a choice the user makes.
   chatId: string | null;
+  // A placeholder for the chat's composer, shown once and focused (the multiplayer spec, section 9.2); null for none.
+  hint: string | null;
 }
 
 /** What applying a held intake came to (the backend's ``IntakeApplyResponse``). */
@@ -636,6 +638,8 @@ export interface AppliedIntake {
   composerText: string | null;
   // The first message of a chat awaiting its first send with no account: the root launches it with this.
   firstMessage: string | null;
+  // A placeholder for the chat's composer, shown once and focused; null for none.
+  hint: string | null;
 }
 
 /** Thrown when a token names no held intake: it was applied, dismissed, or expired. */
@@ -658,8 +662,15 @@ export async function fetchPendingIntake(token: string): Promise<PendingIntake> 
     is_draft: boolean;
     needs_pick: boolean;
     chat_id: string | null;
+    hint?: string | null;
   }>(response, token);
-  return { message: data.message, isDraft: data.is_draft, needsPick: data.needs_pick, chatId: data.chat_id };
+  return {
+    message: data.message,
+    isDraft: data.is_draft,
+    needsPick: data.needs_pick,
+    chatId: data.chat_id,
+    hint: data.hint ?? null,
+  };
 }
 
 /** Apply a held intake, on ``chatId`` when it needed a pick; the token is consumed. Throws
@@ -674,8 +685,14 @@ export async function applyPendingIntake(token: string, chatId: string | null = 
     chat_id: string;
     composer_text: string | null;
     first_message: string | null;
+    hint?: string | null;
   }>(response, token);
-  return { chatId: data.chat_id, composerText: data.composer_text, firstMessage: data.first_message };
+  return {
+    chatId: data.chat_id,
+    composerText: data.composer_text,
+    firstMessage: data.first_message,
+    hint: data.hint ?? null,
+  };
 }
 
 /** Drop a held intake unapplied (the picker was dismissed); a token already gone is fine. The dismissal never

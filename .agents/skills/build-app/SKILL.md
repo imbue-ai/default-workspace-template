@@ -520,6 +520,22 @@ Two cases, two patterns:
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
   is the right pattern.
 
+### Renaming an app
+
+An app's `display_name` names more than its windows: every window's "Chat
+about this app" button opens the chat titled `<display_name> Chat` (the
+multiplayer spec, section 9), so when the display name changes, rename that
+chat too or the button starts a second one. `system/scripts/rename_chat.py`
+does it through the chat app's rename route (`POST /api/chats/<id>/rename`,
+beside the send route `message_chat.py` posts to):
+
+```bash
+python3 system/scripts/rename_chat.py --title "<old display name> Chat" --new-title "<new display name> Chat"
+```
+
+It exits 0 when the chat was renamed or there is no chat under the old title
+(nothing to do), and non-zero when the chat app is unreachable or refused.
+
 ## Step 3: Verify
 
 Both paths use the same verification recipe. See
