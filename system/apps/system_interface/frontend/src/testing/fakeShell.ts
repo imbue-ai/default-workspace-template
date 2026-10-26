@@ -44,6 +44,9 @@ export class FakeDesktopApi implements DesktopApi {
   /** The apps the inventory answers; the socket's ``apps_updated`` is delivered by hand. */
   apps: AppRecord[] = [];
   clients: ClientRecord[] = [];
+  /** Whose desktops a create makes and the order route moves: the shell reads the requester's identity; the fake
+   *  is told (null for the workspace owner's). */
+  participant: string | null = null;
   workspaceName = "Test workspace";
   /** What the next arrival answers beyond the client's recorded desktop: a desktop seeded for the user (added to
    *  the desktops as the shell would), and the name of the one it replaced. */
@@ -166,10 +169,6 @@ export class FakeDesktopApi implements DesktopApi {
       workspace_name: this.workspaceName,
     };
   }
-
-  /** Whose desktops a create makes and the order route moves: the shell reads the requester's identity; the fake
-   *  is told (null for the workspace owner's). */
-  participant: string | null = null;
 
   async createDesktop(name: string): Promise<Desktop> {
     this.calls.push(`createDesktop:${name}`);
