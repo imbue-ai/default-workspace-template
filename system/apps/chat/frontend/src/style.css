@@ -394,6 +394,39 @@
   border: none;
   border-radius: var(--radius-lg);
 }
+/* The frame's loading line sits under it for good, and the frame stays hidden (at its full size)
+   until it has loaded, so any moment the frame paints nothing shows the terminal's surface rather
+   than the card's. */
+.terminal-frame-box {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+.terminal-frame-loading {
+  position: absolute;
+  inset: 0;
+}
+.terminal-frame-box > .terminal-frame {
+  position: relative;
+}
+.terminal-frame-pending {
+  visibility: hidden;
+}
+/* A line drawn the way the terminal draws its output: the frame's box and corner, in ttyd's own
+   default theme and type (the terminal app passes ttyd no theme), so the terminal that replaces
+   it lands on the same surface. */
+.terminal-placeholder {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 5px;
+  border-radius: var(--radius-lg);
+  background: #2b2b2b;
+  color: #d2d2d2;
+  font-family: Consolas, "Liberation Mono", Menlo, Courier, monospace;
+  font-size: 13px;
+  line-height: 1.2;
+}
 
 /* A 600ms rotation is exactly what this asks to be spared. The faces still swap; only the
    turning goes away. */
