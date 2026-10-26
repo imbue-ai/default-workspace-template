@@ -378,6 +378,7 @@ describe("the contract", () => {
         desktopId: "home",
         app: "docs",
         path: "/?doc=1",
+        opensLocalFiles: false,
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
@@ -396,10 +397,18 @@ describe("the contract", () => {
         desktopId: "home",
         app: "docs",
         path: "/?doc=1",
+        opensLocalFiles: false,
       },
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
       { type: SHELL_HIDDEN },
     ]);
+  });
+
+  it("tells a page in its handshake whether the embedder opens its settings for the files shared from the computer", () => {
+    store.setOpensLocalFiles(true);
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, opensLocalFiles: true });
   });
 
   it("greets a page reloaded while hidden with its own desktop, not the active one", async () => {

@@ -31,6 +31,10 @@
  * leaves the document takes the bubble with it. A trigger must be IN the
  * document to be heard -- a detached tree never reaches the listeners.
  *
+ * A tooltip is one short line. A trigger that has a detail worth a glance -- a
+ * reason, a time -- adds it as an optional second line in quieter text
+ * (``detail``), which keeps the first line short rather than stretching it.
+ *
  * The exceptions are both the same problem: a bubble under the trigger covers
  * the thing the pointer is choosing between. The chat rail takes ``right``,
  * because a rail row sits directly above the row it is being compared against;
@@ -59,6 +63,10 @@ const TOOLTIP_MARGIN = 6;
  * clears the modal overlays. */
 const TOOLTIP_CLASS =
   "hover-tooltip type-helper pointer-events-none fixed z-(--z-tooltip) hidden max-w-[480px] items-center gap-1.5 rounded-md bg-inverse px-2 py-1 text-center whitespace-normal text-on-accent shadow-overlay dark:bg-surface dark:text-primary";
+
+/** The second line: the bubble's own text, quieter, and cut off after two lines with an ellipsis -- a glance, not the
+ * place to read a long error in full. */
+const DETAIL_CLASS = "hover-tooltip-detail line-clamp-2 opacity-70";
 
 /** The part of a ``DOMRect`` the placement needs. */
 export interface TooltipAnchor {
@@ -162,9 +170,10 @@ export function placeTooltip(
   }
 }
 
-/** The attribute a trigger carries its text in, and the one it names a
+/** The attribute a trigger carries its text in, the one its optional second line, and the one it names a
  *  non-default placement in. */
 const TOOLTIP_ATTR = "data-hover-tooltip";
+const DETAIL_ATTR = "data-hover-tooltip-detail";
 const PLACEMENT_ATTR = "data-hover-tooltip-placement";
 const MAX_WIDTH_ATTR = "data-hover-tooltip-max-width";
 
@@ -172,6 +181,8 @@ const MAX_WIDTH_ATTR = "data-hover-tooltip-max-width";
 // shares it. ``pendingFor`` and ``shownFor`` name the trigger a scheduled or
 // visible bubble belongs to, so a trigger only ever dismisses its own.
 let bubbleElement: HTMLDivElement | null = null;
+// What the bubble shows, both lines, so a change to either while it is up redraws it.
+let shownContent: string | null = null;
 let pendingTimer: number | null = null;
 let pendingFor: Element | null = null;
 let shownFor: Element | null = null;
@@ -214,9 +225,27 @@ function dropTooltip(): void {
   hideBubble();
 }
 
+function contentKey(text: string, detail: string | null): string {
+  return detail === null ? text : `${text}\n${detail}`;
+}
+
 function showBubble(target: Element, text: string, placement: TooltipPlacement): void {
   const element = ensureBubble();
-  element.textContent = text;
+  const detail = target.getAttribute(DETAIL_ATTR);
+  if (detail === null) {
+    element.textContent = text;
+  } else {
+    const line = document.createElement("span");
+    line.textContent = text;
+    const second = document.createElement("span");
+    second.className = DETAIL_CLASS;
+    second.textContent = detail;
+    element.replaceChildren(line, second);
+  }
+  // Two lines stack; one sits in the row the bubble lays its content out in.
+  element.style.flexDirection = detail === null ? "" : "column";
+  element.style.rowGap = detail === null ? "" : "0";
+  shownContent = contentKey(text, detail);
   const maxWidth = target.getAttribute(MAX_WIDTH_ATTR);
   element.style.maxWidth = maxWidth === null ? "" : `${maxWidth}px`;
   // Measure at the natural width: clear the width a previous show fixed, and
@@ -269,7 +298,7 @@ function watchShownTrigger(target: Element): void {
     const text = tooltipTextOf(shownFor);
     if (text === null) {
       hideBubble();
-    } else if (bubbleElement?.textContent !== text) {
+    } else if (shownContent !== contentKey(text, shownFor.getAttribute(DETAIL_ATTR))) {
       showBubble(shownFor, text, placementOf(shownFor));
     }
   });
@@ -278,7 +307,7 @@ function watchShownTrigger(target: Element): void {
   // check needs the whole tree, and that is childList alone -- watching every
   // element's attributes would put a record on every unrelated DOM write while
   // a bubble happens to be up.
-  shownObserver.observe(target, { attributeFilter: [TOOLTIP_ATTR] });
+  shownObserver.observe(target, { attributeFilter: [TOOLTIP_ATTR, DETAIL_ATTR] });
   shownObserver.observe(document.body, { childList: true, subtree: true });
 }
 
@@ -420,7 +449,7 @@ export function setHoverTooltip(element: Element, text: string | null, placement
 export function hoverTooltipAttrs(
   text: string | null,
   placement: TooltipPlacement = "below",
-  options: { maxWidth?: number } = {},
+  options: { maxWidth?: number; detail?: string | null } = {},
 ): m.Attributes {
   wireListeners();
   // Null values are what mithril removes an attribute for, on the update where
@@ -431,5 +460,7 @@ export function hoverTooltipAttrs(
     [PLACEMENT_ATTR]: placement === "below" ? null : placement,
     // A narrower bubble for a sentence or two of explanation, which reads better wrapped than in one long line.
     [MAX_WIDTH_ATTR]: options.maxWidth ?? null,
+    // The optional second line, in quieter text under the first.
+    [DETAIL_ATTR]: text === null ? null : (options.detail ?? null),
   };
 }

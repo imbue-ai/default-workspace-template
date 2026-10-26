@@ -336,7 +336,7 @@ A page no shell has handed a handshake -- an unframed page, or one framed by som
 
 | Direction | Type | Payload |
 |---|---|---|
-| shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "app", "path"}`; after every `load` of the frame and when the window's desktop changes; `app` is the name of the app the window belongs to (element-reference-menu plan section 5) |
+| shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "app", "path", "opensLocalFiles"}`; after every `load` of the frame and when the window's desktop changes; `app` is the name of the app the window belongs to (element-reference-menu plan section 5); `opensLocalFiles` is whether the Imbue Studio chrome said, with `minds:embedder-capabilities`, that it opens its settings for the files shared from the user's computer (`minds:open-local-files`), and is false when no chrome said so |
 | shell to page | `shell:shown`, `shell:hidden` | `{}` |
 | shell to page | `shell:close-request` | `{}`; a page that declared `closeChord: true` keeps its window, any other page's window closes right after |
 | shell to page | `shell:navigate` | `{"path"}`; only to a page that declared `navigation: true` |

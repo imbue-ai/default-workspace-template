@@ -480,6 +480,8 @@ export class DesktopStore {
   private canPopOut = false;
   /** Which external links the embedder opens outside the workspace for it; none until it says so. */
   private outsideLinkCapabilities = NO_OUTSIDE_LINK_CAPABILITIES;
+  /** Whether the embedder opens its settings for the files shared from the user's computer; off until it says so. */
+  private opensLocalFiles = false;
   /** The detached set as last reported to the embedder, serialized, so a redraw reports nothing new. */
   private lastReportedDetached: string | null = null;
   /** Solo mode's first layout load is still owed: the one load that may re-detach the solo window. */
@@ -535,6 +537,18 @@ export class DesktopStore {
   /** The embedder said which external links it opens for the workspace (``minds:embedder-capabilities``). */
   setOutsideLinkCapabilities(capabilities: OutsideLinkCapabilities): void {
     this.outsideLinkCapabilities = capabilities;
+  }
+
+  /** Whether the embedder opens its settings for the files shared from the user's computer, which each page is told
+   *  in its handshake. */
+  getOpensLocalFiles(): boolean {
+    return this.opensLocalFiles;
+  }
+
+  /** The embedder said whether it opens its settings for shared files (``minds:embedder-capabilities``). Pages
+   *  already greeted hear it as the shell's rebroadcast of that message. */
+  setOpensLocalFiles(opensLocalFiles: boolean): void {
+    this.opensLocalFiles = opensLocalFiles;
   }
 
   /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */

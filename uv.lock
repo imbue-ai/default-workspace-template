@@ -4501,7 +4501,7 @@ requires-dist = [
     { name = "app-schema", editable = "system/libs/app_schema" },
     { name = "click", specifier = ">=8.1" },
     { name = "flask", specifier = ">=3.0" },
-    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=8a46f89db13889b5623dacd657ba10747897ca39" },
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=a83ecd26948435a355668a7bcadbba9cc35dc1c1" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pillow", specifier = ">=12.1" },
     { name = "pydantic", specifier = ">=2.0" },
