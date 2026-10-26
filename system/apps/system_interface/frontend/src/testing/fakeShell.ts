@@ -362,7 +362,7 @@ export class FakeDesktopApi implements DesktopApi {
   /** The show rule as the shell's ``show`` launch target applies it: a window of the app already at the path is
    *  raised, else the app's pinned window is pointed at it for this client, else a window is opened; then, beside a
    *  window other than the shown one and not pulled out, the two are snapped to the halves (the shown one on the half
-   *  its centre is on, the right when it is minimized), the shown one on top. */
+   *  its centre is on, the right when it is minimized or never placed), the shown one on top. */
   private async showLaunched(
     desktopId: string,
     request: LaunchRequest,
