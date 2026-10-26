@@ -6,7 +6,8 @@
  */
 
 import type { OwnIdentity } from "./Presence";
-import type { Desktop, RosterParticipant } from "./records";
+import type { ClientRecord, Desktop, RosterParticipant } from "./records";
+import { OWNER_KEY } from "./Roster";
 
 /** Whether the desktop is the viewer's own. Before a heartbeat has answered who the viewer is (``identity`` null)
  *  the owner's desktops read as the viewer's: a workspace nobody has shared has nobody else to be. */
@@ -18,6 +19,12 @@ export function isOwnDesktop(desktop: Desktop, identity: OwnIdentity | null): bo
 /** The viewer's own desktops, in the shell's order. */
 export function ownDesktops(desktops: readonly Desktop[], identity: OwnIdentity | null): Desktop[] {
   return desktops.filter((desktop) => isOwnDesktop(desktop, identity));
+}
+
+/** Whether a client record is a roster entry's own: the owner's clients carry either of the owner's keys (section
+ *  4.1 folds the two into one person); anyone else's carry their key alone. A record with no key is nobody's. */
+export function isClientOf(entry: RosterParticipant, client: ClientRecord): boolean {
+  return client.participant === entry.key || (entry.is_owner && client.participant === OWNER_KEY);
 }
 
 /** The desktops that are a roster entry's: the ones carrying their key, and, for the owner, the ones with none. */

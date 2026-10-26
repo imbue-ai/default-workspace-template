@@ -1,7 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { desktopRecord, rosterParticipantRecord } from "../testing/records";
+import { clientRecord, desktopRecord, rosterParticipantRecord } from "../testing/records";
 import type { OwnIdentity } from "./Presence";
-import { desktopsOf, isLeftBehind, isOwnDesktop, leftBehindDesktops, ownDesktops, ownerEntryOf } from "./Ownership";
+import {
+  desktopsOf,
+  isClientOf,
+  isLeftBehind,
+  isOwnDesktop,
+  leftBehindDesktops,
+  ownDesktops,
+  ownerEntryOf,
+} from "./Ownership";
 
 const home = desktopRecord("home");
 const work = desktopRecord("work");
@@ -68,5 +76,16 @@ describe("desktopsOf, ownerEntryOf, and the desktops left behind", () => {
     ]);
     expect(leftBehindDesktops([home, alices, gone], roster, null).map((desktop) => desktop.id)).toEqual(["gone"]);
     expect(leftBehindDesktops([home, alices, gone], roster, visitingAlice)).toEqual([]);
+  });
+});
+
+describe("isClientOf", () => {
+  it("gives the owner the clients under either owner key, anyone else the ones carrying their key, and nobody a keyless one", () => {
+    expect(isClientOf(josh, clientRecord("josh-laptop", { participant: josh.key }))).toBe(true);
+    expect(isClientOf(josh, clientRecord("josh-desk", { participant: "owner" }))).toBe(true);
+    expect(isClientOf(josh, clientRecord("alice-laptop", { participant: alice.key }))).toBe(false);
+    expect(isClientOf(alice, clientRecord("alice-laptop", { participant: alice.key }))).toBe(true);
+    expect(isClientOf(alice, clientRecord("josh-desk", { participant: "owner" }))).toBe(false);
+    expect(isClientOf(josh, clientRecord("old", { participant: null }))).toBe(false);
   });
 });

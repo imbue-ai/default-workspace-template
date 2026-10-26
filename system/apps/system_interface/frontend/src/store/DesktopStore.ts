@@ -38,8 +38,8 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { applyPresence, getOwnIdentity, getOwnParticipant } from "../model/Presence";
-import { OWNER_KEY, applyRoster, getRoster } from "../model/Roster";
-import { isOwnDesktop, ownDesktops, ownerEntryOf } from "../model/Ownership";
+import { applyRoster, getRoster } from "../model/Roster";
+import { isClientOf, isOwnDesktop, ownDesktops, ownerEntryOf } from "../model/Ownership";
 import { applyChatsActivity } from "../model/ChatsActivity";
 import { nextExpiryOf, withBubble, withoutChat, withoutExpired, withoutSpeaker } from "../model/Bubbles";
 import type { BubbleStack } from "../model/Bubbles";
@@ -1137,11 +1137,7 @@ export class DesktopStore {
       const desktopId = this.desktopOfClient(client);
       const desktop = desktopId === null ? null : desktopById(this.state, desktopId);
       const owner = desktop === null ? null : ownerEntryOf(desktop, roster);
-      if (owner === null) continue;
-      const isOwnersClient = owner.is_owner
-        ? client.participant === OWNER_KEY || client.participant === owner.key
-        : client.participant === owner.key;
-      if (!isOwnersClient) keys.add(owner.key);
+      if (owner !== null && !isClientOf(owner, client)) keys.add(owner.key);
     }
     return keys;
   }

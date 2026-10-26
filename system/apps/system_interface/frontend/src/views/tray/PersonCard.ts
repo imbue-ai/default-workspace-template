@@ -10,7 +10,7 @@
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { desktopsOf } from "../../model/Ownership";
+import { desktopsOf, isClientOf } from "../../model/Ownership";
 import type { AppRecord, ClientRecord, Desktop, RosterParticipant, WindowRecord } from "../../model/records";
 import { OWNER_KEY, presenceStateOf, statusLineOf } from "../../model/Roster";
 import { appGlyph } from "../glyphs";
@@ -37,7 +37,7 @@ export function lookingAtOf(
   apps: readonly AppRecord[],
 ): LookingAt | null {
   const own = clients
-    .filter((client) => client.participant === entry.key || (entry.is_owner && client.participant === OWNER_KEY))
+    .filter((client) => isClientOf(entry, client))
     .sort((left, right) => right.last_seen.localeCompare(left.last_seen));
   const newest = own.find((client) => client.is_connected) ?? own[0];
   if (newest === undefined || newest.active_desktop === null) return null;
