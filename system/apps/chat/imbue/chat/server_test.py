@@ -4403,6 +4403,16 @@ def _token_of(path: str) -> str:
     return parse_qs(urlparse(path).query)["intake"][0]
 
 
+def _signed_out_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[AgentManager, FlaskClient]:
+    """A chat app with nothing signed in whose agent list is known: an intake cannot launch a chat, so a new one
+    awaits its first send."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    return manager, create_application(build_test_state(agent_manager=manager)).test_client()
+
+
 def test_intake_is_not_ready_until_the_agent_list_is_known() -> None:
     manager = AgentManager.build(WebSocketBroadcaster())
     test_client = create_application(build_test_state(agent_manager=manager)).test_client()
@@ -4672,11 +4682,7 @@ def test_intake_new_chat_with_nothing_signed_in_holds_the_first_message_for_the_
 ) -> None:
     """With no account the server cannot launch: the chat waits for its first send, and applying the intake hands
     the root the message to launch it with once an account is chosen."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
-    manager.note_agent_list_known()
-    test_client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager, test_client = _signed_out_app(tmp_path, monkeypatch)
 
     response = test_client.post("/api/chats/intake", json={"message": "Teach me", "target": "new_chat"})
 
@@ -5772,11 +5778,7 @@ def test_an_app_chat_intake_finds_a_title_the_create_would_refuse_as_taken(tmp_p
 def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaiting_its_first_send(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
-    manager.note_agent_list_known()
-    test_client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager, test_client = _signed_out_app(tmp_path, monkeypatch)
 
     response = test_client.post(
         "/api/chats/intake", json={"target": "app_chat", "app": "docs", "app_display_name": "Docs"}
