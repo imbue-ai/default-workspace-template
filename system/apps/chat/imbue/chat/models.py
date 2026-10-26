@@ -851,8 +851,9 @@ class IntakeTarget(LowerCaseStrEnum):
     CURRENT_CHAT = auto()
     # The one chat there is, else the chat the user picks from the root's picker, else a new one.
     CHAT_SELECTOR = auto()
-    # The chat about an app (the multiplayer spec, section 9.2): the one titled "<display name> Chat", made on the
-    # default account when there is none.
+    # The chat about an app (the multiplayer spec, section 9.2): the one labelled ``app_chat`` with the app's
+    # registered name, else the one titled "<display name> Chat", made with both on the default account when there
+    # is none.
     APP_CHAT = auto()
     # The chat ``chat_id`` names.
     CHAT = auto()
