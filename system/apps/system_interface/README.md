@@ -428,9 +428,11 @@ machine that declares `app_params` (the chat app's `app-chat`, which names the
 window's app and its display name in the params the path declares) through the
 launch route's `show` target: the shell shows the answered page as the `show` op
 would (a window already at the path raised, else the pinned window pointed at
-it) and lays the two windows out for this client, the chat snapped to the half
-of the backdrop its frame's centre was already on (the right for a pinned window
-never shown) and the app's window to the other, the chat on top. The chat app
+it, else a window opened) and lays the two windows out for this client, the
+chat snapped to the half of the backdrop its frame's centre was already on (the
+right when it is minimized or was never placed) and the app's window to the
+other, the chat on top; the pinned window's own balloon, whose show navigates
+that very window, lays nothing out. The chat app
 answers the chat titled "<App display name> Chat", made on the default provider
 when there is none (so the chat app's own windows open "Chat Chat"), with a
 pending intake whose `hint` the chat root puts on the composer as its
