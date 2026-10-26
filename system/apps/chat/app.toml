@@ -47,7 +47,8 @@ params = [{name = "message", label = "Message to send", required = false}]
 presets = {target = "main_chat"}
 text_param = "message"
 
-# The launcher's primary free-text row: what is typed into the desktop's field becomes a new chat's first message.
+# The launcher's Ctrl+Enter (its secondary free-text row): what is typed into the desktop's field becomes a new
+# chat's first message.
 [[launch_paths]]
 id = "new"
 label = "New Chat"
