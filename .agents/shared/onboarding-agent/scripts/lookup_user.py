@@ -10,17 +10,17 @@ Usage, from the repo root, in the background so the conversation goes on while i
     python3 system/scripts/run_in_background.py --description "Looking you up on the web" -- \\
         uv run .agents/shared/onboarding-agent/scripts/lookup_user.py --name "<name>" --detail "<detail>"
 
-It runs one web-only ``claude -p`` look-up (``claude_p_web_lookup`` in the use-ai-integration skill: search and
-page reads, no other tools, so a page's instructions reach nothing on this machine) on the model this chat is set
-to, as the chat app reports it, or on the account's own configured model when the chat app cannot say. A chat that
-runs on another harness (Codex, for one) is not looked up, and the agent is told so. It keeps at most three
-plausible people with the page each came from, and files them with the chat app
-(``POST /api/identity-matches``), which shows the popup over this chat. The user's pick reaches the agent as
-their own message ("That's me: ..." or "None of those are me."); nothing found is used before that.
+It asks the chat app to run one web-only search (``POST /api/chats/<chat-id>/web-lookup``). The chat app runs it on the
+provider, account and model this chat is set to, with search and page reads and no other tool, so a page's
+instructions reach nothing on this machine, and this script names no provider itself. A chat on a provider with no
+web look-up is not looked up, and the agent is told so. The script keeps at most three plausible people with the
+page each came from, and files them with the chat app (``POST /api/identity-matches``), which shows the popup over
+this chat. The user's pick reaches the agent as their own message ("That's me: ..." or "None of those are me.");
+nothing found is used before that.
 
 Prints one line for the agent on how it ended and exits 0 when it showed a popup or found no one who plausibly
-matches; exits 1 when the search or the chat app failed (no Claude account to search with, the chat app
-unreachable or refusing). Run under ``run_in_background.py``, that line is what the agent is woken with.
+matches; exits 1 when the search or the chat app failed (the chat's provider cannot search, the account is not
+signed in, the chat app unreachable or refusing). Run under ``run_in_background.py``, that line is what the agent is woken with.
 """
 
 from __future__ import annotations
@@ -28,12 +28,10 @@ from __future__ import annotations
 import argparse
 import http.client
 import importlib.util
-import json
 import os
 import re
 import sys
 import time
-import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Final
@@ -45,14 +43,9 @@ _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[4]
 _MESSAGE_CHAT_SCRIPT: Final[Path] = (
     _REPO_ROOT / "system" / "scripts" / "message_chat.py"
 )
-_CLAUDE_P_SCRIPT: Final[Path] = (
-    _REPO_ROOT / ".agents" / "skills" / "use-ai-integration" / "scripts" / "claude_p.py"
-)
 
 MATCHES_PATH: Final[str] = "/api/identity-matches"
-CHATS_PATH: Final[str] = "/api/chats"
-CHAT_READ_TIMEOUT_SECONDS: Final[float] = 10.0
-CLAUDE_HARNESS: Final[str] = "claude"
+LOOKUP_PATH: Final[str] = "/api/chats/{chat_id}/web-lookup"
 MAX_CANDIDATES: Final[int] = 3
 # The chat app's limits on what it stores (``imbue/chat/identity_matches.py``); longer text is cut to fit.
 MAX_NAME_LENGTH: Final[int] = 200
@@ -90,41 +83,7 @@ Reply with only this JSON and nothing else:
 
 
 class LookupFailedError(Exception):
-    """Raised when the web look-up could not run: no Claude account, no claude binary, or a failed run."""
-
-
-class ChatModel(BaseModel):
-    """What the chat app says a chat runs on: its harness, and the model it is set to when one is known."""
-
-    harness: str
-    model_id: str | None = None
-
-
-class _Identity(BaseModel):
-    model_id: str
-
-
-class _Matched(BaseModel):
-    id: str
-
-
-class _Choice(BaseModel):
-    identity: _Identity
-    matched: _Matched | None = None
-
-
-class _ActiveAgent(BaseModel):
-    harness: str
-    model_choice: _Choice | None = None
-
-
-class _ChatSnapshot(BaseModel):
-    chat_id: str
-    active_agent: _ActiveAgent
-
-
-class _ChatList(BaseModel):
-    chats: list[_ChatSnapshot]
+    """Raised when the web look-up could not run: no search for the chat's provider, no account, or a failed run."""
 
 
 class _Candidate(BaseModel):
@@ -192,86 +151,62 @@ def parse_candidates(answer_text: str) -> list[dict[str, str]]:
     return usable[:MAX_CANDIDATES]
 
 
-def _get_json(url: str) -> object:
-    with urllib.request.urlopen(url, timeout=CHAT_READ_TIMEOUT_SECONDS) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def read_chat_model(
+def search_through_chat_app(
+    message_chat: Any,
     base_url: str,
     chat_id: str,
-    get_json: Callable[[str], object] = _get_json,
-) -> ChatModel | None:
-    """The harness and model the chat app reports for ``chat_id``'s active agent.
+    name: str,
+    detail: str,
+    clock: Callable[[], float],
+    sleep: Callable[[float], None],
+) -> str:
+    """Ask the chat app to run the web look-up on this chat's own provider and model; its answer text.
 
-    None when the chat app cannot be read, answers something unexpected, or does not list the chat: the
-    caller then lets the account's own configured model answer rather than guessing one. The model is the
-    alias the chat app itself switches to when the chat's model is in its catalog (a name ``claude --model``
-    accepts, such as ``opus[1m]``), else the id the harness reports for it.
+    Raises LookupFailedError with the chat app's reason when the search cannot run: a provider with no web look-up,
+    an account that is not signed in, or a search that gave no answer.
     """
+    body = {
+        "system_prompt": LOOKUP_SYSTEM_PROMPT,
+        "prompt": f"Find this person: {name}, {detail}.",
+    }
     try:
-        listing = _ChatList.model_validate(get_json(f"{base_url}{CHATS_PATH}"))
-    except (OSError, ValueError, http.client.HTTPException):
-        return None
-    for chat in listing.chats:
-        if chat.chat_id == chat_id:
-            choice = chat.active_agent.model_choice
-            if choice is None:
-                model_id = None
-            elif choice.matched is not None:
-                model_id = choice.matched.id or None
-            else:
-                model_id = choice.identity.model_id or None
-            return ChatModel(harness=chat.active_agent.harness, model_id=model_id)
-    return None
-
-
-def model_for_lookup(override: str | None, chat_model: ChatModel | None) -> str | None:
-    """The model the look-up runs on: an explicit ``override``, else the one the chat is set to, else None.
-
-    None leaves the model to the account's own configuration. Raises LookupFailedError for a chat that
-    runs on another harness, since the look-up runs on Claude only.
-    """
-    if override:
-        return override
-    if chat_model is None:
-        return None
-    if chat_model.harness != CLAUDE_HARNESS:
-        raise LookupFailedError(
-            f"this chat runs on {chat_model.harness}, and the web look-up runs on Claude only"
+        status, answer = post_when_ready(
+            message_chat,
+            base_url,
+            LOOKUP_PATH.format(chat_id=chat_id),
+            body,
+            clock,
+            sleep,
         )
-    return chat_model.model_id
-
-
-def search_web(name: str, detail: str, model: str | None) -> str:
-    """Run the web-only look-up and return its answer text; raises LookupFailedError when it cannot run."""
-    claude_p = _load_script(_CLAUDE_P_SCRIPT, "claude_p_for_lookup_user")
-    try:
-        result = claude_p.claude_p_web_lookup(
-            f"Find this person: {name}, {detail}.",
-            system=LOOKUP_SYSTEM_PROMPT,
-            model=model,
-        )
-    except (claude_p.ClaudeCLIError, OSError) as e:
-        raise LookupFailedError(str(e)) from e
-    return result.text
+    except message_chat.ChatAppUnreachableError as e:
+        raise LookupFailedError(f"{e}") from e
+    except (OSError, http.client.HTTPException) as e:
+        raise LookupFailedError(f"the chat app dropped the request: {e}") from e
+    if not 200 <= status < 300:
+        reason = answer.get("detail") if isinstance(answer, dict) else None
+        raise LookupFailedError(str(reason or f"the chat app answered HTTP {status}"))
+    text = answer.get("answer") if isinstance(answer, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        raise LookupFailedError("the chat app answered without a result")
+    return text
 
 
 def chat_id_from_environment(environ: Mapping[str, str]) -> str | None:
     return environ.get("MINDS_CHAT_ID") or environ.get("MNGR_AGENT_ID") or None
 
 
-def file_match(
+def post_when_ready(
     message_chat: Any,
     base_url: str,
+    path: str,
     body: Mapping[str, object],
     clock: Callable[[], float],
     sleep: Callable[[float], None],
 ) -> tuple[int, object]:
-    """POST the match, retrying a not-ready chat app for a bounded window; returns (status, body)."""
+    """POST ``body``, retrying a not-ready chat app for a bounded window; returns (status, body)."""
     started_at = clock()
     while True:
-        answer = message_chat.post_json(base_url, MATCHES_PATH, body)
+        answer = message_chat.post_json(base_url, path, body)
         if (
             answer.status != 503
             or clock() - started_at >= NOT_READY_RETRY_WINDOW_SECONDS
@@ -292,19 +227,13 @@ def _build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Where they work or live, or a site, as they typed it.",
     )
-    parser.add_argument(
-        "--model",
-        default=None,
-        help="Run the look-up on this model instead of the one the chat is set to.",
-    )
     return parser
 
 
 def main(
     argv: list[str] | None = None,
     environ: Mapping[str, str] | None = None,
-    search: Callable[[str, str, str | None], str] = search_web,
-    chat_model_reader: Callable[[str, str], ChatModel | None] = read_chat_model,
+    search: Callable[[str, str], str] | None = None,
     message_chat: Any = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
@@ -328,9 +257,13 @@ def main(
         else _load_script(_MESSAGE_CHAT_SCRIPT, "message_chat_for_lookup_user")
     )
     base_url = resolved_message_chat.chat_app_url(resolved_environ, Path.cwd())
+    ask = search or (
+        lambda who, where: search_through_chat_app(
+            resolved_message_chat, base_url, chat_id, who, where, clock, sleep
+        )
+    )
     try:
-        model = model_for_lookup(args.model, chat_model_reader(base_url, chat_id))
-        candidates = parse_candidates(search(name, detail, model))
+        candidates = parse_candidates(ask(name, detail))
     except LookupFailedError as e:
         print(f"lookup_user: the web look-up for {searched_for!r} could not run: {e}")
         return EXIT_FAILED
@@ -346,7 +279,9 @@ def main(
         return EXIT_OK
     body = {"chat_id": chat_id, "searched_for": searched_for, "candidates": candidates}
     try:
-        status, answer = file_match(resolved_message_chat, base_url, body, clock, sleep)
+        status, answer = post_when_ready(
+            resolved_message_chat, base_url, MATCHES_PATH, body, clock, sleep
+        )
     except resolved_message_chat.ChatAppUnreachableError as e:
         print(f"lookup_user: {e}; the popup could not be shown.")
         return EXIT_FAILED

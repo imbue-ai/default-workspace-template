@@ -3230,6 +3230,19 @@ class AgentManager:
             return ChatAccountBinding(harness=agent_info.harness, account_dir=agent_info.claude_config_dir)
         return self._account_binding(chat_id, account_id)
 
+    def chat_model_switch_id(self, chat_id: ChatId) -> str | None:
+        """The id of the model the chat's active agent is set to, as a CLI's ``--model`` takes it; None when unknown.
+
+        The alias the chat app itself switches the model by when the model is in the harness's catalog (such as
+        ``opus[1m]``), else the id the harness reports, so a model outside the catalog is still named.
+        """
+        agent_info = self.get_active_agent_info(chat_id)
+        agent = None if agent_info is None else self.get_agent_by_id(agent_info.id)
+        choice = None if agent is None else agent.model_choice
+        if choice is None:
+            return None
+        return (choice.matched.id if choice.matched is not None else choice.identity.model_id) or None
+
     def _account_binding(self, chat_id: ChatId, account_id: str) -> ChatAccountBinding | None:
         if not account_id:
             return None

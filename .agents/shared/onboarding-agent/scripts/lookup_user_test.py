@@ -1,7 +1,8 @@
-"""Tests for ``lookup_user.py``: reading the look-up's answer, and what it files with the chat app and tells the agent.
+"""Tests for ``lookup_user.py``: asking the chat app for the search, reading its answer, and what the script files
+with the chat app and tells the agent.
 
-The web search and the chat app are stood in for; the search's own flags are pinned in the use-ai-integration
-skill's ``claude_p_test.py``.
+The chat app is stood in for. Which provider runs the search, and on which model, is the chat app's to decide, and
+is tested there (``system/apps/chat/imbue/chat/web_lookup_endpoints_test.py``).
 
 Run via: ``uv run pytest .agents/shared/onboarding-agent/scripts/lookup_user_test.py``
 """
@@ -38,16 +39,23 @@ class _Answer:
 
 
 class _FakeMessageChat:
-    """The two message_chat.py functions the script uses, recording each POST."""
+    """The two message_chat.py functions the script uses, recording each POST.
+
+    A web look-up POST gets the next of ``lookup_answers``; a match POST gets the next of ``match_statuses``.
+    """
 
     class ChatAppUnreachableError(Exception):
         pass
 
     def __init__(
-        self, statuses: list[int] | None = None, is_unreachable: bool = False
+        self,
+        statuses: list[int] | None = None,
+        is_unreachable: bool = False,
+        lookup_answers: list[tuple[int, object]] | None = None,
     ) -> None:
         self.statuses = statuses or [201]
         self.is_unreachable = is_unreachable
+        self.lookup_answers = lookup_answers or [(200, {"answer": "{}"})]
         self.posts: list[tuple[str, dict]] = []
 
     def chat_app_url(self, environ: object, cwd: Path) -> str:
@@ -57,6 +65,13 @@ class _FakeMessageChat:
         if self.is_unreachable:
             raise self.ChatAppUnreachableError("the chat app is not running")
         self.posts.append((path, body))
+        if path.endswith("/web-lookup"):
+            status, answer_body = (
+                self.lookup_answers.pop(0)
+                if len(self.lookup_answers) > 1
+                else self.lookup_answers[0]
+            )
+            return _Answer(status, answer_body)
         status = self.statuses.pop(0) if len(self.statuses) > 1 else self.statuses[0]
         return _Answer(
             status, {"detail": "nope"} if status >= 400 else {"match_id": "identity-1"}
@@ -67,29 +82,23 @@ def _answer(*candidates: dict) -> str:
     return json.dumps({"candidates": list(candidates)})
 
 
-_CLAUDE_CHAT = lookup_user.ChatModel(harness="claude", model_id="claude-opus-5-5")
-
-
 def _run(
     search_answer: str | Exception,
     message_chat: _FakeMessageChat,
     environ: dict[str, str] | None = None,
-    chat_model: lookup_user.ChatModel | None = _CLAUDE_CHAT,
-    extra_args: tuple[str, ...] = (),
-) -> tuple[int, list[tuple[str, str, str | None]]]:
-    searches: list[tuple[str, str, str | None]] = []
+) -> tuple[int, list[tuple[str, str]]]:
+    searches: list[tuple[str, str]] = []
 
-    def search(name: str, detail: str, model: str | None) -> str:
-        searches.append((name, detail, model))
+    def search(name: str, detail: str) -> str:
+        searches.append((name, detail))
         if isinstance(search_answer, Exception):
             raise search_answer
         return search_answer
 
     code = lookup_user.main(
-        ["--name", " Ada Lovelace ", "--detail", "London", *extra_args],
+        ["--name", " Ada Lovelace ", "--detail", "London"],
         environ={"MINDS_CHAT_ID": _CHAT} if environ is None else environ,
         search=search,
-        chat_model_reader=lambda _base_url, _chat_id: chat_model,
         message_chat=message_chat,
         clock=iter(range(1000)).__next__,
         sleep=lambda _seconds: None,
@@ -105,7 +114,7 @@ def test_found_people_are_filed_as_a_popup_and_the_agent_is_told_to_wait_for_the
     code, searches = _run(_answer(_ADA), message_chat)
 
     assert code == 0
-    assert searches == [("Ada Lovelace", "London", "claude-opus-5-5")]
+    assert searches == [("Ada Lovelace", "London")]
     [(path, body)] = message_chat.posts
     assert path == "/api/identity-matches"
     assert body == {
@@ -119,151 +128,6 @@ def test_found_people_are_filed_as_a_popup_and_the_agent_is_told_to_wait_for_the
     # What the pages said never reaches the agent through this notice, only how many were shown
     # and what the user typed.
     assert _ADA["summary"] not in out
-
-
-def test_the_look_up_runs_on_the_model_the_chat_is_set_to_not_one_of_its_own() -> None:
-    on_opus = lookup_user.ChatModel(harness="claude", model_id="claude-opus-5-5")
-    on_default = lookup_user.ChatModel(harness="claude", model_id=None)
-
-    assert (
-        _run(_answer(_ADA), _FakeMessageChat(), chat_model=on_opus)[1][0][2]
-        == "claude-opus-5-5"
-    )
-    # A chat with no model recorded yet, or a chat app that cannot say, leaves it to the account's own setting.
-    assert (
-        _run(_answer(_ADA), _FakeMessageChat(), chat_model=on_default)[1][0][2] is None
-    )
-    assert _run(_answer(_ADA), _FakeMessageChat(), chat_model=None)[1][0][2] is None
-
-
-def test_an_explicit_model_wins_over_the_chats() -> None:
-    _, searches = _run(
-        _answer(_ADA), _FakeMessageChat(), extra_args=("--model", "claude-haiku-4-5")
-    )
-
-    assert searches[0][2] == "claude-haiku-4-5"
-
-
-def test_a_chat_on_another_harness_is_not_looked_up_and_the_agent_is_told_why(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    message_chat = _FakeMessageChat()
-
-    code, searches = _run(
-        _answer(_ADA),
-        message_chat,
-        chat_model=lookup_user.ChatModel(harness="codex", model_id="gpt-6"),
-    )
-
-    assert code == 1
-    assert searches == []
-    assert message_chat.posts == []
-    assert (
-        "this chat runs on codex, and the web look-up runs on Claude only"
-        in capsys.readouterr().out
-    )
-
-
-def test_the_chat_models_are_read_from_the_chat_apps_list_of_chats() -> None:
-    listing = {
-        "chats": [
-            {
-                "chat_id": "agent-other",
-                "active_agent": {"harness": "codex", "model_choice": None},
-            },
-            {
-                "chat_id": _CHAT,
-                "active_agent": {
-                    "harness": "claude",
-                    "model_choice": {
-                        "identity": {
-                            "model_id": "claude-opus-5-5[1m]",
-                            "effort": "high",
-                            "fast": False,
-                        },
-                        "matched": {"id": "opus[1m]", "label": "Opus 5.5 (1M)"},
-                    },
-                },
-            },
-        ],
-        "main_chat_id": _CHAT,
-    }
-    seen: list[str] = []
-
-    def get_json(url: str) -> object:
-        seen.append(url)
-        return listing
-
-    chat_model = lookup_user.read_chat_model("http://127.0.0.1:8010", _CHAT, get_json)
-
-    assert seen == ["http://127.0.0.1:8010/api/chats"]
-    # The alias the chat app switches to, which claude --model accepts, not the reported API id.
-    assert chat_model == lookup_user.ChatModel(harness="claude", model_id="opus[1m]")
-
-
-def test_a_model_outside_the_catalog_is_passed_on_as_the_id_the_harness_reports() -> (
-    None
-):
-    listing = {
-        "chats": [
-            {
-                "chat_id": _CHAT,
-                "active_agent": {
-                    "harness": "claude",
-                    "model_choice": {
-                        "identity": {
-                            "model_id": "claude-opus-4-8",
-                            "effort": None,
-                            "fast": False,
-                        },
-                        "matched": None,
-                    },
-                },
-            }
-        ]
-    }
-
-    chat_model = lookup_user.read_chat_model(
-        "http://127.0.0.1:8010", _CHAT, lambda _url: listing
-    )
-
-    assert chat_model == lookup_user.ChatModel(
-        harness="claude", model_id="claude-opus-4-8"
-    )
-
-
-def test_a_chat_with_no_model_choice_yet_reads_as_no_model() -> None:
-    listing = {
-        "chats": [
-            {
-                "chat_id": _CHAT,
-                "active_agent": {"harness": "claude", "model_choice": None},
-            }
-        ]
-    }
-
-    chat_model = lookup_user.read_chat_model(
-        "http://127.0.0.1:8010", _CHAT, lambda _url: listing
-    )
-
-    assert chat_model == lookup_user.ChatModel(harness="claude", model_id=None)
-
-
-@pytest.mark.parametrize(
-    "answer", [{"chats": []}, {"unexpected": True}, "not a listing"]
-)
-def test_an_unreadable_or_unlisted_chat_reads_as_unknown(answer: object) -> None:
-    assert (
-        lookup_user.read_chat_model("http://127.0.0.1:8010", _CHAT, lambda _url: answer)
-        is None
-    )
-
-
-def test_a_chat_app_that_cannot_be_read_reads_as_unknown() -> None:
-    def refuse(_url: str) -> object:
-        raise ConnectionRefusedError("down")
-
-    assert lookup_user.read_chat_model("http://127.0.0.1:8010", _CHAT, refuse) is None
 
 
 def test_no_one_found_shows_no_popup_and_says_so(
@@ -365,69 +229,107 @@ def test_parse_cuts_long_text_to_the_chat_apps_limits() -> None:
     assert parsed["summary"].endswith("…")
 
 
-def _stub_claude(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body: str) -> Path:
-    record = tmp_path / "argv.json"
-    stub = tmp_path / "bin" / "claude"
-    stub.parent.mkdir()
-    stub.write_text(
-        f"#!/usr/bin/env python3\nimport json, sys\njson.dump(sys.argv[1:], open({str(record)!r}, 'w'))\n{body}"
-    )
-    stub.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{stub.parent}:{__import__('os').environ['PATH']}")
-    return record
-
-
-def test_search_web_runs_the_web_only_look_up_and_returns_its_answer(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    result = {
-        "type": "result",
-        "subtype": "success",
-        "is_error": False,
-        "result": _answer(_ADA),
-        "total_cost_usd": 0.0,
-        "usage": {"input_tokens": 1, "output_tokens": 1},
-    }
-    record = _stub_claude(tmp_path, monkeypatch, f"print(json.dumps({result!r}))\n")
-
-    text = lookup_user.search_web("Ada Lovelace", "London", "claude-haiku-4-5")
-
-    argv = json.loads(record.read_text())
-    assert lookup_user.parse_candidates(text) == [_ADA]
-    assert argv[argv.index("--tools") + 1] == "WebSearch,WebFetch"
-    assert argv[-1] == "Find this person: Ada Lovelace, London."
-    assert argv[argv.index("--model") + 1] == "claude-haiku-4-5"
-
-
-def test_search_web_leaves_the_model_to_the_account_when_none_is_given(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    result = {
-        "type": "result",
-        "subtype": "success",
-        "is_error": False,
-        "result": _answer(_ADA),
-        "total_cost_usd": 0.0,
-        "usage": {"input_tokens": 1, "output_tokens": 1},
-    }
-    record = _stub_claude(tmp_path, monkeypatch, f"print(json.dumps({result!r}))\n")
-
-    lookup_user.search_web("Ada Lovelace", "London", None)
-
-    assert "--model" not in json.loads(record.read_text())
-
-
-def test_search_web_turns_a_failed_run_into_a_lookup_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    _stub_claude(
-        tmp_path, monkeypatch, "sys.stderr.write('not signed in')\nsys.exit(1)\n"
-    )
-
-    with pytest.raises(lookup_user.LookupFailedError, match="not signed in"):
-        lookup_user.search_web("Ada Lovelace", "London", "claude-haiku-4-5")
-
-
 def test_parse_refuses_an_answer_with_no_json_object() -> None:
     with pytest.raises(ValueError):
         lookup_user.parse_candidates("no json here")
+
+
+def _ask(message_chat: _FakeMessageChat) -> str:
+    return lookup_user.search_through_chat_app(
+        message_chat,
+        "http://127.0.0.1:8010",
+        _CHAT,
+        "Ada Lovelace",
+        "London",
+        iter(range(1000)).__next__,
+        lambda _seconds: None,
+    )
+
+
+def test_the_search_is_asked_of_the_chat_app_for_this_chat_in_the_users_words() -> None:
+    message_chat = _FakeMessageChat(lookup_answers=[(200, {"answer": _answer(_ADA)})])
+
+    text = _ask(message_chat)
+
+    assert text == _answer(_ADA)
+    [(path, body)] = message_chat.posts
+    assert path == f"/api/chats/{_CHAT}/web-lookup"
+    assert body == {
+        "system_prompt": lookup_user.LOOKUP_SYSTEM_PROMPT,
+        "prompt": "Find this person: Ada Lovelace, London.",
+    }
+
+
+def test_the_script_names_no_provider_or_model_of_its_own() -> None:
+    message_chat = _FakeMessageChat(lookup_answers=[(200, {"answer": _answer(_ADA)})])
+
+    _ask(message_chat)
+
+    sent = json.dumps(message_chat.posts)
+    assert "model" not in sent
+    assert "claude" not in sent.lower()
+
+
+def test_a_chat_app_that_is_not_ready_is_asked_again() -> None:
+    message_chat = _FakeMessageChat(
+        lookup_answers=[
+            (503, {"detail": "not ready"}),
+            (200, {"answer": _answer(_ADA)}),
+        ]
+    )
+
+    assert _ask(message_chat) == _answer(_ADA)
+    assert len(message_chat.posts) == 2
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (
+            501,
+            {"detail": "A chat on pi-coding cannot run a web look-up yet"},
+            "pi-coding cannot run a web look-up yet",
+        ),
+        (502, {"detail": "claude -p exited 1: Not logged in"}, "Not logged in"),
+        (404, None, "the chat app answered HTTP 404"),
+        (200, {"answer": "   "}, "answered without a result"),
+        (200, {"unexpected": True}, "answered without a result"),
+    ],
+)
+def test_a_search_the_chat_app_cannot_run_raises_with_its_reason(
+    status: int, body: object, expected: str
+) -> None:
+    with pytest.raises(lookup_user.LookupFailedError, match=expected):
+        _ask(_FakeMessageChat(lookup_answers=[(status, body)]))
+
+
+def test_an_unreachable_chat_app_is_a_failed_look_up() -> None:
+    with pytest.raises(lookup_user.LookupFailedError, match="chat app is not running"):
+        _ask(_FakeMessageChat(is_unreachable=True))
+
+
+def test_a_provider_with_no_web_look_up_is_reported_to_the_agent_and_no_popup_is_filed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    message_chat = _FakeMessageChat(
+        lookup_answers=[
+            (501, {"detail": "A chat on codex cannot run a web look-up yet"})
+        ]
+    )
+
+    code = lookup_user.main(
+        ["--name", "Ada Lovelace", "--detail", "London"],
+        environ={"MINDS_CHAT_ID": _CHAT},
+        message_chat=message_chat,
+        clock=iter(range(1000)).__next__,
+        sleep=lambda _seconds: None,
+    )
+
+    assert code == 1
+    assert [path for path, _ in message_chat.posts] == [
+        f"/api/chats/{_CHAT}/web-lookup"
+    ]
+    assert (
+        "could not run: A chat on codex cannot run a web look-up yet"
+        in capsys.readouterr().out
+    )

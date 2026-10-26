@@ -80,7 +80,9 @@ from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
+from imbue.chat.harnesses.registry import build_web_lookup
 from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.harnesses.web_lookup import WebLookup
 from imbue.chat.identity_matches import IdentityMatchStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
@@ -708,6 +710,7 @@ def build_test_state(
     shell: ShellLayoutInterface | None = None,
     secret_requests: SecretRequestStore | None = None,
     identity_matches: IdentityMatchStore | None = None,
+    web_lookup_builder: Callable[[HarnessType], WebLookup | None] | None = None,
     chat_namer: ChatNamer | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
@@ -746,6 +749,7 @@ def build_test_state(
         # rooted in its tmp_path.
         secret_requests=secret_requests if secret_requests is not None else build_temporary_secret_request_store(),
         identity_matches=identity_matches if identity_matches is not None else build_temporary_identity_match_store(),
+        web_lookup_builder=web_lookup_builder if web_lookup_builder is not None else build_web_lookup,
         chat_namer=chat_namer,
     )
     # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's

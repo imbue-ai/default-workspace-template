@@ -58,6 +58,7 @@ from imbue.chat import focus_chat
 from imbue.chat import identity_matches_endpoints
 from imbue.chat import latchkey_endpoints
 from imbue.chat import secret_requests_endpoints
+from imbue.chat import web_lookup_endpoints
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_exists
 from imbue.chat.activity_state import ActivityState
@@ -2526,6 +2527,7 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     focus_chat.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
     identity_matches_endpoints.ROUTE_TABLE,
+    web_lookup_endpoints.ROUTE_TABLE,
 )
 
 
@@ -2621,6 +2623,7 @@ def create_application(state: ChatAppState) -> Flask:
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
     identity_matches_endpoints.register_routes(application)
+    web_lookup_endpoints.register_routes(application)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])
 

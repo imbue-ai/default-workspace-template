@@ -68,58 +68,6 @@ def test_task_argv_keeps_tools_and_sets_permission_mode() -> None:
     assert "--no-session-persistence" not in argv
 
 
-def test_web_lookup_argv_names_a_model_only_when_given_one() -> None:
-    """With no model the account's own configured model answers, so ``--model`` is left off."""
-    named = claude_p._web_lookup_argv(
-        "who", system="Return JSON.", model="claude-opus-5-5"
-    )
-    unnamed = claude_p._web_lookup_argv("who", system="Return JSON.", model=None)
-
-    assert named[named.index("--model") + 1] == "claude-opus-5-5"
-    assert "--model" not in unnamed
-
-
-def test_web_lookup_argv_allows_only_the_web_tools_and_does_not_persist() -> None:
-    argv = claude_p._web_lookup_argv(
-        "find this person", system="Return JSON.", model="claude-haiku-4-5"
-    )
-    assert argv[argv.index("--tools") + 1] == "WebSearch,WebFetch"
-    assert argv[argv.index("--permission-mode") + 1] == "bypassPermissions"
-    assert argv[argv.index("--system-prompt") + 1] == "Return JSON."
-    assert "--no-session-persistence" in argv
-    assert argv[-2:] == ["--", "find this person"]
-
-
-def test_web_lookup_runs_from_a_throwaway_directory(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The stub records its cwd and arguments; the look-up must not run from the repo, where
-    claude would load CLAUDE.md and the project's hooks."""
-    record = tmp_path / "record.json"
-    stub = tmp_path / "bin" / "claude"
-    stub.parent.mkdir()
-    stub.write_text(
-        "#!/usr/bin/env python3\n"
-        "import json, os, sys\n"
-        f"json.dump({{'cwd': os.getcwd(), 'argv': sys.argv[1:]}}, open({str(record)!r}, 'w'))\n"
-        "print(json.dumps({'type': 'result', 'subtype': 'success', 'is_error': False, 'result': 'ok',"
-        " 'total_cost_usd': 0.0, 'usage': {'input_tokens': 1, 'output_tokens': 1}}))\n"
-    )
-    stub.chmod(0o755)
-    monkeypatch.setenv("PATH", f"{stub.parent}{os.pathsep}{os.environ['PATH']}")
-    monkeypatch.chdir(tmp_path)
-
-    result = claude_p.claude_p_web_lookup("who is this", system="Return JSON.")
-
-    recorded = json.loads(record.read_text())
-    assert result.text == "ok"
-    assert Path(recorded["cwd"]).resolve() != tmp_path.resolve()
-    assert Path(recorded["cwd"]).name.startswith("claude_p_web_lookup_")
-    assert (
-        recorded["argv"][recorded["argv"].index("--tools") + 1] == "WebSearch,WebFetch"
-    )
-
-
 def test_dash_leading_prompt_follows_the_option_terminator() -> None:
     prompt = "---\nname: some-skill\n---\nSummarize this skill."
     completion = claude_p._completion_argv(

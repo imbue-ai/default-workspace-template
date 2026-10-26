@@ -85,7 +85,13 @@ observe`, its own supervised service) writes, and serves:
   the transcript's secret card submits, declines, and re-reads it), and
   `/api/identity-matches` (the onboarding agent's background web look-up files who it
   found; the chat page's "Is this you?" popup confirms one or rejects them all, and the
-  answer reaches the agent as a message in the user's words).
+  answer reaches the agent as a message in the user's words), and
+  `POST /api/chats/<chat-id>/web-lookup` (one web search on the chat's own provider,
+  account and model, for the look-up script: the app builds the web look-up the chat's
+  harness registers (`harnesses/web_lookup.py`; Claude and Codex have one), runs it
+  with the web tools only, from an empty directory, on the model the chat is set to,
+  and answers the model's text; 501 for a provider with none yet, 502 when the search
+  could not run, 504 when it ran out of time).
   `/api/agents` is the plain listing of every mngr agent (the loopback callers'
   view of background agents too); the older `/api/agents/<id>/...` spellings of
   the per-chat routes are gone.

@@ -20,13 +20,16 @@ from imbue.chat.config import Config
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
+from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
+from imbue.chat.harnesses.registry import build_web_lookup
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.harnesses.web_lookup import WebLookup
 from imbue.chat.identity_matches import IdentityMatchStore
 from imbue.chat.primitives import ChatId
 from imbue.chat.secret_requests import SecretRequestChatBridge
@@ -114,6 +117,11 @@ class ChatAppState(MutableModel):
     secret_request_bridge: SecretRequestChatBridge | None = None
     # Who a web look-up found for the user, shown as an "Is this you?" popup until they answer.
     identity_matches: IdentityMatchStore
+    web_lookup_builder: Callable[[HarnessType], WebLookup | None] = Field(
+        default=build_web_lookup,
+        description="How a chat's provider is asked to search the web on the chat's account and model (the onboarding "
+        "agent's look-up of the user); None for a provider that cannot",
+    )
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``, or
