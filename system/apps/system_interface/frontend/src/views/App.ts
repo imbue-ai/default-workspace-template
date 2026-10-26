@@ -96,7 +96,7 @@ type OpenMenu =
   /** The bare backdrop's menu (the multiplayer spec, section 8.2). */
   | { readonly kind: "backdrop"; readonly referenceRows: readonly MenuRow[] }
   /** A desktop thumbnail's menu in the overview. */
-  | { readonly kind: "overview-desktop"; readonly desktopId: string }
+  | { readonly kind: "overview-desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
 
 /** The scope of a reference to the shell's own chrome: this client and desktop, and the window whose chrome
@@ -782,7 +782,7 @@ export function App(): m.Component<AppAttrs> {
       case "backdrop":
         return withReferenceRows(rowsOfBackdropMenu(current), open.referenceRows);
       case "overview-desktop":
-        return rowsOfOverviewDesktopMenu(current, open.desktopId);
+        return withReferenceRows(rowsOfOverviewDesktopMenu(current, open.desktopId), open.referenceRows);
       case "element":
         return [...open.rows];
     }
@@ -904,8 +904,11 @@ export function App(): m.Component<AppAttrs> {
       onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
       onRename: (desktopId, name) => void current.renameDesktop(desktopId, name),
       onReorder: (desktopIds) => void current.reorderDesktops(desktopIds),
-      onDesktopContextMenu: (desktopId, x, y) => {
-        openMenuAt({ kind: "overview-desktop", desktopId }, anchorForPoint(x, y));
+      onDesktopContextMenu: (desktopId, x, y, target) => {
+        openMenuAt(
+          { kind: "overview-desktop", desktopId, referenceRows: referenceRowsFor(current, target, x, y) },
+          anchorForPoint(x, y),
+        );
       },
       onConfirmDelete: (desktopId) => {
         current.setOverviewDeletingId(null);
