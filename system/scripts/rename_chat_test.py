@@ -18,20 +18,30 @@ def _run(*args: str) -> tuple[int, str, str]:
 
 def _listing(*chats: tuple[str, str]) -> dict[str, Any]:
     return {
-        "chats": [{"chat_id": chat_id, "title": title, "kind": "agent"} for chat_id, title in chats],
+        "chats": [
+            {"chat_id": chat_id, "title": title, "kind": "agent"}
+            for chat_id, title in chats
+        ],
         "main_chat_id": None,
     }
 
 
-def test_the_chat_under_the_old_title_is_renamed_through_the_rename_route(fake_chat_app: Any) -> None:
-    fake_chat_app.get_answers["/api/chats"] = (200, _listing(("agent-1", "Main chat"), (_DOCS_CHAT_ID, "Docs Chat")))
+def test_the_chat_under_the_old_title_is_renamed_through_the_rename_route(
+    fake_chat_app: Any,
+) -> None:
+    fake_chat_app.get_answers["/api/chats"] = (
+        200,
+        _listing(("agent-1", "Main chat"), (_DOCS_CHAT_ID, "Docs Chat")),
+    )
     fake_chat_app.answers = [(200, {"chat_id": _DOCS_CHAT_ID, "title": "Notes Chat"})]
 
     rc, out, err = _run("--title", "Docs Chat", "--new-title", "Notes Chat")
 
     assert (rc, err) == (0, "")
     assert "Notes Chat" in out
-    assert fake_chat_app.posted == [(f"/api/chats/{_DOCS_CHAT_ID}/rename", {"title": "Notes Chat"})]
+    assert fake_chat_app.posted == [
+        (f"/api/chats/{_DOCS_CHAT_ID}/rename", {"title": "Notes Chat"})
+    ]
 
 
 def test_no_chat_under_the_old_title_is_nothing_to_do(fake_chat_app: Any) -> None:
@@ -44,9 +54,16 @@ def test_no_chat_under_the_old_title_is_nothing_to_do(fake_chat_app: Any) -> Non
     assert fake_chat_app.posted == []
 
 
-def test_a_refused_rename_and_an_unanswered_listing_exit_non_zero(fake_chat_app: Any) -> None:
-    fake_chat_app.get_answers["/api/chats"] = (200, _listing((_DOCS_CHAT_ID, "Docs Chat")))
-    fake_chat_app.answers = [(409, {"detail": "A chat named 'Notes Chat' already exists"})]
+def test_a_refused_rename_and_an_unanswered_listing_exit_non_zero(
+    fake_chat_app: Any,
+) -> None:
+    fake_chat_app.get_answers["/api/chats"] = (
+        200,
+        _listing((_DOCS_CHAT_ID, "Docs Chat")),
+    )
+    fake_chat_app.answers = [
+        (409, {"detail": "A chat named 'Notes Chat' already exists"})
+    ]
     rc, _out, err = _run("--title", "Docs Chat", "--new-title", "Notes Chat")
     assert rc == 1
     assert "already exists" in err
