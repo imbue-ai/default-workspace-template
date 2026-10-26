@@ -35,6 +35,7 @@ from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
+from imbue.chat.agent_manager import ONBOARDING_ROLE_TEMPLATE
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
@@ -465,10 +466,46 @@ def test_a_chat_created_with_a_message_starts_on_it(
     assert proto_msg["message"] == "Teach me about Imbue Studio"
 
 
-@pytest.mark.parametrize(("is_fast", "expected"), [(True, ("fast",)), (False, ())])
-def test_launch_role_templates_follow_the_chats_fast_mode(is_fast: bool, expected: tuple[str, ...]) -> None:
-    """A chat starts fast when its fast mode calls for it; nothing else rides the templates."""
-    assert launch_role_templates(is_fast) == expected
+@pytest.mark.parametrize(
+    ("is_fast", "is_onboarding", "expected"),
+    [
+        (True, False, ("fast",)),
+        (False, False, ()),
+        (False, True, (ONBOARDING_ROLE_TEMPLATE,)),
+        (True, True, ("fast", ONBOARDING_ROLE_TEMPLATE)),
+    ],
+)
+def test_launch_role_templates_follow_the_chats_fast_mode_and_whether_it_is_the_onboarding_chat(
+    is_fast: bool, is_onboarding: bool, expected: tuple[str, ...]
+) -> None:
+    """A chat starts fast when its fast mode calls for it, and the first workspace's seeded chat gets the onboarding
+    agent; nothing else rides the templates."""
+    assert launch_role_templates(is_fast, is_onboarding=is_onboarding) == expected
+
+
+def _templates_in(argv_line: str) -> list[str]:
+    """The create templates a recorded ``mngr create`` argv line names, in the order it names them."""
+    tokens = argv_line.split()
+    return [tokens[index + 1] for index, token in enumerate(tokens[:-1]) if token == "--template"]
+
+
+def test_an_unseeded_chat_is_created_on_the_chat_role_alone(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        created = manager.create_chat("")
+        wait_until_true(
+            lambda: manager.get_provisional_chat(created.chat_id) is None, 10, "the provisional chat's completion"
+        )
+    finally:
+        manager.stop()
+
+    (argv_line,) = argv_log.read_text().splitlines()
+    assert _templates_in(argv_line) == ["chat"]
 
 
 def test_a_chat_created_with_nothing_to_say_is_created_without_a_first_message(
@@ -602,6 +639,24 @@ def test_a_handoffs_successor_is_created_and_tracked_with_the_chats_idle_compact
     assert successor is not None and successor.labels["autocompact"] == "off"
 
 
+def test_a_handoffs_successor_is_never_the_onboarding_agent(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """Onboarding ends with the chat's first agent: a successor started by a handoff is a plain chat agent."""
+    manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
+    try:
+        spec = SuccessorCreateSpec(
+            name="Chat 1",
+            chat_id=ChatId("agent-seededchat"),
+            agent_id="agent-next",
+            harness=HarnessType.CLAUDE,
+            project_id="",
+            account_id="acct-1",
+            extra_labels=(),
+        )
+        assert ONBOARDING_ROLE_TEMPLATE not in manager._build_successor_create_command(spec)
+    finally:
+        manager.stop()
+
+
 def _seed_turns() -> tuple[SeedTurn, ...]:
     return (
         SeedTurn(role=SeedRole.USER, text="Wait.. what is honest software?"),
@@ -708,7 +763,8 @@ def test_a_seeded_chat_is_launched_by_its_first_send_as_the_seeds_successor(
     (argv_line,) = argv_log.read_text().splitlines()
     argv = argv_line.split()
     templates = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--template"]
-    # A new chat starts at standard speed (the workspace's default fast mode is off), so no fast template.
+    # A new chat starts at standard speed (the workspace's default fast mode is off), so no fast template, and a
+    # seed the app did not mark as the first workspace's onboarding conversation starts a plain chat agent.
     assert templates == ["chat"]
     assert f"chat_id={seeded.chat_id}" in argv and "chat_seq=2" in argv
     assert "Let's" in argv_line
@@ -798,6 +854,38 @@ def test_a_seeded_chat_launched_as_the_user_signs_in_starts_silent_and_its_first
         assert delivered[-1] == "2"
     finally:
         manager.stop()
+
+
+def test_the_onboarding_chats_first_agent_is_the_onboarding_agent_whether_the_sign_in_or_the_first_send_launches_it(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The first workspace's Welcome chat (a seed the app marked as onboarding) wears the onboarding role on top of
+    the chat role, however it is launched: by the sign-in with no message, or by the user's first message."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager, _store = _seed_manager(broadcaster, tmp_path, mngr_binary=mngr_binary)
+    try:
+        launched_by_sign_in = manager.seed_chat("Welcome", _seed_turns(), is_onboarding=True)
+        manager.create_chat("", chat_id=launched_by_sign_in.chat_id)
+        wait_until_true(
+            lambda: manager.get_provisional_chat(launched_by_sign_in.chat_id) is None,
+            10,
+            "the sign-in launch's completion",
+        )
+        launched_by_first_send = manager.seed_chat("Welcome again", _seed_turns(), is_onboarding=True)
+        manager.create_chat("", chat_id=launched_by_first_send.chat_id, message="It is all in spreadsheets")
+        wait_until_true(
+            lambda: manager.get_provisional_chat(launched_by_first_send.chat_id) is None,
+            10,
+            "the first send's launch completion",
+        )
+    finally:
+        manager.stop()
+
+    sign_in_line, first_send_line = argv_log.read_text().splitlines()
+    assert _templates_in(sign_in_line) == ["chat", ONBOARDING_ROLE_TEMPLATE]
+    assert _templates_in(first_send_line) == ["chat", ONBOARDING_ROLE_TEMPLATE]
 
 
 def test_a_send_that_overlaps_the_one_carrying_the_seed_goes_as_typed(

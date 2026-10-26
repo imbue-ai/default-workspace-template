@@ -12,6 +12,8 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
 import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
+import { applyIdentityMatchUpdate, forgetIdentityMatches } from "./IdentityMatches";
+import type { IdentityMatch } from "./IdentityMatches";
 import { loadAccounts } from "./Providers";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
@@ -185,7 +187,8 @@ type WsEvent =
   | { type: "chats_updated"; chats: ChatSnapshot[]; main_chat_id: string | null }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
-  | { type: "accounts_updated" };
+  | { type: "accounts_updated" }
+  | { type: "identity_match_updated"; match: IdentityMatch };
 
 export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
 /**
@@ -248,6 +251,8 @@ function connect(): void {
     // connection; the list ends the replay and must be handled even when nothing changed.
     replayedProvisionalIds = new Set();
     lastChatsSerialized = "";
+    // The replay sends every look-up still waiting for an answer, so one answered meanwhile goes.
+    forgetIdentityMatches();
     m.redraw();
   };
 
@@ -297,6 +302,9 @@ function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "accounts_updated":
       rereadAccounts();
+      break;
+    case "identity_match_updated":
+      applyIdentityMatchUpdate(event.match);
       break;
     case "chats_updated": {
       isChatListReceived = true;

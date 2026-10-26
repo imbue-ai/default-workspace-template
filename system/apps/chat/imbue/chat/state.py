@@ -27,6 +27,7 @@ from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.identity_matches import IdentityMatchStore
 from imbue.chat.primitives import ChatId
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
@@ -111,6 +112,8 @@ class ChatAppState(MutableModel):
     # the router's bridge the routes reach the chats through (attached by ``create_application``).
     secret_requests: SecretRequestStore
     secret_request_bridge: SecretRequestChatBridge | None = None
+    # Who a web look-up found for the user, shown as an "Is this you?" popup until they answer.
+    identity_matches: IdentityMatchStore
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``, or
