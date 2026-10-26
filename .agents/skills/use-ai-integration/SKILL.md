@@ -164,6 +164,11 @@ result = claude_p_task(
 )
 ```
 
+A task that only **searches the web** and whose answer comes from pages it reads
+calls `claude_p_web_lookup(prompt, system=...)` instead: it has only `WebSearch`
+and `WebFetch` and runs from a throwaway directory, so instructions on a page
+cannot reach a file, a shell or the repo.
+
 `append_system` layers instructions on the default agent; pass `system` to
 replace it outright. The default agent prompt is many tokens, but it is useful
 instruction for agentic work, so overwrite it only when you have a good reason.
