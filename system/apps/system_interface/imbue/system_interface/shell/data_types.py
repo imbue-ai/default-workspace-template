@@ -259,7 +259,7 @@ class LaunchTarget(FrozenModel):
     )
 
     @model_validator(mode="after")
-    def _check_window_named_for_the_window_kind(self) -> "LaunchTarget":
+    def _check_fields_fit_the_kind(self) -> "LaunchTarget":
         if (self.kind is LaunchTargetKind.WINDOW) != (self.window_id is not None):
             raise InvalidShellValueError("a launch target names a window exactly when its kind is 'window'")
         if self.beside is not None and self.kind is not LaunchTargetKind.SHOW:
