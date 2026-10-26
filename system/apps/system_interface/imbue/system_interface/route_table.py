@@ -55,6 +55,7 @@ from imbue.system_interface.shell.api_models import UpdateRollbackStarted
 from imbue.system_interface.shell.api_models import WindowOpenedResponse
 from imbue.system_interface.shell.data_types import ClientShownRequest
 from imbue.system_interface.shell.data_types import LaunchRequest
+from imbue.system_interface.shell.data_types import PageShowRequest
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
@@ -156,6 +157,7 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("POST", "/api/clients/{client_id}/shown"): RouteModels(
         request_model=ClientShownRequest, response_model=ClientView
     ),
+    ("POST", "/api/clients/{client_id}/show"): RouteModels(request_model=PageShowRequest, response_model=ShowAnswer),
     ("GET", INVENTORY_ROUTE): RouteModels(response_model=InventoryDocument),
     ("GET", "/api/wallpapers"): RouteModels(response_model=WallpapersListing),
     ("GET", f"{WALLPAPER_ROUTE_PREFIX}/{{kind}}/{{name}}"): _IMAGE,

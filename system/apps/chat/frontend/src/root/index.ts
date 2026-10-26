@@ -65,6 +65,7 @@ import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
+import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import {
@@ -105,7 +106,8 @@ let isDrawerOpen = false;
 
 function selectedTitle(): string {
   if (selectedChatId === null) return "";
-  return getChatById(selectedChatId)?.title ?? "";
+  const title = getChatById(selectedChatId)?.title;
+  return title === undefined ? "" : titleWithPendingRename(selectedChatId, title);
 }
 
 interface ReportedLocation {
@@ -134,7 +136,10 @@ const emptyListChatBackoff = new ReconnectBackoff();
 
 /** The rail's rows in display order: the main chat first, then the most recent. */
 function railRows(): ChatRow[] {
-  return groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId()), startedHere);
+  return groupedRows(
+    withPendingTitles(rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId())),
+    startedHere,
+  );
 }
 
 function slotFillFor(chatId: string | null): SlotFill {
@@ -326,6 +331,7 @@ function dismissPick(): void {
 }
 
 function onChatsUpdated(): void {
+  settleAcceptedRenames();
   const rows = rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId());
   noteStatuses(new Map(rows.map((row) => [row.chatId, row.status])), isRootShown ? selectedChatId : null);
   // A chat that has messaged is no longer new; a deleted chat's frame goes with it.

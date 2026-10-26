@@ -150,6 +150,29 @@ export async function openWindow(desktopId: string, request: WindowOpenRequest):
   };
 }
 
+export interface PageShowRequest {
+  readonly app: string;
+  readonly path: string;
+  /** The app's pages whose on-screen window the shell may point at ``path`` (contracts.md section 8, ``show``). */
+  readonly repoint: readonly string[];
+}
+
+export interface PageShowOutcome {
+  /** The client has only pop-outs open, so the page waits on its desktop for a desktop window. */
+  readonly hasNoDesktopWindow: boolean;
+}
+
+/** Put a page of an app on this client's screen through the shell's ``show`` (contracts.md section 5.3): a window
+ *  already there is raised, else the app's window on a ``repoint`` page or its pinned window is pointed at it, else
+ *  one is opened. */
+export async function showPage(clientId: string, request: PageShowRequest): Promise<PageShowOutcome> {
+  const data = await postJson<{ has_no_desktop_window?: boolean }>(
+    apiUrl(`/api/clients/${encodeURIComponent(clientId)}/show`),
+    { app: request.app, path: request.path, repoint: request.repoint },
+  );
+  return { hasNoDesktopWindow: data.has_no_desktop_window === true };
+}
+
 /** Where a launch's page goes (post-launch-paths plan section 3.3): a new window, a window already at the path (else
  *  a new one), or a named window this client points at it. */
 export type LaunchTarget =

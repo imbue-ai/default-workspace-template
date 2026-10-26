@@ -28,8 +28,9 @@ import { describeElement, type ReferenceClick, type ReferenceScope } from "@imbu
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { kebabGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
+import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
 import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
-import { isAgentStarted, isBeingCreated, startsWithMainChat } from "./rows";
+import { isAgentStarted, startsWithMainChat } from "./rows";
 import {
   DEFAULT_RAIL_WIDTH_PX,
   MAX_RAIL_WIDTH_PX,
@@ -119,22 +120,30 @@ export function isRenaming(chatId: string): boolean {
   return rename !== null && rename.chatId === chatId;
 }
 
-/** Keep the typed name: the field closes at once, and a refusal brings it back with the reason. */
+/** Keep the typed name: the field closes at once on the new name, and a refusal brings back the old name and
+ *  the field with the reason. */
 function commitRename(row: ChatRow): void {
   if (rename === null || rename.chatId !== row.chatId) return;
   const title = rename.draft.trim();
   rename = null;
+  if (title !== "" && title !== row.title) showPendingRename(row.chatId, title);
   m.redraw();
   if (title === "" || title === row.title) return;
-  renameChat(row.chatId, title).catch((error: unknown) => {
-    if (rename !== null) {
-      // Another row's rename has the field: the refusal cannot be shown there, so it is logged.
-      console.warn(`Could not rename chat ${row.chatId}`, error);
-      return;
-    }
+  renameChat(row.chatId, title).then(
+    () => acceptPendingRename(row.chatId, title),
+    (error: unknown) => refuseRename(row, title, error),
+  );
+}
+
+function refuseRename(row: ChatRow, title: string, error: unknown): void {
+  dropPendingRename(row.chatId, title);
+  if (rename !== null) {
+    // Another row's rename has the field: the refusal cannot be shown there, so it is logged.
+    console.warn(`Could not rename chat ${row.chatId}`, error);
+  } else {
     rename = { chatId: row.chatId, draft: title, error: error instanceof Error ? error.message : String(error) };
-    m.redraw();
-  });
+  }
+  m.redraw();
 }
 
 function pruneDeleting(rows: readonly ChatRow[]): void {
@@ -486,10 +495,10 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       onclick: () => {
         if (!isSelected || attrs.isInDrawer) attrs.onPick(row.chatId);
       },
-      ondblclick: isBeingCreated(row) ? undefined : () => beginRename(row),
+      ondblclick: () => beginRename(row),
       oncontextmenu: (event: MouseEvent) => {
         event.preventDefault();
-        if (isDeleting || isBeingCreated(row)) return;
+        if (isDeleting) return;
         menuChatId = row.chatId;
         menuReferenceRows = referenceRowsForEvent(attrs, event);
         railMenu.open(anchorForPoint(event.clientX, event.clientY));
@@ -498,7 +507,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
     [
       statusDot(row, "flex-none"),
       m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
-      isBeingCreated(row) || (attrs.isTouch && isDeleting) ? null : attrs.isTouch ? rowKebab(row) : renamePencil(row),
+      attrs.isTouch && isDeleting ? null : attrs.isTouch ? rowKebab(row) : renamePencil(row),
     ],
   );
 }

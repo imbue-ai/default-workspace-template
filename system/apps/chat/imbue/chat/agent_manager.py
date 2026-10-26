@@ -945,6 +945,37 @@ class _CreatedAgentAwaitingObserve(FrozenModel):
         return self.model_copy_update(to_update(self.field_ref().snapshots_without_it, self.snapshots_without_it + 1))
 
 
+class _RecentRename(FrozenModel):
+    """Renames this server made of one agent that the observe stream has not reported yet.
+
+    The stream can deliver a snapshot it read before a rename after the rename has returned, which would put the
+    old name back for seconds.
+    """
+
+    stale_names: tuple[tuple[str, str | None], ...] = Field(
+        frozen=True, description="The (true name, display_name label) pairs the agent had before, oldest first"
+    )
+    new_name: str = Field(frozen=True, description="The true name the latest rename gave it")
+    new_display_name: str = Field(frozen=True, description="The display_name label the latest rename gave it")
+
+
+@pure
+def _observed_with_recent_rename(observed: AgentStateItem, rename: _RecentRename) -> tuple[AgentStateItem, bool]:
+    """The agent as the chat app shows it after ``observed`` arrives, and whether the rename is still unreported.
+
+    A snapshot carrying a name the agent had before the rename predates it and gets the new name; one carrying the
+    new name reports the rename; one carrying any other name was renamed since, by someone else, and stands.
+    """
+    observed_names = (observed.name, observed.labels.get("display_name"))
+    if observed_names == (rename.new_name, rename.new_display_name) or observed_names not in rename.stale_names:
+        return observed, False
+    renamed = observed.model_copy_update(
+        to_update(observed.field_ref().name, rename.new_name),
+        to_update(observed.field_ref().labels, {**observed.labels, "display_name": rename.new_display_name}),
+    )
+    return renamed, True
+
+
 class HandoffCapabilities(FrozenModel):
     """What a handoff needs from the app state and the routes, bound by the composition root."""
 
@@ -1029,6 +1060,13 @@ class AgentManager:
     # A name shown for a chat before its rename lands: the automatic name, from the moment the
     # model answers until ``mngr rename`` (seconds of CLI startup) has carried it.
     _title_override_by_chat: dict[ChatId, str]
+    # Renames made here that the observe stream has not reported yet, by agent id.
+    _recent_rename_by_agent_id: dict[str, _RecentRename]
+    # The chats whose rename by a person or an agent is running, counted, so no automatic name is shown or made
+    # for them meanwhile.
+    _chosen_renames_running_by_chat: dict[ChatId, int]
+    # One lock per chat, held while a rename of it runs: two renames of one chat run one after the other.
+    _rename_lock_by_chat: dict[ChatId, threading.Lock]
     # The records of the chats that have run on more than one agent, read from the store at
     # build (and on ``refresh_chat_records``); a chat with no record is its one agent.
     _chat_record_store: ChatRecordStore
@@ -1059,6 +1097,9 @@ class AgentManager:
     # the chat, so what is held is bounded by the chats the workspace has rather than by
     # every chat it has ever created (nothing waits on most of them).
     _creation_settled_by_chat: dict[ChatId, threading.Event]
+    # The chats deleted while their create ran. They are listed nowhere, and the agent the create
+    # makes is destroyed as it lands.
+    _abandoned_creates: set[ChatId]
     _mngr_binary: str
     _host_dir: Path
     _activity_tracked_agents: set[str]
@@ -1176,8 +1217,14 @@ class AgentManager:
     # ``attention`` status.
     _pending_permission_ids_by_agent: dict[str, set[str]]
     # Per agent, the send-time ids of its in-flight sends that are waiting for it to come up. A
-    # non-empty set is the snapshot's ``is_connecting``.
+    # non-empty set, less the withdrawn ones, is the snapshot's ``is_connecting``; the whole set
+    # keeps the chat reading as revived while a send's start is still running.
     _connecting_message_ids_by_agent: dict[str, set[str]]
+    # Per agent, the connecting sends that have not been handed to it yet, by send-time id, in
+    # the order they were sent: the ones Stop can still take back.
+    _withdrawable_sends_by_agent: dict[str, dict[str, str]]
+    # The send-time ids Stop took back while they waited for their agent, until their send ends.
+    _withdrawn_message_ids: set[str]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1265,6 +1312,9 @@ class AgentManager:
         manager._provisional_chats = seeded_provisional_chats(manager._chat_record_by_id)
         manager._seed_carries_in_flight = set()
         manager._title_override_by_chat = {}
+        manager._recent_rename_by_agent_id = {}
+        manager._chosen_renames_running_by_chat = {}
+        manager._rename_lock_by_chat = {}
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
         manager._chat_files_root = chat_files_root
         manager._prompt_template_path = prompt_template_path
@@ -1341,6 +1391,9 @@ class AgentManager:
         manager._is_agent_list_known = False
         manager._pending_permission_ids_by_agent = {}
         manager._connecting_message_ids_by_agent = {}
+        manager._withdrawable_sends_by_agent = {}
+        manager._abandoned_creates = set()
+        manager._withdrawn_message_ids = set()
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
@@ -1597,8 +1650,11 @@ class AgentManager:
         return snapshot.model_copy_update(to_update(snapshot.field_ref().title, title))
 
     def show_automatic_title(self, chat_id: ChatId, title: str) -> None:
-        """Show ``title`` for the chat at once, ahead of the rename that will make it its name."""
+        """Show ``title`` for the chat at once, ahead of the rename that will make it its name; nothing while a rename
+        a person or an agent chose is running for it."""
         with self._lock:
+            if chat_id in self._chosen_renames_running_by_chat:
+                return
             self._title_override_by_chat[chat_id] = title
             provisional = self._provisional_chats.get(chat_id)
         if provisional is not None:
@@ -1697,7 +1753,10 @@ class AgentManager:
         for agent in self._agents.values():
             if is_primary_agent(agent) or self._is_archived_member_locked(agent.id):
                 continue
-            chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent.id))
+            chat_id = self._chat_id_of_agent_locked(agent.id)
+            if chat_id in self._abandoned_creates:
+                continue
+            chat = self._resolve_chat_locked(chat_id)
             if chat is not None and chat.active_agent_id == agent.id:
                 listed.append((agent, chat))
         return listed
@@ -1720,9 +1779,7 @@ class AgentManager:
             pending_by_agent = {
                 agent.id: bool(self._pending_permission_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
-            connecting_by_agent = {
-                agent.id: bool(self._connecting_message_ids_by_agent.get(agent.id)) for agent, _chat in listed
-            }
+            connecting_by_agent = {agent.id: self._is_connecting_locked(agent.id) for agent, _chat in listed}
             tasks_by_chat = dict(self._background_tasks_by_chat)
             compaction_cause_by_agent = {
                 agent.id: self._compaction_cause_by_agent.get(agent.id) for agent, _chat in listed
@@ -1758,7 +1815,7 @@ class AgentManager:
             chat = self._resolve_chat_locked(parsed)
             agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
-            is_connecting = agent is not None and bool(self._connecting_message_ids_by_agent.get(agent.id))
+            is_connecting = agent is not None and self._is_connecting_locked(agent.id)
             background_tasks = () if chat is None else self._background_tasks_by_chat.get(chat.chat_id, ())
             compaction_cause = None if agent is None else self._compaction_cause_by_agent.get(agent.id)
         if chat is None or agent is None or is_primary_agent(agent):
@@ -2493,6 +2550,44 @@ class AgentManager:
                 )
             return transition.phase
 
+    def hold_send_for_chat_being_created(
+        self, chat_id: ChatId, message_id: str, text: str, origin: HeldSendOrigin
+    ) -> bool:
+        """Hold a send to a chat whose create is running, for the agent it lands as; False when it is not being created.
+
+        Idempotent on ``message_id``. Atomic with the create's completion under the manager's lock: a send
+        held here is one the completion hands to the new agent, and one that comes after it finds the agent.
+        Every page hears the held list through the provisional record, so one that was closed meanwhile
+        shows the message on its return.
+        """
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if provisional is None or provisional.phase is not ProvisionalChatPhase.CREATING:
+                return False
+            if any(held.message_id == message_id for held in provisional.held_sends):
+                return True
+            held = HeldSend(message_id=message_id, text=text, origin=origin, received_at=datetime.now(timezone.utc))
+            provisional = provisional.model_copy_update(
+                to_update(provisional.field_ref().held_sends, (*provisional.held_sends, held))
+            )
+            self._provisional_chats[chat_id] = provisional
+        self._broadcast_provisional(provisional)
+        return True
+
+    def withdraw_sends_held_for_chat_being_created(self, chat_id: ChatId) -> tuple[str, ...] | None:
+        """Take back the sends held for a chat whose create is running, for Stop to return to the composer; None
+        when the chat is not being created. The create goes on, and its agent lands with nothing to deliver."""
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if provisional is None or provisional.phase is not ProvisionalChatPhase.CREATING:
+                return None
+            withdrawn = tuple(held.text for held in provisional.held_sends)
+            provisional = provisional.model_copy_update(to_update(provisional.field_ref().held_sends, ()))
+            self._provisional_chats[chat_id] = provisional
+        if withdrawn:
+            self._broadcast_provisional(provisional)
+        return withdrawn
+
     def _handoff_runner(self) -> HandoffRunner:
         capabilities = self._require_switch_capabilities()
         deps = HandoffDeps(
@@ -3019,25 +3114,79 @@ class AgentManager:
         self._broadcast_chats_updated()
 
     @contextmanager
-    def track_connecting_send(self, agent_id: str, message_id: str) -> Generator[Callable[[], None], None, None]:
+    def track_connecting_send(
+        self, agent_id: str, message_id: str, text: str
+    ) -> Generator[Callable[[], None], None, None]:
         """Scope one send's delivery. The yielded callable marks the send as waiting for the agent to
-        come up (the snapshot's ``is_connecting``); leaving the scope clears the mark."""
+        come up (the snapshot's ``is_connecting``), which also lets Stop take it back
+        (``withdraw_connecting_sends``) until ``claim_send_for_delivery``; leaving the scope clears both."""
         try:
-            yield lambda: self._set_send_connecting(agent_id, message_id, is_connecting=True)
+            yield lambda: self._set_send_connecting(agent_id, message_id, text)
         finally:
-            self._set_send_connecting(agent_id, message_id, is_connecting=False)
+            self._end_connecting_send(agent_id, message_id)
 
-    def _set_send_connecting(self, agent_id: str, message_id: str, *, is_connecting: bool) -> None:
+    def _is_connecting_locked(self, agent_id: str) -> bool:
+        return bool(self._connecting_message_ids_by_agent.get(agent_id, set()) - self._withdrawn_message_ids)
+
+    def _set_send_connecting(self, agent_id: str, message_id: str, text: str) -> None:
         with self._lock:
-            message_ids = self._connecting_message_ids_by_agent.get(agent_id, set())
-            was_connecting = bool(message_ids)
-            updated_message_ids = (message_ids | {message_id}) if is_connecting else (message_ids - {message_id})
-            if updated_message_ids:
-                self._connecting_message_ids_by_agent[agent_id] = updated_message_ids
+            if message_id in self._withdrawn_message_ids:
+                return
+            was_connecting = self._is_connecting_locked(agent_id)
+            self._connecting_message_ids_by_agent.setdefault(agent_id, set()).add(message_id)
+            self._withdrawable_sends_by_agent.setdefault(agent_id, {})[message_id] = text
+        if not was_connecting:
+            self._broadcast_chats_updated()
+
+    def _end_connecting_send(self, agent_id: str, message_id: str) -> None:
+        with self._lock:
+            was_connecting = self._is_connecting_locked(agent_id)
+            message_ids = self._connecting_message_ids_by_agent.get(agent_id, set()) - {message_id}
+            if message_ids:
+                self._connecting_message_ids_by_agent[agent_id] = message_ids
             else:
                 self._connecting_message_ids_by_agent.pop(agent_id, None)
-        if bool(updated_message_ids) != was_connecting:
+            self._release_withdrawable_locked(agent_id, message_id)
+            self._withdrawn_message_ids.discard(message_id)
+            is_connecting = self._is_connecting_locked(agent_id)
+        if is_connecting != was_connecting:
             self._broadcast_chats_updated()
+
+    def _release_withdrawable_locked(self, agent_id: str, message_id: str) -> None:
+        withdrawable = self._withdrawable_sends_by_agent.get(agent_id)
+        if withdrawable is None:
+            return
+        withdrawable.pop(message_id, None)
+        if not withdrawable:
+            del self._withdrawable_sends_by_agent[agent_id]
+
+    def claim_send_for_delivery(self, agent_id: str, message_id: str) -> bool:
+        """Take a connecting send out of Stop's reach just before it is handed to the agent; False when Stop
+        already took it back, and it must not be delivered. A send never marked connecting is always claimed."""
+        with self._lock:
+            if message_id in self._withdrawn_message_ids:
+                return False
+            self._release_withdrawable_locked(agent_id, message_id)
+            return True
+
+    def is_send_withdrawn(self, message_id: str) -> bool:
+        """Whether Stop took this connecting send back."""
+        with self._lock:
+            return message_id in self._withdrawn_message_ids
+
+    def withdraw_connecting_sends(self, agent_id: str) -> tuple[str, ...]:
+        """Take back every send still waiting for ``agent_id`` to come up, for Stop to return to the composer.
+
+        Their sends stop waiting and deliver nothing (``claim_send_for_delivery`` refuses them). The
+        agent's start, if one is running, is left to finish: it is the message that is withdrawn, not
+        the agent. Empty when nothing is waiting.
+        """
+        with self._lock:
+            withdrawable = self._withdrawable_sends_by_agent.pop(agent_id, {})
+            self._withdrawn_message_ids.update(withdrawable)
+        if withdrawable:
+            self._broadcast_chats_updated()
+        return tuple(withdrawable.values())
 
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
@@ -3091,7 +3240,48 @@ class AgentManager:
         self._broadcast_chats_updated()
 
     def rename_chat(self, chat_ref: str, display_name: str) -> None:
-        """Give a chat the name the user just typed, keeping its active agent's name pair matched.
+        """Give a chat the name a person (or an agent) chose, as ``_rename_chat_now`` does, ahead of any automatic name.
+
+        While it runs the chat no longer counts as wearing a placeholder name, so the namer
+        (``chat_naming.py``) neither shows nor makes its own name for it, and a rename the namer
+        already started finishes first, so this one lands last.
+        """
+        chat_key = parse_chat_ref(chat_ref)
+        if chat_key is None:
+            self._rename_chat_now(chat_ref, display_name)
+            return
+        with self._lock:
+            self._chosen_renames_running_by_chat[chat_key] = self._chosen_renames_running_by_chat.get(chat_key, 0) + 1
+        try:
+            with self._rename_lock_for(chat_key):
+                self._rename_chat_now(chat_ref, display_name)
+        finally:
+            with self._lock:
+                remaining = self._chosen_renames_running_by_chat.pop(chat_key) - 1
+                if remaining > 0:
+                    self._chosen_renames_running_by_chat[chat_key] = remaining
+
+    def _rename_lock_for(self, chat_id: ChatId) -> threading.Lock:
+        with self._lock:
+            return self._rename_lock_by_chat.setdefault(chat_id, threading.Lock())
+
+    def _with_recent_renames_locked(self, observed_agents: dict[str, AgentStateItem]) -> dict[str, AgentStateItem]:
+        """``observed_agents`` with the renames made here that they predate; a rename they report is let go."""
+        shown_agents = dict(observed_agents)
+        still_unreported: dict[str, _RecentRename] = {}
+        for agent_id, rename in self._recent_rename_by_agent_id.items():
+            observed = observed_agents.get(agent_id)
+            if observed is None:
+                continue
+            shown, is_unreported = _observed_with_recent_rename(observed, rename)
+            shown_agents[agent_id] = shown
+            if is_unreported:
+                still_unreported[agent_id] = rename
+        self._recent_rename_by_agent_id = still_unreported
+        return shown_agents
+
+    def _rename_chat_now(self, chat_ref: str, display_name: str) -> None:
+        """Give a chat a new name, keeping its active agent's name pair matched.
 
         ``chat_ref`` is a chat id (what the chat app's rename route carries) or an agent name,
         so both are resolved here. The display name's canonical form becomes the
@@ -3108,11 +3298,10 @@ class AgentManager:
         another agent's (by canonical form; the caller answers 409 so the user
         can retry with a different name).
 
-        An id this manager does not track is not an mngr agent it can rename:
-        an agent still being created already carries the typed name on its
-        ``mngr create`` (and renaming it to something *else* mid-create would
-        race that create, so it is refused), and an id belonging to no agent at
-        all has no name to diverge from. Both return without running anything.
+        A chat with no agent yet (``rename_provisional_chat``) takes the name on
+        its provisional record, and one still being created has its agent renamed
+        as the create lands. An id belonging to no agent at all has no name to
+        diverge from, and returns without running anything.
         """
         if not canonical_agent_name(display_name):
             raise AgentRenameError(f"Chat name '{display_name}' contains no usable characters")
@@ -3180,15 +3369,47 @@ class AgentManager:
                     to_update(renamed.field_ref().name, new_canonical_name),
                     to_update(renamed.field_ref().labels, {**renamed.labels, "display_name": display_name}),
                 )
+                earlier = self._recent_rename_by_agent_id.get(agent_state.id)
+                self._recent_rename_by_agent_id[agent_state.id] = _RecentRename(
+                    stale_names=(
+                        *(() if earlier is None else earlier.stale_names),
+                        (agent_state.name, agent_state.labels.get("display_name")),
+                    ),
+                    new_name=new_canonical_name,
+                    new_display_name=display_name,
+                )
             if chat is not None:
                 self._title_override_by_chat.pop(chat.chat_id, None)
         self._broadcast_chats_updated()
 
+    def _rename_provisional_chat(self, chat_id: ChatId, display_name: str) -> None:
+        """Give a chat with no agent yet the name on its record, which pages show at once and a create
+        launched later takes; one being created now is renamed through mngr as it lands (``_run_creation``).
+        A seeded chat keeps the name on its record (``chosen_name``), so a restart of this app before its
+        first send keeps it. Raises ``AgentNameConflictError`` for a name another chat has."""
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if provisional is None or provisional.name == display_name:
+                return
+            if is_name_conflict(display_name, self._taken_names_locked(exclude_agent_id=str(chat_id))):
+                raise AgentNameConflictError(f"A chat named '{display_name}' already exists; pick another name")
+            provisional = provisional.model_copy_update(to_update(provisional.field_ref().name, display_name))
+            self._provisional_chats[chat_id] = provisional
+            self._title_override_by_chat.pop(chat_id, None)
+            record = self._chat_record_by_id.get(chat_id)
+            if record is not None and record.is_seed_only:
+                self._write_record_locked(
+                    record.model_copy_update(to_update(record.field_ref().chosen_name, display_name))
+                )
+        self._broadcast_provisional(provisional)
+
     def has_placeholder_name(self, chat_id: ChatId) -> bool:
         """Whether a chat still wears a name nobody chose for it: a minted "Chat N", or a title it was seeded with
         other than ``MAIN_CHAT_NAME`` (an older Mind app's "Welcome"). A chat still being created counts by the
-        name it was minted with."""
+        name it was minted with; one whose rename by a person or an agent is running does not count."""
         with self._lock:
+            if chat_id in self._chosen_renames_running_by_chat:
+                return False
             provisional = self._provisional_chats.get(chat_id)
             record = self._chat_record_by_id.get(chat_id)
         if provisional is not None:
@@ -3236,9 +3457,10 @@ class AgentManager:
         """Rename a chat that still wears a placeholder name, as ``rename_chat`` would; False, running nothing,
         when it has any other name, so an automatic name never replaces one a person or agent chose.
         Raises what ``rename_chat`` raises."""
-        if not self.has_placeholder_name(chat_id):
-            return False
-        self.rename_chat(chat_id, display_name)
+        with self._rename_lock_for(chat_id):
+            if not self.has_placeholder_name(chat_id):
+                return False
+            self._rename_chat_now(chat_id, display_name)
         return True
 
     def _start_session_sweep(self) -> None:
@@ -3345,31 +3567,6 @@ class AgentManager:
     def get_own_agent_id(self) -> str:
         """Return this server's own agent ID from the environment."""
         return self._own_agent_id
-
-    def _rename_provisional_chat(self, chat_id: ChatId, display_name: str) -> None:
-        """Rename a chat that is not an agent yet: the name its first agent will be created with.
-
-        Refused while its create runs, since a rename then would race it. A seeded chat keeps the
-        name on its record (``chosen_name``), so a restart of this app before its first send keeps it.
-        """
-        with self._lock:
-            provisional = self._provisional_chats.get(chat_id)
-            if provisional is None or provisional.name == display_name:
-                return
-            if provisional.phase is ProvisionalChatPhase.CREATING:
-                raise AgentRenameError(
-                    f"Chat '{chat_id}' is still being created; it cannot be renamed to '{display_name}' yet"
-                )
-            if is_name_conflict(display_name, self._taken_names_locked(exclude_agent_id=str(chat_id))):
-                raise AgentNameConflictError(f"A chat named '{display_name}' already exists; pick another name")
-            renamed = provisional.model_copy_update(to_update(provisional.field_ref().name, display_name))
-            self._provisional_chats[chat_id] = renamed
-            record = self._chat_record_by_id.get(chat_id)
-            if record is not None and record.is_seed_only:
-                self._write_record_locked(
-                    record.model_copy_update(to_update(record.field_ref().chosen_name, display_name))
-                )
-        self._broadcast_provisional(renamed)
 
     def _taken_names_locked(self, exclude_agent_id: str | None = None) -> list[str]:
         """Every name in use on the machine's agents. Must be called with lock held.
@@ -3631,22 +3828,25 @@ class AgentManager:
         return state
 
     def discard_provisional_chat(self, chat_id: str) -> bool:
-        """Drop a provisional chat that is not being created: one awaiting its first send (its seed
-        goes with it), or one whose create failed. Returns whether anything was dropped; a create in
-        flight cannot be taken back and is left alone."""
+        """Drop a provisional chat: one awaiting its first send (its seed goes with it), one whose create
+        failed, or one being created, which is gone from every page at once and whose agent is destroyed
+        as its create lands (``_run_creation``). Returns whether anything was dropped."""
         parsed = parse_chat_ref(chat_id)
         if parsed is None:
             return False
         with self._lock:
             provisional = self._provisional_chats.get(parsed)
-            if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
+            if provisional is None:
                 return False
             del self._provisional_chats[parsed]
-            self._creation_settled_by_chat.pop(parsed, None)
-            record = self._chat_record_by_id.get(parsed)
-            # A failed create has already written the chat's fast mode into its folder.
-            if record is None or record.is_seed_only:
-                self._delete_record_locked(parsed)
+            if provisional.phase is ProvisionalChatPhase.CREATING:
+                self._abandoned_creates.add(parsed)
+            else:
+                self._creation_settled_by_chat.pop(parsed, None)
+                record = self._chat_record_by_id.get(parsed)
+                # A failed create has already written the chat's fast mode into its folder.
+                if record is None or record.is_seed_only:
+                    self._delete_record_locked(parsed)
         self._auto_open.forget(parsed)
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
         self._broadcast_chats_updated()
@@ -3750,6 +3950,8 @@ class AgentManager:
             primary_labels = dict(primary.labels) if primary else {}
 
             seed_record: ChatRecord | None = None
+            # The sends a failed create kept, which its retry delivers like the first attempt would have.
+            carried_held_sends: tuple[HeldSend, ...] = ()
             if chat_id:
                 provisional = self._provisional_chats.get(ChatId(chat_id))
                 if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
@@ -3779,6 +3981,9 @@ class AgentManager:
                 else:
                     message = provisional.message
                 launched_chat_id = provisional.chat_id
+                carried_held_sends = provisional.held_sends
+                if model_pick is None:
+                    model_pick = provisional.model_pick
                 display_name = provisional.name
                 project_id = provisional.project_id
                 extra_labels = dict(provisional.labels)
@@ -3808,6 +4013,8 @@ class AgentManager:
                 is_installation_check_skipped=is_installation_check_skipped,
                 phase=ProvisionalChatPhase.CREATING,
                 is_seeded=seed_record is not None,
+                held_sends=carried_held_sends,
+                model_pick=model_pick,
             )
             self._provisional_chats[launched_chat_id] = provisional
             fast_mode = self._fast_mode_for_launch_locked(launched_chat_id)
@@ -3989,10 +4196,16 @@ class AgentManager:
         """
         success = False
         error: str | None = None
+        held_sends: tuple[HeldSend, ...] = ()
         output_tail = CreationOutputTail()
         # A seeded chat's agent that mngr provisioned before its create failed: destroyed below,
         # once the lock is released, since the withdrawn record no longer names it.
         half_made_agent_id: str | None = None
+        is_abandoned = False
+        # The name the chat was given while its create ran, which its agent takes once it exists.
+        renamed_while_created: str | None = None
+        # Another account chosen for the chat while its create ran, which the chat moves to once it exists.
+        account_chosen_while_created: str | None = None
 
         try:
             success, error = self._run_create_command(agent_id, cmd, work_dir, output_tail)
@@ -4006,18 +4219,28 @@ class AgentManager:
                 success, error = self._run_create_command(agent_id, cmd, work_dir, output_tail)
 
             with self._lock:
+                is_abandoned = chat_id in self._abandoned_creates
                 if success:
-                    self._provisional_chats.pop(chat_id, None)
-                    self._track_created_agent_locked(
-                        AgentStateItem(
-                            id=agent_id,
-                            name=agent_name,
-                            state="RUNNING",
-                            labels=labels,
-                            work_dir=str(work_dir),
-                            harness=harness,
+                    if not is_abandoned:
+                        settled_provisional = self._provisional_chats.pop(chat_id, None)
+                        if settled_provisional is not None:
+                            held_sends = settled_provisional.held_sends
+                            if settled_provisional.name != labels.get("display_name"):
+                                renamed_while_created = settled_provisional.name
+                            # The account and model chosen while it was created, which the chat runs on.
+                            model_pick = settled_provisional.model_pick
+                            if settled_provisional.account_id not in ("", labels.get("account")):
+                                account_chosen_while_created = settled_provisional.account_id
+                        self._track_created_agent_locked(
+                            AgentStateItem(
+                                id=agent_id,
+                                name=agent_name,
+                                state="RUNNING",
+                                labels=labels,
+                                work_dir=str(work_dir),
+                                harness=harness,
+                            )
                         )
-                    )
                 else:
                     self._mark_creation_failed_locked(chat_id, failure_notice(error, output_tail.text()))
                     if record_entry is not None:
@@ -4036,6 +4259,7 @@ class AgentManager:
             _loguru_logger.opt(exception=e).error("Unexpected error creating agent {}", agent_id)
             try:
                 with self._lock:
+                    is_abandoned = chat_id in self._abandoned_creates
                     self._mark_creation_failed_locked(chat_id, error)
                     if record_entry is not None:
                         half_made_agent_id = self._withdraw_seeded_member_locked(chat_id, record_entry)
@@ -4044,13 +4268,23 @@ class AgentManager:
 
         if half_made_agent_id is not None:
             self._discard_successor(chat_id, half_made_agent_id)
+        if is_abandoned:
+            self._finish_abandoned_create(chat_id, agent_id if success else None)
+            success, error = False, None
 
         try:
             if success:
                 self._ensure_activity_tracking(agent_id)
                 self._ensure_model_tracking(agent_id)
                 self._broadcast_chats_updated()
-                self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message)
+                if renamed_while_created is not None:
+                    self._rename_created_chat(chat_id, renamed_while_created)
+                if account_chosen_while_created is None:
+                    self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message, held_sends)
+                else:
+                    self._move_created_chat(
+                        chat_id, agent_id, account_chosen_while_created, model_pick, deferred_message, held_sends
+                    )
             else:
                 # The pages show what the record holds: the reason and the output behind it.
                 failed = self.get_provisional_chat(chat_id)
@@ -4062,6 +4296,96 @@ class AgentManager:
             if settled is not None:
                 settled.set()
             self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
+
+    def _move_created_chat(
+        self,
+        chat_id: ChatId,
+        agent_id: str,
+        account_id: str,
+        model_pick: ModelPick | None,
+        message: str,
+        held_sends: tuple[HeldSend, ...],
+    ) -> None:
+        """Move a just-created chat to the account chosen for it while it was created, carrying its messages: the
+        first is the switch's own, and the rest are held for the agent it lands on. A switch that cannot start
+        leaves the chat where it is, and its messages go to the agent it has, as if nothing had been chosen."""
+        sends = (
+            *(
+                (
+                    HeldSend(
+                        message_id=uuid4().hex,
+                        text=message,
+                        origin=HeldSendOrigin.CLIENT,
+                        received_at=datetime.now(timezone.utc),
+                    ),
+                )
+                if message
+                else ()
+            ),
+            *held_sends,
+        )
+        trigger = sends[0] if sends else None
+        try:
+            self.begin_switch(
+                chat_id,
+                account_id,
+                trigger.text if trigger is not None else "",
+                trigger.message_id if trigger is not None else uuid4().hex,
+                trigger.origin if trigger is not None else HeldSendOrigin.CLIENT,
+                model_pick,
+            )
+        except (HandoffError, ChatConvergingError) as e:
+            _loguru_logger.warning("Chat {}: could not move it to account {} as it landed: {}", chat_id, account_id, e)
+            self._settle_new_chat(chat_id, agent_id, None, "", sends)
+            return
+        for held in sends[1:]:
+            self.hold_send(chat_id, held.message_id, held.text, held.origin)
+
+    def set_launch_choice(self, chat_id: ChatId, account_id: str, model_pick: ModelPick | None) -> None:
+        """Choose the account and model a chat with no agent yet runs on.
+
+        Shown on the provisional record at once. A chat awaiting its launch is launched on them; one being
+        created takes the model as it lands, and moves to another account then, as a switch would. Raises
+        ``AgentCreationError`` for an account that cannot be bound, or a chat that has an agent already.
+        """
+        try:
+            resolve_binding(account_id)
+        except (AccountError, BindingError) as e:
+            raise AgentCreationError(str(e)) from e
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if provisional is None:
+                raise AgentCreationError(f"Chat {chat_id} has an agent already, or none is being made for it")
+            provisional = provisional.model_copy_update(
+                to_update(provisional.field_ref().account_id, account_id),
+                to_update(provisional.field_ref().model_pick, model_pick),
+            )
+            self._provisional_chats[chat_id] = provisional
+        self._broadcast_provisional(provisional)
+
+    def _rename_created_chat(self, chat_id: ChatId, display_name: str) -> None:
+        """Give a just-created agent the name its chat was renamed to while the create ran. Logged rather than
+        raised, like the rest of a landed create's settling: the chat runs either way."""
+        with self._lock:
+            self._title_override_by_chat[chat_id] = display_name
+        try:
+            self.rename_chat(chat_id, display_name)
+        except AgentRenameError as e:
+            _loguru_logger.warning("Chat {}: could not give its new agent the name {}: {}", chat_id, display_name, e)
+            self.clear_automatic_title(chat_id)
+
+    def _finish_abandoned_create(self, chat_id: ChatId, created_agent_id: str | None) -> None:
+        """Tidy up after a create whose chat was deleted while it ran: destroy the agent it made, if it made
+        one, and drop the chat's folder. Logged rather than raised: the chat is already gone from every page."""
+        _loguru_logger.info("Chat {} was deleted while it was created; removing what the create made", chat_id)
+        if created_agent_id is not None:
+            self._discard_successor(chat_id, created_agent_id)
+        with self._lock:
+            self._abandoned_creates.discard(chat_id)
+            try:
+                self._delete_record_locked(chat_id)
+            except ChatRecordError as e:
+                _loguru_logger.warning("Chat {}: could not remove the folder of the deleted chat: {}", chat_id, e)
 
     def _run_create_command(
         self, agent_id: str, cmd: list[str], work_dir: Path, output_tail: CreationOutputTail
@@ -4114,21 +4438,29 @@ class AgentManager:
         except AgentDestroyError as e:
             _loguru_logger.debug("Chat {}: no half-made agent {} to destroy: {}", chat_id, agent_id, e)
 
-    def _settle_new_chat(self, chat_id: ChatId, agent_id: str, model_pick: ModelPick | None, message: str) -> None:
-        """Put a just-created chat on its pick and hand it the message its create left out.
+    def _settle_new_chat(
+        self,
+        chat_id: ChatId,
+        agent_id: str,
+        model_pick: ModelPick | None,
+        message: str,
+        held_sends: tuple[HeldSend, ...] = (),
+    ) -> None:
+        """Put a just-created chat on its pick and hand it the message its create left out, then the sends held
+        while it was created, in order.
 
         A pick the agent refuses is logged and the chat stays on its harness's default: a new
         chat has nothing to lose to a wrong model, unlike a handoff's successor, whose pick is
-        what the user chose the switch by. The message goes through the send path a held send
+        what the user chose the switch by. The messages go through the send path a held send
         takes; a refusal is logged the same way.
         """
-        if model_pick is None and not message:
+        if model_pick is None and not message and not held_sends:
             return
         agent_info = self.get_agent_info_by_id(agent_id)
         capabilities = self._handoff_capabilities
         if agent_info is None or capabilities is None:
             _loguru_logger.warning(
-                "Chat {}: agent {} is untracked, so its model pick and first message are dropped", chat_id, agent_id
+                "Chat {}: agent {} is untracked, so its model pick and messages are dropped", chat_id, agent_id
             )
             return
         if model_pick is not None:
@@ -4148,6 +4480,8 @@ class AgentManager:
                 ),
                 chat_id,
             )
+        for held in held_sends:
+            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can
@@ -4224,7 +4558,7 @@ class AgentManager:
             with self._lock:
                 old_ids = set(self._agents.keys())
                 new_ids = set(new_agents.keys())
-                self._agents = new_agents
+                self._agents = self._with_recent_renames_locked(new_agents)
 
             for agent_id in new_ids:
                 self._ensure_activity_tracking(agent_id)
@@ -4392,6 +4726,7 @@ class AgentManager:
             self._created_unobserved_by_id = still_awaited
             for agent_id, created in self._created_unobserved_by_id.items():
                 new_agents[agent_id] = self._agents.get(agent_id, created.agent)
+            new_agents = self._with_recent_renames_locked(new_agents)
             self._agents = new_agents
             self._match_by_agent_id = new_matches
             # Known only once the listing it came with is installed, so nothing reads the list as known while

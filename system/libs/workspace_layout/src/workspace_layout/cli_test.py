@@ -76,7 +76,7 @@ def _json_documents(text: str) -> list[Any]:
     [
         ("app:chat?instance=agent-1", "workspace-layout open chat --path <path>"),
         ("app:files", "workspace-layout open files"),
-        ("chat:alice", 'open chat --path "/?chat=<chat-id>"'),
+        ("chat:alice", 'show chat --path "/?chat=<chat-id>" --showing "/<chat-id>" --repoint /'),
         ("chat-terminal:alice", "back face of its chat"),
         ("terminal:terminal-3", 'open terminal --path "/?session=terminal-3"'),
         ("service:files", "workspace-layout open files"),

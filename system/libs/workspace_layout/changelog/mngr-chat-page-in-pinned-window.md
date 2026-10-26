@@ -1,0 +1,1 @@
+`workspace-layout`'s hints for the retired `chat:` and `chat-terminal:` spellings, and `open --path`'s help, now point at `show chat --path "/?chat=<id>" --showing "/<id>" --repoint /`, which shows a chat in the pinned chat window. `open chat --path "/?chat=<id>"` opened a second chat window, because the pinned window's own path stays `/`.
