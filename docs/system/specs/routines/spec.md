@@ -402,6 +402,7 @@ The daily routines-only check is a second definition later, `caretaker-routines.
   The title is the id with the hyphens read as spaces, and `what` is the command, until an agent describes it.
 - A plain cron line whose five fields are one of the shapes section 5 expresses becomes a definition the same way; one that is not is left in place with a warning in the boot log, since the daemon still runs it.
 - Both copies of every converted entry are removed.
+- The Imbue Studio app's `update-self-dispatch` entry stays with cron, untouched: the app rewrites it whenever it arms an update, so a routine of it would run beside the cron line rather than replace it.
 
 The bootstrap runs it at every boot, after the first-boot commit and before writing the tick entry; it is a no-op once nothing is left, and the recovery guard is never touched.
 The definitions it writes are committed as every definition write is (section 4), one commit per definition; a commit the index refuses leaves the file written and the entry converted, as for any write.

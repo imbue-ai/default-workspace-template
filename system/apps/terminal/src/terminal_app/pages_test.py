@@ -1,10 +1,12 @@
 import json
+import re
 from pathlib import Path
 
 import pytest
 from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
 from flask.testing import FlaskClient
+from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
 
 from terminal_app.pages import (
     PageConfig,
@@ -268,6 +270,19 @@ def test_render_page_leaves_a_placeholders_text_in_the_title_alone() -> None:
     start = page_html.index('id="terminal-config">') + len('id="terminal-config">')
     assert json.loads(page_html[start : page_html.index("</script>", start)])["page"]["title"] == title
     assert 'import("/_static/app_contract.js")' in page_html
+
+
+def test_the_page_follows_the_theme_contracts_terminal_palette_and_theme_ids() -> None:
+    page_html = render_page(PageConfig(session=None, page=None))
+
+    start = page_html.index("const THEME = ") + len("const THEME = ")
+    theme = json.loads(page_html[start : page_html.index(";\n", start)])
+
+    assert tuple(theme["paletteTokens"].values()) == TERMINAL_TOKENS
+    assert theme["paletteTokens"]["brightWhite"] == "--term-ansi-15"
+    assert theme["standard"] == STANDARD_THEME_ID
+    assert re.fullmatch(theme["idPattern"], "windows-2000") is not None
+    assert theme["bundlePrefix"] == "/_static/themes/"
 
 
 def test_the_app_describes_its_api_the_way_its_manifest_says(

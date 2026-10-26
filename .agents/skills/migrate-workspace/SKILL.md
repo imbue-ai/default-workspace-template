@@ -112,7 +112,8 @@ away), and the fix is to re-request the grant and retry, not to give up.
 ## 3. Preconditions
 
 **Single-flight.** One migration at a time (the worker name, branch, and runtime
-dir are fixed). Check for a live one, and take over an abandoned one per
+dir are fixed). Check for a live one. One whose holder is gone you take over
+as its lead, or supersede once its worker is gone too, per
 `.agents/shared/references/harden-contention.md`:
 
 ```bash

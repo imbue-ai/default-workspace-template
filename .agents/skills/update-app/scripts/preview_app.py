@@ -267,6 +267,20 @@ def _under_declared_secrets(
     return launch
 
 
+def _declared_theming_mode(worktree: Path, manifest: AppManifest) -> str | None:
+    """The ``[theming]`` mode the worktree's own app.toml declares, or None when it declares no ``[theming]``."""
+    manifest_path, _ = find_manifest(worktree, str(manifest.name))
+    try:
+        raw = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    theming = raw.get("theming")
+    if not isinstance(theming, dict):
+        return None
+    mode = theming.get("mode", "tokens")
+    return mode if isinstance(mode, str) else None
+
+
 def build_up_argv(
     manifest: AppManifest,
     worktree: Path,
@@ -298,6 +312,9 @@ def build_up_argv(
         "--inner-path",
         inner_path,
     ]
+    theming_mode = _declared_theming_mode(worktree, manifest)
+    if theming_mode is not None:
+        argv.extend(["--theming-mode", theming_mode])
     for port_name in preview.ports:
         argv.extend(["--port", str(port_name)])
     for key, value in preview.env.items():

@@ -131,9 +131,10 @@ classes and the apply plan), ``update_apply_contract`` (every path, phase,
 verdict and record the Imbue Studio app, bootstrap and the system interface read),
 ``update_layout``, ``update_banding``, ``update_runtime``,
 ``update_environment``, ``update_probes``, ``update_ledger``,
-``update_history_bridge``, and ``update_apply`` (the apply and recover
-orchestration). All of it is covered by ``update_self_test.py`` and
-``test_update_history_bridge.py``.
+``update_history_bridge``, ``update_apply`` (the apply and recover
+orchestration), ``update_chat_pause`` (``run-status stop-chats`` /
+``resume-chats``) and ``update_resume_note`` (the note a resumed chat is
+sent).
 """
 
 from __future__ import annotations
@@ -155,6 +156,7 @@ from update_apply import (
     apply_update,
     confirm_last,
     pending_update_rollbacks,
+    read_pass_scope,
     recover,
     rollback_last,
     update_rollback_history,
@@ -163,12 +165,29 @@ from update_apply_contract import (
     DEFAULT_RECOVER_GRACE_SECONDS,
     ENV_DRI_AGENT,
     RUN_VERDICTS,
+    STARTED_BY_VALUES,
     RunStatus,
+    StoppedAgent,
+    dispatched_started_by,
     read_run_status,
     run_status_path,
     write_run_status,
 )
 from update_banding import protect_from_memory_shed
+from update_chat_pause import (
+    AgentListingError,
+    LeadIdentity,
+    UnknownAgentError,
+    list_agents,
+    merge_stopped,
+    pause,
+    read_background_runners,
+    resume,
+    run_command,
+    select_pause_targets,
+    send_note,
+    stop_runner,
+)
 from update_classification import classify_merge
 from update_environment import default_sweep_homes
 from update_history_bridge import (
@@ -682,6 +701,17 @@ def _cmd_apply(args: argparse.Namespace) -> int:
             "error: --keep-rollback-point needs an ordinary merge to roll back later; "
             "it cannot be combined with --ff-only."
         )
+    if args.keep_rollback_point != (args.pass_scope is not None):
+        raise SystemExit(
+            "error: --keep-rollback-point and --pass-scope go together: the rollback point "
+            "records the pass's apps and services from its scope file."
+        )
+    try:
+        pass_scope = (
+            read_pass_scope(args.pass_scope) if args.pass_scope is not None else []
+        )
+    except ValueError as exc:
+        raise SystemExit(f"error: --pass-scope: {exc}") from exc
     return apply_update(
         args.merge_ref,
         _repo_root(args).resolve(),
@@ -693,6 +723,7 @@ def _cmd_apply(args: argparse.Namespace) -> int:
         spawner=Spawner(),
         sweep_homes=default_sweep_homes(),
         keep_rollback_point=args.keep_rollback_point,
+        pass_scope=pass_scope,
     )
 
 
@@ -714,11 +745,36 @@ def _cmd_run_status_start(args: argparse.Namespace) -> int:
         )
         return 1
     now = time.time
+    # A start keeps the chats an earlier start paused and has not brought back, this chat's own
+    # (re-taking its lease, resuming after an override) or a lead's that ended before its resume:
+    # nothing else could ever resume them.
+    earlier = read_run_status(repo_root)
+    still_paused = (
+        [
+            entry
+            for entry in earlier.stopped_agents
+            if not (entry.is_restarted and entry.is_told)
+        ]
+        if earlier is not None
+        else []
+    )
+    if (
+        still_paused
+        and earlier is not None
+        and earlier.chat_agent_name != chat_agent_name
+    ):
+        print(
+            f"Carried over {len(still_paused)} chat(s) or agent(s) {earlier.chat_agent_name} paused and "
+            "did not bring back; this run's resume-chats brings them back."
+        )
     write_run_status(
         RunStatus(
             chat_agent_name=chat_agent_name,
             started_at=now(),
             updated_at=0.0,
+            started_by=args.started_by
+            or dispatched_started_by(repo_root, chat_agent_name),
+            stopped_agents=still_paused,
         ),
         repo_root,
         now,
@@ -809,6 +865,79 @@ def _cmd_run_status_resume(args: argparse.Namespace) -> int:
     return 0
 
 
+PROC_DIR = Path("/proc")
+
+
+def _cmd_run_status_stop_chats(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    lead = LeadIdentity.from_environ(os.environ)
+    if not lead.agent_id:
+        print(
+            "error: MNGR_AGENT_ID is not set, so this run cannot tell its own chat and worker "
+            "from the ones to pause; run it as the update's lead.",
+            file=sys.stderr,
+        )
+        return 1
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    try:
+        targets = select_pause_targets(
+            list_agents(run_command),
+            read_background_runners(PROC_DIR),
+            lead,
+            args.agent,
+        )
+    except (AgentListingError, UnknownAgentError) as e:
+        print(f"error: {e}; nothing was paused.", file=sys.stderr)
+        return 1
+    if not targets:
+        if args.agent:
+            print("Nothing to pause: every agent named is already stopped.")
+        else:
+            print("Nothing to pause: no other chat or background agent is busy.")
+        return 0
+
+    def record(stopped: StoppedAgent) -> None:
+        merge_stopped(status.stopped_agents, stopped)
+        write_run_status(status, repo_root, now)
+
+    problems = pause(targets, run_command, stop_runner, record)
+    for problem in problems:
+        print(f"error: {problem}", file=sys.stderr)
+    return 1 if problems else 0
+
+
+def _cmd_run_status_resume_chats(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    if not status.stopped_agents:
+        print("Nothing to resume: this run's record names no paused chat or agent.")
+        return 0
+    if all(entry.is_restarted and entry.is_told for entry in status.stopped_agents):
+        print(
+            "Nothing to resume: every paused chat is running again and has been told."
+        )
+        return 0
+
+    def save() -> None:
+        write_run_status(status, repo_root, now)
+
+    problems = resume(
+        status.stopped_agents,
+        run_command,
+        lambda chat_id, note: send_note(repo_root, run_command, chat_id, note),
+        landed_ref=args.landed or None,
+        wip_commit=args.wip_commit,
+        save=save,
+    )
+    for problem in problems:
+        print(f"error: {problem}", file=sys.stderr)
+    return 1 if problems else 0
+
+
 def _cmd_recover(args: argparse.Namespace) -> int:
     return recover(
         _repo_root(args).resolve(),
@@ -820,7 +949,7 @@ def _cmd_recover(args: argparse.Namespace) -> int:
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     # ``--repo-root`` lives on a shared parent parser so it is accepted both
     # before and after the subcommand (an option defined only on the top-level
     # parser would reject ``update_self.py <subcommand> --repo-root X``).
@@ -1005,6 +1134,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         "the previous version back until a person confirms the update, and the "
         "next apply replaces the point.",
     )
+    apply_parser.add_argument(
+        "--pass-scope",
+        type=Path,
+        default=None,
+        help="The harden pass's scope file (`app-manifest pass-scope`), with "
+        "--keep-rollback-point: the rollback point records its apps and services "
+        "and the programs its wiring names, so a rollback restarts them too.",
+    )
     apply_parser.set_defaults(func=_cmd_apply)
 
     rollback_parser = sub.add_parser(
@@ -1063,13 +1200,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     start_parser = run_status_sub.add_parser(
         "start",
-        help="Record that a run has begun, overwriting the previous run's record.",
+        help="Record that a run has begun, replacing the previous run's record but keeping "
+        "the chats it paused and has not brought back.",
         parents=[common],
     )
     start_parser.add_argument(
         "--chat",
         default="",
         help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    start_parser.add_argument(
+        "--started-by",
+        choices=STARTED_BY_VALUES,
+        default=None,
+        help="How the run was started (default: what the app's last dispatch recorded "
+        "for this chat, else nothing).",
     )
     start_parser.set_defaults(func=_cmd_run_status_start)
     verdict_parser = run_status_sub.add_parser(
@@ -1147,8 +1292,55 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
     )
     resume_parser.set_defaults(func=_cmd_run_status_resume)
+    stop_chats_parser = run_status_sub.add_parser(
+        "stop-chats",
+        help="Pause the other chats and background agents that are busy (or the ones "
+        "named), recording each so resume-chats brings it back.",
+        parents=[common],
+    )
+    stop_chats_parser.add_argument(
+        "--agent",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help="Pause this chat or background agent whatever it is doing (to free memory); "
+        "repeatable. Without it, every busy one is paused.",
+    )
+    stop_chats_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    stop_chats_parser.set_defaults(func=_cmd_run_status_stop_chats)
+    resume_chats_parser = run_status_sub.add_parser(
+        "resume-chats",
+        help="Start every agent stop-chats paused again and send each chat concerned the "
+        "resume note; safe to re-run.",
+        parents=[common],
+    )
+    resume_chats_parser.add_argument(
+        "--landed",
+        default="",
+        metavar="REF",
+        help="The release the apply landed; leave it out when the update did not land.",
+    )
+    resume_chats_parser.add_argument(
+        "--wip-commit",
+        default="",
+        metavar="SHA",
+        help="The commit holding the workspace's uncommitted work, when this run made one.",
+    )
+    resume_chats_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    resume_chats_parser.set_defaults(func=_cmd_run_status_resume_chats)
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
         return args.func(args)
     except (

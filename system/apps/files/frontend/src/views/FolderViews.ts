@@ -7,7 +7,7 @@ import m from "mithril";
 
 import { alertDotIcon, icon } from "@imbue/workspace-ui/src/components/icons";
 
-import { shareBadgeOf, shareRootAt, stuckSyncOf } from "../models/connections";
+import { shareBadgeOf, shareRootAt, syncNoticeOf } from "../models/connections";
 import type { Entry } from "../models/server";
 import { formatModified, formatSize } from "../models/format";
 import { kindLabelOf } from "../models/fileKinds";
@@ -222,15 +222,17 @@ function columnBody(
     return m("div", { class: "px-3 py-4 type-helper text-danger" }, state.error);
   }
   if (entries.length === 0) {
-    const stuck = stuckSyncOf(app.model.connections, folder);
-    if (stuck !== null) {
+    const notice = syncNoticeOf(app.model.connections, folder);
+    if (notice !== null) {
       return m(
-        "div.files-stuck-sync",
+        "div.files-sync-notice",
         { role: "status", class: "flex flex-col gap-1 px-3 py-4 text-center type-helper" },
         [
-          m.trust(alertDotIcon(16, "mx-auto text-warning")),
-          m("div", { class: "font-medium text-primary" }, stuck.title),
-          m("div", { class: "text-secondary" }, stuck.detail),
+          notice.tone === "warning"
+            ? m.trust(alertDotIcon(16, "mx-auto text-warning"))
+            : m("span.spinner.spinner--sm", { class: "mx-auto" }),
+          m("div", { class: "font-medium text-primary" }, notice.title),
+          m("div", { class: "text-secondary" }, notice.detail),
         ],
       );
     }

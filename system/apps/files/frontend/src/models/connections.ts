@@ -25,8 +25,73 @@ export interface Share {
   is_reachable: boolean;
   /** Where the synced copy is in the workspace, or null when there is none. */
   synced_copy: string | null;
-  /** Whether the copy holds what the computer does; null for a share with no copy. */
-  sync_state: "current" | "behind" | "unknown" | null;
+  /** How Imbue Studio says the copy stands; null for a share with no copy, or a copy whose computer didn't say. */
+  sync: FolderSync | null;
+}
+
+/** A sync as Imbue Studio on the computer reports it. */
+export interface FolderSync {
+  state:
+    | "STARTING"
+    | "RESTARTING"
+    | "SYNCING"
+    | "SYNCED"
+    | "DEACTIVATING"
+    | "DISCARDING"
+    | "STOPPED"
+    | "UNKNOWN"
+    | "FAILED";
+  /** Why it failed, in Imbue Studio's words. */
+  message: string | null;
+  /** How far the transfer under way has got; both null when none is. */
+  bytes_done: number | null;
+  bytes_total: number | null;
+}
+
+/** How a synced copy stands, as Files says it. */
+export type SyncStatus =
+  /** ``percent`` is how far the transfer under way has got, when Studio said. */
+  | { kind: "syncing"; percent: number | null }
+  | { kind: "current" }
+  | { kind: "failed"; message: string | null }
+  /** Imbue Studio has it switched on but nothing is running: mostly for a moment, as Studio starts and brings its syncs
+   *  back up (one it cannot bring back is a failure, with the reason). A switched-off sync never gets here: Files reads
+   *  only the syncs Studio has on, so a folder whose sync was switched off is a live share. */
+  | { kind: "stalled" }
+  | { kind: "unknown" };
+
+/** Whether any share's copy is carrying something across. */
+export function isAnySyncMoving(connections: Connections | null): boolean {
+  return (connections?.shares ?? []).some((share) => syncStatusOf(share)?.kind === "syncing");
+}
+
+/** How a share's copy stands, or null for a share with no copy. */
+export function syncStatusOf(share: Share): SyncStatus | null {
+  if (share.synced_copy === null) return null;
+  const sync = share.sync;
+  if (sync === null) return { kind: "unknown" };
+  switch (sync.state) {
+    case "FAILED":
+      return { kind: "failed", message: sync.message };
+    case "STOPPED":
+    case "UNKNOWN":
+    case "DEACTIVATING":
+    case "DISCARDING":
+      return { kind: "stalled" };
+    case "SYNCED":
+      return { kind: "current" };
+    case "STARTING":
+    case "RESTARTING":
+    case "SYNCING":
+      return { kind: "syncing", percent: percentOf(sync.bytes_done, sync.bytes_total) };
+  }
+}
+
+/** How far a pass has got, in whole percent short of 100 (it says done when it settles), or null when the sync didn't
+ *  say. */
+function percentOf(done: number | null, total: number | null): number | null {
+  if (done === null || total === null || total <= 0) return null;
+  return Math.min(99, Math.max(0, Math.floor((done / total) * 100)));
 }
 
 export interface Connections {
@@ -34,19 +99,13 @@ export interface Connections {
   shares: Share[];
 }
 
-/** How a share reaches the workspace. */
-export type ShareMode = "two-way" | "one-way" | "live";
-
-export function modeOf(share: Share): ShareMode {
-  if (share.synced_copy === null) return "live";
-  return share.access === "write" ? "two-way" : "one-way";
-}
-
-/** The badge a share wears on its icon: a chain when it is read live, arrows when a copy of it is kept here. */
-export type ShareBadge = "linked" | "synced";
+/** The badge a share wears on its icon: a chain when it is read live, arrows when a copy of it is kept here, turning
+ *  while that copy is being made or a change carried across. */
+export type ShareBadge = "linked" | "synced" | "syncing";
 
 export function shareBadgeOf(share: Share): ShareBadge {
-  return share.synced_copy === null ? "linked" : "synced";
+  if (share.synced_copy === null) return "linked";
+  return syncStatusOf(share)?.kind === "syncing" ? "syncing" : "synced";
 }
 
 /** The share whose own folder or file is at `path` (not one it holds), if any. */
@@ -81,27 +140,30 @@ function shortDeviceName(deviceName: string): string {
   return deviceName.replace(/\.local$/, "");
 }
 
-/** The hover text of a share: where it lives and how it reaches the workspace, whether it is read-only, and how it
- *  stands, never its own name. */
-export function describeShare(share: Share, device: string): string {
-  const where = {
-    "two-way": `Synced with ${device}.`,
-    "one-way": `Synced from ${device}.`,
-    live: `On ${device}.`,
-  }[modeOf(share)];
-  const access = share.access === "read" ? "Read-only." : "";
-  return [where, access, statusOf(share)].filter((part) => part !== "").join(" ");
+/** A share's tooltip: one short line naming the computer and how the share stands, and, when there is one, a quieter
+ *  second line with the number or reason behind it. Never the share's own name, and never which way it syncs,
+ *  which the read-only badge already tells. */
+export interface ShareTooltip {
+  text: string;
+  detail: string | null;
 }
 
-function statusOf(share: Share): string {
-  if (share.synced_copy === null) return share.is_reachable ? "" : "Not answering right now.";
-  switch (share.sync_state) {
-    case "behind":
-      return "Hasn't caught up yet.";
+export function describeShare(share: Share, device: string): ShareTooltip {
+  const status = syncStatusOf(share);
+  if (status === null) {
+    return { text: share.is_reachable ? `On ${device}` : `${device} isn't answering`, detail: null };
+  }
+  switch (status.kind) {
+    case "syncing":
+      return { text: `Syncing with ${device}`, detail: status.percent === null ? null : `${status.percent}% done` };
+    case "current":
+      return { text: `Up to date with ${device}`, detail: null };
+    case "failed":
+      return { text: `Sync with ${device} stopped`, detail: status.message?.replace(/\.$/, "") ?? null };
+    case "stalled":
+      return { text: `Not syncing with ${device} right now`, detail: null };
     case "unknown":
-      return "Can't check: not answering right now.";
-    default:
-      return "Up to date.";
+      return { text: `${device} isn't answering`, detail: null };
   }
 }
 
@@ -112,19 +174,39 @@ export function shareAt(connections: Connections | null, folder: string): Share 
     .sort((a, b) => targetOf(b).length - targetOf(a).length)[0];
 }
 
-/** What to tell someone looking inside `folder` when it is in a copy that has fallen behind its computer, or null
- *  when it is not. */
-export function stuckSyncOf(
-  connections: Connections | null,
-  folder: string,
-): { title: string; detail: string } | null {
+/** What a copy's folder says about its sync, above its entries or in place of them. */
+export interface SyncNotice {
+  tone: "warning" | "progress";
+  title: string;
+  detail: string;
+  /** Whether it shows only while the folder holds nothing, where it stands in for the "Empty" note. */
+  isOnlyWhenEmpty: boolean;
+}
+
+/** What to tell someone looking inside `folder` when it is in a copy whose sync has stopped, or one that is syncing
+ *  (said only while the folder is empty, in place of "Empty"), or null when there is nothing to say. */
+export function syncNoticeOf(connections: Connections | null, folder: string): SyncNotice | null {
   const share = shareAt(connections, folder);
-  if (connections === null || share === undefined || share.sync_state !== "behind") return null;
-  return {
-    title: `Not synced yet from ${deviceNameOf(connections, share.device)}`,
-    detail:
-      "Your computer has files here that haven't arrived. The sync may be stuck: check it in Imbue Studio on your computer.",
-  };
+  if (connections === null || share === undefined) return null;
+  const status = syncStatusOf(share);
+  const device = deviceNameOf(connections, share.device);
+  if (status?.kind === "failed") {
+    return {
+      tone: "warning",
+      title: `Sync with ${device} stopped`,
+      detail: `${status.message === null ? "" : `${status.message} `}Retry it in Imbue Studio on your computer.`,
+      isOnlyWhenEmpty: false,
+    };
+  }
+  if (status?.kind === "syncing") {
+    return {
+      tone: "progress",
+      title: `Syncing from ${device}`,
+      detail: status.percent === null ? "Files appear here as they arrive" : `${status.percent}% done`,
+      isOnlyWhenEmpty: true,
+    };
+  }
+  return null;
 }
 
 /** The server refuses with `{"detail": ...}` (app_schema's ErrorResponse); anything else is read as text. */
@@ -140,8 +222,8 @@ async function failureOf(response: Response, what: string): Promise<ServerError>
   return new ServerError(detail === "" ? `${what} (${response.status})` : detail, response.status);
 }
 
-export async function fetchConnections(signal?: AbortSignal): Promise<Connections> {
-  const response = await fetch(CONNECTIONS_API, { signal });
+export async function fetchConnections(): Promise<Connections> {
+  const response = await fetch(CONNECTIONS_API);
   if (!response.ok) throw await failureOf(response, "Couldn't read your connections");
   return (await response.json()) as Connections;
 }

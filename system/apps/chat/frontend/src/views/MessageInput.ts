@@ -48,16 +48,22 @@ import { chooseFastMode, parseFastModeCommand } from "./fast-mode-limit";
 import {
   getChatById,
   getProvisionalChat,
+  refuseSendToFailedChat,
   isHandoffCancellable,
+  isLaunchInFlight,
   launchChat,
   whenChatRegistered,
 } from "../models/Chats";
 import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityState";
+import { isChatConnecting } from "./ConnectingIndicator";
+import { isAgentProcessDead } from "./agentLiveness";
+import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
 
 const MAX_TEXTAREA_HEIGHT_PX = 240;
@@ -105,10 +111,11 @@ const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
   "compact_unavailable",
 ]);
 
-/** Drop the "Sending…" bubble of a /compact the server ran as a compaction: no transcript turn will
- *  arrive to retire it, and the compaction's own status and chips show what the send did. */
-function dropOutgoingOfRequestedCompaction(chatId: string, outgoingId: string, status: SendStatus | null): void {
-  if (status === "compaction_requested") {
+/** Drop the "Sending…" bubble of a send no transcript turn will retire: a /compact the server ran as a
+ *  compaction (its own status and chips show what the send did), or a message Stop took back while the
+ *  agent came up (it is in the composer again). */
+function dropOutgoingNoTurnWillRetire(chatId: string, outgoingId: string, status: SendStatus | null): void {
+  if (status === "compaction_requested" || status === "withdrawn") {
     dropOutgoing(chatId, outgoingId);
   }
 }
@@ -224,6 +231,18 @@ function restoreToComposer(chatId: string, text: string, attachments: readonly C
 /** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
  *  the page. An element reference in it is attached as a file first, and only the prompt naming it goes in the
  *  text (``stageElementReferences``). */
+// The page's composer box while it is mounted (a page has one), for the chat root to hand it the keyboard.
+let mountedComposerTextarea: HTMLTextAreaElement | null = null;
+
+/** Put the keyboard in the page's composer; false when there is none to take it (not mounted, or disabled). */
+export function focusComposer(): boolean {
+  if (mountedComposerTextarea === null || mountedComposerTextarea.disabled) {
+    return false;
+  }
+  mountedComposerTextarea.focus();
+  return true;
+}
+
 export function prependToComposer(chatId: string, block: string): void {
   if (!block) {
     return;
@@ -279,6 +298,29 @@ function imageFilesFromClipboard(clipboardData: DataTransfer | null): File[] {
   return files;
 }
 
+// The stopped agents this page asked to start because the user began a message to them, while that start
+// runs: one request per stop, not one per keystroke.
+const warmingAgentIds = new Set<string>();
+
+/**
+ * Start a stopped chat's agent as the user begins a message to it, so the send finds the agent up rather
+ * than waiting on it. Best-effort: when this start fails or is still running at the send, the send starts
+ * the agent itself, as it always has.
+ */
+function warmUpStoppedChat(chatId: string): void {
+  const chat = getChatById(chatId);
+  const agentId = chat?.active_agent.agent_id;
+  if (chat === undefined || agentId === undefined || chat.handoff !== null) return;
+  if (!isAgentProcessDead(chat.active_agent.state) || warmingAgentIds.has(agentId)) return;
+  warmingAgentIds.add(agentId);
+  fetch(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/start`), { method: "POST" })
+    .then((response) => {
+      if (!response.ok) console.warn(`Could not start chat ${chatId} ahead of its message (HTTP ${response.status})`);
+    })
+    .catch((err: unknown) => console.warn(`Could not start chat ${chatId} ahead of its message: ${String(err)}`))
+    .finally(() => warmingAgentIds.delete(agentId));
+}
+
 export interface MessageInputAttrs {
   chatId: string | null;
   /** A control at the left of the composer's box, bottom-aligned with it: the phone layout's settings button. */
@@ -312,7 +354,7 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
 function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
     leading ?? null,
-    m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1` }, boxChildren),
+    m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1`, ...appPartAttrs("chat", "composer") }, boxChildren),
   ]);
 }
 
@@ -721,10 +763,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         try {
           // A chat awaiting its first send (a seeded one, one an intake minted, or the one an empty
           // chat list opens on) has no agent yet, and this send is what launches one: on the account
-          // it was minted for, else the signed-in one, else the one the chooser produces. The
-          // message rides the launch as the agent's first, so nothing is sent after it lands.
+          // it was minted for, else the signed-in one, else the one the chooser produces. A seeded
+          // chat's message rides the launch as the agent's first, wrapped in the seed; any other is
+          // sent once the launch is under way, held like any send to a starting chat, so Stop can
+          // take it back until the agent is up. A chat whose launch is already on its way (the
+          // sign-in's) is a creating chat to this send.
           const awaiting = getProvisionalChat(chatId);
-          if (awaiting?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
+          if (
+            awaiting?.phase === "awaiting_first_send" &&
+            getChatById(chatId) === undefined &&
+            !isLaunchInFlight(chatId)
+          ) {
             const accountId = await chooseAccountForFirstSend(awaiting);
             if (accountId === null) {
               // The chooser closed with no sign-in: nothing was launched, and the message is
@@ -732,6 +781,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               dropOutgoing(chatId, outgoingId);
               restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
               m.redraw();
+              return;
+            }
+            if (!awaiting.is_seeded) {
+              await launchChat(chatId, accountId);
+              await sendMessage(chatId, finalText, messageId);
+              refocusAfterSend();
               return;
             }
             await launchChat(chatId, accountId, finalText);
@@ -749,15 +804,19 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             refocusAfterSend();
             return;
           }
-          // A chat still being created has no agent to deliver to yet: the bubble stays
-          // "Sending…" until the create lands, and the send goes out then. A create that
-          // fails rejects here and the message goes back to the composer like any failed send.
-          await whenChatRegistered(chatId);
+          // A chat still being created has no agent to deliver to yet: the chat app holds the send
+          // and delivers it once the create lands, so a page closed meanwhile loses nothing, and the
+          // bubble stays until the turn arrives. A create that has already failed takes no sends,
+          // and the message goes back to the composer like any failed send.
+          // A launch this page posted that the backend has not yet reported creating may not hold
+          // the send yet, so that one send waits for the chat to land.
+          if (isLaunchInFlight(chatId)) await whenChatRegistered(chatId);
+          refuseSendToFailedChat(chatId);
           const status = await sendMessage(chatId, finalText, messageId);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
-          dropOutgoingOfRequestedCompaction(chatId, outgoingId, status);
+          dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
         } catch (err) {
           // The backend confirms delivery before resolving, so a rejection means the message was
           // NOT accepted. A /compact the server declined to run gets the declined-command notice
@@ -1131,9 +1190,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         const messageId = mintMessageId();
         const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
         try {
-          await whenChatRegistered(recovery.chatId);
+          refuseSendToFailedChat(recovery.chatId);
           const status = await sendMessage(recovery.chatId, recovery.sentText, messageId);
-          dropOutgoingOfRequestedCompaction(recovery.chatId, outgoingId, status);
+          dropOutgoingNoTurnWillRetire(recovery.chatId, outgoingId, status);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
           clearActionFailureNotice();
@@ -1359,14 +1418,35 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
+      /**
+       * The chooser for a chat with no provider to start on: the sign-in it produces launches a chat still
+       * awaiting its first send right away, so its agent is up before the user has typed, and the first send
+       * goes to the running agent (carrying the seeded conversation, for a seeded chat). A launch the chat app
+       * refuses lands on the page as a failed create, with its "Try again".
+       */
+      function openProviderChooserForFirstSend(awaitingChatId: string): void {
+        openProviderChooser({
+          onSignedIn: (accountId) => {
+            const awaiting = getProvisionalChat(awaitingChatId);
+            if (awaiting?.phase !== "awaiting_first_send" || getChatById(awaitingChatId) !== undefined) return;
+            if (isLaunchInFlight(awaitingChatId)) return;
+            launchChat(awaitingChatId, accountId).catch((error: unknown) => {
+              console.error(
+                `The chat ${awaitingChatId} could not be started on sign-in: ${describeRequestError(error)}`,
+              );
+            });
+          },
+        });
+      }
+
       /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
        *  notice appears, and its button opens it again once dismissed. */
-      function renderNoProviderNotice(): m.Children {
+      function renderNoProviderNotice(awaitingChatId: string): m.Children {
         return providerNotice(
           "message-input-no-provider",
           "Connect an AI provider to start chatting.",
-          () => openProviderChooser(),
-          () => openProviderChooser(),
+          () => openProviderChooserForFirstSend(awaitingChatId),
+          () => openProviderChooserForFirstSend(awaitingChatId),
         );
       }
 
@@ -1398,28 +1478,33 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const canSendNow = canSend && !isComposerDisabled;
       const blockingNotice = isBlockedBySignedOutAccount
         ? renderSignedOutAccountNotice(chatId)
-        : isBlockedByNoProvider
-          ? renderNoProviderNotice()
+        : isBlockedByNoProvider && chatId !== null
+          ? renderNoProviderNotice(chatId)
           : null;
 
-      // The stop button is only meaningful while the agent has an interruptible
-      // turn in progress -- the same condition that drives the activity indicator
-      // above the input, read straight off the backend-derived activity state. While the
-      // chat switches harness the turn in progress is the switch's own (the summary it asked
-      // for), so the button is the switch's cancel instead, for as long as that is possible.
+      // The stop button is there whenever a message of the user's is in progress: while the
+      // agent has an interruptible turn -- the same condition that drives the status row at the
+      // end of the transcript, read straight off the backend-derived activity state -- and while a sent
+      // message waits for the agent to come up, when Stop takes it back. While the chat switches
+      // harness the turn in progress is the switch's own (the summary it asked for), so the button
+      // is the switch's cancel instead, for as long as that is possible.
       const activityState = chat?.active_agent.activity_state ?? null;
       const isAgentWorking = isWorkingActivityState(activityState);
+      const isConnecting = isChatConnecting(chatId);
       const isUninterruptibleCompaction =
         activityState === COMPACTING_STATE &&
         getHarnessCatalog(chat?.active_agent.harness)?.can_interrupt_compaction === false;
       const isStopButtonVisible =
-        isAgentWorking && !isInterruptInFlight && handoff === null && !isUninterruptibleCompaction;
+        (isAgentWorking || isConnecting) && !isInterruptInFlight && handoff === null && !isUninterruptibleCompaction;
       const isCancelSwitchVisible = handoff !== null && isHandoffCancellable(handoff);
       // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
       const hasQueuedMessages = (chat?.active_agent.queued_messages ?? []).length > 0;
-      const stopButtonLabel = hasQueuedMessages
-        ? "Interrupt agent and bring queued messages to draft area"
-        : "Interrupt agent";
+      const stopButtonLabel =
+        isConnecting && !isAgentWorking
+          ? "Stop sending and bring your message back to draft area"
+          : hasQueuedMessages
+            ? "Interrupt agent and bring queued messages to draft area"
+            : "Interrupt agent";
 
       return m("div", { class: "message-input mx-auto w-full max-w-(--width-message-column)" }, [
         interceptedAuthCommand !== null ? renderAuthCommandNotice(interceptedAuthCommand) : null,
@@ -1473,17 +1558,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   value: messageText,
                   oncreate: (textareaVnode: m.VnodeDOM) => {
                     messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                    mountedComposerTextarea = messageTextareaElement;
                     wasComposerDisabled = isComposerDisabled;
                     refitComposer();
                     focusMessageTextarea();
                   },
                   onupdate: (textareaVnode: m.VnodeDOM) => {
                     messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                    mountedComposerTextarea = messageTextareaElement;
                     refitComposer();
                     if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
                     wasComposerDisabled = isComposerDisabled;
                   },
                   onremove: () => {
+                    if (mountedComposerTextarea === messageTextareaElement) mountedComposerTextarea = null;
                     messageTextareaElement = null;
                   },
                   oninput: (event: Event) => {
@@ -1491,6 +1579,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     messageText = textarea.value;
                     localStorage.setItem(messageTextKey(chatId), messageText);
                     refitComposer();
+                    if (messageText.trim() !== "") warmUpStoppedChat(chatId);
                   },
                   onkeydown: handleKeydown,
                   onpaste: handlePaste,

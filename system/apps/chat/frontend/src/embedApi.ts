@@ -18,6 +18,9 @@ export interface ChatPageEmbedApi {
   prependDraft(text: string): void;
   /** Whether the root draws its phone layout, which the page's composer follows (``compactLayout.ts``). */
   setCompact(isCompact: boolean): void;
+  /** Take the keyboard, as a page does when it first loads: its composer, else the page itself. The root
+   *  calls it when it switches to a page it already held, so the chat the user picked counts as focused. */
+  focus(): void;
 }
 
 declare global {
