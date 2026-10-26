@@ -987,10 +987,12 @@ def test_a_pages_element_menu_drafts_the_reference_into_the_pinned_window(tmp_pa
         _wait_for_own_window_path(server.base_url, client_id, pinned["id"], draft_page_path)
         expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
 
-        # The desktop's own chrome: a right-click on the empty backdrop opens the shell's element menu.
+        # The desktop's own chrome: a right-click on the empty backdrop opens the shell's backdrop menu, whose
+        # desktop rows are followed by the reference rows.
         page.locator("[data-backdrop-area]").click(button="right", position={"x": 700, "y": 20})
-        shell_menu = page.locator(".element-menu")
+        shell_menu = page.locator(".backdrop-menu")
         expect(shell_menu).to_be_visible()
+        expect(shell_menu.locator('[data-menu-row="new-desktop"]')).to_be_visible()
         expect(shell_menu.locator('[data-menu-row="explain-element"]')).to_be_visible()
         page.keyboard.press("Escape")
         expect(shell_menu).to_be_hidden()
