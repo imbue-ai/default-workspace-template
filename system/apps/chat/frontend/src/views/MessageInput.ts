@@ -100,6 +100,7 @@ const TOOLBAR_CLASS =
 const ATTACHMENT_DETAIL_CLASS = "composer-attachment-detail truncate text-[11px] leading-[1.3]";
 
 const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
+const COMPOSER_HINT_KEY_PREFIX = "composer-hint:";
 
 // The kind of the server's refusal of a send to a chat whose account was signed out.
 const ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND = "account_signed_out";
@@ -126,6 +127,10 @@ function messageTextKey(chatId: string): string {
   return `${MESSAGE_TEXT_KEY_PREFIX}${chatId}`;
 }
 
+function composerHintKey(chatId: string): string {
+  return `${COMPOSER_HINT_KEY_PREFIX}${chatId}`;
+}
+
 // Blocks handed back to the composer from OUTSIDE this component (a native shoulder tap whose combined
 // resend failed -- see QueuedMessageView), keyed by agent. The composer's own ``messageText`` is a
 // per-instance closure, so a sibling view cannot merge into it directly; it drops the block here and
@@ -136,7 +141,9 @@ const pendingComposerPrepends = new Map<string, string>();
 
 // The hint a chat's composer shows as its placeholder until its next send (the multiplayer spec, section 9.2:
 // "How do you want to change <app>?"), by chat; set from outside the component, as the prepends are, and taken
-// up on the composer's next view pass, which also focuses it once.
+// up on the composer's next view pass, which also focuses it once. Persisted to localStorage as the prepends
+// are: the chat root sets it from its own document, and the page's composer (another document, with a map of
+// its own) reads it from there when it mounts.
 const composerHints = new Map<string, string>();
 const pendingComposerFocuses = new Set<string>();
 
@@ -233,11 +240,13 @@ function restoreToComposer(chatId: string, text: string, attachments: readonly C
 }
 
 /** Show ``hint`` as ``chatId``'s composer placeholder until its next send, and focus the composer: what the chat
- *  root hands a page when an intake carried a hint (a window's "Chat about this app"). */
+ *  root hands a page when an intake carried a hint (a window's "Chat about this app"), from the page's own document
+ *  when it is loaded, else from the root's, where only the persisted hint reaches the page. */
 export function setComposerHint(chatId: string, hint: string): void {
   if (!hint) {
     return;
   }
+  localStorage.setItem(composerHintKey(chatId), hint);
   composerHints.set(chatId, hint);
   pendingComposerFocuses.add(chatId);
   m.redraw();
@@ -245,7 +254,12 @@ export function setComposerHint(chatId: string, hint: string): void {
 
 /** The hint ``chatId``'s composer shows as its placeholder, or null once a send cleared it or none was set. */
 export function composerHintOf(chatId: string): string | null {
-  return composerHints.get(chatId) ?? null;
+  return composerHints.get(chatId) ?? localStorage.getItem(composerHintKey(chatId));
+}
+
+function clearComposerHint(chatId: string): void {
+  composerHints.delete(chatId);
+  localStorage.removeItem(composerHintKey(chatId));
 }
 
 /** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
@@ -641,6 +655,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       if (currentChatId !== chatId) {
         currentChatId = chatId;
         messageText = localStorage.getItem(messageTextKey(chatId)) ?? "";
+        const persistedHint = localStorage.getItem(composerHintKey(chatId));
+        if (persistedHint !== null && !composerHints.has(chatId)) {
+          // Set by the chat root before this page loaded: taken up as a live hint would be, focusing once.
+          composerHints.set(chatId, persistedHint);
+          pendingComposerFocuses.add(chatId);
+        }
         isInterruptInFlight = false;
         isCancelSwitchInFlight = false;
         // The notices name a command typed for the previous agent, so they must not follow the
@@ -793,7 +813,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           return;
         }
         // The hint asked a question; the send answered it.
-        composerHints.delete(chatId);
+        clearComposerHint(chatId);
         const { text: sentText, finalText, attachments: sentAttachments } = prepared;
 
         // Paint an optimistic "Sending…" bubble at the tail immediately -- the ONE

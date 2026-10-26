@@ -1484,10 +1484,13 @@ describe("MessageInput switching harness", () => {
 
 describe("setComposerHint", () => {
   beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
     localStorage.clear();
   });
 
-  it("shows the hint as the placeholder until a send, and an empty hint is nothing", () => {
+  it("shows the hint as the placeholder until a send, and an empty hint is nothing", async () => {
     const component = MessageInput();
     setComposerHint("agent-1", "How do you want to change Docs?");
     expect(composerHintOf("agent-1")).toBe("How do you want to change Docs?");
@@ -1498,6 +1501,23 @@ describe("setComposerHint", () => {
     expect(other?.attrs?.placeholder).toBe("Type a message...");
     setComposerHint("agent-3", "");
     expect(composerHintOf("agent-3")).toBeNull();
+
+    // The send answers the hint's question: the placeholder goes back to the composer's own words, here and
+    // for a composer that mounts later.
+    const sent = await typeAndSend(component, "agent-1", "Make it blue");
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(findByTag(sent, "textarea")?.attrs?.placeholder).toBe("Type a message...");
+    expect(composerHintOf("agent-1")).toBeNull();
+    expect(localStorage.getItem("composer-hint:agent-1")).toBeNull();
+  });
+
+  it("is taken up by a composer that mounts after the chat root persisted it", () => {
+    // The root's document sets the hint before the chat's page has loaded; the page's composer, a document of its
+    // own, finds it persisted when it first views the chat.
+    localStorage.setItem("composer-hint:agent-4", "How do you want to change Notes?");
+    expect(composerHintOf("agent-4")).toBe("How do you want to change Notes?");
+    const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-4" } } as never), "textarea");
+    expect(textarea?.attrs?.placeholder).toBe("How do you want to change Notes?");
   });
 });
 
