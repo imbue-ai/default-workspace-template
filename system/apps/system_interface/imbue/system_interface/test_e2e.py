@@ -2552,7 +2552,6 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
         entry = page.locator('[data-tray-person="user:user-alice"]')
         expect(entry).to_be_visible(timeout=15000)
         entry.hover()
-        entry.hover()
         card = page.locator("[data-tray-card]")
         expect(card).to_be_visible(timeout=5000)
         expect(card.locator("[data-tray-card-desktops]")).to_contain_text("desktops")
