@@ -71,8 +71,8 @@ DEFAULT_DESKTOP_NAME: Final[str] = "Home"
 DEFAULT_DESKTOP_COLOR: Final[str] = "#2f6b4f"
 DEFAULT_DESKTOP_GLYPH: Final[int] = 0
 
-# Each glyph's signature colour, in glyph order: the palette the desktops wore while the switcher drew them. The
-# shell still fills both fields for a desktop it names itself, since the record keeps them (the multiplayer spec, S7).
+# Each glyph's signature colour, in glyph order. The shell still fills both fields for a desktop it names itself,
+# since the record keeps them (the multiplayer spec, S7).
 DESKTOP_GLYPH_COLORS: Final[tuple[str, ...]] = (
     "#F0603A",
     "#16A34A",
