@@ -906,7 +906,7 @@ class PendingIntakeView(FrozenModel):
     needs_pick: bool = Field(description="Whether the root has to offer the picker before the intake can be applied")
     chat_id: str | None = Field(description="The chat the intake resolved to; null for a choice")
     hint: str | None = Field(
-        default=None, description="A placeholder for the chat's composer, shown once and focused; null for none"
+        default=None, description="A placeholder for the chat's composer until its next send, focused; null for none"
     )
 
 
@@ -926,7 +926,7 @@ class IntakeApplyResponse(FrozenModel):
         description="The first message of a chat awaiting its first send with no account; the root launches it"
     )
     hint: str | None = Field(
-        default=None, description="A placeholder for the chat's composer, shown once and focused; null for none"
+        default=None, description="A placeholder for the chat's composer until its next send, focused; null for none"
     )
 
 

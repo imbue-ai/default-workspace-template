@@ -627,7 +627,7 @@ export interface PendingIntake {
   needsPick: boolean;
   // The chat the intake resolved to; null for a choice the user makes.
   chatId: string | null;
-  // A placeholder for the chat's composer, shown once and focused (the multiplayer spec, section 9.2); null for none.
+  // The chat's composer placeholder until its next send, focused (the multiplayer spec, section 9.2); null for none.
   hint: string | null;
 }
 
@@ -638,7 +638,7 @@ export interface AppliedIntake {
   composerText: string | null;
   // The first message of a chat awaiting its first send with no account: the root launches it with this.
   firstMessage: string | null;
-  // A placeholder for the chat's composer, shown once and focused; null for none.
+  // The chat's composer placeholder until its next send, focused; null for none.
   hint: string | null;
 }
 

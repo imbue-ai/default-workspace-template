@@ -100,7 +100,9 @@ class PendingIntake(FrozenModel):
     chat_id: ChatId | None = Field(description="The chat it resolved to; None for a choice the user makes")
     needs_pick: bool = Field(description="Whether the root has to offer the picker before applying")
     minted_at: float = Field(description="Wall-clock epoch seconds the intake was held at, for expiry")
-    hint: str = Field(default="", description="A placeholder for the chat's composer, once; empty for none")
+    hint: str = Field(
+        default="", description="A placeholder for the chat's composer until its next send; empty for none"
+    )
 
 
 class PendingIntakeStore(MutableModel):
