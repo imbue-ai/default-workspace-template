@@ -25,7 +25,11 @@ from app_manifest.primitives import LaunchPathId
 from app_manifest.registry import RegistryLaunchPath
 from app_manifest.registry import RegistryRow
 from pydantic import Field
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.identity import is_owner_participant
+from workspace_layout.identity import participant_key_of
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPage
@@ -49,6 +53,7 @@ from imbue.system_interface.shell.data_types import ClientDesktopView
 from imbue.system_interface.shell.data_types import DesktopChangeOutcome
 from imbue.system_interface.shell.data_types import ShowChoice
 from imbue.system_interface.shell.data_types import effective_launch_paths
+from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import GridSearchExhaustedError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import WindowNotFoundError
@@ -610,6 +615,8 @@ def desktop_seeded_from(
     # One fresh id per window of ``source``, in that order.
     window_ids: Sequence[WindowId],
     opened_at: datetime,
+    # Whose desktop it is: the visitor it is seeded for (the multiplayer spec, section 8.1).
+    owner: ParticipantKey | None,
 ) -> Desktop:
     """A new desktop holding the source's shortcuts, wallpaper, and a window at each of its windows' paths (desktop
     plan section 3.10): the same pages, as new windows, so closing one closes nothing of the source's. A pinned
@@ -624,6 +631,7 @@ def desktop_seeded_from(
         glyph=glyph,
         wallpaper=source.wallpaper,
         shortcuts=source.shortcuts,
+        owner=owner,
         windows=tuple(
             Window(
                 id=window_id,
@@ -637,6 +645,38 @@ def desktop_seeded_from(
             for window, window_id in zip(source.windows, window_ids, strict=True)
         ),
     )
+
+
+@pure
+def is_desktop_owned_by(desktop: Desktop, identity: RequestIdentity) -> bool:
+    """Whether the desktop is the requester's own (the multiplayer spec, section 8.1): a desktop with no owner is
+    the workspace owner's, under either of the owner's keys, and any other is its owner's alone."""
+    if desktop.owner is None:
+        return is_owner_participant(identity)
+    return desktop.owner == participant_key_of(identity)
+
+
+@pure
+def desktop_owner_of(identity: RequestIdentity) -> ParticipantKey | None:
+    """The ``owner`` a desktop the requester creates is written with: none for the workspace owner (whose desktops
+    carry no key, as every desktop from before the key was kept), else the requester's key."""
+    return None if is_owner_participant(identity) else participant_key_of(identity)
+
+
+@pure
+def reordered_desktops(
+    desktops: Sequence[Desktop], ordered_own_ids: Sequence[DesktopId], identity: RequestIdentity
+) -> tuple[Desktop, ...]:
+    """The desktops with the requester's own in the order ``ordered_own_ids`` gives, which must name exactly those
+    (raises DesktopValueError otherwise); every other desktop keeps its place (the multiplayer spec, section 8.2)."""
+    own_by_id = {desktop.id: desktop for desktop in desktops if is_desktop_owned_by(desktop, identity)}
+    if len(set(ordered_own_ids)) != len(ordered_own_ids) or set(ordered_own_ids) != set(own_by_id):
+        raise DesktopValueError(
+            f"The order must name each of your desktops once ({', '.join(sorted(own_by_id))}), "
+            f"not {', '.join(ordered_own_ids)}"
+        )
+    ordered_own = iter(ordered_own_ids)
+    return tuple(own_by_id[next(ordered_own)] if desktop.id in own_by_id else desktop for desktop in desktops)
 
 
 @pure

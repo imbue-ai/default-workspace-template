@@ -1500,11 +1500,50 @@ describe("the avatar", () => {
 });
 
 describe("desktops and shortcuts", () => {
-  it("creating a desktop switches to it", async () => {
+  it("creating a desktop switches to it, and the next one is the first free Desktop N", async () => {
     const store = await startedStore();
-    await store.createDesktop("Desktop 1", "#123456", 2);
+    await store.createDesktop("Desktop 1");
     expect(store.getState().activeDesktopId).toBe("desktop-1");
     expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["home", "work", "desktop-1"]);
+    await store.createNextDesktop();
+    expect(api.calls).toContain("createDesktop:Desktop 2");
+    expect(store.getState().activeDesktopId).toBe("desktop-2");
+  });
+
+  it("renames a desktop and reorders its own, taking the shell's answer, and tells the user of a refusal", async () => {
+    const store = await startedStore();
+    await store.renameDesktop("work", "Research");
+    expect(api.calls).toContain("renameDesktop:work:Research");
+    expect(store.getState().desktops[1].name).toBe("Research");
+    await store.reorderDesktops(["work", "home"]);
+    expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["work", "home"]);
+    await store.reorderDesktops(["home"]);
+    expect(notices()).toEqual([expect.stringContaining("Could not reorder the desktops")]);
+    expect(store.getState().desktops.map((desktop) => desktop.id)).toEqual(["work", "home"]);
+    api.refusal = "that name is taken";
+    await store.renameDesktop("home", "Work");
+    expect(notices()).toContain("Could not rename the desktop: that name is taken");
+    await store.deleteDesktop("home");
+    expect(notices()).toContain("Could not delete the desktop: that name is taken");
+  });
+
+  it("opens and closes the overview, and a desktop switch closes it", async () => {
+    const store = await startedStore();
+    expect(store.isOverviewOpen()).toBe(false);
+    store.toggleOverview();
+    expect(store.isOverviewOpen()).toBe(true);
+    store.toggleOverview();
+    expect(store.isOverviewOpen()).toBe(false);
+    store.openOverview();
+    await store.switchDesktop("work");
+    expect(store.isOverviewOpen()).toBe(false);
+  });
+
+  it("reads the active desktop's layout as held and another desktop's from the shell", async () => {
+    const store = await startedStore();
+    api.writeLayout("work", CLIENT, { updated_at: null, placements: [placementRecord("win-9")] });
+    expect(await store.readLayoutOf("home")).toBe(store.getState().layout);
+    expect((await store.readLayoutOf("work")).placements.map((placement) => placement.window_id)).toEqual(["win-9"]);
   });
 
   it("adds a shortcut at the first free cell over the current grid, and not a second time", async () => {
@@ -2866,5 +2905,79 @@ describe("the tray's hops", () => {
 
     vi.advanceTimersByTime(TRAY_HOP_MS + 1);
     expect(store.getHopping()).toEqual(new Set());
+  });
+});
+
+describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => {
+  const alices = desktopRecord("alice", { owner: "user:user-alice-0001" });
+  const josh = rosterParticipantRecord("user:user-josh-0001", { display_name: "Josh", is_owner: true });
+  const alice = rosterParticipantRecord("user:user-alice-0001", { display_name: "Alice" });
+
+  async function viewerStore(): Promise<DesktopStore> {
+    api.desktops = [...api.desktops, alices];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    const store = await startedStore();
+    socket.deliver().onRosterUpdated([josh, alice]);
+    return store;
+  }
+
+  it("tells its own desktops from the ones it views, remembers the way back, and stops viewing onto it", async () => {
+    const store = await viewerStore();
+    expect(store.ownDesktops().map((desktop) => desktop.id)).toEqual(["home", "work"]);
+    expect(store.viewedDesktop()).toBeNull();
+    await store.switchDesktop("work");
+    await store.goToDesktop("alice");
+    expect(store.getState().activeDesktopId).toBe("alice");
+    expect(store.viewedDesktop()?.id).toBe("alice");
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(store.viewedDesktop()).toBeNull();
+  });
+
+  it("stops viewing onto its first own desktop when the way back is gone", async () => {
+    const store = await viewerStore();
+    await store.switchDesktop("work");
+    await store.goToDesktop("alice");
+    socket.deliver().onDesktopsUpdated([api.desktops[0], alices]);
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("home");
+  });
+
+  it("a switch onto one of its own ends the viewing without a way back", async () => {
+    const store = await viewerStore();
+    await store.goToDesktop("alice");
+    await store.switchDesktop("home");
+    expect(store.viewedDesktop()).toBeNull();
+    await store.goToDesktop("alice");
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("home");
+  });
+
+  it("rings the owner of a desktop a connected client of somebody else is on, following the clients' moves", async () => {
+    api.clients = [
+      clientRecord("josh-laptop", { participant: VIEWER, active_desktop: "home" }),
+      clientRecord("alice-laptop", { participant: alice.key, active_desktop: "alice" }),
+      clientRecord("alice-phone", { participant: alice.key, active_desktop: "home", is_connected: false }),
+    ];
+    const store = await viewerStore();
+    expect([...store.viewedOwnerKeys()]).toEqual([]);
+    // Alice's laptop moves onto Home: the owner's desktop, so the owner is ringed.
+    deliverDesktopNews("home", 1, null, "alice-laptop");
+    expect([...store.viewedOwnerKeys()]).toEqual([josh.key]);
+    // Josh's laptop moves onto Alice's desktop: Alice is ringed too.
+    deliverDesktopNews("alice", 2, null, "josh-laptop");
+    expect([...store.viewedOwnerKeys()].sort()).toEqual([alice.key, josh.key].sort());
+    // A read of the clients overtakes the news heard.
+    api.clients = api.clients.map((client) => ({
+      ...client,
+      active_desktop: client.participant === VIEWER ? "home" : "alice",
+    }));
+    await store.refreshClients();
+    expect([...store.viewedOwnerKeys()]).toEqual([]);
   });
 });

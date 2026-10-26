@@ -147,6 +147,11 @@ class Desktop(FrozenModel):
     wallpaper: Wallpaper | None = Field(description="The backdrop image; None draws the theme's default")
     shortcuts: tuple[DesktopShortcut, ...] = Field(description="At most one per (app, launch), in insertion order")
     windows: tuple[Window, ...] = Field(description="Every window on the desktop, in opening order")
+    owner: ParticipantKey | None = Field(
+        default=None,
+        description="Whose desktop this is by convention (the multiplayer spec, section 8.1): the key of the person "
+        "it was made for, or None for the workspace owner's, which every desktop from before the key was kept is",
+    )
 
 
 class WindowPlacement(FrozenModel):

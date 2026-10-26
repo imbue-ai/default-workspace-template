@@ -167,26 +167,50 @@ export class FakeDesktopApi implements DesktopApi {
     };
   }
 
-  async createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {
+  /** Whose desktops a create makes and the order route moves: the shell reads the requester's identity; the fake
+   *  is told (null for the workspace owner's). */
+  participant: string | null = null;
+
+  async createDesktop(name: string): Promise<Desktop> {
     this.calls.push(`createDesktop:${name}`);
     this.refuse();
     const created: Desktop = {
       id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       name,
-      color,
-      glyph,
+      color: "#2f6b4f",
+      glyph: 0,
       wallpaper: null,
       shortcuts: [],
       windows: [],
+      owner: this.participant,
     };
     this.desktops = [...this.desktops, created];
     return created;
   }
 
-  async updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop> {
-    this.calls.push(`updateDesktopSettings:${desktopId}:${name}`);
+  async renameDesktop(desktopId: string, name: string): Promise<Desktop> {
+    this.calls.push(`renameDesktop:${desktopId}:${name}`);
     this.refuse();
-    return this.replace({ ...this.desktop(desktopId), name, color, glyph });
+    return this.replace({ ...this.desktop(desktopId), name });
+  }
+
+  /** As the shell does: the requester's own desktops take the order given in the places their desktops held;
+   *  an order that is not exactly their own is refused. */
+  async reorderDesktops(desktopIds: readonly string[]): Promise<Desktop[]> {
+    this.calls.push(`reorderDesktops:${desktopIds.join(",")}`);
+    this.refuse();
+    const own = this.desktops.filter((desktop) => desktop.owner === this.participant);
+    const ownIds = own.map((desktop) => desktop.id);
+    if (
+      [...desktopIds].sort().join() !== [...ownIds].sort().join() ||
+      new Set(desktopIds).size !== desktopIds.length
+    ) {
+      throw new Error(`The order must name each of your desktops once (${ownIds.join(", ")})`);
+    }
+    const ordered = desktopIds.map((desktopId) => this.desktop(desktopId));
+    let next = 0;
+    this.desktops = this.desktops.map((desktop) => (desktop.owner === this.participant ? ordered[next++] : desktop));
+    return [...this.desktops];
   }
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {

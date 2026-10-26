@@ -37,8 +37,9 @@ import {
   mentionRowsOf,
   textRowDisabledReason,
 } from "../model/launch";
-import { applyPresence, getOwnParticipant } from "../model/Presence";
-import { applyRoster } from "../model/Roster";
+import { applyPresence, getOwnIdentity, getOwnParticipant } from "../model/Presence";
+import { OWNER_KEY, applyRoster, getRoster } from "../model/Roster";
+import { isOwnDesktop, ownDesktops, ownerEntryOf } from "../model/Ownership";
 import { applyChatsActivity } from "../model/ChatsActivity";
 import { nextExpiryOf, withBubble, withoutChat, withoutExpired, withoutSpeaker } from "../model/Bubbles";
 import type { BubbleStack } from "../model/Bubbles";
@@ -134,6 +135,7 @@ import {
   cellForAddedShortcut,
   findShortcut,
   isShortcutOf,
+  nextDesktopName,
   resolveLaunchRun,
 } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
@@ -162,8 +164,11 @@ const SOLO_HEAL_GRACE_MS = 1000;
 export interface DesktopApi {
   /** The desktops, the apps, and the clients in one read (contracts.md section 5.5): what a page boots from. */
   fetchInventory(): Promise<Inventory>;
-  createDesktop(name: string, color: string, glyph: number): Promise<Desktop>;
-  updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop>;
+  /** Create a desktop named ``name``, owned by this client's participant; the shell picks the rest. */
+  createDesktop(name: string): Promise<Desktop>;
+  renameDesktop(desktopId: string, name: string): Promise<Desktop>;
+  /** Put the participant's own desktops in this order (every one of theirs, once); answers every desktop. */
+  reorderDesktops(desktopIds: readonly string[]): Promise<Desktop[]>;
   setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop>;
   deleteDesktop(desktopId: string): Promise<string>;
   setDesktopShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<Desktop>;
@@ -471,6 +476,15 @@ export class DesktopStore {
   private isEmbedderPresent = false;
   /** The clients as last read: what each person is looking at (the multiplayer spec, section 6.3). */
   private clients: readonly ClientRecord[] = [];
+  /** Where every client's stored desktop moved since the clients were read, by client id: the
+   *  ``active_desktop_changed`` news is every client's, so the tray can ring the owner of a desktop someone else is
+   *  viewing (the multiplayer spec, section 8.3). */
+  private readonly clientDesktopsHeard = new Map<string, string>();
+  /** Whether the overview is up over the backdrop (the multiplayer spec, section 8.2). */
+  private isOverviewOpenNow = false;
+  /** While this window views a desktop that is not the viewer's own, the desktop it was on, to go back to; null
+   *  when it came from nowhere of its own (section 8.3). */
+  private returnDesktopId: string | null = null;
 
   constructor(private readonly deps: StoreDependencies) {
     this.state = initialDesktopState(deps.clientId, deps.modes);
@@ -1095,7 +1109,95 @@ export class DesktopStore {
       console.warn("[si] could not read the client records", error);
       return;
     }
+    this.clientDesktopsHeard.clear();
     this.deps.redraw();
+  }
+
+  /** The desktop a known client is on: the news heard since the clients were read, else what the read said. */
+  private desktopOfClient(client: ClientRecord): string | null {
+    return this.clientDesktopsHeard.get(client.id) ?? client.active_desktop;
+  }
+
+  /** The keys of the roster entries whose desktop some connected client of somebody else is viewing (the
+   *  multiplayer spec, section 8.3): the tray rings them in their colour. */
+  viewedOwnerKeys(): ReadonlySet<string> {
+    const roster = getRoster();
+    const keys = new Set<string>();
+    for (const client of this.clients) {
+      if (!client.is_connected) continue;
+      const desktopId = this.desktopOfClient(client);
+      const desktop = desktopId === null ? null : desktopById(this.state, desktopId);
+      const owner = desktop === null ? null : ownerEntryOf(desktop, roster);
+      if (owner === null) continue;
+      const isOwnersClient = owner.is_owner
+        ? client.participant === OWNER_KEY || client.participant === owner.key
+        : client.participant === owner.key;
+      if (!isOwnersClient) keys.add(owner.key);
+    }
+    return keys;
+  }
+
+  // Desktops (the multiplayer spec, section 8)
+
+  /** Whether the desktop is the viewer's own (section 8.1). */
+  isOwnDesktop(desktop: Desktop): boolean {
+    return isOwnDesktop(desktop, getOwnIdentity());
+  }
+
+  /** The viewer's own desktops, in the shell's order. */
+  ownDesktops(): Desktop[] {
+    return ownDesktops(this.state.desktops, getOwnIdentity());
+  }
+
+  /** The desktop this window is viewing: the active one, when it is not the viewer's own (section 8.3); null on
+   *  one of the viewer's own. */
+  viewedDesktop(): Desktop | null {
+    const desktop = activeDesktop(this.state);
+    return desktop !== null && !this.isOwnDesktop(desktop) ? desktop : null;
+  }
+
+  /** Go to a desktop from a card or the overview: a switch onto one of the viewer's own, a viewing of anyone
+   *  else's. */
+  goToDesktop(desktopId: string): Promise<void> {
+    return this.switchDesktop(desktopId);
+  }
+
+  /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop. */
+  stopViewing(): Promise<void> {
+    const back = this.returnDesktopId;
+    const target =
+      back !== null && this.state.desktops.some((desktop) => desktop.id === back)
+        ? back
+        : (this.ownDesktops()[0]?.id ?? null);
+    return target === null ? Promise.resolve() : this.switchDesktop(target);
+  }
+
+  isOverviewOpen(): boolean {
+    return this.isOverviewOpenNow;
+  }
+
+  openOverview(): void {
+    if (this.isOverviewOpenNow) return;
+    this.isOverviewOpenNow = true;
+    this.notifyListeners();
+  }
+
+  closeOverview(): void {
+    if (!this.isOverviewOpenNow) return;
+    this.isOverviewOpenNow = false;
+    this.notifyListeners();
+  }
+
+  toggleOverview(): void {
+    if (this.isOverviewOpenNow) this.closeOverview();
+    else this.openOverview();
+  }
+
+  /** A desktop's layout as this client keeps it: the active one's as held, another's read from the shell (the
+   *  overview's thumbnails draw every one of the viewer's desktops). */
+  async readLayoutOf(desktopId: string): Promise<Layout> {
+    if (desktopId === this.state.activeDesktopId && this.state.isLayoutLoaded) return this.state.layout;
+    return this.deps.api.fetchPlacements(desktopId, this.deps.clientId);
   }
 
   /** The chrome that frames this page has said what it can do (``minds:embedder-capabilities``). */
@@ -1226,7 +1328,13 @@ export class DesktopStore {
    *  window heard was overtaken by a later move on its way here, and the echo of a switch this window reported and
    *  has replaced since with another is followed by the later one's own echo. */
   private takeActiveDesktopChanged(event: ActiveDesktopChangedEvent): void {
-    if (event.clientId !== this.deps.clientId || !this.hearDesktopRevision(event.revision)) return;
+    // Every client's move is news for the tray's rings; only this client's moves this window.
+    this.clientDesktopsHeard.set(event.clientId, event.desktopId);
+    if (event.clientId !== this.deps.clientId) {
+      this.deps.redraw();
+      return;
+    }
+    if (!this.hearDesktopRevision(event.revision)) return;
     if (event.reportId !== null && this.reportIds.isSuperseded(event.reportId)) return;
     // News naming the desktop shown still goes to switchDesktop: an earlier follow waiting on a save has yet to move
     // the window, and switchDesktop compares against the desktop only once that save is done.
@@ -1552,6 +1660,8 @@ export class DesktopStore {
     const previous = this.state.activeDesktopId;
     if (previous === desktopId) return;
     this.cancelGesture();
+    this.closeOverview();
+    this.rememberReturnDesktop(previous, desktopId);
     this.dispatch({ type: "desktop_activated", desktopId });
     switch (cause) {
       case "user":
@@ -1567,9 +1677,22 @@ export class DesktopStore {
     await this.refetchLayout();
   }
 
-  async createDesktop(name: string, color: string, glyph: number): Promise<void> {
+  /** Where a switch leaves the way back (the multiplayer spec, section 8.3): a switch onto one of the viewer's own
+   *  desktops ends any viewing, and a switch off one of their own onto somebody else's remembers it. */
+  private rememberReturnDesktop(previous: string | null, next: string): void {
+    const target = desktopById(this.state, next);
+    if (target === null || this.isOwnDesktop(target)) {
+      this.returnDesktopId = null;
+      return;
+    }
+    const from = previous === null ? null : desktopById(this.state, previous);
+    if (from !== null && this.isOwnDesktop(from)) this.returnDesktopId = previous;
+  }
+
+  /** Create a desktop and switch to it; the shell seeds it and makes it the viewer's own. */
+  async createDesktop(name: string): Promise<void> {
     try {
-      const created = await this.deps.api.createDesktop(name, color, glyph);
+      const created = await this.deps.api.createDesktop(name);
       // The broadcast may have landed first: upsert rather than append.
       this.takeDesktop(created);
       await this.switchDesktop(created.id);
@@ -1578,8 +1701,27 @@ export class DesktopStore {
     }
   }
 
-  async updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<void> {
-    this.takeDesktop(await this.deps.api.updateDesktopSettings(desktopId, name, color, glyph));
+  /** Create a desktop named the first free "Desktop N" (the overview's plus, the backdrop menu, the card). */
+  createNextDesktop(): Promise<void> {
+    return this.createDesktop(nextDesktopName(this.state.desktops));
+  }
+
+  async renameDesktop(desktopId: string, name: string): Promise<void> {
+    try {
+      this.takeDesktop(await this.deps.api.renameDesktop(desktopId, name));
+    } catch (error) {
+      this.toast(`Could not rename the desktop: ${(error as Error).message}`);
+    }
+  }
+
+  /** Put the viewer's own desktops in ``desktopIds``' order (every one of theirs, once); the shell's answer, every
+   *  desktop in its new order, is taken whole. */
+  async reorderDesktops(desktopIds: readonly string[]): Promise<void> {
+    try {
+      this.dispatch({ type: "desktops_updated", desktops: await this.deps.api.reorderDesktops(desktopIds) });
+    } catch (error) {
+      this.toast(`Could not reorder the desktops: ${(error as Error).message}`);
+    }
   }
 
   /** This user's deleted desktop and the one seeded in its place, while the notice about them is still owed. */
@@ -1596,9 +1738,14 @@ export class DesktopStore {
     this.takeDesktop(await this.deps.api.setDesktopWallpaper(desktopId, wallpaper));
   }
 
-  /** Delete a desktop; the shell moves this client to the fallback and says so over the socket. */
+  /** Delete a desktop; the shell moves this client to the fallback and says so over the socket. A refusal (the
+   *  last desktop) is told to the user. */
   async deleteDesktop(desktopId: string): Promise<void> {
-    await this.deps.api.deleteDesktop(desktopId);
+    try {
+      await this.deps.api.deleteDesktop(desktopId);
+    } catch (error) {
+      this.toast(`Could not delete the desktop: ${(error as Error).message}`);
+    }
   }
 
   private takeDesktop(desktop: Desktop): void {

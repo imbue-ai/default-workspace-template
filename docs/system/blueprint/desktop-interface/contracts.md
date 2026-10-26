@@ -93,14 +93,16 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
       ],
       "windows": [
         {"id": "win-0123456789abcdef", "app": "chat", "path": "/?chat=agent-3f2a", "title": "Plan the launch", "opened_at": "2026-09-19T14:11:02.824Z", "is_pinned": false, "scope": "linked"}
-      ]
+      ],
+      "owner": null
     }
   ]
 }
 ```
 
-- `desktops` is in creation order; the first is the fallback desktop.
-- `color` is `#RRGGBB`; `glyph` is `0..9`; `wallpaper` is `{"kind": "bundled" | "file", "name"}` or `null`, with `name` matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
+- `desktops` is in display order: creation order, as rearranged by the order route (section 5.2); the first is the fallback desktop.
+- `color` is `#RRGGBB`; `glyph` is `0..9`; both are kept as written and drawn nowhere since the desktops phase of the multiplayer spec (its S7). `wallpaper` is `{"kind": "bundled" | "file", "name"}` or `null`, with `name` matching `^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`.
+- `owner` (default `null`) is whose desktop it is by convention (the multiplayer spec, section 8.1): a participant key for the desktop seeded for a visitor on their first arrival (section 5.5) and for one a visitor creates, `null` for the workspace owner's, which every desktop from before the key was kept is. "Mine" is `owner` null when the requester is the owner (under either of the owner's keys), else `owner` equal to the requester's key. A desktop whose owner has left the roster is left behind: it keeps its key, and the owner's overview lists it under "Left behind" so the owner can view and delete it. There is no access control.
 - `shortcuts`: `target.kind` is `launch` (the only V1 kind); at most one shortcut per `(app, launch)`; `cell.column` and `cell.row` are integers at least 0.
 - `windows` is in opening order; ids are unique across every desktop; `path` and `title` obey section 1; `is_pinned` (default `false`) marks the app's pinned window, and `scope` (default `linked`) is `linked` or `independent` (pinned-taskbar-entries plan section 3.2). An independent window's `path` stays its home path.
 - A file whose `version` is not 1, or that fails validation, is logged and treated as absent: the shell then creates the default desktop. The old `projects.json` is never read. A desktop that still carries the retired `sharing` key is read with the key dropped, and so is a window that still carries the retired `is_settling` key.
@@ -186,8 +188,9 @@ A preview shell (`system-interface --preview`, booted by `preview_app.py` over a
 | Route | Request | Response |
 |---|---|---|
 | `GET /api/desktops` | | `{"desktops": [desktop, ...]}` |
-| `POST /api/desktops` | `{"name", "color", "glyph"}` | `201 desktop`, seeded shortcuts, no windows, wallpaper `null`; `409` on an id conflict |
-| `POST /api/desktops/<id>/settings` | `{"name", "color", "glyph"}` | `200 desktop` |
+| `POST /api/desktops` | `{"name", "color"?, "glyph"?}` | `201 desktop`, seeded shortcuts, no windows, wallpaper `null`, `owner` the requester's key (`null` for the workspace owner), and, absent, the next free glyph and its colour; `409` on an id conflict |
+| `POST /api/desktops/order` | `{"desktop_ids": [...]}` | `200 {"desktops": [desktop, ...]}` in the new order (the multiplayer spec, section 8.2): the ids must be exactly the requester's own desktops, once each (`400` otherwise); they take that order in the places the requester's desktops held, and every other desktop keeps its place. The file's order is the display order, so the inventory and `desktops_updated` list them so too |
+| `POST /api/desktops/<id>/settings` | `{"name", "color"?, "glyph"?}` | `200 desktop`; the rename of the desktops phase sends the name alone, and an absent colour or glyph stays as written |
 | `POST /api/desktops/<id>/wallpaper` | `{"wallpaper": wallpaper \| null}` | `200 desktop`; `404` when the named wallpaper does not exist |
 | `POST /api/desktops/<id>/delete` | | `200 {"fallback_desktop_id"}`; `409` for the last desktop |
 | `POST /api/desktops/<id>/shortcuts` | `{"target", "mode", "cell"}` | `200 desktop`; replaces the entry for the same `(app, launch)`; `400` for an app or launch path the registry does not declare |
@@ -483,7 +486,13 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-window-control="minimize\|maximize\|restore\|close\|menu"` | the controls |
 | `data-shortcut="<app>:<launch>"`, `data-cell="<column>,<row>"`, `data-connecting="true"`, `data-lifted="true"` | each shortcut; `data-cell` is the cell it is drawn in, which for the one a drag holds is the cell it would land in rather than the cell its box is still at; `data-connecting` only while its app is unknown because no app list has landed; `data-lifted` only on the one a drag holds |
 | `data-taskbar`, `data-taskbar-entry="<window-id>"`, `data-launcher-field`, `data-launcher-overlay` | the taskbar, the launcher field, and its menu (the overlay's name kept from the tiles) |
-| `data-tray-widget="desktops"`, `data-desktop-switch="<id>"`, `data-tray-widget="presence"`, `data-presence-user="<user-id>"`, `data-presence-self="true"` | the tray; the Presence widget is drawn only while two or more users are connected, and `data-presence-self` marks the viewer's own entry, drawn last |
+| `data-tray-widget="overview"` | the overview button between the launcher field and the window entries (the multiplayer spec, section 8.2), `aria-pressed` while the overview is open; hidden while viewing |
+| `data-overview`, `data-overview-windows`, `data-overview-window="<window-id>"`, `data-overview-no-windows`, `data-overview-desktops`, `data-overview-desktop="<id>"`, `data-overview-desktop-slot="<id>"`, `data-overview-desktop-name="<id>"`, `data-overview-rename="<id>"`, `data-overview-drop-gap="<n>"`, `data-overview-delete-confirmation="<id>"`, `data-overview-keep`, `data-overview-confirm-delete="<id>"`, `data-overview-new-desktop`, `data-overview-left-behind`, `data-overview-mini-window="<window-id>"` | the overview: its window grid and each tile (`data-minimized` on a minimized window's), the desktops row and each thumbnail (`data-active` on the active desktop's; its slot is what a drag lifts), a thumbnail's name and the field a rename opens, the bar where a dragged thumbnail would land, a deletion's in-place confirmation and its two buttons, the plus, the desktops left behind, and the windows drawn in a thumbnail. A tile carries `data-window-id` and `data-window-content` too, so the live-page layer lays the window's page over it |
+| `data-tray-widget="viewing"`, `data-viewing-desktop="<id>"`, `data-viewing-owner`, `data-stop-viewing`, `data-viewing-outline="<id>"`, `data-viewing="<id>"` | the viewing chrome (the multiplayer spec, section 8.3): the chip that replaces the tray while a desktop that is not the viewer's own is viewed, the owner's name in it, its Stop viewing button, the outline around the whole desktop, and the mark on the layout's root |
+| `data-tray-ringed="true"` | a tray entry whose desktop somebody else's connected client is on, ringed in its colour |
+| `data-wallpaper-chooser="<id>"`, `data-wallpaper="default" \| "<kind>:<name>"`, `.wallpaper-chooser-save` | the wallpaper chooser the backdrop's menu opens, its swatches, and its Save |
+| `data-launcher-window-owner` | the owner's name on a launcher window row whose desktop is not the viewer's |
+| `data-tray-widget="presence"`, `data-presence-user="<user-id>"`, `data-presence-self="true"` | the Presence widget, drawn only while two or more users are connected, and `data-presence-self` marks the viewer's own entry, drawn last |
 | `data-replaced-desktop-notice="<name>"` | the notice that a visitor's desktop was deleted and replaced |
 | `data-live-page="<window-id>"` | each iframe |
 | `data-launcher-row="launch:<app>:<launch>" \| "window:<window-id>" \| "text:<app>:<launch>"` | each row of the launcher's menu |

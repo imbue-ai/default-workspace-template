@@ -43,6 +43,7 @@ function render(overrides: Partial<PeopleStripAttrs> = {}): HTMLElement {
     viewer: josh.key,
     now: NOW,
     hopping: new Set(),
+    ringed: new Set(),
     onPersonClick: vi.fn(),
     onHoverStart: vi.fn(),
     onHoverEnd: vi.fn(),
@@ -119,6 +120,17 @@ describe("PeopleStrip", () => {
     first.dispatchEvent(new MouseEvent("mouseleave"));
     expect(onHoverStart).toHaveBeenCalledWith(bob, first);
     expect(onHoverEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("rings an entry whose desktop somebody else is viewing, in its colour past the bar's", () => {
+    const root = render({ ringed: new Set([bob.key]) });
+    const [first, second] = entries(root);
+    expect(first.getAttribute("data-tray-ringed")).toBe("true");
+    expect(first.style.boxShadow).toContain(bob.color);
+    expect(first.style.boxShadow).toContain("var(--desk-viewing-outline)");
+    expect(first.style.boxShadow).toContain("var(--desk-viewing-ring-gap)");
+    expect(second.getAttribute("data-tray-ringed")).toBeNull();
+    expect(second.style.boxShadow).toBe("");
   });
 
   it("draws nothing with nobody but the workspace agent in the roster", () => {

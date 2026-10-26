@@ -384,17 +384,31 @@ describe("Escape", () => {
     expect(document.querySelector("[data-launcher-overlay]")).toBeNull();
   });
 
-  it("closes a menu opened over the launcher (by keyboard, so the launcher stayed) before the launcher", () => {
+  it("closes a menu opened over the launcher (the backdrop's, by a right-click that leaves the launcher) before the launcher", () => {
     store.openLauncher();
     m.redraw.sync();
-    (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
+    // Cancelable, as a browser's is: the backdrop's handler takes it, so the element menu's document listener
+    // (which yields to a handled event) does not open the element menu over it.
+    (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
+    );
     m.redraw.sync();
-    expect(document.querySelector(".desktops-menu")).not.toBeNull();
+    expect(document.querySelector(".backdrop-menu")).not.toBeNull();
     pressEscape();
-    expect(document.querySelector(".desktops-menu")).toBeNull();
+    expect(document.querySelector(".backdrop-menu")).toBeNull();
     expect(store.isLauncherOpen()).toBe(true);
     pressEscape();
     expect(store.isLauncherOpen()).toBe(false);
+  });
+
+  it("closes the overview before the launcher", () => {
+    store.openLauncher();
+    store.openOverview();
+    m.redraw.sync();
+    expect(document.querySelector("[data-overview]")).not.toBeNull();
+    pressEscape();
+    expect(store.isOverviewOpen()).toBe(false);
+    expect(store.isLauncherOpen()).toBe(true);
   });
 });
 

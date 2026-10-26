@@ -6,6 +6,8 @@
  * With four or more entries the pictures stack, each tucked under the one before it with a ring of the bar's
  * colour, and the row spreads while the pointer is over it. A click on a person opens the Lounge with a mention of
  * them; a click on your own picture or an invited email does nothing. Hovering an entry opens its card (the caller's).
+ * An entry whose desktop somebody else is viewing wears a ring in its colour (the multiplayer spec, section 8.3),
+ * as wide as the viewing outline past a gap of the bar's colour.
  */
 
 import m from "mithril";
@@ -41,6 +43,8 @@ export interface PeopleStripAttrs {
   readonly now: Date;
   /** The keys of the entries hopping now: they just arrived, or a bubble of theirs just appeared. */
   readonly hopping: ReadonlySet<string>;
+  /** The keys of the entries whose desktop somebody else is viewing. */
+  readonly ringed: ReadonlySet<string>;
   readonly onPersonClick: (entry: RosterParticipant) => void;
   readonly onHoverStart: (entry: RosterParticipant, element: HTMLElement) => void;
   readonly onHoverEnd: () => void;
@@ -65,6 +69,7 @@ export const PeopleStrip: m.Component<PeopleStripAttrs> = {
         const isFaded = presenceStateOf(entry, attrs.now) === "offline";
         const isClickable = !isOwn && entry.kind !== "invited";
         const isHopping = attrs.hopping.has(entry.key);
+        const isRinged = attrs.ringed.has(entry.key);
         return m(
           "button",
           {
@@ -73,6 +78,7 @@ export const PeopleStrip: m.Component<PeopleStripAttrs> = {
             "data-tray-person": entry.key,
             "data-tray-self": isOwn ? "true" : null,
             "data-tray-hopping": isHopping ? "true" : null,
+            "data-tray-ringed": isRinged ? "true" : null,
             class:
               "tray-person relative flex shrink-0 items-center justify-center rounded-full border-0 p-0 " +
               "outline-none focus-visible:ring-2 focus-visible:ring-accent " +
@@ -84,7 +90,18 @@ export const PeopleStrip: m.Component<PeopleStripAttrs> = {
               (stacked && index > 0
                 ? "-ml-(--desk-tray-stack-overlap) transition-[margin] group-hover/people:ml-0 "
                 : ""),
-            style: stacked ? { zIndex: String(entries.length - index) } : {},
+            style: {
+              ...(stacked ? { zIndex: String(entries.length - index) } : {}),
+              // Their colour past a gap of the bar's, echoing the viewing outline; it wins over the stack's ring.
+              ...(isRinged
+                ? {
+                    boxShadow:
+                      "0 0 0 var(--desk-viewing-ring-gap) var(--desk-taskbar-surface), " +
+                      "0 0 0 var(--desk-viewing-outline) " +
+                      entry.color,
+                  }
+                : {}),
+            },
             "aria-label": entryTitle(entry, isOwn),
             onclick: () => {
               if (isClickable) attrs.onPersonClick(entry);

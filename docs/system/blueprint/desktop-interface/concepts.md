@@ -41,12 +41,12 @@ The sections below define each one.
 
 ### 2.1 Desktop
 
-A desktop has an id (the slugified name, stable across renames), a name, a colour, a glyph, a **wallpaper**, its **shortcuts**, and its **windows**.
+A desktop has an id (the slugified name, stable across renames), a name, a **wallpaper**, its **shortcuts**, its **windows**, and an **owner** by convention (its record also keeps a colour and a glyph, which nothing draws any more).
 Everything on a desktop is shared truth: every client sees the same desktops with the same windows, shortcuts, and wallpaper.
 A workspace always has at least one desktop; deleting the last one is refused, and a fresh workspace starts with one default desktop.
 There is no unfiltered "Everything" desktop; the launcher is how you reach everything on the machine.
 
-Every desktop is shared. A private mode was considered and dropped: a window holds a resource for everyone, so nothing about a desktop is actually partitioned, and the concept bought nothing. A visiting user is kept off the owner's desktop by being given one of their own on arrival (the plan's section 3.10).
+Every desktop is shared. A private mode was considered and dropped: a window holds a resource for everyone, so nothing about a desktop is actually partitioned, and the concept bought nothing. A visiting user is kept off the owner's desktop by being given one of their own on arrival (the plan's section 3.10), written with their key as its owner (the multiplayer spec, section 8.1); the owner's desktops carry no key. Ownership is what the overview and the person cards list desktops by, and viewing someone else's desktop is switching the client there with the viewing chrome on (section 8.3); it is a convention, not a lock.
 
 ### 2.2 Window
 
@@ -120,7 +120,7 @@ It is a menu, one per client, closed by a choice, a click outside, or Escape, an
 Opening something from it opens a window on the active desktop; the "Start something" intents and the template shelves the New Tab page showed are the Getting Started app's (launcher-and-getting-started plan section 3.6).
 
 The system tray holds the tray widgets, each a self-contained component with one popover.
-V1 ships two: **Presence** (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher.
+V1 shipped two: **Presence** (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher. The multiplayer spec then made the tray the people and the agent (its section 6) and replaced the Desktops widget with the **overview button** between the launcher field and the window entries (its section 8.2): the overview it opens creates, switches, renames, reorders, and deletes desktops, and the wallpaper is set from the backdrop's context menu.
 
 ### 2.9 The word "dock"
 
@@ -189,7 +189,7 @@ flowchart TB
 ## 4. Verbs
 
 Per window: open, raise, minimize, restore, maximize, snap left, snap right, move, resize, navigate, refresh, share, close.
-Per desktop: create, rename, recolour, set the glyph, set the wallpaper, delete, switch to, add, move, and remove shortcuts.
+Per desktop: create, rename, reorder, set the wallpaper, delete, switch to, view (someone else's), add, move, and remove shortcuts.
 Per app: stop, start.
 The agent-facing `workspace-layout` speaks the same verbs, targets exactly one client for the per-client ones, and applies every op to the stored files so no browser needs to be connected.
 

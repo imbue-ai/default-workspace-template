@@ -1,11 +1,12 @@
 /**
- * The desktop's root: the backdrop with its windows and live pages, the taskbar, the launcher
- * menu, the floating menus, the settings dialog, and the avatar chooser, wired to one
- * ``DesktopStore``. The App owns the transient interface state no record holds (which menu is
- * open, the launcher's query and highlight, the selected shortcut, the chooser and the designs it lists),
- * measures the backdrop for the store, binds the gesture source to the document, and hosts the
- * live-page layer, reconciling it after every redraw. A phone-sized viewport gets the phone layout instead
- * (plan-phone-interface.md), over the same store and the same live-page layer.
+ * The desktop's root: the backdrop with its windows and live pages (or the overview over them), the taskbar,
+ * the launcher menu, the floating menus, the wallpaper chooser, the avatar chooser, and the viewing chrome,
+ * wired to one ``DesktopStore``. The App owns the transient interface state no record holds (which menu is
+ * open, the launcher's query and highlight, the selected shortcut, the chooser and the designs it lists, the
+ * overview's thumbnail layouts and the deletion it is confirming), measures the backdrop for the store, binds
+ * the gesture source to the document, and hosts the live-page layer, reconciling it after every redraw. A
+ * phone-sized viewport gets the phone layout instead (plan-phone-interface.md), over the same store and the
+ * same live-page layer.
  */
 
 import m from "mithril";
@@ -21,11 +22,12 @@ import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
-import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
+import type { AvatarDesign, Desktop, DesktopShortcut, Layout, WallpaperListing } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { WORKSPACE_AGENT_KEY } from "../model/Bubbles";
 import { needsYou, workingOn } from "../model/ChatsActivity";
-import { getOwnParticipant } from "../model/Presence";
+import { leftBehindDesktops, ownerEntryOf } from "../model/Ownership";
+import { getOwnIdentity, getOwnParticipant } from "../model/Presence";
 import { getRoster, rosterEntry } from "../model/Roster";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
@@ -38,6 +40,7 @@ import {
   barEntries,
   desktopById,
   draftTargetOf,
+  effectiveWindowTitle,
   entryLook,
   floatingEntries,
   pinnedWindowOf,
@@ -50,7 +53,7 @@ import {
   secondaryTextRow,
 } from "../reducers/launcherRows";
 import type { LauncherMenuRows, LauncherRow } from "../reducers/launcherRows";
-import { findShortcut, nextDesktopName, nextGlyphIndex } from "../reducers/shortcuts";
+import { findShortcut } from "../reducers/shortcuts";
 import { PINNED_ENTRY_ATTRIBUTE, SHORTCUT_ATTRIBUTE } from "../gestures/pointerGestures";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
@@ -58,8 +61,9 @@ import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
-import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
 import { LauncherMenu } from "./LauncherMenu";
+import { GRID_SHARE, gridFor } from "./Overview";
+import type { OverviewAttrs, OverviewGrid, OverviewTile } from "./Overview";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyDropStyle, applyLiftStyle } from "./ShortcutIcon";
 import { applyRectStyle } from "./pixelStyle";
@@ -70,15 +74,16 @@ import { Taskbar } from "./Taskbar";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
+import { WallpaperChooserDialog, isSameWallpaper } from "./WallpaperChooserDialog";
 import { MENU_MIN_WIDTH, openShareSettings, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
 import { windowSizeRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
-import { SQUIGGLE_GLYPHS } from "./squiggles";
 import { AgentCard } from "./tray/AgentCard";
 import { BubbleLayer } from "./tray/BubbleLayer";
 import { PersonCard } from "./tray/PersonCard";
 import { createTrayCardHover } from "./tray/TrayCard";
 import type { OpenCard } from "./tray/TrayCard";
+import type { ViewingChipAttrs } from "./tray/ViewingChip";
 
 /** Which menu is open and what it was opened for. Where it sits, and everything about taking it
  *  down, belongs to the menu component itself. */
@@ -88,8 +93,10 @@ type OpenMenu =
   | { readonly kind: "entry"; readonly windowId: string; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "shortcut"; readonly shortcut: DesktopShortcut; readonly referenceRows: readonly MenuRow[] }
   | { readonly kind: "app-shortcut"; readonly app: string; readonly referenceRows: readonly MenuRow[] }
-  | { readonly kind: "desktops" }
-  | { readonly kind: "desktop"; readonly desktopId: string; readonly referenceRows: readonly MenuRow[] }
+  /** The bare backdrop's menu (the multiplayer spec, section 8.2). */
+  | { readonly kind: "backdrop"; readonly referenceRows: readonly MenuRow[] }
+  /** A desktop thumbnail's menu in the overview. */
+  | { readonly kind: "overview-desktop"; readonly desktopId: string }
   | { readonly kind: "element"; readonly rows: readonly MenuRow[] };
 
 /** The scope of a reference to the shell's own chrome: this client and desktop, and the window whose chrome
@@ -134,9 +141,10 @@ const WINDOW_MOTION_ATTRIBUTE = "data-window-motion";
 /** Marks the backdrop, the area above the taskbar whose pixels the desktop's frames are fractions of. */
 export const BACKDROP_AREA_ATTRIBUTE = "data-backdrop-area";
 
-interface SettingsDialogState {
-  readonly desktopId: string;
-  readonly isDeleting: boolean;
+/** The overview's tiles as computed for one redraw: the pages are laid over them at the grid's scale. */
+interface OverviewTiling {
+  readonly tiles: readonly OverviewTile[];
+  readonly grid: OverviewGrid;
 }
 
 interface AvatarChooserState {
@@ -160,7 +168,16 @@ function isApplePlatform(): boolean {
 
 export function App(): m.Component<AppAttrs> {
   let openMenu: OpenMenu | null = null;
-  let settingsDialog: SettingsDialogState | null = null;
+  /** The desktop whose wallpaper chooser is up. */
+  let wallpaperDialogDesktopId: string | null = null;
+  /** The desktop whose deletion the overview is confirming in place. */
+  let overviewDeletingId: string | null = null;
+  /** This client's layouts of the desktops the overview draws thumbnails of, read as it opens; a desktop whose
+   *  read is on its way has no entry yet. */
+  const overviewLayouts = new Map<string, Layout>();
+  const overviewLayoutReads = new Set<string>();
+  /** The overview's tiling as the last redraw computed it, which the pages follow; null while it is closed. */
+  let overviewTiling: OverviewTiling | null = null;
   let avatarChooser: AvatarChooserState | null = null;
   let wallpapers: WallpaperListing[] | null = null;
   let launcherQuery = "";
@@ -258,10 +275,14 @@ export function App(): m.Component<AppAttrs> {
       m.redraw();
       return;
     }
-    // One layer per Escape: a dialog (the settings dialog, the avatar chooser) takes it through the
+    // One layer per Escape: a dialog (the wallpaper chooser, the avatar chooser) takes it through the
     // Modal's own listener, an open menu through the menu's own, and the layer under it stays.
     if (document.querySelector('.modal-overlay, [data-menu-part="menu"]') !== null) return;
-    if (store?.isLauncherOpen() === true) {
+    if (store?.isOverviewOpen() === true) {
+      // A rename in progress takes its own Escape (the input stops the key); the overview takes the next.
+      closeOverview();
+      m.redraw();
+    } else if (store?.isLauncherOpen() === true) {
       closeLauncher();
       m.redraw();
     } else if (selectedShortcutKey !== null) {
@@ -705,61 +726,51 @@ export function App(): m.Component<AppAttrs> {
     return row === null ? null : [row];
   }
 
-  /** Create a desktop with the next free name and the next squiggle glyph in its colour. */
-  function createNextDesktop(current: DesktopStore): void {
-    const desktops = current.getState().desktops;
-    const glyphIndex = nextGlyphIndex(
-      desktops.map((desktop) => desktop.glyph),
-      SQUIGGLE_GLYPHS.length,
-    );
-    void current.createDesktop(nextDesktopName(desktops), SQUIGGLE_GLYPHS[glyphIndex].color, glyphIndex);
+  function closeOverview(): void {
+    overviewDeletingId = null;
+    overviewLayouts.clear();
+    overviewLayoutReads.clear();
+    store?.closeOverview();
   }
 
-  function rowsOfDesktopsMenu(current: DesktopStore): MenuRow[] {
-    const state = current.getState();
-    const active = state.activeDesktopId;
+  /** The bare backdrop's menu (the multiplayer spec, section 8.2): a new desktop, the overview, and the wallpaper. */
+  function rowsOfBackdropMenu(current: DesktopStore): MenuRow[] {
+    const active = current.getState().activeDesktopId;
     return [
       {
         kind: "action",
         key: "new-desktop",
         label: "New desktop",
-        onSelect: () => createNextDesktop(current),
+        onSelect: () => void current.createNextDesktop(),
+      },
+      {
+        kind: "action",
+        key: "show-all-desktops",
+        label: "Show all desktops",
+        onSelect: () => current.openOverview(),
       },
       { kind: "divider" },
       {
         kind: "action",
-        key: "settings",
-        label: "Desktop settings...",
+        key: "change-wallpaper",
+        label: "Change wallpaper...",
         isDisabled: active === null,
-        onSelect: () => openSettings(active, false),
+        onSelect: () => openWallpaperChooser(active),
       },
+    ];
+  }
+
+  /** A thumbnail's menu in the overview: the deletion, confirmed in place under the thumbnail. */
+  function rowsOfOverviewDesktopMenu(desktopId: string): MenuRow[] {
+    return [
       {
         kind: "action",
         key: "delete",
         label: "Delete desktop...",
         tone: "danger",
-        isDisabled: active === null,
-        onSelect: () => openSettings(active, true),
-      },
-    ];
-  }
-
-  function rowsOfDesktopMenu(current: DesktopStore, desktopId: string): MenuRow[] {
-    return [
-      {
-        kind: "action",
-        key: "switch",
-        label: "Switch to this desktop",
-        onSelect: () => void current.switchDesktop(desktopId),
-      },
-      { kind: "action", key: "settings", label: "Settings...", onSelect: () => openSettings(desktopId, false) },
-      { kind: "divider" },
-      {
-        kind: "action",
-        key: "delete",
-        label: "Delete...",
-        tone: "danger",
-        onSelect: () => openSettings(desktopId, true),
+        onSelect: () => {
+          overviewDeletingId = desktopId;
+        },
       },
     ];
   }
@@ -777,18 +788,18 @@ export function App(): m.Component<AppAttrs> {
         return withReferenceRows(rowsOfShortcutMenu(current, open.shortcut), open.referenceRows);
       case "app-shortcut":
         return withReferenceRows(rowsOfAppShortcutMenu(current, open.app), open.referenceRows);
-      case "desktops":
-        return rowsOfDesktopsMenu(current);
-      case "desktop":
-        return withReferenceRows(rowsOfDesktopMenu(current, open.desktopId), open.referenceRows);
+      case "backdrop":
+        return withReferenceRows(rowsOfBackdropMenu(current), open.referenceRows);
+      case "overview-desktop":
+        return rowsOfOverviewDesktopMenu(open.desktopId);
       case "element":
         return [...open.rows];
     }
   }
 
-  function openSettings(desktopId: string | null, isDeleting: boolean): void {
+  function openWallpaperChooser(desktopId: string | null): void {
     if (desktopId === null) return;
-    settingsDialog = { desktopId, isDeleting };
+    wallpaperDialogDesktopId = desktopId;
     // Read on every open: a file dropped into the wallpapers directory shows up, and a read that failed
     // last time is tried again; the last list stays on screen meanwhile.
     void fetchWallpapers()
@@ -840,15 +851,113 @@ export function App(): m.Component<AppAttrs> {
       desktops: state.desktops,
       apps: state.apps,
       activeDesktopId: state.activeDesktopId,
-      onSwitchDesktop: (desktopId) => {
+      onOpenDesktop: (desktopId) => {
         trayCard.close();
-        void current.switchDesktop(desktopId);
+        void current.goToDesktop(desktopId);
       },
       onNewDesktop: () => {
         trayCard.close();
-        createNextDesktop(current);
+        void current.createNextDesktop();
       },
     });
+  }
+
+  /** Read this client's layout of every desktop the overview draws a thumbnail of, once each while it is open;
+   *  the active desktop's is the store's own. */
+  function ensureOverviewLayouts(current: DesktopStore, desktops: readonly Desktop[]): void {
+    const active = current.getState().activeDesktopId;
+    for (const desktop of desktops) {
+      if (desktop.id === active || overviewLayouts.has(desktop.id) || overviewLayoutReads.has(desktop.id)) continue;
+      overviewLayoutReads.add(desktop.id);
+      void current
+        .readLayoutOf(desktop.id)
+        .then((layout) => {
+          if (overviewLayoutReads.has(desktop.id)) overviewLayouts.set(desktop.id, layout);
+        })
+        .catch((error: unknown) => {
+          console.warn(`[si] could not read the layout of ${desktop.id} for the overview`, error);
+        })
+        .finally(() => m.redraw());
+    }
+  }
+
+  /** The overview's tiles: the active desktop's windows front-most first, at the rectangles they render at. */
+  function overviewTilingOf(current: DesktopStore): OverviewTiling {
+    const state = current.getState();
+    const desktop = activeDesktop(state);
+    const tiles: OverviewTile[] = [];
+    for (const placement of [...activePlacements(state)].reverse()) {
+      const window = desktop?.windows.find((candidate) => candidate.id === placement.window_id);
+      if (window === undefined || placement.is_detached) continue;
+      const app = appByName(state, window.app);
+      tiles.push({
+        window,
+        app,
+        title: effectiveWindowTitle(state, window, app),
+        rect: current.renderedRect(placement),
+        isMinimized: placement.is_minimized,
+      });
+    }
+    const backdrop = current.getBackdropSize();
+    const metrics = current.getMetrics();
+    const gridHeight = backdrop.height * GRID_SHARE;
+    return {
+      tiles,
+      grid: gridFor(
+        tiles.map((tile) => tile.rect),
+        backdrop.width,
+        gridHeight,
+        metrics,
+      ),
+    };
+  }
+
+  function overviewAttrs(current: DesktopStore, desktop: Desktop, tiling: OverviewTiling): OverviewAttrs {
+    const state = current.getState();
+    const ownDesktops = current.ownDesktops();
+    const leftBehind = leftBehindDesktops(state.desktops, getRoster(), getOwnIdentity());
+    ensureOverviewLayouts(current, [...ownDesktops, ...leftBehind]);
+    return {
+      desktop,
+      tiles: tiling.tiles,
+      grid: tiling.grid,
+      backdrop: current.getBackdropSize(),
+      metrics: current.getMetrics(),
+      ownDesktops,
+      leftBehind,
+      apps: state.apps,
+      layoutOf: (desktopId) =>
+        desktopId === state.activeDesktopId ? state.layout : (overviewLayouts.get(desktopId) ?? null),
+      confirmingDeleteId: overviewDeletingId,
+      onRaiseWindow: (windowId) => current.restoreWindow(windowId),
+      onSwitchDesktop: (desktopId) => void current.goToDesktop(desktopId),
+      onRename: (desktopId, name) => void current.renameDesktop(desktopId, name),
+      onReorder: (desktopIds) => void current.reorderDesktops(desktopIds),
+      onDesktopContextMenu: (desktopId, x, y) => {
+        openMenuAt({ kind: "overview-desktop", desktopId }, anchorForPoint(x, y));
+      },
+      onConfirmDelete: (desktopId) => {
+        overviewDeletingId = null;
+        void current.deleteDesktop(desktopId);
+      },
+      onKeepDesktop: () => {
+        overviewDeletingId = null;
+      },
+      onNewDesktop: () => void current.createNextDesktop(),
+      onClose: closeOverview,
+    };
+  }
+
+  /** The viewing chrome's chip (the multiplayer spec, section 8.3), or null on one of the viewer's own desktops. */
+  function viewingChipAttrs(current: DesktopStore, viewed: Desktop | null): ViewingChipAttrs | null {
+    if (viewed === null) return null;
+    const owner = ownerEntryOf(viewed, getRoster());
+    return {
+      desktop: viewed,
+      owner,
+      color: owner?.color ?? "var(--c-text-faint)",
+      onStopViewing: () => void current.stopViewing(),
+    };
   }
 
   function openAvatarChooser(current: DesktopStore): void {
@@ -891,24 +1000,18 @@ export function App(): m.Component<AppAttrs> {
     });
   }
 
-  function settingsDialogView(current: DesktopStore, dialog: SettingsDialogState): m.Children {
-    const desktop = desktopById(current.getState(), dialog.desktopId);
+  function wallpaperDialogView(current: DesktopStore, desktopId: string): m.Children {
+    const desktop = desktopById(current.getState(), desktopId);
     if (desktop === null) return null;
-    return m(DesktopSettingsDialog, {
+    return m(WallpaperChooserDialog, {
       desktop,
       wallpapers,
-      isDeleting: dialog.isDeleting,
-      onSave: async (name, color, glyph, wallpaper) => {
-        await current.updateDesktopSettings(desktop.id, name, color, glyph);
+      onSave: async (wallpaper) => {
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
-        settingsDialog = null;
-      },
-      onDelete: async () => {
-        await current.deleteDesktop(desktop.id);
-        settingsDialog = null;
+        wallpaperDialogDesktopId = null;
       },
       onCancel: () => {
-        settingsDialog = null;
+        wallpaperDialogDesktopId = null;
       },
     });
   }
@@ -924,7 +1027,7 @@ export function App(): m.Component<AppAttrs> {
   }
 
   function launcherMenu(current: DesktopStore): LauncherMenuRows {
-    return launcherRowsOf(current.getState(), launcherQuery);
+    return launcherRowsOf(current.getState(), launcherQuery, { roster: getRoster(), identity: getOwnIdentity() });
   }
 
   /** The row Enter runs: where the arrows or a hover left the highlight while that row is still shown and
@@ -1041,6 +1144,14 @@ export function App(): m.Component<AppAttrs> {
       if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
       draggedWindowId = movingWindowId;
       if (store !== null) pages?.setMountPolicy(mountPolicyOf(store));
+      // The pages lie over the overview's tiles while it is up, at the scale this redraw tiled them at.
+      const tiling = overviewTiling;
+      const tileIds = tiling === null ? null : new Set(tiling.tiles.map((tile) => tile.window.id));
+      pages?.setOverview(
+        tiling === null || tileIds === null
+          ? null
+          : { scaleOf: (windowId) => (tileIds.has(windowId) ? tiling.grid.scale : null) },
+      );
       pages?.reconcile();
     },
     onremove() {
@@ -1104,6 +1215,9 @@ export function App(): m.Component<AppAttrs> {
       const now = new Date();
       const pinnedChat = avatarPinnedEntryOf(state);
       const openCard = trayCard.current();
+      const viewed = current.viewedDesktop();
+      const viewing = viewingChipAttrs(current, viewed);
+      overviewTiling = desktop !== null && current.isOverviewOpen() ? overviewTilingOf(current) : null;
       // The wallpaper is painted here rather than on the backdrop so it spans the whole viewport:
       // the taskbar's translucent surface then has the desktop behind it to blur, and the backdrop
       // stays the viewport less the taskbar height that the geometry rules measure.
@@ -1112,8 +1226,10 @@ export function App(): m.Component<AppAttrs> {
       return m(
         "div",
         {
-          class: "app-layout flex h-dvh flex-col bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
+          class:
+            "app-layout relative flex h-dvh flex-col bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
           style: wallpaperStyle,
+          "data-viewing": viewed === null ? undefined : viewed.id,
         },
         [
           m(UpdateStalenessBanner),
@@ -1167,6 +1283,13 @@ export function App(): m.Component<AppAttrs> {
                         anchorForPoint(point.x, point.y),
                       );
                     },
+                    onBackdropContextMenu: (point, target) => {
+                      openMenuAt(
+                        { kind: "backdrop", referenceRows: referenceRowsFor(current, target, point.x, point.y) },
+                        anchorForPoint(point.x, point.y),
+                      );
+                    },
+                    overview: overviewTiling === null ? null : overviewAttrs(current, desktop, overviewTiling),
                     onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
                     onShowDetachedWindow: (windowId) => current.showDetachedWindow(windowId),
                     onHideWindowGhost: (windowId) => current.minimizeWindow(windowId),
@@ -1220,27 +1343,20 @@ export function App(): m.Component<AppAttrs> {
                 queueMicrotask(() => m.redraw.sync());
               },
             },
-            desktops: {
-              desktops: state.desktops,
-              activeDesktopId: state.activeDesktopId,
-              isMenuOpen: openMenu?.kind === "desktops",
-              onSwitch: (desktopId) => void current.switchDesktop(desktopId),
-              onOpenMenu: (event) => {
-                if (openMenu?.kind === "desktops") menu.close();
-                else openMenuAt({ kind: "desktops" }, anchorForEvent(event));
-              },
-              onDesktopContextMenu: (desktopId, x, y, target) => {
-                openMenuAt(
-                  { kind: "desktop", desktopId, referenceRows: referenceRowsFor(current, target, x, y) },
-                  anchorForPoint(x, y),
-                );
+            overview: {
+              isOpen: current.isOverviewOpen(),
+              onToggle: () => {
+                if (current.isOverviewOpen()) closeOverview();
+                else current.openOverview();
               },
             },
+            viewing,
             tray: {
               roster,
               viewer: getOwnParticipant(),
               now,
               hopping: current.getHopping(),
+              ringed: current.viewedOwnerKeys(),
               isShareOffered: current.getIsEmbedderPresent(),
               avatar: state.avatar,
               workspaceName: state.workspaceName,
@@ -1273,9 +1389,18 @@ export function App(): m.Component<AppAttrs> {
             placementClass: "fixed bottom-[calc(var(--desk-taskbar-height)+var(--desk-toast-gap))]",
           }),
           menuRows === null ? null : menu.view(menuRows),
-          settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
+          wallpaperDialogDesktopId === null ? null : wallpaperDialogView(current, wallpaperDialogDesktopId),
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
+          // Viewing somebody else's desktop: their colour all the way round, the taskbar included (the
+          // multiplayer spec, section 8.3); it runs into the chip at the bar's corner.
+          viewing === null
+            ? null
+            : m("div", {
+                "data-viewing-outline": viewed?.id ?? "",
+                class: "pointer-events-none absolute inset-0 z-(--z-sticky) border-(length:--desk-viewing-outline)",
+                style: { borderColor: viewing.color },
+              }),
         ],
       );
     },

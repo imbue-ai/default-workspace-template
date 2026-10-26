@@ -84,6 +84,17 @@
   --desk-bubble-width: 240px;
   --desk-bubble-radius: 14px;
 
+  /* Desktops (the multiplayer spec, section 8): the overview's tile gap, the strip a tile's title takes above
+     its page, the widest a desktop thumbnail is drawn, and the weight of the outline around a desktop being
+     viewed (the viewed owner's ring in the tray matches it). */
+  --desk-overview-gap: 28px;
+  --desk-overview-tile-title: 28px;
+  --desk-overview-thumbnail-width: 200px;
+  --desk-overview-thumbnail-radius: 8px;
+  --desk-viewing-outline: 5px;
+  /* The gap of the bar's colour between a ringed tray picture and its ring. */
+  --desk-viewing-ring-gap: 2px;
+
   /* The phone layout (plan-phone-interface.md): a bar of home, the pill, and plus above the
      safe-area inset, sheets rising over the page, and the home grid on the wallpaper. */
   --desk-phone-bar-padding: 12px;

@@ -27,6 +27,7 @@ function trayAttrs(overrides: Partial<SystemTrayAttrs> = {}): SystemTrayAttrs {
     viewer: null,
     now: new Date("2026-10-25T12:00:00Z"),
     hopping: new Set(),
+    ringed: new Set(),
     isShareOffered: false,
     avatar: avatarStateRecord(),
     workspaceName: "Atlas",
@@ -88,14 +89,8 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
       onRunSecondary: vi.fn(),
       onRise: vi.fn(),
     },
-    desktops: {
-      desktops: [desktopRecord("home"), desktopRecord("work")],
-      activeDesktopId: "home",
-      isMenuOpen: false,
-      onSwitch: vi.fn(),
-      onOpenMenu: vi.fn(),
-      onDesktopContextMenu: vi.fn(),
-    },
+    overview: { isOpen: false, onToggle: vi.fn() },
+    viewing: null,
     tray: trayAttrs(),
     onEntryClick: vi.fn(),
     onEntryContextMenu: vi.fn(),
@@ -208,29 +203,42 @@ describe("Taskbar", () => {
     expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
   });
 
-  it("carries the launcher field, the Desktops widget with a glyph per desktop, and the tray with the agent and nobody else while the roster is empty", () => {
-    const onSwitchDesktop = vi.fn();
-    const taskbar = render({
-      desktops: {
-        desktops: [desktopRecord("home"), desktopRecord("work")],
-        activeDesktopId: "home",
-        isMenuOpen: false,
-        onSwitch: onSwitchDesktop,
-        onOpenMenu: vi.fn(),
-        onDesktopContextMenu: vi.fn(),
-      },
-    });
+  it("carries the launcher field, the overview button before the entries, and the tray with the agent and nobody else while the roster is empty", () => {
+    const onToggle = vi.fn();
+    const taskbar = render({ overview: { isOpen: false, onToggle } });
     expect(taskbar.querySelector("[data-launcher-field]")).not.toBeNull();
     expect(taskbar.querySelector("[data-tray-agent]")).not.toBeNull();
     expect(taskbar.querySelector("[data-tray-widget='people']")).toBeNull();
     expect(taskbar.querySelector("[data-tray-share]")).toBeNull();
-    const switches = [...taskbar.querySelectorAll("[data-desktop-switch]")];
-    expect(switches.map((element) => element.getAttribute("data-desktop-switch"))).toEqual(["home", "work"]);
-    expect(switches.map((element) => element.getAttribute("data-active"))).toEqual(["true", "false"]);
-    (switches[1] as HTMLElement).click();
-    expect(onSwitchDesktop).toHaveBeenCalledWith("work");
-    expect(taskbar.querySelector('[data-tray-widget="desktops"]')).not.toBeNull();
+    const button = taskbar.querySelector('[data-tray-widget="overview"]') as HTMLElement;
+    expect(button.getAttribute("aria-label")).toBe("Manage Desktops");
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    expect(button.nextElementSibling?.getAttribute("data-taskbar-entries")).toBe("");
+    button.click();
+    expect(onToggle).toHaveBeenCalledTimes(1);
     expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(1);
+  });
+
+  it("replaces the tray with the viewing chip and hides the overview button while viewing somebody else's desktop", () => {
+    const onStopViewing = vi.fn();
+    const alice = rosterParticipantRecord("user:user-alice-0001", { display_name: "Alice", color: "#3b5ba9" });
+    const taskbar = render({
+      viewing: {
+        desktop: desktopRecord("alice", { name: "Alice's desk", owner: alice.key }),
+        owner: alice,
+        color: alice.color,
+        onStopViewing,
+      },
+    });
+    expect(taskbar.querySelector('[data-tray-widget="overview"]')).toBeNull();
+    expect(taskbar.querySelector("[data-system-tray]")).toBeNull();
+    const chip = taskbar.querySelector('[data-tray-widget="viewing"]') as HTMLElement;
+    expect(chip.getAttribute("data-viewing-desktop")).toBe("alice");
+    expect(chip.textContent).toContain("Alice");
+    expect(chip.textContent).toContain("Alice's desk");
+    expect(chip.style.backgroundColor).toBe("rgb(59, 91, 169)");
+    (chip.querySelector("[data-stop-viewing]") as HTMLElement).click();
+    expect(onStopViewing).toHaveBeenCalledTimes(1);
   });
 
   it("draws the share button under a chrome, the people before the viewer, and the agent last", () => {

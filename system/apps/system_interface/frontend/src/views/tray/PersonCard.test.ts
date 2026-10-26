@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
 import { appRecord, clientRecord, desktopRecord, rosterParticipantRecord, windowRecord } from "../../testing/records";
-import { PersonCard, desktopsOf, lookingAtOf } from "./PersonCard";
+import { PersonCard, lookingAtOf } from "./PersonCard";
 import type { PersonCardAttrs } from "./PersonCard";
 
 const NOW = new Date("2026-10-25T12:00:00Z");
@@ -40,7 +40,7 @@ function render(overrides: Partial<PersonCardAttrs> = {}): HTMLElement {
     desktops: [home, work],
     apps: [files],
     activeDesktopId: "home",
-    onSwitchDesktop: vi.fn(),
+    onOpenDesktop: vi.fn(),
     onNewDesktop: vi.fn(),
     ...overrides,
   };
@@ -51,7 +51,7 @@ afterEach(() => {
   unmountViews();
 });
 
-describe("lookingAtOf and desktopsOf", () => {
+describe("lookingAtOf", () => {
   it("reads the top shown window of the newest connected client of theirs, and the owner's clients under either key", () => {
     const older = clientRecord("bob-phone", {
       participant: bob.key,
@@ -71,35 +71,50 @@ describe("lookingAtOf and desktopsOf", () => {
     expect(lookingAtOf(josh, [unsharedOwner], [home, work], [files])?.window.id).toBe("win-1");
     expect(lookingAtOf(bob, [unsharedOwner], [home, work], [files])).toBeNull();
   });
-
-  it("lists every desktop for the owner and none for anyone else, until the desktops phase", () => {
-    expect(desktopsOf(josh, [home, work]).map((desktop) => desktop.id)).toEqual(["home", "work"]);
-    expect(desktopsOf(bob, [home, work])).toEqual([]);
-  });
 });
 
 describe("PersonCard", () => {
-  it("shows the name, the status, what they are looking at with its app icon, and their desktops", () => {
+  it("shows the name, the status, what they are looking at with its app icon, and no desktops while they own none", () => {
     const root = render();
     expect(root.querySelector("[data-tray-card-name]")?.textContent).toBe("Bob");
     expect(root.querySelector("[data-tray-card-status]")?.textContent).toBe("Active");
     expect(root.querySelector("[data-tray-card-looking='win-1']")?.textContent).toContain("Reports");
     expect(root.querySelector("[data-tray-card-looking='win-1']")?.textContent).toContain("Looking at");
-    // Every desktop is the owner's until the desktops phase, so Bob's card lists none.
     expect(root.querySelector("[data-tray-card-desktops]")).toBeNull();
   });
 
-  it("lists your own desktops, marks the one you are viewing, switches on a click, and ends with New desktop", () => {
-    const onSwitchDesktop = vi.fn();
+  it("lists the desktops a person owns, marks the one the viewer is on, and goes to one on a click", () => {
+    const onOpenDesktop = vi.fn();
+    const bobs = desktopRecord("bob", { name: "Bob's desk", owner: bob.key });
+    const root = render({ desktops: [home, work, bobs], activeDesktopId: "bob", onOpenDesktop });
+    const rows = Array.from(root.querySelectorAll<HTMLElement>("[data-tray-card-desktop]"));
+    expect(rows.map((row) => row.getAttribute("data-tray-card-desktop"))).toEqual(["bob"]);
+    expect(root.querySelector("[data-tray-card-desktops]")?.textContent).toContain("Bob's desktops");
+    expect(rows[0].textContent).toContain("Viewing");
+    rows[0].click();
+    expect(onOpenDesktop).toHaveBeenCalledWith("bob");
+    expect(root.querySelector("[data-tray-card-new-desktop]")).toBeNull();
+  });
+
+  it("lists your own desktops (the keyless ones, for the owner), marks the one you are on, switches on a click, and ends with New desktop", () => {
+    const onOpenDesktop = vi.fn();
     const onNewDesktop = vi.fn();
-    const root = render({ entry: josh, isOwn: true, clients: [], onSwitchDesktop, onNewDesktop });
+    const bobs = desktopRecord("bob", { owner: bob.key });
+    const root = render({
+      entry: josh,
+      isOwn: true,
+      clients: [],
+      desktops: [home, bobs, work],
+      onOpenDesktop,
+      onNewDesktop,
+    });
     expect(root.querySelector("[data-tray-card-name]")?.textContent).toBe("Josh (you)");
     const rows = Array.from(root.querySelectorAll<HTMLElement>("[data-tray-card-desktop]"));
     expect(rows.map((row) => row.getAttribute("data-tray-card-desktop"))).toEqual(["home", "work"]);
     expect(rows[0].textContent).toContain("Viewing");
     expect(rows[1].textContent).not.toContain("Viewing");
     rows[1].click();
-    expect(onSwitchDesktop).toHaveBeenCalledWith("work");
+    expect(onOpenDesktop).toHaveBeenCalledWith("work");
     (root.querySelector("[data-tray-card-new-desktop]") as HTMLElement).click();
     expect(onNewDesktop).toHaveBeenCalledTimes(1);
   });
