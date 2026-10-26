@@ -111,7 +111,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           // them -- a greyed row of buttons is still things to look at, and what is left then is the window's
           // name and the controls every window owes you. They come back with the click that focuses the window,
           // and the title stays put, since their column keeps its width.
-          m("span", { class: "flex min-w-0 items-center justify-start" }, [
+          m("span", { class: "flex items-center justify-start" }, [
             !isFocused
               ? null
               : control("menu", "Window menu", glyph("kebab", TITLE_ACTION_GLYPH_SIZE), isMenuOpen, onControl),
