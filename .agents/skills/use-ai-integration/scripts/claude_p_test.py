@@ -68,6 +68,17 @@ def test_task_argv_keeps_tools_and_sets_permission_mode() -> None:
     assert "--no-session-persistence" not in argv
 
 
+def test_web_lookup_argv_names_a_model_only_when_given_one() -> None:
+    """With no model the account's own configured model answers, so ``--model`` is left off."""
+    named = claude_p._web_lookup_argv(
+        "who", system="Return JSON.", model="claude-opus-5-5"
+    )
+    unnamed = claude_p._web_lookup_argv("who", system="Return JSON.", model=None)
+
+    assert named[named.index("--model") + 1] == "claude-opus-5-5"
+    assert "--model" not in unnamed
+
+
 def test_web_lookup_argv_allows_only_the_web_tools_and_does_not_persist() -> None:
     argv = claude_p._web_lookup_argv(
         "find this person", system="Return JSON.", model="claude-haiku-4-5"

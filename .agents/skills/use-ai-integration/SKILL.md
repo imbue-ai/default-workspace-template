@@ -167,7 +167,8 @@ result = claude_p_task(
 A task that only **searches the web** and whose answer comes from pages it reads
 calls `claude_p_web_lookup(prompt, system=...)` instead: it has only `WebSearch`
 and `WebFetch` and runs from a throwaway directory, so instructions on a page
-cannot reach a file, a shell or the repo.
+cannot reach a file, a shell or the repo. It picks no model of its own: pass the
+one a chat is using, or leave it out to run on the account's configured model.
 
 `append_system` layers instructions on the default agent; pass `system` to
 replace it outright. The default agent prompt is many tokens, but it is useful
