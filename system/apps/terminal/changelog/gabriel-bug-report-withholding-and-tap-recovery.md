@@ -1,1 +1,0 @@
-The terminal theme test now expects the wrapper page's unthemed background to be ttyd's dark grey (`#2b2b2b`), the background #950 gave the page. It still expected black, so CI failed it once #950 merged. The same fix is #967.
