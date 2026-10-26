@@ -59,6 +59,9 @@ def chat_id_titled(chats: list[object], title: str) -> str | None:
 def rename_chat(
     base_url: str, title: str, new_title: str, stdout: IO[str], stderr: IO[str]
 ) -> int:
+    """Rename the chat titled exactly ``title`` to ``new_title`` through the chat app at ``base_url``, and
+    answer the script's exit code (the module docstring): what was done goes to ``stdout``, a refusal or a
+    chat app that could not be reached or answered no listing to ``stderr``."""
     try:
         listed = get_json(base_url, CHATS_PATH)
     except ChatAppUnreachableError as exc:
