@@ -3,10 +3,10 @@
  * the launcher menu, the floating menus, the wallpaper chooser, the avatar chooser, and the viewing chrome,
  * wired to one ``DesktopStore``. The App owns the transient interface state no record holds (which menu is
  * open, the launcher's query and highlight, the selected shortcut, the chooser and the designs it lists, the
- * overview's thumbnail layouts and the deletion it is confirming), measures the backdrop for the store, binds
- * the gesture source to the document, and hosts the live-page layer, reconciling it after every redraw. A
- * phone-sized viewport gets the phone layout instead (plan-phone-interface.md), over the same store and the
- * same live-page layer.
+ * desktop whose wallpaper chooser is up, and the overview's tiling as the last redraw computed it), measures the
+ * backdrop for the store, binds the gesture source to the document, and hosts the live-page layer, reconciling
+ * it after every redraw. A phone-sized viewport gets the phone layout instead (plan-phone-interface.md), over
+ * the same store and the same live-page layer.
  */
 
 import m from "mithril";
