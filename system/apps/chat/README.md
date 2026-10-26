@@ -336,13 +336,15 @@ The intake route is how a text enters a chat from outside a chat page
 text, how the receiving chat is chosen (`target`: `new_chat`, `main_chat` (the
 main chat, else the most recently messaged chat, else a new one; the desktop launcher's Enter), `current_chat` from
 the `window_path` the text was typed into, else the main chat, else the most recently messaged chat;
-`chat_selector`, the one chat there is or the user's pick; or `chat` with a
-`chat_id`), and whether the text is sent or drafted (`is_draft`), plus the
-sender's `client_id` and `desktop_id` for the shell's activity log. The chat's
-manifest declares the desktop's `new`, `send`, and `draft` launch paths as POSTs
-onto it with those fields preset, so the launcher's rows, the Getting Started
-tiles, the avatar dialog's "Design your own...", and `workspace-layout open chat
---launch new --param message=...` all arrive here through the shell. The route
+`chat_selector`, the one chat there is or the user's pick; `lounge`, the chat
+titled Lounge, made as a room when there is none; or `chat` with a `chat_id`),
+and whether the text is sent or drafted (`is_draft`), plus the sender's
+`client_id` and `desktop_id` for the shell's activity log. The chat's manifest
+declares the desktop's `main`, `new`, `send`, `draft`, and `lounge` launch
+paths as POSTs onto it with those fields preset, so the launcher's rows, the
+Getting Started tiles, the avatar dialog's "Design your own...", a click on a
+person in the tray, and `workspace-layout open chat --launch new --param
+message=...` all arrive here through the shell. The route
 answers the pure path the shell opens or navigates a window at: `/?chat=<id>` for
 a send or a create it finished on the server (a send is delivered in the
 background unless `is_delivery_awaited`), `/?chat=<id>&intake=<token>` for a
