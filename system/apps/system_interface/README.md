@@ -125,8 +125,9 @@ and the profile cache.
   `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's default shortcut (its `default_shortcut`, else, for
-  an app a program runs, its first launch path taking no text, or its first
-  when every one takes text) on the first read after the registry has been read.
+  an app a program runs, its first launch path taking no text and no mention,
+  or its first when every one takes one) on the first read after the registry
+  has been read.
   An app that registers later has its default shortcut added to every
   desktop once, on the registry change and on every read;
   `default_shortcuts_offered.json` lists the apps offered so far, so a
@@ -307,11 +308,10 @@ Apps read the directory the same way. The shell sends the connected set on
 every WebSocket connect and pushes `presence_updated` -- one entry per
 account, however many tabs; the `owner` record names none and is left out --
 when a heartbeat brings someone in and, from a sweep every 10 seconds, when
-someone's heartbeats have stopped. The taskbar's Presence tray widget draws
-one profile picture per connected account once two or more are connected (one
-is just you): everyone else first, the requester's own entry last with an
-accent ring and "(you)" on its hover text, the own entry being the one whose
-`user_id` the heartbeat's answer names. A changed name or profile picture
+someone's heartbeats have stopped. The taskbar's tray draws the roster (below)
+rather than the connected set: one picture per person, faded while they are
+away, the viewer's own entry last, the own entry being the one whose
+participant key the heartbeat's answer names. A changed name or profile picture
 reaches the tray through the profile cache (below) within five minutes. A
 visitor granted a single app never loads the shell and so never appears: they
 are in one app, not in the workspace.
@@ -365,14 +365,61 @@ everyone's switcher; there is no private mode.
 
 The backdrop shows the active desktop's shortcuts and windows; each window is
 an iframe of an app page under a title bar with the page's title and the
-window menu. The taskbar shows the desktop switcher, one entry per window of
-the active desktop, the launcher button, and the tray (the Presence widget,
-the desktop switcher, the update-staleness banner). A pinned window's entry may float above
-the windows instead, drawn as the workspace's avatar (the chat's default); its
-context menu moves it between the bar and the desktop, switches its style, and
-opens the avatar chooser. Desktops are created, renamed, recoloured,
-re-wallpapered, and deleted from the switcher; shortcuts are added, moved, and
-removed on the backdrop.
+window menu. The taskbar shows the launcher field, the desktop switcher, one
+entry per window of the active desktop, and the tray. A pinned window's entry
+may float above the windows instead, drawn as the workspace's avatar (the
+chat's default); its context menu moves it between the bar and the desktop,
+switches its style, and opens the avatar chooser. Desktops are created,
+renamed, recoloured, re-wallpapered, and deleted from the switcher; shortcuts
+are added, moved, and removed on the backdrop.
+
+**The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
+and `views/tray/`) is where the people and the agent live: the share button (a
+dashed circle with a plus, drawn only under an Imbue Studio chrome that has said
+what it can do, which it asks to open the share panel on the whole workspace
+through `minds:open-share-settings` with no service named), one 32px picture per
+roster entry in roster order (a profile picture, else a monogram on the person's
+colour; a dashed envelope for an invited email; a monogram tile for a visiting
+agent; a neutral silhouette for the owner of a workspace that has not shared;
+faded while the entry is not here; stacked from four entries on, each
+tucked under the one before it, spread while the pointer is over them; hopping
+once when it arrives and when a bubble of its appears), the viewer's own
+picture, and the agent's avatar at 36px in its mood, attending while the pinned
+avatar-style window is focused. Hovering
+an entry for 180ms opens its card above it: a person's shows the picture, the name
+("(you)", "(owner)"; "You" for the owner of an unshared workspace), the status
+line ("Active", "Idle · 4m", "Offline · last seen 3h ago", "Invited"), what they
+are looking at (the window at the top of the stack on the active desktop of
+their newest client, read from `GET /api/clients` as the card opens), and their
+desktops (every desktop is the owner's until the desktops phase gives them
+owners), with "New desktop" on your own; a visiting agent's shows its name,
+"Visiting agent", and the status line. The agent's card shows the face, the
+workspace name with a pencil that opens the avatar chooser, "Working" or
+"Idle", and the chats under "Working on" (status working or background) and
+"Needs you" (attention), a click showing that chat through the same
+`minds:focus-chat` relay the Imbue Studio app's notifications use. Clicking a
+person drafts a mention of them (`@<handle> `) through the first launch path of
+the machine that declares a `mention_param` (the chat app's, into the Lounge),
+into its pinned window on this desktop when there is one; clicking the agent
+runs the primary text action with nothing to send, which opens the main chat;
+clicking your own picture does nothing. The shell names no app in any of this.
+
+The chat app feeds the tray over loopback: `POST /api/bubbles` with every message
+somebody sends and every turn the agent closes with text (`{"speaker", "chat_id",
+"chat_title", "text", "message_id", "mentions"}`), which the shell broadcasts as
+`bubble` to every window but the speaker's own clients (the clients whose records
+carry the speaker's key; the owner's under either of their keys, the account's or
+the synthetic `owner`, whichever the bubble carries); and
+`POST /api/chats-activity` with what every chat is doing (`{"chats": [{"chat_id",
+"title", "status", "kind"}]}`), kept and broadcast as `chats_activity`, and sent on
+connect once reported. A speech bubble is a rounded card hanging above the tray
+with an arrow at the speaker's entry, holding what was said, a dismiss X, and a
+click that opens the chat it was said in; it lives five seconds after its last
+change, a person's new message replaces their bubble, the agent's new message
+within its bubble's lifetime is appended (folding past three lines into "and N
+more"), bubbles of different speakers stack upward in arrival order, and a mention
+of the viewer wears an accent border and stays until dismissed or its chat is
+opened (`model/Bubbles.ts`, a pure reducer; the timers are the store's).
 
 The launcher is a text field ("Open an app or send a message") and the menu it
 opens above itself (`frontend/src/views/LauncherMenu.ts`, its rows computed by

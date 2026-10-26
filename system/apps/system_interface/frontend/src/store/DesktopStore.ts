@@ -33,14 +33,21 @@ import {
   freeTextRowsOf,
   launchPathOf,
   launchRowKindOf,
+  mentionParams,
+  mentionRowsOf,
   textRowDisabledReason,
 } from "../model/launch";
-import { applyPresence } from "../model/Presence";
+import { applyPresence, getOwnParticipant } from "../model/Presence";
+import { applyRoster } from "../model/Roster";
+import { applyChatsActivity } from "../model/ChatsActivity";
+import { nextExpiryOf, withBubble, withoutChat, withoutExpired, withoutSpeaker } from "../model/Bubbles";
+import type { BubbleStack } from "../model/Bubbles";
 import { labelForApp, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
 import type {
   AppRecord,
   AvatarCatalog,
   AvatarDesign,
+  BubbleWire,
   ClientArrival,
   ClientRecord,
   Desktop,
@@ -58,6 +65,7 @@ import type {
   PinStyle,
   Placement,
   PresentUser,
+  RosterParticipant,
   ShortcutMode,
   Wallpaper,
   WindowRecord,
@@ -202,6 +210,18 @@ export const OTHER_WORKSPACE_LINK_NOTICE = "That link belongs to another workspa
 /** What a page shown or a window opened on this client's desktop gets while the client has only pop-outs open. */
 export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
   "It opened on your desktop. Reopen the main Imbue Studio window to see it.";
+
+/** Why a click on a person's tray entry went nowhere: no app takes a mention of them. */
+export const NO_MENTION_APP_REASON = "No app in this workspace can open a chat with them";
+/** Why a chat could not be shown: no app takes the message that shows one. */
+export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
+/** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
+ *  the animation. */
+export const TRAY_HOP_MS = 450;
+/** The message that shows a chat, as the Imbue Studio app's notifications send it (the chat app registers for it). */
+export const FOCUS_CHAT_MESSAGE_TYPE = "minds:focus-chat";
+/** The sender a message of the shell's own is relayed as (for the relay's logs). */
+export const SHELL_SENDER = "system_interface";
 
 /** What the live-page layer does for the store, registered by that layer (it sits above the store). */
 export interface PageDriver {
@@ -438,6 +458,19 @@ export class DesktopStore {
   private isHiddenSinceConnect = false;
   /** The notes a refusal leaves on screen (plan-phone-interface.md's toasts). */
   readonly toasts: ToastQueue;
+  /** The speech bubbles up over the tray (the multiplayer spec, section 6.5), in arrival order. */
+  private bubbles: BubbleStack = [];
+  private bubbleTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The roster entries connected at the last push, so one that just became connected hops. */
+  private connectedKeys: ReadonlySet<string> = new Set();
+  /** The tray entries hopping now, and the one timer that ends the hop. */
+  private hopping: ReadonlySet<string> = new Set();
+  private hopTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Whether an Imbue Studio chrome frames this page and has said what it can do: the tray's share button is
+   *  drawn only then, since it sends the chrome a message. */
+  private isEmbedderPresent = false;
+  /** The clients as last read: what each person is looking at (the multiplayer spec, section 6.3). */
+  private clients: readonly ClientRecord[] = [];
 
   constructor(private readonly deps: StoreDependencies) {
     this.state = initialDesktopState(deps.clientId, deps.modes);
@@ -826,6 +859,12 @@ export class DesktopStore {
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
       onLayoutOp: (event) => this.handleLayoutOp(event),
       onPresenceUpdated: (users) => this.takePresence(users),
+      onRosterUpdated: (participants) => this.takeRoster(participants),
+      onChatsActivity: (chats) => {
+        applyChatsActivity(chats);
+        this.deps.redraw();
+      },
+      onBubble: (bubble) => this.takeBubble(bubble),
     });
     void this.loadAvatarSelection();
     const entryPushesBefore = this.entryPushes;
@@ -851,6 +890,7 @@ export class DesktopStore {
     this.dispatch({ type: "desktops_updated", desktops: inventory.desktops });
     this.dispatch({ type: "workspace_name_updated", workspaceName: inventory.workspace_name });
     this.replacedDesktop = replacedDesktopOf(arrival);
+    this.clients = inventory.clients;
     const own = inventory.clients.find((client) => client.id === this.deps.clientId);
     this.takeFetchedEntries(own, entryPushesBefore);
     if (own !== undefined) {
@@ -962,6 +1002,143 @@ export class DesktopStore {
   private takePresence(users: PresentUser[]): void {
     applyPresence(users);
     this.deps.redraw();
+  }
+
+  /** The bubbles up now, oldest first; the view stacks them upward over the tray. */
+  getBubbles(): BubbleStack {
+    return this.bubbles;
+  }
+
+  /** The tray entries hopping now: they just became connected, or a bubble of theirs just appeared (the
+   *  multiplayer spec, sections 6.2 and 6.5). */
+  getHopping(): ReadonlySet<string> {
+    return this.hopping;
+  }
+
+  /** The roster the shell pushed: the entries that became connected since the last push hop; the first push with
+   *  anyone connected is an arrival of nobody. */
+  private takeRoster(participants: RosterParticipant[]): void {
+    const connected = new Set(participants.filter((entry) => entry.is_connected).map((entry) => entry.key));
+    const arrived = this.connectedKeys.size === 0 ? [] : [...connected].filter((key) => !this.connectedKeys.has(key));
+    this.connectedKeys = connected;
+    applyRoster(participants);
+    this.hop(arrived);
+    this.deps.redraw();
+  }
+
+  /** The tray entries of ``keys`` hop for ``TRAY_HOP_MS``; a hop under way is restarted. */
+  private hop(keys: readonly string[]): void {
+    if (keys.length === 0) return;
+    this.hopping = new Set([...this.hopping, ...keys]);
+    if (this.hopTimer !== null) clearTimeout(this.hopTimer);
+    this.hopTimer = setTimeout(() => {
+      this.hopTimer = null;
+      this.hopping = new Set();
+      this.deps.redraw();
+    }, TRAY_HOP_MS);
+  }
+
+  /** Somebody just said something: their bubble is raised or refreshed (S11), their entry hops, and the next
+   *  timeout is armed. */
+  private takeBubble(bubble: BubbleWire): void {
+    this.hop([bubble.speaker]);
+    this.setBubbles(withBubble(this.bubbles, bubble, getOwnParticipant(), Date.now()));
+  }
+
+  /** Put a speaker's bubble away: it was dismissed, or clicked. */
+  dismissBubble(speaker: string): void {
+    this.setBubbles(withoutSpeaker(this.bubbles, speaker));
+  }
+
+  /** A bubble was clicked: the chat it was said in is shown with its composer focused, which puts it away along
+   *  with every other bubble pointing at that chat; when nothing can show the chat it stays, so a mention of the
+   *  viewer is not lost to a click that opened nothing. */
+  openBubble(speaker: string): void {
+    const bubble = this.bubbles.find((candidate) => candidate.speaker === speaker);
+    if (bubble === undefined) return;
+    void this.showChat(bubble.chatId);
+  }
+
+  private setBubbles(next: BubbleStack): void {
+    this.bubbles = next;
+    this.armBubbleTimer();
+    this.deps.redraw();
+  }
+
+  /** Arm one timer for the next bubble to time out; none while every bubble up is a mention of the viewer. */
+  private armBubbleTimer(): void {
+    if (this.bubbleTimer !== null) {
+      clearTimeout(this.bubbleTimer);
+      this.bubbleTimer = null;
+    }
+    const expiry = nextExpiryOf(this.bubbles);
+    if (expiry === null) return;
+    this.bubbleTimer = setTimeout(
+      () => {
+        this.bubbleTimer = null;
+        this.setBubbles(withoutExpired(this.bubbles, Date.now()));
+      },
+      Math.max(0, expiry - Date.now()),
+    );
+  }
+
+  /** The clients as last read. */
+  getClients(): readonly ClientRecord[] {
+    return this.clients;
+  }
+
+  /** Read the clients again: a person's card opens on what they are looking at now. */
+  async refreshClients(): Promise<void> {
+    try {
+      this.clients = await this.deps.api.fetchClients();
+    } catch (error) {
+      console.warn("[si] could not read the client records", error);
+      return;
+    }
+    this.deps.redraw();
+  }
+
+  /** The chrome that frames this page has said what it can do (``minds:embedder-capabilities``). */
+  setEmbedderPresent(isPresent: boolean): void {
+    this.isEmbedderPresent = isPresent;
+    this.deps.redraw();
+  }
+
+  /** Whether the tray draws its share button: only under a chrome that takes the share-settings message. */
+  getIsEmbedderPresent(): boolean {
+    return this.isEmbedderPresent;
+  }
+
+  /** Show a chat on this client, the way the Imbue Studio app's notifications do (``minds:focus-chat``): the apps
+   *  registered for that message put it on screen; the shell names no app. Once the chat is to be shown, every
+   *  bubble pointing at it is put away, whichever surface asked (a bubble's click, the agent card's rows): its
+   *  mentions are seen (the multiplayer spec, section 7.4). When nothing shows a chat the user is told and the
+   *  bubbles stay, a mention of the viewer among them until its chat opens. */
+  async showChat(chatId: string): Promise<boolean> {
+    if (!isEmbedderMessageHandled(this.state, FOCUS_CHAT_MESSAGE_TYPE)) {
+      this.toast(NO_CHAT_APP_REASON);
+      return false;
+    }
+    this.setBubbles(withoutChat(this.bubbles, chatId));
+    return this.deliverMessage({ type: FOCUS_CHAT_MESSAGE_TYPE, chatId }, SHELL_SENDER);
+  }
+
+  /** A click on a person's tray entry (the multiplayer spec, section 7.5): a mention of them is drafted through the
+   *  first launch path of the machine that takes one, pinned-first as a free-text row runs; with no such launch
+   *  path the user is told. */
+  async mentionPerson(handle: string): Promise<boolean> {
+    const [row] = mentionRowsOf(openableApps(this.state));
+    if (row === undefined) {
+      this.toast(NO_MENTION_APP_REASON);
+      return false;
+    }
+    return this.launchPinnedFirst(row.app.name, row.launchPath.id, mentionParams(row.launchPath, `@${handle} `));
+  }
+
+  /** A click on the agent's tray entry: the main chat opens, with its composer focused, through the primary text
+   *  action with nothing to send (the chat app's "Send to main chat" with no text opens the main chat). */
+  async openMainChat(): Promise<boolean> {
+    return this.startWithText("");
   }
 
   private async applyDeepLink(link: DeepLink): Promise<void> {
@@ -1600,17 +1777,23 @@ export class DesktopStore {
       this.toast(disabledReason);
       return false;
     }
-    const params = freeTextParams(found.launchPath, text);
-    const pinned = pinnedWindowOf(this.state, found.app.name);
+    return this.launchPinnedFirst(found.app.name, found.launchPath.id, freeTextParams(found.launchPath, text));
+  }
+
+  /** Run a launch path with ``params`` into the app's pinned window on the active desktop when there is one (the
+   *  window restored and raised), else into a new window. Whether the shell accepted the launch. */
+  private async launchPinnedFirst(
+    appName: string,
+    launchId: string,
+    params: Record<string, string>,
+  ): Promise<boolean> {
+    const pinned = pinnedWindowOf(this.state, appName);
     if (pinned !== null) {
-      const launched = await this.launchAt(found.app.name, found.launchPath.id, params, {
-        kind: "window",
-        windowId: pinned.id,
-      });
+      const launched = await this.launchAt(appName, launchId, params, { kind: "window", windowId: pinned.id });
       this.restoreWindow(pinned.id);
       return launched !== null;
     }
-    return (await this.launchAt(found.app.name, found.launchPath.id, params, { kind: "new" })) !== null;
+    return (await this.launchAt(appName, launchId, params, { kind: "new" })) !== null;
   }
 
   /** A page's ``shell:draft-text`` (element-reference-menu plan section 6): the text is drafted into the pinned

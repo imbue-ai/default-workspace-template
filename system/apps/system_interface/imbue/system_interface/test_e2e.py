@@ -47,7 +47,9 @@ from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.utils.polling import poll_until
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.config import Config
+from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
 from imbue.system_interface.server import create_application
+from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.testing import files_registry_row
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.testing import message_handling_app
@@ -666,7 +668,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     e2e_server: E2EServer, page: Page
 ) -> None:
     """A fresh browser lands on the home desktop over the bundled wallpaper: the seeded shortcut sits in the first
-    cell, nothing is open, the taskbar carries the launcher field and the Desktops tray widget, and the shell soon
+    cell, nothing is open, the taskbar carries the launcher field and the desktop switcher, and the shell soon
     knows the client with home as its active desktop."""
     _land(page, e2e_server)
     expect(page).to_have_title(_get_json(f"{e2e_server.base_url}/api/inventory")["workspace_name"])
@@ -693,6 +695,45 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
         poll_interval=0.2,
         error_message="the shell never registered the client on the home desktop",
     )
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_tray_stacks_four_people_and_opens_a_persons_card_on_hover(e2e_server: E2EServer, page: Page) -> None:
+    """With three people granted the workspace, the tray's people are four (the three in grant order, then the
+    viewer, the owner of an unshared workspace): stacked, with the viewer's own entry last; resting the pointer on
+    one opens its card, named for the person; the agent's entry is drawn, and no share button is, since no Imbue
+    Studio chrome frames the page (the multiplayer spec, section 6)."""
+    # The grants are read while the workspace is shared, which the share materials beside them say.
+    grants_path = e2e_server.repo_root / DEFAULT_SHARE_GRANTS_PATH
+    grants_path.parent.mkdir(parents=True, exist_ok=True)
+    (e2e_server.repo_root / DEFAULT_SHARE_ENV_PATH).write_text("SHARE_BROKER_URL=https://broker.example\n")
+    grants_path.write_text('[workspace]\nusers = ["user-ann-0001", "user-bob-0002", "user-cal-0003"]\n')
+    _land(page, e2e_server)
+
+    people = page.locator('[data-tray-widget="people"]')
+    expect(people).to_have_attribute("data-stacked", "true")
+    entries = people.locator("[data-tray-person]")
+    expect(entries).to_have_count(4)
+    assert [entry.get_attribute("data-tray-person") for entry in entries.all()] == [
+        "user:user-ann-0001",
+        "user:user-bob-0002",
+        "user:user-cal-0003",
+        "owner",
+    ]
+    expect(entries.last).to_have_attribute("data-tray-self", "true")
+    expect(page.locator("[data-tray-agent]")).to_be_visible()
+    expect(page.locator("[data-tray-share]")).to_have_count(0)
+    expect(page.locator("[data-tray-card]")).to_have_count(0)
+
+    # The row spreads under the pointer, which slides the first entry out from under it (the row's right end stays
+    # put); the second hover lands on the spread row.
+    entries.first.hover()
+    entries.first.hover()
+    card = page.locator("[data-tray-card]")
+    expect(card).to_be_visible(timeout=5000)
+    expect(card.locator("[data-tray-card-name]")).to_have_text(entries.first.get_attribute("aria-label") or "")
+    page.mouse.move(0, 0)
+    expect(card).to_have_count(0, timeout=5000)
 
 
 @pytest.mark.timeout(60, func_only=False)

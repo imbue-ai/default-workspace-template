@@ -1,17 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
 import { placementOf } from "../geometry/stack";
-import { getPresentUsers, resetPresenceForTesting } from "../model/Presence";
+import { getPresentUsers, resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
+import { BUBBLE_LIFETIME_MS } from "../model/Bubbles";
+import { resetChatsActivityForTesting, workingOn } from "../model/ChatsActivity";
+import { getRoster, resetRosterForTesting } from "../model/Roster";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
   appRecord,
+  chatLikeAppRecord,
   clientRecord,
   desktopRecord,
   launchPathRecord,
   placementRecord,
   presentUserRecord,
+  rosterParticipantRecord,
   shortcutRecord,
   themeMetricsRecord,
   windowRecord,
@@ -19,8 +24,11 @@ import {
 import type { GridCell } from "../model/records";
 import {
   DesktopStore,
+  NO_CHAT_APP_REASON,
+  NO_MENTION_APP_REASON,
   OTHER_WORKSPACE_LINK_NOTICE,
   SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
+  TRAY_HOP_MS,
   chooseInitialDesktopId,
 } from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
@@ -29,6 +37,8 @@ import type { ClientStateReport } from "./socket";
 const METRICS = themeMetricsRecord();
 const MODES = { isPhone: false, isTouch: false };
 const CLIENT = "client-1";
+/** The viewer's participant key, as the heartbeat's answer names it. */
+const VIEWER = "user:user-josh-0001";
 const NO_LINK = { desktopId: null, open: null, launch: null };
 const PLAIN_BAR = { mode: "bar", style: "plain", position: null } as const;
 
@@ -123,6 +133,8 @@ beforeEach(() => {
 
 afterEach(() => {
   resetPresenceForTesting();
+  resetRosterForTesting();
+  resetChatsActivityForTesting();
   vi.useRealTimers();
 });
 
@@ -2704,5 +2716,155 @@ describe("the phone layout", () => {
     store.onVisibilityChange(false);
     socket.deliver().onConnected();
     expect(reloaded).toEqual(["win-1"]);
+  });
+});
+
+describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
+  it("keeps the roster and the chats' activity the socket pushes, and redraws for each", async () => {
+    let redraws = 0;
+    const store = await startedStore(() => void (redraws += 1));
+    const before = redraws;
+    socket.deliver().onRosterUpdated([rosterParticipantRecord("user:user-bob-4471", { display_name: "Bob" })]);
+    socket.deliver().onChatsActivity([{ chat_id: "agent-1", title: "Main chat", status: "working", kind: "agent" }]);
+    expect(getRoster().map((entry) => entry.display_name)).toEqual(["Bob"]);
+    expect(workingOn().map((chat) => chat.title)).toEqual(["Main chat"]);
+    expect(redraws).toBe(before + 2);
+    expect(store.getBubbles()).toEqual([]);
+  });
+
+  it("raises a bubble per speaker, puts it away after its lifetime or on a dismiss, and opens its chat on a click", async () => {
+    const store = await startedStore();
+    offerApps(api, socket, [
+      chatLikeAppRecord("chat", {
+        message_handlers: [{ type: "minds:focus-chat", path: "/api/focus-chat", show: null }],
+      }),
+    ]);
+    const bubble = {
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-2",
+      chat_title: "Lounge",
+      text: "hi",
+      message_id: "m-1",
+      mentions: [],
+    };
+    socket.deliver().onBubble(bubble);
+    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", message_id: "m-2" });
+    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual([
+      "user:user-bob-4471",
+      "user:user-carol-1d2e",
+    ]);
+
+    store.dismissBubble("user:user-carol-1d2e");
+    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-bob-4471"]);
+    vi.advanceTimersByTime(BUBBLE_LIFETIME_MS + 1);
+    expect(store.getBubbles()).toEqual([]);
+
+    socket.deliver().onBubble({ ...bubble, message_id: "m-3" });
+    store.openBubble("user:user-bob-4471");
+    await settle();
+    expect(store.getBubbles()).toEqual([]);
+    expect(api.relayedMessages).toEqual([
+      { type: "minds:focus-chat", clientId: CLIENT, payload: { chatId: "agent-2" }, sender: "system_interface" },
+    ]);
+
+    // A mention of the viewer never times out, but showing its chat from anywhere (the agent card's rows) puts
+    // it away; a bubble of another chat stays.
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    socket.deliver().onBubble({ ...bubble, message_id: "m-4", mentions: [VIEWER] });
+    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-5" });
+    vi.advanceTimersByTime(BUBBLE_LIFETIME_MS * 10);
+    expect(store.getBubbles().map((candidate) => [candidate.speaker, candidate.isMention])).toEqual([
+      ["user:user-bob-4471", true],
+    ]);
+    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-6" });
+    expect(await store.showChat("agent-2")).toBe(true);
+    expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-carol-1d2e"]);
+  });
+
+  it("drafts a mention of a clicked person through the mention launch path into the pinned window, and opens the main chat for the agent", async () => {
+    const store = await startedStore();
+    const chat = chatLikeAppRecord("chat", {
+      launch_paths: [
+        ...chatLikeAppRecord("chat").launch_paths,
+        launchPathRecord({
+          id: "lounge",
+          label: "Mention in the Lounge",
+          path: "/api/chats/intake",
+          method: "POST",
+          params: ["message"],
+          presets: { target: "lounge", is_draft: "true" },
+          mention_param: "message",
+        }),
+      ],
+    });
+    offerApps(api, socket, [chat]);
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-chat", "chat", "/", { is_pinned: true })] })];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+
+    expect(await store.mentionPerson("Bob")).toBe(true);
+    expect(api.calls).toContain('launch:home:chat:lounge:{"message":"@Bob "}:window:win-chat');
+    expect(await store.openMainChat()).toBe(true);
+    expect(api.calls).toContain("launch:home:chat:new:{}:window:win-chat");
+  });
+
+  it("tells the user when no app takes a mention or shows a chat, keeping the chat's bubbles, and offers the share button only under a chrome", async () => {
+    const store = await startedStore();
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    socket.deliver().onBubble({
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-1",
+      chat_title: "Lounge",
+      text: "@Josh look",
+      message_id: "m-1",
+      mentions: [VIEWER],
+    });
+    expect(await store.mentionPerson("Bob")).toBe(false);
+    expect(await store.showChat("agent-1")).toBe(false);
+    store.openBubble("user:user-bob-4471");
+    await settle();
+    expect(notices()).toEqual([NO_MENTION_APP_REASON, NO_CHAT_APP_REASON, NO_CHAT_APP_REASON]);
+    // Nothing opened the chat, the click on its bubble included, so the mention of the viewer is still up.
+    expect(store.getBubbles().map((bubble) => [bubble.speaker, bubble.isMention])).toEqual([
+      ["user:user-bob-4471", true],
+    ]);
+    expect(store.getIsEmbedderPresent()).toBe(false);
+    store.setEmbedderPresent(true);
+    expect(store.getIsEmbedderPresent()).toBe(true);
+  });
+});
+
+describe("the tray's hops", () => {
+  it("hops an entry that just became connected and a speaker whose bubble just appeared, for one hop's length", async () => {
+    const store = await startedStore();
+    const bob = rosterParticipantRecord("user:user-bob-4471", { is_connected: false });
+    const carol = rosterParticipantRecord("user:user-carol-1d2e", { is_connected: true });
+    // The first roster with anyone connected is an arrival of nobody.
+    socket.deliver().onRosterUpdated([bob, carol]);
+    expect(store.getHopping()).toEqual(new Set());
+
+    socket.deliver().onRosterUpdated([{ ...bob, is_connected: true }, carol]);
+    expect(store.getHopping()).toEqual(new Set([bob.key]));
+    socket.deliver().onBubble({
+      speaker: carol.key,
+      chat_id: "agent-2",
+      chat_title: "Lounge",
+      text: "hi",
+      message_id: "m-1",
+      mentions: [],
+    });
+    expect(store.getHopping()).toEqual(new Set([bob.key, carol.key]));
+
+    vi.advanceTimersByTime(TRAY_HOP_MS + 1);
+    expect(store.getHopping()).toEqual(new Set());
   });
 });

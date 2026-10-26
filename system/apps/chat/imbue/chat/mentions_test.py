@@ -101,7 +101,8 @@ def test_a_room_waits_on_the_chats_its_mentions_reached_and_not_on_one_that_refu
         on_pending_changed=lambda: None,
     )
     try:
-        handler.act(lounge, "Lounge", "m-1", "@agent and @Newsreader, look", _BOB, "Bob")
+        text = "@agent and @Newsreader, look"
+        handler.act(handler.resolve(text), lounge, "Lounge", "m-1", text, _BOB, "Bob")
 
         snapshot = manager.get_chat_snapshot(str(lounge))
         assert snapshot is not None and snapshot.awaiting_chat_ids == (_MAIN,)

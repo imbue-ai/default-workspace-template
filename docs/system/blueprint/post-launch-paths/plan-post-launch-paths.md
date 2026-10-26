@@ -33,7 +33,7 @@ The principles of the workspace app model hold: one owner per fact; the shell is
 | Envelope | The fields the shell adds to every POST launch beside the params: the requesting client, its desktop, and the path of the window being launched into |
 | Launch target | Where the shell puts the page the launch answers: a new window, an existing window at that path (focus), or a named window this client points at it |
 | Intake | The chat app's one request for text arriving from outside a chat page: the text, how the receiving chat is chosen, and whether it is sent or drafted |
-| Intake target | How the receiving chat is chosen: `new_chat`, `main_chat`, `current_chat`, `chat_selector`, or `chat` (an explicit id) |
+| Intake target | How the receiving chat is chosen: `new_chat`, `main_chat`, `current_chat`, `chat_selector`, `lounge` (the chat titled Lounge; the multiplayer spec, section 7.5), or `chat` (an explicit id) |
 | Pending intake | An intake the chat app could not complete on the server (a draft, or a choice the user has to make), held under a one-time token until the chat root applies it |
 | Provisional chat | A chat the chat app has minted whose first agent does not exist yet (`ProvisionalChat` today); the `awaiting_first_send` phase now covers unseeded chats too |
 
@@ -118,7 +118,7 @@ A `desktops.json` written by the previous release carries `is_settling` on each 
 | Field | Type | Meaning |
 |---|---|---|
 | `message` | string | The text; may be empty for a `new_chat` that starts with nothing |
-| `target` | `new_chat` \| `main_chat` \| `current_chat` \| `chat_selector` \| `chat` | How the receiving chat is chosen |
+| `target` | `new_chat` \| `main_chat` \| `current_chat` \| `chat_selector` \| `lounge` \| `chat` | How the receiving chat is chosen |
 | `chat_id` | string, default `""` | The chat, when `target` is `chat` |
 | `is_draft` | bool, default false | Put the text in the chat's composer, unsent, instead of sending it |
 | `account_id` | string, default `""` | The account a new chat starts on; empty picks the default, as a create does |
@@ -133,6 +133,7 @@ The receiving chat resolves in this order:
 - `main_chat`: the main chat; else the chat most recently messaged; else the rules of `new_chat`.
 - `chat_selector`: the chats that are agents (a provisional chat cannot take a message).
   With none, the rules of `new_chat`; with one, that chat; with more, the choice is the user's, and the intake is held (section 3.6).
+- `lounge`: the chat titled Lounge, of either kind, made as a room when there is none (the multiplayer spec, section 7.5).
 - `new_chat`: the account is `account_id`, else the workspace's default (the pinned default, else the most recently used).
   With an account and `is_draft` false, the chat is created through the existing create path with `message` as its first message, exactly as the chat root's New Chat button creates one.
   Otherwise (no account, or a draft) the app mints an unseeded provisional chat in the `awaiting_first_send` phase (section 3.7) and holds the intake for it.
@@ -299,7 +300,7 @@ The op route's `open` uses the same resolution (`_open_target` returns the answe
 - `chat_intakes.py` (new): the resolution of section 3.5 as pure functions over the manager's chat snapshots and provisional chats (`chat_selected_by_path`, `most_recently_messaged_chat`, `resolve_intake_target`), and `PendingIntakeStore` (mint, get, take, discard, expiry, under a lock).
 - `agent_manager.py`: `mint_awaiting_chat(account_id) -> ProvisionalChat` (an unseeded `awaiting_first_send` chat with a minted name, broadcast like a seeded one); `create_chat` with a `chat_id` accepts an unseeded awaiting chat, whose launch brings the message.
 - `server.py`: `POST /api/chats/intake`, the three `/api/chats/intakes/<token>` routes; `/new` and `/send` are no longer served (the root is served at `/` alone).
-- `app.toml`: `root` stays a GET at `/` with no params (the chat list; the launcher's focus row and the desktop shortcut); `main`, `new`, `send`, and `draft` are POST launch paths at `/api/chats/intake` with the presets of section 3.5 (`target = main_chat`, first so it is the launcher's Enter; `target = new_chat`; `target = chat_selector`; `target = current_chat` and `is_draft = "true"`), `main`, `new` and `send` with `text_param = "message"` and `draft` with `draft_param = "message"`.
+- `app.toml`: `root` stays a GET at `/` with no params (the chat list; the launcher's focus row and the desktop shortcut); `main`, `new`, `send`, `draft`, and `lounge` are POST launch paths at `/api/chats/intake` with the presets of section 3.5 (`target = main_chat`, first so it is the launcher's Enter; `target = new_chat`; `target = chat_selector`; `target = current_chat` and `is_draft = "true"`; `target = lounge` and `is_draft = "true"`), `main`, `new` and `send` with `text_param = "message"`, `draft` with `draft_param = "message"`, and `lounge` with `mention_param = "message"` (the multiplayer spec, section 7.5).
 
 ### 7.2 Frontend
 

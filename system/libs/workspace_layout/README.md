@@ -89,9 +89,15 @@ answer shapes live in one place the shell and its callers share.
   answer).
 - `workspace_layout.interfaces.ShellLayoutInterface`: `show`, `open`, `focus`,
   `navigate`, `place`, `close`, `refresh`, `connected_clients`, `desktops`,
-  `roster` (everyone who may be in the workspace, in the shell's order), and
-  `record_client_activity` (best-effort: an unreachable or failing shell is a
-  debug log, one that refuses the report a warning, and it never raises).
+  `roster` (everyone who may be in the workspace, in the shell's order),
+  `record_client_activity`, `post_bubble`, and `report_chats_activity` (the
+  last three best-effort: an unreachable or failing shell is a debug log, one
+  that refuses the report a warning, and they never raise).
+- `workspace_layout.feed`: `BubblePost` (`POST /api/bubbles`: who said what,
+  in which chat, mentioning whom, for the speech bubble over their tray entry)
+  and `ChatsActivityReport` (`POST /api/chats-activity`: every chat's
+  `ChatActivity`, with its `ChatActivityStatus` and `ChatActivityKind`), the
+  multiplayer spec's sections 6.5 and 6.4.
 - `workspace_layout.client`: `ShellLayoutClient` (the shell over loopback, with
   the requester every op carries and a per-request timeout), `DisconnectedShell`
   (nobody connected and nothing to show on: the stand-in where no shell is

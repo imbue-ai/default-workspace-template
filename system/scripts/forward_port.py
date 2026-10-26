@@ -23,8 +23,8 @@ An app with a directory ships ``system/apps/<package>/app.toml`` (see
 and copies its static fields onto the row: ``display_name``, ``description``, ``api_schema_path``, ``critical``,
 ``stop_when_no_windows``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
-the names of the params, and ``method``, ``presets``, ``text_param``, and
-``draft_param`` when given), ``pin`` (path, and style, scope, and
+the names of the params, and ``method``, ``presets``, ``text_param``,
+``draft_param``, and ``mention_param`` when given), ``pin`` (path, and style, scope, and
 default_mode when given), ``window_closed_path``, and ``message_handlers`` (type, and path or show and showing);
 the icon is read from the file the manifest names, relative to the manifest. Every manifest
 field is authoritative on every call, so a re-registration with a changed manifest updates the row.
@@ -138,7 +138,20 @@ RESERVED_NAME_PREFIXES = ("host-", "agent-")
 # the first label of every standalone supervisord program with a hyphen in
 # its name: an app named ``share`` would claim ``share-gateway`` as its
 # ``share-<role>`` sidecar when its footprint is computed.
-RESERVED_NAMES = frozenset({"localhost", "auth", "share", "app", "owner", "vm", "host", "env", "github", "agent"})
+RESERVED_NAMES = frozenset(
+    {
+        "localhost",
+        "auth",
+        "share",
+        "app",
+        "owner",
+        "vm",
+        "host",
+        "env",
+        "github",
+        "agent",
+    }
+)
 
 # Cap on the stored SVG markup. Generous for a hand-drawn or exported glyph
 # (icons in this repo run from a few hundred bytes to a couple of kilobytes)
@@ -214,7 +227,12 @@ _MANIFEST_OWNED_KEYS = (
 # required. The row carries only what the manifest wrote, and the reader fills the defaults.
 _PIN_OPTIONAL_STRING_KEYS = ("style", "scope", "default_mode")
 # The optional string keys of a launch path entry, copied when the manifest wrote them; the reader fills the defaults.
-_LAUNCH_PATH_OPTIONAL_STRING_KEYS = ("method", "text_param", "draft_param")
+_LAUNCH_PATH_OPTIONAL_STRING_KEYS = (
+    "method",
+    "text_param",
+    "draft_param",
+    "mention_param",
+)
 
 # The TOML basic-string escapes for the characters that have a short form;
 # every other control character is written as ``\uXXXX``.
@@ -612,7 +630,9 @@ def _read_manifest(
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
         entries = raw.get(key)
         if entries is not None:
-            copied_entries, entries_error = _copied_tables(entries, path, key, copy_entry)
+            copied_entries, entries_error = _copied_tables(
+                entries, path, key, copy_entry
+            )
             if copied_entries is None:
                 return {}, None, entries_error
             fields[key] = copied_entries
@@ -681,7 +701,8 @@ def _copied_launch_path(
 ) -> tuple[dict[str, object] | None, str | None]:
     """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``, ``method`` when
     given, ``params`` (the param names) when it declares any, ``presets`` when it declares any, and
-    ``text_param`` and ``draft_param`` when it names them. Returns ``(copied, None)``, or ``(None, error)``
+    ``text_param``, ``draft_param``, and ``mention_param`` when it names them. Returns ``(copied, None)``, or
+    ``(None, error)``
     when the entry is not shaped as the manifest requires."""
     if not (
         isinstance(launch_path, dict)
@@ -702,9 +723,14 @@ def _copied_launch_path(
         value = launch_path.get(key)
         if value is not None:
             if not isinstance(value, str):
-                return None, f"manifest {str(path)!r}: a launch path's {key} must be a string"
+                return (
+                    None,
+                    f"manifest {str(path)!r}: a launch path's {key} must be a string",
+                )
             copied[key] = value
-    param_names, params_error = _copied_param_names(launch_path.get("params"), path, "launch path")
+    param_names, params_error = _copied_param_names(
+        launch_path.get("params"), path, "launch path"
+    )
     if param_names is None:
         return None, params_error
     if param_names:
@@ -712,9 +738,13 @@ def _copied_launch_path(
     presets = launch_path.get("presets")
     if presets is not None:
         if not isinstance(presets, dict) or not all(
-            isinstance(name, str) and isinstance(value, str) for name, value in presets.items()
+            isinstance(name, str) and isinstance(value, str)
+            for name, value in presets.items()
         ):
-            return None, f"manifest {str(path)!r}: a launch path's presets must be a table of strings"
+            return (
+                None,
+                f"manifest {str(path)!r}: a launch path's presets must be a table of strings",
+            )
         if presets:
             copied["presets"] = dict(presets)
     return copied, None
@@ -747,7 +777,10 @@ def _copied_message_handler(
     shell posts the message to) or ``show`` (the page it shows) with ``showing`` when the manifest gives it. Returns
     ``(copied, None)``, or ``(None, error)`` when the entry is not shaped as the manifest requires."""
     if not (isinstance(handler, dict) and isinstance(handler.get("type"), str)):
-        return None, f"manifest {str(path)!r}: every message handler needs a string 'type'"
+        return (
+            None,
+            f"manifest {str(path)!r}: every message handler needs a string 'type'",
+        )
     is_path_given = isinstance(handler.get("path"), str)
     is_show_given = isinstance(handler.get("show"), str)
     if is_path_given == is_show_given:
@@ -758,12 +791,20 @@ def _copied_message_handler(
     showing = handler.get("showing")
     if is_path_given:
         if showing is not None:
-            return None, f"manifest {str(path)!r}: a message handler gives 'showing' only beside 'show'"
+            return (
+                None,
+                f"manifest {str(path)!r}: a message handler gives 'showing' only beside 'show'",
+            )
         return {"type": handler["type"], "path": handler["path"]}, None
     copied: dict[str, object] = {"type": handler["type"], "show": handler["show"]}
     if showing is not None:
-        if not (isinstance(showing, list) and all(isinstance(page, str) for page in showing)):
-            return None, f"manifest {str(path)!r}: a message handler's showing must be an array of strings"
+        if not (
+            isinstance(showing, list) and all(isinstance(page, str) for page in showing)
+        ):
+            return (
+                None,
+                f"manifest {str(path)!r}: a message handler's showing must be an array of strings",
+            )
         copied["showing"] = list(showing)
     return copied, None
 

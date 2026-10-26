@@ -513,15 +513,22 @@ def test_each_app_is_seeded_with_its_default_shortcut_preferring_one_taking_no_t
             # A preview frame or an isolated test server registers with no program.
             registry_row_toml("preview-1", "http://localhost:3"),
             registry_row_toml("vm-exec", "http://localhost:4", program="vm-exec", is_internal=True),
-            # With no default declared, the first launch path taking no typed or drafted text is the shortcut...
+            # With no default declared, the first launch path taking no typed or drafted text and no mention is the
+            # shortcut...
             registry_row_toml(
                 "journal",
                 "http://localhost:5",
                 program="journal",
-                launch_paths=[("write", "Write", "/write"), ("draft", "Draft", "/draft"), ("read", "Read", "/")],
-                launch_params={"write": ["entry"], "draft": ["entry"]},
+                launch_paths=[
+                    ("write", "Write", "/write"),
+                    ("draft", "Draft", "/draft"),
+                    ("mention", "Mention", "/mention"),
+                    ("read", "Read", "/"),
+                ],
+                launch_params={"write": ["entry"], "draft": ["entry"], "mention": ["entry"]},
                 launch_text_params={"write": "entry"},
                 launch_draft_params={"draft": "entry"},
+                launch_mention_params={"mention": "entry"},
             ),
             # ...or the first launch path of all, when every one takes text.
             registry_row_toml(

@@ -93,6 +93,7 @@ from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import CreateChatRequest
+from imbue.chat.models import CreatedChat
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelPick
@@ -103,6 +104,7 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
+from imbue.chat.server import _bubble_new_chats_first_message
 from imbue.chat.server import _open_chat_stream
 from imbue.chat.server import _record_room_first_message_author
 from imbue.chat.server import _revive_and_retry_send
@@ -5349,11 +5351,14 @@ _LOUNGE_ID = "agent-00000000000000000000000000000042"
 
 
 def _peopled_app(
-    tmp_path: Path, messenger: RecordingMngrMessenger, imbue_studio_gateway: GatewayAccess | None = None
+    tmp_path: Path,
+    messenger: RecordingMngrMessenger,
+    imbue_studio_gateway: GatewayAccess | None = None,
+    is_secondary: bool = False,
 ) -> Flask:
     """An app whose shell answers a roster of Josh (the owner), Bob, and the workspace agent Atlas, with a running
     main chat Josh started and a room, the Lounge, whose agent's state dir is on disk; ``imbue_studio_gateway`` is
-    where the owner's notifications go, when given."""
+    where the owner's notifications go, when given, and ``is_secondary`` makes it a preview's chat app."""
     shell = FakeShell(
         roster_document=RosterDocument(
             participants=(
@@ -5374,7 +5379,7 @@ def _peopled_app(
         chat_files_root=tmp_path / "chats",
         imbue_studio_gateway=imbue_studio_gateway,
     )
-    state = build_test_state(agent_manager=manager, shell=shell)
+    state = build_test_state(agent_manager=manager, shell=shell, is_secondary=is_secondary)
     manager.note_agent_list_known()
     seed_agent_state(manager, _MAIN_ID, name="Main", labels={"display_name": "Main"})
     seed_agent_state(manager, _LOUNGE_ID, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
@@ -5545,6 +5550,166 @@ def test_the_handle_table_lists_the_people_the_agent_and_every_chat_by_title(tmp
         ("Main", "chat"),
         ("Lounge", "chat"),
     ]
+
+
+def _fake_shell_of(app: Flask) -> FakeShell:
+    shell = state_of(app).shell
+    assert isinstance(shell, FakeShell)
+    return shell
+
+
+def test_a_persons_send_raises_a_bubble_over_their_entry_naming_the_people_it_mentions(tmp_path: Path) -> None:
+    """Every message a person sends raises a bubble for the tray (the multiplayer spec, section 6.5): in a room the
+    people it mentions ride with it, so their clients mark it; in an agent chat a handle is a word."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    assert (
+        client.post(
+            f"/api/chats/{_LOUNGE_ID}/message",
+            json={"message": "@Josh @agent look at this", "message_id": "m-1"},
+            headers=_identity_header(_VISITOR),
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/chats/{_MAIN_ID}/message",
+            json={"message": "@Bob is right", "message_id": "m-2"},
+            headers=_identity_header(_JOSH),
+        ).status_code
+        == 200
+    )
+
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "both bubbles to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
+        for bubble in shell.bubbles
+    ] == [
+        ("user:user-bob-4471", _LOUNGE_ID, "Lounge", "@Josh @agent look at this", "m-1", ("user:user-josh-0001",)),
+        ("user:user-josh-0001", _MAIN_ID, "Main", "@Bob is right", "m-2", ()),
+    ]
+
+
+def test_the_agents_turns_raise_a_bubble_with_their_first_paragraph(tmp_path: Path) -> None:
+    """An assistant turn of the chat's live agent, and the agent's post into a room, each raise a bubble over the
+    agent's entry; a retired agent's words raise none."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    state = state_of(app)
+    shell = _fake_shell_of(app)
+    turn = {
+        "type": "assistant_message",
+        "event_id": "e-1",
+        "agent_id": _MAIN_ID,
+        "text": "Done: the report is ready.\n\nIt covers three cases.",
+    }
+    room_post = {"type": "user_message", "event_id": "e-2", "content": "It is noon.", "author": "workspace-agent"}
+
+    state.bubble_agent_turns(ChatId(_MAIN_ID), _MAIN_ID, [turn, {**turn, "event_id": "e-3", "text": "  "}])
+    state.bubble_agent_turns(ChatId(_LOUNGE_ID), _LOUNGE_ID, [room_post])
+    state.bubble_agent_turns(ChatId(_MAIN_ID), "agent-00000000000000000000000000000099", [turn])
+
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the agent's bubbles to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id)
+        for bubble in shell.bubbles
+    ] == [
+        ("workspace-agent", _MAIN_ID, "Main", "Done: the report is ready.", "e-1"),
+        ("workspace-agent", _LOUNGE_ID, "Lounge", "It is noon.", "e-2"),
+    ]
+
+
+def test_every_chat_list_push_tells_the_shell_what_each_chat_is_doing(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    shell = _fake_shell_of(app)
+
+    # A chat-list push with no mngr behind it: the room starting to wait on the main chat.
+    state_of(app).agent_manager.note_chat_awaiting(ChatId(_LOUNGE_ID), ChatId(_MAIN_ID))
+
+    wait_until_true(lambda: bool(shell.chats_activity), 10.0, "the chats' activity to reach the shell")
+    latest = shell.chats_activity[-1]
+    assert sorted((chat.chat_id, chat.title, chat.kind.value) for chat in latest.chats) == sorted(
+        [(_MAIN_ID, "Main", "agent"), (_LOUNGE_ID, "Lounge", "room")]
+    )
+
+
+def test_a_mention_intake_drafts_into_the_lounge_there_is(tmp_path: Path) -> None:
+    """A click on a person in the desktop's tray (the multiplayer spec, section 7.5): the chat app's ``lounge``
+    launch path drafts ``@<handle> `` into the Lounge, unsent, held for the root to put in the composer."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+
+    response = _intake(client, message="@Bob ", target="lounge", is_draft="true")
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    assert parse_qs(urlparse(path).query)["chat"] == [_LOUNGE_ID]
+    applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
+    assert applied.status_code == 200
+    assert applied.get_json()["composer_text"] == "@Bob "
+    assert applied.get_json()["chat_id"] == _LOUNGE_ID
+
+
+def test_a_mention_intake_makes_the_lounge_when_there_is_none(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-00000000000000000000000000000123")
+    _register_agent(app, "agent-00000000000000000000000000000123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+
+    response = _intake(client, message="@Bob ", target="lounge", is_draft="true")
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    assert provisional is not None and provisional.name == "Lounge"
+    assert provisional.phase is ProvisionalChatPhase.CREATING
+    # A second click while the room is still being created lands in the same Lounge.
+    again = _intake(client, message="@Carol ", target="lounge", is_draft="true")
+    assert parse_qs(urlparse(again.get_json()["path"]).query)["chat"] == [chat_id]
+
+
+def test_a_new_agent_chats_first_message_raises_a_bubble_as_the_create_is_accepted(tmp_path: Path) -> None:
+    """The first send of an awaiting chat and the launcher's send into a new chat hand the message to the create
+    rather than the send path, so the create route raises the bubble itself (the multiplayer spec, section 6.5),
+    under the chat's minted title and the sender the request vouched for; an empty message raises none."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    state = state_of(app)
+    shell = _fake_shell_of(app)
+    created = CreatedChat(
+        chat_id=ChatId("agent-00000000000000000000000000000044"), name="Chat-2", display_name="Chat 2"
+    )
+
+    _bubble_new_chats_first_message(state, created, "", _VISITOR, "m-none")
+    _bubble_new_chats_first_message(state, created, "first words", _VISITOR, "m-first")
+
+    wait_until_true(lambda: len(shell.bubbles) == 1, 10.0, "the first message's bubble to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
+        for bubble in shell.bubbles
+    ] == [("user:user-bob-4471", str(created.chat_id), "Chat 2", "first words", "m-first", ())]
+
+
+def test_a_secondary_chat_feeds_no_tray_and_makes_no_lounge(tmp_path: Path) -> None:
+    """A secondary chat's sends and chats are a preview's (the multiplayer spec, section 11): a send raises no bubble,
+    the chat list is never reported, and the ``lounge`` intake target answers 403 rather than making a room."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger(), is_secondary=True)
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    sent = client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "@Josh look at this", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+    refused = _intake(client, message="@Bob ", target="lounge", is_draft="true")
+
+    assert sent.status_code == 200
+    assert refused.status_code == 403
+    assert shell.bubbles == [] and shell.chats_activity == []
 
 
 def test_a_rooms_first_message_from_a_visitor_is_recorded_as_theirs_before_the_room_is_up(tmp_path: Path) -> None:

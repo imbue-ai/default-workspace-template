@@ -187,6 +187,26 @@ class ClientActivityKind(LowerCaseStrEnum):
     MESSAGE = auto()
 
 
+class ChatActivityStatus(LowerCaseStrEnum):
+    """What a chat is doing, as the chat app reports it to the shell for the tray's agent card (a wire value): a turn
+    in flight, a background task about to start one, nothing, a permission waiting on the user, the agent dead, or
+    a failed switch."""
+
+    WORKING = auto()
+    BACKGROUND = auto()
+    IDLE = auto()
+    ATTENTION = auto()
+    STOPPED = auto()
+    ERROR = auto()
+
+
+class ChatActivityKind(LowerCaseStrEnum):
+    """What a reported chat is (a wire value): a conversation with an agent, or a room among the people here."""
+
+    AGENT = auto()
+    ROOM = auto()
+
+
 class IfPresent(LowerCaseStrEnum):
     """What an open does about a window of the app already at the path: focus it, or open another (a wire value)."""
 

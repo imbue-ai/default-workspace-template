@@ -23,6 +23,10 @@ import { appShortcutOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
 import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
 import { shortcutKey } from "../model/records";
+import { WORKSPACE_AGENT_KEY } from "../model/Bubbles";
+import { needsYou, workingOn } from "../model/ChatsActivity";
+import { getOwnParticipant } from "../model/Presence";
+import { getRoster, rosterEntry } from "../model/Roster";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
 import {
@@ -30,6 +34,7 @@ import {
   activeFocusedWindowId,
   activePlacements,
   appByName,
+  avatarPinnedEntryOf,
   barEntries,
   desktopById,
   draftTargetOf,
@@ -69,6 +74,11 @@ import { MENU_MIN_WIDTH, openShareSettings, taskbarEntryMenuRows, windowMenuRows
 import { windowSizeRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
+import { AgentCard } from "./tray/AgentCard";
+import { BubbleLayer } from "./tray/BubbleLayer";
+import { PersonCard } from "./tray/PersonCard";
+import { createTrayCardHover } from "./tray/TrayCard";
+import type { OpenCard } from "./tray/TrayCard";
 
 /** Which menu is open and what it was opened for. Where it sits, and everything about taking it
  *  down, belongs to the menu component itself. */
@@ -173,6 +183,12 @@ export function App(): m.Component<AppAttrs> {
   let gestureRoot: HTMLElement | null = null;
   let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
+  // The tray's card: which entry's, and the hover bookkeeping that opens and closes it.
+  const trayCard = createTrayCardHover((card) => {
+    // A person's card reads what they are looking at as it opens (the multiplayer spec, section 6.3).
+    if (card?.kind === "person" && store !== null) void store.refreshClients();
+    m.redraw();
+  });
 
   // The one menu the desktop ever has open. Which menu it is and what it was opened for is
   // ``openMenu``; opening, placing, dismissing and closing are the component's, and its
@@ -689,6 +705,16 @@ export function App(): m.Component<AppAttrs> {
     return row === null ? null : [row];
   }
 
+  /** Create a desktop with the next free name and the next squiggle glyph in its colour. */
+  function createNextDesktop(current: DesktopStore): void {
+    const desktops = current.getState().desktops;
+    const glyphIndex = nextGlyphIndex(
+      desktops.map((desktop) => desktop.glyph),
+      SQUIGGLE_GLYPHS.length,
+    );
+    void current.createDesktop(nextDesktopName(desktops), SQUIGGLE_GLYPHS[glyphIndex].color, glyphIndex);
+  }
+
   function rowsOfDesktopsMenu(current: DesktopStore): MenuRow[] {
     const state = current.getState();
     const active = state.activeDesktopId;
@@ -697,13 +723,7 @@ export function App(): m.Component<AppAttrs> {
         kind: "action",
         key: "new-desktop",
         label: "New desktop",
-        onSelect: () => {
-          const glyphIndex = nextGlyphIndex(
-            state.desktops.map((desktop) => desktop.glyph),
-            SQUIGGLE_GLYPHS.length,
-          );
-          void current.createDesktop(nextDesktopName(state.desktops), SQUIGGLE_GLYPHS[glyphIndex].color, glyphIndex);
-        },
+        onSelect: () => createNextDesktop(current),
       },
       { kind: "divider" },
       {
@@ -780,6 +800,55 @@ export function App(): m.Component<AppAttrs> {
         wallpapers ??= [];
       })
       .finally(() => m.redraw());
+  }
+
+  /** The box of a speaker's tray entry, where its bubble's arrow points. */
+  function trayEntryRect(speaker: string): DOMRect | null {
+    const selector =
+      speaker === WORKSPACE_AGENT_KEY ? "[data-tray-agent]" : `[data-tray-person="${CSS.escape(speaker)}"]`;
+    return document.querySelector(selector)?.getBoundingClientRect() ?? null;
+  }
+
+  function trayCardView(current: DesktopStore, open: OpenCard, now: Date): m.Children {
+    const state = current.getState();
+    const frame = { anchor: trayCard.anchor(), onEnter: trayCard.enterCard, onLeave: trayCard.leaveCard };
+    if (open.kind === "agent") {
+      return m(AgentCard, {
+        ...frame,
+        avatar: state.avatar,
+        workspaceName: state.workspaceName,
+        workingOn: workingOn(),
+        needsYou: needsYou(),
+        onChangeAvatar: () => {
+          trayCard.close();
+          openAvatarChooser(current);
+        },
+        onOpenChat: (chatId) => {
+          trayCard.close();
+          void current.showChat(chatId);
+        },
+      });
+    }
+    const entry = rosterEntry(open.key);
+    if (entry === null) return null;
+    return m(PersonCard, {
+      ...frame,
+      entry,
+      isOwn: entry.key === getOwnParticipant(),
+      now,
+      clients: current.getClients(),
+      desktops: state.desktops,
+      apps: state.apps,
+      activeDesktopId: state.activeDesktopId,
+      onSwitchDesktop: (desktopId) => {
+        trayCard.close();
+        void current.switchDesktop(desktopId);
+      },
+      onNewDesktop: () => {
+        trayCard.close();
+        createNextDesktop(current);
+      },
+    });
   }
 
   function openAvatarChooser(current: DesktopStore): void {
@@ -983,6 +1052,7 @@ export function App(): m.Component<AppAttrs> {
       detachGestures?.();
       resizeObserver?.disconnect();
       if (travelFrame !== null) cancelAnimationFrame(travelFrame);
+      trayCard.dispose();
     },
     view(vnode) {
       const current = vnode.attrs.store;
@@ -1030,6 +1100,10 @@ export function App(): m.Component<AppAttrs> {
         );
       };
       const menuRows = openMenu === null ? null : rowsOfOpenMenu(current, openMenu);
+      const roster = getRoster();
+      const now = new Date();
+      const pinnedChat = avatarPinnedEntryOf(state);
+      const openCard = trayCard.current();
       // The wallpaper is painted here rather than on the backdrop so it spans the whole viewport:
       // the taskbar's translucent surface then has the desktop behind it to blur, and the backdrop
       // stays the viewport less the taskbar height that the geometry rules measure.
@@ -1146,12 +1220,12 @@ export function App(): m.Component<AppAttrs> {
                 queueMicrotask(() => m.redraw.sync());
               },
             },
-            tray: {
+            desktops: {
               desktops: state.desktops,
               activeDesktopId: state.activeDesktopId,
-              isDesktopsMenuOpen: openMenu?.kind === "desktops",
-              onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
-              onOpenDesktopsMenu: (event) => {
+              isMenuOpen: openMenu?.kind === "desktops",
+              onSwitch: (desktopId) => void current.switchDesktop(desktopId),
+              onOpenMenu: (event) => {
                 if (openMenu?.kind === "desktops") menu.close();
                 else openMenuAt({ kind: "desktops" }, anchorForEvent(event));
               },
@@ -1162,9 +1236,38 @@ export function App(): m.Component<AppAttrs> {
                 );
               },
             },
+            tray: {
+              roster,
+              viewer: getOwnParticipant(),
+              now,
+              hopping: current.getHopping(),
+              isShareOffered: current.getIsEmbedderPresent(),
+              avatar: state.avatar,
+              workspaceName: state.workspaceName,
+              isAgentAttending: pinnedChat !== null && pinnedChat.isFocused && !pinnedChat.isMinimized,
+              onPersonClick: (entry) => {
+                trayCard.close();
+                void current.mentionPerson(entry.handle);
+              },
+              onAgentClick: () => {
+                trayCard.close();
+                void current.openMainChat();
+              },
+              onPersonHoverStart: (entry, element) => trayCard.enterEntry({ kind: "person", key: entry.key }, element),
+              onAgentHoverStart: (element) => trayCard.enterEntry({ kind: "agent" }, element),
+              onHoverEnd: trayCard.leaveEntry,
+            },
             onEntryClick,
             onEntryContextMenu,
           }),
+          m(BubbleLayer, {
+            bubbles: current.getBubbles(),
+            anchorOf: trayEntryRect,
+            rosterEntry,
+            onOpen: (speaker) => current.openBubble(speaker),
+            onDismiss: (speaker) => current.dismissBubble(speaker),
+          }),
+          openCard === null ? null : trayCardView(current, openCard, now),
           m(Toasts, {
             toasts: current.toasts.current(),
             placementClass: "fixed bottom-[calc(var(--desk-taskbar-height)+var(--desk-toast-gap))]",

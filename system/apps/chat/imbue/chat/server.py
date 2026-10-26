@@ -17,6 +17,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import TypeVar
 from typing import assert_never
 from uuid import uuid4
 
@@ -132,6 +133,7 @@ from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.identity import request_identity
 from imbue.chat.identity import request_participant
 from imbue.chat.main_chat import MAIN_CHAT_NAME
+from imbue.chat.mention_parser import MentionTarget
 from imbue.chat.mentions import BackgroundMentionDeliverer
 from imbue.chat.mentions import MentionHandler
 from imbue.chat.models import AgentCreationError
@@ -915,20 +917,28 @@ def _is_author_prefixed(chat_id: ChatId) -> bool:
     return agent_info is None or get_harness_spec(agent_info.harness).is_author_prefixed
 
 
-def _act_on_room_mentions(
+def _act_on_accepted_send(
     state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
 ) -> None:
-    """What a send's mentions do once it was accepted (the multiplayer spec, section 7.4): in a room, people are
-    marked and the agent or a chat is sent the message; in an agent chat nothing, a handle being a word the agent
-    reads like any other. Takes the sender's ``identity`` rather than reading the request's, since an intake nobody
-    waits on is delivered on a thread of its own."""
-    handler = state.mention_handler
+    """What a person's or a visiting agent's send does once it was accepted (the multiplayer spec, sections 6.5 and
+    7.4): their speech bubble is raised over their tray entry, naming the people a room message mentions so their
+    clients mark it; and in a room the mentions act, people marked and the agent or a chat sent the message. In an
+    agent chat a handle is a word the agent reads like any other. Takes the sender's ``identity`` rather than reading
+    the request's, since an intake nobody waits on and a room's first message land on threads of their own."""
     snapshot = state.agent_manager.get_chat_snapshot(str(chat_id))
-    if handler is None or snapshot is None or snapshot.kind is not ChatKind.ROOM or "@" not in text:
+    if snapshot is None:
         return
+    handler = state.mention_handler
+    targets: tuple[MentionTarget, ...] = ()
+    if snapshot.kind is ChatKind.ROOM and handler is not None and "@" in text:
+        targets = handler.resolve(text)
     sender = participant_key_of(identity)
-    sender_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
-    handler.act(chat_id, snapshot.title, message_id, text, sender, sender_name)
+    if state.tray_feed is not None:
+        mentioned = tuple(target.key for target in targets if target.is_person and target.key is not None)
+        state.tray_feed.post_bubble(sender, chat_id, snapshot.title, text, message_id, mentioned)
+    if handler is not None and targets:
+        sender_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
+        handler.act(targets, chat_id, snapshot.title, message_id, text, sender, sender_name)
 
 
 def _me_endpoint() -> Response:
@@ -1002,7 +1012,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     )
     if isinstance(accepted, _SendRefused):
         return model_response(accepted.answer, accepted.status)
-    _act_on_room_mentions(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
+    _act_on_accepted_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
     if accepted.held_phase is not None:
@@ -1669,9 +1679,12 @@ def _get_screen_capture(chat_id: str) -> Response:
     return model_response(ScreenCaptureResponse(screen=result.stdout))
 
 
-def _created_chat_or_refusal(create: Callable[[], CreatedChat]) -> CreatedChat | Response:
-    """Run one create of a chat: the chat, else its refusal as the create route answers it (a taken name is a 409,
-    anything else the manager refused a 400 with its reason, and a ``kind`` beside it when the account is the
+_CreatedT = TypeVar("_CreatedT")
+
+
+def _created_or_refusal(create: Callable[[], _CreatedT]) -> _CreatedT | Response:
+    """Run one create of a chat: what it answers, else its refusal as the create route answers it (a taken name is
+    a 409, anything else the manager refused a 400 with its reason, and a ``kind`` beside it when the account is the
     reason)."""
     try:
         return create()
@@ -1718,15 +1731,16 @@ def _run_create_chat() -> CreatedChat | Response:
     agent_manager: AgentManager = state.agent_manager
     create_request = parse_request_body(CreateChatRequest)
     identity = request_identity()
-    # A room's first message is appended once its agent is up, by a thread with no identity of its own: who sent
-    # it is annotated under this id before the create, and what its mentions do runs once it has landed.
-    first_message_id = uuid4().hex if create_request.kind is ChatKind.ROOM else ""
+    # The first message's id, which its bubble carries. A room's first message is appended once its agent is up,
+    # by a thread with no identity of its own: who sent it is annotated under this id before the create, and what
+    # its mentions do runs once it has landed.
+    first_message_id = uuid4().hex
     on_message_delivered = (
         _room_first_message_hook(state, create_request.message, identity, current_app.app_context())
         if create_request.kind is ChatKind.ROOM
         else None
     )
-    created = _created_chat_or_refusal(
+    created = _created_or_refusal(
         lambda: agent_manager.create_chat(
             create_request.name,
             # A client asks for no templates: the manager adds `fast` itself, from the
@@ -1750,6 +1764,7 @@ def _run_create_chat() -> CreatedChat | Response:
         _record_room_first_message_author(state, created.chat_id, create_request.message, identity, first_message_id)
     else:
         _consider_naming_chat(state, created.chat_id, create_request.message)
+        _bubble_new_chats_first_message(state, created, create_request.message, identity, first_message_id)
     if not create_request.should_wait:
         return created
     outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
@@ -1760,6 +1775,20 @@ def _run_create_chat() -> CreatedChat | Response:
         detail = outcome.error or f"Creating chat {created.display_name!r} failed"
         return error_response(detail, 500)
     return created
+
+
+def _bubble_new_chats_first_message(
+    state: ChatAppState, created: CreatedChat, message: str, identity: RequestIdentity, message_id: str
+) -> None:
+    """Raise the bubble a new agent chat's first message is due (the multiplayer spec, section 6.5): the message
+    rides or follows the create rather than a send, so it is posted here, under the chat's minted title, as the
+    create is accepted; its mentions act on nothing, since the chat is an agent's. A room's first message raises
+    its bubble once it has landed (``_act_on_room_first_message``), with its mentions."""
+    if not message or state.tray_feed is None:
+        return
+    state.tray_feed.post_bubble(
+        participant_key_of(identity), created.chat_id, created.display_name, message, message_id, ()
+    )
 
 
 def _record_room_first_message_author(
@@ -1783,11 +1812,11 @@ def _act_on_room_first_message(
     chat_id: ChatId,
     message_id: str,
 ) -> None:
-    """What a new room's first message does once it has landed (the multiplayer spec, section 7.4): its mentions
-    act as a message-route send's do, for the sender the create's request vouched for, under the app's context,
-    since the create's thread has none of its own."""
+    """What a new room's first message does once it has landed: what a message-route send's does (its bubble, its
+    mentions), for the sender the create's request vouched for, under the app's context, since the create's thread
+    has none of its own."""
     with app_context:
-        _act_on_room_mentions(state, chat_id, message_id, message, identity)
+        _act_on_accepted_send(state, chat_id, message_id, message, identity)
 
 
 def _room_first_message_hook(
@@ -1873,14 +1902,29 @@ def _main_or_most_recent_intake_chat(
     return _ResolvedIntakeChat(chat_id=most_recently_messaged_chat_id(snapshots))
 
 
-def _resolve_intake_chat(agent_manager: AgentManager, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
+def _lounge_or_refusal(state: ChatAppState) -> _ResolvedIntakeChat | Response:
+    """The Lounge, made when there is none (the multiplayer spec, section 7.5), or the refusal: a secondary chat
+    makes no room, and a room's create may be refused as the create route refuses one."""
+    if state.lounge is None:
+        return error_response("A secondary chat has no Lounge", 403)
+    lounge_id = _created_or_refusal(state.lounge.ensure)
+    if isinstance(lounge_id, Response):
+        return lounge_id
+    return _ResolvedIntakeChat(chat_id=lounge_id)
+
+
+def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
     """The chat an intake's target names (spec 3.5), or the 404 for an explicit chat the app does not list.
 
     ``new_chat`` answers no chat: the caller creates or mints one. ``current_chat``,
-    ``main_chat`` and ``chat_selector`` fall back to that when nothing qualifies.
+    ``main_chat`` and ``chat_selector`` fall back to that when nothing qualifies; ``lounge`` is the Lounge, made
+    when there is none.
     """
+    agent_manager = state.agent_manager
     snapshots = agent_manager.get_chat_snapshots()
     match intake.target:
+        case IntakeTarget.LOUNGE:
+            return _lounge_or_refusal(state)
         case IntakeTarget.CHAT:
             parsed = parse_chat_ref(intake.chat_id)
             if parsed is None or not agent_manager.knows_chat(parsed):
@@ -1937,7 +1981,7 @@ def _deliver_intake_send(
     )
     if isinstance(accepted, _SendRefused):
         return accepted
-    _act_on_room_mentions(state, chat_id, message_id, intake.message, identity)
+    _act_on_accepted_send(state, chat_id, message_id, intake.message, identity)
     return None
 
 
@@ -1990,7 +2034,7 @@ def _intake_chat() -> Response:
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     intake = parse_request_body(IntakeRequest)
-    resolved = _resolve_intake_chat(agent_manager, intake)
+    resolved = _resolve_intake_chat(state, intake)
     if isinstance(resolved, Response):
         return resolved
     if resolved.needs_pick:
@@ -2012,12 +2056,14 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
     if isinstance(account, Response):
         return account
     if account is not None and not intake.is_draft:
-        created = _created_chat_or_refusal(
-            lambda: agent_manager.create_chat("", account_id=account, message=intake.message)
+        message_id = uuid4().hex
+        created = _created_or_refusal(
+            lambda: agent_manager.create_chat("", account_id=account, message=intake.message, message_id=message_id)
         )
         if isinstance(created, Response):
             return created
         _consider_naming_chat(state, created.chat_id, intake.message)
+        _bubble_new_chats_first_message(state, created, intake.message, request_identity(), message_id)
         return model_response(IntakeResponse(path=intake_path(created.chat_id, None)))
     minted = agent_manager.mint_awaiting_chat(account or "")
     token = state.pending_intakes.mint(intake, minted.chat_id, needs_pick=False)

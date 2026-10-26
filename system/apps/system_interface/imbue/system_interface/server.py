@@ -796,6 +796,10 @@ def _run_ws_broadcast_loop(
         )
         websocket.send(json.dumps({"type": "presence_updated", "users": initial_presence}))
         websocket.send(json.dumps({"type": "roster_updated", **initial_roster}))
+        # The chats' activity too, when the chat app has reported it: the agent's card lists it from the connect.
+        chats_activity = shell.chats_activity.current()
+        if chats_activity is not None:
+            websocket.send(json.dumps({"type": "chats_activity", **chats_activity.model_dump(mode="json")}))
 
         is_client_registered = False
         shutdown = False

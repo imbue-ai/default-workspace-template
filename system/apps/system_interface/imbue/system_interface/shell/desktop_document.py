@@ -653,17 +653,22 @@ def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
 
 
 @pure
-def _takes_text(launch_path: RegistryLaunchPath) -> bool:
-    return launch_path.text_param is not None or launch_path.draft_param is not None
+def _takes_text_or_mention(launch_path: RegistryLaunchPath) -> bool:
+    """Whether the launch path needs something filled in: typed or drafted text, or a mention of a person."""
+    return (
+        launch_path.text_param is not None
+        or launch_path.draft_param is not None
+        or launch_path.mention_param is not None
+    )
 
 
 @pure
 def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
     """The shortcut an app is given on a desktop: its ``default_shortcut`` when it declares one naming a launch path it
     offers, whether or not that path takes text; else, for a supervised app (one whose row names a ``program``), its
-    first launch path that takes no typed or drafted text, or its first launch path when every one takes text,
-    focusing. A manifest-less row with no program (a preview, an isolated test server) gets none, and neither does an
-    internal app."""
+    first launch path that takes no typed or drafted text and no mention, or its first launch path when every one
+    takes one, focusing. A manifest-less row with no program (a preview, an isolated test server) gets none, and
+    neither does an internal app."""
     if row.internal:
         return None
     offered = effective_launch_paths(row)
@@ -672,7 +677,7 @@ def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
         return row.default_shortcut if is_offered else None
     if row.program is None:
         return None
-    first = next((path for path in offered if not _takes_text(path)), offered[0])
+    first = next((path for path in offered if not _takes_text_or_mention(path)), offered[0])
     return DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS)
 
 

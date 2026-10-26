@@ -1,0 +1,1 @@
+A launch path may declare a `mention_param` beside `text_param` and `draft_param` (at most one of the three): the declared param the desktop's shell fills with a mention of the person whose tray entry was clicked (`@<handle> `), never a launcher row. The registry row carries it, and `forward_port.py` copies it.

@@ -8,6 +8,8 @@ from workspace_layout.answers import DesktopOpAnswer
 from workspace_layout.answers import OpenAnswer
 from workspace_layout.answers import ShowAnswer
 from workspace_layout.answers import TransientOpAnswer
+from workspace_layout.feed import BubblePost
+from workspace_layout.feed import ChatsActivityReport
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import NavigateArgs
 from workspace_layout.ops import OpenArgs
@@ -66,3 +68,13 @@ class ShellLayoutInterface(MutableModel, ABC):
     @abstractmethod
     def roster(self) -> RosterDocument:
         """Everyone who may be in the workspace, in the shell's order (the multiplayer spec, section 4.2)."""
+
+    @abstractmethod
+    def post_bubble(self, bubble: BubblePost) -> None:
+        """Tell the shell somebody just said something, for the bubble over their tray entry (the multiplayer spec,
+        section 6.5); best-effort, never raises."""
+
+    @abstractmethod
+    def report_chats_activity(self, report: ChatsActivityReport) -> None:
+        """Tell the shell what every chat is doing, for the tray's agent card (the multiplayer spec, section 6.4);
+        best-effort, never raises."""

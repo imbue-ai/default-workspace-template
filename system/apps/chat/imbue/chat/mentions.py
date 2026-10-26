@@ -15,6 +15,7 @@ import threading
 from abc import ABC
 from abc import abstractmethod
 from collections.abc import Callable
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
@@ -191,12 +192,19 @@ class MentionHandler(MutableModel):
         return find_mentions(text, self.table())
 
     def act(
-        self, room_id: ChatId, room_title: str, message_id: str, text: str, sender: ParticipantKey, sender_name: str
+        self,
+        targets: Sequence[MentionTarget],
+        room_id: ChatId,
+        room_title: str,
+        message_id: str,
+        text: str,
+        sender: ParticipantKey,
+        sender_name: str,
     ) -> None:
-        """Act on a room message's mentions once it has landed: a person is marked (and the owner notified), and
-        the workspace's agent or an agent chat is sent the message. A mention of the sender does nothing."""
+        """Act on a room message's resolved mentions once it has landed: a person is marked (and the owner notified),
+        and the workspace's agent or an agent chat is sent the message. A mention of the sender does nothing."""
         is_anyone_marked = False
-        for target in self.resolve(text):
+        for target in targets:
             if target.key is not None and target.key == sender:
                 continue
             if target.is_person and target.key is not None:

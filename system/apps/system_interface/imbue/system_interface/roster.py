@@ -162,6 +162,11 @@ class RosterSource(MutableModel):
         default=PRESENCE_CONNECTED_WINDOW, frozen=True, description="How long a sighting counts as connected"
     )
 
+    def owner_key(self, now: datetime) -> ParticipantKey:
+        """The owner's key as the presence records say it (the multiplayer spec, section 4.4): the account whose
+        heartbeats say it owns the workspace, else the synthetic ``owner`` of a workspace that has not shared."""
+        return self._owner_key(self.presence.presence_by_participant(now))
+
     def document(self, now: datetime) -> RosterDocument:
         presence_by_key = self.presence.presence_by_participant(now)
         grants = self.share_grants.read_grants()

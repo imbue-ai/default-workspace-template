@@ -20,12 +20,16 @@ from workspace_layout.answers import InventoryOpAnswer
 from workspace_layout.answers import OpenAnswer
 from workspace_layout.answers import ShowAnswer
 from workspace_layout.answers import TransientOpAnswer
+from workspace_layout.feed import BubblePost
+from workspace_layout.feed import ChatsActivityReport
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopView
 from workspace_layout.records import EntryPresentation
 from workspace_layout.records import WindowView
 from workspace_layout.roster import RosterDocument
+from workspace_layout.shell_url import BUBBLES_ROUTE
+from workspace_layout.shell_url import CHATS_ACTIVITY_ROUTE
 from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
@@ -110,6 +114,9 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("GET", ROSTER_ROUTE): RouteModels(response_model=RosterDocument),
     # Section 5.1 and 5: the client-activity report, and an app's lifecycle
     ("POST", CLIENT_ACTIVITY_ROUTE): RouteModels(request_model=ClientActivityReport, success_status=HTTP_NO_CONTENT),
+    # The multiplayer spec, sections 6.4 and 6.5: the tray's feed from the chat app
+    ("POST", BUBBLES_ROUTE): RouteModels(request_model=BubblePost, success_status=HTTP_NO_CONTENT),
+    ("POST", CHATS_ACTIVITY_ROUTE): RouteModels(request_model=ChatsActivityReport, success_status=HTTP_NO_CONTENT),
     ("POST", "/api/apps/{name}/stop"): RouteModels(response_model=AppRunningState),
     ("POST", "/api/apps/{name}/start"): RouteModels(response_model=AppRunningState),
     ("POST", "/api/apps/{name}/quit"): RouteModels(response_model=AppRunningState),
