@@ -17,6 +17,7 @@
  * The plus makes a new desktop. Escape or a click on the bare backdrop closes it; both are the App's.
  */
 
+import { OVERVIEW_SCRIM_Z_INDEX } from "../geometry/stacking";
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -452,7 +453,8 @@ export function Overview(): m.Component<OverviewAttrs> {
           "data-overview": "",
           role: "dialog",
           "aria-label": "Desktop overview",
-          class: "overview absolute inset-0 z-(--z-sticky) flex flex-col bg-black/35 backdrop-blur-md",
+          class: "overview absolute inset-0 flex flex-col bg-black/35 backdrop-blur-md",
+          style: { zIndex: OVERVIEW_SCRIM_Z_INDEX },
           onclick: close,
         },
         [

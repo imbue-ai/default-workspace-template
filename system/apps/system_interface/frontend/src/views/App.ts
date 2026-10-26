@@ -22,7 +22,7 @@ import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
-import type { AvatarDesign, Desktop, DesktopShortcut, Layout, WallpaperListing } from "../model/records";
+import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
 import { shortcutKey } from "../model/records";
 import { WORKSPACE_AGENT_KEY } from "../model/Bubbles";
 import { needsYou, workingOn } from "../model/ChatsActivity";
@@ -170,12 +170,6 @@ export function App(): m.Component<AppAttrs> {
   let openMenu: OpenMenu | null = null;
   /** The desktop whose wallpaper chooser is up. */
   let wallpaperDialogDesktopId: string | null = null;
-  /** The desktop whose deletion the overview is confirming in place. */
-  let overviewDeletingId: string | null = null;
-  /** This client's layouts of the desktops the overview draws thumbnails of, read as it opens; a desktop whose
-   *  read is on its way has no entry yet. */
-  const overviewLayouts = new Map<string, Layout>();
-  const overviewLayoutReads = new Set<string>();
   /** The overview's tiling as the last redraw computed it, which the pages follow; null while it is closed. */
   let overviewTiling: OverviewTiling | null = null;
   let avatarChooser: AvatarChooserState | null = null;
@@ -727,9 +721,6 @@ export function App(): m.Component<AppAttrs> {
   }
 
   function closeOverview(): void {
-    overviewDeletingId = null;
-    overviewLayouts.clear();
-    overviewLayoutReads.clear();
     store?.closeOverview();
   }
 
@@ -761,16 +752,14 @@ export function App(): m.Component<AppAttrs> {
   }
 
   /** A thumbnail's menu in the overview: the deletion, confirmed in place under the thumbnail. */
-  function rowsOfOverviewDesktopMenu(desktopId: string): MenuRow[] {
+  function rowsOfOverviewDesktopMenu(current: DesktopStore, desktopId: string): MenuRow[] {
     return [
       {
         kind: "action",
         key: "delete",
         label: "Delete desktop...",
         tone: "danger",
-        onSelect: () => {
-          overviewDeletingId = desktopId;
-        },
+        onSelect: () => current.setOverviewDeletingId(desktopId),
       },
     ];
   }
@@ -791,7 +780,7 @@ export function App(): m.Component<AppAttrs> {
       case "backdrop":
         return withReferenceRows(rowsOfBackdropMenu(current), open.referenceRows);
       case "overview-desktop":
-        return rowsOfOverviewDesktopMenu(open.desktopId);
+        return rowsOfOverviewDesktopMenu(current, open.desktopId);
       case "element":
         return [...open.rows];
     }
@@ -853,32 +842,13 @@ export function App(): m.Component<AppAttrs> {
       activeDesktopId: state.activeDesktopId,
       onOpenDesktop: (desktopId) => {
         trayCard.close();
-        void current.goToDesktop(desktopId);
+        void current.switchDesktop(desktopId);
       },
       onNewDesktop: () => {
         trayCard.close();
         void current.createNextDesktop();
       },
     });
-  }
-
-  /** Read this client's layout of every desktop the overview draws a thumbnail of, once each while it is open;
-   *  the active desktop's is the store's own. */
-  function ensureOverviewLayouts(current: DesktopStore, desktops: readonly Desktop[]): void {
-    const active = current.getState().activeDesktopId;
-    for (const desktop of desktops) {
-      if (desktop.id === active || overviewLayouts.has(desktop.id) || overviewLayoutReads.has(desktop.id)) continue;
-      overviewLayoutReads.add(desktop.id);
-      void current
-        .readLayoutOf(desktop.id)
-        .then((layout) => {
-          if (overviewLayoutReads.has(desktop.id)) overviewLayouts.set(desktop.id, layout);
-        })
-        .catch((error: unknown) => {
-          console.warn(`[si] could not read the layout of ${desktop.id} for the overview`, error);
-        })
-        .finally(() => m.redraw());
-    }
   }
 
   /** The overview's tiles: the active desktop's windows front-most first, at the rectangles they render at. */
@@ -916,7 +886,7 @@ export function App(): m.Component<AppAttrs> {
     const state = current.getState();
     const ownDesktops = current.ownDesktops();
     const leftBehind = leftBehindDesktops(state.desktops, getRoster(), getOwnIdentity());
-    ensureOverviewLayouts(current, [...ownDesktops, ...leftBehind]);
+    current.ensureOverviewLayouts([...ownDesktops, ...leftBehind]);
     return {
       desktop,
       tiles: tiling.tiles,
@@ -926,23 +896,20 @@ export function App(): m.Component<AppAttrs> {
       ownDesktops,
       leftBehind,
       apps: state.apps,
-      layoutOf: (desktopId) =>
-        desktopId === state.activeDesktopId ? state.layout : (overviewLayouts.get(desktopId) ?? null),
-      confirmingDeleteId: overviewDeletingId,
+      layoutOf: (desktopId) => current.overviewLayoutOf(desktopId),
+      confirmingDeleteId: current.getOverviewDeletingId(),
       onRaiseWindow: (windowId) => current.restoreWindow(windowId),
-      onSwitchDesktop: (desktopId) => void current.goToDesktop(desktopId),
+      onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
       onRename: (desktopId, name) => void current.renameDesktop(desktopId, name),
       onReorder: (desktopIds) => void current.reorderDesktops(desktopIds),
       onDesktopContextMenu: (desktopId, x, y) => {
         openMenuAt({ kind: "overview-desktop", desktopId }, anchorForPoint(x, y));
       },
       onConfirmDelete: (desktopId) => {
-        overviewDeletingId = null;
+        current.setOverviewDeletingId(null);
         void current.deleteDesktop(desktopId);
       },
-      onKeepDesktop: () => {
-        overviewDeletingId = null;
-      },
+      onKeepDesktop: () => current.setOverviewDeletingId(null),
       onNewDesktop: () => void current.createNextDesktop(),
       onClose: closeOverview,
     };

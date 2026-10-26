@@ -27,8 +27,6 @@ from workspace_layout.records import Wallpaper
 
 from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.shell.data_types import AppPin
-from imbue.system_interface.shell.desktop_document import desktop_owner_of
-from imbue.system_interface.shell.desktop_document import is_desktop_owned_by
 from imbue.system_interface.shell.desktop_document import next_shortcut_cell
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
@@ -48,6 +46,8 @@ from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.errors import WindowNotFoundError
+from imbue.system_interface.shell.ownership import desktop_owner_of
+from imbue.system_interface.shell.ownership import is_desktop_owned_by
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_WITH_CHAT
 from imbue.system_interface.shell.testing import TEST_NOW

@@ -41,7 +41,6 @@ from imbue.system_interface.shell.data_types import DesktopsDocument
 from imbue.system_interface.shell.desktop_document import DESKTOPS_FILE_VERSION
 from imbue.system_interface.shell.desktop_document import apps_with_a_default_shortcut
 from imbue.system_interface.shell.desktop_document import apps_with_a_shortcut_on
-from imbue.system_interface.shell.desktop_document import reordered_desktops
 from imbue.system_interface.shell.desktop_document import with_default_shortcuts_offered
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_ensured
 from imbue.system_interface.shell.desktop_document import with_shortcut
@@ -55,6 +54,7 @@ from imbue.system_interface.shell.errors import DesktopConflictError
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
+from imbue.system_interface.shell.ownership import reordered_desktops
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document

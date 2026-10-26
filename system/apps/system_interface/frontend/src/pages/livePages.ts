@@ -44,7 +44,7 @@ import {
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
-import { windowPageZIndex } from "../geometry/stacking";
+import { OVERVIEW_PAGE_Z_INDEX, windowPageZIndex } from "../geometry/stacking";
 import { windowPageUrl } from "../model/pageUrl";
 import type { AppRecord, Desktop, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
@@ -123,10 +123,6 @@ export interface OverviewPresentation {
   /** The scale the tile of ``windowId`` draws its page at, or null for a window the overview has no tile for. */
   readonly scaleOf: (windowId: string) => number | null;
 }
-
-/** The z-index of every page laid over an overview tile: above the overview's scrim (which sits at the sticky
- *  layer), below the menus and cards. */
-const OVERVIEW_PAGE_Z_INDEX = "calc(var(--z-sticky) + 1)";
 
 /** A pixel box relative to the pages' host. */
 interface HostRect {

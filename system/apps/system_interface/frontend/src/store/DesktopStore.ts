@@ -482,6 +482,13 @@ export class DesktopStore {
   private readonly clientDesktopsHeard = new Map<string, string>();
   /** Whether the overview is up over the backdrop (the multiplayer spec, section 8.2). */
   private isOverviewOpenNow = false;
+  /** This client's layouts of the desktops the overview draws thumbnails of, read once each while it is open; a
+   *  desktop whose read is on its way has no entry yet. Cleared with the overview, whichever way it closes, so
+   *  the next open reads them again. */
+  private readonly overviewLayouts = new Map<string, Layout>();
+  private readonly overviewLayoutReads = new Set<string>();
+  /** The desktop whose deletion the overview is confirming in place, or null. */
+  private overviewDeletingId: string | null = null;
   /** While this window views a desktop that is not the viewer's own, the desktop it was on, to go back to; null
    *  when it came from nowhere of its own (section 8.3). */
   private returnDesktopId: string | null = null;
@@ -1013,9 +1020,11 @@ export class DesktopStore {
     this.markAppsLoaded();
   }
 
+  /** Who is here changed: the clients are read again too, so a ring follows a viewer who left. */
   private takePresence(users: PresentUser[]): void {
     applyPresence(users);
     this.deps.redraw();
+    void this.refreshClients();
   }
 
   /** The bubbles up now, oldest first; the view stacks them upward over the tray. */
@@ -1156,12 +1165,6 @@ export class DesktopStore {
     return desktop !== null && !this.isOwnDesktop(desktop) ? desktop : null;
   }
 
-  /** Go to a desktop from a card or the overview: a switch onto one of the viewer's own, a viewing of anyone
-   *  else's. */
-  goToDesktop(desktopId: string): Promise<void> {
-    return this.switchDesktop(desktopId);
-  }
-
   /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop. */
   stopViewing(): Promise<void> {
     const back = this.returnDesktopId;
@@ -1182,7 +1185,12 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
+  /** Close the overview and forget what it read and was confirming: every way out (Escape, the backdrop, any
+   *  desktop switch) comes through here, so the next open starts afresh. */
   closeOverview(): void {
+    this.overviewLayouts.clear();
+    this.overviewLayoutReads.clear();
+    this.overviewDeletingId = null;
     if (!this.isOverviewOpenNow) return;
     this.isOverviewOpenNow = false;
     this.notifyListeners();
@@ -1198,6 +1206,41 @@ export class DesktopStore {
   async readLayoutOf(desktopId: string): Promise<Layout> {
     if (desktopId === this.state.activeDesktopId && this.state.isLayoutLoaded) return this.state.layout;
     return this.deps.api.fetchPlacements(desktopId, this.deps.clientId);
+  }
+
+  /** Read this client's layout of every desktop given that the open overview has not read yet, once each; the
+   *  active desktop's is the store's own. Nothing while the overview is closed. */
+  ensureOverviewLayouts(desktops: readonly Desktop[]): void {
+    if (!this.isOverviewOpenNow) return;
+    for (const desktop of desktops) {
+      if (desktop.id === this.state.activeDesktopId || this.overviewLayoutReads.has(desktop.id)) continue;
+      this.overviewLayoutReads.add(desktop.id);
+      void this.readLayoutOf(desktop.id)
+        .then((layout) => {
+          if (this.overviewLayoutReads.has(desktop.id)) this.overviewLayouts.set(desktop.id, layout);
+        })
+        .catch((error: unknown) => {
+          console.warn(`[si] could not read the layout of ${desktop.id} for the overview`, error);
+        })
+        .finally(() => this.deps.redraw());
+    }
+  }
+
+  /** A desktop's layout for the overview's thumbnail: the active one's as held, another's as read since the
+   *  overview opened, or null while its read is on its way. */
+  overviewLayoutOf(desktopId: string): Layout | null {
+    if (desktopId === this.state.activeDesktopId) return this.state.layout;
+    return this.overviewLayouts.get(desktopId) ?? null;
+  }
+
+  getOverviewDeletingId(): string | null {
+    return this.overviewDeletingId;
+  }
+
+  /** The desktop whose deletion the overview confirms in place, or null once it is confirmed or kept. */
+  setOverviewDeletingId(desktopId: string | null): void {
+    this.overviewDeletingId = desktopId;
+    this.deps.redraw();
   }
 
   /** The chrome that frames this page has said what it can do (``minds:embedder-capabilities``). */
@@ -1331,7 +1374,9 @@ export class DesktopStore {
     // Every client's move is news for the tray's rings; only this client's moves this window.
     this.clientDesktopsHeard.set(event.clientId, event.desktopId);
     if (event.clientId !== this.deps.clientId) {
-      this.deps.redraw();
+      // A client the last read did not list connected since: read again, so whose it is is known.
+      if (this.clients.some((client) => client.id === event.clientId)) this.deps.redraw();
+      else void this.refreshClients();
       return;
     }
     if (!this.hearDesktopRevision(event.revision)) return;

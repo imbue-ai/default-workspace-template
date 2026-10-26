@@ -1210,6 +1210,9 @@ describe("presence", () => {
     expect(getPresentUsers().map((user) => user.user_id)).toEqual(["user-bob-4471"]);
     expect(redraws).toBe(before + 1);
     expect(store.getState().desktops).toHaveLength(2);
+    // Who is here changed, so the clients (what each person looks at) are read again.
+    await settle();
+    expect(api.calls).toContain("fetchClients");
   });
 });
 
@@ -1537,6 +1540,37 @@ describe("desktops and shortcuts", () => {
     store.openOverview();
     await store.switchDesktop("work");
     expect(store.isOverviewOpen()).toBe(false);
+  });
+
+  it("reads the thumbnails' layouts once per open and forgets them, and the delete confirmation, on any close", async () => {
+    const store = await startedStore();
+    api.writeLayout("work", CLIENT, { updated_at: null, placements: [placementRecord("win-9")] });
+    const work = store.getState().desktops.filter((desktop) => desktop.id === "work");
+    const reads = (): number => api.calls.filter((call) => call === "fetchPlacements:work").length;
+    // Closed, the overview reads nothing.
+    store.ensureOverviewLayouts(work);
+    expect(reads()).toBe(0);
+    store.openOverview();
+    expect(store.overviewLayoutOf("home")).toBe(store.getState().layout);
+    expect(store.overviewLayoutOf("work")).toBeNull();
+    store.ensureOverviewLayouts(work);
+    store.ensureOverviewLayouts(work);
+    await settle();
+    expect(reads()).toBe(1);
+    expect(store.overviewLayoutOf("work")?.placements.map((placement) => placement.window_id)).toEqual(["win-9"]);
+    store.setOverviewDeletingId("work");
+    expect(store.getOverviewDeletingId()).toBe("work");
+    // A switch closes the overview from inside the store, and forgets what it read and was confirming.
+    await store.switchDesktop("work");
+    await store.switchDesktop("home");
+    expect(store.isOverviewOpen()).toBe(false);
+    expect(store.getOverviewDeletingId()).toBeNull();
+    const before = reads();
+    store.openOverview();
+    expect(store.overviewLayoutOf("work")).toBeNull();
+    store.ensureOverviewLayouts(work);
+    await settle();
+    expect(reads()).toBe(before + 1);
   });
 
   it("reads the active desktop's layout as held and another desktop's from the shell", async () => {
@@ -2931,7 +2965,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(store.ownDesktops().map((desktop) => desktop.id)).toEqual(["home", "work"]);
     expect(store.viewedDesktop()).toBeNull();
     await store.switchDesktop("work");
-    await store.goToDesktop("alice");
+    await store.switchDesktop("alice");
     expect(store.getState().activeDesktopId).toBe("alice");
     expect(store.viewedDesktop()?.id).toBe("alice");
     await store.stopViewing();
@@ -2942,7 +2976,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
   it("stops viewing onto its first own desktop when the way back is gone", async () => {
     const store = await viewerStore();
     await store.switchDesktop("work");
-    await store.goToDesktop("alice");
+    await store.switchDesktop("alice");
     socket.deliver().onDesktopsUpdated([api.desktops[0], alices]);
     await store.stopViewing();
     expect(store.getState().activeDesktopId).toBe("home");
@@ -2950,10 +2984,10 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
 
   it("a switch onto one of its own ends the viewing without a way back", async () => {
     const store = await viewerStore();
-    await store.goToDesktop("alice");
+    await store.switchDesktop("alice");
     await store.switchDesktop("home");
     expect(store.viewedDesktop()).toBeNull();
-    await store.goToDesktop("alice");
+    await store.switchDesktop("alice");
     await store.stopViewing();
     expect(store.getState().activeDesktopId).toBe("home");
   });
@@ -2978,6 +3012,23 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
       active_desktop: client.participant === VIEWER ? "home" : "alice",
     }));
     await store.refreshClients();
+    expect([...store.viewedOwnerKeys()]).toEqual([]);
+  });
+
+  it("reads the clients again on a move by one it does not know, and when who is here changes", async () => {
+    api.clients = [clientRecord("josh-laptop", { participant: VIEWER, active_desktop: "home" })];
+    const store = await viewerStore();
+    // Alice's phone connected after this page loaded and moved onto Home: its record is read, so the owner is ringed.
+    api.clients = [...api.clients, clientRecord("alice-phone", { participant: alice.key, active_desktop: "home" })];
+    deliverDesktopNews("home", 1, null, "alice-phone");
+    await settle();
+    expect([...store.viewedOwnerKeys()]).toEqual([josh.key]);
+    // Alice left: the presence push reads the clients again, and her phone is no longer connected.
+    api.clients = api.clients.map((client) =>
+      client.id === "alice-phone" ? { ...client, is_connected: false } : client,
+    );
+    socket.deliver().onPresenceUpdated([]);
+    await settle();
     expect([...store.viewedOwnerKeys()]).toEqual([]);
   });
 });

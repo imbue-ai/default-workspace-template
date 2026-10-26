@@ -80,7 +80,6 @@ from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.data_types import window_view
 from imbue.system_interface.shell.desktop_document import apps_with_their_default_shortcut_on
-from imbue.system_interface.shell.desktop_document import desktop_owner_of
 from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
@@ -110,6 +109,7 @@ from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
+from imbue.system_interface.shell.ownership import desktop_owner_of
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import LaunchTargetKind

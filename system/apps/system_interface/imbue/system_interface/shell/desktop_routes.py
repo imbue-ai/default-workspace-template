@@ -144,8 +144,9 @@ from imbue.system_interface.shell.wallpapers import resolve_wallpaper_file
 
 
 class DesktopMetadataRequest(FrozenModel):
-    """The body of desktop create: the name, and the colour and glyph the record keeps though nothing draws them
-    any more (the multiplayer spec, S7), which the shell picks when they are absent."""
+    """The body of desktop create: the name, and the colour and glyph the record keeps though the page no longer
+    draws or sends them (the multiplayer spec, section 8.1); an agent may still choose them, and the shell picks
+    them when they are absent."""
 
     name: str = Field(description="The display name")
     color: str | None = Field(default=None, description="'#RRGGBB'; absent takes the chosen glyph's colour")
@@ -153,8 +154,8 @@ class DesktopMetadataRequest(FrozenModel):
 
 
 class DesktopSettingsRequest(FrozenModel):
-    """The body of desktop settings: the name, and the colour and glyph a caller from before the desktops phase
-    still sends (absent, each stays as written)."""
+    """The body of desktop settings: the name, and the colour and glyph the record keeps though the page no longer
+    draws or sends them (the multiplayer spec, section 8.1); absent, each stays as written."""
 
     name: str = Field(description="The display name")
     color: str | None = Field(default=None, description="'#RRGGBB'; absent keeps the colour as written")
