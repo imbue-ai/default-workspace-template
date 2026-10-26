@@ -38,6 +38,10 @@ PENDING_INTAKE_TTL_SECONDS: Final[float] = 15 * 60.0
 # The random bytes behind a pending intake's one-time token.
 _PENDING_INTAKE_TOKEN_BYTES: Final[int] = 16
 
+# The label a chat about an app carries, with the app's registered name: what the button finds the chat by again
+# whatever its title has become (the multiplayer spec, section 9.2).
+APP_CHAT_LABEL: Final[str] = "app_chat"
+
 
 @pure
 def chat_id_selected_by_window_path(path: str) -> ChatId | None:
@@ -63,11 +67,6 @@ def most_recently_messaged_chat_id(snapshots: Sequence[ChatSnapshot]) -> ChatId 
     if not snapshots:
         return None
     return max(snapshots, key=lambda snapshot: snapshot.last_messaged_at or 0.0).chat_id
-
-
-# The label a chat about an app carries, with the app's registered name: what the button finds the chat by again
-# whatever its title has become (the multiplayer spec, section 9.2).
-APP_CHAT_LABEL: Final[str] = "app_chat"
 
 
 @pure
