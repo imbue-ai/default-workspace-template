@@ -2927,6 +2927,18 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     ]);
     expect(store.getState().layout.window_paths["win-chat"]?.path).toBe("/?chat=agent-docs");
 
+    // The pinned window's own balloon: the show navigates that very window, so there is nothing to lay it out beside
+    // and the placements stay.
+    expect(await store.openAppChat("win-chat")).toBe(true);
+    expect(api.calls).toContain(
+      'launch:home:chat:app-chat:{"app":"chat","app_display_name":"Chat"}:show:beside:win-chat',
+    );
+    await settle();
+    expect(store.getState().layout.placements.map((placement) => [placement.window_id, placement.state])).toEqual([
+      ["win-docs", "SNAPPED_LEFT"],
+      ["win-chat", "SNAPPED_RIGHT"],
+    ]);
+
     // Without an app-chat launch path on the machine the user is told, and a window that is gone is nothing to act on.
     offerApps(api, socket, [chatLikeAppRecord("chat"), appRecord("docs", { display_name: "Docs" })]);
     expect(await store.openAppChat("win-docs")).toBe(false);

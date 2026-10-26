@@ -361,8 +361,8 @@ export class FakeDesktopApi implements DesktopApi {
 
   /** The show rule as the shell's ``show`` launch target applies it: a window of the app already at the path is
    *  raised, else the app's pinned window is pointed at it for this client, else a window is opened; then, beside a
-   *  window, the two are snapped to the halves (the shown one on the half its centre is on, the right when it is
-   *  minimized), the shown one on top. */
+   *  window other than the shown one, the two are snapped to the halves (the shown one on the half its centre is on,
+   *  the right when it is minimized), the shown one on top. */
   private async showLaunched(
     desktopId: string,
     request: LaunchRequest,
@@ -392,7 +392,7 @@ export class FakeDesktopApi implements DesktopApi {
       shown = opened.window;
       isNew = opened.isNew;
     }
-    if (besideWindowId !== undefined) {
+    if (besideWindowId !== undefined && besideWindowId !== shown.id) {
       const layout = this.layoutOf(desktopId, request.clientId);
       const placement = placementOf(layout, shown.id);
       const isPlaced = layout.placements.some((candidate) => candidate.window_id === shown.id);

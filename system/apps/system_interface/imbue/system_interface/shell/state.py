@@ -468,7 +468,9 @@ class ShellState(MutableModel):
                     repoint=set(),
                     is_every_desktop_searched=False,
                 )
-                if beside is not None and not shown.is_raised_in_own_window:
+                # The pinned window's own balloon names it as ``beside`` and the show navigates it: one window, nothing
+                # to lay out beside.
+                if beside is not None and beside.id != shown.window_id and not shown.is_raised_in_own_window:
                     self.edit_desktop_layout(
                         shown.desktop,
                         request.client_id,

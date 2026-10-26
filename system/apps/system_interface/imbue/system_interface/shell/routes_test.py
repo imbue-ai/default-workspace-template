@@ -2792,6 +2792,7 @@ def test_a_show_launch_puts_the_page_on_screen_by_the_show_rule_and_lays_it_out_
         [
             LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-9"}),
             LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-9"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-10"}),
         ]
     )
     app = _launching_shell(tmp_path, broadcaster, poster)
@@ -2835,6 +2836,24 @@ def test_a_show_launch_puts_the_page_on_screen_by_the_show_rule_and_lays_it_out_
         },
     )
     assert raised.status_code == 200 and raised.get_json()["window"]["id"] == pinned["id"]
+    assert [(placement["window_id"], placement["state"]) for placement in _placements(client, "c1")] == [
+        (terminal["id"], "SNAPPED_LEFT"),
+        (pinned["id"], "SNAPPED_RIGHT"),
+    ]
+
+    # Beside the pinned window itself (its own balloon): the show navigates that very window to the new page, so
+    # there is nothing to lay it out beside and the placements stay.
+    own = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "hi"},
+            "target": {"kind": "show", "beside": pinned["id"]},
+        },
+    )
+    assert own.status_code == 200, own.get_json()
+    assert (own.get_json()["window"]["id"], own.get_json()["window"]["path"]) == (pinned["id"], "/?chat=agent-10")
     assert [(placement["window_id"], placement["state"]) for placement in _placements(client, "c1")] == [
         (terminal["id"], "SNAPPED_LEFT"),
         (pinned["id"], "SNAPPED_RIGHT"),
