@@ -37,7 +37,6 @@ path = "/"
 # at the path the route answers. ``target`` says which chat receives the text, ``is_draft`` whether it is put
 # in the composer unsent.
 
-# The launcher's primary free-text row: what is typed into the desktop's field becomes a new chat's first message.
 # The launcher's Enter: a text typed into the desktop goes to the main chat.
 [[launch_paths]]
 id = "main"
@@ -48,6 +47,7 @@ params = [{name = "message", label = "Message to send", required = false}]
 presets = {target = "main_chat"}
 text_param = "message"
 
+# The launcher's primary free-text row: what is typed into the desktop's field becomes a new chat's first message.
 [[launch_paths]]
 id = "new"
 label = "New Chat"
