@@ -240,8 +240,8 @@ def _open_fixture_chat(page: Page, server: RunningWorkspace) -> None:
 
 
 def _start_new_chat(page: Page, server: RunningWorkspace) -> FrameLocator:
-    """Run the chat app's ``new`` launch path from the launcher's menu (its primary free-text row, run with nothing
-    typed): the shell posts the intake and points the window at the chat it answers; return that chat's frame."""
+    """Run the chat app's ``new`` launch path from the launcher's menu with nothing typed: the shell posts the intake
+    and points the window at the chat it answers; return that chat's frame."""
     _land(page, server)
     page.locator("[data-launcher-field] textarea").click()
     menu = page.locator("[data-launcher-overlay]")
