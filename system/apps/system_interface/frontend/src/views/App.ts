@@ -724,7 +724,8 @@ export function App(): m.Component<AppAttrs> {
     store?.closeOverview();
   }
 
-  /** The bare backdrop's menu (the multiplayer spec, section 8.2): a new desktop, the overview, and the wallpaper. */
+  /** The bare backdrop's menu (the multiplayer spec, section 8.2): a new desktop, the overview (not while viewing
+   *  somebody else's desktop, when the overview button is hidden too, section 8.3), and the wallpaper. */
   function rowsOfBackdropMenu(current: DesktopStore): MenuRow[] {
     const active = current.getState().activeDesktopId;
     return [
@@ -738,6 +739,7 @@ export function App(): m.Component<AppAttrs> {
         kind: "action",
         key: "show-all-desktops",
         label: "Show all desktops",
+        isDisabled: current.viewedDesktop() !== null,
         onSelect: () => current.openOverview(),
       },
       { kind: "divider" },

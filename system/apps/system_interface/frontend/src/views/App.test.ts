@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
+import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import {
   appRecord,
@@ -79,6 +80,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   unmountViews();
+  resetPresenceForTesting();
   gestureListener = null;
 });
 
@@ -399,6 +401,24 @@ describe("Escape", () => {
     expect(store.isLauncherOpen()).toBe(true);
     pressEscape();
     expect(store.isLauncherOpen()).toBe(false);
+  });
+
+  it("offers the overview on the backdrop's menu except while viewing somebody else's desktop", async () => {
+    setOwnIdentityForTesting({ owner: true, user_id: null, email: null, participant: "owner" });
+    socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("alice", { owner: "user:user-alice-0001" })]);
+    const openBackdropMenu = (): Element | null => {
+      (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
+      );
+      m.redraw.sync();
+      return document.querySelector('.backdrop-menu [data-menu-row="show-all-desktops"]');
+    };
+    expect(openBackdropMenu()?.getAttribute("aria-disabled")).toBeNull();
+    pressEscape();
+    await store.switchDesktop("alice");
+    m.redraw.sync();
+    expect(openBackdropMenu()?.getAttribute("aria-disabled")).toBe("true");
+    pressEscape();
   });
 
   it("closes the overview before the launcher", () => {
