@@ -1113,12 +1113,12 @@ export function App(): m.Component<AppAttrs> {
       if (store !== null) pages?.setMountPolicy(mountPolicyOf(store));
       // The pages lie over the overview's tiles while it is up, at the scale this redraw tiled them at.
       const tiling = overviewTiling;
-      const tileIds = tiling === null ? null : new Set(tiling.tiles.map((tile) => tile.window.id));
-      pages?.setOverview(
-        tiling === null || tileIds === null
-          ? null
-          : { scaleOf: (windowId) => (tileIds.has(windowId) ? tiling.grid.scale : null) },
-      );
+      if (tiling === null) {
+        pages?.setOverview(null);
+      } else {
+        const tileIds = new Set(tiling.tiles.map((tile) => tile.window.id));
+        pages?.setOverview({ scaleOf: (windowId) => (tileIds.has(windowId) ? tiling.grid.scale : null) });
+      }
       pages?.reconcile();
     },
     onremove() {

@@ -120,7 +120,8 @@ export type MountPolicy = { readonly kind: "all" } | ShownMountPolicy;
 
 /** The overview's tiles (the multiplayer spec, section 8.2): how far each tile scales its window down. */
 export interface OverviewPresentation {
-  /** The scale the tile of ``windowId`` draws its page at, or null for a window the overview has no tile for. */
+  /** The scale the tile of ``windowId`` draws its page at, or null for a window the overview has no tile for; a
+   *  scale that is not positive (a grid no tile fits) hides the page as no tile does. */
   readonly scaleOf: (windowId: string) => number | null;
 }
 
@@ -348,7 +349,7 @@ export class LivePagesLayer implements PageDriver {
     for (const placement of placements) {
       const found = windowsById.get(placement.window_id);
       const scale = overview.scaleOf(placement.window_id);
-      if (found === undefined || desktop === null || scale === null) continue;
+      if (found === undefined || desktop === null || scale === null || scale <= 0) continue;
       if (placement.is_detached || placement.window_id === this.tornOutWindowId) continue;
       const app = appByName(state, found.window.app);
       if (app === undefined) continue;

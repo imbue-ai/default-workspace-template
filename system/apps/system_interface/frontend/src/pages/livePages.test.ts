@@ -944,4 +944,12 @@ describe("the overview (the multiplayer spec, section 8.2)", () => {
     expect(wrapper.style.zIndex).toBe("5");
     expect(wrapperOf("win-2").style.display).toBe("none");
   });
+
+  it("hides a page whose tile scale is not positive rather than sizing it by a zero scale", () => {
+    renderTiles();
+    layer.setOverview({ scaleOf: (windowId) => (windowId === "win-1" ? 0 : 0.5) });
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.display).toBe("none");
+    expect(wrapperOf("win-2").style.display).toBe("");
+  });
 });
