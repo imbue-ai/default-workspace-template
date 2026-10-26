@@ -19,7 +19,7 @@ import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialo
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { fetchAccountModelOptions } from "../models/AccountModelOptions";
-import { getChatById } from "../models/Chats";
+import { getChatById, launchChat } from "../models/Chats";
 import type { ChatSnapshot, TransitionKind } from "../models/Chats";
 import { switchChat } from "../models/Handoffs";
 import { effortInEffect, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
@@ -128,6 +128,29 @@ function decideSwitchTo(chatId: string, target: ProviderAccount): void {
 export function beginSwitchToAccountId(chatId: string, accountId: string): void {
   const account = accountForAgent(accountId);
   if (account !== null) beginSwitchTo(chatId, account);
+}
+
+/** Make the chat a room (the multiplayer spec, section 7.6): a switch with nothing to hand over, since the room
+ *  takes no prompt; the conversation so far stays as the chat's earlier segments. Nothing to pick, so no dialog. */
+export async function switchToRoom(chatId: string): Promise<void> {
+  setPendingAccount(chatId, null);
+  try {
+    await switchChat(chatId, "", "", mintMessageId(), null, "room");
+  } catch (error) {
+    raiseFailureNotice(chatId, { title: "Couldn't make this chat a room", detail: describeRequestError(error) });
+  }
+  m.redraw();
+}
+
+/** Launch a chat awaiting its first send as a room, with nothing said yet (section 7.3): what the provider
+ *  chooser's room row comes to when the awaiting chat's provider chip or its no-provider notice opened it. */
+export async function launchAwaitingChatAsRoom(chatId: string): Promise<void> {
+  try {
+    await launchChat(chatId, "", "", "room");
+  } catch (error) {
+    raiseFailureNotice(chatId, { title: "Couldn't make a room", detail: describeRequestError(error) });
+  }
+  m.redraw();
 }
 
 async function switchFreshChat(chatId: string, target: ProviderAccount): Promise<void> {

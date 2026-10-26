@@ -47,21 +47,16 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
-from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
-from workspace_layout.interfaces import ShellLayoutInterface
-from workspace_layout.ops import ClientActivityReport
-from workspace_layout.primitives import ClientActivityKind
-from workspace_layout.primitives import ClientId
-from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.shell_url import shell_base_url
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
 from imbue.chat import latchkey_endpoints
+from imbue.chat import mentions_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_exists
@@ -98,6 +93,8 @@ from imbue.chat.chat_intakes import most_recently_messaged_chat_id
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
+from imbue.chat.client_activity import is_client_activity_reportable
+from imbue.chat.client_activity import record_client_message_activity
 from imbue.chat.compaction_status import compact_command_instructions
 from imbue.chat.compaction_status import is_compact_command
 from imbue.chat.compaction_status import is_context_compacted_event
@@ -105,6 +102,7 @@ from imbue.chat.config import Config
 from imbue.chat.documents import document_response
 from imbue.chat.documents import inject_base_path_meta_tag
 from imbue.chat.documents import inject_chat_identity_meta_tags
+from imbue.chat.documents import inject_chat_kind_meta_tag
 from imbue.chat.documents import inject_hostname_meta_tag
 from imbue.chat.documents import inject_plugin_script_tags
 from imbue.chat.documents import inject_primary_agent_id_meta_tag
@@ -134,6 +132,8 @@ from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.identity import request_identity
 from imbue.chat.identity import request_participant
 from imbue.chat.main_chat import MAIN_CHAT_NAME
+from imbue.chat.mentions import BackgroundMentionDeliverer
+from imbue.chat.mentions import MentionHandler
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentListItem
@@ -199,9 +199,10 @@ from imbue.chat.models import SwitchChatResponse
 from imbue.chat.models import parse_subagent_key
 from imbue.chat.naming import canonical_agent_name
 from imbue.chat.presence import PresenceReport
+from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import AGENT_ID_PATTERN
-from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.request_helpers import answer_chat_app_error
 from imbue.chat.request_helpers import handle_unhandled_exception
@@ -664,9 +665,12 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     # it starts is already running.
     requested_at = time.monotonic()
     # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
-    # harness still starting -- reads as Connecting on the chat until it resolves.
+    # harness still starting -- reads as Connecting on the chat until it resolves. A room's send
+    # starts nothing (it appends to the room's transcript), so a stopped room stays stopped and
+    # reads so (the multiplayer spec, section 11).
+    is_revived_by_send = get_harness_spec(agent_info.harness).is_revived_by_send
     with agent_manager.track_connecting_send(agent_info.id, message_id) as mark_connecting:
-        if is_lifecycle_dead(agent_info.state) or session.is_starting_up():
+        if (is_revived_by_send and is_lifecycle_dead(agent_info.state)) or session.is_starting_up():
             mark_connecting()
         outcome = session.send(text, message_id)
         if outcome is SendOutcome.NOT_READY:
@@ -681,7 +685,7 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
         # lifecycle that is true rather than one that says the agent they just messaged is dead.
         # Inside the connecting scope, so the chat never reads as stopped and not connecting,
         # which would let the stopped-chat release drop the watcher of the chat it revived.
-        if outcome is SendOutcome.OK:
+        if outcome is SendOutcome.OK and is_revived_by_send:
             agent_manager.note_agent_alive(agent_info.id)
     if outcome is SendOutcome.OK and compact_handling is ComposerCompactHandling.FORWARDED_TO_HARNESS:
         agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)
@@ -898,9 +902,33 @@ def _attributed_delivery(
         return message
     sender = participant_key_of(identity)
     display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
-    delivered = message if is_unprefixable_input(message) else author_prefix(display_name) + message
+    is_prefixed = _is_author_prefixed(chat_id) and not is_unprefixable_input(message)
+    delivered = author_prefix(display_name) + message if is_prefixed else message
     state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, delivered))
     return delivered
+
+
+def _is_author_prefixed(chat_id: ChatId) -> bool:
+    """Whether the chat's harness learns a non-owner's author from the delivered text's prefix; a room records the
+    author from the annotation instead. A chat with no agent yet reads as prefixed, like the agent it will get."""
+    agent_info = _find_active_agent(str(chat_id))
+    return agent_info is None or get_harness_spec(agent_info.harness).is_author_prefixed
+
+
+def _act_on_room_mentions(
+    state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
+) -> None:
+    """What a send's mentions do once it was accepted (the multiplayer spec, section 7.4): in a room, people are
+    marked and the agent or a chat is sent the message; in an agent chat nothing, a handle being a word the agent
+    reads like any other. Takes the sender's ``identity`` rather than reading the request's, since an intake nobody
+    waits on is delivered on a thread of its own."""
+    handler = state.mention_handler
+    snapshot = state.agent_manager.get_chat_snapshot(str(chat_id))
+    if handler is None or snapshot is None or snapshot.kind is not ChatKind.ROOM or "@" not in text:
+        return
+    sender = participant_key_of(identity)
+    sender_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
+    handler.act(chat_id, snapshot.title, message_id, text, sender, sender_name)
 
 
 def _me_endpoint() -> Response:
@@ -974,6 +1002,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     )
     if isinstance(accepted, _SendRefused):
         return model_response(accepted.answer, accepted.status)
+    _act_on_room_mentions(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
     if accepted.held_phase is not None:
@@ -983,48 +1012,9 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
 
 @pure
-def is_client_activity_reportable(send_message_request: SendMessageRequest) -> bool:
-    """Whether a send names the client and the desktop the shell's activity log keys on (a legacy or unframed caller names neither)."""
-    return send_message_request.client_id != "" and send_message_request.desktop_id != ""
-
-
-@pure
 def _held_send_origin(send_message_request: SendMessageRequest) -> HeldSendOrigin:
     """Who a send held during a handoff came from: a chat page names its client, anything else is a script."""
     return HeldSendOrigin.CLIENT if is_client_activity_reportable(send_message_request) else HeldSendOrigin.SCRIPT
-
-
-@pure
-def client_activity_report(chat_id: ChatId, send_message_request: SendMessageRequest) -> ClientActivityReport:
-    """The shell's client-activity report for one send (desktop contracts.md section 5.1), keyed by chat. Raises
-    InvalidLayoutValueError when the send's client or desktop is not an id the shell would take."""
-    return ClientActivityReport(
-        client_id=ClientId(send_message_request.client_id),
-        desktop_id=DesktopId(send_message_request.desktop_id),
-        kind=ClientActivityKind.MESSAGE,
-        app=str(CHAT_APP_NAME),
-        key=chat_id,
-        text=send_message_request.message,
-    )
-
-
-def record_client_message_activity(
-    shell: ShellLayoutInterface, chat_id: ChatId, send_message_request: SendMessageRequest, is_secondary: bool
-) -> None:
-    """Tell the shell which client (and desktop) a message came from, so agents can attribute requests through
-    ``workspace-layout context``. Callers naming no client or no desktop are not recorded, and neither is anything a
-    secondary chat (a preview) hears: the shell's activity log is the live chat's. Reported on its own thread:
-    the shell is a separate app, and a send must not wait on it."""
-    if is_secondary or not is_client_activity_reportable(send_message_request):
-        return
-    try:
-        report = client_activity_report(chat_id, send_message_request)
-    except InvalidLayoutValueError as e:
-        logger.warning("Skipped reporting a send of chat {} to the shell: {}", chat_id, e)
-        return
-    threading.Thread(
-        target=shell.record_client_activity, args=(report,), name="client-activity-report", daemon=True
-    ).start()
 
 
 def _get_harnesses_endpoint() -> Response:
@@ -1551,6 +1541,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
             message_id,
             _held_send_origin(switch_request),
             model_pick=switch_request.model,
+            kind=switch_request.kind,
         )
     except ChatConvergingError as e:
         return error_response(str(e), 409)
@@ -1591,7 +1582,7 @@ def _retry_handoff_endpoint(chat_id: str) -> Response:
         return _chat_not_found_response(chat_id)
     retry_request = parse_request_body(HandoffRetryRequest)
     try:
-        phase = get_state().agent_manager.retry_handoff(parsed, retry_request.account_id)
+        phase = get_state().agent_manager.retry_handoff(parsed, retry_request.account_id, retry_request.kind)
     except HandoffError as e:
         return error_response(str(e), 400)
     return model_response(HandoffRetryResponse(status="converging", phase=phase), 202)
@@ -1723,8 +1714,18 @@ def _run_create_chat() -> CreatedChat | Response:
     ``system/scripts/message_chat.py --create``) holds its "starting..." state until the
     chat exists, without polling.
     """
-    agent_manager: AgentManager = get_state().agent_manager
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
     create_request = parse_request_body(CreateChatRequest)
+    identity = request_identity()
+    # A room's first message is appended once its agent is up, by a thread with no identity of its own: who sent
+    # it is annotated under this id before the create, and what its mentions do runs once it has landed.
+    first_message_id = uuid4().hex if create_request.kind is ChatKind.ROOM else ""
+    on_message_delivered = (
+        _room_first_message_hook(state, create_request.message, identity, current_app.app_context())
+        if create_request.kind is ChatKind.ROOM
+        else None
+    )
     created = _created_chat_or_refusal(
         lambda: agent_manager.create_chat(
             create_request.name,
@@ -1738,11 +1739,17 @@ def _run_create_chat() -> CreatedChat | Response:
             labels=create_request.labels,
             is_installation_check_skipped=create_request.is_installation_check_skipped,
             model_pick=create_request.model,
+            kind=create_request.kind,
+            message_id=first_message_id,
+            on_message_delivered=on_message_delivered,
         )
     )
     if isinstance(created, Response):
         return created
-    _consider_naming_chat(get_state(), created.chat_id, create_request.message)
+    if create_request.kind is ChatKind.ROOM:
+        _record_room_first_message_author(state, created.chat_id, create_request.message, identity, first_message_id)
+    else:
+        _consider_naming_chat(state, created.chat_id, create_request.message)
     if not create_request.should_wait:
         return created
     outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
@@ -1753,6 +1760,43 @@ def _run_create_chat() -> CreatedChat | Response:
         detail = outcome.error or f"Creating chat {created.display_name!r} failed"
         return error_response(detail, 500)
     return created
+
+
+def _record_room_first_message_author(
+    state: ChatAppState, chat_id: ChatId, message: str, identity: RequestIdentity, message_id: str
+) -> None:
+    """Record who a new room's first message is from (the multiplayer spec, section 5.1): the message is appended
+    once the room's agent is up, with no identity of its own, so a sender other than the owner is annotated here,
+    under the id the append will carry."""
+    if not message or is_owner_participant(identity):
+        return
+    sender = participant_key_of(identity)
+    display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
+    state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, message))
+
+
+def _act_on_room_first_message(
+    state: ChatAppState,
+    message: str,
+    identity: RequestIdentity,
+    app_context: AppContext,
+    chat_id: ChatId,
+    message_id: str,
+) -> None:
+    """What a new room's first message does once it has landed (the multiplayer spec, section 7.4): its mentions
+    act as a message-route send's do, for the sender the create's request vouched for, under the app's context,
+    since the create's thread has none of its own."""
+    with app_context:
+        _act_on_room_mentions(state, chat_id, message_id, message, identity)
+
+
+def _room_first_message_hook(
+    state: ChatAppState, message: str, identity: RequestIdentity, app_context: AppContext
+) -> Callable[[ChatId, str], None]:
+    """The hook the create route hands the manager for a room's first message, bound to the sender and the app."""
+    return lambda chat_id, message_id: _act_on_room_first_message(
+        state, message, identity, app_context, chat_id, message_id
+    )
 
 
 def _create_chat() -> Response:
@@ -1875,8 +1919,8 @@ def _deliver_intake_send(
     state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
 ) -> _SendRefused | None:
     """Send an intake's text to a chat that is an agent through the ordinary send path, attributed to the sender
-    ``identity`` vouches for as a message-route send is; None when it landed (or was held for a converging chat),
-    else the refusal: what the message route would answer, and under which status."""
+    ``identity`` vouches for and acted on for its mentions as a message-route send is; None when it landed (or was
+    held for a converging chat), else the refusal: what the message route would answer, and under which status."""
     message_id = uuid4().hex
     send_message_request = SendMessageRequest(
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
@@ -1891,7 +1935,10 @@ def _deliver_intake_send(
         is_refused_on_signed_out_account=True,
         delivered_text=delivered_text,
     )
-    return accepted if isinstance(accepted, _SendRefused) else None
+    if isinstance(accepted, _SendRefused):
+        return accepted
+    _act_on_room_mentions(state, chat_id, message_id, intake.message, identity)
+    return None
 
 
 def _log_undelivered_intake_send(
@@ -2247,8 +2294,12 @@ def _presence_endpoint(chat_id: str) -> Response:
     if not AGENT_ID_PATTERN.fullmatch(chat_id):
         return _chat_not_found_response(chat_id)
     report = parse_request_body(PresenceReport)
-    agent_manager: AgentManager = get_state().agent_manager
-    agent_manager.record_presence(ChatId(chat_id), report)
+    state = get_state()
+    state.agent_manager.record_presence(ChatId(chat_id), report)
+    # A page of theirs looking at the chat is the person having seen what mentioned them (section 7.4).
+    if report.state is PresenceState.VISIBLE and report.is_focused:
+        if state.mentions.clear(request_participant(), ChatId(chat_id)):
+            state.broadcaster.broadcast_mentions_updated()
     return model_response(OkResponse())
 
 
@@ -2322,7 +2373,12 @@ def _chat_document(key: str) -> Response:
     config: Config = get_state().config
     root_path = (request.script_root or "").rstrip("/")
     with_workspace_tags = _inject_workspace_meta_tags(document_path.read_text(), root_path)
-    html_content = inject_chat_identity_meta_tags(with_workspace_tags, chat_id, agent_id, session_id)
+    with_identity = inject_chat_identity_meta_tags(with_workspace_tags, chat_id, agent_id, session_id)
+    # The kind as the chat app lists the chat now; a chat it does not list yet (one still being created) is an
+    # agent's until the list says otherwise.
+    snapshot = get_state().agent_manager.get_chat_snapshot(chat_id)
+    kind = snapshot.kind if snapshot is not None else ChatKind.AGENT
+    html_content = inject_chat_kind_meta_tag(with_identity, kind.value)
     if config.javascript_plugin_basenames:
         html_content = inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
     return document_response(html_content, is_frontend_built=True)
@@ -2610,7 +2666,22 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     latchkey_endpoints.ROUTE_TABLE,
     focus_chat.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
+    mentions_endpoints.ROUTE_TABLE,
 )
+
+
+def _send_room_mention(chat_id: ChatId, delivered: str, message_id: str) -> str | None:
+    """Deliver a room's mention to an agent chat through the ordinary send path; the refusal's detail, or None. A
+    person's message, so a chat whose account was signed out refuses it as it does the message route's."""
+    accepted = _send_to_chat(
+        get_state(),
+        chat_id,
+        SendMessageRequest(message=delivered, message_id=message_id),
+        message_id,
+        is_refused_on_signed_out_account=True,
+        delivered_text=delivered,
+    )
+    return accepted.answer.detail if isinstance(accepted, _SendRefused) else None
 
 
 def create_application(state: ChatAppState) -> Flask:
@@ -2709,6 +2780,15 @@ def create_application(state: ChatAppState) -> Flask:
     focus_chat.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
+    state.mention_handler = MentionHandler(
+        agent_manager=state.agent_manager,
+        roster=state.roster,
+        mentions=state.mentions,
+        authors=state.authors,
+        deliverer=BackgroundMentionDeliverer(send=_send_room_mention),
+        on_pending_changed=state.broadcaster.broadcast_mentions_updated,
+    )
+    mentions_endpoints.register_routes(application)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])
 

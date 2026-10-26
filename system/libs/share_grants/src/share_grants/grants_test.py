@@ -152,7 +152,6 @@ def test_a_quoted_table_key_and_each_of_the_three_lists_grant_their_app() -> Non
     assert parse_grants(text).granted_app_names() == {"my-app", "other"}
 
 
-
 def test_render_grants_roundtrips_through_parse() -> None:
     rendered = render_grants(parse_grants(_FULL_GRANTS))
     reparsed = parse_grants(rendered)

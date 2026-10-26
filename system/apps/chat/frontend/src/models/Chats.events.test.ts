@@ -272,4 +272,16 @@ describe("the account list over the socket", () => {
 
     expect(providers.loadAccounts).toHaveBeenCalledOnce();
   });
+
+  it("tells the mentions listeners of a reconnect as of a push, since a push while it was down reached no one", () => {
+    const listener = vi.fn();
+    manager.addMentionsUpdatedListener(listener);
+    open();
+    expect(listener).not.toHaveBeenCalled();
+
+    push({ type: "mentions_updated" });
+    open();
+
+    expect(listener).toHaveBeenCalledTimes(2);
+  });
 });

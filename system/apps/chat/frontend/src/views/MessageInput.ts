@@ -26,7 +26,7 @@ import {
   setSwitchSending,
 } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
-import { beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
+import { beginSwitchToAccountId, launchAwaitingChatAsRoom, openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import {
@@ -49,6 +49,7 @@ import {
   getChatById,
   getProvisionalChat,
   isHandoffCancellable,
+  isRoomChat,
   launchChat,
   whenChatRegistered,
 } from "../models/Chats";
@@ -56,6 +57,10 @@ import { COMPACTING_STATE, isWorkingActivityState } from "../models/activityStat
 import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { ensureMentionHandles, matchingHandles } from "../models/Mentions";
+import type { MentionHandle } from "../models/Mentions";
+import { MENTION_ROW_CAP, insertMention, mentionDraftAt, mentionPopover } from "./MentionPopover";
+import type { MentionDraft } from "./MentionPopover";
 import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
@@ -312,7 +317,7 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
 function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
     leading ?? null,
-    m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1` }, boxChildren),
+    m("div", { class: `${INPUT_BOX_CLASS} relative min-w-0 flex-1` }, boxChildren),
   ]);
 }
 
@@ -342,6 +347,9 @@ addModelChoiceFailureListener((chatId, detail) =>
 function chooseProviderToContinue(chatId: string): void {
   openProviderChooser({ onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen) });
 }
+
+/** What an awaiting chat's first send launches it as: a chat on an account, or a room. */
+type FirstSendChoice = { kind: "account"; id: string } | { kind: "room" };
 
 export function MessageInput(): m.Component<MessageInputAttrs> {
   let messageText = "";
@@ -405,6 +413,58 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // The chat whose switch-and-send message is still being prepared (uploads, the composer guard):
   // not sent yet, so the switch is still the next send's.
   let switchPreparingChatId: string | null = null;
+  // The mention being typed, while the caret follows an ``@`` (section 7.2); null otherwise.
+  let mentionDraft: MentionDraft | null = null;
+
+  function mentionRows(): MentionHandle[] {
+    return mentionDraft === null ? [] : matchingHandles(mentionDraft.query).slice(0, MENTION_ROW_CAP);
+  }
+
+  /** Read the mention under the caret after the text changed or the caret moved; a fresh ``@`` asks for the table.
+   *  Only in a room (section 7.2): in an agent chat a handle is a word the agent reads like any other. */
+  function updateMentionDraft(textarea: HTMLTextAreaElement): void {
+    if (currentChatId === null || !isRoomChat(currentChatId)) {
+      mentionDraft = null;
+      return;
+    }
+    const previous = mentionDraft;
+    mentionDraft = mentionDraftAt(textarea.value, textarea.selectionStart ?? textarea.value.length, previous);
+    if (mentionDraft !== null && previous === null) void ensureMentionHandles().then(() => m.redraw());
+  }
+
+  function pickMention(handle: MentionHandle): void {
+    if (mentionDraft === null || messageTextareaElement === null || currentChatId === null) return;
+    const inserted = insertMention(messageText, mentionDraft, handle.handle);
+    messageText = inserted.text;
+    messageTextareaElement.value = inserted.text;
+    messageTextareaElement.setSelectionRange(inserted.caret, inserted.caret);
+    localStorage.setItem(messageTextKey(currentChatId), messageText);
+    mentionDraft = null;
+    refitComposer();
+    focusMessageTextarea();
+    m.redraw();
+  }
+
+  /** The popover's keys while a mention is being typed; whether the key was taken. */
+  function handleMentionKeydown(event: KeyboardEvent): boolean {
+    if (mentionDraft === null) return false;
+    const rows = mentionRows();
+    if (event.key === "Escape") {
+      mentionDraft = null;
+      return true;
+    }
+    if (rows.length === 0) return false;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      mentionDraft = { ...mentionDraft, index: (mentionDraft.index + step + rows.length) % rows.length };
+      return true;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      pickMention(rows[Math.min(mentionDraft.index, rows.length - 1)]);
+      return true;
+    }
+    return false;
+  }
 
   function focusMessageTextarea(): void {
     messageTextareaElement?.focus();
@@ -725,8 +785,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // message rides the launch as the agent's first, so nothing is sent after it lands.
           const awaiting = getProvisionalChat(chatId);
           if (awaiting?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
-            const accountId = await chooseAccountForFirstSend(awaiting);
-            if (accountId === null) {
+            const choice = await chooseAccountForFirstSend(awaiting);
+            if (choice === null) {
               // The chooser closed with no sign-in: nothing was launched, and the message is
               // the user's to keep.
               dropOutgoing(chatId, outgoingId);
@@ -734,7 +794,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               m.redraw();
               return;
             }
-            await launchChat(chatId, accountId, finalText);
+            // A room is launched like a chat on an account, on none: the message is appended once it is up.
+            await launchChat(
+              chatId,
+              choice.kind === "account" ? choice.id : "",
+              finalText,
+              choice.kind === "account" ? "agent" : "room",
+            );
             try {
               await whenChatRegistered(chatId);
             } catch (err) {
@@ -793,18 +859,23 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       /**
-       * The account a chat's first send launches it on: the one the chat was minted for when it
+       * What a chat's first send launches it as: the account the chat was minted for when it
        * names one (an intake's), else the signed-in one when there is one, else whatever the
-       * provider chooser produces, or null when it is dismissed instead.
+       * provider chooser produces; a room when the chooser's room row was picked instead
+       * (section 7.3), or null when the chooser closed with neither.
        */
-      async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | null> {
+      async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<FirstSendChoice | null> {
         await whenAccountsReadyToChoose();
         const account = accountForFirstSend(provisional.account_id);
         if (account !== null) {
-          return account.id;
+          return { kind: "account", id: account.id };
         }
         return new Promise((resolve) => {
-          openProviderChooser({ onSignedIn: (accountId) => resolve(accountId), onDismissed: () => resolve(null) });
+          openProviderChooser({
+            onSignedIn: (accountId) => resolve({ kind: "account", id: accountId }),
+            onDismissed: () => resolve(null),
+            onRoomChosen: () => resolve({ kind: "room" }),
+          });
         });
       }
 
@@ -961,6 +1032,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function handleKeydown(event: KeyboardEvent): void {
+        if (handleMentionKeydown(event)) {
+          event.preventDefault();
+          m.redraw();
+          return;
+        }
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           void handleSubmit();
@@ -1361,13 +1437,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
 
       /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
        *  notice appears, and its button opens it again once dismissed. */
-      function renderNoProviderNotice(): m.Children {
-        return providerNotice(
-          "message-input-no-provider",
-          "Connect an AI provider to start chatting.",
-          () => openProviderChooser(),
-          () => openProviderChooser(),
-        );
+      function renderNoProviderNotice(awaitingChatId: string): m.Children {
+        const open = (): void =>
+          openProviderChooser({ onRoomChosen: () => void launchAwaitingChatAsRoom(awaitingChatId) });
+        return providerNotice("message-input-no-provider", "Connect an AI provider to start chatting.", open, open);
       }
 
       const attachments = getComposerAttachments(chatId);
@@ -1399,7 +1472,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const blockingNotice = isBlockedBySignedOutAccount
         ? renderSignedOutAccountNotice(chatId)
         : isBlockedByNoProvider
-          ? renderNoProviderNotice()
+          ? renderNoProviderNotice(chatId)
           : null;
 
       // The stop button is only meaningful while the agent has an interruptible
@@ -1447,6 +1520,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           vnode.attrs.leading,
           // With no provider to send to, the composer stays in view, holding any draft, but takes nothing.
           [
+            mentionPopover({
+              rows: mentionRows(),
+              selectedIndex: mentionDraft?.index ?? 0,
+              onPick: pickMention,
+              onHover: (index) => {
+                if (mentionDraft !== null) mentionDraft = { ...mentionDraft, index };
+              },
+            }),
             m(
               "div",
               {
@@ -1462,12 +1543,15 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-primary focus:outline-none " +
                     "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
                     "disabled:cursor-not-allowed disabled:opacity-60",
+                  // A switch off a room holds the message like any switch, so its wording comes first.
                   placeholder:
                     handoff !== null
                       ? handoffComposerPlaceholder(handoff)
-                      : isAgentWorking
-                        ? "Type to queue more messages..."
-                        : "Type a message...",
+                      : isRoomChat(chatId)
+                        ? "Message (tag @agent to ask the agent)"
+                        : isAgentWorking
+                          ? "Type to queue more messages..."
+                          : "Type a message...",
                   rows: 1,
                   disabled: isComposerDisabled,
                   value: messageText,
@@ -1490,7 +1574,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     const textarea = event.target as HTMLTextAreaElement;
                     messageText = textarea.value;
                     localStorage.setItem(messageTextKey(chatId), messageText);
+                    updateMentionDraft(textarea);
                     refitComposer();
+                  },
+                  onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),
+                  onblur: () => {
+                    mentionDraft = null;
                   },
                   onkeydown: handleKeydown,
                   onpaste: handlePaste,

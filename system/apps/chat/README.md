@@ -901,6 +901,54 @@ which the chat app proxies from the shell so the page needs no second origin.
 The agent's prose is drawn as bubbles under that picture and the workspace's name,
 one per paragraph.
 
+## Rooms and mentions
+
+A room is a second kind of chat (the multiplayer spec, section 7.3): a message log
+among the workspace's people with no AI agent. Like every chat it is an mngr agent,
+of the template's `room` type (`[agent_types.room]` in `.mngr/settings.toml`): its
+process is the room's reader, `system/scripts/room_agent.py`, which appends what
+`mngr message <room>` types into its pane to the room's transcript, the common
+transcript at `events/room/common_transcript/events.jsonl` under the agent's state
+dir, which `mngr transcript <room>` renders. The chat app's `room` harness
+(`harnesses/room/`) tails that one file and appends people's messages to it through
+the room's harness session, so the chat routes serve a room as they serve any chat:
+`/events` and `/stream` answer its messages as `user_message` events stamped with
+their authors from the chat's annotations (a message the reader appended is the
+workspace agent's), `/message` appends, and rename, delete, stop, start, presence,
+and watchers work unchanged. A chat snapshot's `kind` says which a chat is, from
+the harness its active agent runs; a room is never the main chat. Agent chats and
+rooms are one list, one id shape, and one push.
+
+A room starts from the awaiting chat's provider chooser ("Chat room (no provider)",
+`POST /api/chats/create` with `"kind": "room"`), which the create guard
+(`system/scripts/require_create_account.py`) lets through on no account; the
+awaiting chat's provider chip opens that chooser, as does its first send while
+nothing is signed in. A chat
+converts to a room and back through the ordinary switch (`POST /api/chats/<id>/handoff`
+with `"kind": "room"`, or with an account): a switch to a room is a fresh-start
+handoff on no account, and a switch off a room takes the room's transcript as the
+summary its successor reads, so a converted chat keeps its whole history as segments.
+The workspace agent reads a room with `mngr transcript <room>` and answers into it
+with `mngr message --start <room>` (a bare `mngr message` refuses a stopped room);
+a visiting agent reads and posts through the chat routes
+with its own identity.
+
+A mention is `@<handle>` (`mention_parser.py`, section 7.1): the roster's handles as
+the shell assigned them, `@agent` for the workspace's agent, and every chat's title
+(spaces as hyphens, `@Main-chat`), resolved case-insensitively after the people;
+`GET /api/mentions` answers the table a room's composer offers from its `@` popover.
+A mention acts only in a room (`mentions.py`, section 7.4): a mentioned person's
+pending mentions (`data/.apps/chat/mentions/<key>.jsonl`; `GET /api/mentions/pending`
+answers the requester's own, `mentions_updated` on `/api/ws` says they changed) mark
+the room's row with an `@` until a page of theirs watches it, and the owner is told
+through the Imbue Studio app's feed as the room's own agent, so the notification opens
+the room (a room the app cannot post as sends none); `@agent` or a chat's title sends
+that chat (the main chat for `@agent`) the room's message as `[from: <name> in #<room>]
+<text>` through the ordinary send path, and the room's snapshot names the chat in
+`awaiting_chat_ids` (its row shows a working dot) until the workspace agent posts into
+the room. In an agent chat a handle is a word the agent reads like any other, and the
+composer offers no popover.
+
 ## Memory shedding
 
 The chat app re-tags chat agents' `oom_score_adj` from live activity

@@ -5,11 +5,16 @@ import { chatRowFixture } from "./chatRowFixture";
 import type { ChatRow } from "./rows";
 import { SendPicker, pickableRows } from "./SendPicker";
 
-function row(chatId: string, title: string, isProvisional = false): ChatRow {
-  return chatRowFixture(chatId, { title, isProvisional });
+function row(chatId: string, title: string, kind: ChatRow["kind"] = "agent"): ChatRow {
+  return chatRowFixture(chatId, { title, kind });
 }
 
-const ROWS = [row("agent-1", "Plan the launch"), row("agent-2", "Fix the tests"), row("agent-3", "New chat", true)];
+const ROWS = [
+  row("agent-1", "Plan the launch"),
+  row("agent-2", "Fix the tests"),
+  row("agent-3", "New chat", "provisional"),
+  row("room-0123456789abcdef", "Lounge", "room"),
+];
 
 let root: HTMLElement | null = null;
 
@@ -29,8 +34,13 @@ afterEach(() => {
 });
 
 describe("pickableRows", () => {
-  it("offers the chats that are agents, narrowed by title", () => {
-    expect(pickableRows(ROWS, "").map((candidate) => candidate.chatId)).toEqual(["agent-1", "agent-2"]);
+  it("offers the chats that can take a message, narrowed by title, and not a chat that is not an agent yet", () => {
+    expect(pickableRows(ROWS, "").map((candidate) => candidate.chatId)).toEqual([
+      "agent-1",
+      "agent-2",
+      "room-0123456789abcdef",
+    ]);
+    expect(pickableRows(ROWS, "lounge").map((candidate) => candidate.chatId)).toEqual(["room-0123456789abcdef"]);
     expect(pickableRows(ROWS, "tests").map((candidate) => candidate.chatId)).toEqual(["agent-2"]);
     expect(pickableRows(ROWS, "zzz")).toEqual([]);
   });
@@ -43,7 +53,11 @@ describe("SendPicker", () => {
     expect(picker.querySelector(".send-picker-text")!.textContent).toBe("“hello there”");
     expect(picker.querySelector("[data-send-picker]")!.getAttribute("aria-label")).toBe("Send to which chat?");
     const targets = Array.from(picker.querySelectorAll("[data-send-target]"));
-    expect(targets.map((target) => target.getAttribute("data-send-target"))).toEqual(["agent-1", "agent-2"]);
+    expect(targets.map((target) => target.getAttribute("data-send-target"))).toEqual([
+      "agent-1",
+      "agent-2",
+      "room-0123456789abcdef",
+    ]);
     expect(targets[0].getAttribute("aria-selected")).toBe("true");
     (targets[1] as HTMLElement).click();
     expect(onPick).toHaveBeenCalledWith("agent-2");

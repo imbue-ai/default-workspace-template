@@ -54,6 +54,7 @@ const mocks = vi.hoisted(() => {
     setPendingAccount: vi.fn(),
     openSwitchDialog: vi.fn(),
     beginSwitchToAccountId: vi.fn(),
+    launchAwaitingChatAsRoom: vi.fn(async (_chatId: string) => {}),
     // What the composer registered to hear of a model pick the chat app refused.
     modelChoiceFailureListener: null as ((chatId: string, detail: string) => void) | null,
     // The account ids that read as signed out; empty at rest.
@@ -75,8 +76,10 @@ const mocks = vi.hoisted(() => {
     whenChatRegistered: vi.fn(async (_chatId: string) => {}),
     // Whether the chat list names the chat; false for a seeded chat awaiting its first send.
     isChatRegistered: true,
+    // Whether the chat is a room (a message log among the people here), which offers no model and no agent.
+    isRoom: false,
     provisional: undefined as unknown,
-    launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string) => ({})),
+    launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string, _kind?: string) => ({})),
     chooseFastMode: vi.fn(),
     selectedAccount: null as { id: string } | null,
     // Whether this page has read the account list; until it has, no account reads as missing.
@@ -110,6 +113,7 @@ vi.mock("../models/PendingLane", async (importOriginal) => {
 vi.mock("./SwitchDialog", () => ({
   openSwitchDialog: mocks.openSwitchDialog,
   beginSwitchToAccountId: mocks.beginSwitchToAccountId,
+  launchAwaitingChatAsRoom: mocks.launchAwaitingChatAsRoom,
 }));
 vi.mock("./fast-mode-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./fast-mode-limit")>()),
@@ -200,7 +204,9 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   getChatById: () =>
     mocks.isChatRegistered ? { active_agent: mocks.agent, handoff: mocks.switching.handoff } : undefined,
   getProvisionalChat: () => mocks.provisional,
-  launchChat: (chatId: string, accountId: string, message?: string) => mocks.launchChat(chatId, accountId, message),
+  isRoomChat: () => mocks.isRoom,
+  launchChat: (chatId: string, accountId: string, message?: string, kind?: string) =>
+    mocks.launchChat(chatId, accountId, message, kind),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
 }));
 vi.mock("../models/Providers", () => ({
@@ -489,6 +495,21 @@ describe("MessageInput placeholder", () => {
     mocks.agent.activity_state = "COMPACTING";
     const textarea = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
     expect(textarea?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+
+  it("tells a room's sender to tag the agent, until a switch off the room holds the message instead", () => {
+    mocks.isRoom = true;
+    try {
+      const room = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+      expect(room?.attrs?.placeholder).toBe("Message (tag @agent to ask the agent)");
+
+      mocks.switching.handoff = handoffStateFixture({ phase: "summarizing" });
+      const switching = findByTag(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never), "textarea");
+      expect(switching?.attrs?.placeholder).toBe("Type a message; it is delivered once Codex is ready…");
+    } finally {
+      mocks.isRoom = false;
+      mocks.switching.handoff = null;
+    }
   });
 });
 
@@ -836,7 +857,7 @@ describe("MessageInput first send of a seeded chat", () => {
     await typeAndSend(MessageInput(), "agent-1", "Let's build something");
 
     expect(mocks.launchChat).toHaveBeenCalledTimes(1);
-    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "Let's build something");
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "Let's build something", "agent");
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     expect(mocks.openProviderChooser).not.toHaveBeenCalled();
   });
@@ -853,7 +874,22 @@ describe("MessageInput first send of a seeded chat", () => {
     intent.onSignedIn("acct-2");
     await sending;
 
-    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-2", "Let's build something");
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-2", "Let's build something", "agent");
+  });
+
+  it("launches the chat as a room, on no account, when the chooser's room row is picked instead", async () => {
+    mocks.accountsLoaded = false;
+    mocks.selectedAccount = null;
+
+    const sending = typeAndSend(MessageInput(), "agent-1", "Let's build something");
+    await flushAsync();
+    expect(mocks.launchChat).not.toHaveBeenCalled();
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onRoomChosen: () => void };
+    intent.onRoomChosen();
+    await sending;
+
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "", "Let's build something", "room");
+    expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
   it("puts the message back when the chooser is dismissed, launching nothing", async () => {
@@ -1530,6 +1566,18 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     (notice!.attrs!.oncreate as () => void)();
 
     expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+  });
+
+  it("launches the chat as a room, with nothing said yet, when the notice's chooser picks the room row", async () => {
+    mocks.launchAwaitingChatAsRoom.mockClear();
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+    (findButton(tree, "Choose a provider")!.attrs!.onclick as () => void)();
+
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onRoomChosen: () => void };
+    intent.onRoomChosen();
+    await flushAsync();
+
+    expect(mocks.launchAwaitingChatAsRoom).toHaveBeenCalledExactlyOnceWith("agent-first-7731");
   });
 
   it("keeps the phone's leading settings button beside the notice", () => {

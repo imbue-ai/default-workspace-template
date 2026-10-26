@@ -33,7 +33,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getChatById, getProvisionalChat } from "../models/Chats";
+import { getChatById, getMainChatId, getProvisionalChat } from "../models/Chats";
 import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { effortInEffect, ensureHarnessCatalogs, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
@@ -83,8 +83,15 @@ import {
   isAccountSignedOut,
   openProviderChooser,
 } from "../models/Providers";
-import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog, takeBackSwitch } from "./SwitchDialog";
-import type { ProviderAccount } from "../models/Providers";
+import {
+  beginSwitchTo,
+  beginSwitchToAccountId,
+  launchAwaitingChatAsRoom,
+  openSwitchDialog,
+  switchToRoom,
+  takeBackSwitch,
+} from "./SwitchDialog";
+import type { ProviderAccount, ProviderChooserIntent } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
@@ -140,15 +147,15 @@ function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
 }
 
-/** The chip with no provider signed in: it says so, and a press opens the provider chooser. */
-function notConnectedChip(onSignedIn?: (accountId: string) => void): m.Vnode {
+/** The chip with no provider signed in: it says so, and a press opens the provider chooser with ``intent``. */
+function notConnectedChip(intent: ProviderChooserIntent = {}): m.Vnode {
   return m(
     "button",
     {
       type: "button",
       class: `model-selector-not-connected ${css.TRIGGER}`,
       ...hoverTooltipAttrs("Connect a model provider", "above"),
-      onclick: () => openProviderChooser(onSignedIn === undefined ? {} : { onSignedIn }),
+      onclick: () => openProviderChooser(intent),
     },
     "Not connected",
   );
@@ -159,18 +166,23 @@ function loadingChip(): m.Vnode {
   return m("span", { class: `model-selector-loading ${css.PROVISIONAL_CHIP}` }, "Loading…");
 }
 
-/** The chip for a chat with no agent yet: the account it starts on. With no agent there is no
- *  model to name or change. */
+/** The chip for a chat with no agent yet: the account its first send starts it on. With no agent there is no
+ *  model to name or change, so a press opens the provider chooser, whose room row makes the chat a room instead
+ *  (the multiplayer spec, section 7.3): with an account signed in, the first send launches on it and nothing else
+ *  on the page opens that chooser. */
 function provisionalChip(chatId: string): m.Vnode {
   const provisional = getProvisionalChat(chatId);
   if (provisional === undefined || !areAccountsLoaded()) return loadingChip();
+  const intent: ProviderChooserIntent = { onRoomChosen: () => void launchAwaitingChatAsRoom(chatId) };
   const account = accountForFirstSend(provisional.account_id);
-  if (account === null) return notConnectedChip();
+  if (account === null) return notConnectedChip(intent);
   return m(
-    "span",
+    "button",
     {
-      class: `model-selector-provisional ${css.PROVISIONAL_CHIP}`,
-      ...hoverTooltipAttrs(`This chat starts on ${account.label}`, "above"),
+      type: "button",
+      class: `model-selector-provisional ${css.TRIGGER}`,
+      ...hoverTooltipAttrs(`This chat starts on ${account.label}; press for a chat room instead`, "above"),
+      onclick: () => openProviderChooser(intent),
     },
     account.provider,
   );
@@ -816,6 +828,23 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               });
             }),
       ),
+      // A chat among the people here instead (the multiplayer spec, section 7.6); a room is one already, and the
+      // main chat never becomes one (S3).
+      chat !== undefined && chat.kind !== "room" && chat.chat_id !== getMainChatId()
+        ? m(
+            "button",
+            {
+              type: "button",
+              class: `model-provider-menu-room ${css.SUBMENU_ADD}`,
+              ...hoverTooltipAttrs("Make this a chat among the people here, with no AI agent", "above"),
+              onclick: () => {
+                menu.close();
+                void switchToRoom(chatId);
+              },
+            },
+            "Chat room",
+          )
+        : null,
       m(
         "button",
         {
@@ -958,13 +987,16 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       // No account to name and no model to show. With no provider signed in, say so; otherwise
       // the chip below stands in (its Provider row reads "No account") until the model arrives,
       // which for a chat whose agent is still connecting takes a while. A phone keeps its settings
-      // button, which is also its way to Source view and Stop agent.
-      if (account === null && matched === null && !isCompact) {
+      // button, which is also its way to Source view and Stop agent. A room runs on no account by
+      // design, so its chip names the room instead.
+      if (account === null && matched === null && !isCompact && chat.kind !== "room") {
         if (!areAccountsLoaded()) return loadingChip();
         if (getAccounts().length === 0) {
-          return notConnectedChip((accountId) => {
-            beginSwitchToAccountId(chatId, accountId);
-            m.redraw();
+          return notConnectedChip({
+            onSignedIn: (accountId) => {
+              beginSwitchToAccountId(chatId, accountId);
+              m.redraw();
+            },
           });
         }
       }
@@ -1025,7 +1057,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
           : [
               // A dot joins the text parts; the bolt stands on the row's gap alone, since a glyph
               // is already read apart from the words.
-              m("span", matched?.label ?? account?.provider ?? "Model"),
+              m("span", matched?.label ?? account?.provider ?? (chat.kind === "room" ? "Chat room" : "Model")),
               shownEfforts.length > 1 && currentEffort !== null
                 ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
                 : null,

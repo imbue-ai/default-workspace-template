@@ -35,6 +35,7 @@
  */
 
 import m from "mithril";
+import { peopleGlyph } from "../glyphs";
 
 import { Button, buttonClass } from "@imbue/workspace-ui/src/components/Button";
 import { icon, spinnerIcon, warningIcon } from "@imbue/workspace-ui/src/components/icons";
@@ -57,6 +58,8 @@ import {
   getLanes,
   getUnpickableAccount,
   isPickingAccount,
+  isRoomChoiceOffered,
+  pickRoom,
   loadAccounts,
   pickAccount,
   takeChooserAccountId,
@@ -409,6 +412,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     // with nothing to explain.
     const signedIn = renderAccounts();
     return [
+      roomRow(),
       signedIn,
       // Removing an account can fail -- a row with no folder, a store that will not write --
       // and without this the row simply stays put with no explanation.
@@ -416,6 +420,27 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
       signedIn !== null ? m("div", { class: `${css.SECTION_LABEL} mt-6` }, "Add more") : null,
       m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
     ];
+  }
+
+  /** "Chat room (no provider)": the first row when the chooser was opened for a chat awaiting its first send, which
+   *  then becomes a room among the workspace's people instead of a chat with an agent (section 7.3). */
+  function roomRow(): m.Children {
+    if (!isRoomChoiceOffered()) return null;
+    return m("div", { class: `${css.ROW_STACK} mb-6` }, [
+      m(
+        "button",
+        {
+          type: "button",
+          class: css.ACCOUNT_PICK,
+          "data-e2e": "pick-room",
+          onclick: () => pickRoom(),
+        },
+        [
+          m("span", { class: "flex w-6 shrink-0 items-center justify-center text-secondary" }, peopleGlyph(20)),
+          m("span", { class: `${css.OPTION_ROW_NAME} min-w-0 flex-1 truncate` }, "Chat room (no provider)"),
+        ],
+      ),
+    ]);
   }
 
   /** A signed-in account is a STATE, not a place to navigate to, so the row reads as a listed

@@ -84,11 +84,18 @@ def author_prefix(display_name: str, room_title: str | None = None) -> str:
 
 
 @pure
+def prefix_safe_text(text: str, fallback: str) -> str:
+    """``text`` as the prefix can carry it: the closing bracket dropped, whitespace runs (line breaks included) as
+    one space; ``fallback`` when nothing is left."""
+    cleaned = _WHITESPACE_RUN.sub(" ", text.replace("]", "")).strip()
+    return cleaned if cleaned else fallback
+
+
+@pure
 def prefix_safe_name(display_name: str, key: ParticipantKey) -> str:
-    """The name as the prefix can carry it (and as the annotation records it, so a prefix joins by name): the
-    closing bracket dropped, whitespace runs (line breaks included) as one space; the key when nothing is left."""
-    cleaned = _WHITESPACE_RUN.sub(" ", display_name.replace("]", "")).strip()
-    return cleaned if cleaned else str(key)
+    """The name as the prefix can carry it (and as the annotation records it, so a prefix joins by name); the key
+    when nothing is left."""
+    return prefix_safe_text(display_name, str(key))
 
 
 @pure
