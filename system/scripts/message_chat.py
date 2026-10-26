@@ -243,7 +243,8 @@ def chat_app_url(environ: Mapping[str, str], cwd: Path) -> str:
 
 
 def _chat_app_connection(base_url: str) -> http.client.HTTPConnection:
-    """A connection to the chat app at ``base_url`` that gives up connecting after the connect timeout."""
+    """A connection to the chat app at ``base_url`` whose every socket operation gives up after the connect
+    timeout, until the caller lifts it."""
     parsed = urllib.parse.urlsplit(base_url)
     return http.client.HTTPConnection(
         parsed.hostname or "127.0.0.1",
@@ -262,10 +263,12 @@ def _answer_of(status: int, raw: bytes) -> ChatAppAnswer:
 
 
 def get_json(base_url: str, path: str) -> ChatAppAnswer:
-    """GET ``path`` and answer what came back.
+    """GET ``path`` and answer what came back, within the connect timeout.
 
-    Raises ``ChatAppUnreachableError`` when the chat app cannot be connected to or answers
-    nothing; a read answers no state, so there is nothing acted on to be careful about.
+    Raises ``ChatAppUnreachableError`` when the chat app cannot be connected to or does not
+    answer in time; unlike a send, the whole exchange is bounded by the connect timeout, since
+    a read changes no state (there is nothing acted on to be careful about) and a listing is
+    quick.
     """
     connection = _chat_app_connection(base_url)
     try:
