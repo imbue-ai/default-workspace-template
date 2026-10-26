@@ -101,9 +101,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
         with:
-          version: "latest"
+          # UV_VERSION in system/scripts/setup_system.sh: another uv writes uv.lock differently.
+          version: "0.13.4"
 
       # A branch iterating on a paired mngr change may pin mngr from the private
       # mngr-internal repo (see docs/system/workspace-internals.md). This repo's CI
@@ -115,9 +116,8 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          # 22+, not 20: the frontend tests exercise code that reads the global
-          # `navigator` (added to Node in 21), and Node 20 is past end-of-life.
-          node-version: '22'
+          # NODE_VERSION in system/scripts/setup_system.sh, the Node workspaces run.
+          node-version: '24.22.1'
           cache: 'npm'
           cache-dependency-path: system/package-lock.json
 
@@ -242,9 +242,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
         with:
-          version: "latest"
+          # UV_VERSION in system/scripts/setup_system.sh: another uv writes uv.lock differently.
+          version: "0.13.4"
 
       - name: Refuse a private mngr pin (this CI has no credential for it, by design)
         run: python3 system/scripts/set_mngr_pin.py --require-public

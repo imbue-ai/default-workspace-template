@@ -116,6 +116,7 @@ from imbue.system_interface.shell.primitives import mint_window_id
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.tour import TourStore
 from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
 from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
@@ -160,6 +161,7 @@ class ShellState(MutableModel):
         frozen=True, description="The avatar designs registered in the workspace"
     )
     avatar_selection: AvatarSelectionStore = Field(frozen=True, description="avatar_selection.json")
+    tour: TourStore = Field(frozen=True, description="tour.json: whether the show-around tour has run")
     avatar_status: AvatarStatusReader = Field(
         frozen=True, description="The avatar's mood, read from mngr's event file"
     )
@@ -362,8 +364,9 @@ class ShellState(MutableModel):
                         f"Window {str(window.id)} shows {str(window.app)!r}, not {str(request.app)!r}"
                     )
                 seen = effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
+                window_path = seen.path if request.target.sends_window_path else None
                 path = self.launch_destination(
-                    entry, launch_path, request.params, request.client_id, desktop.id, seen.path
+                    entry, launch_path, request.params, request.client_id, desktop.id, window_path
                 )
                 navigated = self.report_window_location(desktop.id, window.id, request.client_id, path, seen.title)
                 return LaunchOutcome(window=navigated, path=path, is_new=False)
@@ -870,6 +873,7 @@ def build_shell_state(
         broadcaster=broadcaster,
         avatar_catalog=AvatarCatalogStore(directory=_under_repo_root(avatar_catalog_directory, repo_root)),
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
+        tour=TourStore(state_directory=state_directory),
         avatar_status=AvatarStatusReader(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
             background_tasks_root=background_tasks_root

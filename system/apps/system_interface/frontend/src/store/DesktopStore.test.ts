@@ -1309,6 +1309,11 @@ describe("pinned entries", () => {
     expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")?.is_minimized).toBe(
       false,
     );
+    // A text not about the window's page is launched without it, so the app drafts it where such a text goes.
+    expect(await store.draftIntoPinnedWindow("Draw me", false)).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:buddy:draft:{"message":"Draw me"}:window:win-9:without-page`,
+    );
     // A desktop with no pinned app taking a draft has nowhere to put one.
     socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("buddy")]);
     expect(await store.draftIntoPinnedWindow("Draw me")).toBe(false);
@@ -1345,7 +1350,7 @@ describe("pinned entries", () => {
 
   it("restores a pinned window the client never placed at the frame the shell answered, not the cascade", async () => {
     const store = await pinnedStore();
-    expect(store.windowRect("win-9")).toEqual({ x: 460, y: 40, width: 500, height: 720 });
+    expect(store.windowRect("win-9")).toEqual({ x: 50, y: 40, width: 900, height: 720 });
     store.toggleTaskbarEntry("win-9");
     expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")).toMatchObject({
       frame: PINNED_WINDOW_FRAME,
@@ -1760,6 +1765,7 @@ describe("links Imbue Studio hands over", () => {
       outsideLinks: {
         openInEmbedder: (url) => outside.push(`embedder:${url}`),
         openInBrowser: (url) => outside.push(`browser:${url}`),
+        launchInSystemApp: (url) => outside.push(`app:${url}`),
       },
     });
     await store.start(NO_LINK);
@@ -1773,7 +1779,7 @@ describe("links Imbue Studio hands over", () => {
     await store.openLink("mailto:someone@example.com", SHELL_HOST, "chat");
     // One Imbue Studio handed over goes back to it, before it said so too.
     await store.openLink("https://example.com/b", SHELL_HOST, null);
-    store.setCanOpenLinksOutside(true);
+    store.setOutsideLinkCapabilities({ opensExternalLinks: true, opensCustomSchemeLinks: false });
     await store.openLink("tel:+15551234567", SHELL_HOST, "chat");
 
     expect(outside).toEqual([
@@ -1792,7 +1798,7 @@ describe("links Imbue Studio hands over", () => {
       message_handlers: [{ type: "open:mailto", path: "/api/compose", show: null }],
     });
     socket.deliver().onAppsUpdated([appRecord("docs"), mailer]);
-    store.setCanOpenLinksOutside(true);
+    store.setOutsideLinkCapabilities({ opensExternalLinks: true, opensCustomSchemeLinks: false });
 
     await store.openLink("mailto:someone@example.com", SHELL_HOST, "chat");
     await store.openLink("https://example.com/a", SHELL_HOST, "chat");
@@ -1801,6 +1807,39 @@ describe("links Imbue Studio hands over", () => {
       { type: "open:mailto", clientId: CLIENT, payload: { url: "mailto:someone@example.com" }, sender: "chat" },
     ]);
     expect(outside).toEqual(["embedder:https://example.com/a"]);
+  });
+
+  it("hands a custom-scheme link to the app registered for its scheme, and opens one no app takes outside", async () => {
+    const { store, outside } = await outsideRecordingStore();
+    const slackApp = appRecord("slack-inbox", {
+      message_handlers: [{ type: "open:slack", path: "/api/open", show: null }],
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs"), slackApp]);
+
+    await store.openLink("slack://channel?id=C1", SHELL_HOST, "chat");
+    // No app takes vscode: links: with no Imbue Studio (a plain browser), a browser tab; with an older one, which
+    // shows a popup of one as an empty window, launched from this page; with one that opens them, through it.
+    await store.openLink("vscode://file/a", SHELL_HOST, "chat");
+    store.setOutsideLinkCapabilities({ opensExternalLinks: true, opensCustomSchemeLinks: false });
+    await store.openLink("vscode://file/b", SHELL_HOST, "chat");
+    store.setOutsideLinkCapabilities({ opensExternalLinks: true, opensCustomSchemeLinks: true });
+    await store.openLink("vscode://file/c", SHELL_HOST, "chat");
+    // One Imbue Studio handed over goes back to it.
+    await store.openLink("SLACK://channel?id=C2", SHELL_HOST, null);
+    // A scheme whose message is the web link's goes where a web link no app takes goes.
+    await store.openLink("web://example", SHELL_HOST, "chat");
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:slack", clientId: CLIENT, payload: { url: "slack://channel?id=C1" }, sender: "chat" },
+      { type: "open:slack", clientId: CLIENT, payload: { url: "slack://channel?id=C2" }, sender: "embedder" },
+    ]);
+    expect(outside).toEqual([
+      "browser:vscode://file/a",
+      "app:vscode://file/b",
+      "embedder:vscode://file/c",
+      "embedder:web://example",
+    ]);
+    expect(notices()).toEqual([]);
   });
 
   it("opens an address on the workspace's share domain as that app's window, from a desktop shell", async () => {

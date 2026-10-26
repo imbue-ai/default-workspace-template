@@ -11,6 +11,14 @@ three adjustments to `update-app`'s ordinary live loop, and nothing else changes
 the editing lease, the demonstrative-prototype taxonomy, and the turn-end harden
 handoff are all `update-app`'s and the references it points at.
 
+**The whole change takes this flow, not just its critical part.** When the
+change also touches creations that are not critical -- an ordinary app the
+critical one now talks to, a skill that drives it -- edit them in the same
+worktree, preview them from it, and hand them to the same harden pass, which
+lands everything in the same apply (`update-creation`, "One change, one pass").
+Never split the change into a careful pass and an ordinary one: neither would
+test the two sides together.
+
 1. **Code isolation.** You edit an *isolated git worktree*, never the served
    tree. A half-broken build can never reach the served app.
 2. **The preview is the user's view.** For an ordinary app the user watches the
@@ -151,6 +159,18 @@ came up healthy; on a non-zero exit, fix the build and re-run, and do not open
 a window on a broken boot. It refuses to boot if another pass's preview of the
 same app is up rather than hijacking it; surface that and coordinate.
 
+An ordinary app the change also touches is previewed from the same worktree as
+a sibling of the critical app's preview: add `--with <other>` to the `up`
+above, and open `<other>-preview` too when it has a window of its own, so the
+user tries both sides of the change together. A critical preview that reads a
+copied registry (the shell's, the terminal's) then reaches the ordinary app's
+preview rather than the live app; one booted on its own is not what it
+reaches. The chat's preview reads the live registry, so anything it reaches
+through the registry is still the live app: try that seam from the ordinary
+app's own preview window, and say so when you hand the preview over. Every
+preview step below -- close, refresh, re-open, tear down -- applies to it as
+well.
+
 Only once it is up, open its window:
 
 ```bash
@@ -246,7 +266,7 @@ tears everything down (the step 4 teardown) and releases the leases.
 
 Once the user approves the shape, hand the branch to a background worker that
 runs the full test and review gate. This reuses `update-creation`'s
-orchestration core (`type: app`), with two deviations: the worker is created
+orchestration core, with two deviations: the worker is created
 **at approval, on the existing branch**, and the task frames one of two handoff
 shapes.
 
@@ -265,8 +285,10 @@ worktree holds uncommitted work; commit it and retry. Never discard it: the
 branch you are about to hand the worker is the only copy.
 
 **Create the worker on the branch.** Follow `update-creation` steps 1-3 (the
-tracking ticket, the task file with `operation: update` / `type: app`
-frontmatter, launch, background-poll) with these specifics:
+tracking ticket, the task file with `operation: update` and `creations` naming
+every creation the change touched -- `app:<name>` for each app, critical or
+not, `skill:<name>` for a skill, `service:<package>` for a background service --
+launch, background-poll) with these specifics:
 
 - The task file's `diff_base` is the commit the branch forked from the served
   tree, `$(git merge-base HEAD "mngr/update-$SLUG")` run in the served tree, so
@@ -291,7 +313,7 @@ frontmatter, launch, background-poll) with these specifics:
     verify and harden it, do not re-implement it.
 
   There is **no `## Change origin` marker and no worker gate**: the user already
-  approved the shape in your live loop. Name the app (`type-app.md`'s
+  approved the shape in your live loop. Name the apps (`type-app.md`'s
   "Critical apps" section tells the worker to build every bundle at the npm root
   and report each path). Include a `## Real scenario` section when a real
   conversation motivated the change, naming the motivating chat (usually your
@@ -324,26 +346,40 @@ tear the preview down and decide with them whether to re-brief the worker.
 ## 4. Go live: freshness-check, apply, tear down
 
 With the worker `done` (and any final preview approved), land the change. Your
-leases from step 1 keep other passes off the apps you touched, but a pass on
-another critical app may have applied since you branched.
+leases from step 1 keep other passes off the critical apps you touched, but a
+pass on another critical app may have applied since you branched, and an
+ordinary app in the pass holds no lease, so another chat may have changed it.
 
 1. **Freshness check.** The branch is mergeable only if nothing the apps you
    hold leases on are built from (each one's package, the shared library, the
-   npm files), and no file the branch itself changes, has changed on the served
-   branch since the worker branched (a change to another critical app's sources
-   is not staleness: the apply rebuilds that bundle from the merged tree). Name
-   `system/apps/<package>/` once per leased app:
+   npm files), no other creation in the pass, and no file the branch itself
+   changes, has changed on the served branch since the worker branched (a
+   change to another critical app's sources is not staleness: the apply
+   rebuilds that bundle from the merged tree). The pass's footprint names
+   every creation in it, computed from the worker's checkout of the branch,
+   since a creation the branch added is not in the served tree yet:
 
    ```bash
    BASE=$(git merge-base HEAD "mngr/update-$SLUG")
-   git diff --name-only --no-renames "$BASE" "mngr/update-$SLUG" > /tmp/update-$SLUG-files.txt
-   git diff --name-only "$BASE" HEAD -- system/apps/<package>/ system/libs/workspace_ui/ system/libs/workspace_layout/ \
-       system/package.json system/package-lock.json $(cat /tmp/update-$SLUG-files.txt)
+   WORK_DIR=$(mngr ls --include "name == \"update-$SLUG\"" --format json \
+       | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
+   SCOPE="data/.tasks/harden/update-$SLUG/pass-scope.json"
+   uv run app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) --repo-root "$WORK_DIR" \
+       --out "$SCOPE" || exit 1
+   jq -r '[.creations[] | .primary[], .wiring[].path, .references[].path] | unique | .[]' "$SCOPE" \
+       > /tmp/update-$SLUG-paths.txt
+   git diff --name-only --no-renames "$BASE" "mngr/update-$SLUG" >> /tmp/update-$SLUG-paths.txt
+   git diff --name-only "$BASE" HEAD -- system/libs/workspace_ui/ system/libs/workspace_layout/ \
+       system/package.json system/package-lock.json $(cat /tmp/update-$SLUG-paths.txt)
    ```
 
    Empty output means fresh: continue. Any output means the pass is stale; do
-   **not** merge and never hand-resolve a conflicted merge (see
-   `harden-contention.md`). Re-brief the worker to rebase and re-verify.
+   **not** merge, and never resolve a conflicted merge yourself. Catch the
+   pass up per `harden-contention.md` ("Catching up a stale pass"): the worker
+   merges the served `HEAD` into the branch, resolves any conflict, re-verifies
+   what came in, rebuilds the bundles, and reports `done` again, which comes
+   back through this check. When the catch-up changed something the user
+   previewed, offer the final preview again from the worker's work_dir.
 
    If a "recently updated" notice has appeared since entry (another pass's
    apply), tell the user this apply will replace its rollback point, as step 1
@@ -351,9 +387,9 @@ another critical app may have applied since you branched.
 
 2. **Apply.** Run the general update apply, the same script `update-self` lands
    releases with, pointing it at the pass branch and at the bundles the user
-   last previewed (the worker's work_dir after a final preview, otherwise your
-   own worktree). Resolve the worker's in the same invocation, since each bash
-   call starts a fresh shell:
+   last previewed (the worker's work_dir after a final preview or a catch-up,
+   otherwise your own worktree). Resolve the worker's in the same invocation,
+   since each bash call starts a fresh shell:
 
    ```bash
    WORK_DIR=$(mngr ls --include "name == \"update-$SLUG\"" --format json \
@@ -362,8 +398,13 @@ another critical app may have applied since you branched.
        --merge-ref "mngr/update-$SLUG" \
        --worker-bundle "system_interface=$WORK_DIR/system/apps/system_interface/imbue/system_interface/static" \
        --worker-bundle "chat=$WORK_DIR/system/apps/chat/imbue/chat/static" \
-       --keep-rollback-point
+       --keep-rollback-point --pass-scope "data/.tasks/harden/update-$SLUG/pass-scope.json"
    ```
+
+   `--pass-scope` is the file step 1 wrote: the rollback point records the
+   pass's other apps and services from it, and a rollback restarts the
+   programs its wiring names (one with none is named in the rollback's
+   outcome, for you to restart).
 
    That one command owns the whole go-live as one deterministic, self-healing
    motion: it merges the branch, classifies what changed, snapshots the built
@@ -385,22 +426,29 @@ another critical app may have applied since you branched.
    - `3`: **emergency**: even rollback could not restore a healthy workspace.
      Escalate immediately, with the snapshot paths the stderr names.
    - `1`: precondition error (a dirty tree, another apply in flight, a
-     conflicted merge); nothing was changed.
+     conflicted merge); nothing was changed. A conflicted merge is a stale
+     pass: catch it up as step 1 says.
+
+   Only the critical apps' health gates the apply. After a `0`, check that any
+   ordinary app or service in the pass works, and fix what doesn't.
 
 3. **The notice is the user's.** After a successful apply, one banner across
-   the top of the workspace names every critical app included in the rollback:
-   recently updated, with "Roll back" and "Everything seems good". It rolls all
-   of them back together. Frontend applies include both chat and shell because
-   every bundle (the shell's, the chat's, and the Getting Started app's, whose
-   owner is not critical and so is not named) is replaced; an extra app restart
-   is acceptable. Tell the user
-   the banner is at the top of the workspace and what it does. **Never confirm or roll back on the user's behalf.** Only a person
-   closes it: confirming
-   discards the kept snapshots, rolling back restores them and restarts only the
-   touched programs, and the outcome shows in the notice (and stays in its
-   record, `data/.state/update-apply/last-good.json`, until they close it; a
-   rollback started from the notice logs to `rollback-last.log` beside it). If
-   they roll back, the branch and the worker's report are the retry's input.
+   the top of the workspace names every app included in the rollback (each
+   critical app the apply touched, and every other app in the pass): recently
+   updated, with "Roll back" and "Everything seems good". It
+   rolls all of them back together. Frontend applies include both chat and
+   shell because every bundle (the shell's, the chat's, and those of Getting
+   Started, Files and Routines, whose owners are not critical and so are named
+   only when they are in the pass) is replaced; an extra app restart is
+   acceptable.
+   Tell the user the banner is at the top of the workspace and what it does.
+   **Never confirm or roll back on the user's behalf.** Only a person closes
+   it: confirming discards the kept snapshots, rolling back restores them and
+   restarts only the touched programs, and the outcome shows in the notice (and
+   stays in its record, `data/.state/update-apply/last-good.json`, until they
+   close it; a rollback started from the notice logs to `rollback-last.log`
+   beside it). If they roll back, the branch and the worker's report are the
+   retry's input.
 
 4. **Tear down and release.** Whatever the exit code, and after a rejection
    where nothing was merged, close the preview's window and tear it down, retire the

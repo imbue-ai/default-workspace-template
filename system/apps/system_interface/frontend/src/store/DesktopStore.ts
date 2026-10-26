@@ -22,6 +22,7 @@ import {
   OPEN_URL_MESSAGE,
   classifyLink,
   externalLinkMessageType,
+  isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
 import {
@@ -254,15 +255,32 @@ const NULL_POP_OUT_BRIDGE: PopOutBridge = {
 };
 
 /** Where an external link no app of the workspace takes opens: through the Imbue Studio chrome
- *  (``minds:open-external``), or in the user's own browser when no chrome can. */
+ *  (``minds:open-external``), or in the user's own browser when no chrome can, a custom-scheme link in the app of the
+ *  user's system it belongs to. */
 export interface OutsideLinkOpener {
   openInEmbedder(url: string): void;
   openInBrowser(url: string): void;
+  /** Launch a custom-scheme link by navigating this page to it, which opens no window and leaves the page where it
+   *  is: an Imbue Studio that does not take custom-scheme links shows a popup of one as an empty window. */
+  launchInSystemApp(url: string): void;
 }
+
+/** Which external links the embedder opens outside the workspace for it (``minds:embedder-capabilities``): any, and
+ *  custom-scheme ones among them. */
+export interface OutsideLinkCapabilities {
+  readonly opensExternalLinks: boolean;
+  readonly opensCustomSchemeLinks: boolean;
+}
+
+const NO_OUTSIDE_LINK_CAPABILITIES: OutsideLinkCapabilities = {
+  opensExternalLinks: false,
+  opensCustomSchemeLinks: false,
+};
 
 const NULL_OUTSIDE_LINK_OPENER: OutsideLinkOpener = {
   openInEmbedder: () => undefined,
   openInBrowser: () => undefined,
+  launchInSystemApp: () => undefined,
 };
 
 // The layout verbs that edit a placement, which two shells never apply. A solo shell (the pull-out-window spec,
@@ -420,8 +438,8 @@ export class DesktopStore {
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
   private canPopOut = false;
-  /** Whether the embedder opens external links outside the workspace for it; off until it says so. */
-  private canOpenLinksOutside = false;
+  /** Which external links the embedder opens outside the workspace for it; none until it says so. */
+  private outsideLinkCapabilities = NO_OUTSIDE_LINK_CAPABILITIES;
   /** The detached set as last reported to the embedder, serialized, so a redraw reports nothing new. */
   private lastReportedDetached: string | null = null;
   /** Solo mode's first layout load is still owed: the one load that may re-detach the solo window. */
@@ -474,9 +492,9 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
-  /** The embedder said whether it opens external links for the workspace (``minds:embedder-capabilities``). */
-  setCanOpenLinksOutside(canOpenLinksOutside: boolean): void {
-    this.canOpenLinksOutside = canOpenLinksOutside;
+  /** The embedder said which external links it opens for the workspace (``minds:embedder-capabilities``). */
+  setOutsideLinkCapabilities(capabilities: OutsideLinkCapabilities): void {
+    this.outsideLinkCapabilities = capabilities;
   }
 
   /** Whether a window move in progress has pulled ``windowId`` out of the chrome's window (it is hidden meanwhile). */
@@ -1092,15 +1110,17 @@ export class DesktopStore {
   /** Hand ``text`` to the pinned window that takes a draft (plan section 4.7): its app's draft launch path runs
    *  into this client's view of that window with the text as the draft param, and the window is restored and
    *  raised; the app drafts the text into a composer and the page reports where it landed. False when no pinned
-   *  app on this desktop takes one, or the launch was refused. */
-  async draftIntoPinnedWindow(text: string): Promise<boolean> {
+   *  app on this desktop takes one, or the launch was refused. A text that is not about the window's page
+   *  (``isAboutPage`` false) is sent without it, so the app drafts it where such a text goes (the chat app: its
+   *  main chat) rather than into what the window shows. */
+  async draftIntoPinnedWindow(text: string, isAboutPage = true): Promise<boolean> {
     const target = draftTargetOf(this.state);
     if (target === null) return false;
     const launched = await this.launchAt(
       target.window.app,
       target.launchPath.id,
       freeTextParams(target.launchPath, text),
-      { kind: "window", windowId: target.window.id },
+      { kind: "window", windowId: target.window.id, sendsWindowPath: isAboutPage },
     );
     this.restoreWindow(target.window.id);
     return launched !== null;
@@ -1148,7 +1168,7 @@ export class DesktopStore {
    *  app's ``<label>.localhost`` (or ``<name>.localhost``) host, or else at its registered backend port, as that app's
    *  window at its path, any other local URL in the workspace's browser
    *  (``open:url``), one of this workspace's app addresses (on its share domain too) as that app's window at its
-   *  path, an external link in the app registered for its kind (``open:web``, ``open:mailto``, ``open:tel``) or else
+   *  path, an external link in the app registered for its kind (``open:web``, ``open:mailto``, ``open:<scheme>``) or else
    *  outside the workspace. Another workspace's address is refused with a notice.
    *  ``workspaceHost`` is this page's own host, which says which workspace it is; ``senderApp`` is the app whose page
    *  asked, or null for the Imbue Studio chrome, and names the message it sends. */
@@ -1190,15 +1210,23 @@ export class DesktopStore {
   }
 
   /** An external link goes to the app registered for its kind; with none, it opens outside the workspace at once,
-   *  still inside the click that asked for it (a browser opens a new tab only then). One the Imbue Studio chrome
-   *  handed over (``senderApp`` null) goes back to it however early: a chrome that hands external links over opens
-   *  them too, and opening it here as a popup would only send it back again. */
+   *  still inside the click that asked for it (a browser opens a new tab only then): through the Imbue Studio chrome
+   *  when it said it opens that kind of link, else as a popup; a custom-scheme link facing an older chrome, which
+   *  shows that popup as an empty window, opens from this page instead. One the
+   *  chrome handed over (``senderApp`` null) goes back to it however early: a chrome that hands a link over opens it
+   *  too, and opening it here would only send it back again. */
   private async openExternalLink(url: string, senderApp: string | null): Promise<void> {
     const type = externalLinkMessageType(url);
+    const capabilities = this.outsideLinkCapabilities;
+    const isCustomScheme = isCustomSchemeLink(url);
+    const doesEmbedderOpen =
+      capabilities.opensExternalLinks && (capabilities.opensCustomSchemeLinks || !isCustomScheme);
     if (isEmbedderMessageHandled(this.state, type)) {
       await this.deliverMessage({ type, url }, senderApp ?? EMBEDDER_SENDER);
-    } else if (this.canOpenLinksOutside || senderApp === null) {
+    } else if (doesEmbedderOpen || senderApp === null) {
       this.outsideLinks.openInEmbedder(url);
+    } else if (isCustomScheme && capabilities.opensExternalLinks) {
+      this.outsideLinks.launchInSystemApp(url);
     } else {
       this.outsideLinks.openInBrowser(url);
     }

@@ -38,6 +38,16 @@ path = "/"
 # in the composer unsent.
 
 # The launcher's primary free-text row: what is typed into the desktop's field becomes a new chat's first message.
+# The launcher's Enter: a text typed into the desktop goes to the main chat.
+[[launch_paths]]
+id = "main"
+label = "Send to main chat"
+path = "/api/chats/intake"
+method = "POST"
+params = [{name = "message", label = "Message to send", required = false}]
+presets = {target = "main_chat"}
+text_param = "message"
+
 [[launch_paths]]
 id = "new"
 label = "New Chat"
@@ -61,8 +71,9 @@ params = [{name = "message", label = "Message to send", required = false}]
 presets = {target = "chat_selector"}
 text_param = "message"
 
-# A draft lands in the composer of the chat on screen (else the most recent, else a new one), unsent: what the
-# desktop's "Design your own..." hands the pinned chat window.
+# A draft lands in the composer of the chat on screen (else the main chat, else the most recent, else a new one),
+# unsent: what the desktop hands the pinned chat window. Its "Design your own..." sends no page, so that draft goes
+# to the main chat.
 [[launch_paths]]
 id = "draft"
 label = "Draft into chat"
@@ -81,6 +92,10 @@ note = "Holds the chat create template every chat launch stacks on"
 [[references]]
 path = ".agents/skills/connect-external-service"
 note = "request_secret.py files secret requests through /api/secret-requests"
+
+[[references]]
+path = ".agents/skills/update-self/scripts/update_resume_note.py"
+note = "Writes the resume note whose tag and outcomes harnesses/message_display.py shows as a notice"
 
 # The Imbue Studio app's ask to show a chat (its chat notifications): the shell posts it here, and this app asks the
 # shell's ``show`` op for the window (desktop-interface contracts.md section 8).

@@ -6,7 +6,9 @@
  * The root owns the shell connection: it reports ``/?chat=<id>`` and the selected chat's
  * title as its location, handles ``shell:navigate`` by changing the selection, applies the
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
- * chat through the picker, or a first message that launches a chat) exactly once and then reports the selection alone, and drives its inner pages
+ * chat through the picker, or a first message that launches a chat) exactly once and then
+ * reports the selection alone, opens the provider chooser once when its URL carries
+ * ``open=providers`` (the Imbue Studio app's sign-in button), and drives its inner pages
  * directly (they share an origin) with its shown and hidden states, so each page's presence
  * reports key on the chat it shows. The shell's handshake goes down to the inner pages, and their
  * messages for the shell and the minds chrome go up, through ``relay.ts``, which says which
@@ -34,6 +36,7 @@ import {
   fetchPendingIntake,
   getChatById,
   getChats,
+  getMainChatId,
   getProvisionalChats,
   hasReceivedChatList,
   initChats,
@@ -41,7 +44,15 @@ import {
   removeChatsUpdatedListener,
 } from "../models/Chats";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
-import { accountForFirstSend, loadAccountsWithRetry, whenAccountsReadyToChoose } from "../models/Providers";
+import {
+  accountForFirstSend,
+  closeProviderChooser,
+  isProviderChooserOpen,
+  loadAccountsWithRetry,
+  openProviderChooser,
+  whenAccountsReadyToChoose,
+} from "../models/Providers";
+import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
@@ -56,7 +67,13 @@ import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
-import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } from "./selection";
+import {
+  intakeTokenFromSearch,
+  isProviderChooserRequested,
+  rootPathFor,
+  selectionFromSearch,
+  slotFill,
+} from "./selection";
 import type { SlotFill } from "./selection";
 import { prependToComposer } from "../views/MessageInput";
 
@@ -114,9 +131,9 @@ let isOpeningChatForEmptyList = false;
 // empty after that brings no push to ask again on (an unchanged list is not passed on).
 const emptyListChatBackoff = new ReconnectBackoff();
 
-/** The rail's rows in display order, most recent first. */
+/** The rail's rows in display order: the main chat first, then the most recent. */
 function railRows(): ChatRow[] {
-  return groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats()), startedHere);
+  return groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId()), startedHere);
 }
 
 function slotFillFor(chatId: string | null): SlotFill {
@@ -131,7 +148,7 @@ function slotFillFor(chatId: string | null): SlotFill {
 }
 
 /** Show ``chatId``: the URL, the frame, the shell's location, and the unread mark follow. Asked to show nothing, the
- *  root shows the most recent chat instead, or with no chats one awaiting its first send (``slotFill``). */
+ *  root shows the main chat instead (else the most recent), or with no chats one awaiting its first send (``slotFill``). */
 function select(chatId: string | null): void {
   const fill = slotFillFor(chatId);
   const shown = fill.kind === "select" ? fill.chatId : chatId;
@@ -282,6 +299,17 @@ async function takeIntake(token: string): Promise<void> {
   await applyIntake(token, null);
 }
 
+/** Open the provider chooser a URL asked for, once the accounts have loaded (the chooser lists them). The
+ *  root's own URL drops the request first, and so does the location the shell holds for this window (reported
+ *  even when the selection is the one reported before), so neither a reload nor the next layout load opens it
+ *  again. */
+function openRequestedProviderChooser(accountsLoaded: Promise<void>): void {
+  if (pendingToken === null) history.replaceState(null, "", `${getBasePath()}${rootPathFor(selectedChatId)}`);
+  reportedLocation = null;
+  reportLocation();
+  void accountsLoaded.then(() => openProviderChooser());
+}
+
 function pickFor(chatId: string): void {
   const pick = pendingPick;
   pendingPick = null;
@@ -297,7 +325,7 @@ function dismissPick(): void {
 }
 
 function onChatsUpdated(): void {
-  const rows = rowsFromSnapshots(getChats(), getProvisionalChats());
+  const rows = rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId());
   noteStatuses(new Map(rows.map((row) => [row.chatId, row.status])), isRootShown ? selectedChatId : null);
   // A chat that has messaged is no longer new; a deleted chat's frame goes with it.
   for (const chatId of startedHere) {
@@ -400,6 +428,8 @@ const ChatRoot: m.Component = {
               onPick: pickFor,
               onDismiss: dismissPick,
             }),
+        // Opened over the whole root when its URL asks for it; a chat page opens its own from its composer.
+        isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
       ],
     );
   },
@@ -457,6 +487,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       const target = new URL(path, window.location.origin);
       const token = intakeTokenFromSearch(target.search);
       const requested = selectionFromSearch(target.search);
+      if (isProviderChooserRequested(target.search)) openRequestedProviderChooser(accountsLoaded);
       if (token !== null) {
         // The window is at the chat's path already; a picker path names none and leaves the shown chat standing.
         pendingToken = token;
@@ -513,6 +544,7 @@ function bootstrap(): void {
   reportLocation();
   const token = pendingToken;
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));
+  if (isProviderChooserRequested(window.location.search)) openRequestedProviderChooser(accountsLoaded);
 }
 
 window.addEventListener("load", bootstrap);

@@ -39,6 +39,8 @@ from imbue.chat.accounts import delete_account
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.auto_open import chat_root_path
+from imbue.chat.chat_seed import SeedRole
+from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.models import ChatSnapshot
@@ -1166,6 +1168,66 @@ def test_the_chat_list_opened_with_nothing_selected_shows_the_most_recent_chat(t
 
 
 @pytest.mark.timeout(120, func_only=False)
+def test_the_chat_list_leads_with_the_main_chat_and_lands_on_the_next_main_chat_when_it_goes(
+    tmp_path: Path, page: Page
+) -> None:
+    """The seeded welcome chat is the main chat: it heads the list, set apart from the rest and marked, ahead of
+    a chat messaged since, and it is the chat the list shows with nothing selected. When it goes, the chat messaged
+    most recently becomes the main chat at once, takes its place at the head, and is the chat the list lands on.
+
+    The root is opened at the chat app's own URL, with no shell client connected: seeding also owes the welcome chat
+    an auto-opened window, which would move a shell's chat window onto it whatever the root itself selected."""
+    with _running_e2e_server(tmp_path) as server:
+        agent_manager = server.chat_state.agent_manager
+        agent_manager.record_message_sent(ChatId(FIXTURE_AGENT_ID))
+        welcome = agent_manager.seed_chat(
+            "Welcome",
+            (SeedTurn(role=SeedRole.ASSISTANT, text="Your workspace is ready! How would you like to start?"),),
+        )
+        page.goto(f"{server.chat_url}/")
+        expect(page).to_have_url(f"{server.chat_url}{chat_root_path(welcome.chat_id)}", timeout=15000)
+        rows = page.locator(".chat-rail-row")
+        expect(rows).to_have_count(2, timeout=15000)
+        expect(rows.nth(0)).to_have_attribute("data-chat-id", welcome.chat_id)
+        expect(rows.nth(0)).to_have_attribute("data-main", "true")
+        expect(rows.nth(1)).to_have_attribute("data-chat-id", FIXTURE_AGENT_ID)
+        main_group = page.locator(".chat-rail-main-group .chat-rail-row")
+        expect(main_group).to_have_count(1)
+
+        assert agent_manager.discard_provisional_chat(welcome.chat_id)
+
+        expect(page).to_have_url(f"{server.chat_url}{_FIXTURE_ROOT_PATH}", timeout=15000)
+        expect(rows).to_have_count(1)
+        expect(rows.nth(0)).to_have_attribute("data-chat-id", FIXTURE_AGENT_ID)
+        expect(rows.nth(0)).to_have_attribute("data-main", "true")
+
+
+def test_making_a_chat_the_main_chat_from_its_menu_moves_it_to_the_head_of_the_list(
+    tmp_path: Path, page: Page
+) -> None:
+    """A chat's right-click menu stars it as the main chat: it takes the welcome chat's place at the head of the list,
+    marked, and the welcome chat drops back among the rest."""
+    with _running_e2e_server(tmp_path) as server:
+        agent_manager = server.chat_state.agent_manager
+        welcome = agent_manager.seed_chat(
+            "Welcome",
+            (SeedTurn(role=SeedRole.ASSISTANT, text="Your workspace is ready! How would you like to start?"),),
+        )
+        page.goto(f"{server.chat_url}/")
+        rows = page.locator(".chat-rail-row")
+        expect(rows).to_have_count(2, timeout=15000)
+        expect(rows.nth(0)).to_have_attribute("data-chat-id", welcome.chat_id)
+
+        page.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]').click(button="right")
+        page.locator('.chat-rail-menu [data-menu-row="make-main"]').click()
+
+        expect(rows.nth(0)).to_have_attribute("data-chat-id", FIXTURE_AGENT_ID)
+        expect(rows.nth(0)).to_have_attribute("data-main", "true")
+        expect(page.locator(".chat-rail-row[data-main]")).to_have_count(1)
+        assert agent_manager.get_main_chat_id() == ChatId(FIXTURE_AGENT_ID)
+
+
+@pytest.mark.timeout(120, func_only=False)
 def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_own_window(
     tmp_path: Path, page: Page
 ) -> None:
@@ -2231,7 +2293,7 @@ def test_the_phone_header_kebab_renames_the_chat_on_screen(e2e_server: RunningWo
     page.locator("[data-chat-header-menu]").click()
     menu = page.locator(".chat-header-menu")
     expect(menu.locator("[data-menu-row]")).to_have_text(
-        ["Rename", "Stop chat", "Delete chat", "Copy reference", "Explain...", "Modify..."]
+        ["Rename", "Delete chat", "Copy reference", "Explain...", "Modify..."]
     )
     menu.locator('[data-menu-row="rename"]').click()
     field = page.locator(".chat-header .chat-rail-rename-input")
@@ -2253,7 +2315,7 @@ def test_a_drawer_row_kebab_stops_that_chat(tmp_path: Path, page: Page) -> None:
         page.locator("[data-chat-header-list]").click()
         page.locator(f'[data-chat-row-menu="{_SECOND_AGENT_ID}"]').click()
         menu = page.locator(".chat-rail-menu")
-        expect(menu.locator("[data-menu-row]")).to_have_text(["Rename", "Stop chat", "Delete chat"])
+        expect(menu.locator("[data-menu-row]")).to_have_text(["Rename", "Make main chat", "Stop chat", "Delete chat"])
 
         with page.expect_response(
             lambda response: response.request.method == "POST" and "/stop" in response.url
@@ -2303,6 +2365,24 @@ def test_the_phone_composer_settings_button_opens_the_model_menu_with_effort_seg
     menu.locator('[data-menu-row="source-view"] [role="switch"]').click()
     expect(menu).to_have_count(0)
     expect(chat.locator(".composer-under-bar .terminal-view-toggle")).to_have_attribute("aria-checked", "true")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_hovering_the_fast_mode_row_says_what_fast_mode_is(e2e_server: RunningWorkspace, page: Page) -> None:
+    """A user who has never heard of fast mode learns what it is, and that it costs more, by hovering its row in the
+    model card."""
+    model_state = get_model_state_path(HarnessType.CLAUDE, e2e_server.agent_info.agent_state_dir)
+    model_state.write_text(json.dumps({"model": "claude-opus-5-5", "effort": "high", "fast": False}))
+    e2e_server.chat_state.agent_manager.refresh_model_choice(FIXTURE_AGENT_ID)
+    _open_fixture_chat(page, e2e_server)
+    chat = _chat(page)
+    chat.locator(".model-selector-trigger").click()
+    chat.locator('[data-menu-row="fast"]').hover()
+    expect(chat.locator(".hover-tooltip")).to_have_text(
+        "Fast mode makes the model reply faster. It's the same model, just as smart, only quicker. It costs more to "
+        "run, so turn it on when speed matters and leave it off otherwise.",
+        timeout=5000,
+    )
 
 
 @pytest.mark.timeout(60, func_only=False)

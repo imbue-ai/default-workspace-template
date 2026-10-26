@@ -40,6 +40,7 @@ import { effortInEffect, ensureHarnessCatalogs, getHarnessCatalog, startingEffor
 import type { ChatFastModeState } from "../models/FastMode";
 import {
   FAST_MODES,
+  FAST_MODE_EXPLANATION,
   FAST_MODE_LABELS,
   ensureFastModeState,
   fastModeDetail,
@@ -1161,6 +1162,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                     key: "fast",
                     label: "Fast mode",
                     value: fastModeValue(chatId),
+                    tooltip: FAST_MODE_EXPLANATION,
                     content: () => fastModeSubmenu(chatId),
                   }
                 : {
@@ -1168,7 +1170,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                     key: "fast",
                     label: "Fast mode",
                     value: fastModeValue(chatId),
-                    tooltip: readOnlyTooltip ?? undefined,
+                    tooltip: readOnlyTooltip ?? FAST_MODE_EXPLANATION,
                   },
             );
           }

@@ -245,9 +245,10 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
         with _BootedServer() as server:
             ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/alex-smith/cast")
             try:
-                # Drain a handful of seed/early messages; none may be `initializing`.
-                seen: list[dict[str, Any]] = []
-                for _ in range(5):
+                # Drain a handful of seed/early messages; none may be `initializing`. The seed is awaited
+                # with the room a loaded machine needs; only the drain after it uses the short timeout.
+                seen: list[dict[str, Any]] = [_ws_recv_json(ws, timeout=10)]
+                for _ in range(4):
                     try:
                         seen.append(_ws_recv_json(ws, timeout=1))
                     except (AssertionError, OSError):

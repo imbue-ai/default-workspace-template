@@ -981,6 +981,9 @@ describe("the combo card", () => {
     if (row === null) throw new Error("no fast row");
     expect(row.textContent).toContain("Fast mode");
     expect(row.textContent).toContain("Auto (off now)");
+    expect(row.getAttribute("data-hover-tooltip")).toBe(
+      "Fast mode makes the model reply faster. It's the same model, just as smart, only quicker. It costs more to run, so turn it on when speed matters and leave it off otherwise.",
+    );
     expect(document.querySelector(".fast-limit-input")).toBeNull();
 
     click('[data-menu-row="fast"]');

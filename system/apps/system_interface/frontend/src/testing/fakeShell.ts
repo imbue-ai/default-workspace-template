@@ -37,7 +37,7 @@ import type { ClientStateReport, DesktopSocket, SocketHandlers } from "../store/
 import { clientRecord } from "./records";
 
 /** The frame the shell answers for a pinned window a client has never placed (the shell's own constant). */
-export const PINNED_WINDOW_FRAME = { x: 0.46, y: 0.05, width: 0.5, height: 0.9 };
+export const PINNED_WINDOW_FRAME = { x: 0.05, y: 0.05, width: 0.9, height: 0.9 };
 
 export class FakeDesktopApi implements DesktopApi {
   desktops: Desktop[] = [];
@@ -284,7 +284,9 @@ export class FakeDesktopApi implements DesktopApi {
    *  is ``postLaunchAnswer``; then an open (``new``, ``focus``) or a location write (``window``). */
   async launch(desktopId: string, request: LaunchRequest): Promise<LaunchOutcome> {
     const targetSpelling =
-      request.target.kind === "window" ? `window:${request.target.windowId}` : request.target.kind;
+      request.target.kind === "window"
+        ? `window:${request.target.windowId}` + (request.target.sendsWindowPath === false ? ":without-page" : "")
+        : request.target.kind;
     this.calls.push(
       `launch:${desktopId}:${request.app}:${request.launch}:${JSON.stringify(request.params)}:${targetSpelling}` +
         (request.isMinimized ? ":minimized" : ""),

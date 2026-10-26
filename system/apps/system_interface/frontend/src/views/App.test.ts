@@ -10,7 +10,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
+import { TourController } from "../model/tour";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
+import { FakeTourApi } from "../testing/fakeTour";
 import {
   appRecord,
   desktopRecord,
@@ -35,6 +37,7 @@ const gestures: GestureSource = {
 let api: FakeDesktopApi;
 let socket: FakeDesktopSocket;
 let store: DesktopStore;
+let tour: TourController;
 /** Every link the store opened outside the workspace, by where it went. */
 let openedOutside: string[];
 
@@ -66,11 +69,18 @@ async function mountApp(options: { isDetached?: boolean; soloWindowId?: string }
     outsideLinks: {
       openInEmbedder: (url) => openedOutside.push(`embedder:${url}`),
       openInBrowser: (url) => openedOutside.push(`browser:${url}`),
+      launchInSystemApp: (url) => openedOutside.push(`app:${url}`),
     },
   });
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs")]);
-  mountView(() => m(App, { store, gestures, host: "127.0.0.1:8000", protocol: "http:" }));
+  tour = new TourController({
+    api: new FakeTourApi({ isSeen: true }),
+    highlightChrome: () => undefined,
+    isAutoStartAllowed: () => false,
+    redraw: () => m.redraw(),
+  });
+  mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
 }
 
 beforeEach(async () => {
@@ -456,7 +466,7 @@ describe("the avatar chooser", () => {
     expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
     await settle();
     expect(api.calls).toContain(
-      `launch:home:buddy:draft:${JSON.stringify({ message: AVATAR_DESIGN_PROMPT })}:window:win-9`,
+      `launch:home:buddy:draft:${JSON.stringify({ message: AVATAR_DESIGN_PROMPT })}:window:win-9:without-page`,
     );
     expect(api.calls).toContain(`reportWindowLocation:home:win-9:${CLIENT}:/?chat=agent-1:`);
     expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
