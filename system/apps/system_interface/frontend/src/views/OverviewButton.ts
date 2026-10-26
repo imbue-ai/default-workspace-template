@@ -10,7 +10,7 @@ import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverToolt
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 
 const GRID_GLYPH_SIZE = 18;
-export const OVERVIEW_BUTTON_LABEL = "Manage Desktops";
+const OVERVIEW_BUTTON_LABEL = "Manage Desktops";
 
 export interface OverviewButtonAttrs {
   readonly isOpen: boolean;

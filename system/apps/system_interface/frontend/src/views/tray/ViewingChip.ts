@@ -10,7 +10,7 @@ import type { Desktop, RosterParticipant } from "../../model/records";
 import { TrayAvatar } from "./TrayAvatar";
 
 const OWNER_PICTURE_SIZE_PX = 28;
-export const STOP_VIEWING_LABEL = "Stop viewing";
+const STOP_VIEWING_LABEL = "Stop viewing";
 
 export interface ViewingChipAttrs {
   readonly desktop: Desktop;
@@ -22,7 +22,7 @@ export interface ViewingChipAttrs {
 }
 
 /** The name the chip gives a desktop's owner: the roster's, or nobody's for a desktop left behind. */
-export function viewedOwnerName(owner: RosterParticipant | null): string {
+function viewedOwnerName(owner: RosterParticipant | null): string {
   return owner === null ? "Left behind" : owner.display_name;
 }
 
