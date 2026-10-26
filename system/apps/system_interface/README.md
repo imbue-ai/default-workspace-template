@@ -76,18 +76,39 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   registration `POST /api/avatars` is loopback-only), the embedder-message
   relay (`/api/embedder-messages`), and the loopback-only op route
   (`/api/layout/broadcast`).
+- Workspace themes (`docs/system/blueprint/workspace-themes/`): the catalog
+  with the default the workspace wears (`/api/themes`), the default's route
+  (`POST /api/themes/default`), each theme's icons
+  (`/api/themes/<id>/icons/<file>`), a desktop's own theme
+  (`POST /api/desktops/<id>/theme`), the theme files every app serves from its
+  own origin (`/_static/themes/<path>`), and the theme gallery page
+  (`/theme-gallery`), which shows every part of a theme. A watch on the theme
+  folders and the app manifests says `themes_changed` when the catalog does.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.
 - Presence (`/api/presence`, `/api/presence/heartbeat`): who is connected
   right now, with their identity and profile (see "Who is here").
+- The show-around tour's record (`GET` and `POST /api/tour`, `{"is_seen",
+  "resume_index"}`): whether the tour of the desktop
+  (`frontend/src/model/tourCards.ts`) has run in this workspace, and the card it
+  resumes at. A fresh workspace runs it by itself the first time its agent goes
+  to work (so the owner learns the product while waiting for a reply; the page's
+  `tour_start_ms` query parameter makes it wait for a task that is taking a
+  while instead); the agent answering interrupts it, and the next time the
+  agent works it resumes from the card that would have come next. The
+  launcher's "Show me around" row runs it again from the first card any time.
+  A card about a control of the Imbue Studio chrome asks the chrome to ring it
+  (`minds:highlight-chrome`); the chat card's Next snaps the pinned chat to the
+  right half of the desktop, revealing the shortcuts.
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
   `presence_updated`, `placements_updated`, `active_desktop_changed`,
-  `client_entries_changed`, `avatar_status`, `avatar_selection_changed`, and
-  `layout_op` (contracts section 6); it accepts each client's `client_state`
-  report.
+  `client_entries_changed`, `avatar_status`, `avatar_selection_changed`,
+  `themes_changed`, and `layout_op` (contracts section 6); it accepts each
+  client's `client_state` report.
 
-Its state lives under `data/.state/system_interface/`: `desktops.json`,
+Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, and where it resumes),
+`desktop_themes.json` (the workspace's default theme and each desktop's own),
 `default_shortcuts_offered.json` (the apps whose default shortcut the shell
 has offered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),
@@ -190,8 +211,9 @@ page its template names from the message's fields and show it through the op
 route's `show` below, in-process. A message some app did not take becomes a
 notice carrying that app's reason, and a page shown while the client has only
 pop-outs open becomes a notice to reopen the main window. The shell's page
-also opens links itself: it announces `opensLinks` to the chrome and opens a
-`minds:open-link` (a popup Imbue Studio turned back into the workspace) or a
+also opens links itself: it announces `opensLinks` and `opensCustomSchemeLinks`
+to the chrome and opens a `minds:open-link` (a popup Imbue Studio turned back
+into the workspace) or a
 page's `shell:open-link` by the shared link classifier (`workspace_ui`'s
 `links.ts`): a `file:` URL as `open:file`, a local URL on an openable app's
 `<label>.localhost` (or `<name>.localhost`) host, or else at its registered
@@ -199,10 +221,13 @@ backend port, as that app's window (`windowAtLocalAppHost` and
 `windowAtBackendUrl` in `frontend/src/model/pageUrl.ts`), any other local URL
 as `open:url`, one of this workspace's app addresses (its addresses on the
 domain the workspace was last shared under included, read off the apps'
-`share_url`) as that app's window, and an external web, `mailto:`, or `tel:`
-link as `open:web`, `open:mailto`, or `open:tel` to the app registered for it,
-or else outside the workspace: back to a chrome that says it opens external
-links (`minds:open-external`), else in a new browser tab. An app's window already
+`share_url`) as that app's window, and an external web, `mailto:`, `tel:`, or
+custom-scheme (`slack:`) link as `open:web` or `open:<scheme>` (`open:mailto`,
+`open:slack`) to the app registered for it, or else outside the workspace: back
+to a chrome that says it opens that kind of external link
+(`minds:open-external`), else in a new browser tab; a custom-scheme link
+facing an older desktop app, which shows a popup of one as an empty window,
+opens by navigating the page to it instead. An app's window already
 there that the client has popped out is raised in its own window, and one a
 link opens while the client has only pop-outs open gets the same notice. An
 app that wants a window for what it was told asks the op route's `show`, which
@@ -486,7 +511,7 @@ python3 .agents/skills/update-self/scripts/update_self.py apply \
     --merge-ref "mngr/update-<slug>" \
     --worker-bundle "system_interface=<work_dir>/system/apps/system_interface/imbue/system_interface/static" \
     --worker-bundle "chat=<work_dir>/system/apps/chat/imbue/chat/static" \
-    --keep-rollback-point
+    --keep-rollback-point --pass-scope "data/.tasks/harden/update-<slug>/pass-scope.json"
 ```
 
 The apply merges the worker's branch, classifies what changed and does only
@@ -642,8 +667,11 @@ informs only; acting on it stays with the agent.
 The careful flow's apply (`update_self.py apply --keep-rollback-point`, see
 "Updating the running UI") does not discard its snapshots on success: it leaves
 `data/.state/update-apply/last-good.json`, a record of the merge it landed, the
-copies it kept, and the critical apps and supervisord programs included in rollback.
-A frontend apply includes both chat and shell (the critical bundle owners), even if only
+copies it kept, and the apps and supervisord programs included in rollback: each critical
+app whose program or bundle the apply changed, and every other app and service of
+the harden pass it landed (`--pass-scope`), with the programs that pass's scope
+names for them. A frontend apply includes
+both chat and shell (the critical bundle owners), even if only
 one app's source changed, because one build replaces every bundle. The shell turns that
 record into a notice only a person closes (`shell/update_notice.py`):
 one top banner beside the staleness one, naming every app the record names (or

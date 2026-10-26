@@ -13,10 +13,14 @@ from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import LayoutOp
 from workspace_layout.primitives import UserId
+from workspace_themes.contract import BUILTIN_THEMES_DIRECTORY
+from workspace_themes.testing import write_standard_theme
+from workspace_themes.testing import write_test_theme
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
+from imbue.system_interface.shell.app_theming import AppThemingStore
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
@@ -36,6 +40,7 @@ from imbue.system_interface.shell.testing import message_report
 from imbue.system_interface.shell.testing import read_stub_update_self_calls
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
+from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.testing import write_two_app_registry
@@ -726,7 +731,7 @@ def test_a_pinned_window_first_shows_at_the_pinned_frame_and_a_restore_writes_it
     (placement,) = client.get("/api/placements/home?client=c1").get_json()["placements"]
     assert placement["window_id"] == pinned["id"]
     assert placement["is_minimized"] is True
-    assert placement["frame"] == {"x": 0.46, "y": 0.05, "width": 0.5, "height": 0.9}
+    assert placement["frame"] == {"x": 0.05, "y": 0.05, "width": 0.9, "height": 0.9}
     answer = client.post(
         "/api/layout/broadcast",
         json={"op": "restore", "args": {"window": pinned["id"], "client": "c1"}, "requester": None},
@@ -734,7 +739,7 @@ def test_a_pinned_window_first_shows_at_the_pinned_frame_and_a_restore_writes_it
     assert answer.status_code == 200
     (written,) = client.get("/api/placements/home?client=c1").get_json()["placements"]
     assert written["is_minimized"] is False
-    assert written["frame"] == {"x": 0.46, "y": 0.05, "width": 0.5, "height": 0.9}
+    assert written["frame"] == {"x": 0.05, "y": 0.05, "width": 0.9, "height": 0.9}
 
 
 def test_an_independent_window_keeps_a_path_per_client_and_its_shared_path_stays_the_home_path(
@@ -949,6 +954,25 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
         client.post("/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2}).status_code
         == 404
     )
+
+    # A desktop's own theme rides on its wire record; null wears the workspace's default.
+    themes_root = shell.repo_root / BUILTIN_THEMES_DIRECTORY
+    write_standard_theme(shell.repo_root)
+    write_test_theme(themes_root, "mac-classic", '[data-part="window-frame"] { border: 1px solid #000000; }\n')
+    assert settled.get_json()["theme"] is None
+    drain_messages(client_queue)
+    themed = client.post("/api/desktops/research/theme", json={"theme": "mac-classic"})
+    assert themed.status_code == 200 and themed.get_json()["theme"] == "mac-classic"
+    # Every window hears it, so each one showing the desktop re-themes.
+    updates = [message for message in drain_messages(client_queue) if message["type"] == "desktops_updated"]
+    assert updates and {desktop["id"]: desktop for desktop in updates[-1]["desktops"]}["research"]["theme"] == (
+        "mac-classic"
+    )
+    listed = {desktop["id"]: desktop for desktop in client.get("/api/desktops").get_json()["desktops"]}
+    assert listed["research"]["theme"] == "mac-classic"
+    assert client.post("/api/desktops/research/theme", json={"theme": "beos"}).status_code == 400
+    assert client.post("/api/desktops/research/theme", json={"theme": None}).get_json()["theme"] is None
+    assert client.post("/api/desktops/missing/theme", json={"theme": "standard"}).status_code == 404
 
     # A wallpaper must exist to be set; file wallpapers are whatever sits in the wallpapers directory.
     unknown = client.post("/api/desktops/research/wallpaper", json={"wallpaper": {"kind": "bundled", "name": "nope"}})
@@ -2717,3 +2741,143 @@ def test_an_open_op_at_a_post_launch_path_posts_for_its_page_with_and_without_a_
     assert unplaced.status_code == 200, unplaced.get_json()
     assert unplaced.get_json()["client_id"] is None
     assert poster.posts[1].body == {"target": "new_chat", "message": "later"}
+
+
+def test_the_theme_catalog_lists_every_theme_with_its_chrome_icons_and_problems(
+    client: FlaskClient, app: Flask
+) -> None:
+    shell = _shell(app)
+    themes_root = shell.repo_root / BUILTIN_THEMES_DIRECTORY
+    write_standard_theme(shell.repo_root)
+    write_test_theme(
+        themes_root, "paper", '[data-part="title-bar"] { background: #ffffff; }\n', app_names_with_icons=("files",)
+    )
+    write_test_theme(themes_root, "broken", ".title-bar { color: red; }\n")
+
+    catalog = client.get("/api/themes").get_json()
+
+    assert catalog["default"] is None
+    by_id = {theme["id"]: theme for theme in catalog["themes"]}
+    assert [theme["id"] for theme in catalog["themes"]][0] == "standard"
+    assert by_id["paper"]["available"] is True and by_id["paper"]["base"] == "standard"
+    assert by_id["paper"]["chrome"] == {
+        "title_align": "center",
+        "leading": ["close", "title", "refresh", "menu"],
+        "trailing": ["minimize", "maximize"],
+    }
+    assert set(by_id["paper"]["icons"]["apps"]) == {"files"}
+    assert by_id["broken"]["available"] is False
+    assert any(".title-bar is a class" in problem for problem in by_id["broken"]["problems"])
+    assert by_id["broken"]["icons"] is None
+    assert client.get("/api/themes/broken/icons/app.png").status_code == 404
+    icon = client.get(by_id["paper"]["icons"]["apps"]["files"])
+    assert icon.status_code == 200 and icon.data.startswith(b"\x89PNG")
+    assert client.get(by_id["paper"]["icons"]["fallback_url"]).status_code == 200
+    assert client.get("/api/themes/paper/icons/terminal.png").status_code == 404
+
+
+def test_a_theme_icon_is_never_sniffed_and_an_svg_icon_runs_nothing(client: FlaskClient, app: Flask) -> None:
+    shell = _shell(app)
+    themes_root = shell.repo_root / BUILTIN_THEMES_DIRECTORY
+    write_standard_theme(shell.repo_root)
+    write_test_theme(themes_root, "paper", "", app_names_with_icons=("files",))
+    outline = write_test_theme(themes_root, "outline", "")
+    manifest_path = outline / "theme.toml"
+    manifest_path.write_text(
+        manifest_path.read_text(encoding="utf-8").replace('format = "png"', 'format = "svg"'), encoding="utf-8"
+    )
+    for name in ("app", "files"):
+        (outline / "icons" / f"{name}.svg").write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32"/></svg>\n',
+            encoding="utf-8",
+        )
+
+    png = client.get("/api/themes/paper/icons/files.png")
+    svg = client.get("/api/themes/outline/icons/files.svg")
+
+    assert png.status_code == 200 and svg.status_code == 200, (png.status_code, svg.status_code)
+    assert png.headers["X-Content-Type-Options"] == "nosniff"
+    assert "Content-Security-Policy" not in png.headers
+    assert svg.headers["X-Content-Type-Options"] == "nosniff"
+    assert svg.headers["Content-Security-Policy"] == "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+
+
+def test_the_default_theme_is_set_broadcast_and_refused_when_unavailable(client: FlaskClient, app: Flask) -> None:
+    shell = _shell(app)
+    client_queue = _register_client(app, "c1", "home")
+    write_standard_theme(shell.repo_root)
+    write_test_theme(shell.repo_root / BUILTIN_THEMES_DIRECTORY, "paper", "")
+
+    answered = client.post("/api/themes/default", json={"theme": "paper"})
+
+    assert answered.status_code == 200 and answered.get_json() == {"default": "paper"}
+    assert client.get("/api/themes").get_json()["default"] == "paper"
+    changed = [message for message in drain_messages(client_queue) if message["type"] == "themes_changed"]
+    assert changed and changed[-1]["catalog"]["default"] == "paper"
+    assert client.post("/api/themes/default", json={"theme": "beos"}).status_code == 400
+    assert client.post("/api/themes/default", json={"theme": None}).get_json() == {"default": None}
+
+
+def test_a_theme_bundle_imports_its_chain_and_its_files_are_served_from_this_origin(
+    client: FlaskClient, app: Flask
+) -> None:
+    shell = _shell(app)
+    themes_root = shell.repo_root / BUILTIN_THEMES_DIRECTORY
+    write_standard_theme(shell.repo_root)
+    write_test_theme(themes_root, "paper", '[data-part="window"] { color: #000000; }\n')
+    write_test_theme(themes_root, "dark-paper", '[data-part="window"] { color: #ffffff; }\n', base="paper")
+
+    bundle = client.get("/_static/themes/dark-paper/theme.css")
+
+    assert bundle.status_code == 200 and bundle.mimetype == "text/css"
+    imports = [line for line in bundle.get_data(as_text=True).splitlines() if line.startswith("@import")]
+    assert [line.split("?")[0] for line in imports] == [
+        '@import url("../paper/parts.css',
+        '@import url("../dark-paper/parts.css',
+    ]
+    assert bundle.headers["Cache-Control"] == "no-cache"
+    revalidated = client.get("/_static/themes/dark-paper/theme.css", headers={"If-None-Match": bundle.headers["ETag"]})
+    assert revalidated.status_code == 304
+    assert client.get("/_static/themes/paper/parts.css").get_data(as_text=True).startswith("[data-part")
+    assert client.get("/_static/themes/paper/theme.toml").status_code == 404
+    assert client.get("/_static/themes/paper/../standard/theme.toml").status_code == 404
+    assert client.get("/_static/themes/nowhere/theme.css").status_code == 404
+
+
+def test_a_themeable_app_turns_its_theming_on_and_off(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
+    registry_path = write_registry(
+        tmp_path / "apps.toml",
+        registry_row_toml("notes", "http://localhost:7001", theming_mode="outside"),
+        registry_row_toml("todo", "http://localhost:7002"),
+        registry_row_toml("chat", "http://localhost:8010", theming_mode="parts"),
+    )
+    inventory = build_inventory(
+        registry_path, broadcaster, theming_off=AppThemingStore(state_directory=tmp_path / "state").read
+    )
+    client = shell_application(tmp_path, inventory, broadcaster).test_client()
+
+    def theming() -> dict[str, str | None]:
+        return {app["name"]: app["theming"] for app in client.get("/api/inventory").get_json()["apps"]}
+
+    # A themeable app has its theming on until the user turns it off; an app with no [theming] can be made themeable.
+    assert theming() == {"notes": "on", "todo": "unthemed", "chat": None}
+    assert client.post("/api/apps/notes/theming", json={"is_on": False}).get_json() == {"app": "notes", "is_on": False}
+    assert theming()["notes"] == "off"
+    assert client.post("/api/apps/notes/theming", json={"is_on": True}).status_code == 200
+    assert theming()["notes"] == "on"
+    for app in ("todo", "chat", "nowhere"):
+        assert client.post(f"/api/apps/{app}/theming", json={"is_on": False}).status_code == 400
+
+
+def test_the_tour_record_is_unseen_until_posted_and_round_trips(client: FlaskClient) -> None:
+    assert client.get("/api/tour").get_json() == {"is_seen": False, "resume_index": None}
+    assert client.post("/api/tour", json={"is_seen": True}).get_json() == {"is_seen": True, "resume_index": None}
+    assert client.post("/api/tour", json={"is_seen": True, "resume_index": 3}).get_json() == {
+        "is_seen": True,
+        "resume_index": 3,
+    }
+    assert client.get("/api/tour").get_json() == {"is_seen": True, "resume_index": 3}
+    assert client.post("/api/tour", json={"is_seen": False}).get_json() == {"is_seen": False, "resume_index": None}
+    assert client.post("/api/tour", json={"is_seen": "not a flag"}).status_code == 400
+    assert client.post("/api/tour", json={"is_seen": True, "resume_index": "three"}).status_code == 400
+    assert client.post("/api/tour", json={"is_seen": True, "resume_index": -1}).status_code == 400

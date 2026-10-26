@@ -2368,6 +2368,24 @@ def test_the_phone_composer_settings_button_opens_the_model_menu_with_effort_seg
 
 
 @pytest.mark.timeout(60, func_only=False)
+def test_hovering_the_fast_mode_row_says_what_fast_mode_is(e2e_server: RunningWorkspace, page: Page) -> None:
+    """A user who has never heard of fast mode learns what it is, and that it costs more, by hovering its row in the
+    model card."""
+    model_state = get_model_state_path(HarnessType.CLAUDE, e2e_server.agent_info.agent_state_dir)
+    model_state.write_text(json.dumps({"model": "claude-opus-5-5", "effort": "high", "fast": False}))
+    e2e_server.chat_state.agent_manager.refresh_model_choice(FIXTURE_AGENT_ID)
+    _open_fixture_chat(page, e2e_server)
+    chat = _chat(page)
+    chat.locator(".model-selector-trigger").click()
+    chat.locator('[data-menu-row="fast"]').hover()
+    expect(chat.locator(".hover-tooltip")).to_have_text(
+        "Fast mode makes the model reply faster. It's the same model, just as smart, only quicker. It costs more to "
+        "run, so turn it on when speed matters and leave it off otherwise.",
+        timeout=5000,
+    )
+
+
+@pytest.mark.timeout(60, func_only=False)
 def test_a_draft_typed_on_the_phone_is_back_after_a_reload(e2e_server: RunningWorkspace, page: Page) -> None:
     """An unsent message survives the page going away, which is what lets the phone mount only the window it shows."""
     _open_phone_chat_root(page, e2e_server)

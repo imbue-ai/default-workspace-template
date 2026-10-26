@@ -103,4 +103,5 @@ now. Try again in a moment.", with the file left written.
 `routines migrate-cron` converts the `data/.state/cron.d` entries a workspace
 wrote before routines existed, carries the old runner's state over, and
 removes both copies of each converted entry; the bootstrap runs it at every
-boot.
+boot. It leaves the Imbue Studio app's `update-self-dispatch` entry with cron,
+untouched: the app rewrites that entry whenever it arms an update.

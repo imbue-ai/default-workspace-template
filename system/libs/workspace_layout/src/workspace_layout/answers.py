@@ -23,6 +23,7 @@ from pydantic import Field
 from pydantic import ValidationError
 
 from workspace_layout.errors import ShellAnswerMalformedError
+from workspace_layout.primitives import AppTheming
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import LayoutOp
@@ -127,6 +128,11 @@ class InventoryApp(FrozenModel):
     is_running: bool = Field(description="Derived from supervisord or a TCP probe, never stored")
     share_url: str | None = Field(
         description="The app's address on the domain the workspace was last shared under; None when it never was"
+    )
+    theming: AppTheming | None = Field(
+        default=None,
+        description="Where the app's Theming submenu stands: on or off for a themeable app, unthemed for an app that "
+        "can be made themeable; None for an app that wears the workspace's theme itself or is not themed",
     )
 
 

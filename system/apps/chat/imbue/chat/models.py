@@ -315,7 +315,16 @@ class HandoffError(ValueError):
     ...
 
 
-class QueuedMessageState(FrozenModel):
+class DisplayDecisionFields(FrozenModel):
+    """The render decision a not-yet-delivered message's text would get as a transcript user_message
+    (``harnesses.message_display``), so the page draws it as the row it will become."""
+
+    display: DisplayKind | None = Field(default=None, description="The decision's kind; None for a plain message")
+    display_label: str | None = Field(default=None, description="The decision's chip or notice label")
+    display_body: str | None = Field(default=None, description="The decision's body, when it is not the text")
+
+
+class QueuedMessageState(DisplayDecisionFields):
     """One currently-queued message on the per-agent WebSocket state.
 
     The harness-agnostic wire shape of a queued message: the frontend renders the
@@ -337,15 +346,6 @@ class QueuedMessageState(FrozenModel):
             "False for an ordinary parked queue chip."
         ),
     )
-    display: DisplayKind | None = Field(
-        default=None,
-        description=(
-            "The render decision the content would get as a transcript user_message "
-            "(``harnesses.message_display``); None for a plain message"
-        ),
-    )
-    display_label: str | None = Field(default=None, description="The decision's chip or notice label")
-    display_body: str | None = Field(default=None, description="The decision's body, when it is not the content")
 
 
 class AgentStateItem(FrozenModel):
@@ -475,7 +475,7 @@ class HeldSend(FrozenModel):
     received_at: datetime = Field(description="When the chat app accepted it")
 
 
-class HeldSendSnapshot(FrozenModel):
+class HeldSendSnapshot(DisplayDecisionFields):
     """One message the chat app is holding for the successor, as the chat pages render it while converging."""
 
     message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
@@ -756,8 +756,9 @@ class ProvisionalChatPhase(LowerCaseStrEnum):
     """Where a chat that is not an agent yet stands."""
 
     # A seeded chat (``chat_seed.py``) whose transcript is on the page with a composer: the
-    # user's first send launches it on the signed-in account (with nothing signed in, the page
-    # asks for a provider in the composer's place).
+    # user's first send launches it on the signed-in account; with nothing signed in, the page
+    # asks for a provider in the composer's place, and that sign-in launches it with no message,
+    # the first send then carrying the seed (``AgentManager.carry_pending_seed``).
     AWAITING_FIRST_SEND = auto()
     # Its ``mngr create`` is running.
     CREATING = auto()

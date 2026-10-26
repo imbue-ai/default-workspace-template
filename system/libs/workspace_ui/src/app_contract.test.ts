@@ -18,8 +18,10 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_THEME,
   ShellContractError,
   connectToShell,
+  followShellTheme,
 } from "./app_contract";
 import type { ShellConnection } from "./app_contract";
 
@@ -233,6 +235,48 @@ describe("connectToShell", () => {
   });
 });
 
+describe("followShellTheme", () => {
+  it("follows the parent's theme messages alone, without posting anything", () => {
+    const parent = framed();
+    const onTheme = vi.fn();
+    const stop = followShellTheme(onTheme);
+
+    deliver({ type: SHELL_THEME, theme: "windows-2000", revision: "r1" }, parent);
+    deliver({ type: SHELL_THEME, theme: "mac-classic" }, parent);
+    deliver({ type: SHELL_THEME, theme: 7 }, parent);
+    deliver({ type: SHELL_THEME, theme: "mac-classic", revision: "r2" }, {});
+    deliver({ type: SHELL_SHOWN }, parent);
+    stop();
+    deliver({ type: SHELL_THEME, theme: "standard", revision: "r3" }, parent);
+
+    expect(onTheme.mock.calls).toEqual([
+      ["windows-2000", "r1", false],
+      ["mac-classic", "", false],
+    ]);
+    expect(parent.postMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("connectToShell's theme", () => {
+  it("delivers the parent's theme with its revision, an empty revision when it names none, and a preview flag", () => {
+    const parent = framed();
+    const onTheme = vi.fn();
+    connection = connectToShell({ onTheme });
+
+    deliver({ type: SHELL_THEME, theme: "windows-2000", revision: "r1" }, parent);
+    deliver({ type: SHELL_THEME, theme: "mac-classic" }, parent);
+    deliver({ type: SHELL_THEME, theme: "paper", revision: "r2", isPreview: true }, parent);
+    deliver({ type: SHELL_THEME, theme: 7, revision: "r3" }, parent);
+    deliver({ type: SHELL_THEME, theme: "ink", revision: "r4" }, {});
+
+    expect(onTheme.mock.calls).toEqual([
+      ["windows-2000", "r1", false],
+      ["mac-classic", "", false],
+      ["paper", "r2", true],
+    ]);
+  });
+});
+
 describe("a framed page's link clicks", () => {
   /** Whether each click was cancelled, as the last listener of its bubbling sees it; the click is then cancelled, so
    *  the test document never navigates. */
@@ -276,6 +320,7 @@ describe("a framed page's link clicks", () => {
     ["a web link", "https://example.com/docs"],
     ["mailto", "mailto:someone@example.com"],
     ["tel", "tel:+15551234567"],
+    ["a custom-scheme link", "slack://channel?id=C1"],
   ])("hands %s to the shell and keeps the page where it is, whatever its target", (_what, href) => {
     const parent = connect();
     click(`<a href="${href}"><span data-click>open</span></a>`);
@@ -417,6 +462,7 @@ describe("a framed page's scripted popups", () => {
     const calls: unknown[][] = [
       ["https://example.com/sign-in", "signin", "popup"],
       ["mailto:someone@example.com"],
+      ["slack://channel?id=C1"],
       ["about:blank"],
       [],
       [""],
@@ -436,6 +482,7 @@ describe("a framed page's scripted popups", () => {
     expect(open("/docs/intro", "_self")).toEqual({ closed: false });
     expect(open("http://localhost:5173/preview", "_SELF")).toBeNull();
     expect(open("https://example.com/docs", "_self")).toBeNull();
+    expect(open("slack://channel?id=C1", "_self")).toBeNull();
     expect(open("http://localhost:5173/preview", "preview")).toEqual({ closed: false });
     expect(open("/docs/intro", "preview")).toEqual({ closed: false });
     expect(nativeOpen.mock.calls).toEqual([
@@ -446,6 +493,7 @@ describe("a framed page's scripted popups", () => {
     expect(sentAfterConnect(parent)).toEqual([
       [{ type: SHELL_OPEN_LINK, url: "http://localhost:5173/preview" }, "*"],
       [{ type: SHELL_OPEN_LINK, url: "https://example.com/docs" }, "*"],
+      [{ type: SHELL_OPEN_LINK, url: "slack://channel?id=C1" }, "*"],
     ]);
     document.body.innerHTML = "";
   });

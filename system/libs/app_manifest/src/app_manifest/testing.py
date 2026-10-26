@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 import subprocess
+from collections.abc import Mapping
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
@@ -102,6 +103,13 @@ def commit_everything(repo_root: Path, message: str) -> str:
     run_git(repo_root, ("add", "-A"))
     run_git(repo_root, ("commit", "-q", "-m", message))
     return run_git(repo_root, ("rev-parse", "HEAD")).strip()
+
+
+def commit_changes(repo_root: Path, changes: Mapping[str, str], message: str) -> str:
+    """Write each repo-relative file with its content and commit them, returning the new sha."""
+    for relative_path, content in changes.items():
+        write_repo_file(repo_root, relative_path, content)
+    return commit_everything(repo_root, message)
 
 
 def build_news_workspace(repo_root: Path) -> Path:
@@ -238,6 +246,16 @@ def build_selection_workspace(repo_root: Path) -> None:
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "VALUE = 1\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n")
     commit_everything(repo_root, "workspace")
+
+
+def declare_root_dependency(repo_root: Path, name: str) -> None:
+    """Make the selection workspace's root project depend on the member ``name``."""
+    root_pyproject = repo_root / "pyproject.toml"
+    root_pyproject.write_text(
+        root_pyproject.read_text().replace(
+            'version = "0.1.0"\n', f'version = "0.1.0"\ndependencies = ["{name}"]\n', 1
+        )
+    )
 
 
 def remove_shell_modules(repo_root: Path) -> None:

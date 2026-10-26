@@ -36,6 +36,10 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import ConfigDict, Field, field_validator
 from workspace_layout.windows import WindowClosedHint, window_query_value
+from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
+from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE, register_workspace_theme_route
+from workspace_themes.primitives import THEME_ID_PATTERN
+from workspace_themes.serving import THEME_STATIC_ROUTE_PREFIX
 
 from terminal_app.errors import (
     InvalidTerminalValueError,
@@ -76,7 +80,40 @@ _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 # The template's placeholders, filled in one pass so that a title or a config carrying a
 # placeholder's text is not itself filled.
-_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH)__")
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME)__")
+
+# xterm's theme keys for the contract's terminal tokens, in TERMINAL_TOKENS' order.
+_XTERM_THEME_KEYS: Final[tuple[str, ...]] = (
+    "background",
+    "foreground",
+    "cursor",
+    "selectionBackground",
+    "black",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "brightBlack",
+    "brightRed",
+    "brightGreen",
+    "brightYellow",
+    "brightBlue",
+    "brightMagenta",
+    "brightCyan",
+    "brightWhite",
+)
+# What the script needs to know of workspace themes, from the theme library rather than copied into the script.
+_THEME_SCRIPT_CONFIG: Final[str] = json.dumps(
+    {
+        "standard": STANDARD_THEME_ID,
+        "idPattern": THEME_ID_PATTERN.pattern,
+        "bundlePrefix": THEME_STATIC_ROUTE_PREFIX,
+        "paletteTokens": dict(zip(_XTERM_THEME_KEYS, TERMINAL_TOKENS, strict=True)),
+    }
+)
 
 _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <html lang="en">
@@ -274,7 +311,76 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     if (button !== null) pressKey(button);
     focusPty();
   });
-  frame.addEventListener("load", () => setCtrlArmed(false));
+  frame.addEventListener("load", () => {
+    setCtrlArmed(false);
+    if (palette !== undefined) postToPty({ type: "terminal:theme", theme: palette });
+  });
+
+  // The workspace's theme reaches the terminal as a palette (docs/system/blueprint/workspace-themes/, section
+  // 4.1). The terminal takes no other part in themes ([theming] mode = "none"), so the theme's bundle is loaded
+  // into a blank frame of this origin that nobody sees, never into this page: the --term-* tokens are read there
+  // once it has loaded and handed to the pty page's xterm, and the theme's rules style nothing here. The standard
+  // theme sets none, which leaves xterm its own colors.
+  // The standard theme's id, the pattern a theme id matches, where a theme's bundle is served, and each xterm color's
+  // --term-* token.
+  const THEME = __THEME__;
+  const THEME_ID = new RegExp(THEME.idPattern);
+  let palette = undefined;
+  let paletteFrame = null;
+  // The theme and revision worn or loading, so a repeated shell:theme reloads nothing.
+  let wornTheme = null;
+
+  function readPalette(probe) {
+    const style = probe.contentWindow.getComputedStyle(probe.contentDocument.documentElement);
+    const read = {};
+    for (const [key, token] of Object.entries(THEME.paletteTokens)) {
+      const value = style.getPropertyValue(token).trim();
+      if (value !== "") read[key] = value;
+    }
+    return Object.keys(read).length === 0 ? null : read;
+  }
+
+  function wearTheme(theme, revision) {
+    if (!THEME_ID.test(theme)) return;
+    const key = `${theme}@${revision}`;
+    if (key === wornTheme) return;
+    wornTheme = key;
+    paletteFrame?.remove();
+    paletteFrame = null;
+    if (theme === THEME.standard) {
+      palette = null;
+      postToPty({ type: "terminal:theme", theme: null });
+      return;
+    }
+    // Laid out (not display: none), so every engine resolves the frame's styles, but with no size and unseen.
+    const probe = document.createElement("iframe");
+    probe.setAttribute("aria-hidden", "true");
+    probe.tabIndex = -1;
+    probe.style.cssText = "position: absolute; width: 0; height: 0; border: 0; visibility: hidden;";
+    document.body.appendChild(probe);
+    paletteFrame = probe;
+    const probeDocument = probe.contentDocument;
+    probeDocument.documentElement.dataset.uiTheme = theme;
+    const link = probeDocument.createElement("link");
+    link.rel = "stylesheet";
+    const bundlePath = `${THEME.bundlePrefix}${theme}/theme.css` + (revision ? `?v=${encodeURIComponent(revision)}` : "");
+    link.href = new URL(bundlePath, location.href).href;
+    link.addEventListener("load", () => {
+      if (paletteFrame !== probe) return;
+      palette = readPalette(probe);
+      postToPty({ type: "terminal:theme", theme: palette });
+    });
+    // A theme that cannot be loaded (gone, or unavailable) leaves xterm its own colors, not the last theme's.
+    link.addEventListener("error", () => {
+      if (paletteFrame !== probe) return;
+      probe.remove();
+      paletteFrame = null;
+      wornTheme = null;
+      palette = null;
+      postToPty({ type: "terminal:theme", theme: null });
+    });
+    probeDocument.head.appendChild(link);
+  }
 
   window.addEventListener("message", (event) => {
     const data = event.data;
@@ -298,6 +404,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
           capabilities: { navigation: true, closeChord: false },
           onNavigate: navigate,
           onShown: focusPty,
+          onTheme: wearTheme,
         });
         if (current !== null) connection.location(pathFor(current), document.title);
       })
@@ -363,6 +470,7 @@ ROUTE_TABLE: RouteTable = {
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
     ("POST", WINDOW_CLOSED_PATH): RouteModels(request_model=WindowClosedHint, success_status=HTTP_NO_CONTENT),
     ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the app contract module, a JavaScript file"),
+    **THEME_STATIC_ROUTE_TABLE,
 }
 
 
@@ -398,6 +506,7 @@ def render_page(config: PageConfig) -> str:
         "CONFIG_ID": _CONFIG_ELEMENT_ID,
         "CONFIG": encoded,
         "CONTRACT_PATH": APP_CONTRACT_ROUTE,
+        "THEME": _THEME_SCRIPT_CONFIG,
     }
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
 
@@ -421,6 +530,7 @@ def build_pages_blueprint(
         description=APP_DESCRIPTION,
         route_table=ROUTE_TABLE,
     )
+    register_workspace_theme_route(blueprint)
     attach_document_policy(blueprint)
 
     def session_page(name: TmuxSessionName) -> SessionPage:

@@ -27,8 +27,8 @@ Facts this design builds on, as of `main` at `02eb68c02` (2026-09-28).
 - The terminal and the browser collect their *resources* (a tmux session, Chromium) once no window shows them (window-bound-resources spec, Part B), told by the shell's close hint (`window_closed_path`) and by a 90 second sweep over `GET /api/desktops`.
   The shell itself destroys nothing.
 - `mngr forward` answers a backend it cannot reach with a 503 whose HTML body polls the same URL every second and reloads on any other status; the share gateway's caddy answers a bare 502 for a registered service whose backend is down, and serves its own auto-refreshing loading page only for origins it has no route for.
-- Getting Started opens its first-visit window from a thread of its own process, which polls the shell for a connected client (`system/apps/getting_started/src/getting_started/first_window.py`).
-  Stopped before anyone has visited, it would never deliver that window.
+- Getting Started opened its first-visit window from a thread of its own process, which polled the shell for a connected client, until the new onboarding (October 2026) left a new workspace on the welcome chat alone, with the desktop's tour introducing the apps.
+  The rule below that holds a stop until a client has visited was written for that window and is kept: it costs nothing and keeps the first visit's apps running.
 - The `app-watcher` service is a 40 MB process whose one job is to diff `data/.state/apps.toml` on change and append `service_registered` and `service_deregistered` events to `$MNGR_AGENT_STATE_DIR/events/services/events.jsonl`, which the minds desktop reads to discover an app's origins.
   The shell watches the same file with the same intent (`shell/inventory.py`).
 - A scaffolded user app registers itself as the first half of its own program command (`forward_port.py --manifest ... && <entry>`), runs its uv tool entry point directly (no `uv run`), and carries `startsecs = 30` and `startretries = 5`.

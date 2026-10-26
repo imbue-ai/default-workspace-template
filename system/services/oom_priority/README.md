@@ -329,9 +329,15 @@ python3 system/services/oom_priority/bin/memory_candidates.py --json   # the sam
 
 It lists:
 
-- **Free memory**, from `/proc/meminfo`: `MemAvailable`, or `MemFree` when
-  there is no `MemAvailable`. The output names the field it read. Under gVisor
-  the two are equal.
+- **Free memory**, read where the memory guard reads it (`oom_priority.meminfo`
+  and "How it fits together" above): the `--host-meminfo` headroom file while it
+  is fresh, else `/proc/meminfo`. It takes `MemAvailable`, or `MemFree` when
+  there is no `MemAvailable`, and the output names both the file and the field.
+  The distinction is not cosmetic: under a memory cap the container's own
+  `/proc/meminfo` describes the whole machine or misses what the runtime is
+  charged, so it can read several gigabytes more free than the figure earlyoom
+  acts on. A reader who takes `/proc/meminfo` for the guard's own figure
+  concludes there is room and reruns a command the guard goes on shedding.
 - **Idle chats and workers**, from `mngr list --provider local`, rendered
   through a `--format` template (the columns are `MNGR_LIST_FIELDS`). This is
   how `system/scripts/collect_bug_report_diagnostics.py` lists agents too:
@@ -359,9 +365,17 @@ It lists:
   Its memory is the summed RSS of its process trees. The trees are rooted at the
   `pid` mngr reports and at every live pid the agent-pid registry holds for it
   (codex registers two).
+- **Apps the workspace may stop**, from the shell's `GET /api/inventory` joined
+  to the programs supervisord reports running. A candidate has a program, is not
+  critical (the shell, the chat and the terminal are what the workspace is
+  reached and talked to through), is not internal, and is running. The browser is
+  left out: its service holds almost nothing and its Chromium processes have
+  their own section below. Each row carries how many windows show the app, which
+  is what decides whether stopping it takes something off the user's screen, and
+  its memory is the summed RSS of its program's process tree.
 - **Browsers no window shows**, from the browser service's `GET /browsers`. A
-  candidate is a `running` browser that no window names, according to the
-  shell's `GET /api/desktops`. Its memory is the summed RSS of the Chromium
+  candidate is a `running` browser that no window names, according to the same
+  inventory document. Its memory is the summed RSS of the Chromium
   processes on its profile and their children.
 
 The browser service stops a browser on its own once a window has shown it and
@@ -376,13 +390,17 @@ frees, most of all for Chromium, whose processes share most of their memory: a
 browser whose processes summed to 2.8 GB freed about 460 MB when stopped. Read
 them as a ranking, and read the free memory again after stopping something.
 
-Each source is read on its own. When `mngr list`, the browser service or the
-shell cannot be read, that section says so, and its candidates are `null` in
-JSON: "unknown", not "none". The other sections are still listed, and the
-command still exits 0.
+Each source is read on its own. When `mngr list`, the browser service, the
+shell or supervisord cannot be read, that section says so, and its candidates are
+`null` in JSON: "unknown", not "none". The other sections are still listed, and
+the command still exits 0. The shell is read once, and its one document answers
+both the apps and the browsers, so a shell that cannot be reached takes both
+sections to "unknown" together.
 
 A lead runs it when one of its agents reports a shed. It shows the user the
-list and the free memory, and stops only what the user approves:
+list and the free memory, and stops only what the user approves (a scheduled
+update is the one flow that may go further on its own judgment; see the
+`update-self` skill's "What this pass may do without asking"):
 
 - **A chat**: `mngr stop <name>`, the same command the chat app's own stop
   runs. The chat restarts on its next message. mngr's send starts a `STOPPED`
@@ -396,6 +414,18 @@ list and the free memory, and stops only what the user approves:
   a crash and restart it. A plain `mngr stop` would look like a crash.
 - **A browser**: `POST /browsers/<name>/stop` on the browser service. This
   keeps the browser's profile and tabs, and its next window starts it again.
+- **An app**: `supervisorctl stop <program>`, and `supervisorctl start
+  <program>` to put it back. Stopping the program leaves the app's windows
+  where they are: a window is the shell's, not the app's, and only an explicit
+  close or the shell's own "quit the app" takes one away. While the program is
+  down the shell parks its port, and a connection to that port both answers
+  "Starting <app>" and wakes the app
+  (`system_interface/shell/app_lifecycle.py`). So a window someone is actually
+  looking at starts the app again the moment its page reloads, and only an app
+  nothing is loading stays down. Read the free memory again rather than assuming
+  it did. Every program carries `autostart=true`, so a restart of the services
+  agent (`mngr start --restart system-services`, which every apply runs) starts
+  them all again whether or not anything remembered to.
 
 ## Protection is soft
 

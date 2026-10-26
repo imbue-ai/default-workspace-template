@@ -11,7 +11,8 @@
  * threshold have to be ones the shell can see.
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
- * desktop change, ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
+ * desktop change, ``shell:theme`` after every handshake and on every change of the theme the shell
+ * wears, ``shell:shown`` and ``shell:hidden`` as visibility changes, the following rule
  * of plan section 4.6 after every desktops update and every layout load (``shell:navigate`` for a
  * page that declared navigation, a ``src`` reassignment otherwise; an independent window's page follows
  * this client's own stored path, which arrives with the layout), and the pages' own
@@ -37,6 +38,7 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
@@ -58,6 +60,13 @@ import {
 import type { DesktopState } from "../reducers/desktopState";
 import { sendToChildFrame, setChildFrameMessageHandler } from "../relay";
 import type { DesktopStore, EmbedderMessage, PageDriver } from "../store/DesktopStore";
+import {
+  currentTheme,
+  isCurrentThemeRemembered,
+  onThemeChanged,
+  type ThemeRef,
+} from "@imbue/workspace-ui/src/themes/themeClient";
+import { STANDARD_THEME_ID } from "@imbue/workspace-ui/src/themes/themeBoot";
 
 export const LIVE_PAGE_ATTRIBUTE = "data-live-page";
 /** The element of a window's chrome the page is laid over. */
@@ -77,6 +86,19 @@ export const PAGE_FRAME_ALLOW = "clipboard-read; clipboard-write";
 // The shell's WindowTitle rule (contracts.md section 1, ``shell/primitives.py``): a longer title is
 // refused with a 400, which would leave the whole report, path included, unstored.
 export const MAX_WINDOW_TITLE_LENGTH = 256;
+
+/** The `shell:theme` payload (workspace-themes plan section 5.3): a theme the shell wears without remembering it
+ *  is a preview, which the page wears without remembering either. */
+function themeMessage(
+  theme: ThemeRef,
+  isRemembered: boolean,
+): { readonly theme: string; readonly revision: string; readonly isPreview: boolean } {
+  return { theme: theme.id, revision: theme.revision, isPreview: !isRemembered };
+}
+
+/** Stops the started layer hearing theme changes: the newest layer takes this seat, as it takes the store's
+ *  page-driver seat, so a layer replaced by another (a switch to the phone layout) is let go. */
+let stopFollowingTheme: (() => void) | null = null;
 
 interface LivePage {
   readonly windowId: string;
@@ -154,6 +176,8 @@ export class LivePagesLayer implements PageDriver {
     // Focusable, so the shell has somewhere of its own to put the document's focus (``takeFocusFromOtherPages``).
     this.host.tabIndex = -1;
     this.store.setPageDriver(this);
+    stopFollowingTheme?.();
+    stopFollowingTheme = onThemeChanged((theme, isRemembered) => this.sendTheme(theme, isRemembered));
   }
 
   /** Set which pages live; applied by the next reconcile. */
@@ -203,6 +227,24 @@ export class LivePagesLayer implements PageDriver {
     for (const page of this.pages.values()) {
       if (page.app === appName) this.reloadPage(page);
     }
+  }
+
+  resendTheme(appName: string): void {
+    for (const page of this.pages.values()) {
+      if (page.app === appName && page.greetedDesktopId !== null) {
+        sendToChildFrame(
+          page.frame,
+          SHELL_THEME,
+          this.themeMessageFor(page, currentTheme(), isCurrentThemeRemembered()),
+        );
+      }
+    }
+  }
+
+  /** The theme a page is sent: the standard one, which puts nothing on the page, for an app whose theming is off. */
+  private themeMessageFor(page: LivePage, theme: ThemeRef, isRemembered: boolean): ReturnType<typeof themeMessage> {
+    const isThemingOff = appByName(this.store.getState(), page.app)?.theming === "off";
+    return themeMessage(isThemingOff ? { id: STANDARD_THEME_ID, revision: "" } : theme, isRemembered);
   }
 
   /** Reload a page at its window's stored path (the page may have moved since it was first pointed). */
@@ -555,6 +597,16 @@ export class LivePagesLayer implements PageDriver {
       path,
     });
     page.greetedDesktopId = desktopId;
+    sendToChildFrame(page.frame, SHELL_THEME, this.themeMessageFor(page, currentTheme(), isCurrentThemeRemembered()));
+  }
+
+  /** Tell every greeted page the theme the desktop now wears. */
+  private sendTheme(theme: ThemeRef, isRemembered: boolean): void {
+    for (const page of this.pages.values()) {
+      if (page.greetedDesktopId !== null) {
+        sendToChildFrame(page.frame, SHELL_THEME, this.themeMessageFor(page, theme, isRemembered));
+      }
+    }
   }
 
   private syncVisibility(page: LivePage, isVisible: boolean): void {

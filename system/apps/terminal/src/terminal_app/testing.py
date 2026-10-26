@@ -17,7 +17,12 @@ from imbue.imbue_common.mutable_model import MutableModel
 from pydantic import Field
 
 from terminal_app.data_types import TerminalSessionRecord, TmuxSession
-from terminal_app.pages import build_pages_blueprint
+from terminal_app.pages import (
+    PageConfig,
+    SessionPage,
+    build_pages_blueprint,
+    render_page,
+)
 from terminal_app.primitives import (
     TerminalTitle,
     TmuxSessionId,
@@ -50,6 +55,16 @@ TEST_SESSION_COMMAND: Final[tuple[str, ...]] = (
 TEST_PTY_LABEL: Final[str] = "terminal-pty-c3d4"
 # What a test's stand-in for the shell's built contract module says.
 TEST_APP_CONTRACT_SOURCE: Final[str] = "export function connectToShell() {}\n"
+
+# The wrapper page and its pty frame as the browser tests serve them: two origins through request routing, since the
+# wrapper derives the pty's origin from its own host.
+BROWSER_WRAPPER_HOST: Final[str] = "terminal.test"
+BROWSER_PTY_LABEL: Final[str] = "pty"
+BROWSER_PTY_PATH: Final[str] = "/?arg=_&arg=session&arg=terminal-1"
+BROWSER_WRAPPER_URL: Final[str] = f"http://{BROWSER_WRAPPER_HOST}/?session=terminal-1"
+BROWSER_PTY_URL: Final[str] = (
+    f"http://{BROWSER_PTY_LABEL}.{BROWSER_WRAPPER_HOST}{BROWSER_PTY_PATH}"
+)
 
 _EXECUTABLE_MODE: Final[int] = 0o755
 
@@ -220,6 +235,18 @@ def make_tmux_session(
 def expected_session_id_file(session_id: str) -> str:
     """The id file the app writes for a session the fake tmux minted (or one built by ``make_tmux_session``)."""
     return f"{session_id}\n{fake_created_epoch(session_id)}\n"
+
+
+def render_browser_wrapper_page() -> str:
+    """The wrapper page of session terminal-1, framing its pty at ``BROWSER_PTY_URL``."""
+    session = TmuxSessionName("terminal-1")
+    page = SessionPage(
+        name=session,
+        title=TerminalTitle("Terminal 1"),
+        pty_path=BROWSER_PTY_PATH,
+        pty_label=BROWSER_PTY_LABEL,
+    )
+    return render_page(PageConfig(session=session, page=page))
 
 
 def install_fake_tmux(directory: Path) -> FakeTmux:

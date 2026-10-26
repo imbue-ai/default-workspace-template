@@ -31,7 +31,9 @@ observe`, its own supervised service) writes, and serves:
   composer, which stays in view (holding any draft) but disabled, and opens the
   provider chooser as that notice appears; this is the one place the chooser
   opens for a missing provider (the New chat button opens the awaiting chat, and
-  an intake's first message goes into its composer, with no dialog). Whether
+  an intake's first message goes into its composer, with no dialog). The sign-in
+  that chooser produces launches the awaiting chat at once, with no message, so
+  its agent is up before the user has typed. Whether
   anything is signed in is decided from a fresh read of the account list; the
   New chat button then names no account, so the chat app picks it as the create
   runs and an account signed out since the page read the list is never the one
@@ -135,14 +137,16 @@ becomes the file's `file:` URL, which the shell opens in Files
 `*.localhost`) the shell opens as the window of the app on whose
 `<label>.localhost` host or registered port it is, or else in the workspace's
 browser; an address on the workspace's share domain it opens as that app's
-window; an external web, mail, or phone link it hands to the app of the
-workspace registered for it, or else opens in the user's own browser or mail or
-phone app; and a relative path, a fragment, or another
-scheme is unwrapped to its text. A chat with no shell above it (opened on its
+window; an external web, mail, phone, or custom-scheme (`slack:`) link it
+hands to the app of the workspace registered for it, or else opens in the
+user's own browser or the app of their system the link belongs to; and a
+relative path, a fragment, a file and line (`q4.md:12`), a host and port
+with no scheme (`localhost:3000/app`), or another of the browser's own schemes
+is unwrapped to its text. A chat with no shell above it (opened on its
 own, or in a chat root opened on its own, which hands its pages no handshake)
 leaves its links to the browser, which opens a web, mail, or phone link in a new
-tab and does nothing for a file link: a browser does not follow a `file:` link
-from a web page.
+tab, hands a custom-scheme link to the app it belongs to, and does nothing for
+a file link: a browser does not follow a `file:` link from a web page.
 Sends are reported to the shell's client-activity route so agents can
 attribute a request to a client, and the app asks the shell for windows,
 through one client of the `workspace_layout` library that asks as the chat app
@@ -294,9 +298,11 @@ carries the switch out: once its message is sent the chip names the target,
 unmarked, until the new agent reports its model, and a failed switch leaves it
 on the agent the chat still runs on.
 While the chat converges the held messages render from the snapshot's
-`handoff.held_sends` (the message the user switched with stands down once the
-`agent_switch` marker carrying it is on the transcript, where it renders as the
-successor's opening bubble), one handoff node in the transcript shows the switch's
+`handoff.held_sends` (each carries the display decision its text would get in
+the transcript, so a held background-task report shows as its notice; the
+message the user switched with stands down once the `agent_switch` marker
+carrying it is on the transcript, where it renders as the successor's opening
+bubble), one handoff node in the transcript shows the switch's
 progress ("Handing off to Codex...", then "Handed off from Claude Code to Codex",
 expandable to the summary turn and the handoff prompt, with a rule under it
 once the switch has landed; a fresh start, which asked for no summary and sent
@@ -398,19 +404,25 @@ and opens a chat on them: the turns are written as the chat's first segment
 pseudo-harness like any archived segment), the record names the seed as its
 first member, and the chat is listed as a provisional chat in the
 `awaiting_first_send` phase, its transcript on the page with a composer under
-it. The user's first message is what launches the chat's first real agent
-(with nothing signed in, the chat's page asks for a provider first), which
-joins the
+it. The chat's first real agent is launched either by the sign-in that gives
+the page a provider (with nothing signed in, the chat's page asks for one, and
+the sign-in launches the chat with no message) or by the user's first message,
+when nothing has launched it yet; either way the agent joins the
 record as the seed's successor with the `chat_id` and `chat_seq` labels a
-handoff's successor carries. That agent is launched with the seeded
-conversation ahead of the user's message, as one message: the seed is a segment
+handoff's successor carries. The agent receives the seeded
+conversation ahead of the user's first words, as one message: the seed is a segment
 this app renders from a file, not a transcript any harness could read, so an
 agent handed the message alone could not tell what a reply like "1" picked out
-of the options the last seeded turn offered. The page strips that context block
+of the options the last seeded turn offered. A launch by the first message
+carries it in that message; a launch by the sign-in marks the seed as pending
+on the record (`is_seed_pending`), and the first send since carries it
+(`carry_pending_seed`), the seed counting as delivered only once the harness
+took that send, so a send it refused or could not take yet leaves the
+conversation for the next. The page strips that context block
 and shows the user's own words alone (`prompt_with_context` in
-`harnesses/message_display.py`). A first message that is a slash command goes
+`harnesses/message_display.py`). A message that is a slash command goes
 out as typed, since a harness runs a command only when the slash leads the
-message. The seed survives a restart of this app because
+message, and leaves a pending seed for the next message. The seed survives a restart of this app because
 the record does; discarding the chat before its first send drops both.
 
 The workspace has one **main chat**, where a text with no chat of its own goes
@@ -443,7 +455,7 @@ first one. Fast mode is a per-chat setting with three modes
 `fast_mode_turn_limit` of the user's turns, then standard speed) and **on**
 (fast throughout). A new chat starts in the workspace's default mode
 (`fast_mode_default` in `GET`/`PUT /api/settings`, `chat_settings.py`, stored
-at `data/.apps/chat/settings.json`; auto with a limit of 2 unless changed), and
+at `data/.apps/chat/settings.json`; off unless changed, auto's limit 2), and
 a chat whose mode calls for it launches through the `fast` create template, a
 handoff's successor included. The model picker's fast row states the chat's
 mode and opens a submenu where the mode, auto's turn limit and the default for

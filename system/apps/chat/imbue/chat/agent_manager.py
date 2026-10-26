@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 from typing import Self
+from typing import TypeVar
 from uuid import uuid4
 
 from chat_background_tasks.markers import TaskSource
@@ -86,6 +87,7 @@ from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import is_slash_command
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_events
@@ -159,6 +161,7 @@ from imbue.chat.models import ChatCreationOutcome
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import CreatedChat
+from imbue.chat.models import DisplayDecisionFields
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HandoffState
@@ -533,17 +536,26 @@ def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str
     ]
 
 
+_DecidedT = TypeVar("_DecidedT", bound=DisplayDecisionFields)
+
+
+@pure
+def _with_display_decision(message: _DecidedT, text: str) -> _DecidedT:
+    """``message`` carrying the render decision ``text`` would get in the transcript."""
+    decision = classify_user_message(text)
+    if decision is None:
+        return message
+    return message.model_copy_update(
+        to_update(message.field_ref().display, decision.display),
+        to_update(message.field_ref().display_label, decision.display_label),
+        to_update(message.field_ref().display_body, decision.display_body),
+    )
+
+
 def _queued_message_state(entry: Mapping[str, Any]) -> QueuedMessageState:
     """One harness's queued entry on the wire, carrying the render decision its content would get in the transcript."""
     queued = QueuedMessageState.model_validate(entry)
-    decision = classify_user_message(queued.content)
-    if decision is None:
-        return queued
-    return queued.model_copy_update(
-        to_update(queued.field_ref().display, decision.display),
-        to_update(queued.field_ref().display_label, decision.display_label),
-        to_update(queued.field_ref().display_body, decision.display_body),
-    )
+    return _with_display_decision(queued, queued.content)
 
 
 # AgentMatch requires a host_name, but the send path never reads it -- it groups
@@ -780,7 +792,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # (a fresh start picked from the provider menu) has no confirming message to show.
     others = transition.held_sends_after_trigger()
     trigger = (
-        (HeldSendSnapshot(message_id=transition.trigger_message_id, text=transition.trigger_text),)
+        (_held_send_snapshot(transition.trigger_message_id, transition.trigger_text),)
         if transition.trigger_text
         else ()
     )
@@ -792,12 +804,18 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         target_account_id=transition.target_account_id,
         target_harness=transition.target_harness,
         target_label=_target_label_of(transition),
-        held_sends=(*trigger, *(HeldSendSnapshot(message_id=held.message_id, text=held.text) for held in others)),
+        held_sends=(*trigger, *(_held_send_snapshot(held.message_id, held.text) for held in others)),
         model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
         is_fresh_start=isinstance(transition, ChatHandoffRecord) and transition.is_fresh_start,
     )
+
+
+@pure
+def _held_send_snapshot(message_id: str, text: str) -> HeldSendSnapshot:
+    """One held send on the wire, carrying the render decision its text would get in the transcript."""
+    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=text), text)
 
 
 @pure
@@ -1003,6 +1021,10 @@ class AgentManager:
     _match_by_agent_id: dict[str, AgentMatch]
     # The chats minted here whose first agent mngr does not know yet, by chat id.
     _provisional_chats: dict[ChatId, ProvisionalChat]
+    # The chats whose pending seed a send is carrying right now (``carry_pending_seed``): the
+    # delivery runs outside the lock, and a second send overlapping it must go as typed rather
+    # than carry the conversation again.
+    _seed_carries_in_flight: set[ChatId]
     # A name shown for a chat before its rename lands: the automatic name, from the moment the
     # model answers until ``mngr rename`` (seconds of CLI startup) has carried it.
     _title_override_by_chat: dict[ChatId, str]
@@ -1240,6 +1262,7 @@ class AgentManager:
         manager._chat_record_store = chat_record_store if chat_record_store is not None else InMemoryChatRecordStore()
         manager._chat_record_by_id = manager._chat_record_store.read_all()
         manager._provisional_chats = seeded_provisional_chats(manager._chat_record_by_id)
+        manager._seed_carries_in_flight = set()
         manager._title_override_by_chat = {}
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
         manager._chat_files_root = chat_files_root
@@ -2596,13 +2619,14 @@ class AgentManager:
         self._chat_record_by_id.pop(chat_id, None)
 
     def _name_seeded_member_locked(
-        self, seed_record: ChatRecord, account: Account, harness: HarnessType
+        self, seed_record: ChatRecord, account: Account, harness: HarnessType, is_seed_carried_by_first_send: bool
     ) -> ChatAgentEntry:
         """Mint a seeded chat's first agent and name it on the record ahead of its ``mngr create``. Lock held.
 
         Named before the create, as a handoff names its successor: the observe stream lists an
         agent as soon as mngr provisions it, well before the create returns, and an agent no
-        record names would be listed as a chat of its own until then.
+        record names would be listed as a chat of its own until then. A launch with no message
+        marks the seed as pending, for the first send to carry.
         """
         entry = ChatAgentEntry(
             seq=len(seed_record.agents) + 1,
@@ -2613,9 +2637,55 @@ class AgentManager:
             started_at=datetime.now(timezone.utc),
         )
         self._write_record_locked(
-            seed_record.model_copy_update(to_update(seed_record.field_ref().agents, (*seed_record.agents, entry)))
+            seed_record.model_copy_update(
+                to_update(seed_record.field_ref().agents, (*seed_record.agents, entry)),
+                to_update(seed_record.field_ref().is_seed_pending, is_seed_carried_by_first_send),
+            )
         )
         return entry
+
+    def carry_pending_seed(self, chat_id: ChatId, message: str, deliver: Callable[[str], SendOutcome]) -> SendOutcome:
+        """Deliver ``message`` to ``chat_id`` through ``deliver``, with the seeded conversation ahead of it when
+        the chat's agent was launched without it (``create_chat`` with no message) and this is the first send
+        since, else as given. The seed is marked delivered only once ``deliver`` says the message went through:
+        a send the harness refused or could not take yet (its daemon still starting, as it may be right after
+        the launch) leaves the conversation for the next send rather than losing it. A slash command is
+        delivered as typed and leaves the seed pending, since a block ahead of it would turn the command into
+        prose. One send carries the seed at a time: a send that overlaps a carrying one (the route serializes
+        nothing, and two clients can post at once) goes as typed, and the seed stays pending for the next send
+        if the carrying one was refused."""
+        with self._lock:
+            record = self._chat_record_by_id.get(chat_id)
+            is_seed_carried = (
+                record is not None
+                and record.is_seed_pending
+                and chat_id not in self._seed_carries_in_flight
+                and not is_slash_command(message)
+            )
+            if is_seed_carried:
+                self._seed_carries_in_flight.add(chat_id)
+        text = seed_context_message(self._chat_files_root / chat_id, message) if is_seed_carried else message
+        is_delivered = False
+        try:
+            outcome = deliver(text)
+            is_delivered = outcome is SendOutcome.OK
+        finally:
+            if is_seed_carried:
+                self._end_seed_carry(chat_id, is_delivered=is_delivered)
+        return outcome
+
+    def _end_seed_carry(self, chat_id: ChatId, is_delivered: bool) -> None:
+        """Free ``chat_id`` for the next send's carry, marking the seed delivered in the same locked step when
+        this carry went through: a send arriving between the two would otherwise find the seed still pending
+        with no carry in flight, and carry it again."""
+        with self._lock:
+            self._seed_carries_in_flight.discard(chat_id)
+            if not is_delivered:
+                return
+            record = self._chat_record_by_id.get(chat_id)
+            if record is None or not record.is_seed_pending:
+                return
+            self._write_record_locked(record.model_copy_update(to_update(record.field_ref().is_seed_pending, False)))
 
     def _withdraw_seeded_member_locked(self, chat_id: ChatId, record_entry: ChatAgentEntry) -> str | None:
         """Take a seeded chat's agent back off its record when its create failed: the chat is seed-only
@@ -2630,7 +2700,13 @@ class AgentManager:
         record = self._chat_record_by_id.get(chat_id)
         if record is not None and record.entry_for(record_entry.agent_id) is not None:
             remaining = tuple(entry for entry in record.agents if entry.agent_id != record_entry.agent_id)
-            self._write_record_locked(record.model_copy_update(to_update(record.field_ref().agents, remaining)))
+            # A seed pending for the withdrawn member is pending for nobody: the next launch decides again.
+            self._write_record_locked(
+                record.model_copy_update(
+                    to_update(record.field_ref().agents, remaining),
+                    to_update(record.field_ref().is_seed_pending, False),
+                )
+            )
         if record_entry.agent_id not in self._agents:
             return None
         del self._agents[record_entry.agent_id]
@@ -3335,9 +3411,10 @@ class AgentManager:
         The Imbue Studio app's onboarding continues here as the workspace's first chat: the turns become
         the chat's seed segment on disk, its record names the seed as its first member, and the
         chat is listed as a provisional chat awaiting the user's first message, with the
-        transcript on its page and a composer under it. That first send launches the chat's first
-        agent on the signed-in account through ``create_chat`` (with nothing signed in, the page
-        asks for a provider in the composer's place). The
+        transcript on its page and a composer under it. Its first agent is launched through
+        ``create_chat``: by that first send, on the signed-in account, or, with nothing signed in
+        (the page asks for a provider in the composer's place), by the sign-in itself with no
+        message, the first send then carrying the seeded conversation (``carry_pending_seed``). The
         seed survives a restart of this app because the record does; the window is opened through
         the shell like a labeled chat's, held until a client is connected.
 
@@ -3573,7 +3650,9 @@ class AgentManager:
         message sends none and waits for the user. A chat minted
         earlier keeps the message it was minted with, so a launch that names one beside
         ``chat_id`` is refused like a name; the exception is a seeded chat awaiting its first send, whose
-        message is exactly what the launch brings.
+        message is exactly what the launch brings: the user's first words, or nothing when the sign-in
+        that made an account launches it ahead of them, in which case the first send carries the seeded
+        conversation (``carry_pending_seed``).
 
         ``labels`` ride the create as extra ``--label``s, for a caller outside the workspace
         that wants the chat's window surfaced (``auto_open``); one that restates a label the app
@@ -3632,16 +3711,11 @@ class AgentManager:
                     seed_record = self._chat_record_by_id.get(provisional.chat_id)
                     if seed_record is None or not seed_record.is_seed_only:
                         raise AgentCreationError(f"Chat {chat_id} has no seed to continue from")
-                    if provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
-                        if not message:
+                    if provisional.phase is not ProvisionalChatPhase.AWAITING_FIRST_SEND:
+                        if message:
                             raise AgentCreationError(
-                                f"Chat {chat_id} is launched by its first message; none was given"
+                                f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
                             )
-                    elif message:
-                        raise AgentCreationError(
-                            f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
-                        )
-                    else:
                         message = provisional.message
                 elif provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
                     # An unseeded chat awaiting its first send (an intake that could not launch at once,
@@ -3668,7 +3742,11 @@ class AgentManager:
             # record before the provisional record changes phase, so a record that cannot be
             # written refuses the launch and leaves the chat as it was.
             record_entry = (
-                None if seed_record is None else self._name_seeded_member_locked(seed_record, account, harness)
+                None
+                if seed_record is None
+                else self._name_seeded_member_locked(
+                    seed_record, account, harness, is_seed_carried_by_first_send=not message
+                )
             )
             provisional = ProvisionalChat(
                 chat_id=launched_chat_id,
@@ -3706,9 +3784,12 @@ class AgentManager:
         # A seeded chat's first agent joins a conversation it cannot see: the seed is a segment
         # this app renders from a file, which no harness transcript holds, so its launch carries
         # that conversation ahead of the user's own words. The provisional record keeps the words
-        # alone, so a retry after a failed create wraps them once.
+        # alone, so a retry after a failed create wraps them once. A launch with no words (the
+        # sign-in's) leaves the conversation for the first send to carry.
         launch_message = (
-            message if seed_record is None else seed_context_message(self._chat_files_root / launched_chat_id, message)
+            message
+            if seed_record is None or not message
+            else seed_context_message(self._chat_files_root / launched_chat_id, message)
         )
 
         # With a pick the message follows the create rather than riding it: the model has to be
