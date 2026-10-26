@@ -196,9 +196,11 @@ export function createSlidingMenuTrack(options: SlidingMenuTrackOptions = {}): S
           ? null
           : (rows.find((row): row is SubmenuRow => row.kind === "submenu" && row.key === shownKey) ?? null);
       const isSubmenuShown = submenu !== null;
+      // Clipped, not hidden: an overflow-hidden box still scrolls, and focusing a field in the
+      // submenu (the model search) scrolls it a pane sideways on top of the slide, leaving it blank.
       return m(
         "div",
-        { class: "sliding-menu overflow-hidden", "data-menu-track": isSubmenuShown ? "submenu" : "menu" },
+        { class: "sliding-menu overflow-clip", "data-menu-track": isSubmenuShown ? "submenu" : "menu" },
         m(
           "div",
           {

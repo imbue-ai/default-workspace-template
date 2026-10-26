@@ -13,6 +13,8 @@ import type {
   LaunchOutcome,
   LaunchRequest,
   LaunchTarget,
+  PageShowOutcome,
+  PageShowRequest,
   PlacementsSaveRequest,
   WindowOpenOutcome,
   WindowOpenRequest,
@@ -37,7 +39,7 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { applyPresence } from "../model/Presence";
-import { labelForApp, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
+import { labelForApp, pinPageOfLink, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -180,6 +182,8 @@ export interface DesktopApi {
   openWindow(desktopId: string, request: WindowOpenRequest): Promise<WindowOpenOutcome>;
   /** Run a launch path (post-launch-paths plan section 5.3): the shell resolves the page and opens or navigates. */
   launch(desktopId: string, request: LaunchRequest): Promise<LaunchOutcome>;
+  /** The ``show`` op for this client (contracts.md section 5.3): the shell chooses the window. */
+  showPage(clientId: string, request: PageShowRequest): Promise<PageShowOutcome>;
   closeWindow(desktopId: string, windowId: string): Promise<void>;
   reportWindowLocation(
     desktopId: string,
@@ -1259,7 +1263,7 @@ export class DesktopStore {
         const apps = openableApps(this.state);
         const appWindow = windowAtLocalAppHost(apps, target.url) ?? windowAtBackendUrl(apps, target.url);
         if (appWindow !== null) {
-          await this.focusOrOpenWindowAt(appWindow.app.name, appWindow.path);
+          await this.openAppLink(appWindow.app, appWindow.path);
           return;
         }
         await this.deliverMessage({ type: OPEN_URL_MESSAGE, url: target.url }, senderApp ?? EMBEDDER_SENDER);
@@ -1271,7 +1275,7 @@ export class DesktopStore {
           this.toast(`Nothing in this workspace is at ${target.url}`);
           return;
         }
-        await this.focusOrOpenWindowAt(app.name, target.path);
+        await this.openAppLink(app, target.path);
         return;
       }
       case "other-workspace":
@@ -1307,6 +1311,26 @@ export class DesktopStore {
     } else {
       this.outsideLinks.openInBrowser(url);
     }
+  }
+
+  /** A link to a page of ``app``. One at the app's pin page in a state of its own (a chat at ``/?chat=<id>``) goes
+   *  through the shell's ``show``, which raises a window already there, or points the app's window on that page or
+   *  its pinned window at it, rather than opening another; any other page is focused or opened. */
+  private async openAppLink(app: AppRecord, path: string): Promise<void> {
+    const pinPage = pinPageOfLink(app, path);
+    if (pinPage === null) {
+      await this.focusOrOpenWindowAt(app.name, path);
+      return;
+    }
+    await this.flushPendingSave();
+    let outcome: PageShowOutcome;
+    try {
+      outcome = await this.deps.api.showPage(this.deps.clientId, { app: app.name, path, repoint: [pinPage] });
+    } catch (error) {
+      this.toast(`Could not open ${app.name}: ${(error as Error).message}`);
+      return;
+    }
+    if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
   }
 
   /** Open a window of ``app`` at ``path``, raising one already there. A window there that this client has popped out
