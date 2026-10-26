@@ -15,6 +15,8 @@ import contextlib
 import json
 import re
 import shutil
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -140,6 +142,7 @@ class E2EServer(FrozenModel):
     repo_root: Path = Field(description="The workspace root the update notice reads its record under")
     stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
     pinned_url: str = Field(default="", description="The pinned stub app's loopback URL; empty when none is offered")
+    registry_path: Path = Field(description="The registry file the shell and ``workspace-layout`` read")
     agent_events_path: Path = Field(
         description="The agents event file the avatar's mood is read from, absent at first"
     )
@@ -281,6 +284,7 @@ def _running_e2e_server(
                     repo_root=repo_root,
                     stub_url=stub_url,
                     pinned_url=pinned_served.http_url if pinned_served is not None else "",
+                    registry_path=registry_path,
                     agent_events_path=agent_events_path,
                     theme=theme,
                 )
@@ -2899,6 +2903,120 @@ def test_an_apps_links_open_by_the_app_contract_with_no_link_code_of_its_own(tmp
     assert opened_urls == [{"type": "open:url", "client_id": client_id, "url": "http://localhost:3999/preview?x=1"}]
     assert opened_files == [{"type": "open:file", "client_id": client_id, "path": "/home/user/plan 1.md"}]
     assert page.context.pages == [page]
+
+
+# The console script the workspace-layout library installs beside this interpreter.
+_LAYOUT_COMMAND = Path(sys.executable).parent / "workspace-layout"
+
+
+def _run_layout_command(server: E2EServer, args: list[str], agent_id: str, cwd: Path) -> str:
+    """Run ``workspace-layout`` as a chat's agent runs it, against the shell; answers its stdout."""
+    result = subprocess.run(
+        [str(_LAYOUT_COMMAND), *args],
+        capture_output=True,
+        text=True,
+        cwd=str(cwd),
+        env={
+            "PATH": sys.exec_prefix + "/bin:/usr/bin:/bin",
+            "PYTHONPATH": "",
+            "MINDS_WORKSPACE_SERVER_URL": server.base_url,
+            "MINDS_APPS_FILE": str(server.registry_path),
+            "MNGR_AGENT_ID": agent_id,
+        },
+        timeout=15,
+    )
+    assert result.returncode == 0, f"stderr={result.stderr!r}"
+    return result.stdout
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_an_agents_show_of_its_own_chat_lands_in_the_pinned_window(tmp_path: Path, page: Page) -> None:
+    """The command the caretaker and manage-desktop give an agent for surfacing its own chat
+    (``show`` at the chat root on the chat, the chat's own page counting as showing it, the root page repointable)
+    points the user's pinned window at the chat and brings it on screen; a second agent's moves that same window. No
+    second window of the app opens, as an ``open`` at the path would."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        expect(_window(page, pinned["id"])).to_be_hidden()
+        # The command targets the one connected client, so the page's socket has to be registered first.
+        wait_for(
+            lambda: any(
+                client["id"] == client_id and client["is_connected"]
+                for client in _get_json(f"{server.base_url}/api/clients")["clients"]
+            ),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the shell never registered the page's socket",
+        )
+
+        for agent_id in ("agent-1", "agent-2"):
+            shown = _run_layout_command(
+                server,
+                [
+                    "show",
+                    _PINNED_APP_NAME,
+                    "--path",
+                    f"/?chat={agent_id}",
+                    "--showing",
+                    f"/{agent_id}",
+                    "--repoint",
+                    "/",
+                ],
+                agent_id,
+                sandbox,
+            )
+            assert shown.strip() == pinned["id"]
+            _wait_for_own_window_path(server.base_url, client_id, pinned["id"], f"/?chat={agent_id}")
+            expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+            expect(_page_frame(page, pinned["id"]).locator("#where")).to_have_text(f"/?chat={agent_id}", timeout=15000)
+        assert [window["id"] for window in _windows(server.base_url) if window["app"] == _PINNED_APP_NAME] == [
+            pinned["id"]
+        ]
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_an_apps_links_to_the_pinned_page_in_a_state_of_its_own_land_in_the_pinned_window(
+    tmp_path: Path, page: Page
+) -> None:
+    """An app's page linking to the pinned app's home page with a query (as an app embedding the chat links a chat,
+    ``/?chat=<id>``) has the link shown in the pinned window, pointed there for this client and brought on screen; a
+    second such link moves that same window. No second window of the pinned app opens."""
+    first_path = f"{_PINNED_HOME_PATH}?chat=agent-1"
+    second_path = f"{_PINNED_HOME_PATH}?chat=agent-2"
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        window_id = _broadcast_op(server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id})[
+            "window_id"
+        ]
+        frame = _page_frame(page, window_id)
+        links = (
+            f'<a id="first" href="{server.pinned_url}{first_path}">first</a>'
+            f'<a id="second" href="{server.pinned_url}{second_path}">second</a>'
+        )
+        frame.evaluate(f"() => document.body.insertAdjacentHTML('beforeend', {json.dumps(links)})")
+        expect(_window(page, pinned["id"])).to_be_hidden()
+
+        frame.locator("#first").click()
+        _wait_for_own_window_path(server.base_url, client_id, pinned["id"], first_path)
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+        pinned_frame = _page_frame(page, pinned["id"])
+        expect(pinned_frame.locator("#where")).to_have_text(first_path, timeout=15000)
+
+        # The pinned window may now cover the link, so it is clicked as the page itself would be.
+        frame.locator("#second").evaluate("(link) => link.click()")
+        _wait_for_own_window_path(server.base_url, client_id, pinned["id"], second_path)
+        expect(pinned_frame.locator("#where")).to_have_text(second_path, timeout=15000)
+        page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+        assert [window["id"] for window in _windows(server.base_url) if window["app"] == _PINNED_APP_NAME] == [
+            pinned["id"]
+        ]
+        assert frame.evaluate("() => location.pathname") == "/"
 
 
 @pytest.mark.timeout(90, func_only=False)

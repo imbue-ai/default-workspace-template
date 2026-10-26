@@ -58,6 +58,7 @@ from imbue.chat.testing import put_stand_in_pi_on_path
 from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
@@ -1417,8 +1418,9 @@ def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """With an account signed in the intake creates the chat at once on it, and the page is an empty chat with its composer
-    ready from the first frame: no placeholder text while the agent is created, and none once it lands -- not even
-    for a single frame, which is how a flash of a "not found" or "loading" screen shows up."""
+    ready from the first frame: it says the chat is starting while the agent is created, and that it is ready once it
+    lands, and never shows a placeholder screen -- not even for a single frame, which is how a flash of a "not found" or
+    "loading" screen shows up."""
     release_create = tmp_path / "release-create"
     monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
     page.add_init_script(_RECORD_PLACEHOLDERS_SEEN_SCRIPT)
@@ -1429,7 +1431,7 @@ def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
             # connect and bring the provisional record; the create itself is held until released below.
             expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
             expect(chat.locator(".message-input-textbox")).to_be_editable()
-            expect(chat.locator(".message-list-creating")).to_have_text("")
+            expect(chat.locator(".message-list-creating")).to_have_text("Starting your chat…")
             # The provider row is there before the agent is: it names the account the chat starts on.
             expect(chat.locator(".model-selector-provisional")).to_have_text("Anthropic")
             composer_while_starting = chat.locator(".message-input-textbox").bounding_box()
@@ -1438,7 +1440,7 @@ def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
             release_create.touch()
 
         expect(chat.locator(".message-list-empty")).to_have_count(1, timeout=15000)
-        expect(chat.locator(".message-list-empty")).to_have_text("")
+        expect(chat.locator(".message-list-empty")).to_have_text("Your chat is ready.")
         expect(chat.locator(".message-input-textbox")).to_be_editable()
         # The agent's own menu takes the row over without moving the composer above it.
         expect(chat.locator(".model-selector-trigger")).to_be_visible()
@@ -2303,8 +2305,13 @@ def test_the_phone_header_kebab_renames_the_chat_on_screen(e2e_server: RunningWo
     field.press("Enter")
 
     expect(page.locator(".chat-header-title")).to_have_text("Phone rename", timeout=15000)
-    snapshot = e2e_server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-    assert snapshot is not None and snapshot.title == "Phone rename"
+    # The header shows the name at once; the chat takes it when the rename lands.
+    wait_until_true(
+        lambda: (snapshot := e2e_server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)) is not None
+        and snapshot.title == "Phone rename",
+        timeout_seconds=15.0,
+        what="the chat to take the name typed in the header",
+    )
 
 
 @pytest.mark.timeout(60, func_only=False)

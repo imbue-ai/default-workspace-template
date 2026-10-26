@@ -7,6 +7,7 @@ import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
 import {
   appRecord,
+  chatLikeAppRecord,
   clientRecord,
   desktopRecord,
   launchPathRecord,
@@ -1720,6 +1721,45 @@ describe("links Imbue Studio hands over", () => {
 
     expect(api.calls).toContain("openWindow:home:files:/home/user/?view:focus");
     expect(api.relayedMessages).toEqual([]);
+  });
+
+  it("shows a link to an app's pin page in a state of its own through the shell's show, repointing that page", async () => {
+    const store = await startedStore();
+    socket
+      .deliver()
+      .onAppsUpdated([
+        appRecord("docs"),
+        chatLikeAppRecord("chat", { label: "chat-ab12cd34", url: "http://127.0.0.1:8096" }),
+      ]);
+
+    await store.openLink("http://chat-ab12cd34.localhost/?chat=agent-1", SHELL_HOST, "notes");
+    await store.openLink("http://localhost:8096/?chat=agent-2", SHELL_HOST, "notes");
+
+    expect(api.calls).toContain(`showPage:${CLIENT}:chat:/?chat=agent-1:/`);
+    expect(api.calls).toContain(`showPage:${CLIENT}:chat:/?chat=agent-2:/`);
+    expect(api.calls.filter((call) => call.startsWith("openWindow:"))).toEqual([]);
+  });
+
+  it("focuses or opens a link to an app's pin page itself, or to its other pages, as any other page", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), chatLikeAppRecord("chat", { label: "chat-ab12cd34" })]);
+
+    await store.openLink("http://chat-ab12cd34.localhost/", SHELL_HOST, "notes");
+    await store.openLink("http://chat-ab12cd34.localhost/agent-1", SHELL_HOST, "notes");
+
+    expect(api.calls).toContain("openWindow:home:chat:/:focus");
+    expect(api.calls).toContain("openWindow:home:chat:/agent-1:focus");
+    expect(api.calls.filter((call) => call.startsWith("showPage:"))).toEqual([]);
+  });
+
+  it("tells the user when a link shown through the shell's show waits for the main window", async () => {
+    const store = await startedStore();
+    socket.deliver().onAppsUpdated([appRecord("docs"), chatLikeAppRecord("chat", { label: "chat-ab12cd34" })]);
+    api.hasNoDesktopWindow = true;
+
+    await store.openLink("http://chat-ab12cd34.localhost/?chat=agent-1", SHELL_HOST, "notes");
+
+    expect(notices()).toEqual([SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE]);
   });
 
   it("opens the address of an app whose row has no label, which its windows are framed at by its name", async () => {

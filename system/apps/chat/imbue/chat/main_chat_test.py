@@ -51,18 +51,31 @@ def test_with_no_chat_there_is_no_main_chat() -> None:
 
 
 def test_the_store_keeps_the_main_chat_across_a_reload_and_forgets_it_when_cleared(tmp_path: Path) -> None:
+    """A store whose file was never written says so until a main chat is written, and not again, even cleared;
+    a store in memory only never does."""
     path = tmp_path / "main_chat.json"
-    MainChatStore(path=path).write(ChatId("agent-welcome"))
+    store = MainChatStore(path=path)
+    assert store.is_file_never_written()
+    assert not MainChatStore(path=None).is_file_never_written()
+
+    store.write(ChatId("agent-welcome"))
+    assert not store.is_file_never_written()
     assert MainChatStore(path=path).read() == ChatId("agent-welcome")
 
     MainChatStore(path=path).write(None)
-    assert MainChatStore(path=path).read() is None
+    cleared = MainChatStore(path=path)
+    assert cleared.read() is None
+    assert not cleared.is_file_never_written()
 
 
 def test_the_store_ignores_a_file_it_cannot_read(tmp_path: Path) -> None:
     path = tmp_path / "main_chat.json"
     path.write_text("not json", encoding="utf-8")
-    assert MainChatStore(path=path).read() is None
+    unreadable = MainChatStore(path=path)
+    assert unreadable.read() is None
+    assert not unreadable.is_file_never_written()
 
     path.write_text('{"chat_id": "not an id"}', encoding="utf-8")
-    assert MainChatStore(path=path).read() is None
+    wrong_shape = MainChatStore(path=path)
+    assert wrong_shape.read() is None
+    assert not wrong_shape.is_file_never_written()

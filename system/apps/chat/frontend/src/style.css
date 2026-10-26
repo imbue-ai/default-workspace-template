@@ -738,3 +738,47 @@
 .transcript-scrollbar-shown .transcript-scrollbar-thumb {
   background: color-mix(in srgb, var(--c-text-secondary) 55%, transparent);
 }
+
+/* The shape of a conversation whose transcript is loading (views/ChatPanel.ts). It fades in only
+   after a beat, so switching to a chat that loads at once shows nothing in between. */
+@keyframes message-list-skeleton-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+.message-list-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: --spacing(4);
+  opacity: 0;
+  animation: message-list-skeleton-in 300ms ease-out 400ms forwards;
+}
+
+.message-list-skeleton-bar {
+  height: --spacing(3);
+  width: 70%;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--c-fill-hover);
+}
+
+.message-list-skeleton-bar--user {
+  align-self: flex-end;
+  width: 35%;
+  height: --spacing(8);
+  border-radius: var(--radius-lg, 12px);
+  background: var(--c-bg-user-bubble);
+}
+
+.message-list-skeleton-bar--short {
+  width: 45%;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .message-list-skeleton {
+    animation-duration: 0ms;
+  }
+}
