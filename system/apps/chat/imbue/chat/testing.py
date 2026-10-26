@@ -724,6 +724,27 @@ def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: 
     return log_path
 
 
+def put_stand_in_pi_on_path(
+    tmp_path: Path, provider: str, model_ids: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Put a ``pi`` first on PATH whose bundled catalog and ``--list-models`` offer ``model_ids`` on ``provider``.
+
+    The catalog sits where ``find_provider_data_dir`` looks from the binary; every model reasons, so each offers
+    pi's default thinking levels.
+    """
+    bin_dir = tmp_path / "stand-in-pi" / "bin"
+    data_dir = bin_dir / "node_modules" / "@earendil-works" / "pi-ai" / "dist" / "providers" / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / f"{provider}.json").write_text(
+        json.dumps({"openai-completions": {model_id: {"reasoning": True} for model_id in model_ids}})
+    )
+    listing = "".join(f"{provider} {model_id}\\n" for model_id in model_ids)
+    script = bin_dir / "pi"
+    script.write_text(f"#!/bin/sh\nprintf 'provider model\\n{listing}'\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+
 class InlineExecutor(Executor):
     """Runs each submitted call to completion before ``submit`` returns, so work a request hands off has finished
     when the request returns.

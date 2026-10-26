@@ -90,6 +90,8 @@ from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
+from imbue.chat.presence import PresenceReport
+from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
@@ -593,6 +595,41 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
     assert rebuilt is not first
     assert [e["content"] for e in rebuilt.get_all_events()] == ["hello"]
     state.shutdown()
+
+
+def _presence(sequence: int, state: PresenceState, is_focused: bool) -> PresenceReport:
+    return PresenceReport(
+        instance_id="page-4417", client_id="client-4417", state=state, is_focused=is_focused, sequence=sequence
+    )
+
+
+def test_reply_drafts_read_only_a_chat_a_page_streams_and_shows_focused(tmp_path: Path) -> None:
+    """The pane polling behind reply drafts runs for the chat the user is looking at, never for a
+    chat in the background: streamed but hidden, streamed but unfocused, or shown but not streamed."""
+    state = build_test_state()
+    seed_agent_state(state.agent_manager, "looked-at-agent", name="looked-at-agent", state="RUNNING")
+    agent_info = _claude_agent_info_with_one_message(tmp_path, "looked-at-agent", "RUNNING")
+    chat_id = ChatId("looked-at-agent")
+    try:
+        state.get_or_create_watcher(agent_info)
+        state.agent_manager.record_presence(chat_id, _presence(1, PresenceState.VISIBLE, is_focused=True))
+        # Shown and focused, but no page streams it.
+        assert state.list_watched_agents() == []
+
+        stream = state.event_queues.register(str(chat_id))
+        assert [agent_id for _, agent_id, _ in state.list_watched_agents()] == ["looked-at-agent"]
+
+        state.agent_manager.record_presence(chat_id, _presence(2, PresenceState.VISIBLE, is_focused=False))
+        assert state.list_watched_agents() == []
+
+        state.agent_manager.record_presence(chat_id, _presence(3, PresenceState.HIDDEN, is_focused=True))
+        assert state.list_watched_agents() == []
+
+        state.agent_manager.record_presence(chat_id, _presence(4, PresenceState.VISIBLE, is_focused=True))
+        state.event_queues.unregister(str(chat_id), stream)
+        assert state.list_watched_agents() == []
+    finally:
+        state.shutdown()
 
 
 def test_a_stopped_chat_read_after_its_stop_is_released_once_nobody_streams_it(tmp_path: Path) -> None:

@@ -54,6 +54,7 @@ from imbue.chat.testing import SummaryWritingMngrMessenger
 from imbue.chat.testing import get_json
 from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
+from imbue.chat.testing import put_stand_in_pi_on_path
 from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
@@ -2365,6 +2366,51 @@ def test_the_phone_composer_settings_button_opens_the_model_menu_with_effort_seg
     menu.locator('[data-menu-row="source-view"] [role="switch"]').click()
     expect(menu).to_have_count(0)
     expect(chat.locator(".composer-under-bar .terminal-view-toggle")).to_have_attribute("aria-checked", "true")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_phone_model_menu_shows_a_pi_chats_model_search_inside_the_card(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Pi chat's Model submenu opens on its search field, which takes focus; the slide still lands on the
+    submenu's pane, so the back row and the field sit inside the card rather than a pane to its side."""
+    model_ids = [f"vendor/model-{index}" for index in range(12)]
+    put_stand_in_pi_on_path(tmp_path, "openrouter", model_ids, monkeypatch)
+    with _running_e2e_server(tmp_path) as server:
+        manager = server.chat_state.agent_manager
+        seed_agent_state(
+            manager,
+            FIXTURE_AGENT_ID,
+            name=server.agent_info.name,
+            labels={"account": server.account_ids[0]},
+            harness=HarnessType.PI_CODING,
+        )
+        manager._ensure_activity_tracking(FIXTURE_AGENT_ID)
+        model_state = get_model_state_path(HarnessType.PI_CODING, server.agent_info.agent_state_dir)
+        model_state.parent.mkdir(parents=True, exist_ok=True)
+        model_state.write_text(json.dumps({"model": "openrouter/vendor/model-3", "effort": "high", "fast": False}))
+        manager.refresh_model_choice(FIXTURE_AGENT_ID)
+        _open_phone_chat_root(page, server)
+        chat = _shown_chat_of_root(page)
+        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+
+        chat.locator("[data-composer-settings]").click()
+        menu = chat.locator(".model-provider-menu--compact")
+        expect(menu.locator('[data-menu-row="model"]')).to_contain_text("openrouter/vendor/model-3")
+        menu.locator('[data-menu-row="model"]').click()
+        expect(menu.locator("[data-menu-track]")).to_have_attribute("data-menu-track", "submenu")
+        search = menu.locator('input[placeholder="Search models"]')
+        expect(search).to_be_focused()
+        expect(menu.locator("button", has_text="openrouter/vendor/model-11")).to_be_attached()
+
+        track = menu.locator("[data-menu-track]")
+        card = track.bounding_box()
+        assert card is not None
+        for shown in (menu.locator("[data-menu-track-back]"), search):
+            box = shown.bounding_box()
+            assert box is not None
+            assert card["x"] <= box["x"] and box["x"] + box["width"] <= card["x"] + card["width"] + 1
+        assert track.evaluate("element => element.scrollLeft") == 0
 
 
 @pytest.mark.timeout(60, func_only=False)

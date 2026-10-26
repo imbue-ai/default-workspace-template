@@ -58,6 +58,7 @@ from imbue.system_interface.shell.testing import running_files
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
+from imbue.system_interface.shell.tour import OFFER_TOUR_FILENAME
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_e2e_browser_installed
@@ -2172,6 +2173,9 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
     "Design your own..." drafts the design prompt into this client's pinned window, which declares a launch path that
     takes a draft, rather than opening a chat."""
     with _running_e2e_server(tmp_path, pin=("avatar", "independent", "floating")) as server:
+        # A new workspace: the bootstrap marked it on its first boot, so the tour may start by itself.
+        server.state_dir.mkdir(parents=True, exist_ok=True)
+        (server.state_dir / OFFER_TOUR_FILENAME).touch()
         _land(page, server)
         entry = _pinned_entry(page)
         expect(entry).to_be_visible(timeout=15000)

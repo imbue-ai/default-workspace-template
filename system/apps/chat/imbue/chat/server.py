@@ -7,7 +7,6 @@ this app's manifest registers for (``focus_chat.py``).
 """
 
 import json
-import os
 import queue
 import threading
 import time
@@ -68,6 +67,7 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
 from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
 from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.agent_discovery import agent_tmux_session_name
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import start_agent
 from imbue.chat.agent_manager import AgentManager
@@ -1586,8 +1586,7 @@ def _get_screen_capture(chat_id: str) -> Response:
     if agent_info is None:
         return _chat_not_found_response(chat_id)
 
-    prefix = os.environ.get("MNGR_PREFIX", "mngr-")
-    session_name = f"{prefix}{agent_info.name}"
+    session_name = agent_tmux_session_name(agent_info.name)
     include_scrollback = request.args.get("scrollback", "false").lower() == "true"
     scrollback_flag = ["-S", "-"] if include_scrollback else []
     command = ["tmux", "capture-pane", "-t", session_name, *scrollback_flag, "-p"]

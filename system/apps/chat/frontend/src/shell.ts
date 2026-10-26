@@ -18,7 +18,7 @@ import { currentPresenceState, reportFocusChange, reportPresence, startPresenceR
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
-import { prependToComposer } from "./views/MessageInput";
+import { focusComposer, prependToComposer } from "./views/MessageInput";
 import { mirrorParentTheme, wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 /** The path of a sub-agent view: the chat, the agent whose session it is, and the session. */
@@ -108,6 +108,9 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
       setCompact: (isCompact) => {
         setCompactFromRoot(isCompact);
         m.redraw();
+      },
+      focus: () => {
+        if (!focusComposer()) window.focus();
       },
     };
     window.chatPageEmbed = embedApi;

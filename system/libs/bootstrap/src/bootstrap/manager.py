@@ -106,6 +106,11 @@ MAIN_BRANCH_SIGNAL = STATE_DIR / "workspace_main_branch_initialized"
 # still counts as done. Kept as a bare path rather than a re-exported constant because nothing
 # writes it any more; it exists only to be recognised.
 _LEGACY_MAIN_BRANCH_SIGNAL = STATE_DIR / "initial_chat_created"
+# Tells the system interface this workspace is new, so its show-around tour may start by itself. A
+# workspace that already existed when an update brought the tour in never gets it. The directory is
+# system_interface's ``DEFAULT_STATE_DIRECTORY``, spelled out rather than imported to keep this
+# first-boot program's dependencies minimal.
+OFFER_TOUR_SIGNAL = STATE_DIR / "system_interface" / "offer_tour"
 # The view the first chat is filed in: the starter project the workspace seeds.
 # Duplicated from system_interface's ``projects.DEFAULT_PROJECT_ID`` rather than
 # imported, to keep this one-shot first-boot program's dependencies minimal (the
@@ -211,6 +216,20 @@ def _ensure_git_identity() -> None:
         _git("config", "user.name", "minds-bootstrap")
 
 
+def _is_main_branch_initialized() -> bool:
+    return MAIN_BRANCH_SIGNAL.exists() or _LEGACY_MAIN_BRANCH_SIGNAL.exists()
+
+
+def _offer_tour_on_first_boot() -> None:
+    """Mark a workspace booting for the first time as new, for the system interface's tour.
+
+    Must run before ``_initialize_workspace_main_branch``, whose signal is what tells a first boot apart.
+    """
+    if _is_main_branch_initialized():
+        return
+    _touch(OFFER_TOUR_SIGNAL)
+
+
 def _initialize_workspace_main_branch() -> None:
     """Commit any rsync-staged content and rename the work_dir branch to `main`.
 
@@ -241,7 +260,7 @@ def _initialize_workspace_main_branch() -> None:
     workspace yet and a misbehaving pre-commit hook on the rsynced
     template shouldn't gate boot.
     """
-    if MAIN_BRANCH_SIGNAL.exists() or _LEGACY_MAIN_BRANCH_SIGNAL.exists():
+    if _is_main_branch_initialized():
         logger.debug(
             "Signal file {} present; work_dir is already on main", MAIN_BRANCH_SIGNAL
         )
@@ -1002,6 +1021,7 @@ def main() -> None:
 
     # Every boot, not once: `pool_bake` unsets the repo identity on finalize and expects the
     # adopted workspace to supply it again. Only-if-unset, so it never overwrites the user's.
+    # Then, on a first boot only, mark the workspace new so the shell offers its tour.
     # Then commit the rsynced template and put the work_dir on `main`. Its OWN one-shot
     # signal: "does this workspace have a main branch" and "does it have a chat" are
     # different questions with different answers, so they cannot share one.
@@ -1009,6 +1029,7 @@ def main() -> None:
         "initialize_main_branch", "Setting up the workspace's main branch"
     ):
         _ensure_git_identity()
+        _offer_tour_on_first_boot()
         _initialize_workspace_main_branch()
 
     # Converge the workspace venv BEFORE the initial chat agent is created

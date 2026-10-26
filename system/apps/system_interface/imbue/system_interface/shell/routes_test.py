@@ -2869,8 +2869,9 @@ def test_a_themeable_app_turns_its_theming_on_and_off(tmp_path: Path, broadcaste
         assert client.post(f"/api/apps/{app}/theming", json={"is_on": False}).status_code == 400
 
 
-def test_the_tour_record_is_unseen_until_posted_and_round_trips(client: FlaskClient) -> None:
-    assert client.get("/api/tour").get_json() == {"is_seen": False, "resume_index": None}
+def test_the_tour_record_round_trips(client: FlaskClient) -> None:
+    # A workspace the bootstrap did not mark new is not offered the tour until something asks for it.
+    assert client.get("/api/tour").get_json() == {"is_seen": True, "resume_index": None}
     assert client.post("/api/tour", json={"is_seen": True}).get_json() == {"is_seen": True, "resume_index": None}
     assert client.post("/api/tour", json={"is_seen": True, "resume_index": 3}).get_json() == {
         "is_seen": True,

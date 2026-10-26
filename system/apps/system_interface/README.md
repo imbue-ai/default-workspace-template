@@ -92,8 +92,9 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
 - The show-around tour's record (`GET` and `POST /api/tour`, `{"is_seen",
   "resume_index"}`): whether the tour of the desktop
   (`frontend/src/model/tourCards.ts`) has run in this workspace, and the card it
-  resumes at. A fresh workspace runs it by itself the first time its agent goes
-  to work (so the owner learns the product while waiting for a reply; the page's
+  resumes at. A new workspace (one the bootstrap marked with `offer_tour` on its
+  first boot) runs it by itself the first time its agent goes to work (so the
+  owner learns the product while waiting for a reply; the page's
   `tour_start_ms` query parameter makes it wait for a task that is taking a
   while instead); the agent answering interrupts it, and the next time the
   agent works it resumes from the card that would have come next. The
@@ -107,7 +108,7 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   `themes_changed`, and `layout_op` (contracts section 6); it accepts each
   client's `client_state` report.
 
-Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, and where it resumes),
+Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, and where it resumes), `offer_tour` (the bootstrap's mark on a new workspace, without which the tour never starts by itself),
 `desktop_themes.json` (the workspace's default theme and each desktop's own),
 `default_shortcuts_offered.json` (the apps whose default shortcut the shell
 has offered), `placements/<desktop>/<client>.json`,
