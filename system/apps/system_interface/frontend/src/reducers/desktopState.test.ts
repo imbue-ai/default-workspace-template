@@ -11,6 +11,7 @@ import {
 import {
   activeFocusedWindowId,
   activePlacements,
+  avatarPinnedWindow,
   barEntries,
   draftTargetOf,
   effectiveWindow,
@@ -360,6 +361,7 @@ describe("pinned entries", () => {
     expect(entryLook(state, home.windows[0], appRecord("docs"))).toBeNull();
     expect(pinnedWindowOf(state, "buddy")).toBe(pinned);
     expect(pinnedWindowOf(state, "docs")).toBeNull();
+    expect(avatarPinnedWindow(state)).toBe(pinned);
     expect(barEntries(state).map((entry) => entry.window.id)).toEqual(["win-1", "win-2"]);
     expect(floatingEntries(state).map((entry) => entry.window.id)).toEqual(["win-9"]);
     const chosen = reduceDesktopState(state, {

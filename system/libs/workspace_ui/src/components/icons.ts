@@ -90,8 +90,6 @@ const STROKE_PATHS = {
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   upload:
     '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/>',
-  // A laptop struck through: a computer that is not answering.
-  "laptop-off": '<rect x="4" y="5" width="16" height="10.5" rx="1.5"/><path d="M2 19h20"/><path d="m2 2 20 20"/>',
   "panel-left": '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/>',
   info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
   ellipsis: '<circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/>',

@@ -4,8 +4,10 @@ from pathlib import Path
 import pytest
 
 from app_manifest.errors import SuiteSelectionError
+from app_manifest.primitives import RepoRelativePath
 from app_manifest.selection import ALWAYS_RUN_GUARDS
 from app_manifest.selection import ChangedPathClass
+from app_manifest.selection import CreationReach
 from app_manifest.selection import SuiteSelection
 from app_manifest.selection import load_repo_layout
 from app_manifest.selection import render_command_line
@@ -13,6 +15,7 @@ from app_manifest.selection import render_selection
 from app_manifest.selection import select_tests
 from app_manifest.testing import build_selection_workspace
 from app_manifest.testing import commit_everything
+from app_manifest.testing import declare_root_dependency
 from app_manifest.testing import remove_shell_modules
 from app_manifest.testing import selection_lock
 from app_manifest.testing import write_app_manifest
@@ -38,20 +41,11 @@ _FRONTEND_BUILD = ["(cd system && npm ci)", "(cd system && npm run build)"]
 def _select(
     repo_root: Path, paths: list[str], lockfile_texts: tuple[str, str] | None = None
 ) -> SuiteSelection:
-    return select_tests(load_repo_layout(repo_root), paths, lockfile_texts)
+    return select_tests(load_repo_layout(repo_root), paths, lockfile_texts, None)
 
 
 def _command_lines(selection: SuiteSelection) -> list[str]:
     return [render_command_line(command) for command in selection.commands]
-
-
-def _declare_root_dependency(repo_root: Path, name: str) -> None:
-    root_pyproject = repo_root / "pyproject.toml"
-    root_pyproject.write_text(
-        root_pyproject.read_text().replace(
-            'version = "0.1.0"\n', f'version = "0.1.0"\ndependencies = ["{name}"]\n', 1
-        )
-    )
 
 
 @pytest.fixture
@@ -108,7 +102,7 @@ def test_a_shared_library_test_change_runs_only_the_librarys_own_suite(workspace
 def test_a_package_the_root_project_depends_on_runs_the_full_root_suite(
     workspace: Path, path: str
 ) -> None:
-    _declare_root_dependency(workspace, "midlib")
+    declare_root_dependency(workspace, "midlib")
 
     selection = _select(workspace, [path])
 
@@ -540,7 +534,7 @@ def test_an_upgrade_reaching_a_package_the_root_project_depends_on_runs_the_full
     workspace: Path,
 ) -> None:
     # requests reaches midlib through corelib.
-    _declare_root_dependency(workspace, "midlib")
+    declare_root_dependency(workspace, "midlib")
 
     selection = _select(workspace, ["uv.lock"], (selection_lock("2.0"), selection_lock("2.1")))
 
@@ -603,3 +597,35 @@ def test_an_ignored_vendored_subtree_selects_none_of_its_tests(workspace: Path) 
     selection = _select(workspace, ["system/vendor/tool/tool_test.py"])
 
     assert not any("system/vendor/tool" in line for line in _command_lines(selection))
+
+
+def test_a_selection_that_runs_nothing_still_prints_its_notes(workspace: Path) -> None:
+    """A note says what the selection could not settle, which matters most when nothing runs."""
+    write_repo_file(workspace, ".agents/skills/untested/SKILL.md", "# untested\n")
+    reach = CreationReach(
+        paths=(RepoRelativePath("uv.lock"),),
+        lockfile_texts=("not [ toml", "not [ toml either"),
+        creation_directories=(RepoRelativePath(".agents/skills/untested"),),
+    )
+
+    selection = select_tests(load_repo_layout(workspace), [], None, reach)
+
+    assert selection.commands == ()
+    assert len(selection.notes) == 1
+    assert selection.notes[0].endswith("; every creation's own suite runs")
+    assert f"# note: {selection.notes[0]}\n" in render_selection(selection)
+
+
+def test_a_catch_up_runs_nothing_for_a_documentation_creation(workspace: Path) -> None:
+    """A change to a documentation file selects no tests, so the root configuration coming in
+    under a catch-up selects none for a creation that is one, unlike a shared script."""
+    write_repo_file(workspace, "docs/specs/plan.md", "# plan\n")
+    reach = CreationReach(
+        paths=(RepoRelativePath("conftest.py"),),
+        lockfile_texts=None,
+        creation_directories=(RepoRelativePath("docs/specs/plan.md"),),
+    )
+
+    selection = select_tests(load_repo_layout(workspace), [], None, reach)
+
+    assert selection.commands == ()

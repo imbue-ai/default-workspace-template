@@ -628,7 +628,7 @@ export function buildSections(
   let lastSwitched: HandoffNode | null = null;
   for (const e of events) {
     if (e.type === "agent_switch" && e.from_harness === SEED_HARNESS) {
-      // The chat's first agent taking over from the seed segment the Imbue Studio app wrote: nothing
+      // The chat's first agent taking over from the seed segment, which no agent wrote: nothing
       // was handed off, so no node marks it; the agent's first turn simply opens a section.
       if (current !== null) carryover = openStepsAtEnd(current);
       current = ensureSection(openingTurnOf(e), `section-switch-${e.event_id}`);

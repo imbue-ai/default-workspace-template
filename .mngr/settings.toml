@@ -166,8 +166,8 @@ auto_allow_permissions = true
 auto_disable_questions = true
 cli_args = """--dangerously-skip-permissions --disallowed-tools ExitPlanMode,TodoWrite,TaskCreate,TaskList,TaskUpdate"""
 # fastMode defaults OFF here so every NON-interactive agent runs at standard
-# speed -- every claude role (caretaker, automation, worker) resolves to this
-# type, so they all inherit it. Fast mode buys latency at a higher per-token
+# speed -- every claude role (automation, worker) resolves to this type, so
+# they all inherit it. Fast mode buys latency at a higher per-token
 # price, which is worth it only when a human is waiting on the reply.
 # A chat launches fast through the `agent_types.claude.settings_overrides.fastMode=true`
 # setting that `[create_templates.fast]` (below) stacks on its create when the
@@ -224,7 +224,7 @@ command = "python3 ${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/ag
 # Pin Claude Code to a specific version; the provisioning-time version check
 # refuses to start the agent if the installed binary diverges. Bump this in
 # sync with the CLAUDE_CODE_VERSION default in system/scripts/setup_system.sh.
-version = "2.1.293"
+version = "2.1.307"
 # Do not provision a per-agent Claude config dir. A claude is bound to a
 # provider account on its `mngr create` by CLAUDE_CONFIG_DIR pointing at that
 # account's folder under ~/.minds/accounts (the chat app's own creates, and the
@@ -1724,24 +1724,11 @@ setting__extend = [
     'agent_types.codex.config_overrides__extend={"service_tier":"fast","features__extend":{"fast_mode":true}}',
 ]
 
-# Caretaker: the weekly maintenance agent -- the tailored instance of the
-# generic `automation` role below. Spawned (and re-woken) by the caretaker job
-# (the /etc/cron.d/minds-caretaker entry the enable-caretaker skill creates --
-# absent until then, weekly and findings-gated via
-# system/services/caretaker/caretaker_check.sh once enabled) via
-# system/libs/automations/run_automation.sh, and labelled automation=caretaker
-# so it can be found as a singleton (the agent surfaces its own chat window via
-# uv run --no-sync workspace-layout after its first message).
-[create_templates.caretaker]
-transfer = "none"
-env__extend = ["MNGR_AGENT_ROLE=caretaker"]
-append_system_prompt__extend = ["You are the Caretaker: a maintenance agent for this workspace, woken about once a week when a scheduled check finds something worth reporting. When you are messaged to run, follow the `caretaker` skill (.agents/skills/caretaker/SKILL.md) exactly. Always speak to the user in plain, non-technical, user-experience terms. Apart from one look-only scan on your very first run -- which you always do to introduce yourself, and which never changes anything -- never scan logs or apply fixes without the permission recorded in data/.state/caretaker/permissions.md, and never apply a fix on that first run."]
-
-# Automation: the reusable base for any skill run on a cadence (the Caretaker
-# above is a tailored instance). system/libs/automations/run_automation.sh
-# <skill> spawns one per skill, labels it automation=<skill>, and messages it
-# `/<skill>` on every run -- so a new automation (e.g. a morning news digest)
-# needs only a skill plus a cron entry, no new template.
+# Automation: the agent a skill routine runs in (system/libs/routines). The
+# routines runner creates one per routine on its first run, labels it
+# routine=<id>, and on every later run clears its chat and sends `/<skill>` --
+# so a new automation (e.g. a morning news digest) needs only a skill plus a
+# routine definition, no new template. The Caretaker is one such routine.
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
@@ -1768,8 +1755,7 @@ append_system_prompt__extend = ["You are an automation agent for this workspace.
 # Nothing worker-specific is installed into the worker's skill tree: the harden
 # worker is followed in place, from the checkout every worker already has at
 # .agents/shared/worker/SKILL.md, because a lead's task file names that path
-# outright. (The venv converge that used to sit here now runs for every agent
-# from [commands.create], and lands before this.)
+# outright.
 #
 # The worker's Claude plugins need no install: .claude/settings.json declares
 # them from local marketplaces under /opt/agent-plugins, which claude loads in

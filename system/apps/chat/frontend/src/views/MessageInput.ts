@@ -57,6 +57,7 @@ import {
   getChatById,
   getProvisionalChat,
   isHandoffCancellable,
+  isLaunchInFlight,
   launchChat,
   whenChatRegistered,
 } from "../models/Chats";
@@ -66,6 +67,7 @@ import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
 
 const MAX_TEXTAREA_HEIGHT_PX = 240;
@@ -232,6 +234,18 @@ function restoreToComposer(chatId: string, text: string, attachments: readonly C
 /** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
  *  the page. An element reference in it is attached as a file first, and only the prompt naming it goes in the
  *  text (``stageElementReferences``). */
+// The page's composer box while it is mounted (a page has one), for the chat root to hand it the keyboard.
+let mountedComposerTextarea: HTMLTextAreaElement | null = null;
+
+/** Put the keyboard in the page's composer; false when there is none to take it (not mounted, or disabled). */
+export function focusComposer(): boolean {
+  if (mountedComposerTextarea === null || mountedComposerTextarea.disabled) {
+    return false;
+  }
+  mountedComposerTextarea.focus();
+  return true;
+}
+
 export function prependToComposer(chatId: string, block: string): void {
   if (!block) {
     return;
@@ -320,7 +334,7 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
 function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
     leading ?? null,
-    m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1` }, boxChildren),
+    m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1`, ...appPartAttrs("chat", "composer") }, boxChildren),
   ]);
 }
 
@@ -756,9 +770,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // A chat awaiting its first send (a seeded one, one an intake minted, or the one an empty
           // chat list opens on) has no agent yet, and this send is what launches one: on the account
           // it was minted for, else the signed-in one, else the one the chooser produces. The
-          // message rides the launch as the agent's first, so nothing is sent after it lands.
+          // message rides the launch as the agent's first, so nothing is sent after it lands. A chat
+          // whose launch is already on its way (the sign-in's) is a creating chat to this send.
           const awaiting = getProvisionalChat(chatId);
-          if (awaiting?.phase === "awaiting_first_send" && getChatById(chatId) === undefined) {
+          if (
+            awaiting?.phase === "awaiting_first_send" &&
+            getChatById(chatId) === undefined &&
+            !isLaunchInFlight(chatId)
+          ) {
             const accountId = await chooseAccountForFirstSend(awaiting);
             if (accountId === null) {
               // The chooser closed with no sign-in: nothing was launched, and the message is
@@ -1418,14 +1437,35 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         );
       }
 
+      /**
+       * The chooser for a chat with no provider to start on: the sign-in it produces launches a chat still
+       * awaiting its first send right away, so its agent is up before the user has typed, and the first send
+       * goes to the running agent (carrying the seeded conversation, for a seeded chat). A launch the chat app
+       * refuses lands on the page as a failed create, with its "Try again".
+       */
+      function openProviderChooserForFirstSend(awaitingChatId: string): void {
+        openProviderChooser({
+          onSignedIn: (accountId) => {
+            const awaiting = getProvisionalChat(awaitingChatId);
+            if (awaiting?.phase !== "awaiting_first_send" || getChatById(awaitingChatId) !== undefined) return;
+            if (isLaunchInFlight(awaitingChatId)) return;
+            launchChat(awaitingChatId, accountId).catch((error: unknown) => {
+              console.error(
+                `The chat ${awaitingChatId} could not be started on sign-in: ${describeRequestError(error)}`,
+              );
+            });
+          },
+        });
+      }
+
       /** In place of the composer while nothing is signed in that a new chat could start on. The chooser opens as the
        *  notice appears, and its button opens it again once dismissed. */
-      function renderNoProviderNotice(): m.Children {
+      function renderNoProviderNotice(awaitingChatId: string): m.Children {
         return providerNotice(
           "message-input-no-provider",
           "Connect an AI provider to start chatting.",
-          () => openProviderChooser(),
-          () => openProviderChooser(),
+          () => openProviderChooserForFirstSend(awaitingChatId),
+          () => openProviderChooserForFirstSend(awaitingChatId),
         );
       }
 
@@ -1457,8 +1497,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const canSendNow = canSend && !isComposerDisabled;
       const blockingNotice = isBlockedBySignedOutAccount
         ? renderSignedOutAccountNotice(chatId)
-        : isBlockedByNoProvider
-          ? renderNoProviderNotice()
+        : isBlockedByNoProvider && chatId !== null
+          ? renderNoProviderNotice(chatId)
           : null;
 
       // The stop button is only meaningful while the agent has an interruptible
@@ -1532,17 +1572,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   value: messageText,
                   oncreate: (textareaVnode: m.VnodeDOM) => {
                     messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                    mountedComposerTextarea = messageTextareaElement;
                     wasComposerDisabled = isComposerDisabled;
                     refitComposer();
                     focusMessageTextarea();
                   },
                   onupdate: (textareaVnode: m.VnodeDOM) => {
                     messageTextareaElement = textareaVnode.dom as HTMLTextAreaElement;
+                    mountedComposerTextarea = messageTextareaElement;
                     refitComposer();
                     if (wasComposerDisabled && !isComposerDisabled) focusMessageTextarea();
                     wasComposerDisabled = isComposerDisabled;
                   },
                   onremove: () => {
+                    if (mountedComposerTextarea === messageTextareaElement) mountedComposerTextarea = null;
                     messageTextareaElement = null;
                   },
                   oninput: (event: Event) => {

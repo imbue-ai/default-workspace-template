@@ -22,16 +22,26 @@
 import m from "mithril";
 
 import { addChatsUpdatedListener, isHandoffCancellable } from "./Chats";
-import type { HandoffState } from "./Chats";
+import type { DisplayDecision, HandoffState } from "./Chats";
 
 export interface OutgoingMessage {
   id: string;
-  /** The text the user typed (shown verbatim), not the attachment-expanded form. */
+  /** The text the user typed (shown verbatim unless ``displayDecision`` makes it a notice), not
+   *  the attachment-expanded form. */
   content: string;
   /** The send-time message_id (contract A4) when the caller minted one. A backend record that
    *  carries the same id (a message held while the chat switches harness) replaces this bubble
    *  exactly, rather than by position. */
   messageId?: string;
+  /** The backend's render decision, for a held send that comes back as a bubble when its switch ends. */
+  displayDecision?: DisplayDecision;
+}
+
+/** Just the render decision a backend record carries, or undefined for a plain message. */
+function displayDecisionOf(record: DisplayDecision): DisplayDecision | undefined {
+  return record.display
+    ? { display: record.display, display_label: record.display_label, display_body: record.display_body }
+    : undefined;
 }
 
 const byChat: Record<string, OutgoingMessage[]> = {};
@@ -47,9 +57,19 @@ let nextId = 0;
 
 /** Record a just-sent message as an optimistic "Sending…" bubble; returns its id
  *  so the caller can drop it on failure. */
-export function addOutgoing(chatId: string, content: string, messageId?: string): string {
+export function addOutgoing(
+  chatId: string,
+  content: string,
+  messageId?: string,
+  displayDecision?: DisplayDecision,
+): string {
   const id = `outgoing-${nextId++}`;
-  (byChat[chatId] ??= []).push(messageId === undefined ? { id, content } : { id, content, messageId });
+  (byChat[chatId] ??= []).push({
+    id,
+    content,
+    ...(messageId === undefined ? {} : { messageId }),
+    ...(displayDecision === undefined ? {} : { displayDecision }),
+  });
   m.redraw();
   return id;
 }
@@ -200,7 +220,7 @@ export function trackBackendArrivals(
         const returning = previous.handoff.held_sends;
         for (const held of isCancelled ? returning.slice(1) : returning) {
           if (isCarriedBySwitch(chat.chat_id, held.message_id)) continue;
-          addOutgoing(chat.chat_id, held.text, held.message_id);
+          addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held));
         }
         for (let i = 0; i < consumedBySuccessor; i++) {
           removeOldest(chat.chat_id);

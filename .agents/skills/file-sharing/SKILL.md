@@ -1,6 +1,6 @@
 ---
 name: file-sharing
-description: Use to read and write files and directories on the user's local filesystem.
+description: Use to read and write files and directories on the user's local filesystem. Also useful for importing Apple Notes, Photos, and other similar locally stored data.
 metadata:
   author: imbue
 ---

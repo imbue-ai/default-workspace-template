@@ -78,8 +78,8 @@ Desktop creation runs the same ensure before answering, so a new desktop is born
 An app registered later is reconciled as soon as the registry change is read.
 When a pin is withdrawn, its windows stay as ordinary windows, `is_pinned` false, and can be closed like any other.
 
-A pinned window has no placement in a client's layout until the client touches it; the shell's layout answer places it for the client at the pinned frame (the right half of the backdrop, a margin in: `x 0.46, y 0.05, width 0.5, height 0.9`), normal and minimized, below every stored placement.
-A fresh client sees every pinned entry, all of them "closed", and the first press restores the window at that frame, half the screen beside its floating entry; the client's first save writes it, as does an op's first edit of that client's layout (an agent's `restore` of it).
+A pinned window has no placement in a client's layout until the client touches it; the shell's layout answer places it for the client at the pinned frame (most of the backdrop, a margin in on every side: `x 0.05, y 0.05, width 0.9, height 0.9`), normal and minimized, below every stored placement.
+A fresh client sees every pinned entry, all of them "closed", and the first press restores the window at that frame, most of the screen with a margin in on every side; the client's first save writes it, as does an op's first edit of that client's layout (an agent's `restore` of it).
 The frame is the shell's alone: neither editor's default-placement rule (the cascade) changes.
 
 ### 3.3 Location scope

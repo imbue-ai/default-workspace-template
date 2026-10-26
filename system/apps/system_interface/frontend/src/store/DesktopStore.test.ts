@@ -13,10 +13,14 @@ import {
   placementRecord,
   presentUserRecord,
   shortcutRecord,
+  themeCatalog,
   themeMetricsRecord,
+  themeRecord,
   windowRecord,
 } from "../testing/records";
 import type { GridCell } from "../model/records";
+import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
+import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
   DesktopStore,
   OTHER_WORKSPACE_LINK_NOTICE,
@@ -696,6 +700,7 @@ describe("windows", () => {
     store.setPageDriver({
       reload: () => undefined,
       reloadApp: () => undefined,
+      resendTheme: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
     });
@@ -712,6 +717,7 @@ describe("windows", () => {
     store.setPageDriver({
       reload: () => undefined,
       reloadApp: () => undefined,
+      resendTheme: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
     });
@@ -726,6 +732,7 @@ describe("windows", () => {
     store.setPageDriver({
       reload: () => undefined,
       reloadApp: () => undefined,
+      resendTheme: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: (id) => id === "win-1",
     });
@@ -770,6 +777,7 @@ describe("windows", () => {
     store.setPageDriver({
       reload: (id) => void reloaded.push(`window:${id}`),
       reloadApp: (app) => void reloaded.push(`app:${app}`),
+      resendTheme: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
     });
@@ -778,6 +786,23 @@ describe("windows", () => {
     socket.deliver().onLayoutOp({ op: "reload_system_interface", args: {}, requester: "" });
     expect(reloaded).toEqual(["window:win-1", "app:docs"]);
     expect(reloads).toBe(1);
+  });
+
+  it("sends an app's pages the theme again when its theming is turned on or off, and leaves other apps alone", async () => {
+    const store = await startedStore();
+    const resent: string[] = [];
+    store.setPageDriver({
+      reload: () => undefined,
+      reloadApp: () => undefined,
+      resendTheme: (app) => void resent.push(app),
+      requestClose: () => undefined,
+      ownsCloseChord: () => false,
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs", { theming: "on" }), appRecord("notes")]);
+    resent.length = 0;
+    socket.deliver().onAppsUpdated([appRecord("docs", { theming: "off" }), appRecord("notes")]);
+    socket.deliver().onAppsUpdated([appRecord("docs", { theming: "off" }), appRecord("notes")]);
+    expect(resent).toEqual(["docs"]);
   });
 
   it("follows a pushed desktop switch without re-reporting a previous desktop", async () => {
@@ -1309,6 +1334,11 @@ describe("pinned entries", () => {
     expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")?.is_minimized).toBe(
       false,
     );
+    // A text not about the window's page is launched without it, so the app drafts it where such a text goes.
+    expect(await store.draftIntoPinnedWindow("Draw me", false)).toBe(true);
+    expect(last(api.calls.filter((call) => call.startsWith("launch")))).toBe(
+      `launch:home:buddy:draft:{"message":"Draw me"}:window:win-9:without-page`,
+    );
     // A desktop with no pinned app taking a draft has nowhere to put one.
     socket.deliver().onAppsUpdated([appRecord("docs"), appRecord("buddy")]);
     expect(await store.draftIntoPinnedWindow("Draw me")).toBe(false);
@@ -1345,7 +1375,7 @@ describe("pinned entries", () => {
 
   it("restores a pinned window the client never placed at the frame the shell answered, not the cascade", async () => {
     const store = await pinnedStore();
-    expect(store.windowRect("win-9")).toEqual({ x: 460, y: 40, width: 500, height: 720 });
+    expect(store.windowRect("win-9")).toEqual({ x: 50, y: 40, width: 900, height: 720 });
     store.toggleTaskbarEntry("win-9");
     expect(activePlacements(store.getState()).find((placement) => placement.window_id === "win-9")).toMatchObject({
       frame: PINNED_WINDOW_FRAME,
@@ -1760,6 +1790,7 @@ describe("links Imbue Studio hands over", () => {
       outsideLinks: {
         openInEmbedder: (url) => outside.push(`embedder:${url}`),
         openInBrowser: (url) => outside.push(`browser:${url}`),
+        launchInSystemApp: (url) => outside.push(`app:${url}`),
       },
     });
     await store.start(NO_LINK);
@@ -1773,7 +1804,7 @@ describe("links Imbue Studio hands over", () => {
     await store.openLink("mailto:someone@example.com", SHELL_HOST, "chat");
     // One Imbue Studio handed over goes back to it, before it said so too.
     await store.openLink("https://example.com/b", SHELL_HOST, null);
-    store.setCanOpenLinksOutside(true);
+    store.setOutsideLinkCapabilities({ opensExternalLinks: true, opensCustomSchemeLinks: false });
     await store.openLink("tel:+15551234567", SHELL_HOST, "chat");
 
     expect(outside).toEqual([
@@ -1792,7 +1823,7 @@ describe("links Imbue Studio hands over", () => {
       message_handlers: [{ type: "open:mailto", path: "/api/compose", show: null }],
     });
     socket.deliver().onAppsUpdated([appRecord("docs"), mailer]);
-    store.setCanOpenLinksOutside(true);
+    store.setOutsideLinkCapabilities({ opensExternalLinks: true, opensCustomSchemeLinks: false });
 
     await store.openLink("mailto:someone@example.com", SHELL_HOST, "chat");
     await store.openLink("https://example.com/a", SHELL_HOST, "chat");
@@ -1801,6 +1832,39 @@ describe("links Imbue Studio hands over", () => {
       { type: "open:mailto", clientId: CLIENT, payload: { url: "mailto:someone@example.com" }, sender: "chat" },
     ]);
     expect(outside).toEqual(["embedder:https://example.com/a"]);
+  });
+
+  it("hands a custom-scheme link to the app registered for its scheme, and opens one no app takes outside", async () => {
+    const { store, outside } = await outsideRecordingStore();
+    const slackApp = appRecord("slack-inbox", {
+      message_handlers: [{ type: "open:slack", path: "/api/open", show: null }],
+    });
+    socket.deliver().onAppsUpdated([appRecord("docs"), slackApp]);
+
+    await store.openLink("slack://channel?id=C1", SHELL_HOST, "chat");
+    // No app takes vscode: links: with no Imbue Studio (a plain browser), a browser tab; with an older one, which
+    // shows a popup of one as an empty window, launched from this page; with one that opens them, through it.
+    await store.openLink("vscode://file/a", SHELL_HOST, "chat");
+    store.setOutsideLinkCapabilities({ opensExternalLinks: true, opensCustomSchemeLinks: false });
+    await store.openLink("vscode://file/b", SHELL_HOST, "chat");
+    store.setOutsideLinkCapabilities({ opensExternalLinks: true, opensCustomSchemeLinks: true });
+    await store.openLink("vscode://file/c", SHELL_HOST, "chat");
+    // One Imbue Studio handed over goes back to it.
+    await store.openLink("SLACK://channel?id=C2", SHELL_HOST, null);
+    // A scheme whose message is the web link's goes where a web link no app takes goes.
+    await store.openLink("web://example", SHELL_HOST, "chat");
+
+    expect(api.relayedMessages).toEqual([
+      { type: "open:slack", clientId: CLIENT, payload: { url: "slack://channel?id=C1" }, sender: "chat" },
+      { type: "open:slack", clientId: CLIENT, payload: { url: "slack://channel?id=C2" }, sender: "embedder" },
+    ]);
+    expect(outside).toEqual([
+      "browser:vscode://file/a",
+      "app:vscode://file/b",
+      "embedder:vscode://file/c",
+      "embedder:web://example",
+    ]);
+    expect(notices()).toEqual([]);
   });
 
   it("opens an address on the workspace's share domain as that app's window, from a desktop shell", async () => {
@@ -2690,6 +2754,7 @@ describe("the phone layout", () => {
     store.setPageDriver({
       reload: (id) => void reloaded.push(id),
       reloadApp: () => undefined,
+      resendTheme: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
     });
@@ -2699,5 +2764,149 @@ describe("the phone layout", () => {
     store.onVisibilityChange(false);
     socket.deliver().onConnected();
     expect(reloaded).toEqual(["win-1"]);
+  });
+});
+
+describe("themes", () => {
+  const INK_CHROME: ThemeChrome = {
+    title_align: "center",
+    leading: ["close", "title", "refresh", "menu"],
+    trailing: ["minimize", "maximize"],
+  };
+
+  beforeEach(() => {
+    api.themeCatalog = {
+      ...themeCatalog(
+        themeRecord("paper"),
+        themeRecord("ink", { chrome: INK_CHROME }),
+        themeRecord("broken", { available: false }),
+      ),
+      default: "ink",
+    };
+  });
+
+  it("reads the catalog at start and wears the workspace default on a desktop with no theme of its own", async () => {
+    const store = await startedStore();
+    await settle();
+
+    expect(api.calls).toContain("fetchThemes");
+    expect(store.shownTheme().id).toBe("ink");
+  });
+
+  it("knows the theme to wear only once the catalog has arrived and a desktop is on screen", async () => {
+    const store = makeStore();
+    // Before either, shownTheme() is the standard look, which a themed workspace must not be switched to.
+    expect(store.isShownThemeKnown()).toBe(false);
+    expect(store.shownTheme().id).toBe("standard");
+
+    await store.start(NO_LINK);
+    await settle();
+
+    expect(store.isShownThemeKnown()).toBe(true);
+    expect(store.shownTheme().id).toBe("ink");
+  });
+
+  it("previews a choice on the desktop on screen until the preview is cleared, without saving it", async () => {
+    const store = await startedStore();
+    await settle();
+
+    store.previewDesktopTheme("home", "paper");
+    expect(store.shownTheme().id).toBe("paper");
+    store.previewDesktopTheme("work", "paper");
+    // A preview of another desktop leaves this one as it is.
+    expect(store.shownTheme().id).toBe("ink");
+    store.previewDesktopTheme("home", "broken");
+    expect(store.shownTheme().id).toBe("standard");
+    store.clearThemePreview();
+    expect(store.shownTheme().id).toBe("ink");
+    expect(api.calls.some((call) => call.startsWith("setDesktopTheme"))).toBe(false);
+  });
+
+  it("a catalog pushed while the catalog is read stands over the read's older answer", async () => {
+    const answerReads = api.holdReads();
+    const store = makeStore();
+    const starting = store.start(NO_LINK);
+    await settle();
+    socket.deliver().onThemesChanged({ ...api.themeCatalog, default: "paper" });
+    answerReads();
+    await starting;
+    await settle();
+    expect(store.shownTheme().id).toBe("paper");
+  });
+
+  it("tells its shown-theme listeners when the theme or a preview changes, and only then", async () => {
+    const store = makeStore();
+    const heard: string[] = [];
+    store.onShownThemeChanged(({ record, isPreview }) => heard.push(`${record.id}${isPreview ? " (preview)" : ""}`));
+    await store.start(NO_LINK);
+    await settle();
+    store.dispatch({ type: "window_raised", windowId: "win-2" });
+
+    store.previewDesktopTheme("home", "paper");
+    store.previewDesktopTheme("home", "paper");
+    store.clearThemePreview();
+    await store.setDesktopTheme("home", "ink");
+
+    expect(heard).toEqual(["ink", "paper (preview)", "ink"]);
+  });
+
+  it("tells its shown-theme listeners the same theme again when a new catalog arrives", async () => {
+    const store = await startedStore();
+    await settle();
+    const heard: string[] = [];
+    store.onShownThemeChanged(({ record }) => heard.push(record.id));
+
+    socket.deliver().onThemesChanged(structuredClone(store.getThemeCatalog()));
+
+    expect(heard).toEqual(["ink", "ink"]);
+  });
+
+  it("takes a new workspace default at once, without reading the catalog again", async () => {
+    const store = await startedStore();
+    await settle();
+    const readsBefore = api.calls.filter((call) => call === "fetchThemes").length;
+
+    await store.setDefaultTheme("paper");
+
+    expect(store.shownTheme().id).toBe("paper");
+    expect(api.calls.filter((call) => call === "fetchThemes").length).toBe(readsBefore);
+  });
+
+  it("reads the catalog for a new workspace default set before any catalog arrived", async () => {
+    api.themeReadFailures = 1;
+    const store = await startedStore();
+    await settle();
+    expect(store.isShownThemeKnown()).toBe(false);
+
+    await store.setDefaultTheme("paper");
+
+    expect(api.calls.filter((call) => call === "fetchThemes")).toHaveLength(2);
+    expect(store.isShownThemeKnown()).toBe(true);
+    expect(store.shownTheme().id).toBe("paper");
+    expect(store.getThemeCatalog().themes.map((theme) => theme.id)).toContain("ink");
+  });
+
+  it("reads the catalog again, after a pause, when the first read fails", async () => {
+    api.themeReadFailures = 1;
+    const store = await startedStore();
+    await settle();
+    expect(store.isShownThemeKnown()).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(RECONNECT_BASE_MS * 2);
+
+    expect(api.calls.filter((call) => call === "fetchThemes")).toHaveLength(2);
+    expect(store.shownTheme().id).toBe("ink");
+  });
+
+  it("takes a pushed catalog, and a saved desktop theme over the default", async () => {
+    const store = await startedStore();
+    await settle();
+
+    socket.handlers?.onThemesChanged({ ...api.themeCatalog, default: "paper" });
+    expect(store.shownTheme().id).toBe("paper");
+    expect(store.shownChrome()).toEqual(STANDARD_CHROME);
+    await store.setDesktopTheme("home", "ink");
+    expect(store.shownTheme().id).toBe("ink");
+    expect(store.shownChrome()).toEqual(INK_CHROME);
   });
 });

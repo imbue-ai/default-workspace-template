@@ -204,6 +204,10 @@ def _stop_xvfb(xvfb: "subprocess.Popen[bytes]") -> None:
 # fixed path: root otherwise leaves the socket group-gated and our clients get
 # "Access denied"); the only fleet change is one sink per browser instead of one global.
 _PULSE_SERVER = "unix:/var/run/pulse/native"
+# Every browser daemon in the workspace shares that pulse daemon, so a preview booted beside the live one names
+# its sinks under a prefix of its own; sharing the live names would route its audio into the live browsers' sinks
+# and unload them when it closes.
+_PULSE_SINK_PREFIX = os.environ.get("BROWSER_PULSE_SINK_PREFIX", "browser")
 
 
 def _pulse_env() -> dict[str, str]:
@@ -213,7 +217,7 @@ def _pulse_env() -> dict[str, str]:
 def _pulse_sink_name(browser_id: str) -> str:
     """A PulseAudio-safe null-sink name giving a browser its own audio bus."""
     safe = "".join(c if c.isalnum() else "_" for c in browser_id)
-    return f"browser_{safe}"
+    return f"{_PULSE_SINK_PREFIX}_{safe}"
 
 
 def _ensure_pulse_daemon() -> bool:
@@ -224,17 +228,18 @@ def _ensure_pulse_daemon() -> bool:
         if subprocess.run(["pactl", "info"], env=env, capture_output=True, timeout=5).returncode == 0:
             return True
         os.makedirs("/var/run/pulse", exist_ok=True)
-        # Foreground daemon as a detached background process. A clean service stop signals
-        # the browser daemon alone (stopasgroup=false, so it can checkpoint first), so this
-        # one outlives it and the next daemon adopts it through the ``pactl info`` probe
-        # above; only a stop that overruns stopwaitsecs reaps it with the group.
+        # Foreground daemon as a detached background process, in a session of its own: every
+        # browser daemon in the workspace shares it, so it must outlive the one that started it,
+        # and the next daemon adopts it through the ``pactl info`` probe above. A preview's
+        # teardown signals the preview's whole process group, which would otherwise take the
+        # live browsers' audio down with it.
         # --daemonize=yes double-forks and trips over a stale PID file in this container; a
         # plain Popen does not.
         daemon = subprocess.Popen(
             ["pulseaudio", "--system", "--daemonize=no", "--disallow-exit",
              "--exit-idle-time=-1", "--log-target=stderr", "-n",
              "-L", "module-native-protocol-unix auth-anonymous=1 socket=/var/run/pulse/native"],
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True,
         )
         _reap_on_exit(daemon, "pulseaudio")
         deadline = time.monotonic() + 10

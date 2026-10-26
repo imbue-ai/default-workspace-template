@@ -77,9 +77,13 @@ format) and a template's own publish count. See
 ## Shared conventions
 
 - **The ledger** is `docs/VERSION_HISTORY.md`. Its `## Templates` section is
-  where a publish/revise is recorded (the same format `publish-template` §8
-  step 4 and the update apply, `update-self`'s `scripts/update_self.py`,
-  write); §1 reads it and §8 appends to it.
+  where a publish or update is recorded, by `publish-template`'s
+  `record_publish.py`; §1 reads it and §8 appends to it.
+- **`PT=/home/user/workspace/.agents/skills/publish-template/scripts`** -- the
+  publish tools this flow shares. Always run them from the live workspace's copy;
+  the copies in `$WT` are the published tip's. Like `$WT`, `PUBLISHED_TIP` and
+  `SOURCE_SHA`, it is a value to note, not shell state: every command runs in a
+  fresh shell, so set the ones a command uses at its start.
 - **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees under
   `/home/user/worktrees/<name>-<uuid>/`; the path cannot be guessed -- resolve it from
   the worker's `done` report per §3. Everything after re-assembly runs with cwd =
@@ -113,6 +117,10 @@ From that block extract:
 - **current version `n`** -- the highest `v<k>` among the lines (the newest);
 - **the source sha version `n` was cut from** -- the 7-char sha ending the newest
   `v<n>` line. This is the **anchor** for the "what changed since" diff.
+
+Each heading is one repo. If the slug has more than one (it was published afresh
+to another repo), the last heading is the newest publish; confirm with the user
+which repo they mean, and read only that heading's lines.
 
 **If there is no row for this slug** (the template was published before this
 feature existed, from another workspace, or the ledger was lost): do not guess.
@@ -187,7 +195,7 @@ fi
 
 A clean published repo prints nothing and exits 0; read the output, not the exit
 code. `NO BASE` means the tip is `template:` snapshots all the way down -- a
-parentless publish that `publish-template` §8's own guard rejects -- and the
+parentless publish that `push_snapshot.py` cannot make -- and the
 question cannot be answered at all, so STOP and surface that rather than
 reading it as clean.
 
@@ -225,7 +233,7 @@ had personal data stripped and modifications applied, so a workspace-vs-publishe
 diff would try to re-add exactly the things the recipe deliberately removed. Also
 note the **base delta**: compare the published base (`PUBLISHED_BASE` from 2b)
 against the current resolved base (`uv run
-.agents/shared/scripts/resolve_template_base.py`, as in `publish-template` §2).
+.agents/shared/scripts/resolve_template_base.py`, as in `publish-template`'s step 2).
 If `BASE_REF` moved, the template substrate advanced too -- report it, but an
 app-delta update re-publishes on the existing published base; re-cutting on a
 newer base is a separate, larger operation (surface it as an option, default to
@@ -242,7 +250,7 @@ message, in plain language:
 - **which of those changes will go into the update** -- the user may take the
   whole delta, a subset, or ALSO fold in a newly-created path that was not in the
   original recipe (adding a new path is a scope change to the recipe -- it
-  re-opens the same include-set judgment `publish-template` §1 makes, including
+  re-opens the same include-set judgment `publish-template`'s scope gate makes, including
   the personal-data question for any data it carries);
 - **what will NOT change** -- the recipe's existing exclusions still hold (they
   stay excluded even though they still exist in the workspace), the modifications
@@ -296,29 +304,40 @@ approved in §2e, plus any newly-added path), the `exclude` list and
 `modification_rules` from §2c, the new version `v(n+1)`, and a one-line
 description of what changed for the changelog entry.
 
+Once the tree is committed, and before launching, capture the commit the worker
+is cut from -- §8 records it as the anchor the next update diffs from, so take it
+now, before the workspace moves on:
+
+```bash
+SOURCE_SHA="$(git rev-parse HEAD)"
+```
+
 Set `source_artifacts_dir: data/.tasks/launch-task/<slug>` in the task frontmatter so
 the bundle is pushed to the worker. The task body directs the worker to:
 
 1. **Parse the frontmatter FIRST** (`LEAD_AGENT` / `LEAD_WORK_DIR` /
    `FINISH_REPORT_PATH`) per `.agents/shared/references/worker-reporting.md`,
    from the exact task-file path `data/.tasks/launch-task/<slug>/task.md` --
-   before any reset that could remove the task file. Deliver the report itself
-   by hand at the end, per `publish-template` §3's copy and for the same reason:
-   the reset leaves your checkout at the published tip, whose launcher may
-   predate the `report` subcommand.
+   before any reset that could remove the task file, and set
+   `PT="${LEAD_WORK_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}/.agents/skills/publish-template/scripts"`
+   -- the publishing workspace's copy of the shared tools, used in every step
+   below. Note these values: every command runs in a fresh shell and the reset
+   removes the task file, so set the ones a command uses at its start. Deliver
+   the report itself by hand at the end, as `publish-template`'s
+   `references/assembly-worker.md` does and for the same reason: the reset leaves
+   your checkout at the published tip, whose launcher may predate the `report`
+   subcommand.
 2. **Load the published tip from the bundle** and confirm it matches the expected
    sha (objects only; no network):
    ```bash
    git fetch data/.tasks/launch-task/<slug>/published-tip.bundle "refs/tags/_pub-tip-<slug>:refs/tags/_pub-tip-<slug>"
    test "$(git rev-parse refs/tags/_pub-tip-<slug>)" = "<PUBLISHED_TIP>"   # abort if not
    ```
-3. **Snapshot the secret-scan tools and stage the approved changed paths BEFORE
-   resetting** (the reset removes the current-source versions from the worktree,
-   exactly as `build_template.sh` step 1 stages includes first). Copy
-   `.agents/skills/publish-template/scripts/scan_secrets.sh` and its sibling
-   `betterleaks.toml` out to a scratch dir, and `rsync -aR` every ADDED/MODIFIED
-   approved path (from the current-HEAD checkout) into a stage dir. Record the
-   DELETED approved paths as a list.
+3. **Stage the approved changed paths BEFORE resetting** (the reset removes the
+   current-source versions from the worktree, exactly as `build_template.sh`
+   stages includes first): `rsync -aR` every ADDED/MODIFIED approved path (from
+   the current-HEAD checkout) into a stage dir. Record the DELETED approved paths
+   as a list.
 4. **Reset the worktree to the PUBLISHED TIP -- never `BASE_REF`.** Confirm you
    are in the throwaway worktree before you run it. `clean -fdxq` deletes
    untracked AND gitignored files, so these two lines in the live workspace
@@ -344,11 +363,11 @@ the bundle is pushed to the worker. The task body directs the worker to:
    overlay re-introduces the source's real value -- e.g. a hardcoded channel -- so
    the rule must re-generalize it, exactly as at first publish; the rules are
    stored as rules, not values, precisely so they can be replayed here).
-6. **Re-run the hard secret scan over every overlaid/modified path** with the
-   snapshotted tool -- a secret introduced in the source since v(n) can ride in on
-   an updated path just as at first publish:
+6. **Re-run the hard secret scan over every overlaid/modified path** -- a secret
+   introduced in the source since v(n) can ride in on an updated path just as at
+   first publish:
    ```bash
-   bash "$SCAN_TOOLS_DIR/scan_secrets.sh" "$STAGE"
+   bash "$PT/scan_secrets.sh" "$STAGE"
    ```
    Any finding, scanner error, or missing scanner -> fix or report `stuck`; never
    commit around it. This stays the authoritative, hard-failing blocker.
@@ -373,11 +392,13 @@ the bundle is pushed to the worker. The task body directs the worker to:
    `configroot.supervisord.process_group_configs` must be non-empty, since every
    program lives in a `supervisord.conf.d` drop-in and an `[include]` glob that
    matches nothing yields a valid config with no services. If it fails, report
-   `stuck`. Then run
-   `.agents/skills/publish-template/scripts/validate_template.py` (per
-   that skill's §3 step 6), which must exit 0: it catches a markdown/TOML
-   disagreement introduced by the version bump and re-resolves every declared
-   apt package against the pinned mirror.
+   `stuck`. Then run the gate, which must exit 0: it catches a markdown/TOML
+   disagreement introduced by the version bump, a reintroduced FILL-IN block or
+   placeholder thumbnail, an unsafe thumbnail, and an apt package that no longer
+   resolves in the pinned mirror:
+   ```bash
+   uv run --no-project --with 'pydantic>=2' python "$PT/validate_template.py" .
+   ```
 9. **Mint ONE clean commit parented on the published tip:**
    ```bash
    git add -A
@@ -393,17 +414,16 @@ the bundle is pushed to the worker. The task body directs the worker to:
    tip)` stays `BASE_REF` (composability preserved), and the mint is a single
    atomic post-cleanup snapshot: no pre-scan / pre-generalization state ever
    exists as its own commit.
-10. **Self-check and report `done`** with the worktree's absolute path and the
-    branch `mngr/<slug>` -- the lead pushes from there. There must be NO
-    `<!-- FILL-IN` markers and NO `minds-placeholder-thumbnail` marker
-    reintroduced (a correct update never regenerates those), and `git status` must
-    be clean.
+10. **Report `done`** with the worktree's absolute path and the branch
+    `mngr/<slug>` -- the lead pushes from there. `git status` must be clean.
 
-Launch the worker and background-await its report exactly as `publish-template`
-§3 / `launch-task` §2-§4 do. Handle the report per `lead-proxy.md` with the same
-override: on `done`, do NOT merge `mngr/<slug>`; resolve `$WT`, verify the
-worker's gates yourself, then proceed to §5 with cwd = `$WT`. On `stuck`, surface
-the reason and stop (or fix the input and relaunch); publish nothing.
+Launch the worker and background-await its report exactly as `publish-template`'s
+step 3 / `launch-task` §2-§4 do. Handle the report per `lead-proxy.md` with the
+same override: on `done`, do NOT merge `mngr/<slug>`; resolve `$WT` and re-run the
+gate yourself (`uv run --no-project --with 'pydantic>=2' python
+"$PT/validate_template.py" "$WT"`), then proceed to §5 with cwd = `$WT`. On
+`stuck`, surface the reason and stop (or fix the input and relaunch); publish
+nothing.
 
 ## 4. What the worker guarantees (guard rails)
 
@@ -413,7 +433,7 @@ every overlaid/modified path, the boot smoke-check passed, the manifest's
 Publication history gained exactly one new `v(n+1)` entry (earlier entries and
 Adaptation history untouched), and the single snapshot commit is parented on the
 published tip. A `stuck` report maps to the same causes as
-`publish-template` §5 (secret scan, boot check) plus: bundle sha mismatch, or
+`publish-template`'s `references/failures.md` (secret scan, boot check) plus: bundle sha mismatch, or
 the published tip could not be loaded -- all "fix the input and relaunch", never
 "publish something smaller".
 
@@ -435,63 +455,62 @@ not the GitHub permission approval. Present the proposal ONCE, in plain language
 Then END YOUR TURN and WAIT for the user's explicit go-ahead TO THIS message.
 Your own gate checks are verification, not confirmation. If the user asks for
 edits (e.g. a thumbnail tweak or a Publication-history wording change), apply them
-in `$WT` -- keeping the SVG safety rules from `publish-template` §6 -- and
+in `$WT` -- keeping the inert-SVG rules in `publish-template`'s
+`references/assembly-worker.md` -- and
 commit in `$WT` before §7. If the user aborts, stop and leave the assembled
 commit intact.
 
 ## 6. Ensure GitHub push access (latchkey -- not the gh CLI)
 
-Reuse `publish-template` §7's mechanics for the WRITE side. You already have
-`github-git-read` from §2a; the push needs `github-git-write`. Probe it and, if
-missing, initiate the permission request yourself (`payload.scope: github-git`,
-`permissions: ["github-git-write"]`), tell the user an approval is waiting in
-Imbue Studio, and background-poll (bounded) until granted. No `github-rest-api` /
-repo-creation grant is needed -- the repo already exists and this flow does not
-create one or change its settings. Never fall back to a token-in-URL push.
+You already have `github-git-read` from §2a; the push needs `github-git-write`.
+No `github-rest-api` grant is needed -- the repo exists, and this flow neither
+creates it nor changes its settings.
 
-## 7. Fast-forward push v(n+1), then move the tag
+```bash
+python3 "$PT/github_access.py" check --need git-write
+```
 
-**cwd = `$WT`.** The push publishes the update.
+If it is NOT permitted, file the request yourself, as the only command in its
+tool call (the chat builds the approval card from it), then tell the user an
+approval is waiting in Imbue Studio and wait in the background. If it is
+UNKNOWN, file nothing: when the reason says the desktop is unreachable, ask them
+to open their Imbue Studio app and check again; for any other reason, follow
+`publish-template`'s `references/failures.md`.
 
-- **Pre-push checklist:** `(cd "$WT" && git status)` must be clean; the
-  placeholder-thumbnail / FILL-IN / SVG-safety greps from `publish-template` §8
-  must print NOTHING (a correct update never reintroduces a placeholder).
-- **Push as a fast-forward -- no force.** The minted commit descends from the
-  current published tip, so `main` advances by one commit and no history is
-  rewritten:
+```bash
+latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
+    -H 'Content-Type: application/json' \
+    -d '{"agent_id": "'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"'", "type": "predefined", "payload": {"scope": "github-git", "permissions": ["github-git-write"]}, "rationale": "Push the new version of your template to its repo."}'
+```
 
-  ```bash
-  ( cd "$WT" \
-      && git merge-base --is-ancestor "<PUBLISHED_TIP>" "$SNAPSHOT_COMMIT" \
-      && test "$(git rev-list --count "$SNAPSHOT_COMMIT")" -gt 1 \
-      && git \
-      -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
-      ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
-      push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" "${SNAPSHOT_COMMIT}:refs/heads/main" )
-  ```
+```bash
+python3 system/scripts/run_in_background.py --description "Wait for the GitHub approval" -- \
+    python3 "$PT/github_access.py" wait --need git-write
+```
 
-  A NON-fast-forward rejection means the published `main` moved since §2b's check
-  (a genuine out-of-band push) -- STOP and surface it; do NOT `--force`. Handle
-  the other push-failure causes (permission, HTTP 413, `workflow` scope, GitHub
-  push-protection on the baked-in Imbue Studio Google OAuth client) exactly as
-  `publish-template` §8's "Failure handling" list does.
+Never fall back to a token-in-URL push.
 
-- **Move / create the version tag** (the design's `template/<slug>/v<n>` tag
-  scheme -- the durable, adopter-facing version marker). Publish v1 did not push a
-  v1 tag, so in practice this CREATES the tag at v(n+1); it is create-or-move and
-  idempotent:
+## 7. Push v(n+1) and tag it
 
-  ```bash
-  ( cd "$WT" \
-      && git tag -f -a "template/<slug>/v(n+1)" "$SNAPSHOT_COMMIT" -m "template <slug> v(n+1)" \
-      && git \
-      -c "http.extraHeader=X-Latchkey-Gateway-Password: $LATCHKEY_GATEWAY_PASSWORD" \
-      ${LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE:+-c "http.extraHeader=X-Latchkey-Gateway-Permissions-Override: $LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"} \
-      push "$LATCHKEY_GATEWAY/gateway/https://github.com/<owner>/<repo>.git" "refs/tags/template/<slug>/v(n+1)" )
-  ```
+**cwd = `$WT`.** This publishes the update:
 
-  If the tag push fails, the update itself already succeeded -- retry once, and
-  otherwise report it as a minor follow-up rather than failing the update.
+```bash
+uv run --no-project --with 'pydantic>=2' python "$PT/push_snapshot.py" \
+    --worktree "$WT" --parent "<PUBLISHED_TIP>" --repo "<owner>/<repo>" \
+    --tag "template/<slug>/v(n+1)" \
+    --message "template: <slug> v(n+1)
+
+Update of the <slug> template on top of the published v(n) snapshot; app-delta re-cut, recipe re-applied."
+```
+
+It runs the pre-push gate, mints one commit from `$WT`'s final tree parented on
+the published tip, and pushes it as a fast-forward, so `main` advances by exactly
+one commit and `merge-base(template, tip)` stays `BASE_REF`. It never forces: a
+rejection because `main` moved since §2b means someone pushed out of band -- STOP
+and surface it. The `template/<slug>/v<n>` tag is the durable, adopter-facing
+version marker (a first publish has none, so in practice the first update creates
+one); a failed tag push is a follow-up, not a failed update. Every other failure
+is in `publish-template`'s `references/failures.md`.
 
 ## 8. Record the v(n+1) entry in the ledger (ONLY after the push succeeded)
 
@@ -499,10 +518,20 @@ The single sanctioned write back to `/home/user/workspace` -- read the CWD-INVAR
 callout at the top before running it. If the push failed or the user aborted,
 SKIP this entirely: an update that did not publish is never recorded.
 
-The full contract -- the exact line format, the computed `v<n+1>`, the
-per-slug idempotence rule, and the one-file commit -- is in
-`references/ledger-entry.md`. Follow it exactly; it is the same
-`## Templates` format `publish-template` §8 step 4 owns.
+```bash
+python3 "$PT/record_publish.py" --workspace /home/user/workspace --slug <slug> \
+    --repo-url "github.com/<owner>/<repo>" --note "<one line: what changed>" \
+    --source-sha "$SOURCE_SHA"
+```
+
+`SOURCE_SHA` is the workspace commit this update was cut from, captured in §3b
+(not the workspace's HEAD now, which may have moved on; not `BASE_REF`, not the
+published tip, nothing from `$WT`). The script computes `v(n+1)` itself,
+appends it under the slug's heading, and commits that one file; recording the
+same note at the same sha again changes nothing. If §1 found no row for this
+slug, add `--version <n+1>` (the version you just pushed and tagged): with no
+entry to count from, the script would otherwise record it as v1. If it reports a failed commit,
+the update IS published -- say so, and commit the file rather than re-pushing.
 
 ## 9. Close out
 

@@ -7,7 +7,7 @@
  * empty transcript (a message typed now is held until the agent lands); failed, it shows the
  * reason and a way to try again over the composer, so a message held through the failure is
  * back in it where it can be seen. The transcript takes over when creation completes. A
- * seeded chat (the Imbue Studio app's onboarding conversation, continued here) has a transcript from
+ * seeded chat (one opened on turns written before any agent joined it) has a transcript from
  * the start, so it renders as one through its wait for the first send and its create; only a
  * failed create shows the provisional screen.
  *
@@ -30,16 +30,21 @@ import {
   getEventsForChat,
   getEventCount,
   getFirstOffset,
+  getLastEventId,
   getRenderVersion,
   getTotalEventCount,
+  hasMoreAfter,
   isConversationNotFound,
   noteLoadedArrivals,
   removeMessageSentListener,
+  type ToolResultEvent,
 } from "../models/Response";
 import type { FillAction } from "../models/transcriptScroll/fillPlanner";
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
 import { TranscriptScrollbar } from "./TranscriptScrollbar";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
+import { shownReplyDraft } from "../models/ReplyDrafts";
+import { renderAssistantMessage } from "./message-renderers";
 import {
   addChatsUpdatedListener,
   getChatById,
@@ -116,6 +121,14 @@ function provisionalRecord(chatId: string): ProvisionalChat | null {
  *  shows its reason instead, like any other. */
 export function isSeededTranscriptShown(provisional: ProvisionalChat | null): boolean {
   return provisional !== null && provisional.is_seeded && provisional.phase !== "failed";
+}
+
+const NO_TOOL_RESULTS: Map<string, ToolResultEvent> = new Map();
+
+/** The chat's reply draft as a reply node, or nothing when there is none to show. */
+function renderReplyDraft(chatId: string): m.Vnode[] {
+  const draft = hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
+  return draft === null ? [] : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId)];
 }
 
 export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; isCompact?: boolean }> {
@@ -667,6 +680,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         ...[renderHandoffTailNode(chatId, hasOpenHandoffRequest(events, chat?.handoff ?? null))].filter(
           (node) => node !== null,
         ),
+        // The reply the agent is still writing, which its transcript does not hold yet, while the
+        // window reaches the live end. A node of its own rather than a row: a draft changes a few
+        // times a second, and a row would re-walk the whole held transcript on every change.
+        ...renderReplyDraft(chatId),
         ...renderQueuedMessages(chatId),
         // The messages the chat app holds while the chat switches harness, then this page's
         // own not-yet-delivered sends.

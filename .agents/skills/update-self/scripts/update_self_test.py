@@ -12,6 +12,7 @@ import fcntl
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -1048,6 +1049,37 @@ def test_footprint_ranges_hold_after_a_commit_on_top_of_the_merge(
     ]
 
 
+def test_footprint_ranges_hold_after_a_catch_up_merge(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # Another chat commits while the worker runs, and the worker merges the moved
+    # HEAD into its branch (the worker guide's catch-up). The ranges still anchor
+    # on the update's merge: the incoming commit is neither the workspace's
+    # pre-update content nor part of the update.
+    history = _UpdateHistory(tmp_path)
+    history.release("minds-v1")
+    history.commit("system/apps/mine/app.py", "local work")
+    _git_in(history.repo, "checkout", "-q", "-b", "mngr/update-self")
+    history.land("minds-v1")
+    merge = _head_sha(history.repo)
+    _git_in(history.repo, "checkout", "-q", history.local)
+    moved_head = history.commit("system/apps/other/app.py", "another chat's work")
+    _git_in(history.repo, "checkout", "-q", "mngr/update-self")
+    history.land(
+        moved_head, subject="Catch up to the workspace's latest work (moved head)"
+    )
+
+    ranges = history.footprint_ranges("minds-v1", capsys)
+
+    assert ranges["merge"] == merge
+    assert history.changed(ranges["local_base"], ranges["local_ref"]) == [
+        "system/apps/mine/app.py"
+    ]
+    assert history.changed(ranges["update_base"], ranges["update_ref"]) == [
+        "minds-v1.txt"
+    ]
+
+
 def test_footprint_ranges_on_a_retry_whose_target_moved(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1604,10 +1636,240 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     ]
     # The commands this guard exists for; without them it is vacuous.
     assert any("run-status delegate" in line for line in invocations)
-    assert any("run-status hold" in line for line in invocations)
+    assert any("run-status verdict" in line for line in invocations)
     staged = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
     strays = [line for line in invocations if staged not in line]
     assert strays == []
+
+
+_FENCED_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+
+
+def _skill_section(heading: str) -> str:
+    """One ``##``/``###`` section of SKILL.md, up to the next heading of the same or a higher level.
+
+    Lines inside fenced blocks are never headings: a bash comment starts with ``#`` too.
+    """
+    lines = (
+        (_MODULE_PATH.parent.parent / "SKILL.md")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    )
+    level = len(heading.split(" ", 1)[0])
+    start = next(index for index, line in enumerate(lines) if line.startswith(heading))
+    is_fenced = False
+    for index in range(start + 1, len(lines)):
+        line = lines[index]
+        if line.lstrip().startswith("```"):
+            is_fenced = not is_fenced
+            continue
+        hashes = len(line) - len(line.lstrip("#"))
+        if not is_fenced and 0 < hashes <= level and line[hashes : hashes + 1] == " ":
+            return "\n".join(lines[start:index])
+    return "\n".join(lines[start:])
+
+
+def _fenced_commands(text: str) -> list[str]:
+    """Every command line in the fenced blocks, continuation lines joined."""
+    return [
+        line.strip()
+        for block in _FENCED_BLOCK.findall(text)
+        for line in block.replace("\\\n", " ").splitlines()
+        if line.strip()
+    ]
+
+
+def _first_index(commands: list[str], needle: str) -> int:
+    matches = [index for index, command in enumerate(commands) if needle in command]
+    assert matches, f"no fenced command runs {needle!r}"
+    return matches[0]
+
+
+def test_every_update_self_invocation_in_the_prose_is_one_the_script_takes() -> None:
+    """The prose and the script move together: a subcommand or flag the prose reaches for that the
+    parser does not know fails exactly when a lead follows it. Every fenced ``update_self.py`` call in
+    SKILL.md and the references is parsed as written, with an unset pin expanding to nothing."""
+    skill_dir = _MODULE_PATH.parent.parent
+    prose = [skill_dir / "SKILL.md", *sorted((skill_dir / "references").glob("*.md"))]
+    parser = update_self.build_parser()
+    parsed = 0
+    for path in prose:
+        for command in _fenced_commands(path.read_text(encoding="utf-8")):
+            if "update_self.py " not in command:
+                continue
+            unpinned = re.sub(r"\$\{\w+:\+[^}]*\}", "", command)
+            words = shlex.split(
+                re.sub(r"<[^<>]*>", "PLACEHOLDER", unpinned), comments=True
+            )
+            argv = words[
+                next(
+                    i for i, word in enumerate(words) if word.endswith("update_self.py")
+                )
+                + 1 :
+            ]
+            for index, word in enumerate(argv):
+                if word in (">", "||", "&&", "|", ";"):
+                    argv = argv[:index]
+                    break
+            try:
+                parser.parse_args(argv)
+            except SystemExit as exc:
+                raise AssertionError(
+                    f"{path.name}: `{command}` does not parse"
+                ) from exc
+            parsed += 1
+    assert parsed >= 10, (
+        "the prose no longer runs update_self.py; this guard is vacuous"
+    )
+
+
+def _release_repos(tmp_path: Path) -> Path:
+    """An upstream carrying three releases, and a workspace made from the first with work of its own."""
+    upstream = tmp_path / "upstream"
+    _git_in(tmp_path, "init", "-q", "-b", "main", str(upstream))
+    for tag in ("minds-v0.1.0", "minds-v0.2.0", "minds-v0.3.0"):
+        _git_in(
+            upstream,
+            "-c",
+            "user.email=t@example.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "--allow-empty",
+            "-q",
+            "-m",
+            tag,
+        )
+        _git_in(upstream, "tag", tag)
+    workspace = tmp_path / "workspace"
+    _git_in(tmp_path, "clone", "-q", "--no-tags", str(upstream), str(workspace))
+    _git_in(workspace, "remote", "rename", "origin", "upstream")
+    _git_in(workspace, "reset", "-q", "--hard", "upstream/main~2")
+    _git_in(
+        workspace,
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "--allow-empty",
+        "-q",
+        "-m",
+        "local work",
+    )
+    shutil.copytree(_SCRIPTS_DIR, workspace / update_self.SKILL_DIR_REL / "scripts")
+    return workspace
+
+
+def _run_step_2(
+    workspace: Path, tmp_path: Path, pin: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Step 2's resolve block exactly as SKILL.md has it, with the pin a lead fills in from the message."""
+    [block] = [
+        block
+        for block in _FENCED_BLOCK.findall(_skill_section("## 2. Resolve the target"))
+        if "resolve-target" in block
+    ]
+    for name, value in pin.items():
+        assert f'{name}=""' in block, f"Step 2 no longer sets {name}"
+        block = block.replace(f'{name}=""', f'{name}="{value}"')
+    block = block.replace("/tmp/update-self-target.json", str(tmp_path / "target.json"))
+    return subprocess.run(
+        ["bash", "-c", block],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+@pytest.mark.flaky
+def test_step_2_resolves_a_pinned_target_without_asking_the_app(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A pass the app pinned must resolve with the app unreachable (closed, on a sleeping laptop); the
+    same block with no pin asks the app, so the unreachable app is a fault there."""
+    _install_fake_latchkey(
+        monkeypatch, tmp_path / "bin", body="", status="", exit_code=7
+    )
+    workspace = _release_repos(tmp_path)
+
+    unpinned = _run_step_2(workspace, tmp_path, {})
+    assert unpinned.returncode != 0
+    assert "could not reach the Imbue Studio app" in unpinned.stderr
+
+    pinned = _run_step_2(workspace, tmp_path, {"PINNED_CEILING": "minds-v0.2.0"})
+    assert pinned.returncode == 0, pinned.stderr
+    target = json.loads((tmp_path / "target.json").read_text())
+    assert (target["ref"], target["ceiling"], target["exceeds_ceiling"]) == (
+        "minds-v0.2.0",
+        "minds-v0.2.0",
+        False,
+    )
+
+    # The user's own choice, named by the message's override note, rides beside the ceiling.
+    chosen = _run_step_2(
+        workspace,
+        tmp_path,
+        {"PINNED_CEILING": "minds-v0.2.0", "PINNED_OVERRIDE": "minds-v0.3.0"},
+    )
+    assert chosen.returncode == 0, chosen.stderr
+    target = json.loads((tmp_path / "target.json").read_text())
+    assert (target["ref"], target["exceeds_ceiling"]) == ("minds-v0.3.0", True)
+
+
+def test_step_5b_pauses_the_chats_saves_their_work_applies_then_resumes_them() -> None:
+    """The apply-time order: chats paused, their uncommitted work saved, the apply, and the chats back."""
+    commands = _fenced_commands(_skill_section("### 5b. Apply the update"))
+    order = [
+        _first_index(commands, "run-status stop-chats"),
+        _first_index(commands, "git commit -F /tmp/update-self-wip-message.txt"),
+        _first_index(commands, "update_self.py apply"),
+        _first_index(commands, "run-status resume-chats"),
+    ]
+    assert order == sorted(order)
+    # The fast-forward check comes before the pause too, so a catch-up for other chats' commits runs
+    # while they still work.
+    assert (
+        _first_index(commands, "git merge-base --is-ancestor HEAD mngr/update-self")
+        < order[0]
+    )
+
+
+def test_step_4_ends_a_hold_with_a_decision_keeping_the_worker() -> None:
+    """A customization the update cannot keep ends the pass: the verdict, the worker stopped and kept,
+    and the chats brought back by Step 6's opening, which runs on every terminal path."""
+    commands = _fenced_commands(_skill_section("## 4. Proxy the `question` gate"))
+    verdict = _first_index(commands, "run-status verdict NEEDS_DECISION")
+    stop = _first_index(commands, "mngr stop update-self")
+    assert verdict < stop
+    # The hold's own report is consumed, so the re-land's re-armed poll waits for the reply.
+    assert stop < _first_index(commands, "reports/consumed/")
+    assert not any(
+        "mngr destroy" in command or "git branch" in command for command in commands
+    )
+    assert not any("run-status hold" in command for command in commands)
+    _first_index(
+        _fenced_commands(_skill_section("## 6. Teardown")), "run-status resume-chats"
+    )
+
+    relanding = _fenced_commands(
+        (_MODULE_PATH.parent.parent / "references" / "resuming-after-a-decision.md").read_text(encoding="utf-8")
+    )
+    order = [
+        _first_index(relanding, "run-status start"),
+        _first_index(relanding, "git merge-base --is-ancestor HEAD mngr/update-self"),
+        _first_index(relanding, "worker_agent_id"),
+        _first_index(relanding, 'message_chat.py "$WORKER_ID"'),
+    ]
+    assert order == sorted(order)
+    # The stopped worker is reached the way 5b's catch-up reaches it: by its id, through a sender
+    # that starts it, never by its mngr name.
+    assert _first_index(relanding, '--start -m "$DECISION"') > order[-1]
+    assert not any(
+        "mngr start update-self" in command or "mngr message update-self" in command
+        for command in relanding
+    )
 
 
 # The atomic apply
@@ -2026,6 +2288,7 @@ def _apply(
     is_pid_live: Callable[[int], bool] = lambda pid: False,
     expend: Callable[[Sequence[str]], list[str]] = _tagging_expend,
     sweep_homes: Sequence[Path] = (),
+    clock: _Clock | None = None,
 ) -> int:
     return update_apply.apply_update(
         merge_ref,
@@ -2038,7 +2301,7 @@ def _apply(
         spawner=spawner,
         sleeper=lambda _seconds: None,
         base_url=_LIVE_BASE,
-        now=_Clock(),
+        now=clock if clock is not None else _Clock(),
         today=_TODAY,
         is_pid_live=is_pid_live,
         expend=expend,
@@ -2280,6 +2543,8 @@ def test_read_app_tools_skips_an_app_it_cannot_describe(tmp_path: Path, capsys) 
         ("system/apps/files/src/files_app/server.py", {"files-app"}),
         ("system/apps/files/app.toml", {"files-app"}),
         ("system/apps/files/frontend/src/index.ts", set()),
+        ("system/apps/routines/src/routines_app/server.py", {"routines-app"}),
+        ("system/apps/routines/frontend/src/index.ts", set()),
         # A shared backend manifest is part of every app tool's closure: the
         # pinned mngr packages an app depends on, and the plugin table that
         # assigns plugins to its tool.
@@ -2382,6 +2647,8 @@ def test_plan_apply_does_not_mistake_nested_paths_for_manifests(path: str) -> No
         "system/apps/getting_started/frontend/index.html",
         "system/apps/files/frontend/src/index.ts",
         "system/apps/files/frontend/vite.config.ts",
+        "system/apps/routines/frontend/src/views/App.ts",
+        "system/apps/routines/frontend/index.html",
         "system/libs/workspace_ui/src/base.css",
         "system/tsconfig.base.json",
     ],
@@ -2399,6 +2666,7 @@ def test_plan_apply_counts_every_frontend_file_not_just_src(path: str) -> None:
         "system/apps/chat/frontend/package.json",
         "system/apps/getting_started/frontend/package.json",
         "system/apps/files/frontend/package.json",
+        "system/apps/routines/frontend/package.json",
         "system/libs/workspace_ui/package.json",
     ],
 )
@@ -4013,7 +4281,7 @@ def test_a_failed_provisioner_alone_lands_the_update_and_records_the_gap(
 ) -> None:
     # A failed tool install leaves the tree and services consistent, and
     # re-running the provisioner later is cheap and merge-independent -- so it
-    # must not cost the whole release plus a fresh worker pass. The update
+    # must not cost the whole release plus a retry through the worker. The update
     # lands, and the gap is loud: on stderr, and as a durable record for the
     # skill to act on.
     monkeypatch.setenv("MNGR_AGENT_NAME", "the-lead")
@@ -6810,12 +7078,10 @@ def _commit_count(repo: Path) -> int:
 
 
 def test_the_starter_this_recreates_is_the_one_the_template_ships() -> None:
-    # `publish-template`, `update-installed-template` and
-    # update-published-template's ledger-entry reference all instruct an agent
-    # to recreate a ledger "byte-identical to the shipped root file", and point
-    # at this constant for the exact block. Nothing else compares the two, so a
-    # preamble edited on one side alone would silently make that instruction
-    # impossible to follow and hand a recreated ledger a different header.
+    # A deleted ledger is recreated from this constant, meant to be
+    # byte-identical to the shipped root file. Nothing else compares the two,
+    # so a preamble edited on one side alone would hand a recreated ledger a
+    # different header.
     ledger = _WORKSPACE_ROOT / update_ledger._VERSION_HISTORY_REL
     # This file ships into every workspace made from the template, and there
     # the same path is that workspace's own ledger: entries are appended to it
@@ -6828,7 +7094,7 @@ def test_the_starter_this_recreates_is_the_one_the_template_ships() -> None:
     shipped = ledger.read_text()
 
     assert _without_ledger_entries(shipped) == _without_ledger_entries(
-        update_ledger._VERSION_HISTORY_STARTER
+        update_ledger.VERSION_HISTORY_STARTER
     )
 
 
@@ -7948,6 +8214,74 @@ def test_the_marker_mirrors_the_apply_into_the_run_record(
     assert status.apply_updated_at is None
 
 
+def test_a_landed_apply_records_when_it_landed_in_the_run_record(
+    apply_repo: Path, monkeypatch
+) -> None:
+    """The app says the update is finishing, not preparing, between the landing and the verdict."""
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert (
+        update_self.main(["run-status", "start", "--repo-root", str(apply_repo)]) == 0
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    clock = _Clock()
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+        clock=clock,
+    )
+
+    assert code == 0
+    status = update_apply_contract.read_run_status(apply_repo)
+    assert status is not None
+    assert status.apply_phase is None
+    # Stamped on the apply's own clock, like every other fact of the landing.
+    assert status.applied_at is not None and 1000.0 < status.applied_at <= clock.value
+
+
+def test_a_rolled_back_apply_records_no_landing(apply_repo: Path, monkeypatch) -> None:
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert (
+        update_self.main(["run-status", "start", "--repo-root", str(apply_repo)]) == 0
+    )
+    runner = _apply_runner(_FRONTEND_DIFF, apply_repo)
+    runner.respond(("npm", "run", "build"), _Result(returncode=1, stderr="boom"))
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 2
+    status = update_apply_contract.read_run_status(apply_repo)
+    assert status is not None
+    assert status.apply_phase is None
+    assert status.applied_at is None
+
+
+def test_run_status_start_clears_the_previous_runs_landing(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-lead")
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+    _plant_marker(tmp_path)
+    update_apply_contract.clear_marker(tmp_path, landed_at=time.time())
+    landed = update_apply_contract.read_run_status(tmp_path)
+    assert landed is not None and landed.applied_at is not None
+
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+
+    status = update_apply_contract.read_run_status(tmp_path)
+    assert status is not None
+    assert status.applied_at is None
+
+
 def test_the_marker_does_not_invent_a_run_record(tmp_path) -> None:
     # An apply run by hand outside a pass has no run to report to; a record
     # conjured here would name no chat and lock the app's row for good.
@@ -8027,6 +8361,12 @@ def test_a_worker_bundle_flag_may_name_each_app_only_once() -> None:
             "with --ff-only and without --keep-rollback-point",
             id="update-self-landing-cannot-keep-a-rollback-point",
         ),
+        # The rollback point records the pass's apps and services from its scope file.
+        pytest.param(
+            ["--keep-rollback-point"],
+            "--keep-rollback-point and --pass-scope go together",
+            id="a-rollback-point-needs-the-pass-scope",
+        ),
     ],
 )
 def test_apply_refuses_a_flag_combination_it_cannot_honor(
@@ -8044,7 +8384,11 @@ def _rollback_point(repo_root: Path) -> "update_apply_contract.LastGoodRecord | 
     return update_apply_contract.read_last_good(repo_root)
 
 
-def _apply_keeping_the_rollback_point(runner: _RecordingRunner, repo_root: Path) -> int:
+def _apply_keeping_the_rollback_point(
+    runner: _RecordingRunner,
+    repo_root: Path,
+    pass_scope: Sequence[update_apply.PassCreation] = (),
+) -> int:
     return update_apply.apply_update(
         _MERGE_REF,
         repo_root,
@@ -8062,6 +8406,7 @@ def _apply_keeping_the_rollback_point(runner: _RecordingRunner, repo_root: Path)
         expend=_tagging_expend,
         sweep_homes=(),
         keep_rollback_point=True,
+        pass_scope=pass_scope,
     )
 
 
@@ -8098,13 +8443,15 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     apply_repo: Path,
 ) -> None:
     """A shared-library change rebuilds every bundle, so each critical bundle owner is touched;
-    a change under one app's directory touches that app; a non-critical app never counts."""
+    a change under one app's directory touches that app; a non-critical app never counts by
+    its paths alone: the pass scope is what names those."""
     _write_openable_app(apply_repo, "chat")
     _write_openable_app(apply_repo, "terminal")
+    _write_openable_app(apply_repo, "roadmap", is_critical=False, program="roadmap-web")
     _write_registry(apply_repo, {"chat": _CHAT_ROW_URL, "terminal": _TERMINAL_ROW_URL})
     runner = _apply_runner(
         "M\tsystem/libs/workspace_ui/src/origin.ts\nM\tsystem/apps/terminal/src/terminal_app/main.py\n"
-        "M\tsystem/apps/browser/src/browser/session.py\n",
+        "M\tsystem/apps/roadmap/src/roadmap/main.py\n",
         apply_repo,
     )
 
@@ -8114,6 +8461,171 @@ def test_the_record_names_every_critical_app_the_apply_touched(
     assert record is not None
     assert record.apps == ["chat", "system_interface", "terminal"]
     assert record.programs == ["chat", "system_interface", "terminal"]
+
+
+_RIDE_ALONG_DIFF = (
+    _CHAT_FRONTEND_DIFF
+    + "M\tsystem/apps/roadmap/src/roadmap/main.py\n"
+    + "A\tsystem/apps/notes/app.toml\n"
+    + "M\tsystem/services/host_backup/src/host_backup/runner.py\n"
+    + "M\tsystem/services/oom_priority/bin/oom_tag_backstop.py\n"
+    + "A\tsystem/services/share_gateway/pyproject.toml\n"
+    + "M\t.agents/skills/digest/SKILL.md\n"
+)
+
+
+def _ride_along_pass_scope() -> list[update_apply.PassCreation]:
+    """A careful pass over the chat and, riding along, an ordinary app, an app the merge adds,
+    a service whose wiring names its programs, a service with none, a service the merge adds,
+    and a skill."""
+    return [
+        update_apply.PassCreation("app", "chat", "system/apps/chat/", ("chat",)),
+        update_apply.PassCreation(
+            "app", "roadmap", "system/apps/roadmap/", ("roadmap-web",)
+        ),
+        update_apply.PassCreation("app", "notes", "system/apps/notes/", ("notes",)),
+        update_apply.PassCreation(
+            "service",
+            "host_backup",
+            "system/services/host_backup/",
+            ("host-backup", "host-backup-sidecar"),
+        ),
+        update_apply.PassCreation(
+            "service", "oom_priority", "system/services/oom_priority/", ()
+        ),
+        update_apply.PassCreation(
+            "service",
+            "share_gateway",
+            "system/services/share_gateway/",
+            ("share-gateway",),
+        ),
+        update_apply.PassCreation("skill", "digest", ".agents/skills/digest/", ()),
+    ]
+
+
+def test_the_record_takes_the_pass_scopes_other_apps_and_services(
+    apply_repo: Path,
+) -> None:
+    """Beside the critical apps, the record takes the pass's other apps and services from
+    its scope: the programs their wiring names, an added app named with nothing to restart,
+    an added service with nothing to restart, and a service with no program left for the
+    agent rather than escalated."""
+    _write_openable_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_RIDE_ALONG_DIFF, apply_repo),
+            apply_repo,
+            _ride_along_pass_scope(),
+        )
+        == 0
+    )
+
+    record = _rollback_point(apply_repo)
+    assert record is not None
+    assert record.apps == ["chat", "system_interface", "roadmap", "notes"]
+    assert record.programs == [
+        "chat",
+        "host-backup",
+        "host-backup-sidecar",
+        "roadmap-web",
+        "system_interface",
+    ]
+    assert record.unrestarted == ["oom_priority"]
+    assert record.needs_system_services_restart is False
+
+
+def test_a_rollback_restarts_the_pass_and_waits_on_critical_apps_alone(
+    apply_repo: Path,
+) -> None:
+    """Only critical programs gate a rollback's verdict, as they gate the apply's: the pass's
+    other programs are restarted, a creation with none is named for the agent, and the
+    rollback still finishes rather than stopping for a services restart."""
+    _write_openable_app(apply_repo, "chat")
+    _write_registry(apply_repo, {"chat": _CHAT_ROW_URL})
+    assert (
+        _apply_keeping_the_rollback_point(
+            _apply_runner(_RIDE_ALONG_DIFF, apply_repo),
+            apply_repo,
+            _ride_along_pass_scope(),
+        )
+        == 0
+    )
+    # The fixture's supervisor reports only the critical programs: the others never settle.
+    runner = _rollback_runner(apply_repo)
+
+    assert _rollback(runner, apply_repo) == 0
+
+    assert runner.argvs_starting("supervisorctl", "restart") == [
+        [
+            "supervisorctl",
+            "restart",
+            "chat",
+            "host-backup",
+            "host-backup-sidecar",
+            "roadmap-web",
+            "system_interface",
+        ]
+    ]
+    settled = _rollback_point(apply_repo)
+    assert settled is not None
+    assert settled.outcome == (
+        "Rolled back to the previous version. oom_priority did not restart with it; "
+        "ask your agent to restart them."
+    )
+
+
+# What ``app-manifest pass-scope`` writes for an app and a service (fields the reader does
+# not use trimmed); system/libs/app_manifest's CLI test pins the same shape.
+_PASS_SCOPE_FILE = """{
+  "creations": [
+    {
+      "creation": {"type": "app", "name": "roadmap", "package": "roadmap", "manifest": "system/apps/roadmap/app.toml"},
+      "primary": ["system/apps/roadmap/"],
+      "wiring": [
+        {"path": "system/supervisord.conf.d/roadmap.conf", "sections": ["program:roadmap", "program:roadmap-sync"]},
+        {"path": "system/supervisord.conf.d/xvfb.conf", "sections": ["program:xvfb"]}
+      ],
+      "references": [], "context": [], "conventions": [], "exclude": [], "diff": null
+    },
+    {
+      "creation": {"type": "service", "name": "oom_priority", "package": "oom_priority", "manifest": null},
+      "primary": ["system/services/oom_priority/"],
+      "wiring": [],
+      "references": [], "context": [], "conventions": [], "exclude": [], "diff": null
+    }
+  ],
+  "diff": null
+}
+"""
+
+
+def test_the_pass_scope_reader_takes_each_creations_programs_from_its_wiring(
+    tmp_path: Path,
+) -> None:
+    scope_file = tmp_path / "scope.json"
+    scope_file.write_text(_PASS_SCOPE_FILE)
+
+    assert update_apply.read_pass_scope(scope_file) == [
+        update_apply.PassCreation(
+            "app",
+            "roadmap",
+            "system/apps/roadmap/",
+            ("roadmap", "roadmap-sync", "xvfb"),
+        ),
+        update_apply.PassCreation(
+            "service", "oom_priority", "system/services/oom_priority/", ()
+        ),
+    ]
+
+
+def test_the_pass_scope_reader_refuses_a_file_that_is_not_one(tmp_path: Path) -> None:
+    scope_file = tmp_path / "scope.json"
+    scope_file.write_text('{"creation": {"type": "app"}}')
+
+    with pytest.raises(ValueError, match="is not a pass scope file"):
+        update_apply.read_pass_scope(scope_file)
 
 
 def test_the_record_names_every_critical_app_whose_tool_the_apply_reinstalled(
@@ -8314,9 +8826,17 @@ def test_a_failed_snapshot_restore_keeps_recovery_copies_even_when_health_would_
 def test_a_rollback_that_needs_the_services_agent_restores_the_files_and_names_the_command(
     apply_repo: Path,
 ) -> None:
+    """The outcome names the command, and a pass creation with no program to restart,
+    which the services restart does not reach either."""
     assert (
         _apply_keeping_the_rollback_point(
-            _apply_runner("M\tsystem/scripts/bootstrap.sh\n", apply_repo), apply_repo
+            _apply_runner("M\tsystem/scripts/bootstrap.sh\n", apply_repo),
+            apply_repo,
+            [
+                update_apply.PassCreation(
+                    "service", "oom_priority", "system/services/oom_priority/", ()
+                )
+            ],
         )
         == 0
     )
@@ -8333,6 +8853,7 @@ def test_a_rollback_that_needs_the_services_agent_restores_the_files_and_names_t
     assert (
         record.outcome is not None
         and update_apply.SERVICES_RESTART_COMMAND in record.outcome
+        and "oom_priority did not restart with it" in record.outcome
     )
 
 

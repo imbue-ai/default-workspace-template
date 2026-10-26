@@ -23,6 +23,8 @@ from imbue.chat.harnesses.codex.model import write_codex_model_options
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.harnesses.one_shot import OneShotCompletionTimeoutError
+from imbue.chat.harnesses.one_shot import answer_on_first_model
+from imbue.chat.harnesses.one_shot import describe_model_name
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -119,18 +121,15 @@ class CodexOneShotCompletion(OneShotCompletion):
     def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
         """The answer on the account's cheapest model; on the default model when that one is refused."""
         choice = choose_codex_one_shot_model(_account_models(account_dir))
-        # codex exec takes no system prompt of its own, so the instructions lead the message.
-        full_prompt = f"{system_prompt}\n\nThe message:\n\n{prompt}"
-        try:
-            return self._complete_on(choice, account_dir, full_prompt)
-        except OneShotCompletionTimeoutError:
-            raise
-        except OneShotCompletionError as e:
-            if choice.model is None:
-                raise
-            # The model list read earlier may name a model the account no longer offers.
-            logger.info("codex one-shot on {} failed, using the default model: {}", choice.model, e)
-            return self._complete_on(CodexOneShotChoice(), account_dir, full_prompt)
+        # codex exec takes no system prompt of its own, so the instructions lead the prompt.
+        full_prompt = f"{system_prompt}\n\n{prompt}"
+        # The model list read earlier may name a model the account no longer offers.
+        choices = (choice,) if choice.model is None else (choice, CodexOneShotChoice())
+        return answer_on_first_model(
+            choices,
+            lambda each: self._complete_on(each, account_dir, full_prompt),
+            lambda each: describe_model_name(each.model),
+        )
 
     def _complete_on(self, choice: CodexOneShotChoice, account_dir: Path, prompt: str) -> str:
         started_at = time.monotonic()

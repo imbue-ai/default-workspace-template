@@ -7,6 +7,7 @@ Run via: ``uv run pytest
 from __future__ import annotations
 
 import importlib.util
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -400,6 +401,74 @@ body
         "TASK_FILE=data/.tasks/launch-task/inner/task.md\n"
         "FINISH_REPORT_PATH=data/.tasks/launch-task/inner/reports/report.md\n"
     )
+
+
+_THREE_CREATION_PASS = """---
+finish_report_path: data/.tasks/harden/update-roadmap-sync/reports/report.md
+scope_file: data/.tasks/harden/update-roadmap-sync/scope.json
+diff_base: abc123
+operation: update
+creations: app:roadmap service:share_gateway shared:references/roadmap.md
+---
+body
+"""
+
+
+def test_a_pass_over_three_creations_reaches_the_worker_as_type_and_name(
+    tmp_path: Path,
+) -> None:
+    """What the worker's `eval` defines for a pass covering an app, a service, and a
+    shared reference (whose name is a path), read the way the worker reads it: one
+    `<type>:<name>` token per creation."""
+    task = _write_task(tmp_path, _THREE_CREATION_PASS)
+    probe = (
+        f'eval "$({shlex.join([sys.executable, str(_SCRIPT), str(task)])})" && '
+        'printf "%s|" "$OPERATION" "$SCOPE_FILE" && '
+        'for creation in $CREATIONS; do printf "%s=%s|" "${creation%%:*}" "${creation#*:}"; done'
+    )
+    result = subprocess.run(
+        ["bash", "-c", probe], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == (
+        "update|data/.tasks/harden/update-roadmap-sync/scope.json|"
+        "app=roadmap|service=share_gateway|shared=references/roadmap.md|"
+    )
+
+
+def test_a_harden_task_in_the_single_creation_shape_fails_loud(tmp_path: Path) -> None:
+    """A task with a top-level `type` is refused rather than handed to a worker that
+    reads `creations`, even when it carries both."""
+    task = _write_task(
+        tmp_path,
+        "---\nfinish_report_path: b\nscope_file: s.json\noperation: update\n"
+        "creations: app:roadmap\ntype: app\n---\nbody\n",
+    )
+    with pytest.raises(ValueError, match="top-level `type`"):
+        parse_task_frontmatter.parse(task)
+
+
+@pytest.mark.parametrize(
+    "fields,message",
+    [
+        ("scope_file: s.json", "needs a non-empty string `creations`"),
+        ("creations: app:roadmap", "needs a non-empty string `scope_file`"),
+        (
+            "scope_file: s.json\ncreations: [app:roadmap]",
+            "needs a non-empty string `creations`",
+        ),
+        ("scope_file: s.json\ncreations: ' '", "needs a non-empty string `creations`"),
+    ],
+)
+def test_a_malformed_harden_task_fails_loud(
+    tmp_path: Path, fields: str, message: str
+) -> None:
+    task = _write_task(
+        tmp_path,
+        f"---\nfinish_report_path: b\noperation: update\n{fields}\n---\nbody\n",
+    )
+    with pytest.raises(ValueError, match=message):
+        parse_task_frontmatter.parse(task)
 
 
 def test_cli_reports_a_missing_path_and_exits_nonzero(tmp_path: Path) -> None:

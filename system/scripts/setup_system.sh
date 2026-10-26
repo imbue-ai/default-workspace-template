@@ -17,6 +17,12 @@ export DEBIAN_FRONTEND=noninteractive
 # the installers "succeed" into the wrong home and the version checks fail.
 export HOME=/root
 
+# Pin the Python every uv command below resolves to. uv's default for an
+# open-ended request moves with the uv release, so without this a uv bump would
+# quietly move the tools to a new Python; changing it is a deliberate edit here,
+# in build_workspace.sh and in install_dependencies.sh.
+export UV_PYTHON=3.12
+
 # Skip if this exact repo tree was already provisioned (e.g. baked into the image).
 . "$(dirname "$0")/_provision_guard.sh"
 provision_skip_if_done setup_system
@@ -44,18 +50,18 @@ fi
 # agent_types.claude.version in .mngr/settings.toml.
 provision_drop_inherited_pins
 : "${TTYD_VERSION:=1.7.7}"
-: "${UV_VERSION:=0.11.7}"
-: "${NODE_VERSION:=22.23.2}"
-: "${CLAUDE_CODE_VERSION:=2.1.293}"
+: "${UV_VERSION:=0.13.4}"
+: "${NODE_VERSION:=24.22.1}"
+: "${CLAUDE_CODE_VERSION:=2.1.307}"
 : "${CODEX_VERSION:=0.161.0}"
 : "${PI_VERSION:=0.87.1}"
 : "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
-: "${OPENCODE_VERSION:=1.18.19}"
-: "${MODAL_VERSION:=1.4.2}"
+: "${OPENCODE_VERSION:=1.19.4}"
+: "${MODAL_VERSION:=1.6.2}"
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
-: "${LATCHKEY_VERSION:=3.16.1}"
+: "${LATCHKEY_VERSION:=3.19.3}"
 : "${MCPC_VERSION:=0.7.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
@@ -258,17 +264,22 @@ fi
 # Node.js as a pinned, sha256-verified nodejs.org release tarball (installed to
 # /usr/local so node/npm/npx land on PATH). NOT the trixie apt nodejs (20.x): the
 # pi CLI ships an `undici` that calls `worker_threads.markAsUncloneable`, which is
-# absent on Node 20 and crashes pi at import -- so we pin Node 22 LTS. Installs like
+# absent on Node 20 and crashes pi at import -- so we pin Node 24 LTS. Installs like
 # gh/caddy/restic above: fixed version, checksummed download.
 node_arch="$(uname -m)"
 case "${node_arch}" in
-    x86_64) node_goarch="x64"; node_sha256="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" ;;
-    aarch64) node_goarch="arm64"; node_sha256="013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30" ;;
+    x86_64) node_goarch="x64"; node_sha256="eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c" ;;
+    aarch64) node_goarch="arm64"; node_sha256="33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3" ;;
     *) echo "Unsupported architecture for node: ${node_arch}" >&2; exit 1 ;;
 esac
 curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_goarch}.tar.gz" -o /tmp/node.tar.gz
 echo "${node_sha256}  /tmp/node.tar.gz" | sha256sum -c -
 # --strip-components=1 lands bin/node, bin/npm, bin/npx, lib/node_modules under /usr/local.
+# Extracting over an older Node leaves the old npm's files beside the new
+# one's, and npm then loads a stale nested dependency and fails every install,
+# so the bundled npm and corepack trees are removed first. Global packages
+# installed beside them are kept.
+rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
 tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1
 rm /tmp/node.tar.gz
 command -v node npm >/dev/null
@@ -300,7 +311,7 @@ curl -fsSL https://opencode.ai/install | VERSION="${OPENCODE_VERSION}" bash
 ln -sf "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode
 opencode --version >/dev/null
 
-# Pi CLI (pinned; npm-installed, needs Node 22 above -- crashes on Node 20). Keep
+# Pi CLI (pinned; npm-installed, needs the Node above -- crashes on Node 20). Keep
 # in sync with agent_types.pi-coding.version in .mngr/settings.toml.
 npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
 command -v pi >/dev/null

@@ -1,13 +1,14 @@
 # system/services/
 
-Background services with no tab of their own -- most supervised by
-supervisord, some driven by cron instead. They keep the workspace running --
+Background services with no tab of their own, supervised by supervisord
+(anything that runs on a schedule and exits is a routine instead: the
+`manage-routines` skill, `system/routines/`). They keep the workspace running --
 backing it up, keeping tunnels alive, watching state -- without the user ever
 needing to open them.
 
-- `caretaker/` - The weekly Caretaker's deterministic check (cron-driven via
-  `system/libs/automations/`, off by default; see the enable-caretaker
-  skill).
+- `caretaker/` - The weekly Caretaker's deterministic check, run by the
+  `caretaker` routine (`system/routines/caretaker.toml`, off by default;
+  turned on from the Routines app or with `routines enable caretaker`).
 - `share_gateway/` - The self-hosted sharing stack: while share materials are
   present it terminates the share's TLS in-container (caddy), enforces the
   owner's grants on every request, and keeps the outbound relay tunnel (frpc)

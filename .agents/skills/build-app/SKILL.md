@@ -19,29 +19,6 @@ There is one canonical path (scaffold a new Flask lib) and one
 escape hatch (wrap a pre-existing third-party server). Modify/remove
 flows go through the `update-app` skill.
 
-## First: fire off the plan recorder
-
-Before anything else, run this once to record what the user requested:
-
-```bash
-system/scripts/imbue_plan_extra/write_plan.sh build-app <<'IMBUE_PLAN_BRIEF'
-<your brief, as many lines as it needs>
-IMBUE_PLAN_BRIEF
-```
-
-The goal of the brief is to allow resuming the work later. Don't include a plan,
-only the information directly provided by the user.
-
-Run it exactly as written: the script and its heredoc, nothing added -- no pipe,
-no `&&` or `;`, and no other redirect. Keep the `<<'IMBUE_PLAN_BRIEF'` quoted, so
-backticks and `$(...)` in the brief stay literal instead of running. A pipe to
-`head` or `tail` is blocked by a pre-tool hook, and anything appended hides the
-line it prints.
-
-You don't need to expose this step to the user: no `tk` step, no mention to the
-user, no waiting, no acting on the line it prints, ignore any failure. Then
-carry on as if you had not run it.
-
 ## This is the web specialization of the interactive-delivery shape
 
 **Read `.agents/shared/references/interactive-delivery.md` first.** Building a web
@@ -145,7 +122,7 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   manual port checks (`ss -tln`) is unnecessary. If you are picking a port
   manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
   (system_interface), `8010` (the chat app), `8030` (the Getting Started app),
-  `8040` (the Memory & disk app) and `8081` (the browser service).
+  `8040` (the System Monitor app) and `8081` (the browser service).
   Two things do not show up there: the `agent-observer` program binds no port at
   all, and a preview of any app (`update-app`'s `preview_app.py`) takes free
   ports at boot, so nothing to avoid is written down for it.
@@ -216,10 +193,13 @@ What gets generated:
   frees the whole process while nobody looks at it, its data on disk is
   untouched, and the next request wakes it. Set it to `false` when the app
   does work between requests that a stop would lose or interrupt: a
-  background thread or scheduler that refreshes data, a poller or file
+  background thread that keeps something live, a poller or file
   watcher, a websocket or subscription to an outside service, a job that
   must finish after the user closes the window, or an API another agent
-  drives with no window open. A stopped app runs nothing until its next
+  drives with no window open. Work on a cadence (a refresh every N minutes,
+  a nightly sync) is never a scheduler inside the service: it is a routine
+  with `--app <name>` (the `manage-routines` skill), which the Routines app
+  shows and the user can run, pause and retime. A stopped app runs nothing until its next
   request, and the wake serves that request, not the work that was in
   flight. `forward_port.py --manifest`
   reads it on every start; the scaffold checks it with `uv run app-manifest
@@ -471,8 +451,9 @@ directive** (`script-src`, `style-src` and `font-src`, `img-src`,
 `connect-src`); an inline `<script>` needs its
 `inline_script_source` in `script-src`; never `'unsafe-inline'` or `*` for
 scripts. The browser reports every block to the starter's `/_csp-report` route,
-which logs it to stderr as `ERROR Content-Security-Policy blocked <url> on <page>
-(<directive>)` (a blocked inline script adds its line and first characters), so
+which logs it to stderr as an `ERROR` line containing
+`Content-Security-Policy blocked <url> on <page> (<directive>)` (a blocked
+inline script adds its line and first characters), so
 when something on a page does not show up, read the app's
 stderr log (`/var/log/supervisor/<name>-stderr.log`; `check-app-errors` finds
 these lines too) rather than guessing.
@@ -540,19 +521,21 @@ Two cases, two patterns:
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
   is the right pattern.
 
-## Step 3: Verify
+## Step 3: Verify (one call)
 
-Both paths use the same verification recipe. See
-[references/verify.md](references/verify.md) -- use `system/scripts/smoketest_app.py`:
+Both paths use the same verification recipe, and in a chat turn it is a single
+tool call. See [references/verify.md](references/verify.md) -- use
+`system/scripts/verify_app.py`:
 
 ```bash
-python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>"
+python3 system/scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app.png --open
 ```
 
-Or with a visual screenshot:
-```bash
-python3 system/scripts/smoketest_app.py <name> --marker "<expected-heading-or-text>" --screenshot /tmp/app.png
-```
+`--open` is Step 4 folded in; for an app already on the user's screen, use
+`--refresh` instead and drop `--screenshot`. Leave `--restart` out right after
+`scaffold_flask_lib.py --start`, which already started the app. If a changed API
+route needs exercising, append one `curl` to the same tool call. Test files
+and the test gate belong to Step 5's background pass, not to the chat turn.
 
 If verification surfaces something unexpected (connection refused,
 a window stuck on the loading page, broken WebSockets), see
@@ -564,7 +547,8 @@ a window stuck on the loading page, broken WebSockets), see
 Once verification passes, tell the workspace UI to actually open the
 new window. Without this step the user would have to discover it via the
 launcher -- skip the surfacing step only for services with no UI
-(pure JSON APIs, webhook receivers, etc.).
+(pure JSON APIs, webhook receivers, etc.). `verify_app.py --open` in Step 3
+already does this; run it by hand only when verification was done another way:
 
 ```bash
 uv run --no-sync workspace-layout open <name> --beside
@@ -600,7 +584,7 @@ service) without prompting the user to click Refresh:
 uv run --no-sync workspace-layout refresh --app <name>
 ```
 
-You should always `refresh` services after making changes, to make sure the user can see the updates.
+You should always `refresh` services after making changes, to make sure the user can see the updates; `verify_app.py <name> --restart ... --refresh` does the restart, the check and the refresh in one call.
 
 For anything beyond `open` / `refresh` -- placing, focusing, minimizing,
 maximizing, navigating a window to another path, reading the desktops -- see
@@ -645,7 +629,7 @@ Reading the confirmation signal:
 
 On confirmation, **hand the confirmed app to the `crystallize-creation`
 skill with `type=app`.** It owns the rest -- the tracking ticket, the
-task file (set `type: app`), launching the generic worker,
+task file (`creations: app:<app name>`), launching the generic worker,
 polling, merging on `done`, and refreshing the window after merge. Give it only:
 the slug (the app name), and a task body naming the built lib path, the
 app name, the URL segment, and what the app does. The generic worker
