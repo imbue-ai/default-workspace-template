@@ -10,6 +10,7 @@
  */
 
 import m from "mithril";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { cellRect } from "../geometry/grid";
 import type { PixelPoint } from "../geometry/frames";
 import type { Desktop, DesktopShortcut, Placement } from "../model/records";
@@ -17,7 +18,6 @@ import { shortcutKey } from "../model/records";
 import { appByName, effectiveWindowTitle, isAppShownStopped } from "../reducers/desktopState";
 import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
-import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { DetachedWindowGhost } from "./DetachedWindowGhost";
 import { FloatingEntries } from "./FloatingEntries";
 import { Overview } from "./Overview";
