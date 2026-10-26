@@ -11,7 +11,7 @@ import {
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import { Overview, gridFor, reorderedForDrop, thumbnailSize } from "./Overview";
+import { GRID_SHARE, Overview, gridFor, reorderedForDrop, thumbnailSize } from "./Overview";
 import type { OverviewAttrs, OverviewTile } from "./Overview";
 
 const METRICS = themeMetricsRecord();
@@ -42,7 +42,7 @@ function render(overrides: Partial<OverviewAttrs> = {}): OverviewAttrs {
     grid: gridFor(
       tiles.map((entry) => entry.rect),
       BACKDROP.width,
-      BACKDROP.height * 0.68,
+      BACKDROP.height * GRID_SHARE,
       METRICS,
     ),
     backdrop: BACKDROP,
