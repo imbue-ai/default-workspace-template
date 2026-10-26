@@ -1110,15 +1110,19 @@ export class DesktopStore {
     return this.clients;
   }
 
-  /** Read the clients again: a person's card opens on what they are looking at now. */
+  /** Read the clients again: a person's card opens on what they are looking at now. The listing overtakes the
+   *  moves heard before the read began; one heard while it was on its way is newer than the listing and stays. */
   async refreshClients(): Promise<void> {
+    const heardBeforeRead = new Map(this.clientDesktopsHeard);
     try {
       this.clients = await this.deps.api.fetchClients();
     } catch (error) {
       console.warn("[si] could not read the client records", error);
       return;
     }
-    this.clientDesktopsHeard.clear();
+    for (const [clientId, desktopId] of heardBeforeRead) {
+      if (this.clientDesktopsHeard.get(clientId) === desktopId) this.clientDesktopsHeard.delete(clientId);
+    }
     this.deps.redraw();
   }
 

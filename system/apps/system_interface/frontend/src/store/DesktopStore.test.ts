@@ -3047,4 +3047,22 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     await settle();
     expect([...store.viewedOwnerKeys()]).toEqual([]);
   });
+
+  it("keeps a move heard while the clients were being read, which is newer than the listing", async () => {
+    api.clients = [
+      clientRecord("josh-laptop", { participant: VIEWER, active_desktop: "home" }),
+      clientRecord("alice-laptop", { participant: alice.key, active_desktop: "home" }),
+    ];
+    const store = await viewerStore();
+    expect([...store.viewedOwnerKeys()]).toEqual([josh.key]);
+    // A presence change starts a read; Alice moves home while it is held open, so the listing it answers is older
+    // than her move.
+    const answer = api.holdReads();
+    socket.deliver().onPresenceUpdated([]);
+    deliverDesktopNews("alice", 1, null, "alice-laptop");
+    expect([...store.viewedOwnerKeys()]).toEqual([]);
+    answer();
+    await settle();
+    expect([...store.viewedOwnerKeys()]).toEqual([]);
+  });
 });
