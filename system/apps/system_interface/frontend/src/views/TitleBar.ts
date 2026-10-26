@@ -26,7 +26,7 @@ const APP_GLYPH_SIZE = 20;
 
 export type WindowControl = "minimize" | "maximize" | "restore" | "close" | "menu" | "refresh" | "app-chat";
 
-export const APP_CHAT_LABEL = "Chat about this app";
+const APP_CHAT_LABEL = "Chat about this app";
 
 export interface TitleBarAttrs {
   readonly title: string;
