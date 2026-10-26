@@ -197,7 +197,10 @@ class DesktopsDocument(FrozenModel):
     """The whole of ``desktops.json``."""
 
     version: int = Field(description="The file format version")
-    desktops: tuple[Desktop, ...] = Field(description="Every desktop, in creation order; the first is the fallback")
+    desktops: tuple[Desktop, ...] = Field(
+        description="Every desktop, in display order (creation order, as the order route rearranged it); the first is "
+        "the fallback"
+    )
 
 
 class DefaultShortcutsOfferedDocument(FrozenModel):
@@ -330,7 +333,7 @@ class DesktopChangeOutcome(FrozenModel):
 class DesktopsChangeOutcome(FrozenModel):
     """What an edit over every desktop that may change nothing came to: the desktops, and whether they were written."""
 
-    desktops: tuple[Desktop, ...] = Field(description="Every desktop after the edit, in creation order")
+    desktops: tuple[Desktop, ...] = Field(description="Every desktop after the edit, in display order")
     is_written: bool = Field(description="Whether the edit changed a desktop and the file was written")
 
 

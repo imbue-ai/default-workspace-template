@@ -313,7 +313,8 @@ class DesktopStore(MutableModel):
             self._write_offered_unlocked(offered)
 
     def list_desktops(self) -> list[Desktop]:
-        """Every desktop in creation order; an absent or unreadable file lists none (``ensure_default`` seeds one)."""
+        """Every desktop in display order (creation order, as ``reorder_desktops`` rearranged it); an absent or
+        unreadable file lists none (``ensure_default`` seeds one)."""
         with STATE_FILES_LOCK:
             document = self._read_unlocked()
         return list(document.desktops) if document is not None else []

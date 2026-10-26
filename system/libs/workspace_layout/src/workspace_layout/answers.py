@@ -152,7 +152,9 @@ class InventoryOpAnswer(InventoryDocument):
 class DesktopsListing(FrozenModel):
     """``GET /api/desktops`` (desktop contracts.md section 5.2): every desktop, the first being the fallback."""
 
-    desktops: tuple[DesktopView, ...] = Field(description="Every desktop, in creation order")
+    desktops: tuple[DesktopView, ...] = Field(
+        description="Every desktop, in display order (creation order, as the order route rearranged it)"
+    )
 
 
 class ClientsListing(FrozenModel):
