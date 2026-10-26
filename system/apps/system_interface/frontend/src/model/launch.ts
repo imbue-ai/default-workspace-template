@@ -27,30 +27,29 @@ export const NO_TEXT_APP_REASON = "No app in this workspace can start a chat";
 /** Why a page's ``shell:draft-text`` went nowhere. */
 export const NO_DRAFT_APP_REASON = "No app in this workspace can take a draft";
 
-/** Every launch path of every openable app, in registry and manifest order, but the ones that take a mention of a
- *  person: those are the tray's to run (the multiplayer spec, section 7.5), never a row of anything. */
-export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {
+/** The launch paths of the openable apps that ``isWanted`` picks, in registry and manifest order. */
+function launchesWhere(apps: readonly AppRecord[], isWanted: (launchPath: LaunchPath) => boolean): AppLaunch[] {
   const launches: AppLaunch[] = [];
   for (const app of apps) {
     if (app.internal) continue;
     for (const launchPath of app.launch_paths) {
-      if (launchPath.mention_param === null && launchPath.app_params === null) launches.push({ app, launchPath });
+      if (isWanted(launchPath)) launches.push({ app, launchPath });
     }
   }
   return launches;
 }
 
+/** Every launch path of every openable app, in registry and manifest order, but the ones that take a mention of a
+ *  person or are about an app: those are the tray's and the title bar's to run (the multiplayer spec, sections 7.5
+ *  and 9.2), never a row of anything. */
+export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {
+  return launchesWhere(apps, (launchPath) => launchPath.mention_param === null && launchPath.app_params === null);
+}
+
 /** The launch path a window's "Chat about this app" button runs (the multiplayer spec, section 9.2): the first of
  *  the machine that declares ``app_params``, in launcher order; null when no app declares one. */
 export function appChatLaunchOf(apps: readonly AppRecord[]): AppLaunch | null {
-  const launches: AppLaunch[] = [];
-  for (const app of apps) {
-    if (app.internal) continue;
-    for (const launchPath of app.launch_paths) {
-      if (launchPath.app_params !== null) launches.push({ app, launchPath });
-    }
-  }
-  return orderAppLaunches(launches)[0] ?? null;
+  return orderAppLaunches(launchesWhere(apps, (launchPath) => launchPath.app_params !== null))[0] ?? null;
 }
 
 /** The params an app-chat launch runs with: the app's name and display name in the params the path declares. */
@@ -62,14 +61,7 @@ export function appChatParams(launchPath: LaunchPath, about: AppRecord): Record<
 /** The launch paths that take a mention of a person, in launcher order: the first is what a click on a person's
  *  tray entry runs, with ``@<handle> `` as the param. */
 export function mentionRowsOf(apps: readonly AppRecord[]): AppLaunch[] {
-  const launches: AppLaunch[] = [];
-  for (const app of apps) {
-    if (app.internal) continue;
-    for (const launchPath of app.launch_paths) {
-      if (launchPath.mention_param !== null) launches.push({ app, launchPath });
-    }
-  }
-  return orderAppLaunches(launches);
+  return orderAppLaunches(launchesWhere(apps, (launchPath) => launchPath.mention_param !== null));
 }
 
 /** The params a mention launch runs with: the mention as its mention param. */
