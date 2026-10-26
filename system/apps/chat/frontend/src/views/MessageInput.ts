@@ -252,11 +252,6 @@ export function setComposerHint(chatId: string, hint: string): void {
   m.redraw();
 }
 
-/** The hint ``chatId``'s composer shows as its placeholder, or null once a send cleared it or none was set. */
-export function composerHintOf(chatId: string): string | null {
-  return composerHints.get(chatId) ?? localStorage.getItem(composerHintKey(chatId));
-}
-
 function clearComposerHint(chatId: string): void {
   composerHints.delete(chatId);
   localStorage.removeItem(composerHintKey(chatId));
