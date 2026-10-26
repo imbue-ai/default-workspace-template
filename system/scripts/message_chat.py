@@ -150,7 +150,7 @@ class Outcome(Enum):
 
 
 class ChatAppAnswer:
-    """One HTTP answer from the send route."""
+    """One HTTP answer from the chat app: a send's, a rename's, or a listing's."""
 
     def __init__(self, status: int, body: object) -> None:
         self.status = status
