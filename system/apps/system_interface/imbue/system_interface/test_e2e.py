@@ -2541,8 +2541,8 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
     """With a visitor granted the workspace and arrived (so a desktop of theirs exists), the owner's card of them
     lists it (the multiplayer spec, section 6.3); a click switches the owner onto it with the viewing chrome on
     (section 8.3): the outline in the visitor's colour, the chip naming them and the desktop in place of the tray,
-    no overview button; the visitor's own tray rings nobody but theirs rings the owner... (their picture is ringed on
-    the visitor's client while the owner looks at their desktop). Stop viewing goes back to Home."""
+    and no overview button. On the visitor's own client their picture is ringed in their colour while the owner
+    looks at their desktop. Stop viewing goes back to Home, and the ring goes with it."""
     grants_path = e2e_server.repo_root / DEFAULT_SHARE_GRANTS_PATH
     grants_path.parent.mkdir(parents=True, exist_ok=True)
     (e2e_server.repo_root / DEFAULT_SHARE_ENV_PATH).write_text("SHARE_BROKER_URL=https://broker.example\n")
