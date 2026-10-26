@@ -338,10 +338,12 @@ main chat, else the most recently messaged chat, else a new one; the desktop lau
 the `window_path` the text was typed into, else the main chat, else the most recently messaged chat;
 `chat_selector`, the one chat there is or the user's pick; `lounge`, the chat
 titled Lounge, made as a room when there is none; `app_chat`, the chat labelled `app_chat` with the `app`'s
-registered name, else the one titled "<app_display_name> Chat", made with that
-title and label on the default account when there is none (a window's "Chat
-about this app"; the intake is held with a `hint` the root puts on the
-composer); or `chat` with a `chat_id`),
+registered name, else the one titled "<app_display_name> Chat" by the rule a
+create refuses a taken name by (`naming.py`'s `is_name_conflict`: canonical
+forms compared case-insensitively, so "docs chat" is found rather than refused),
+made with that title and label on the default account when there is none (a
+window's "Chat about this app"; the intake is held with a `hint` the root puts
+on the composer); or `chat` with a `chat_id`),
 and whether the text is sent or drafted (`is_draft`), plus the sender's
 `client_id` and `desktop_id` for the shell's activity log. The chat's manifest
 declares the desktop's `main`, `new`, `send`, `draft`, `lounge`, and `app-chat`

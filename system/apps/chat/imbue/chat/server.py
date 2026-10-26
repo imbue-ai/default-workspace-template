@@ -203,6 +203,7 @@ from imbue.chat.models import SwitchChatRequest
 from imbue.chat.models import SwitchChatResponse
 from imbue.chat.models import parse_subagent_key
 from imbue.chat.naming import canonical_agent_name
+from imbue.chat.naming import is_name_conflict
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import AGENT_ID_PATTERN
@@ -1918,10 +1919,11 @@ def _lounge_or_refusal(state: ChatAppState) -> _ResolvedIntakeChat | Response:
 
 def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
     """The chat about an app (the multiplayer spec, section 9.2): the chat labelled ``app_chat`` with the app's
-    registered name (so a renamed app keeps its chat), else the one titled exactly "<display name> Chat", of either
-    kind or still being made; else one created with that title and label on the default account (never auto-named,
-    since the title is not a "Chat N"); with nothing signed in, a chat awaiting its first send under them, whose
-    page asks for a provider. The refusals are the create route's."""
+    registered name (so a renamed app keeps its chat), else the one titled "<display name> Chat" by the rule the
+    create refuses a taken name by (``is_name_conflict``: canonical forms compared case-insensitively, so "docs chat"
+    is found rather than refused), of either kind or still being made; else one created with that title and label on
+    the default account (never auto-named, since the title is not a "Chat N"); with nothing signed in, a chat
+    awaiting its first send under them, whose page asks for a provider. The refusals are the create route's."""
     if not intake.app or not intake.app_display_name:
         return error_response("A chat about an app names the app and its display name", 400)
     title = app_chat_title(intake.app_display_name)
@@ -1931,7 +1933,7 @@ def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _Resolve
     provisional = agent_manager.get_provisional_chats()
     for is_match in (
         lambda chat_labels, chat_title: chat_labels.get(APP_CHAT_LABEL) == intake.app,
-        lambda chat_labels, chat_title: chat_title == title,
+        lambda chat_labels, chat_title: is_name_conflict(title, (chat_title,)),
     ):
         for snapshot in snapshots:
             if is_match(snapshot.labels, snapshot.title):

@@ -96,8 +96,8 @@ presets = {target = "lounge", is_draft = "true"}
 mention_param = "message"
 
 # A window's "Chat about this app" (the multiplayer spec, section 9.2): the chat labelled app_chat with the app's
-# registered name, else the one titled "<App> Chat", made with both on the default provider when there is none,
-# opened with the composer asking what to change. Never a launcher row.
+# registered name, else the one titled "<App> Chat" (by the create's name-conflict rule), made with both on the
+# default provider when there is none, opened with the composer asking what to change. Never a launcher row.
 [[launch_paths]]
 id = "app-chat"
 label = "Chat about this app"

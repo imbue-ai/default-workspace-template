@@ -5720,7 +5720,7 @@ def test_an_app_chat_intake_opens_the_chat_titled_for_the_app_and_makes_it_on_th
     assert _intake(client, target="app_chat", app_display_name="Docs").status_code == 400
 
 
-def test_an_app_chat_intake_finds_the_chat_by_its_label_else_its_exact_title_and_the_chat_app_opens_chat_chat(
+def test_an_app_chat_intake_finds_the_chat_by_its_label_else_its_title_and_the_chat_app_opens_chat_chat(
     tmp_path: Path,
 ) -> None:
     """The chat about an app is found by the ``app_chat`` label carrying the app's registered name, whatever it has
@@ -5747,6 +5747,26 @@ def test_an_app_chat_intake_finds_the_chat_by_its_label_else_its_exact_title_and
     own_id = parse_qs(urlparse(own.get_json()["path"]).query)["chat"][0]
     minted = manager.get_provisional_chat(own_id)
     assert minted is not None and minted.name == "Chat Chat"
+
+
+def test_an_app_chat_intake_finds_a_title_the_create_would_refuse_as_taken(tmp_path: Path) -> None:
+    """The title fallback matches by the rule the create refuses a taken name by (canonical forms compared
+    case-insensitively): a chat titled "docs chat" or "Docs-Chat" by hand is the chat about Docs, rather than a name
+    the create of "Docs Chat" is refused beside on every press."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    manager = state_of(app).agent_manager
+    seed_agent_state(manager, _DOCS_CHAT_ID, name="docs-chat", labels={"display_name": "docs chat"})
+    canonical_id = "agent-00000000000000000000000000000079"
+    seed_agent_state(manager, canonical_id, name="Notes-Chat")
+    client = app.test_client()
+
+    by_case_variant = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+    by_true_name = _intake(client, target="app_chat", app="notes", app_display_name="Notes")
+
+    assert by_case_variant.status_code == 200, by_case_variant.get_json()
+    assert parse_qs(urlparse(by_case_variant.get_json()["path"]).query)["chat"] == [_DOCS_CHAT_ID]
+    assert by_true_name.status_code == 200, by_true_name.get_json()
+    assert parse_qs(urlparse(by_true_name.get_json()["path"]).query)["chat"] == [canonical_id]
 
 
 def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaiting_its_first_send(
