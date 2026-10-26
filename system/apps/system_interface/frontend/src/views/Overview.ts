@@ -293,7 +293,11 @@ export function Overview(): m.Component<OverviewAttrs> {
     const isActive = desktop.id === attrs.desktop.id;
     const isRenaming = renamingId === desktop.id;
     const isConfirmingDelete = attrs.confirmingDeleteId === desktop.id;
-    const landing = drag !== null && drag.desktopId !== desktop.id && (drag.gap === index || drag.gap === index + 1);
+    const landing =
+      isReorderable &&
+      drag !== null &&
+      drag.desktopId !== desktop.id &&
+      (drag.gap === index || drag.gap === index + 1);
     return m(
       "div",
       {

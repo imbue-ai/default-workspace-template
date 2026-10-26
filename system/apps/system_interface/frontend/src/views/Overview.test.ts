@@ -227,5 +227,13 @@ describe("Overview", () => {
     expect(
       query("[data-overview-new-desktop]").compareDocumentPosition(leftBehind) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    // A drag over the own row lands nowhere among them, whatever their index.
+    const own = query<HTMLElement>('[data-overview-desktop-slot="work"]');
+    own.dispatchEvent(new Event("dragstart", { bubbles: true }));
+    own.getBoundingClientRect = () => ({ left: 300, width: 200 }) as DOMRect;
+    own.dispatchEvent(new MouseEvent("dragover", { bubbles: true, cancelable: true, clientX: 310 }));
+    m.redraw.sync();
+    expect(document.querySelector("[data-overview-drop-gap]")).not.toBeNull();
+    expect(leftBehind.querySelector("[data-overview-drop-gap]")).toBeNull();
   });
 });
