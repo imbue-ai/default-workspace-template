@@ -41,6 +41,7 @@ from imbue.chat.harnesses.interrupt import SettleActivity
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.sending_registry import SendingRegistry
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.imbue_common.frozen_model import FrozenModel
 
 
@@ -180,6 +181,13 @@ class AgentHarnessSession(ABC):
     def in_flight_block(self) -> str:
         """The still-in-flight (Sending) messages as one concatenated block ('' = none)."""
         return ""
+
+    def read_streamed_reply(self) -> StreamedReply | None:
+        """The reply the harness's live connection is streaming, which its transcript may not hold yet.
+
+        None by default: a file harness has no live connection to stream one.
+        """
+        return None
 
     # Turn control
 
