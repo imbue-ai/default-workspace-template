@@ -177,11 +177,11 @@ def test_the_chat_models_are_read_from_the_chat_apps_list_of_chats() -> None:
                     "harness": "claude",
                     "model_choice": {
                         "identity": {
-                            "model_id": "claude-opus-5-5",
+                            "model_id": "claude-opus-5-5[1m]",
                             "effort": "high",
                             "fast": False,
                         },
-                        "matched": None,
+                        "matched": {"id": "opus[1m]", "label": "Opus 5.5 (1M)"},
                     },
                 },
             },
@@ -197,8 +197,38 @@ def test_the_chat_models_are_read_from_the_chat_apps_list_of_chats() -> None:
     chat_model = lookup_user.read_chat_model("http://127.0.0.1:8010", _CHAT, get_json)
 
     assert seen == ["http://127.0.0.1:8010/api/chats"]
+    # The alias the chat app switches to, which claude --model accepts, not the reported API id.
+    assert chat_model == lookup_user.ChatModel(harness="claude", model_id="opus[1m]")
+
+
+def test_a_model_outside_the_catalog_is_passed_on_as_the_id_the_harness_reports() -> (
+    None
+):
+    listing = {
+        "chats": [
+            {
+                "chat_id": _CHAT,
+                "active_agent": {
+                    "harness": "claude",
+                    "model_choice": {
+                        "identity": {
+                            "model_id": "claude-opus-4-8",
+                            "effort": None,
+                            "fast": False,
+                        },
+                        "matched": None,
+                    },
+                },
+            }
+        ]
+    }
+
+    chat_model = lookup_user.read_chat_model(
+        "http://127.0.0.1:8010", _CHAT, lambda _url: listing
+    )
+
     assert chat_model == lookup_user.ChatModel(
-        harness="claude", model_id="claude-opus-5-5"
+        harness="claude", model_id="claude-opus-4-8"
     )
 
 

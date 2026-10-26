@@ -104,8 +104,13 @@ class _Identity(BaseModel):
     model_id: str
 
 
+class _Matched(BaseModel):
+    id: str
+
+
 class _Choice(BaseModel):
     identity: _Identity
+    matched: _Matched | None = None
 
 
 class _ActiveAgent(BaseModel):
@@ -200,7 +205,9 @@ def read_chat_model(
     """The harness and model the chat app reports for ``chat_id``'s active agent.
 
     None when the chat app cannot be read, answers something unexpected, or does not list the chat: the
-    caller then lets the account's own configured model answer rather than guessing one.
+    caller then lets the account's own configured model answer rather than guessing one. The model is the
+    alias the chat app itself switches to when the chat's model is in its catalog (a name ``claude --model``
+    accepts, such as ``opus[1m]``), else the id the harness reports for it.
     """
     try:
         listing = _ChatList.model_validate(get_json(f"{base_url}{CHATS_PATH}"))
@@ -209,10 +216,13 @@ def read_chat_model(
     for chat in listing.chats:
         if chat.chat_id == chat_id:
             choice = chat.active_agent.model_choice
-            return ChatModel(
-                harness=chat.active_agent.harness,
-                model_id=(choice.identity.model_id or None) if choice else None,
-            )
+            if choice is None:
+                model_id = None
+            elif choice.matched is not None:
+                model_id = choice.matched.id or None
+            else:
+                model_id = choice.identity.model_id or None
+            return ChatModel(harness=chat.active_agent.harness, model_id=model_id)
     return None
 
 
