@@ -432,7 +432,8 @@ it, else a window opened) and lays the two windows out for this client, the
 chat snapped to the half of the backdrop its frame's centre was already on (the
 right when it is minimized or was never placed) and the app's window to the
 other, the chat on top; the pinned window's own balloon, whose show navigates
-that very window, lays nothing out. The chat app
+that very window, lays nothing out, and neither does a show whose window is
+pulled out into a window of the chrome's own. The chat app
 answers the chat titled "<App display name> Chat", made on the default provider
 when there is none (so the chat app's own windows open "Chat Chat"), with a
 pending intake whose `hint` the chat root puts on the composer as its
