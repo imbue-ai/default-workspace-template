@@ -327,7 +327,7 @@ The update apply's post-restart probes change from "every critical app's instanc
 - `store/`: the one implementation class, `DesktopStore`, holding the client's state (desktops, apps, the active desktop's layout, live pages, the gesture in progress, the open overlay), applying reducers, saving with debounce and conflict handling, and subscribing to the socket. Nothing else holds mutable state.
 - `pages/`: the live-page layer (`livePages.ts`), keyed by window id: create once, position, show and hide, make inert, navigate, destroy.
 - `gestures/`: `pointerGestures.ts`, the one module that listens to pointer events for window drag, resize, and shortcut drag, behind a `GestureSource` interface that yields `{begin, move, end}` with deltas, so it can be swapped for interact.js without touching a reducer.
-- `views/`: Mithril components, each a pure function of records and callbacks: `Backdrop`, `ShortcutIcon`, `Window`, `TitleBar`, `WindowMenu`, `Taskbar`, `TaskbarEntry`, `LauncherField`, `LauncherOverlay` (hosting today's New Tab sections), `SystemTray`, `DesktopsWidget`, `DesktopSettingsDialog`, `SnapPreview`, and the shared `Popover` and `Menu` (today's `placeMenu` rule, moved).
+- `views/`: Mithril components, each a pure function of records and callbacks: `Backdrop`, `ShortcutIcon`, `Window`, `TitleBar`, `WindowMenu`, `Taskbar`, `TaskbarEntry`, `LauncherField`, `LauncherOverlay` (hosting today's New Tab sections), `SystemTray`, `OverviewButton`, `Overview`, `WallpaperChooserDialog`, `SnapPreview`, and the shared `Popover` and `Menu` (today's `placeMenu` rule, moved).
 - `relay.ts`, `embed.ts`: unchanged.
 - `App.ts`, `index.ts`: wiring.
 
@@ -446,7 +446,7 @@ The update apply refreshes tool environments as today and probes every critical 
 
 ## 11. What is deleted
 
-`dockview-core`; `DockviewWorkspace.ts`, `Sidebar.ts`, `NewTabLauncher.ts` as a panel (its sections move into `LauncherOverlay`), `IframePanel.ts`, `liveSurfaces.ts` (replaced by `livePages.ts`), `tabMenu.ts`, `tab-rename.ts`, `AllAppsPicker.ts`, `ProjectMembershipDialog.ts`, `ProjectSettingsModal.ts` (replaced by `DesktopSettingsDialog`); the shell's `dockview_document.py`, `layouts.py`, `projects.py`, `instance_relay.py`, the instance fetching in `inventory.py`, and the instance vocabulary in `data_types.py` and `primitives.py`; `migrate_workspace_layouts.py`; the `manage-projects` skill (folded into `manage-layout`, renamed `manage-desktop`); the `app_instances` library and every `/_instances` blueprint in the built-ins; the prototypes' wallpaper binaries are not imported.
+`dockview-core`; `DockviewWorkspace.ts`, `Sidebar.ts`, `NewTabLauncher.ts` as a panel (its sections move into `LauncherOverlay`), `IframePanel.ts`, `liveSurfaces.ts` (replaced by `livePages.ts`), `tabMenu.ts`, `tab-rename.ts`, `AllAppsPicker.ts`, `ProjectMembershipDialog.ts`, `ProjectSettingsModal.ts` (replaced by `WallpaperChooserDialog`); the shell's `dockview_document.py`, `layouts.py`, `projects.py`, `instance_relay.py`, the instance fetching in `inventory.py`, and the instance vocabulary in `data_types.py` and `primitives.py`; `migrate_workspace_layouts.py`; the `manage-projects` skill (folded into `manage-layout`, renamed `manage-desktop`); the `app_instances` library and every `/_instances` blueprint in the built-ins; the prototypes' wallpaper binaries are not imported.
 The word "dock" leaves every file the change touches.
 
 ## 12. mngr-side changes
