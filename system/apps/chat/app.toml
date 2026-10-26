@@ -61,8 +61,8 @@ params = [
 presets = {target = "new_chat"}
 text_param = "message"
 
-# The launcher's secondary free-text row (Ctrl+Enter): the text goes to the one chat there is, or to the chat
-# picked from a picker the root opens over them.
+# A free-text row bound to no key: the text goes to the one chat there is, or to the chat picked from a picker
+# the root opens over them.
 [[launch_paths]]
 id = "send"
 label = "Send to chat..."
