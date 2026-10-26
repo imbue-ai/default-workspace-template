@@ -2,4 +2,4 @@
 
 The desktop interface's contract table (`docs/system/blueprint/desktop-interface/contracts.md`, section 2) lists the chat app's `lounge` launch path beside its other intake paths, and `system/test_app_manifests.py` holds the manifest to it.
 
-The post-launch-paths plan (`docs/system/blueprint/post-launch-paths/plan-post-launch-paths.md`) lists the `lounge` intake target and launch path beside the others.
+The post-launch-paths plan (`docs/system/blueprint/post-launch-paths/plan-post-launch-paths.md`) lists the `lounge` intake target and launch path beside the others, and its launcher section (4) names the rows the chords run now that `main` is first: `main` is Enter, `new` is Ctrl+Enter, and a Getting Started tile's text goes to the main chat.
