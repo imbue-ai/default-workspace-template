@@ -17,7 +17,6 @@
  * The plus makes a new desktop. Escape or a click on the bare backdrop closes it; both are the App's.
  */
 
-import { OVERVIEW_SCRIM_Z_INDEX } from "../geometry/stacking";
 import m from "mithril";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
@@ -25,6 +24,7 @@ import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { frameForState, frameToPixels } from "../geometry/frames";
 import type { PixelRect, PixelSize } from "../geometry/frames";
+import { OVERVIEW_SCRIM_Z_INDEX } from "../geometry/stacking";
 import { wallpaperBackgroundImage } from "../model/api";
 import type { AppRecord, Desktop, Layout, WindowRecord } from "../model/records";
 import type { ThemeMetrics } from "../theme/metrics";
