@@ -27,8 +27,7 @@ file in them is released or withheld on its own. Anything requested that is not
 in the archive -- a file withheld by the secret scan, or one the size budget
 could not fit -- is a plain-words line in the archive's own
 ``collection-notes.txt`` member, so the archive explains itself; a content type
-that was not requested appears in
-neither the members nor the notes.
+that was not requested appears in neither the members nor the notes.
 
 Nothing leaves the container unscanned: every chat, the logs text, and each
 future zip member's own filename are staged as PLAINTEXT and run through the
