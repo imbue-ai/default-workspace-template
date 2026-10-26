@@ -50,6 +50,11 @@ handles the things that are easy to get wrong by hand:
   directory (the repo). ``bypassPermissions`` is load-bearing: a headless run has
   no human to approve tool use, so otherwise Read/Write/Bash are auto-denied.
 
+- ``claude_p_web_lookup(prompt, *, system, model=...)`` -- a search of the public
+  web whose pages are untrusted: only ``WebSearch`` and ``WebFetch``, from an
+  isolated temp directory, not persisted, so a page's instructions cannot reach
+  this machine.
+
 Both unset ``MAIN_CLAUDE_SESSION_ID`` in the child environment (an inherited value
 makes the child look like mngr's managed main session and trips its
 stop/readiness hooks), point the child at the resolved account
@@ -75,6 +80,9 @@ _MAIN_CLAUDE_SESSION_ID = "MAIN_CLAUDE_SESSION_ID"
 _MNGR_AGENT_VARS = ("MNGR_AGENT_STATE_DIR", "MNGR_AGENT_NAME", "MNGR_HOST_DIR")
 
 _DEFAULT_MODEL = "claude-haiku-4-5"
+
+# The only tools a web look-up gets (``claude_p_web_lookup``).
+_WEB_TOOLS = "WebSearch,WebFetch"
 
 
 class ClaudeCLIError(RuntimeError):
@@ -466,6 +474,42 @@ def claude_p_completion(
     # working directory, so a throwaway dir keeps that project context out of the
     # answer. Credentials come from the env, not the cwd, so auth is unaffected.
     with tempfile.TemporaryDirectory(prefix="claude_p_completion_") as cwd:
+        return _run_blocking(argv, env=env, cwd=cwd)
+
+
+def _web_lookup_argv(prompt: str, *, system: str, model: str) -> list[str]:
+    """The argv of one web look-up: the web tools only, allowed without asking, not persisted.
+
+    A page it reads can carry instructions, so the run gets no tool that reaches this machine:
+    it can search and read pages and nothing else.
+    """
+    return _build_argv(
+        prompt,
+        model=model,
+        system=system,
+        append_system=None,
+        tools=_WEB_TOOLS,
+        permission_mode="bypassPermissions",
+        is_session_persisted=False,
+    )
+
+
+def claude_p_web_lookup(
+    prompt: str,
+    *,
+    system: str,
+    model: str = _DEFAULT_MODEL,
+    strip_mngr_agent_vars: bool = False,
+) -> ClaudeResult:
+    """One look-up on the public web: ``WebSearch`` and ``WebFetch`` only, from an isolated cwd.
+
+    For a search whose pages are untrusted: unlike ``claude_p_task`` it has no file, shell or
+    edit tools, and like ``claude_p_completion`` it runs from a throwaway directory so the repo's
+    ``CLAUDE.md`` and hooks stay out of it. ``system`` frames the task and the answer's shape.
+    """
+    env = _child_env(strip_mngr_agent_vars)
+    argv = _web_lookup_argv(prompt, system=system, model=model)
+    with tempfile.TemporaryDirectory(prefix="claude_p_web_lookup_") as cwd:
         return _run_blocking(argv, env=env, cwd=cwd)
 
 

@@ -178,3 +178,29 @@ def test_chat_template_marks_the_agent_role() -> None:
     """
     assert "MNGR_AGENT_ROLE=chat" in _apply(("chat",))["env"]
     assert "MNGR_AGENT_ROLE=chat" in _apply(("chat", "fast"))["env"]
+
+
+def test_onboarding_template_adds_one_block_to_a_chat_and_names_a_real_file() -> None:
+    """The onboarding agent is a chat agent with one more block of instructions.
+
+    The chat app stacks `onboarding` on `chat` for a seeded chat's agent. The role must add
+    exactly one system-prompt block, keep the chat role marker (the finish-notification hooks
+    gate on it) and the chat output style (its instructions defer to that style for how
+    technical to be), and point at an instructions file that is really there, since the agent
+    is told to read it before its first reply.
+    """
+    no_prompt = {"append_system_prompt": (), "output_style": None}
+    plain = _apply(("chat",), extra_param_defaults=no_prompt)
+    assert len(plain["append_system_prompt"]) == 0
+    stacked = _apply(("chat", "onboarding"), extra_param_defaults=no_prompt)
+    (block,) = stacked["append_system_prompt"]
+    assert "MNGR_AGENT_ROLE=chat" in stacked["env"]
+    assert stacked["output_style"] == plain["output_style"] == "Engineering Subordinate"
+    instructions = Path(".agents/shared/onboarding-agent/SKILL.md")
+    assert str(instructions) in block
+    assert (_REPO_ROOT / instructions).is_file()
+    # The entry file points at the profile format guide, and that guide is there.
+    profile_format = Path(".agents/shared/onboarding-agent/references/profile-file.md")
+    entry = (_REPO_ROOT / instructions).read_text()
+    assert "references/profile-file.md" in entry
+    assert (_REPO_ROOT / profile_format).is_file()

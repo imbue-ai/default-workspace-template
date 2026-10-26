@@ -14,6 +14,8 @@ Visible folders (starters -- reshape them freely):
 - `uploads/` - Files you attach to chat messages (recreated on demand if you
   rename it).
 - `memories/` - Your agent's long-term memory notes.
+- `profile/` - What your agent knows about you (`about-you.md`), written only
+  after you approve it. Open it, edit it or delete it any time.
 - `system/` - Workspace configuration written at runtime (backup settings,
   GitHub sync settings).
 

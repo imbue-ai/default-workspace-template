@@ -72,12 +72,21 @@ def test_every_wired_hook_script_exists() -> None:
 def test_claude_and_codex_run_the_same_pretooluse_guards() -> None:
     """The safety/workflow guards are cross-harness by design, so the two configs must
     name the same set. (Only PreToolUse: claude also wires SessionStart and Stop hooks
-    that have no codex counterpart -- see tool-call-policies.md, category C.)"""
+    that codex does not all share -- see tool-call-policies.md, category C.)"""
     claude = json.loads(_CLAUDE_SETTINGS.read_text())
     codex = json.loads(_CODEX_HOOKS.read_text())
     claude_guards = _referenced_scripts(_hook_commands(claude, "PreToolUse"))
     codex_guards = _referenced_scripts(_hook_commands(codex, "PreToolUse"))
     assert claude_guards == codex_guards
+
+
+def test_claude_and_codex_both_print_the_user_profile_at_session_start() -> None:
+    """A chat on either harness starts knowing the user's approved profile."""
+    for config_path in (_CLAUDE_SETTINGS, _CODEX_HOOKS):
+        config = json.loads(config_path.read_text())
+        assert "user_profile_context.sh" in _referenced_scripts(
+            _hook_commands(config, "SessionStart")
+        ), f"{config_path.name} does not run the profile hook at SessionStart"
 
 
 def test_pi_runs_the_same_pretooluse_scripts_as_claude() -> None:
