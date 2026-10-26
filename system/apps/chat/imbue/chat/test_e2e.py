@@ -240,8 +240,8 @@ def _open_fixture_chat(page: Page, server: RunningWorkspace) -> None:
 
 
 def _start_new_chat(page: Page, server: RunningWorkspace) -> FrameLocator:
-    """Run the chat app's ``new`` launch path from the launcher's menu (its primary free-text row, run with nothing
-    typed): the shell posts the intake and points the window at the chat it answers; return that chat's frame."""
+    """Run the chat app's ``new`` launch path from the launcher's menu with nothing typed: the shell posts the intake
+    and points the window at the chat it answers; return that chat's frame."""
     _land(page, server)
     page.locator("[data-launcher-field] textarea").click()
     menu = page.locator("[data-launcher-overlay]")
@@ -1077,9 +1077,9 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         home_window = _the_chat_window(server)["id"]
 
-        page.locator("[data-desktops-menu]").click()
-        expect(page.locator(".desktops-menu")).to_be_visible(timeout=5000)
-        page.locator('[data-menu-row="new-desktop"]').click()
+        page.locator('[data-tray-widget="overview"]').click()
+        expect(page.locator("[data-overview]")).to_be_visible(timeout=5000)
+        page.locator("[data-overview-new-desktop]").click()
         wait_for(lambda: len(_desktops(server)) == 2, timeout=10.0, poll_interval=0.1)
         (created,) = [desktop["id"] for desktop in _desktops(server) if desktop["id"] != _HOME_DESKTOP_ID]
         expect(page.locator(f'[data-desktop-id="{created}"]')).to_be_visible(timeout=15000)
@@ -1093,7 +1093,9 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         assert [window["id"] for window in _chat_windows(server)] == [home_window]
 
-        page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]').click()
+        page.locator('[data-tray-widget="overview"]').click()
+        expect(page.locator("[data-overview]")).to_be_visible(timeout=5000)
+        page.locator(f'[data-overview-desktop="{_HOME_DESKTOP_ID}"]').click()
         expect(_taskbar_entry(page, home_window)).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-list-empty")).to_have_count(0)

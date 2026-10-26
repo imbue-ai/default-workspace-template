@@ -22,6 +22,10 @@
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
  * whether shown or not, since it is where a phone lands); every other page is destroyed rather than hidden, and a
  * window shown again gets a fresh page.
+ *
+ * While the overview is up (the multiplayer spec, section 8.2) the active desktop's pages, the minimized ones
+ * included, are laid over the overview's tiles instead of the windows: each at the size its window renders at,
+ * scaled down to its tile and inert, so the tile shows the page as it is.
  */
 
 import {
@@ -40,7 +44,7 @@ import {
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
-import { windowPageZIndex } from "../geometry/stacking";
+import { OVERVIEW_PAGE_Z_INDEX, windowPageZIndex } from "../geometry/stacking";
 import { windowPageUrl } from "../model/pageUrl";
 import type { AppRecord, Desktop, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
@@ -114,6 +118,13 @@ export type ShownMountPolicy = {
 /** Which pages live: every page of the desktop's windows, or the phone's shown page and the ones it keeps. */
 export type MountPolicy = { readonly kind: "all" } | ShownMountPolicy;
 
+/** The overview's tiles (the multiplayer spec, section 8.2): how far each tile scales its window down. */
+export interface OverviewPresentation {
+  /** The scale the tile of ``windowId`` draws its page at, or null for a window the overview has no tile for; a
+   *  scale that is not positive (a grid no tile fits) hides the page as no tile does. */
+  readonly scaleOf: (windowId: string) => number | null;
+}
+
 /** A pixel box relative to the pages' host. */
 interface HostRect {
   left: number;
@@ -134,6 +145,8 @@ export class LivePagesLayer implements PageDriver {
   /** The shell's layout revision the pages last followed: an independent window's stored path arrives with it. */
   private followedLayoutLoadsRevision = 0;
   private mountPolicy: MountPolicy = { kind: "all" };
+  /** The overview's tiles while it is up, else null. */
+  private overview: OverviewPresentation | null = null;
 
   constructor(
     private readonly host: HTMLElement,
@@ -159,6 +172,12 @@ export class LivePagesLayer implements PageDriver {
   /** Set which pages live; applied by the next reconcile. */
   setMountPolicy(policy: MountPolicy): void {
     this.mountPolicy = policy;
+  }
+
+  /** Lay the active desktop's pages over the overview's tiles (or back over their windows, for null); applied by
+   *  the next reconcile. */
+  setOverview(overview: OverviewPresentation | null): void {
+    this.overview = overview;
   }
 
   /** Whether a window's page has been created in this client. */
@@ -277,6 +296,10 @@ export class LivePagesLayer implements PageDriver {
       this.reconcileShown(policy.windowId, policy.alsoKeep, windowsById);
       return;
     }
+    if (this.overview !== null) {
+      this.reconcileOverview(this.overview, windowsById);
+      return;
+    }
 
     const desktop = activeDesktop(state);
     const placements = desktop === null ? [] : activePlacements(state);
@@ -309,6 +332,43 @@ export class LivePagesLayer implements PageDriver {
     }
     this.followIfRevised(windowsById);
     this.focusIfChanged(focused);
+  }
+
+  /** The overview (the multiplayer spec, section 8.2): every window of the active desktop the overview has a tile
+   *  for, minimized ones included, has its page laid over the tile's content box at the tile's scale, inert; a
+   *  pulled-out window's page stays in the chrome's own window, and every other page is hidden. Nothing holds the
+   *  frame focus while the overview is up, so the focused window takes it back when the overview goes. */
+  private reconcileOverview(
+    overview: OverviewPresentation,
+    windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>,
+  ): void {
+    const state = this.store.getState();
+    const desktop = activeDesktop(state);
+    const placements = desktop === null ? [] : activePlacements(state);
+    const shownIds = new Set<string>();
+    for (const placement of placements) {
+      const found = windowsById.get(placement.window_id);
+      const scale = overview.scaleOf(placement.window_id);
+      if (found === undefined || desktop === null || scale === null || scale <= 0) continue;
+      if (placement.is_detached || placement.window_id === this.tornOutWindowId) continue;
+      const app = appByName(state, found.window.app);
+      if (app === undefined) continue;
+      const page = this.pages.get(found.window.id) ?? this.create(found.window, app);
+      shownIds.add(found.window.id);
+      if (!this.prepareShownPage(page, app)) continue;
+      const box = this.contentBox(found.window.id);
+      if (box === null) {
+        this.hide(page);
+        continue;
+      }
+      this.showScaled(page, box, scale);
+      if (page.greetedDesktopId !== null && page.greetedDesktopId !== desktop.id) this.greet(page);
+    }
+    for (const page of this.pages.values()) {
+      if (!shownIds.has(page.windowId)) this.hide(page);
+    }
+    this.followIfRevised(windowsById);
+    this.focusIfChanged(null);
   }
 
   /** Solo mode (the pull-out-window spec, section 7.5): the one window's page over the whole host, live, and no
@@ -516,6 +576,23 @@ export class LivePagesLayer implements PageDriver {
     style.top = `${box.top}px`;
     style.width = `${box.width}px`;
     style.height = `${box.height}px`;
+    style.transform = "";
+  }
+
+  /** Lay a page over an overview tile's box: at the size its window renders at (the box over the scale), scaled
+   *  down from the box's top-left corner to fill it, inert, above the overview's scrim. */
+  private showScaled(page: LivePage, box: HostRect, scale: number): void {
+    const style = page.wrapper.style;
+    style.left = `${box.left}px`;
+    style.top = `${box.top}px`;
+    style.width = `${box.width / scale}px`;
+    style.height = `${box.height / scale}px`;
+    style.transformOrigin = "top left";
+    style.transform = `scale(${scale})`;
+    style.zIndex = OVERVIEW_PAGE_Z_INDEX;
+    style.pointerEvents = "none";
+    style.display = "";
+    this.syncVisibility(page, true);
   }
 
   private show(page: LivePage, box: HostRect, stackIndex: number, isInteractive: boolean): void {

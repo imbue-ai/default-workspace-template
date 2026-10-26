@@ -26,6 +26,7 @@ from app_manifest.registry import RegistryLaunchPath
 from app_manifest.registry import RegistryRow
 from pydantic import Field
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPage
@@ -610,6 +611,8 @@ def desktop_seeded_from(
     # One fresh id per window of ``source``, in that order.
     window_ids: Sequence[WindowId],
     opened_at: datetime,
+    # Whose desktop it is: the visitor it is seeded for (the multiplayer spec, section 8.1).
+    owner: ParticipantKey | None,
 ) -> Desktop:
     """A new desktop holding the source's shortcuts, wallpaper, and a window at each of its windows' paths (desktop
     plan section 3.10): the same pages, as new windows, so closing one closes nothing of the source's. A pinned
@@ -624,6 +627,7 @@ def desktop_seeded_from(
         glyph=glyph,
         wallpaper=source.wallpaper,
         shortcuts=source.shortcuts,
+        owner=owner,
         windows=tuple(
             Window(
                 id=window_id,

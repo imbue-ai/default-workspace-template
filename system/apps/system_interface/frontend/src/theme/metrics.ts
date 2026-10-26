@@ -29,6 +29,11 @@ export interface ThemeMetrics {
   readonly floatingEntrySize: number;
   readonly floatingEntryInsetX: number;
   readonly floatingEntryInsetY: number;
+  /** The overview (the multiplayer spec, section 8.2): the gap between its tiles, the strip a tile's title takes
+   *  above the page, and the widest a desktop thumbnail is drawn. */
+  readonly overviewGap: number;
+  readonly overviewTileTitle: number;
+  readonly overviewThumbnailWidth: number;
 }
 
 const TOKEN_BY_METRIC: Readonly<Record<keyof ThemeMetrics, string>> = {
@@ -47,6 +52,9 @@ const TOKEN_BY_METRIC: Readonly<Record<keyof ThemeMetrics, string>> = {
   floatingEntrySize: "--desk-floating-entry-size",
   floatingEntryInsetX: "--desk-floating-entry-inset-x",
   floatingEntryInsetY: "--desk-floating-entry-inset-y",
+  overviewGap: "--desk-overview-gap",
+  overviewTileTitle: "--desk-overview-tile-title",
+  overviewThumbnailWidth: "--desk-overview-thumbnail-width",
 };
 
 /** Raised when a token the metrics need is missing from the computed style or is not a pixel length. */

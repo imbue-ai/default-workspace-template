@@ -4,10 +4,13 @@
  * live page the pages layer positions for it), the floating pinned entries above them, and the snap
  * preview. A shortcut being dragged needs no layer of its own: the icon carries its own lift, and the
  * store's placement carries the room made for it. Every pixel comes from the store's geometry; nothing
- * here measures the DOM or listens for gestures.
+ * here measures the DOM or listens for gestures. A right-click on the bare backdrop asks for the desktop's
+ * menu (the multiplayer spec, section 8.2). While the overview is up it stands in for the windows layer, so
+ * the live-page layer lays the pages over its tiles.
  */
 
 import m from "mithril";
+import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { cellRect } from "../geometry/grid";
 import type { PixelPoint } from "../geometry/frames";
 import type { Desktop, DesktopShortcut, Placement } from "../model/records";
@@ -17,6 +20,8 @@ import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
 import { DetachedWindowGhost } from "./DetachedWindowGhost";
 import { FloatingEntries } from "./FloatingEntries";
+import { Overview } from "./Overview";
+import type { OverviewAttrs } from "./Overview";
 import { ShortcutIcon } from "./ShortcutIcon";
 import { SnapPreview } from "./SnapPreview";
 import { Window } from "./Window";
@@ -41,6 +46,10 @@ export interface BackdropAttrs {
   readonly onSelectShortcut: (key: string | null) => void;
   readonly onRunShortcut: (shortcut: DesktopShortcut) => void;
   readonly onShortcutContextMenu: (shortcut: DesktopShortcut, point: PixelPoint, target: Element) => void;
+  /** A right-click on the bare backdrop: the desktop's menu. */
+  readonly onBackdropContextMenu: (point: PixelPoint, target: Element) => void;
+  /** The overview over the backdrop, or null while it is closed. */
+  readonly overview: OverviewAttrs | null;
   readonly onWindowControl: (windowId: string, control: WindowControl, event: MouseEvent) => void;
   /** A pulled-out window's ghost was asked to show its own desktop window, to hide itself, or to bring the
    *  window back. */
@@ -84,6 +93,11 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                 // A press on the bare backdrop (the grid covers all of it) clears the shortcut selection.
                 if (event.target === event.currentTarget) attrs.onSelectShortcut(null);
               },
+              oncontextmenu: (event: MouseEvent) => {
+                if (event.target !== event.currentTarget) return;
+                event.preventDefault();
+                attrs.onBackdropContextMenu({ x: event.clientX, y: event.clientY }, targetElementOf(event));
+              },
             },
             placed.map(({ shortcut, cell }) => {
               const key = shortcutKey(shortcut.target.app, shortcut.target.launch);
@@ -116,56 +130,59 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             oncreate: (created: m.VnodeDOM) => attrs.onPagesHostCreated(created.dom as HTMLElement),
             onbeforeupdate: () => false,
           }),
-          m(
-            "div",
-            // Inert down to the parts that take a press (title bar, resize edges, shield, placeholders): each
-            // window's chrome sits over its own page in the stacking order, and the page must get the rest.
-            { class: "windows absolute inset-0 pointer-events-none" },
-            // A keyed list tolerates no holes: a minimized or unknown window contributes nothing (a pulled-out
-            // window's hidden ghost included).
-            placements.flatMap((placement, index): m.Children[] => {
-              const window = windowsById.get(placement.window_id);
-              if (placement.is_minimized || window === undefined) return [];
-              const app = appByName(state, window.app);
-              // A pulled-out window leaves its ghost at its frame, where a return lands, whatever state it was
-              // pulled out in (detach keeps the state); its page is in the chrome's own window.
-              if (placement.is_detached) {
-                return [
-                  m(DetachedWindowGhost, {
-                    key: window.id,
-                    window,
-                    app,
-                    title: effectiveWindowTitle(state, window, app),
-                    rect: store.renderedRect({ ...placement, state: "NORMAL" }),
-                    stackIndex: index,
-                    onShow: () => attrs.onShowDetachedWindow(window.id),
-                    onHide: () => attrs.onHideWindowGhost(window.id),
-                    onBringBack: () => attrs.onBringBackWindow(window.id),
-                  }),
-                ];
-              }
-              return [
-                m(Window, {
-                  key: window.id,
-                  window,
-                  app,
-                  title: effectiveWindowTitle(state, window, app),
-                  rect: store.windowRect(window.id),
-                  state: placement.state,
-                  stackIndex: index,
-                  isFocused: window.id === focusedWindowId,
-                  isTouch: state.modes.isTouch,
-                  isMenuOpen: attrs.openMenuWindowId === window.id,
-                  sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
-                  isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
-                  isStopped: isAppShownStopped(state, app),
-                  onRaise: () => store.raiseWindow(window.id),
-                  onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
-                  onToggleMaximize: () => store.toggleMaximized(window.id),
+          // The overview stands in for the windows: its tiles are where the pages lie while it is up.
+          attrs.overview !== null
+            ? null
+            : m(
+                "div",
+                // Inert down to the parts that take a press (title bar, resize edges, shield, placeholders): each
+                // window's chrome sits over its own page in the stacking order, and the page must get the rest.
+                { class: "windows absolute inset-0 pointer-events-none" },
+                // A keyed list tolerates no holes: a minimized or unknown window contributes nothing (a pulled-out
+                // window's hidden ghost included).
+                placements.flatMap((placement, index): m.Children[] => {
+                  const window = windowsById.get(placement.window_id);
+                  if (placement.is_minimized || window === undefined) return [];
+                  const app = appByName(state, window.app);
+                  // A pulled-out window leaves its ghost at its frame, where a return lands, whatever state it was
+                  // pulled out in (detach keeps the state); its page is in the chrome's own window.
+                  if (placement.is_detached) {
+                    return [
+                      m(DetachedWindowGhost, {
+                        key: window.id,
+                        window,
+                        app,
+                        title: effectiveWindowTitle(state, window, app),
+                        rect: store.renderedRect({ ...placement, state: "NORMAL" }),
+                        stackIndex: index,
+                        onShow: () => attrs.onShowDetachedWindow(window.id),
+                        onHide: () => attrs.onHideWindowGhost(window.id),
+                        onBringBack: () => attrs.onBringBackWindow(window.id),
+                      }),
+                    ];
+                  }
+                  return [
+                    m(Window, {
+                      key: window.id,
+                      window,
+                      app,
+                      title: effectiveWindowTitle(state, window, app),
+                      rect: store.windowRect(window.id),
+                      state: placement.state,
+                      stackIndex: index,
+                      isFocused: window.id === focusedWindowId,
+                      isTouch: state.modes.isTouch,
+                      isMenuOpen: attrs.openMenuWindowId === window.id,
+                      sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
+                      isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
+                      isStopped: isAppShownStopped(state, app),
+                      onRaise: () => store.raiseWindow(window.id),
+                      onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
+                      onToggleMaximize: () => store.toggleMaximized(window.id),
+                    }),
+                  ];
                 }),
-              ];
-            }),
-          ),
+              ),
           m(FloatingEntries, {
             entries: attrs.floatingEntries,
             avatar: state.avatar,
@@ -175,6 +192,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
             onContextMenu: attrs.onEntryContextMenu,
           }),
           m(SnapPreview, { rect: snapRect }),
+          attrs.overview === null ? null : m(Overview, attrs.overview),
         ],
       );
     },

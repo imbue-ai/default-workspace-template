@@ -626,9 +626,21 @@ def _wait_for_own_window_path(base_url: str, client_id: str, window_id: str, pat
     )
 
 
-def _open_desktops_menu(page: Page) -> None:
-    page.locator("[data-desktops-menu]").click()
-    expect(page.locator(".desktops-menu")).to_be_visible(timeout=5000)
+def _open_overview(page: Page) -> Locator:
+    """Open the overview from the taskbar's button, answering it."""
+    page.locator('[data-tray-widget="overview"]').click()
+    overview = page.locator("[data-overview]")
+    expect(overview).to_be_visible(timeout=5000)
+    return overview
+
+
+def _switch_to_desktop(page: Page, desktop_id: str) -> None:
+    """Switch the page onto a desktop the way a person does: through the overview's thumbnail of it."""
+    _open_overview(page).locator(f'[data-overview-desktop="{desktop_id}"]').click()
+
+
+def _expect_on_desktop(page: Page, desktop_id: str) -> None:
+    expect(page.locator(f'[data-desktop-id="{desktop_id}"]')).to_be_visible(timeout=15000)
 
 
 def _open_entry_menu(page: Page, entry: Locator) -> Locator:
@@ -668,7 +680,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     e2e_server: E2EServer, page: Page
 ) -> None:
     """A fresh browser lands on the home desktop over the bundled wallpaper: the seeded shortcut sits in the first
-    cell, nothing is open, the taskbar carries the launcher field and the desktop switcher, and the shell soon
+    cell, nothing is open, the taskbar carries the launcher field and the overview button, and the shell soon
     knows the client with home as its active desktop."""
     _land(page, e2e_server)
     expect(page).to_have_title(_get_json(f"{e2e_server.base_url}/api/inventory")["workspace_name"])
@@ -677,7 +689,7 @@ def test_fresh_browser_lands_on_home_with_the_seeded_shortcut_and_registers_as_a
     expect(shortcut.locator(".shortcut-label")).to_have_text(_STUB_APP_DISPLAY_NAME)
     expect(_shown_windows(page)).to_have_count(0)
     expect(page.locator("[data-taskbar] [data-launcher-field]")).to_be_visible()
-    expect(page.locator('[data-tray-widget="desktops"] [data-desktop-switch]')).to_have_count(1)
+    expect(page.locator('[data-taskbar] [data-tray-widget="overview"]')).to_be_visible()
     expect(page.locator(f'[data-desktop-id="{_HOME_DESKTOP_ID}"]')).to_be_visible()
     # The wallpaper is the app layout's, so it spans the taskbar too; the backdrop is clear over it.
     assert (
@@ -975,10 +987,12 @@ def test_a_pages_element_menu_drafts_the_reference_into_the_pinned_window(tmp_pa
         _wait_for_own_window_path(server.base_url, client_id, pinned["id"], draft_page_path)
         expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
 
-        # The desktop's own chrome: a right-click on the empty backdrop opens the shell's element menu.
+        # The desktop's own chrome: a right-click on the empty backdrop opens the shell's backdrop menu, whose
+        # desktop rows are followed by the reference rows.
         page.locator("[data-backdrop-area]").click(button="right", position={"x": 700, "y": 20})
-        shell_menu = page.locator(".element-menu")
+        shell_menu = page.locator(".backdrop-menu")
         expect(shell_menu).to_be_visible()
+        expect(shell_menu.locator('[data-menu-row="new-desktop"]')).to_be_visible()
         expect(shell_menu.locator('[data-menu-row="explain-element"]')).to_be_visible()
         page.keyboard.press("Escape")
         expect(shell_menu).to_be_hidden()
@@ -1448,15 +1462,20 @@ def test_shortcut_menu_changes_mode_and_removes(e2e_server: E2EServer, page: Pag
 
 
 @pytest.mark.timeout(90, func_only=False)
-def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: E2EServer, page: Page) -> None:
-    """The Desktops widget's menu creates a desktop (the client switches to it, with the seeded shortcut), its
-    settings dialog renames it, the widget switches back and forth (each desktop keeps its own windows), and the
-    delete confirmation removes it, moving the client home."""
+def test_desktops_are_created_renamed_switched_and_deleted_through_the_overview(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """The overview (the multiplayer spec, section 8.2) tiles the active desktop's windows and lists the viewer's
+    desktops: its plus creates one (the client switches to it, with the seeded shortcut), a double-click on a name
+    renames it, the thumbnails switch back and forth (each desktop keeps its own windows, and a tile raises one),
+    and the thumbnail's menu deletes it after a confirmation in place, moving the client home."""
     _land(page, e2e_server)
     home_window = _open_via_shortcut(page, e2e_server)
 
-    _open_desktops_menu(page)
-    page.locator('[data-menu-row="new-desktop"]').click()
+    overview = _open_overview(page)
+    expect(overview.locator(f'[data-overview-window="{home_window}"]')).to_be_visible()
+    expect(overview.locator('[data-overview-desktop="home"]')).to_have_attribute("data-active", "true")
+    overview.locator("[data-overview-new-desktop]").click()
     wait_for(
         lambda: len(_desktops(e2e_server.base_url)) == 2,
         timeout=10.0,
@@ -1464,43 +1483,107 @@ def test_desktop_create_settings_switch_and_delete_through_the_tray(e2e_server: 
         error_message="no second desktop was created",
     )
     (created,) = [desktop for desktop in _desktops(e2e_server.base_url) if desktop["id"] != _HOME_DESKTOP_ID]
-    expect(page.locator(f'[data-desktop-id="{created["id"]}"]')).to_be_visible(timeout=15000)
-    expect(page.locator(f'[data-desktop-switch="{created["id"]}"]')).to_have_attribute("data-active", "true")
+    assert created["name"] == "Desktop 1" and created["owner"] is None
+    _expect_on_desktop(page, created["id"])
+    expect(page.locator("[data-overview]")).to_have_count(0)
     expect(page.locator(f'[data-desktop-id="{created["id"]}"] [data-shortcut="{_STUB_SHORTCUT_KEY}"]')).to_be_visible()
     expect(_taskbar_entry(page, home_window)).to_have_count(0)
 
-    _open_desktops_menu(page)
-    page.locator('[data-menu-row="settings"]').click()
-    dialog = page.locator(f'[data-desktop-settings="{created["id"]}"]')
-    expect(dialog).to_be_visible(timeout=5000)
-    dialog.locator('input[placeholder="desktop name"]').fill("Research")
-    dialog.locator(".desktop-settings-save").click()
-    expect(dialog).to_be_hidden(timeout=5000)
+    overview = _open_overview(page)
+    expect(overview.locator("[data-overview-no-windows]")).to_have_text(f"No windows open on {created['name']}")
+    overview.locator(f'[data-overview-desktop-name="{created["id"]}"]').dblclick()
+    rename = overview.locator(f'[data-overview-rename="{created["id"]}"]')
+    expect(rename).to_be_visible(timeout=5000)
+    rename.fill("Research")
+    rename.press("Enter")
     wait_for(
         lambda: _desktop(e2e_server.base_url, created["id"])["name"] == "Research",
         timeout=10.0,
         poll_interval=0.1,
         error_message="the rename never landed",
     )
+    expect(overview.locator(f'[data-overview-desktop-name="{created["id"]}"]')).to_have_text("Research")
 
-    page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]').click()
+    overview.locator(f'[data-overview-desktop="{_HOME_DESKTOP_ID}"]').click()
+    _expect_on_desktop(page, _HOME_DESKTOP_ID)
     expect(_taskbar_entry(page, home_window)).to_be_visible(timeout=15000)
     expect(_window(page, home_window)).to_be_visible()
-    page.locator(f'[data-desktop-switch="{created["id"]}"]').click()
+    # A tile raises its window and closes the overview; the window's page is laid over the tile meanwhile.
+    page.locator('[data-window-control="minimize"]').first.click()
+    expect(_taskbar_entry(page, home_window)).to_have_attribute("data-minimized", "true")
+    overview = _open_overview(page)
+    tile = overview.locator(f'[data-overview-window="{home_window}"]')
+    expect(tile).to_have_attribute("data-minimized", "true")
+    expect(page.locator(f'iframe[data-live-page="{home_window}"]')).to_be_visible()
+    tile.click()
+    expect(page.locator("[data-overview]")).to_have_count(0)
+    expect(_taskbar_entry(page, home_window)).to_have_attribute("data-minimized", "false", timeout=15000)
+    _switch_to_desktop(page, created["id"])
     expect(_taskbar_entry(page, home_window)).to_have_count(0, timeout=15000)
 
-    _open_desktops_menu(page)
+    overview = _open_overview(page)
+    overview.locator(f'[data-overview-desktop="{created["id"]}"]').click(button="right")
     page.locator('[data-menu-row="delete"]').click()
-    expect(dialog).to_be_visible(timeout=5000)
-    dialog.locator(".desktop-settings-confirm-delete").click()
+    overview.locator(f'[data-overview-confirm-delete="{created["id"]}"]').click()
     wait_for(
         lambda: [desktop["id"] for desktop in _desktops(e2e_server.base_url)] == [_HOME_DESKTOP_ID],
         timeout=10.0,
         poll_interval=0.1,
         error_message="the desktop was never deleted",
     )
-    expect(page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]')).to_have_attribute("data-active", "true")
+    _expect_on_desktop(page, _HOME_DESKTOP_ID)
     expect(_window(page, home_window)).to_be_visible(timeout=15000)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_the_overview_reorders_the_viewers_desktops_and_the_backdrop_menu_changes_the_wallpaper(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """Dragging a thumbnail sideways reorders the viewer's desktops, which every listing then lists that way (the
+    multiplayer spec, section 8.2); the backdrop's context menu opens the overview, makes a desktop, and offers the
+    wallpaper chooser, which sets the desktop's wallpaper."""
+    _land(page, e2e_server)
+    page.locator(".shortcut-grid").click(button="right", position={"x": 400, "y": 300})
+    page.locator('[data-menu-row="new-desktop"]').click()
+    wait_for(lambda: len(_desktops(e2e_server.base_url)) == 2, timeout=10.0, poll_interval=0.1)
+    (created,) = [desktop for desktop in _desktops(e2e_server.base_url) if desktop["id"] != _HOME_DESKTOP_ID]
+    _expect_on_desktop(page, created["id"])
+
+    page.locator(".shortcut-grid").click(button="right", position={"x": 400, "y": 300})
+    page.locator('[data-menu-row="show-all-desktops"]').click()
+    overview = page.locator("[data-overview]")
+    expect(overview).to_be_visible(timeout=5000)
+    thumbnails = overview.locator("[data-overview-desktop]")
+    assert [thumbnail.get_attribute("data-overview-desktop") for thumbnail in thumbnails.all()] == [
+        _HOME_DESKTOP_ID,
+        created["id"],
+    ]
+    overview.locator(f'[data-overview-desktop-slot="{created["id"]}"]').drag_to(
+        overview.locator(f'[data-overview-desktop-slot="{_HOME_DESKTOP_ID}"]'), target_position={"x": 10, "y": 10}
+    )
+    wait_for(
+        lambda: [desktop["id"] for desktop in _desktops(e2e_server.base_url)] == [created["id"], _HOME_DESKTOP_ID],
+        timeout=10.0,
+        poll_interval=0.1,
+        error_message="the reorder never landed",
+    )
+    expect(thumbnails.first).to_have_attribute("data-overview-desktop", created["id"])
+    page.keyboard.press("Escape")
+    expect(overview).to_have_count(0)
+
+    page.locator(".shortcut-grid").click(button="right", position={"x": 400, "y": 300})
+    page.locator('[data-menu-row="change-wallpaper"]').click()
+    chooser = page.locator(f'[data-wallpaper-chooser="{created["id"]}"]')
+    expect(chooser).to_be_visible(timeout=5000)
+    chooser.locator('[data-wallpaper="bundled:arcs"]').click()
+    chooser.locator(".wallpaper-chooser-save").click()
+    expect(chooser).to_be_hidden(timeout=5000)
+    wait_for(
+        lambda: _desktop(e2e_server.base_url, created["id"])["wallpaper"] == {"kind": "bundled", "name": "arcs"},
+        timeout=10.0,
+        poll_interval=0.1,
+        error_message="the wallpaper never landed",
+    )
 
 
 # Rapid desktop switches (desktop contracts.md section 6)
@@ -1559,10 +1642,12 @@ def _record_desktop_traffic(page: Page) -> _DesktopTraffic:
 
 
 def _create_desktop_shown_on(server: E2EServer, pages: list[Page]) -> str:
-    """Create a second desktop and wait until every page offers a switch to it; answers its id."""
-    desktop_id = _post_json(f"{server.base_url}/api/desktops", {"name": "Other", "color": "#4477aa", "glyph": 0})["id"]
+    """Create a second desktop and wait until every page lists it in its overview; answers its id."""
+    desktop_id = _post_json(f"{server.base_url}/api/desktops", {"name": "Other"})["id"]
     for page in pages:
-        expect(page.locator(f'[data-desktop-switch="{desktop_id}"]')).to_be_visible(timeout=15000)
+        expect(_open_overview(page).locator(f'[data-overview-desktop="{desktop_id}"]')).to_be_visible(timeout=15000)
+        page.keyboard.press("Escape")
+        expect(page.locator("[data-overview]")).to_have_count(0)
     return desktop_id
 
 
@@ -1576,11 +1661,11 @@ def _pump_until(page: Page, condition: Callable[[], bool], what: str) -> None:
 
 
 def _switch_rapidly(page: Page, desktop_ids: list[str], traffics: list[_DesktopTraffic]) -> None:
-    """Click the desktops in turn as fast as the pointer goes, waiting on nothing between clicks, then wait until
-    every page has heard the move of each click."""
+    """Switch to the desktops in turn as fast as the overview opens and its thumbnail can be clicked, waiting on
+    nothing else between switches, then wait until every page has heard the move of each switch."""
     heard_before = [len(traffic.moves) for traffic in traffics]
     for desktop_id in desktop_ids:
-        page.locator(f'[data-desktop-switch="{desktop_id}"]').click()
+        _switch_to_desktop(page, desktop_id)
     _pump_until(
         page,
         lambda: all(
@@ -1592,7 +1677,7 @@ def _switch_rapidly(page: Page, desktop_ids: list[str], traffics: list[_DesktopT
 
 
 def _expect_settled_on(page: Page, desktop_id: str, window_id: str) -> None:
-    expect(page.locator(f'[data-desktop-switch="{desktop_id}"]')).to_have_attribute("data-active", "true")
+    _expect_on_desktop(page, desktop_id)
     expect(_window(page, window_id)).to_be_visible(timeout=15000)
     expect(_taskbar_entry(page, window_id)).to_have_attribute("data-minimized", "false")
 
@@ -1700,8 +1785,7 @@ def test_an_op_move_wins_over_a_report_the_page_made_before_hearing_it(e2e_serve
     other = _create_desktop_shown_on(e2e_server, [page])
 
     _broadcast_op(e2e_server.base_url, "load", {"desktop": other, "client": client_id})
-    other_switch = page.locator(f'[data-desktop-switch="{other}"]')
-    expect(other_switch).to_have_attribute("data-active", "true", timeout=15000)
+    _expect_on_desktop(page, other)
     _pump_until(page, lambda: any(report["is_following"] for report in socket.reports), "the page follow the op")
     op_move = (other, socket.moves[0]["revision"])
     assert [(move["desktop_id"], move["revision"]) for move in socket.moves] == [op_move]
@@ -1716,7 +1800,7 @@ def test_an_op_move_wins_over_a_report_the_page_made_before_hearing_it(e2e_serve
     page.wait_for_timeout(_SETTLED_WATCH_MS)
     heard = [(move["desktop_id"], move["revision"]) for move in socket.moves]
     assert len(heard) > 1 and set(heard) == {op_move}
-    expect(other_switch).to_have_attribute("data-active", "true")
+    _expect_on_desktop(page, other)
     clients = _get_json(f"{e2e_server.base_url}/api/clients")["clients"]
     assert [client["active_desktop"] for client in clients if client["id"] == client_id] == [other]
 
@@ -1819,8 +1903,7 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
 
         # A new desktop is born with its own pinned window, and an open at the home path finds it.
-        _open_desktops_menu(page)
-        page.locator('[data-menu-row="new-desktop"]').click()
+        _open_overview(page).locator("[data-overview-new-desktop]").click()
         wait_for(
             lambda: len(_desktops(server.base_url)) == 2,
             timeout=10.0,
@@ -2417,7 +2500,23 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
         # The copy is hers to arrange: it starts minimized in her taskbar, and Home's window is untouched.
         expect(_taskbar_entry(visitor, copied["id"])).to_be_visible(timeout=15000)
         assert [window["id"] for window in _windows(e2e_server.base_url)] == [home_window]
-        expect(page.locator('[data-desktop-switch="alice"]')).to_be_visible(timeout=15000)
+        # Hers alone (the multiplayer spec, section 8.1): she is not in the roster here (no grants), so the owner's
+        # overview lists it as left behind rather than among the owner's own, and her overview lists it alone.
+        assert alice["owner"] == "user:user-alice"
+        owner_overview = _open_overview(page)
+        expect(owner_overview.locator('[data-overview-left-behind] [data-overview-desktop="alice"]')).to_be_visible(
+            timeout=15000
+        )
+        expect(owner_overview.locator('[data-overview-desktop-slot="alice"]')).not_to_have_attribute(
+            "draggable", "true"
+        )
+        page.keyboard.press("Escape")
+        visitor_overview = _open_overview(visitor)
+        assert [
+            thumbnail.get_attribute("data-overview-desktop")
+            for thumbnail in visitor_overview.locator("[data-overview-desktop]").all()
+        ] == ["alice"]
+        visitor.keyboard.press("Escape")
         expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
 
         with _visiting_client(page, e2e_server, "user-alice", "alice", "alice"):
@@ -2433,6 +2532,59 @@ def test_a_visiting_user_lands_on_a_desktop_of_their_own_seeded_from_home(e2e_se
         expect(visitor.locator('[data-desktop-id="alice"]')).to_be_visible()
         visitor.locator(".replaced-desktop-dismiss").click()
         expect(visitor.locator("[data-replaced-desktop-notice]")).to_have_count(0)
+
+
+def _css_rgb(hex_color: str) -> str:
+    """A ``#rrggbb`` colour as a computed style spells it."""
+    red, green, blue = (int(hex_color[index : index + 2], 16) for index in (1, 3, 5))
+    return f"rgb({red}, {green}, {blue})"
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chrome_on(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """With a visitor granted the workspace and arrived (so a desktop of theirs exists), the owner's card of them
+    lists it (the multiplayer spec, section 6.3); a click switches the owner onto it with the viewing chrome on
+    (section 8.3): the outline in the visitor's colour, the chip naming them and the desktop in place of the tray,
+    and no overview button. On the visitor's own client their picture is ringed in their colour while the owner
+    looks at their desktop. Stop viewing goes back to Home, and the ring goes with it."""
+    grants_path = e2e_server.repo_root / DEFAULT_SHARE_GRANTS_PATH
+    grants_path.parent.mkdir(parents=True, exist_ok=True)
+    (e2e_server.repo_root / DEFAULT_SHARE_ENV_PATH).write_text("SHARE_BROKER_URL=https://broker.example\n")
+    grants_path.write_text('[workspace]\nusers = ["user-alice"]\n')
+    _land(page, e2e_server)
+    with _visiting_client(page, e2e_server, "user-alice", "alice", "alice") as visitor:
+        entry = page.locator('[data-tray-person="user:user-alice"]')
+        expect(entry).to_be_visible(timeout=15000)
+        entry.hover()
+        card = page.locator("[data-tray-card]")
+        expect(card).to_be_visible(timeout=5000)
+        expect(card.locator("[data-tray-card-desktops]")).to_contain_text("desktops")
+        card.locator('[data-tray-card-desktop="alice"]').click()
+        _expect_on_desktop(page, "alice")
+        expect(page.locator("[data-overview]")).to_have_count(0)
+        expect(page.locator('[data-tray-widget="overview"]')).to_have_count(0)
+        chip = page.locator('[data-tray-widget="viewing"]')
+        expect(chip).to_be_visible(timeout=5000)
+        expect(chip.locator("[data-viewing-owner]")).to_have_text("alice")
+        expect(chip).to_have_attribute("data-viewing-desktop", "alice")
+        outline = page.locator('[data-viewing-outline="alice"]')
+        expect(outline).to_be_visible()
+        participants = _get_json(f"{e2e_server.base_url}/api/roster")["participants"]
+        (alice_entry,) = [participant for participant in participants if participant["key"] == "user:user-alice"]
+        assert outline.evaluate("(el) => getComputedStyle(el).borderTopColor") == _css_rgb(alice_entry["color"])
+        # The visitor's own client sees their picture ringed while the owner looks at their desktop.
+        expect(visitor.locator('[data-tray-person="user:user-alice"][data-tray-ringed="true"]')).to_be_visible(
+            timeout=15000
+        )
+        chip.locator("[data-stop-viewing]").click()
+        _expect_on_desktop(page, _HOME_DESKTOP_ID)
+        expect(page.locator('[data-tray-widget="viewing"]')).to_have_count(0)
+        expect(page.locator('[data-tray-widget="overview"]')).to_be_visible()
+        expect(visitor.locator('[data-tray-person="user:user-alice"][data-tray-ringed="true"]')).to_have_count(
+            0, timeout=15000
+        )
 
 
 @pytest.mark.timeout(120, func_only=False)

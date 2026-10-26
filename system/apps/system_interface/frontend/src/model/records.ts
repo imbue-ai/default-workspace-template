@@ -74,11 +74,15 @@ export interface WindowRecord {
 export interface Desktop {
   readonly id: string;
   readonly name: string;
+  /** Kept in the record and drawn nowhere since the desktops phase (the multiplayer spec, S7). */
   readonly color: string;
   readonly glyph: number;
   readonly wallpaper: Wallpaper | null;
   readonly shortcuts: readonly DesktopShortcut[];
   readonly windows: readonly WindowRecord[];
+  /** Whose desktop it is by convention (the multiplayer spec, section 8.1): a participant key, or null for the
+   *  workspace owner's. */
+  readonly owner: string | null;
 }
 
 export interface Placement {
@@ -454,6 +458,7 @@ export function parseDesktop(raw: unknown): Desktop {
     wallpaper: parseWallpaper(record.wallpaper),
     shortcuts: asArray(record.shortcuts, "desktop.shortcuts").map(parseShortcut),
     windows: asArray(record.windows, "desktop.windows").map(parseWindow),
+    owner: asOptionalString(record.owner, "desktop.owner"),
   };
 }
 

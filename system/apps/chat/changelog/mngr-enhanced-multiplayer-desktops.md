@@ -1,0 +1,1 @@
+The chat app's browser test of a desktop switch drives the shell's overview (the taskbar's "Manage Desktops" button and its thumbnails) rather than the desktop switcher the shell no longer draws (the mngr repo's `specs/multiplayer-refinements/spec.md`, section 8.2); nothing in the chat app itself changes.

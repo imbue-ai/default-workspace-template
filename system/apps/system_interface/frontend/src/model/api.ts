@@ -13,6 +13,7 @@ import {
   parseClientRecord,
   parseClientRecords,
   parseDesktop,
+  parseDesktops,
   parseInventory,
   parseLayout,
   parseMessageRelay,
@@ -53,17 +54,23 @@ function desktopUrl(desktopId: string, suffix: string = ""): string {
   return apiUrl(`/api/desktops/${encodeURIComponent(desktopId)}${suffix}`);
 }
 
-export async function createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {
-  return parseDesktop(await postJson<unknown>(apiUrl("/api/desktops"), { name, color, glyph }));
+/** Create a desktop named ``name``, owned by this client's participant (the multiplayer spec, section 8.1); the
+ *  shell picks its colour and glyph, which nothing draws any more. */
+export async function createDesktop(name: string): Promise<Desktop> {
+  return parseDesktop(await postJson<unknown>(apiUrl("/api/desktops"), { name }));
 }
 
-export async function updateDesktopSettings(
-  desktopId: string,
-  name: string,
-  color: string,
-  glyph: number,
-): Promise<Desktop> {
-  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/settings"), { name, color, glyph }));
+export async function renameDesktop(desktopId: string, name: string): Promise<Desktop> {
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/settings"), { name }));
+}
+
+/** Put this client's participant's own desktops in ``desktopIds``' order (every one of theirs, once each); the
+ *  others keep their places. Answers every desktop in the new order. */
+export async function reorderDesktops(desktopIds: readonly string[]): Promise<Desktop[]> {
+  const data = (await postJson<unknown>(apiUrl("/api/desktops/order"), { desktop_ids: desktopIds })) as {
+    desktops?: unknown;
+  };
+  return parseDesktops(data.desktops);
 }
 
 export async function setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {

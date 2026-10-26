@@ -17,6 +17,7 @@ from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import assert_api_schema_describes_app
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 
@@ -985,7 +986,7 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
     shell = state_of(app).shell
     shell.inventory.reload_registry()
     shell.list_desktops()
-    work = shell.create_desktop("Work", "#123456", 1)
+    work = shell.create_desktop("Work", "#123456", 1, ANONYMOUS_OWNER)
     client_queue = shell.broadcaster.register()
     try:
         first = json.dumps(_moving_report("c1", "home"))
@@ -1064,7 +1065,7 @@ def test_a_move_reported_before_its_page_heard_an_ops_move_is_not_recorded_and_i
     shell = state_of(app).shell
     shell.inventory.reload_registry()
     shell.list_desktops()
-    work = shell.create_desktop("Work", "#123456", 1)
+    work = shell.create_desktop("Work", "#123456", 1, ANONYMOUS_OWNER)
     client_queue = shell.broadcaster.register()
     other_queue = shell.broadcaster.register()
     shell.broadcaster.set_client_info(other_queue, "c1", "home")

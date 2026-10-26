@@ -18,11 +18,13 @@ from workspace_layout.primitives import UserId
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
+from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.errors import LaunchUnavailableError
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
+from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeLivenessProber
@@ -1005,10 +1007,25 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     assert created.get_json()["id"] == "research" and len(created.get_json()["shortcuts"]) == 2
     assert client.post("/api/desktops", json={"name": "research!", "color": "#12B5A5", "glyph": 4}).status_code == 409
     assert client.post("/api/desktops", json={"name": "Bad", "color": "red", "glyph": 4}).status_code == 400
+    assert client.post("/api/desktops", json={"name": "Bad", "glyph": GLYPH_COUNT}).status_code == 400
     settled = client.post(
         "/api/desktops/research/settings", json={"name": "Research 2", "color": "#222222", "glyph": 2}
     )
     assert settled.status_code == 200 and settled.get_json()["name"] == "Research 2"
+    # The desktops phase renames alone (the multiplayer spec, S7): the colour and glyph stay as written.
+    renamed = client.post("/api/desktops/research/settings", json={"name": "Research 3"})
+    assert renamed.status_code == 200
+    assert (renamed.get_json()["name"], renamed.get_json()["color"], renamed.get_json()["glyph"]) == (
+        "Research 3",
+        "#222222",
+        2,
+    )
+    # A create with no colour or glyph takes the next free glyph and its colour, and the owner's desktop no owner.
+    plain = client.post("/api/desktops", json={"name": "Plain"})
+    assert plain.status_code == 201
+    assert (plain.get_json()["glyph"], plain.get_json()["owner"]) == (1, None)
+    assert plain.get_json()["color"] == DESKTOP_GLYPH_COLORS[1]
+    assert client.post("/api/desktops/plain/delete").status_code == 200
     assert (
         client.post("/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2}).status_code
         == 404
@@ -2426,6 +2443,53 @@ def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_cl
         "home",
         "alice",
         "bob",
+    ]
+
+
+def test_a_visitors_desktops_carry_their_key_and_the_order_route_moves_only_the_requesters_own(
+    client: FlaskClient, app: Flask
+) -> None:
+    """The desktop seeded for a visitor, and one they create, are written with their key; the owner's carry none
+    (the multiplayer spec, section 8.1). The order route lists the requester's own desktops in the order given and
+    leaves the others where they were (section 8.2), refusing an order that is not exactly their own."""
+    seeded = _arrive(client, "c-alice", _ALICE)["created_desktop"]
+    assert seeded["owner"] == "user:user-alice"
+    made = client.post("/api/desktops", json={"name": "Alice's Lab"}, headers=identity_headers(_ALICE))
+    assert made.status_code == 201 and made.get_json()["owner"] == "user:user-alice"
+    owners = client.post("/api/desktops", json={"name": "Work"})
+    assert owners.status_code == 201 and owners.get_json()["owner"] is None
+    assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == [
+        "home",
+        "alice",
+        "alice-s-lab",
+        "work",
+    ]
+
+    client_queue = _register_client(app, "c-owner", "home")
+    reordered = client.post("/api/desktops/order", json={"desktop_ids": ["work", "home"]})
+    assert reordered.status_code == 200
+    assert [desktop["id"] for desktop in reordered.get_json()["desktops"]] == ["work", "alice", "alice-s-lab", "home"]
+    assert "desktops_updated" in {message["type"] for message in drain_messages(client_queue)}
+    assert [desktop["id"] for desktop in client.get("/api/inventory").get_json()["desktops"]] == [
+        "work",
+        "alice",
+        "alice-s-lab",
+        "home",
+    ]
+    alices = client.post(
+        "/api/desktops/order", json={"desktop_ids": ["alice-s-lab", "alice"]}, headers=identity_headers(_ALICE)
+    )
+    assert alices.status_code == 200
+    assert [desktop["id"] for desktop in alices.get_json()["desktops"]] == ["work", "alice-s-lab", "alice", "home"]
+    # An order naming another's desktop, missing one of the requester's, or naming one twice is refused whole.
+    for order in (["work", "home", "alice"], ["work"], ["work", "work"]):
+        refused = client.post("/api/desktops/order", json={"desktop_ids": order})
+        assert refused.status_code == 400, order
+    assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == [
+        "work",
+        "alice-s-lab",
+        "alice",
+        "home",
     ]
 
 

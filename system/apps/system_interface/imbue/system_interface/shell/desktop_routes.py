@@ -144,19 +144,29 @@ from imbue.system_interface.shell.wallpapers import resolve_wallpaper_file
 
 
 class DesktopMetadataRequest(FrozenModel):
-    """The body of desktop create."""
+    """The body of desktop create: the name, and the colour and glyph the record keeps though the page no longer
+    draws or sends them (the multiplayer spec, section 8.1); an agent may still choose them, and the shell picks
+    them when they are absent."""
 
     name: str = Field(description="The display name")
-    color: str = Field(description="'#RRGGBB'")
-    glyph: int = Field(description="The glyph index")
+    color: str | None = Field(default=None, description="'#RRGGBB'; absent takes the chosen glyph's colour")
+    glyph: int | None = Field(default=None, description="The glyph index; absent takes the next free glyph")
 
 
 class DesktopSettingsRequest(FrozenModel):
-    """The body of desktop settings."""
+    """The body of desktop settings: the name, and the colour and glyph the record keeps though the page no longer
+    draws or sends them (the multiplayer spec, section 8.1); absent, each stays as written."""
 
     name: str = Field(description="The display name")
-    color: str = Field(description="'#RRGGBB'")
-    glyph: int = Field(description="The glyph index")
+    color: str | None = Field(default=None, description="'#RRGGBB'; absent keeps the colour as written")
+    glyph: int | None = Field(default=None, description="The glyph index; absent keeps the glyph as written")
+
+
+class DesktopOrderRequest(FrozenModel):
+    """The body of ``POST /api/desktops/order`` (the multiplayer spec, section 8.2): the requester's own desktops in
+    the order they are to be listed in."""
+
+    desktop_ids: tuple[DesktopId, ...] = Field(description="Every desktop of the requester's, once each, in order")
 
 
 class DesktopWallpaperRequest(FrozenModel):
@@ -221,20 +231,30 @@ def list_desktops() -> ResponseReturnValue:
 
 
 def create_desktop() -> ResponseReturnValue:
-    """Add a desktop with a name, a colour, and a glyph."""
+    """Add a desktop with a name, owned by the requester (none for the workspace owner's); its colour and glyph are
+    the shell's to pick unless given."""
     body = parse_request_body(DesktopMetadataRequest)
     shell = _shell()
-    desktop = shell.create_desktop(body.name, body.color, body.glyph)
+    desktop = shell.create_desktop(body.name, body.color, body.glyph, request_identity())
     return model_response(shell.desktop_view(desktop), HTTP_CREATED)
 
 
 def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
-    """Rename a desktop or change its colour or glyph."""
+    """Rename a desktop (and change its colour or glyph, when a caller still sends them)."""
     body = parse_request_body(DesktopSettingsRequest)
     shell = _shell()
     desktop = shell.desktops.update_settings(desktop_id, body.name, body.color, body.glyph)
     shell.broadcast_desktops_updated()
     return model_response(shell.desktop_view(desktop))
+
+
+def reorder_desktops() -> ResponseReturnValue:
+    """Put the requester's own desktops in the order given (every one of theirs, once each); the other desktops keep
+    their places. The order is how every listing and ``desktops_updated`` lists them."""
+    body = parse_request_body(DesktopOrderRequest)
+    shell = _shell()
+    reordered = shell.reorder_desktops(body.desktop_ids, request_identity())
+    return model_response(DesktopsListing(desktops=tuple(shell.desktop_views(reordered))))
 
 
 def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
@@ -453,6 +473,9 @@ def register_desktop_routes(application: Flask) -> None:
     """Register the desktop interface's routes on ``application`` (the error handlers are the shell's)."""
     application.add_url_rule(DESKTOPS_ROUTE, view_func=list_desktops, methods=["GET"], endpoint="list_desktops")
     application.add_url_rule(DESKTOPS_ROUTE, view_func=create_desktop, methods=["POST"], endpoint="create_desktop")
+    application.add_url_rule(
+        f"{DESKTOPS_ROUTE}/order", view_func=reorder_desktops, methods=["POST"], endpoint="reorder_desktops"
+    )
     application.add_url_rule(
         "/api/desktops/<desktop_id>/settings",
         view_func=update_desktop_settings,

@@ -16,6 +16,7 @@ from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.registry import read_registry
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WallpaperKind
 from workspace_layout.primitives import WallpaperName
 from workspace_layout.primitives import WindowId
@@ -764,8 +765,10 @@ def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_window
         1,
         [WindowId("win-00000000000000ff"), WindowId("win-00000000000000fe")],
         later,
+        ParticipantKey("user:user-alice"),
     )
     assert (seeded.id, seeded.name, seeded.color, seeded.glyph) == ("alice", "Alice", "#16A34A", 1)
+    assert seeded.owner == "user:user-alice" and source.owner is None
     assert seeded.shortcuts == source.shortcuts and seeded.wallpaper == source.wallpaper
     copied, copied_pinned = seeded.windows
     assert (copied.id, copied.app, copied.path, copied.title) == ("win-00000000000000ff", "terminal", settled.path, "")
@@ -783,4 +786,4 @@ def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_window
     ensured = with_pinned_windows_ensured(without_pin_marks(seeded, {AppName("chat")}), [chat_pin], later)
     assert ensured.desktop is seeded and ensured.is_written is False
     with pytest.raises(InvalidShellValueError):
-        desktop_seeded_from(source, DesktopId("bob"), "Bob", "#16A34A", 1, [], later)
+        desktop_seeded_from(source, DesktopId("bob"), "Bob", "#16A34A", 1, [], later, None)

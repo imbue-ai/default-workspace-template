@@ -19,7 +19,8 @@ _REPORT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^report-[0-9a-f]{16}$"
 _PAGE_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^page-[0-9a-f]{16}$")
 _MINTED_ID_BYTES: Final[int] = 8
 
-# A desktop's ``glyph`` indexes the frontend's squiggle table.
+# How many glyphs a desktop's ``glyph`` may index: the record keeps the field (the multiplayer spec, S7), though
+# nothing draws it any more.
 GLYPH_COUNT: Final[int] = 10
 
 

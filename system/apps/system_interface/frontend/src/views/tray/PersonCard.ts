@@ -1,14 +1,16 @@
 /**
  * A person's card (the multiplayer spec, section 6.3): the picture, the name ("(you)", "(owner)"), the status line
  * with its dot, then, when connected, what they are looking at (the window at the top of the stack on the active
- * desktop of their newest client), then their desktops, one row each, the one the viewer is on marked "Viewing";
- * your own card lists your own desktops and ends with "New desktop". A visiting agent's card shows its name,
- * "Visiting agent", and the status line, and no desktops. On an unshared workspace the owner's own entry is a
- * neutral silhouette and the card reads "You".
+ * desktop of their newest client), then their desktops (the ones they own, section 8.1), one row each, the one the
+ * viewer is on marked "Viewing", a click viewing it (section 8.3); your own card lists your own desktops (a click
+ * switches) and ends with "New desktop". A visiting agent's card shows its name, "Visiting agent", and the status
+ * line, and no desktops. On an unshared workspace the owner's own entry is a neutral silhouette and the card reads
+ * "You".
  */
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { desktopsOf, isClientOf } from "../../model/Ownership";
 import type { AppRecord, ClientRecord, Desktop, RosterParticipant, WindowRecord } from "../../model/records";
 import { OWNER_KEY, presenceStateOf, statusLineOf } from "../../model/Roster";
 import { appGlyph } from "../glyphs";
@@ -35,7 +37,7 @@ export function lookingAtOf(
   apps: readonly AppRecord[],
 ): LookingAt | null {
   const own = clients
-    .filter((client) => client.participant === entry.key || (entry.is_owner && client.participant === OWNER_KEY))
+    .filter((client) => isClientOf(entry, client))
     .sort((left, right) => right.last_seen.localeCompare(left.last_seen));
   const newest = own.find((client) => client.is_connected) ?? own[0];
   if (newest === undefined || newest.active_desktop === null) return null;
@@ -47,12 +49,6 @@ export function lookingAtOf(
   return { window, app: apps.find((app) => app.name === window.app), desktop };
 }
 
-/** The desktops that are a person's. Until the desktops phase gives a desktop an owner (the multiplayer spec,
- *  section 8.1), every desktop is the owner's and nobody else has any. */
-export function desktopsOf(entry: RosterParticipant, desktops: readonly Desktop[]): Desktop[] {
-  return entry.is_owner ? [...desktops] : [];
-}
-
 export interface PersonCardAttrs extends Omit<TrayCardFrameAttrs, "label"> {
   readonly entry: RosterParticipant;
   readonly isOwn: boolean;
@@ -61,7 +57,8 @@ export interface PersonCardAttrs extends Omit<TrayCardFrameAttrs, "label"> {
   readonly desktops: readonly Desktop[];
   readonly apps: readonly AppRecord[];
   readonly activeDesktopId: string | null;
-  readonly onSwitchDesktop: (desktopId: string) => void;
+  /** A click on a desktop row: a switch onto your own, a viewing of anyone else's. */
+  readonly onOpenDesktop: (desktopId: string) => void;
   readonly onNewDesktop: () => void;
 }
 
@@ -144,7 +141,7 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
                   "data-tray-card-desktop": desktop.id,
                   class:
                     "flex cursor-pointer items-center gap-1.5 rounded-md border-0 bg-transparent px-1 py-0.5 text-left text-primary hover:bg-fill-hover",
-                  onclick: () => attrs.onSwitchDesktop(desktop.id),
+                  onclick: () => attrs.onOpenDesktop(desktop.id),
                 },
                 [
                   m(

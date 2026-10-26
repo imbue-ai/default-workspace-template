@@ -1,7 +1,7 @@
 /**
  * The system tray at the taskbar's right end (the multiplayer spec, section 6.1): the share button (under a chrome
- * that takes it), the people, the viewer's own entry, and the agent. The desktop switcher sits before the window
- * entries now, where the overview button of the desktops phase will.
+ * that takes it), the people, the viewer's own entry, and the agent. The overview button sits before the window
+ * entries (section 8.2).
  */
 
 import m from "mithril";
@@ -18,6 +18,8 @@ export interface SystemTrayAttrs {
   readonly now: Date;
   /** The keys of the entries hopping now: they just arrived, or a bubble of theirs just appeared. */
   readonly hopping: ReadonlySet<string>;
+  /** The keys of the entries whose desktop somebody else is viewing, ringed in their colour (section 8.3). */
+  readonly ringed: ReadonlySet<string>;
   readonly isShareOffered: boolean;
   readonly avatar: AvatarState;
   readonly workspaceName: string;
@@ -39,6 +41,7 @@ export const SystemTray: m.Component<SystemTrayAttrs> = {
         viewer: attrs.viewer,
         now: attrs.now,
         hopping: attrs.hopping,
+        ringed: attrs.ringed,
         onPersonClick: attrs.onPersonClick,
         onHoverStart: attrs.onPersonHoverStart,
         onHoverEnd: attrs.onHoverEnd,

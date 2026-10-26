@@ -138,7 +138,7 @@ export function windowRecord(
   };
 }
 
-/** A desktop named after its id, with no wallpaper, shortcuts, or windows. */
+/** The workspace owner's desktop named after its id, with no wallpaper, shortcuts, or windows. */
 export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Desktop {
   return {
     id,
@@ -148,6 +148,7 @@ export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Des
     wallpaper: null,
     shortcuts: [],
     windows: [],
+    owner: null,
     ...overrides,
   };
 }
@@ -247,6 +248,9 @@ export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): Theme
     floatingEntrySize: 56,
     floatingEntryInsetX: 16,
     floatingEntryInsetY: 12,
+    overviewGap: 28,
+    overviewTileTitle: 28,
+    overviewThumbnailWidth: 200,
     ...overrides,
   };
 }

@@ -97,6 +97,7 @@ from imbue.system_interface.shell.desktops import desktop_name_for_user
 from imbue.system_interface.shell.desktops import next_glyph_index
 from imbue.system_interface.shell.desktops import resolve_active_desktop
 from imbue.system_interface.shell.desktops import slugify_desktop_name
+from imbue.system_interface.shell.desktops import validated_desktop_glyph
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import InvalidShellValueError
@@ -109,6 +110,7 @@ from imbue.system_interface.shell.inventory import DEFAULT_SHARE_DOMAIN_PATH
 from imbue.system_interface.shell.launches import LaunchPoster
 from imbue.system_interface.shell.launches import post_launch
 from imbue.system_interface.shell.launches import resolve_launch_destination
+from imbue.system_interface.shell.ownership import desktop_owner_of
 from imbue.system_interface.shell.placements import PlacementStore
 from imbue.system_interface.shell.placements import StoredDesktopLayout
 from imbue.system_interface.shell.primitives import LaunchTargetKind
@@ -283,25 +285,39 @@ class ShellState(MutableModel):
             self.broadcaster.broadcast_desktops_updated(self.desktop_views(pinned_outcome.desktops))
         return pinned_outcome.desktops
 
-    def create_desktop(self, name: str, color: str, glyph: int) -> Desktop:
-        """Register a desktop born with its seeded shortcuts and one pinned window per pinned app, and tell everyone.
-        The other desktops are reconciled with the same rows first, under the same lock, so a default shortcut the
-        new desktop is seeded with is offered on every desktop."""
+    def create_desktop(self, name: str, color: str | None, glyph: int | None, identity: RequestIdentity) -> Desktop:
+        """Register a desktop born with its seeded shortcuts and one pinned window per pinned app, owned by the
+        requester (the multiplayer spec, section 8.1: no owner for the workspace owner's), and tell everyone. With
+        no colour or glyph it gets the next free glyph and that glyph's colour, as a visitor's does. The other
+        desktops are reconciled with the same rows first, under the same lock, so a default shortcut the new desktop
+        is seeded with is offered on every desktop."""
         now = datetime.now(timezone.utc)
         with STATE_FILES_LOCK:
             is_registry_read = self.inventory.is_registry_read
             rows = self._registry_rows() if is_registry_read else []
-            if is_registry_read:
-                self._reconcile_desktops_with(rows)
+            desktops = self._reconcile_desktops_with(rows) if is_registry_read else self.desktops.list_desktops()
+            chosen_glyph = (
+                validated_desktop_glyph(glyph)
+                if glyph is not None
+                else next_glyph_index([desktop.glyph for desktop in desktops])
+            )
             desktop = self.desktops.create_desktop(
                 name,
-                color,
-                glyph,
+                color if color is not None else DESKTOP_GLYPH_COLORS[chosen_glyph],
+                chosen_glyph,
                 seed_desktop_shortcuts(rows),
                 [pinned_window(app_pin, now) for app_pin in pinned_apps(rows)],
+                desktop_owner_of(identity),
             )
         self.broadcast_desktops_updated()
         return desktop
+
+    def reorder_desktops(self, ordered_own_ids: Sequence[DesktopId], identity: RequestIdentity) -> list[Desktop]:
+        """Put the requester's own desktops in the order given (the multiplayer spec, section 8.2) and tell
+        everyone; raises DesktopValueError for an order that is not exactly their own desktops."""
+        reordered = self.desktops.reorder_desktops(ordered_own_ids, identity)
+        self.broadcast_desktops_updated()
+        return reordered
 
     def require_app_entry(self, app: str) -> AppInventoryEntry:
         """The inventory entry of a registered app; raises DesktopValueError (a 400) for any other name."""
@@ -720,7 +736,7 @@ class ShellState(MutableModel):
     ) -> Desktop:
         """A desktop named after the user (their profile's display name, else their email's local part), seeded from
         the first desktop (its shortcuts, wallpaper, and windows as new windows), with the next free glyph and that
-        glyph's colour."""
+        glyph's colour, and owned by the user (the multiplayer spec, section 8.1)."""
         name = desktop_name_for_user(profile.display_name if profile is not None else None, identity.email, desktops)
         glyph = next_glyph_index([desktop.glyph for desktop in desktops])
         source = desktops[0]
@@ -732,6 +748,7 @@ class ShellState(MutableModel):
             glyph,
             [mint_window_id() for _ in source.windows],
             now,
+            desktop_owner_of(identity),
         )
         created = self.desktops.add_desktop(seeded, apps_with_their_default_shortcut_on(seeded, self._registry_rows()))
         logger.info(

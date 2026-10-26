@@ -279,7 +279,7 @@ def read_default_shortcuts_offered(state_directory: Path) -> dict[str, Any]:
 _RELEASED_DESKTOPS_FILE_VERSION: Final[int] = 1
 _RELEASED_DESKTOPS_FILE_KEYS: Final[frozenset[str]] = frozenset({"version", "desktops"})
 _RELEASED_DESKTOP_KEYS: Final[frozenset[str]] = frozenset(
-    {"id", "name", "color", "glyph", "wallpaper", "shortcuts", "windows"}
+    {"id", "name", "color", "glyph", "wallpaper", "shortcuts", "windows", "owner"}
 )
 
 

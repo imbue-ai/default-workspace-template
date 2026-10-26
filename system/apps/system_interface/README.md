@@ -22,9 +22,12 @@ format. In brief:
   posted the params by the shell and answers the page to open; an app that
   declares none offers `open` at its root.
 - A **desktop** is a named, shared collection of windows and shortcuts over a
-  wallpaper, with a colour and a glyph. Everyone sees the same desktops and
-  the same windows on them; a signed-in visitor gets a desktop of their own,
-  seeded from the first one, the first time they arrive (see "Who is here").
+  wallpaper, owned by convention (the multiplayer spec, section 8.1): the
+  owner's carry no owner key, a visitor's carry theirs. Everyone sees the same
+  desktops and the same windows on them; a signed-in visitor gets a desktop of
+  their own, seeded from the first one, the first time they arrive (see "Who
+  is here"), and looking at someone else's desktop is switching onto it with
+  the viewing chrome on (see "The desktop, the taskbar, and the launcher").
 - A **window** is one page of one app on one desktop: the app, the path under
   its origin the page is at, and the title the page last reported. That is
   the whole of what the shell knows about what a window shows.
@@ -58,10 +61,11 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   into this app's static output; every app serves those same files from its
   own origin, since a cross-origin module import carries no cookie and the
   forwarder refuses it. The desktop's own chrome draws the element menu too: a
-  right-click the views leave alone opens it, and the entry, shortcut, and
-  desktop menus end with its reference rows
+  right-click the views leave alone opens it, and the entry, shortcut,
+  backdrop, and overview thumbnail menus end with its reference rows
   (`docs/system/blueprint/element-reference-menu/`).
 - The shell routes of contracts sections 5 and 8: desktops (`/api/desktops`,
+  `/api/desktops/order`,
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
   placements (`/api/placements/<desktop>`), wallpapers (`/api/wallpapers`,
@@ -104,8 +108,9 @@ and the profile cache.
 
 ### The desktop model
 
-- **Records** (`shell/data_types.py`): a `Desktop` (name, colour, glyph,
-  wallpaper, shortcuts, windows), a `Window` (an app, a path
+- **Records** (`shell/data_types.py`): a `Desktop` (name, wallpaper,
+  shortcuts, windows, and its owner by convention; the colour and glyph of the
+  retired switcher stay in the record), a `Window` (an app, a path
   under its origin, and the title its page last reported; shared), and per
   client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
   backdrop, state, minimized, detached; the order is the stack).
@@ -142,9 +147,15 @@ and the profile cache.
   every geometry rule (cascade, fit, snap zones, un-snap, the grid, nearest
   free cell, reading order, shortcut placement) as pure functions over the
   records. The rules the frontend also applies pass the shared vectors in
-  `docs/system/blueprint/desktop-interface/geometry_vectors.json`.
+  `docs/system/blueprint/desktop-interface/geometry_vectors.json`. Whose a
+  desktop is, and the reorder that moves only the requester's own, are the
+  pure functions of `shell/ownership.py`, which the editor stays apart from.
 - **Routes** (`shell/desktop_routes.py`): the desktop, window, placement,
-  arrival, and wallpaper routes above. A placements save carries a save id
+  arrival, and wallpaper routes above. A desktop create takes the name
+  (the shell picks the rest) and writes the requester's key as its owner
+  (none for the workspace owner); `POST /api/desktops/order` lists the
+  requester's own desktops in a new order and leaves the others in place,
+  refusing an order that is not exactly their own. A placements save carries a save id
   and the stamp it was based on; a save over a newer arrangement is refused
   with 409 and the browser refetches. `GET /api/inventory` is
   `{desktops, apps, clients}`, each `app` carrying its `launch_paths`,
@@ -358,20 +369,54 @@ first desktop: its shortcuts, its wallpaper, and a new window at the path of
 each window open there. It is remembered in `users.json`, every later client
 of that user lands on it, a returning client keeps the desktop it was on (when
 it last arrived as that same user), and if it has been deleted the next
-arrival seeds another and says so. Every desktop stays shared and in
-everyone's switcher; there is no private mode.
+arrival seeds another and says so. Every desktop stays shared and reachable
+from everyone's launcher; there is no private mode. The seeded desktop is
+written with the visitor's key as its owner (the multiplayer spec, section
+8.1), so their card and their overview list it as theirs; a desktop whose owner
+has since left the grants is left behind, listed in the owner's overview under
+"Left behind" so it can be viewed and deleted.
 
 ### The desktop, the taskbar, and the launcher
 
 The backdrop shows the active desktop's shortcuts and windows; each window is
 an iframe of an app page under a title bar with the page's title and the
-window menu. The taskbar shows the launcher field, the desktop switcher, one
+window menu. The taskbar shows the launcher field, the overview button, one
 entry per window of the active desktop, and the tray. A pinned window's entry
 may float above the windows instead, drawn as the workspace's avatar (the
 chat's default); its context menu moves it between the bar and the desktop,
-switches its style, and opens the avatar chooser. Desktops are created,
-renamed, recoloured, re-wallpapered, and deleted from the switcher; shortcuts
-are added, moved, and removed on the backdrop.
+switches its style, and opens the avatar chooser. Shortcuts are added, moved,
+and removed on the backdrop.
+
+**Desktops** (the multiplayer spec, section 8; `frontend/src/views/Overview.ts`,
+`model/Ownership.ts`). The overview button (four squares, "Manage Desktops")
+opens the overview over the backdrop: the active desktop's windows as live,
+inert tiles scaled into a grid (the live-page layer lays each window's page
+over its tile; a minimized window's tile is faint), a click raising one, and
+below them one thumbnail per desktop the viewer owns, drawn from its wallpaper
+and this client's placements of it, the active one outlined. A click switches,
+a double-click on the name renames, a drag sideways reorders (`POST
+/api/desktops/order`), a right-click offers "Delete desktop...", confirmed in
+place and refused for the last desktop, and the plus makes "Desktop N" with
+the seeded shortcuts, owned by the viewer. The owner also sees the desktops
+left behind by people no longer in the roster, after a thin rule. Escape or a
+click on the bare backdrop closes it. The backdrop's own context menu offers
+"New desktop", "Show all desktops", and "Change wallpaper...", which opens the
+wallpaper chooser (`WallpaperChooserDialog.ts`, what the settings dialog
+became: a desktop's colour and glyph are no longer shown or edited). A person's
+tray card lists the desktops they own, and a click on one of somebody else's
+*views* it: the client switches there with the viewing chrome on, an outline
+in the owner's colour around the whole desktop, the taskbar included, and a
+chip in that colour with their picture, "<Name> · <Desktop name>", and "Stop
+viewing" in place of the tray, the overview button hidden meanwhile (and the
+backdrop menu's "Show all desktops" disabled). Stop viewing goes back to the
+desktop the window came from, else the viewer's first. Viewing is a
+convention: every window verb works there. On every other client the owner of
+a desktop somebody else is on wears a ring in their colour in the tray, read
+off the clients and the desktop moves the socket announces; a move by a client
+the last read did not list, and a change in who is here, read the clients
+again.
+The launcher's window rows name the owner of a desktop that is not the
+viewer's. The phone layout offers no overview.
 
 **The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
 and `views/tray/`) is where the people and the agent live: the share button (a

@@ -4,11 +4,14 @@
  * app, less the free-text ones), the window rows (every window of every desktop, only while
  * typing), and the free-text rows (the primary always, the rest only with text to send; the first
  * two bound to Enter and Ctrl+Enter), each section kept in its order and narrowed by the text; a
- * text with a line break is a message, not a query, and keeps the free-text rows alone. Then the
- * highlight rule, with the arrow keys' step through the enabled rows.
+ * text with a line break is a message, not a query, and keeps the free-text rows alone. A window
+ * row on a desktop that is not the viewer's names its owner. Then the highlight rule, with the
+ * arrow keys' step through the enabled rows.
  */
 
-import type { AppRecord, LaunchPath, WindowRecord } from "../model/records";
+import type { OwnIdentity } from "../model/Presence";
+import { isOwnDesktop, ownerEntryOf } from "../model/Ownership";
+import type { AppRecord, LaunchPath, RosterParticipant, WindowRecord } from "../model/records";
 import {
   appLaunchesOf,
   freeTextRowsOf,
@@ -40,11 +43,23 @@ export interface WindowRow {
   readonly window: WindowRecord;
   readonly desktopId: string;
   readonly desktopName: string;
+  /** The name of the desktop's owner, for a desktop that is not the viewer's (the multiplayer spec, section
+   *  8.2); null for the viewer's own, and for one whose owner has left the roster. */
+  readonly ownerName: string | null;
   readonly app: AppRecord | undefined;
   readonly title: string;
   readonly isMinimized: boolean;
   readonly isOnActiveDesktop: boolean;
 }
+
+/** Who the viewer is and who may be here, which say whose desktop each window row is on. */
+export interface DesktopOwnership {
+  readonly roster: readonly RosterParticipant[];
+  readonly identity: OwnIdentity | null;
+}
+
+/** Nobody known: every keyless desktop reads as the viewer's own, and no row names an owner. */
+export const NO_OWNERSHIP: DesktopOwnership = Object.freeze({ roster: Object.freeze([]), identity: null });
 
 /** The first two free-text rows: Enter's fallthrough, and Ctrl+Enter's target. */
 export type TextAction = "primary" | "secondary";
@@ -104,7 +119,7 @@ function launchRowsOf(apps: readonly AppRecord[], query: string): LaunchRow[] {
 }
 
 /** Every window of every desktop, the active desktop's first and in opening order, narrowed by the query. */
-function windowRowsOf(state: DesktopState, query: string): WindowRow[] {
+function windowRowsOf(state: DesktopState, query: string, ownership: DesktopOwnership): WindowRow[] {
   const placements = activePlacements(state);
   const ordered = [...state.desktops].sort(
     (left, right) => Number(right.id === state.activeDesktopId) - Number(left.id === state.activeDesktopId),
@@ -112,6 +127,9 @@ function windowRowsOf(state: DesktopState, query: string): WindowRow[] {
   const rows: WindowRow[] = [];
   for (const desktop of ordered) {
     const isOnActiveDesktop = desktop.id === state.activeDesktopId;
+    const ownerName = isOwnDesktop(desktop, ownership.identity)
+      ? null
+      : (ownerEntryOf(desktop, ownership.roster)?.display_name ?? null);
     for (const window of desktop.windows) {
       const app = appByName(state, window.app);
       const title = effectiveWindowTitle(state, window, app);
@@ -122,6 +140,7 @@ function windowRowsOf(state: DesktopState, query: string): WindowRow[] {
         window,
         desktopId: desktop.id,
         desktopName: desktop.name,
+        ownerName,
         app,
         title,
         isMinimized: isOnActiveDesktop ? isWindowMinimized(placements, window.id) : false,
@@ -159,12 +178,16 @@ export function isMessageText(text: string): boolean {
 /** The menu for the field's ``query`` (plan section 3.5): window rows appear only while typing; the free-text rows
  *  stand alone for a text with a line break. The line break is read off the field's text as typed, as the field
  *  reads it for the arrows, so a break just typed already makes a message; the rows send the trimmed text. */
-export function launcherRowsOf(state: DesktopState, query: string): LauncherMenuRows {
+export function launcherRowsOf(
+  state: DesktopState,
+  query: string,
+  ownership: DesktopOwnership = NO_OWNERSHIP,
+): LauncherMenuRows {
   const text = query.trim();
   const apps = openableApps(state);
   const isMessage = isMessageText(query);
   const launchRows = isMessage ? [] : launchRowsOf(apps, text);
-  const windowRows = text === "" || isMessage ? [] : windowRowsOf(state, text);
+  const windowRows = text === "" || isMessage ? [] : windowRowsOf(state, text, ownership);
   const textRows = textRowsOf(apps, text);
   return {
     launchRows,

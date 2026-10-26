@@ -62,6 +62,13 @@ describe("parseDesktop", () => {
     ).toThrow(WireShapeError);
   });
 
+  it("reads the owner, absent or null for the workspace owner's and a key for a visitor's", () => {
+    expect(parseDesktop(DESKTOP_WIRE).owner).toBeNull();
+    expect(parseDesktop({ ...DESKTOP_WIRE, owner: null }).owner).toBeNull();
+    expect(parseDesktop({ ...DESKTOP_WIRE, owner: "user:user-alice-0001" }).owner).toBe("user:user-alice-0001");
+    expect(() => parseDesktop({ ...DESKTOP_WIRE, owner: 7 })).toThrow(WireShapeError);
+  });
+
   it("reads a null wallpaper and refuses a desktop of the wrong shape", () => {
     expect(parseDesktop({ ...DESKTOP_WIRE, wallpaper: null }).wallpaper).toBeNull();
     expect(() => parseDesktop({ ...DESKTOP_WIRE, windows: "none" })).toThrow(WireShapeError);

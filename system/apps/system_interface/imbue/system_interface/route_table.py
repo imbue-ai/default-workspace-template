@@ -64,6 +64,7 @@ from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_routes import DesktopMetadataRequest
+from imbue.system_interface.shell.desktop_routes import DesktopOrderRequest
 from imbue.system_interface.shell.desktop_routes import DesktopSettingsRequest
 from imbue.system_interface.shell.desktop_routes import DesktopShortcutRequest
 from imbue.system_interface.shell.desktop_routes import DesktopWallpaperRequest
@@ -124,6 +125,9 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("GET", DESKTOPS_ROUTE): RouteModels(response_model=DesktopsListing),
     ("POST", DESKTOPS_ROUTE): RouteModels(
         request_model=DesktopMetadataRequest, response_model=DesktopView, success_status=HTTP_CREATED
+    ),
+    ("POST", f"{DESKTOPS_ROUTE}/order"): RouteModels(
+        request_model=DesktopOrderRequest, response_model=DesktopsListing
     ),
     ("POST", "/api/desktops/{desktop_id}/settings"): _edits_desktop(DesktopSettingsRequest),
     ("POST", "/api/desktops/{desktop_id}/wallpaper"): _edits_desktop(DesktopWallpaperRequest),
