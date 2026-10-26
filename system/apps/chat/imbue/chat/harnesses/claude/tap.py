@@ -12,9 +12,9 @@ in-process message API (``send_key_chord_to_agents`` -> ``press_key_chord``), wh
 the same per-agent ``message.lock`` as a text send, so the chord can never interleave with
 a half-delivered message. This module owns only the orchestration around that keypress:
 the refresh-first gate, the live-session byte baseline, the bounded verdict watch, and the
-one recovery message for the cancelled-follow-on race. The abort-and-capture pieces
-(``resolve_live_session_baseline`` / ``watch_for_flush_verdict``) and the pure verdict
-lattice are factored so the sibling plan-claude-interrupt path can reuse them.
+one recovery message for the cancelled-follow-on race. The live-session baseline and the raw
+tail reader (``resolve_live_session_baseline`` / ``read_raw_tail``) are shared with the stop
+button below.
 
 The watch is biased toward *never losing* a message: it fast-exits FLUSHED once the mirror has
 drained AND the flush is confirmed to have started a turn -- either the turn produced an answer OR
@@ -381,7 +381,7 @@ def watch_for_flush_verdict(
 
     Every poll reads the whole tail since the baseline, so a dequeue or an answer seen once stays
     seen. Exits early on a positive FLUSHED; otherwise polls to the deadline and finalizes from the
-    last observation. Shared with the sibling interrupt path.
+    last observation.
     """
     deadline = now() + watch_deadline_seconds
     mirror_is_empty, facts = _poll_tap_state(watcher, session_file, baseline_size)
