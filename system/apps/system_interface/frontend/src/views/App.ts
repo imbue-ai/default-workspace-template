@@ -1060,6 +1060,9 @@ export function App(): m.Component<AppAttrs> {
       case "refresh":
         current.refreshWindow(windowId);
         return;
+      case "app-chat":
+        void current.openAppChat(windowId);
+        return;
       case "menu":
         // A press while this menu is up lands on the menu's own sheet and closes it there, so the
         // click that reaches the kebab is almost always the opening one; the toggle stands for the

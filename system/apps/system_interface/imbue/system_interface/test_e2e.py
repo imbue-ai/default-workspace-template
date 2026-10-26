@@ -111,6 +111,9 @@ _PINNED_HOME_PATH = "/"
 _PINNED_NEW_LAUNCH_ID = "new"
 _PINNED_SEND_LAUNCH_ID = "send"
 _PINNED_DRAFT_LAUNCH_ID = "draft"
+_PINNED_APP_CHAT_LAUNCH_ID = "app-chat"
+_PINNED_APP_PARAM = "app"
+_PINNED_APP_DISPLAY_NAME_PARAM = "app_display_name"
 _PINNED_TEXT_PARAM = "message"
 
 # The query parameter a stub's POST launch path names itself under in the page path it answers.
@@ -205,28 +208,34 @@ def _running_e2e_server(
                     pinned_served.http_url,
                     display_name=_PINNED_APP_DISPLAY_NAME,
                     pin=(_PINNED_HOME_PATH, *pin),
-                    # The pin's home path is a plain page, as the chat's root is; the other three are POST launch
-                    # paths as the chat's, two taking typed text and one a draft.
+                    # The pin's home path is a plain page, as the chat's root is; the other four are POST launch
+                    # paths as the chat's, two taking typed text, one a draft, and one about an app.
                     launch_paths=(
                         ("root", _PINNED_APP_DISPLAY_NAME, _PINNED_HOME_PATH),
                         (_PINNED_NEW_LAUNCH_ID, f"New {_PINNED_APP_DISPLAY_NAME}", "/new"),
                         (_PINNED_SEND_LAUNCH_ID, f"Send to {_PINNED_APP_DISPLAY_NAME.lower()}...", "/send"),
                         (_PINNED_DRAFT_LAUNCH_ID, f"Draft into {_PINNED_APP_DISPLAY_NAME.lower()}", "/draft"),
+                        (_PINNED_APP_CHAT_LAUNCH_ID, "Chat about this app", f"/{_PINNED_APP_CHAT_LAUNCH_ID}"),
                     ),
                     launch_params={
                         _PINNED_NEW_LAUNCH_ID: [_PINNED_TEXT_PARAM],
                         _PINNED_SEND_LAUNCH_ID: [_PINNED_TEXT_PARAM],
                         _PINNED_DRAFT_LAUNCH_ID: [_PINNED_TEXT_PARAM],
+                        _PINNED_APP_CHAT_LAUNCH_ID: [_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM],
                     },
                     launch_text_params={
                         _PINNED_NEW_LAUNCH_ID: _PINNED_TEXT_PARAM,
                         _PINNED_SEND_LAUNCH_ID: _PINNED_TEXT_PARAM,
                     },
                     launch_draft_params={_PINNED_DRAFT_LAUNCH_ID: _PINNED_TEXT_PARAM},
+                    launch_app_params={
+                        _PINNED_APP_CHAT_LAUNCH_ID: (_PINNED_APP_PARAM, _PINNED_APP_DISPLAY_NAME_PARAM)
+                    },
                     launch_methods={
                         _PINNED_NEW_LAUNCH_ID: "POST",
                         _PINNED_SEND_LAUNCH_ID: "POST",
                         _PINNED_DRAFT_LAUNCH_ID: "POST",
+                        _PINNED_APP_CHAT_LAUNCH_ID: "POST",
                     },
                 )
             )
@@ -1806,6 +1815,50 @@ def test_an_op_move_wins_over_a_report_the_page_made_before_hearing_it(e2e_serve
 
 
 # Pinned windows (pinned-taskbar-entries plan sections 3.2, 4.1, 4.3, 4.4)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_the_title_bars_balloon_opens_the_chat_about_the_app_beside_its_window(tmp_path: Path, page: Page) -> None:
+    """A window's "Chat about this app" (the multiplayer spec, section 9): a focused title bar is the window menu,
+    Refresh, and the balloon, then the controls; the balloon runs the pinned app's launch path about the window's
+    app (no window path in the envelope), this client's pinned window is pointed at the page it answers, and the two
+    windows are snapped side by side, the chat on the right (where a pinned window never shown counts as being) and
+    on top. The pinned app's own windows carry the balloon too."""
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        window_id = _open_via_shortcut(page, server)
+        window = _window(page, window_id)
+        controls = window.locator("[data-window-control]")
+        expect(controls).to_have_count(6)
+        assert [control.get_attribute("data-window-control") for control in controls.all()] == [
+            "menu",
+            "refresh",
+            "app-chat",
+            "minimize",
+            "maximize",
+            "close",
+        ]
+
+        window.locator('[data-window-control="app-chat"]').click()
+
+        about = {_PINNED_APP_PARAM: _STUB_APP_NAME, _PINNED_APP_DISPLAY_NAME_PARAM: _STUB_APP_DISPLAY_NAME}
+        _wait_for_own_window_path(
+            server.base_url, client_id, pinned["id"], _launched_page_path(_PINNED_APP_CHAT_LAUNCH_ID, about)
+        )
+        (posted,) = _posted_launches(server.pinned_url)
+        assert posted["path"] == f"/{_PINNED_APP_CHAT_LAUNCH_ID}"
+        assert posted["body"] == {**about, "client_id": client_id, "desktop_id": _HOME_DESKTOP_ID}
+        chat = _window(page, pinned["id"])
+        expect(chat).to_be_visible(timeout=15000)
+        expect(chat).to_have_attribute("data-window-state", "SNAPPED_RIGHT")
+        expect(chat).to_have_attribute("data-focused", "true")
+        expect(window).to_have_attribute("data-window-state", "SNAPPED_LEFT")
+        placements = _placements(server.base_url, client_id)
+        assert (placements[pinned["id"]]["state"], placements[window_id]["state"]) == ("SNAPPED_RIGHT", "SNAPPED_LEFT")
+        assert placements[pinned["id"]]["is_minimized"] is False
+        expect(chat.locator('[data-window-control="app-chat"]')).to_be_visible()
 
 
 def _pinned_window(base_url: str, desktop_id: str = _HOME_DESKTOP_ID) -> dict[str, Any]:

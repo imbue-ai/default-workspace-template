@@ -216,7 +216,7 @@ describe("parseAppRecord", () => {
       draft_param: "message",
     };
     const app = parseAppRecord({ ...wire, launch_paths: [drafting] });
-    expect(app.launch_paths[0]).toEqual({ ...drafting, mention_param: null, text_param: null });
+    expect(app.launch_paths[0]).toEqual({ ...drafting, mention_param: null, text_param: null, app_params: null });
     expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, method: "PUT" }] })).toThrow(WireShapeError);
     expect(() => parseAppRecord({ ...wire, launch_paths: [{ ...drafting, presets: { is_draft: true } }] })).toThrow(
       WireShapeError,
@@ -445,5 +445,22 @@ describe("the tray's records (the multiplayer spec)", () => {
       parseAppRecord({ name: "chat", url: "http://127.0.0.1:1", launch_paths: [mentioning] }).launch_paths[0]
         .mention_param,
     ).toBe("message");
+    const aboutAnApp = {
+      id: "app-chat",
+      label: "Chat about this app",
+      path: "/x",
+      app_params: { name: "app", display_name: "app_display_name" },
+    };
+    expect(
+      parseAppRecord({ name: "chat", url: "http://127.0.0.1:1", launch_paths: [aboutAnApp] }).launch_paths[0]
+        .app_params,
+    ).toEqual({ name: "app", display_name: "app_display_name" });
+    expect(() =>
+      parseAppRecord({
+        name: "chat",
+        url: "http://127.0.0.1:1",
+        launch_paths: [{ ...aboutAnApp, app_params: { name: "app" } }],
+      }),
+    ).toThrow(WireShapeError);
   });
 });

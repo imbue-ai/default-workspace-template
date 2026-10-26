@@ -70,8 +70,9 @@ def _wait_for_the_chat_app(shell_url: str) -> dict[str, Any]:
 @pytest.mark.timeout(60, func_only=False)
 def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: Path) -> None:
     """The chat reaches the shell's inventory as an app: running, with the launch paths of its manifest (the ``root``
-    page, and ``main``, ``new``, ``send``, ``draft``, and ``lounge`` as POSTs onto its intake route with their presets
-    and text, draft, or mention params) and its default shortcut, and nothing about the chats inside it."""
+    page, and ``main``, ``new``, ``send``, ``draft``, ``lounge``, and ``app-chat`` as POSTs onto its intake route with
+    their presets and text, draft, mention, or app params) and its default shortcut, and nothing about the chats
+    inside it."""
     with running_workspace(tmp_path, find_free_port(), find_free_port()) as workspace:
         listed = _wait_for_the_chat_app(workspace.shell_url)
         assert listed["display_name"] == "Chat"
@@ -83,12 +84,14 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             ("send", "/api/chats/intake", "POST"),
             ("draft", "/api/chats/intake", "POST"),
             ("lounge", "/api/chats/intake", "POST"),
+            ("app-chat", "/api/chats/intake", "POST"),
         ]
         assert [launch["text_param"] for launch in listed["launch_paths"]] == [
             None,
             "message",
             "message",
             "message",
+            None,
             None,
             None,
         ]
@@ -99,6 +102,7 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             None,
             "message",
             None,
+            None,
         ]
         assert [launch["mention_param"] for launch in listed["launch_paths"]] == [
             None,
@@ -107,6 +111,16 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             None,
             None,
             "message",
+            None,
+        ]
+        assert [launch["app_params"] for launch in listed["launch_paths"]] == [
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            {"name": "app", "display_name": "app_display_name"},
         ]
         assert [launch["presets"] for launch in listed["launch_paths"]] == [
             {},
@@ -115,6 +129,7 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             {"target": "chat_selector"},
             {"target": "current_chat", "is_draft": "true"},
             {"target": "lounge", "is_draft": "true"},
+            {"target": "app_chat"},
         ]
         assert listed["default_shortcut"] == {"launch": "root", "mode": "new"}
 

@@ -436,12 +436,12 @@ def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mentio
     launch_path = {**_launch_path_data(), "draft_param": "path"}
     with pytest.raises(
         ValidationError,
-        match="at most one of text_param, draft_param, and mention_param",
+        match="at most one of text_param, draft_param, mention_param, and app_params",
     ):
         AppManifest.model_validate({**data, "launch_paths": [launch_path]})
     with pytest.raises(
         ValidationError,
-        match="at most one of text_param, draft_param, and mention_param",
+        match="at most one of text_param, draft_param, mention_param, and app_params",
     ):
         AppManifest.model_validate(
             {
@@ -494,6 +494,64 @@ def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mentio
         }
     )
     assert mentioning.launch_paths[0].mention_param == "path"
+
+
+def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_and_nothing_else() -> (
+    None
+):
+    """The ``app_params`` pair (the multiplayer spec, section 9.2) names two distinct params of the launch path, and
+    stands alone like a text, draft, or mention param."""
+    data = _full_manifest_data()
+    params = [
+        {"name": "app", "label": "App", "required": True},
+        {"name": "app_display_name", "label": "App name", "required": True},
+    ]
+    about_an_app = {
+        **_launch_path_data(),
+        "text_param": None,
+        "params": params,
+        "app_params": {"name": "app", "display_name": "app_display_name"},
+    }
+    manifest = AppManifest.model_validate({**data, "launch_paths": [about_an_app]})
+    assert manifest.launch_paths[0].app_params is not None
+    assert manifest.launch_paths[0].app_params.display_name == "app_display_name"
+    with pytest.raises(
+        ValidationError,
+        match="app_params.display_name 'title' is not one of the launch path's params",
+    ):
+        AppManifest.model_validate(
+            {
+                **data,
+                "launch_paths": [
+                    {
+                        **about_an_app,
+                        "app_params": {"name": "app", "display_name": "title"},
+                    }
+                ],
+            }
+        )
+    with pytest.raises(
+        ValidationError,
+        match="at most one of text_param, draft_param, mention_param, and app_params",
+    ):
+        AppManifest.model_validate(
+            {**data, "launch_paths": [{**about_an_app, "text_param": "app"}]}
+        )
+    with pytest.raises(
+        ValidationError,
+        match="names one param 'app' for both the name and the display name",
+    ):
+        AppManifest.model_validate(
+            {
+                **data,
+                "launch_paths": [
+                    {
+                        **about_an_app,
+                        "app_params": {"name": "app", "display_name": "app"},
+                    }
+                ],
+            }
+        )
 
 
 def test_a_preset_may_not_shadow_a_param() -> None:

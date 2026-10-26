@@ -18,7 +18,7 @@ import { currentPresenceState, reportFocusChange, reportPresence, startPresenceR
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
-import { prependToComposer } from "./views/MessageInput";
+import { prependToComposer, setComposerHint } from "./views/MessageInput";
 
 /** The path of a sub-agent view: the chat, the agent whose session it is, and the session. */
 export function subagentViewPath(key: string): string {
@@ -96,6 +96,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
       shown: onShown,
       hidden: onHidden,
       prependDraft: (text) => prependToComposer(chatId, text),
+      hintComposer: (hint) => setComposerHint(chatId, hint),
       setCompact: (isCompact) => {
         setCompactFromRoot(isCompact);
         m.redraw();

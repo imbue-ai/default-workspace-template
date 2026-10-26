@@ -5,6 +5,7 @@ from collections import Counter
 from collections.abc import Callable
 from collections.abc import Mapping
 from collections.abc import Sequence
+from collections.abc import Set as AbstractSet
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -27,8 +28,10 @@ from workspace_layout.identity import visiting_user_id
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
+from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPage
 from workspace_layout.primitives import WindowPath
 from workspace_layout.primitives import WindowTitle
 from workspace_layout.records import ClientRecord
@@ -64,6 +67,7 @@ from imbue.system_interface.shell.close_hints import post_window_closed_hint
 from imbue.system_interface.shell.close_hints import window_closed_hint
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
+from imbue.system_interface.shell.data_types import ClientDesktopView
 from imbue.system_interface.shell.data_types import ClientReportOutcome
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import DesktopDeleteOutcome
@@ -71,6 +75,7 @@ from imbue.system_interface.shell.data_types import LaunchOutcome
 from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PlacementsEditOutcome
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
+from imbue.system_interface.shell.data_types import ShownWindow
 from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.data_types import WindowOpenOutcome
 from imbue.system_interface.shell.data_types import WindowOpenRequest
@@ -80,16 +85,19 @@ from imbue.system_interface.shell.data_types import effective_window
 from imbue.system_interface.shell.data_types import stoppable_program_of
 from imbue.system_interface.shell.data_types import window_view
 from imbue.system_interface.shell.desktop_document import apps_with_their_default_shortcut_on
+from imbue.system_interface.shell.desktop_document import choose_show_target
 from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import find_window
 from imbue.system_interface.shell.desktop_document import find_window_at
 from imbue.system_interface.shell.desktop_document import pinned_apps
 from imbue.system_interface.shell.desktop_document import pinned_window
+from imbue.system_interface.shell.desktop_document import placement_of
 from imbue.system_interface.shell.desktop_document import require_window
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
 from imbue.system_interface.shell.desktop_document import with_window_placed_on_open
 from imbue.system_interface.shell.desktop_document import with_window_raised
+from imbue.system_interface.shell.desktop_document import with_windows_side_by_side
 from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.desktops import DesktopStore
 from imbue.system_interface.shell.desktops import desktop_kept_by_returning_client
@@ -359,10 +367,67 @@ class ShellState(MutableModel):
             entry, launch_path, params, client_id, desktop_id, window_path, self.launch_poster
         )
 
+    def _client_desktop_view(self, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
+        """The desktop as one client sees it: its layout, and the windows at the client's own paths."""
+        return ClientDesktopView(
+            desktop=desktop,
+            layout=self.read_desktop_layout(desktop, client_id),
+            seen_windows=self.windows_for_client(desktop, client_id),
+        )
+
+    def show_window(
+        self,
+        client_id: ClientId,
+        desktop: Desktop,
+        app: AppName,
+        path: WindowPath,
+        showing: AbstractSet[WindowPath],
+        repoint: AbstractSet[WindowPage],
+        is_every_desktop_searched: bool,
+        is_minimized: bool,
+    ) -> ShownWindow:
+        """Put ``path`` of ``app`` on the client's screen by the ``show`` op's rule (desktop contracts.md section 8,
+        ``choose_show_target``): a window already at the path raised (on the given desktop, or on any desktop when
+        ``is_every_desktop_searched``), else a window on a page in ``repoint`` or the app's pinned window navigated
+        there, else a new window opened on the desktop (placed minimized for the client when ``is_minimized``, as
+        an open is); a pulled-out window is left where it is."""
+        self.require_app_entry(str(app))
+        others = (
+            [self._client_desktop_view(other, client_id) for other in self.list_desktops() if other.id != desktop.id]
+            if is_every_desktop_searched
+            else []
+        )
+        choice = choose_show_target(self._client_desktop_view(desktop, client_id), others, app, path, showing, repoint)
+        shown_on = self.get_desktop(choice.desktop_id)
+        is_raised_in_own_window = False
+        if choice.window is None:
+            request = WindowOpenRequest(
+                app=app, path=path, client_id=client_id, if_present=IfPresent.NEW, minimized=is_minimized
+            )
+            window_id = self.open_window(shown_on.id, request).window.id
+        else:
+            window_id = choice.window.id
+            if choice.outcome is not ShowOutcome.RAISED:
+                # As a ``navigate`` does: an independent window moves for this client alone, a linked one for everyone.
+                self.report_window_location(shown_on.id, window_id, client_id, path, choice.window.title)
+            is_raised_in_own_window = placement_of(
+                self.read_desktop_layout(shown_on, client_id), window_id
+            ).is_detached
+            if not is_raised_in_own_window:
+                self.edit_desktop_layout(shown_on, client_id, lambda current: with_window_raised(current, window_id))
+        return ShownWindow(
+            desktop=self.get_desktop(shown_on.id),
+            window_id=window_id,
+            outcome=choice.outcome,
+            is_raised_in_own_window=is_raised_in_own_window,
+        )
+
     def launch(self, desktop_id: str, request: LaunchRequest) -> LaunchOutcome:
         """Run a launch path for a client (post-launch-paths plan section 5.3): resolve the page it opens, then open a
-        window there (the ``new`` and ``focus`` targets, as ``open_window`` does) or point the named window at it
-        (the ``window`` target, as the op route's ``navigate`` does)."""
+        window there (the ``new`` and ``focus`` targets, as ``open_window`` does), point the named window at it (the
+        ``window`` target, as the op route's ``navigate`` does), or put it on screen by the ``show`` op's rule and,
+        when the target names a window, lay the shown window out beside it (the ``show`` target; the multiplayer
+        spec, section 9.2)."""
         desktop = self.get_desktop(desktop_id)
         entry = self.require_app_entry(str(request.app))
         launch_path = self.require_launch_path(entry, request.launch)
@@ -395,6 +460,36 @@ class ShellState(MutableModel):
                 )
                 navigated = self.report_window_location(desktop.id, window.id, request.client_id, path, seen.title)
                 return LaunchOutcome(window=navigated, path=path, is_new=False)
+            case LaunchTargetKind.SHOW:
+                beside = require_window(desktop, request.target.beside) if request.target.beside is not None else None
+                path = self.launch_destination(entry, launch_path, request.params, request.client_id, desktop.id, None)
+                shown = self.show_window(
+                    request.client_id,
+                    desktop,
+                    request.app,
+                    path,
+                    showing=set(),
+                    repoint=set(),
+                    is_every_desktop_searched=False,
+                    is_minimized=request.minimized,
+                )
+                # The pinned window's own balloon names it as ``beside`` and the show navigates it: one window, nothing
+                # to lay out beside.
+                if beside is not None and beside.id != shown.window_id and not shown.is_raised_in_own_window:
+                    layout = self.read_desktop_layout(shown.desktop, request.client_id)
+                    # A ``beside`` pulled out into a window of the chrome's own is left out, as the shown window is:
+                    # snapping it would pull it back.
+                    if not placement_of(layout, beside.id).is_detached:
+                        self.edit_desktop_layout(
+                            shown.desktop,
+                            request.client_id,
+                            lambda current: with_windows_side_by_side(current, shown.window_id, beside.id),
+                        )
+                window = require_window(shown.desktop, shown.window_id)
+                seen = effective_window(
+                    window, self.read_window_paths(shown.desktop, request.client_id).get(window.id)
+                )
+                return LaunchOutcome(window=seen, path=path, is_new=shown.outcome is ShowOutcome.OPENED)
             case _ as unreachable:
                 assert_never(unreachable)
 

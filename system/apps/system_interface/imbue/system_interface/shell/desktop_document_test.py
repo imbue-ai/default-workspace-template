@@ -77,6 +77,7 @@ from imbue.system_interface.shell.desktop_document import with_window_raised
 from imbue.system_interface.shell.desktop_document import with_window_reattached
 from imbue.system_interface.shell.desktop_document import with_window_restored
 from imbue.system_interface.shell.desktop_document import with_window_state
+from imbue.system_interface.shell.desktop_document import with_windows_side_by_side
 from imbue.system_interface.shell.desktop_document import without_pin_marks
 from imbue.system_interface.shell.desktop_document import without_shortcut
 from imbue.system_interface.shell.errors import InvalidShellValueError
@@ -787,3 +788,46 @@ def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_window
     assert ensured.desktop is seeded and ensured.is_written is False
     with pytest.raises(InvalidShellValueError):
         desktop_seeded_from(source, DesktopId("bob"), "Bob", "#16A34A", 1, [], later, None)
+
+
+def _placed(window_id: WindowId, x: float, width: float, is_minimized: bool = False) -> WindowPlacement:
+    return WindowPlacement(
+        window_id=window_id,
+        frame=Frame(x=x, y=0.1, width=width, height=0.5),
+        state=WindowState.NORMAL,
+        is_minimized=is_minimized,
+    )
+
+
+def test_side_by_side_snaps_the_shown_window_to_the_half_its_centre_is_on_and_puts_it_on_top() -> None:
+    """The multiplayer spec, section 9.2: the shown window keeps the side its frame's centre is already on, the window
+    it is laid out beside takes the other, and the shown one ends on top; a minimized or never-placed shown window
+    counts as being on the right."""
+    centred_left = _layout(_placed(_WIN_1, 0.1, 0.3), _placed(_WIN_2, 0.5, 0.4))
+    laid = with_windows_side_by_side(centred_left, _WIN_1, _WIN_2)
+    assert [(placement.window_id, placement.state, placement.is_minimized) for placement in laid.placements] == [
+        (_WIN_2, WindowState.SNAPPED_RIGHT, False),
+        (_WIN_1, WindowState.SNAPPED_LEFT, False),
+    ]
+    assert laid.placements[-1].frame == centred_left.placements[0].frame
+
+    centred_right = _layout(_placed(_WIN_2, 0.0, 0.2), _placed(_WIN_1, 0.4, 0.5))
+    laid = with_windows_side_by_side(centred_right, _WIN_1, _WIN_2)
+    assert [(placement.window_id, placement.state) for placement in laid.placements] == [
+        (_WIN_2, WindowState.SNAPPED_LEFT),
+        (_WIN_1, WindowState.SNAPPED_RIGHT),
+    ]
+
+    minimized_on_the_left = _layout(_placed(_WIN_1, 0.0, 0.3, is_minimized=True), _placed(_WIN_2, 0.0, 0.3))
+    laid = with_windows_side_by_side(minimized_on_the_left, _WIN_1, _WIN_2)
+    assert [(placement.window_id, placement.state, placement.is_minimized) for placement in laid.placements] == [
+        (_WIN_2, WindowState.SNAPPED_LEFT, False),
+        (_WIN_1, WindowState.SNAPPED_RIGHT, False),
+    ]
+
+    never_placed = _layout(_placed(_WIN_2, 0.6, 0.3))
+    laid = with_windows_side_by_side(never_placed, _WIN_1, _WIN_2)
+    assert [(placement.window_id, placement.state) for placement in laid.placements] == [
+        (_WIN_2, WindowState.SNAPPED_LEFT),
+        (_WIN_1, WindowState.SNAPPED_RIGHT),
+    ]

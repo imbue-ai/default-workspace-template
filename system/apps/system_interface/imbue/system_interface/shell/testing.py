@@ -86,13 +86,14 @@ def registry_row_toml(
     # Each launch path as ``(id, label, path)``; ``launch_params`` names each one's param names by id,
     # ``launch_text_params`` the param of each that takes typed text, ``launch_draft_params`` the param of each
     # that takes drafted text, ``launch_mention_params`` the param of each that takes a mention of a person,
-    # ``launch_methods`` the method of each that is not a GET, and ``launch_presets`` the presets of each that
-    # declares any.
+    # ``launch_app_params`` the ``(name, display_name)`` params of each that is about an app, ``launch_methods``
+    # the method of each that is not a GET, and ``launch_presets`` the presets of each that declares any.
     launch_paths: Sequence[tuple[str, str, str]] = (),
     launch_params: Mapping[str, Sequence[str]] | None = None,
     launch_text_params: Mapping[str, str] | None = None,
     launch_draft_params: Mapping[str, str] | None = None,
     launch_mention_params: Mapping[str, str] | None = None,
+    launch_app_params: Mapping[str, tuple[str, str]] | None = None,
     launch_methods: Mapping[str, str] | None = None,
     launch_presets: Mapping[str, Mapping[str, str]] | None = None,
     # The ``[pin]`` table as ``(path, style, scope, default_mode)``.
@@ -153,6 +154,9 @@ def registry_row_toml(
         mention_param = (launch_mention_params or {}).get(launch_id)
         if mention_param is not None:
             lines.append(f'mention_param = "{mention_param}"')
+        app_params = (launch_app_params or {}).get(launch_id)
+        if app_params is not None:
+            lines.append(f'app_params = {{ name = "{app_params[0]}", display_name = "{app_params[1]}" }}')
         method = (launch_methods or {}).get(launch_id)
         if method is not None:
             lines.append(f'method = "{method}"')

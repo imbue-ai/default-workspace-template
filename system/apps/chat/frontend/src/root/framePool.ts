@@ -132,6 +132,15 @@ export class InnerFramePool {
     return true;
   }
 
+  /** Hand ``hint`` to the live composer of ``chatId``'s page as its placeholder, focused; false when the page is not
+   *  loaded yet (the caller then stores the hint where the page's composer reads it on mount). */
+  hintComposer(chatId: string, hint: string): boolean {
+    const api = this.api(chatId);
+    if (api === null) return false;
+    api.hintComposer(hint);
+    return true;
+  }
+
   private api(chatId: string): ChatPageEmbedApi | null {
     const held = this.held.get(chatId);
     if (held === undefined || !held.isLoaded) return null;

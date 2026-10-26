@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_WINDOW_PATH_LENGTH,
+  appChatLaunchOf,
+  appChatParams,
   appLaunchesOf,
   appShortcutOf,
   fillParamOf,
@@ -86,6 +88,17 @@ describe("launch paths of an app", () => {
       mode: "focus",
     });
     expect(appShortcutOf(appRecord("gone", { default_shortcut: { launch: "missing", mode: "new" } }))).toBeNull();
+    // A path that takes a mention or is about an app is never the shortcut, as the shell seeds it.
+    const marked = appRecord("marked", {
+      program: "marked",
+      default_shortcut: null,
+      launch_paths: [
+        launchPathRecord({ id: "m", mention_param: "m", params: ["m"] }),
+        launchPathRecord({ id: "a", params: ["x", "y"], app_params: { name: "x", display_name: "y" } }),
+        launchPathRecord({ id: "plain", path: "/plain" }),
+      ],
+    });
+    expect(appShortcutOf(marked)).toEqual({ launch: "plain", mode: "focus" });
     const undeclared = { default_shortcut: null, launch_paths: buddy.launch_paths };
     expect(appShortcutOf(appRecord("own", undeclared))).toEqual({ launch: "root", mode: "focus" });
     // With no declared default and every launch path taking text, the first is still the app's shortcut.
@@ -158,5 +171,33 @@ describe("the mention rows", () => {
     ]);
     expect(mentionParams(mention, "@Bob ")).toEqual({ message: "@Bob " });
     expect(mentionParams(launchPathRecord(), "@Bob ")).toEqual({});
+  });
+});
+
+describe("the app-chat launch", () => {
+  it("keeps a launch path about an app out of every row and picks the first in launcher order for the button", () => {
+    const aboutAnApp = launchPathRecord({
+      id: "app-chat",
+      path: "/api/chats/intake",
+      method: "POST",
+      params: ["app", "app_display_name"],
+      app_params: { name: "app", display_name: "app_display_name" },
+    });
+    const chat = appRecord("chat", {
+      launcher_rank: 10,
+      launch_paths: [launchPathRecord({ id: "root", path: "/" }), aboutAnApp],
+    });
+    const notes = appRecord("notes", {
+      launch_paths: [
+        launchPathRecord({ id: "about", params: ["a", "d"], app_params: { name: "a", display_name: "d" } }),
+      ],
+    });
+    const docs = appRecord("docs", { display_name: "Docs" });
+    expect(appLaunchesOf([notes, chat]).map((launch) => launch.launchPath.id)).toEqual(["root"]);
+    const launch = appChatLaunchOf([notes, chat]);
+    expect(launch === null ? null : `${launch.app.name}:${launch.launchPath.id}`).toBe("chat:app-chat");
+    expect(appChatLaunchOf([docs])).toBeNull();
+    expect(appChatParams(aboutAnApp, docs)).toEqual({ app: "docs", app_display_name: "Docs" });
+    expect(appChatParams(launchPathRecord(), docs)).toEqual({});
   });
 });

@@ -24,7 +24,7 @@ and copies its static fields onto the row: ``display_name``, ``description``, ``
 ``stop_when_no_windows``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
 the names of the params, and ``method``, ``presets``, ``text_param``,
-``draft_param``, and ``mention_param`` when given), ``pin`` (path, and style, scope, and
+``draft_param``, ``mention_param``, and ``app_params`` when given), ``pin`` (path, and style, scope, and
 default_mode when given), ``window_closed_path``, and ``message_handlers`` (type, and path or show and showing);
 the icon is read from the file the manifest names, relative to the manifest. Every manifest
 field is authoritative on every call, so a re-registration with a changed manifest updates the row.
@@ -700,9 +700,9 @@ def _copied_launch_path(
     launch_path: Any, path: Path
 ) -> tuple[dict[str, object] | None, str | None]:
     """One manifest launch path as the registry row carries it: ``id``, ``label``, ``path``, ``method`` when
-    given, ``params`` (the param names) when it declares any, ``presets`` when it declares any, and
-    ``text_param``, ``draft_param``, and ``mention_param`` when it names them. Returns ``(copied, None)``, or
-    ``(None, error)``
+    given, ``params`` (the param names) when it declares any, ``presets`` when it declares any,
+    ``text_param``, ``draft_param``, and ``mention_param`` when it names them, and ``app_params`` (the ``name``
+    and ``display_name`` pair) when it declares one. Returns ``(copied, None)``, or ``(None, error)``
     when the entry is not shaped as the manifest requires."""
     if not (
         isinstance(launch_path, dict)
@@ -747,6 +747,19 @@ def _copied_launch_path(
             )
         if presets:
             copied["presets"] = dict(presets)
+    app_params = launch_path.get("app_params")
+    if app_params is not None:
+        if not (
+            isinstance(app_params, dict)
+            and set(app_params) == {"name", "display_name"}
+            and all(isinstance(value, str) for value in app_params.values())
+        ):
+            return (
+                None,
+                f"manifest {str(path)!r}: a launch path's app_params is a table of the strings 'name' and "
+                "'display_name'",
+            )
+        copied["app_params"] = dict(app_params)
     return copied, None
 
 

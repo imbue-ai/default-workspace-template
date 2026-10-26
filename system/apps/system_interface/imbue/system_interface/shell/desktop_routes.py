@@ -95,14 +95,12 @@ from imbue.system_interface.shell.api_models import WindowOpenedResponse
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
-from imbue.system_interface.shell.data_types import ClientDesktopView
 from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_layout_view
 from imbue.system_interface.shell.data_types import effective_launch_paths
-from imbue.system_interface.shell.desktop_document import choose_show_target
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import find_window_at
@@ -977,14 +975,6 @@ def _navigate(
     return named.window.id
 
 
-def _client_desktop_view(shell: ShellState, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
-    return ClientDesktopView(
-        desktop=desktop,
-        layout=shell.read_desktop_layout(desktop, client_id),
-        seen_windows=shell.windows_for_client(desktop, client_id),
-    )
-
-
 class ShowResult(FrozenModel):
     """What a ``show`` did: the client and desktop the page is on, the window showing it, and which way it went."""
 
@@ -1011,36 +1001,27 @@ def _show_page(
 ) -> ShowResult:
     """Put the path of the app on the target client's screen, choosing the window by the rule ``choose_show_target``
     spells."""
-    shell.require_app_entry(str(app))
     client_id = target.client_id
-    others = [
-        _client_desktop_view(shell, desktop, client_id)
-        for desktop in shell.list_desktops()
-        if desktop.id != target.desktop.id
-    ]
-    choice = choose_show_target(
-        _client_desktop_view(shell, target.desktop, client_id), others, app, path, showing, repoint
+    shown = shell.show_window(
+        client_id,
+        target.desktop,
+        app,
+        path,
+        showing=showing,
+        repoint=repoint,
+        is_every_desktop_searched=True,
+        is_minimized=False,
     )
-    desktop = shell.get_desktop(choice.desktop_id)
-    is_raised_in_own_window = False
-    if choice.window is None:
-        request = WindowOpenRequest(app=app, path=path, client_id=client_id, if_present=IfPresent.NEW)
-        window_id = shell.open_window(desktop.id, request).window.id
-    else:
-        window_id = choice.window.id
-        if choice.outcome is not ShowOutcome.RAISED:
-            # As a ``navigate`` does: an independent window moves for this client alone, a linked one for everyone.
-            shell.report_window_location(desktop.id, window_id, client_id, path, choice.window.title)
-        is_raised_in_own_window = placement_of(shell.read_desktop_layout(desktop, client_id), window_id).is_detached
-        if not is_raised_in_own_window:
-            shell.edit_desktop_layout(desktop, client_id, lambda current: with_window_raised(current, window_id))
+    desktop = shown.desktop
     # Switched after the raise, so the layout the client fetches on arriving already has the window on top; a window
     # raised in its own window leaves the client where ``args.desktop`` put it.
-    if not is_raised_in_own_window and desktop.id != target.desktop.id:
+    if not shown.is_raised_in_own_window and desktop.id != target.desktop.id:
         shell.set_client_active_desktop(client_id, desktop.id)
     else:
         _switch_as_asked(shell, target)
-    _announce_window_op(shell, LayoutOp.SHOW, window_id, client_id, requester, is_detached=is_raised_in_own_window)
+    _announce_window_op(
+        shell, LayoutOp.SHOW, shown.window_id, client_id, requester, is_detached=shown.is_raised_in_own_window
+    )
     logger.info(
         "layout op={} requester={} desktop={} client={} app={} path={} shown={}",
         LayoutOp.SHOW,
@@ -1049,14 +1030,14 @@ def _show_page(
         client_id,
         app,
         path,
-        choice.outcome.value,
+        shown.outcome.value,
     )
     return ShowResult(
         shown_on=_DesktopOpTarget(client_id=client_id, desktop=desktop),
-        window_id=window_id,
-        outcome=choice.outcome,
-        is_raised_in_own_window=is_raised_in_own_window,
-        has_no_desktop_window=not is_raised_in_own_window and _has_no_desktop_window(shell, client_id),
+        window_id=shown.window_id,
+        outcome=shown.outcome,
+        is_raised_in_own_window=shown.is_raised_in_own_window,
+        has_no_desktop_window=not shown.is_raised_in_own_window and _has_no_desktop_window(shell, client_id),
     )
 
 

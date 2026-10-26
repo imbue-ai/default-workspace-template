@@ -1,7 +1,8 @@
 /**
- * A window's title bar (concepts.md section 2.7), left to right: the app icon, the title,
- * Refresh, the window menu (three dots, right after it), then at the right edge minimize,
- * maximize (restore when maximized), and close. Resting on the maximize control opens the
+ * A window's title bar (concepts.md section 2.7; the multiplayer spec, section 9.1), left to right: while the
+ * window is focused, the window menu (three dots), Refresh, and "Chat about this app" (a speech balloon, on
+ * every window of an app that is not internal); the app icon and the title centred over the bar; then at the
+ * right edge minimize, maximize (restore when maximized), and close. Resting on the maximize control opens the
  * window's size menu, which the window menu opens under Move and resize too.
  * It is the drag handle (``data-drag-handle``);
  * a double click toggles maximize. A pinned window keeps its close control too, so the
@@ -23,7 +24,9 @@ const TITLE_ACTION_GLYPH_SIZE = 12;
  *  at a control's size it reads as mud. 20 in a 36 bar leaves 8 above and below. */
 const APP_GLYPH_SIZE = 20;
 
-export type WindowControl = "minimize" | "maximize" | "restore" | "close" | "menu" | "refresh";
+export type WindowControl = "minimize" | "maximize" | "restore" | "close" | "menu" | "refresh" | "app-chat";
+
+const APP_CHAT_LABEL = "Chat about this app";
 
 export interface TitleBarAttrs {
   readonly title: string;
@@ -31,6 +34,9 @@ export interface TitleBarAttrs {
   readonly state: WindowState;
   readonly isFocused: boolean;
   readonly isMenuOpen: boolean;
+  /** Whether the bar offers "Chat about this app": an app that is not internal, on a machine with an app-chat launch
+   *  path (the multiplayer spec, section 9.1). */
+  readonly hasAppChat: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
   readonly sizeMenuTrigger: m.Attributes;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;
@@ -78,18 +84,20 @@ function control(
 export function TitleBar(): m.Component<TitleBarAttrs> {
   return {
     view(vnode) {
-      const { title, app, state, isFocused, isMenuOpen, sizeMenuTrigger, onControl, onDoubleClick } = vnode.attrs;
+      const { title, app, state, isFocused, isMenuOpen, hasAppChat, sizeMenuTrigger, onControl, onDoubleClick } =
+        vnode.attrs;
       const isMaximized = state === "MAXIMIZED";
       const sizing = { extra: "ml-1", hover: sizeMenuTrigger };
       return m(
         "div",
         {
           "data-drag-handle": "",
-          // No gap of its own: the spacing between the leading items is uneven, so each carries
-          // its own leading margin.
+          // Three columns, the outer two of one width, so the title sits at the bar's centre whatever each side
+          // holds; a title that does not fit between them is cut, never pushed. No gap of its own: the spacing
+          // between the leading items is uneven, so each carries its own leading margin.
           class:
-            "title-bar pointer-events-auto flex h-(--desk-title-bar-height) shrink-0 items-center border-b " +
-            "border-default pr-1 pl-1.5 touch-none select-none " +
+            "title-bar pointer-events-auto grid h-(--desk-title-bar-height) shrink-0 grid-cols-[1fr_auto_1fr] " +
+            "items-center border-b border-default pr-1 pl-1.5 touch-none select-none " +
             // The open hand says the bar is the handle. The controls carry their own cursor.
             "cursor-grab " +
             (isFocused ? "bg-surface text-primary" : "bg-surface-secondary text-secondary"),
@@ -99,51 +107,60 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           },
         },
         [
-          // The app's icon paints itself (`docs/system/app-icons.md`), and so does the monogram an
-          // app with no icon wears, so unlike every other glyph in the bar it cannot take the
-          // bar's colour: an unfocused window fades it by hand instead, and further than it fades
-          // the title, since a tile of colour pulls the eye harder than grey text does. The only
-          // thing here that still takes the bar's colour is the built-in glyph for a window whose
-          // app the registry no longer has.
-          m(
-            "span",
-            { class: "flex shrink-0 items-center " + (isFocused ? "" : "opacity-50") },
-            m.trust(appGlyph(app, APP_GLYPH_SIZE)),
-          ),
-          // Bold while the window is focused: the colour already says which window you are in, and
-          // the weight says it from across the screen, where a shade of grey does not read. Faded
-          // when it is not, so the name of a background window reads as a label rather than as
-          // something to act on.
-          m(
-            "span",
-            {
-              class:
-                "window-title ml-1.5 min-w-0 truncate text-(length:--font-size-row) " +
-                (isFocused ? "font-bold" : "font-medium opacity-70"),
-            },
-            title,
-          ),
-          // The two title actions belong to the window you are in. An unfocused bar drops them
-          // rather than fading them -- a greyed pair of buttons is still two things to look at,
-          // and what is left then is the window's name and the controls every window owes you.
-          // They come back with the click that focuses the window, and nothing to their right
-          // moves, since the spacer beside them takes up the room.
-          !isFocused
-            ? null
-            : control("refresh", "Refresh", icon("refresh", { size: TITLE_ACTION_GLYPH_SIZE }), false, onControl, {
-                extra: "ml-2",
-              }),
-          !isFocused
-            ? null
-            : control("menu", "Window menu", glyph("kebab", TITLE_ACTION_GLYPH_SIZE), isMenuOpen, onControl, {
-                extra: "ml-0.5",
-              }),
-          m("span", { class: "flex-1" }),
-          control("minimize", "Minimize", glyph("minimize", CONTROL_GLYPH_SIZE), false, onControl),
-          isMaximized
-            ? control("restore", "Restore", glyph("restore", CONTROL_GLYPH_SIZE), false, onControl, sizing)
-            : control("maximize", "Maximize", glyph("maximize", CONTROL_GLYPH_SIZE), false, onControl, sizing),
-          control("close", "Close", icon("close", { size: CONTROL_GLYPH_SIZE }), false, onControl, { extra: "ml-1" }),
+          // The title actions belong to the window you are in. An unfocused bar drops them rather than fading
+          // them -- a greyed row of buttons is still things to look at, and what is left then is the window's
+          // name and the controls every window owes you. They come back with the click that focuses the window,
+          // and the title stays put, since their column keeps its width.
+          m("span", { class: "flex items-center justify-start" }, [
+            !isFocused
+              ? null
+              : control("menu", "Window menu", glyph("kebab", TITLE_ACTION_GLYPH_SIZE), isMenuOpen, onControl),
+            !isFocused
+              ? null
+              : control("refresh", "Refresh", icon("refresh", { size: TITLE_ACTION_GLYPH_SIZE }), false, onControl, {
+                  extra: "ml-0.5",
+                }),
+            !isFocused || !hasAppChat
+              ? null
+              : control("app-chat", APP_CHAT_LABEL, glyph("balloon", TITLE_ACTION_GLYPH_SIZE), false, onControl, {
+                  extra: "ml-0.5",
+                }),
+          ]),
+          m("span", { class: "flex min-w-0 items-center justify-center px-2" }, [
+            // The app's icon paints itself (`docs/system/app-icons.md`), and so does the monogram an
+            // app with no icon wears, so unlike every other glyph in the bar it cannot take the
+            // bar's colour: an unfocused window fades it by hand instead, and further than it fades
+            // the title, since a tile of colour pulls the eye harder than grey text does. The only
+            // thing here that still takes the bar's colour is the built-in glyph for a window whose
+            // app the registry no longer has.
+            m(
+              "span",
+              { class: "flex shrink-0 items-center " + (isFocused ? "" : "opacity-50") },
+              m.trust(appGlyph(app, APP_GLYPH_SIZE)),
+            ),
+            // Bold while the window is focused: the colour already says which window you are in, and
+            // the weight says it from across the screen, where a shade of grey does not read. Faded
+            // when it is not, so the name of a background window reads as a label rather than as
+            // something to act on.
+            m(
+              "span",
+              {
+                class:
+                  "window-title ml-1.5 min-w-0 truncate text-(length:--font-size-row) " +
+                  (isFocused ? "font-bold" : "font-medium opacity-70"),
+              },
+              title,
+            ),
+          ]),
+          m("span", { class: "flex items-center justify-end" }, [
+            control("minimize", "Minimize", glyph("minimize", CONTROL_GLYPH_SIZE), false, onControl),
+            isMaximized
+              ? control("restore", "Restore", glyph("restore", CONTROL_GLYPH_SIZE), false, onControl, sizing)
+              : control("maximize", "Maximize", glyph("maximize", CONTROL_GLYPH_SIZE), false, onControl, sizing),
+            control("close", "Close", icon("close", { size: CONTROL_GLYPH_SIZE }), false, onControl, {
+              extra: "ml-1",
+            }),
+          ]),
         ],
       );
     },

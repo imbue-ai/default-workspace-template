@@ -851,6 +851,10 @@ class IntakeTarget(LowerCaseStrEnum):
     CURRENT_CHAT = auto()
     # The one chat there is, else the chat the user picks from the root's picker, else a new one.
     CHAT_SELECTOR = auto()
+    # The chat about an app (the multiplayer spec, section 9.2): the one labelled ``app_chat`` with the app's
+    # registered name, else the one titled "<display name> Chat" (by the create's name-conflict rule), made with
+    # both on the default account when there is none.
+    APP_CHAT = auto()
     # The chat ``chat_id`` names.
     CHAT = auto()
     # The Lounge (the multiplayer spec, section 7.5), made when there is none: what a click on a person in the
@@ -882,6 +886,10 @@ class IntakeRequest(FrozenModel):
     window_path: str = Field(
         default="", description="The path of the window the text was typed into, which ``current_chat`` reads"
     )
+    app: str = Field(default="", description="The registered name of the app an ``app_chat`` intake is about")
+    app_display_name: str = Field(
+        default="", description="The display name of that app, which titles its chat and words the composer's hint"
+    )
 
 
 class IntakeResponse(FrozenModel):
@@ -897,6 +905,9 @@ class PendingIntakeView(FrozenModel):
     is_draft: bool = Field(description="Whether the text is drafted rather than sent")
     needs_pick: bool = Field(description="Whether the root has to offer the picker before the intake can be applied")
     chat_id: str | None = Field(description="The chat the intake resolved to; null for a choice")
+    hint: str | None = Field(
+        default=None, description="A placeholder for the chat's composer until its next send, focused; null for none"
+    )
 
 
 class IntakeApplyRequest(FrozenModel):
@@ -913,6 +924,9 @@ class IntakeApplyResponse(FrozenModel):
     composer_text: str | None = Field(description="Text for the chat's composer, unsent; null when nothing is drafted")
     first_message: str | None = Field(
         description="The first message of a chat awaiting its first send with no account; the root launches it"
+    )
+    hint: str | None = Field(
+        default=None, description="A placeholder for the chat's composer until its next send, focused; null for none"
     )
 
 

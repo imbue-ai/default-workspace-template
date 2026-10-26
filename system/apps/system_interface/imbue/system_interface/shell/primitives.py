@@ -86,8 +86,10 @@ def mint_window_id() -> WindowId:
 
 class LaunchTargetKind(LowerCaseStrEnum):
     """Where a launch's page goes (post-launch-paths plan section 3.3): a new window, a window already at that path
-    (else a new one), or a named window this client points at it (a wire value)."""
+    (else a new one), a named window this client points at it, or wherever the ``show`` op's rule puts it (a wire
+    value)."""
 
     NEW = auto()
     FOCUS = auto()
     WINDOW = auto()
+    SHOW = auto()

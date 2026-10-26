@@ -375,6 +375,7 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
                 "text_param": None,
                 "draft_param": None,
                 "mention_param": None,
+                "app_params": None,
             }
         ],
         "files": [
@@ -388,6 +389,7 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
                 "text_param": None,
                 "draft_param": None,
                 "mention_param": None,
+                "app_params": None,
             }
         ],
     }
@@ -2778,6 +2780,149 @@ def test_a_post_launch_path_is_posted_with_its_presets_params_and_envelope_and_l
     )
     # Nothing was posted for the refused launches.
     assert len(poster.posts) == 4
+
+
+def test_a_show_launch_puts_the_page_on_screen_by_the_show_rule_and_lays_it_out_beside_a_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The ``show`` target (the multiplayer spec, section 9.2): the page lands where the ``show`` op would put it (a
+    window already at the path raised, else the app's pinned window navigated, else a new window), and when the
+    target names a window, the shown window is snapped beside it, the shown one on top."""
+    poster = _RecordingLaunchPoster(
+        [
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-9"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-9"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-10"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-11"}),
+        ]
+    )
+    app = _launching_shell(tmp_path, broadcaster, poster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (pinned,) = _desktop_windows(client)
+    terminal = _open_window(client, "terminal", "/?session=t1").get_json()["window"]
+
+    # Nothing shows the answered path yet: the pinned window is navigated there for this client. Never placed by
+    # this client (so minimized at the pinned frame), it takes the right half and the terminal the left.
+    shown = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "hi"},
+            "target": {"kind": "show", "beside": terminal["id"]},
+        },
+    )
+    assert shown.status_code == 200, shown.get_json()
+    assert shown.get_json()["is_new"] is False
+    assert (shown.get_json()["window"]["id"], shown.get_json()["window"]["path"]) == (pinned["id"], "/?chat=agent-9")
+    assert poster.posts[0].body == {"target": "new_chat", "message": "hi", "client_id": "c1", "desktop_id": "home"}
+    assert [
+        (placement["window_id"], placement["state"], placement["is_minimized"])
+        for placement in _placements(client, "c1")
+    ] == [
+        (terminal["id"], "SNAPPED_LEFT", False),
+        (pinned["id"], "SNAPPED_RIGHT", False),
+    ]
+
+    # A window of the app already at the path is raised rather than navigated; the layout is made again from where
+    # the windows stand, so nothing moves.
+    raised = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "hi"},
+            "target": {"kind": "show", "beside": terminal["id"]},
+        },
+    )
+    assert raised.status_code == 200 and raised.get_json()["window"]["id"] == pinned["id"]
+    assert [(placement["window_id"], placement["state"]) for placement in _placements(client, "c1")] == [
+        (terminal["id"], "SNAPPED_LEFT"),
+        (pinned["id"], "SNAPPED_RIGHT"),
+    ]
+
+    # Beside the pinned window itself (its own balloon): the show navigates that very window to the new page, so
+    # there is nothing to lay it out beside and the placements stay.
+    own = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "hi"},
+            "target": {"kind": "show", "beside": pinned["id"]},
+        },
+    )
+    assert own.status_code == 200, own.get_json()
+    assert (own.get_json()["window"]["id"], own.get_json()["window"]["path"]) == (pinned["id"], "/?chat=agent-10")
+    assert [(placement["window_id"], placement["state"]) for placement in _placements(client, "c1")] == [
+        (terminal["id"], "SNAPPED_LEFT"),
+        (pinned["id"], "SNAPPED_RIGHT"),
+    ]
+
+    # Beside a window pulled out into a window of the chrome's own: the pinned window is navigated as before, and
+    # nothing is laid out, since snapping the pulled-out window would pull it back.
+    _pull_out(client, terminal["id"])
+    beside_pulled_out = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "hi"},
+            "target": {"kind": "show", "beside": terminal["id"]},
+        },
+    )
+    assert beside_pulled_out.status_code == 200, beside_pulled_out.get_json()
+    assert beside_pulled_out.get_json()["window"]["path"] == "/?chat=agent-11"
+    assert [
+        (placement["window_id"], placement["state"], placement["is_detached"])
+        for placement in _placements(client, "c1")
+    ] == [
+        (terminal["id"], "SNAPPED_LEFT", True),
+        (pinned["id"], "SNAPPED_RIGHT", False),
+    ]
+
+    # An app with no pinned window and nothing at the path gets a new window, laid out beside none, and placed
+    # minimized for the client when the launch says so (the phone), as an open is.
+    opened = _launch(
+        client,
+        {
+            "app": "terminal",
+            "launch": "new",
+            "params": {"workdir": "/tmp"},
+            "target": {"kind": "show"},
+            "minimized": True,
+        },
+    )
+    assert opened.status_code == 201, opened.get_json()
+    assert opened.get_json()["is_new"] is True and opened.get_json()["window"]["app"] == "terminal"
+    (opened_placement,) = [
+        placement
+        for placement in _placements(client, "c1")
+        if placement["window_id"] == opened.get_json()["window"]["id"]
+    ]
+    assert opened_placement["is_minimized"] is True
+
+    # The window laid out beside must be on the desktop; only the show kind lays out beside one, and the show kind
+    # points no named window at the page.
+    assert (
+        _launch(
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "show", "beside": "win-00000000000000ff"}}
+        ).status_code
+        == 404
+    )
+    assert (
+        _launch(
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "new", "beside": pinned["id"]}}
+        ).status_code
+        == 400
+    )
+    assert (
+        _launch(
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "show", "window_id": pinned["id"]}}
+        ).status_code
+        == 400
+    )
 
 
 def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_nothing(

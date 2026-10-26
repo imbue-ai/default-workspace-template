@@ -27,6 +27,8 @@ import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
+  appChatLaunchOf,
+  appChatParams,
   appShortcutOf,
   draftRowsOf,
   freeTextParams,
@@ -218,6 +220,8 @@ export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
 
 /** Why a click on a person's tray entry went nowhere: no app takes a mention of them. */
 export const NO_MENTION_APP_REASON = "No app in this workspace can open a chat with them";
+/** Why a window's "Chat about this app" went nowhere: no app declares a launch path about an app. */
+export const NO_APP_CHAT_REASON = "No app in this workspace can open a chat about an app";
 /** Why a chat could not be shown: no app takes the message that shows one. */
 export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
 /** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
@@ -1286,6 +1290,26 @@ export class DesktopStore {
     return this.startWithText("");
   }
 
+  /** A window's "Chat about this app" (the multiplayer spec, section 9.2): the window's app is named to the first
+   *  launch path of the machine that is about an app, whose page is put on screen by the show rule and laid out
+   *  beside the window; with no such launch path the user is told. False when nothing was shown. */
+  async openAppChat(windowId: string): Promise<boolean> {
+    const found = findWindow(this.state, windowId);
+    const about = found === null ? undefined : appByName(this.state, found.window.app);
+    if (found === null || about === undefined) return false;
+    const launch = appChatLaunchOf(openableApps(this.state));
+    if (launch === null) {
+      this.toast(NO_APP_CHAT_REASON);
+      return false;
+    }
+    const params = appChatParams(launch.launchPath, about);
+    const shown = await this.launchAt(launch.app.name, launch.launchPath.id, params, {
+      kind: "show",
+      besideWindowId: windowId,
+    });
+    return shown !== null;
+  }
+
   private async applyDeepLink(link: DeepLink): Promise<void> {
     if (link.open !== null) {
       if (appByName(this.state, link.open.app) === undefined)
@@ -2055,8 +2079,9 @@ export class DesktopStore {
   }
 
   /** Run a launch path through the shell's launch route (post-launch-paths plan section 5.3): the shell resolves the
-   *  page (built for a GET launch path, asked of the app for a POST one) and opens a window there or points the
-   *  named window at it. An opened or focused window is taken as an open is; a navigated one as this client's own
+   *  page (built for a GET launch path, asked of the app for a POST one) and opens a window there, points the
+   *  named window at it, or shows it by the show rule. An opened, focused, or shown window is taken as an open
+   *  is; a navigated one (the named window, or the pinned window a show pointed at the page) as this client's own
    *  navigation, so the page follows. Answers the window's id, or null when the shell refused (told to the user). */
   async launchAt(
     app: string,
@@ -2064,8 +2089,14 @@ export class DesktopStore {
     params: Readonly<Record<string, string>>,
     target: LaunchTarget,
   ): Promise<string | null> {
-    // A launch into a named window runs on that window's desktop; any other on the desktop an open goes to.
-    const named = target.kind === "window" ? findWindow(this.state, target.windowId) : null;
+    // A launch into a named window runs on that window's desktop, a show beside one on that window's; any other on
+    // the desktop an open goes to.
+    const named =
+      target.kind === "window"
+        ? findWindow(this.state, target.windowId)
+        : target.kind === "show" && target.besideWindowId !== undefined
+          ? findWindow(this.state, target.besideWindowId)
+          : null;
     const desktopId = named?.desktop.id ?? this.openingDesktopId();
     if (desktopId === null) return null;
     const isMinimized = this.isPhoneLayout();
@@ -2087,6 +2118,10 @@ export class DesktopStore {
     if (target.kind === "window") {
       if (named !== null) this.applyOwnNavigation(named, outcome.window);
       return outcome.window.id;
+    }
+    if (target.kind === "show") {
+      const shown = findWindow(this.state, outcome.window.id);
+      if (shown !== null && shown.window.path !== outcome.window.path) this.applyOwnNavigation(shown, outcome.window);
     }
     this.takeOpened(desktopId, outcome.window, outcome.isNew, isMinimized);
     return outcome.window.id;

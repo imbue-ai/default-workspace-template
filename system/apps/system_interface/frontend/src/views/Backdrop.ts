@@ -14,6 +14,7 @@ import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { cellRect } from "../geometry/grid";
 import type { PixelPoint } from "../geometry/frames";
 import type { Desktop, DesktopShortcut, Placement } from "../model/records";
+import { appChatLaunchOf } from "../model/launch";
 import { shortcutKey } from "../model/records";
 import { appByName, effectiveWindowTitle, isAppShownStopped } from "../reducers/desktopState";
 import type { TaskbarEntry } from "../reducers/desktopState";
@@ -66,6 +67,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
       const attrs = vnode.attrs;
       const { store, desktop, placements, focusedWindowId } = attrs;
       const state = store.getState();
+      const isAppChatOffered = appChatLaunchOf(state.apps) !== null;
       const metrics = store.getMetrics();
       const gesture = store.getGesture();
       // The placement already carries the drag: the held shortcut sits in the cell under the pointer (its
@@ -173,6 +175,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                       isFocused: window.id === focusedWindowId,
                       isTouch: state.modes.isTouch,
                       isMenuOpen: attrs.openMenuWindowId === window.id,
+                      hasAppChat: isAppChatOffered && app !== undefined && !app.internal,
                       sizeMenuTrigger: attrs.sizeMenuTrigger(window.id),
                       isShielded: window.id !== focusedWindowId || attrs.isOverlayOpen,
                       isStopped: isAppShownStopped(state, app),

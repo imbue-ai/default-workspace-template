@@ -2885,6 +2885,67 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     expect(api.calls).toContain("launch:home:chat:new:{}:window:win-chat");
   });
 
+  it("opens the chat about a window's app beside it through the app-chat launch path, and tells the user when there is none", async () => {
+    const store = await startedStore();
+    const chat = chatLikeAppRecord("chat", {
+      launch_paths: [
+        ...chatLikeAppRecord("chat").launch_paths,
+        launchPathRecord({
+          id: "app-chat",
+          label: "Chat about this app",
+          path: "/api/chats/intake",
+          method: "POST",
+          params: ["app", "app_display_name"],
+          presets: { target: "app_chat" },
+          app_params: { name: "app", display_name: "app_display_name" },
+        }),
+      ],
+    });
+    offerApps(api, socket, [chat, appRecord("docs", { display_name: "Docs" })]);
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [
+          windowRecord("win-chat", "chat", "/", { is_pinned: true, scope: "independent" }),
+          windowRecord("win-docs", "docs", "/?doc=1"),
+        ],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [placementRecord("win-docs")] });
+    api.postLaunchAnswer = "/?chat=agent-docs";
+
+    expect(await store.openAppChat("win-docs")).toBe(true);
+    expect(api.calls).toContain(
+      'launch:home:chat:app-chat:{"app":"docs","app_display_name":"Docs"}:show:beside:win-docs',
+    );
+    await settle();
+    // The pinned chat window, never placed here, takes the right half and the window beside it the left, the chat on
+    // top; this client's view of the pinned window is at the answered path.
+    expect(store.getState().layout.placements.map((placement) => [placement.window_id, placement.state])).toEqual([
+      ["win-docs", "SNAPPED_LEFT"],
+      ["win-chat", "SNAPPED_RIGHT"],
+    ]);
+    expect(store.getState().layout.window_paths["win-chat"]?.path).toBe("/?chat=agent-docs");
+
+    // The pinned window's own balloon: the show navigates that very window, so there is nothing to lay it out beside
+    // and the placements stay.
+    expect(await store.openAppChat("win-chat")).toBe(true);
+    expect(api.calls).toContain(
+      'launch:home:chat:app-chat:{"app":"chat","app_display_name":"Chat"}:show:beside:win-chat',
+    );
+    await settle();
+    expect(store.getState().layout.placements.map((placement) => [placement.window_id, placement.state])).toEqual([
+      ["win-docs", "SNAPPED_LEFT"],
+      ["win-chat", "SNAPPED_RIGHT"],
+    ]);
+
+    // Without an app-chat launch path on the machine the user is told, and a window that is gone is nothing to act on.
+    offerApps(api, socket, [chatLikeAppRecord("chat"), appRecord("docs", { display_name: "Docs" })]);
+    expect(await store.openAppChat("win-docs")).toBe(false);
+    expect(notices()).toContain("No app in this workspace can open a chat about an app");
+    expect(await store.openAppChat("win-gone")).toBe(false);
+  });
+
   it("tells the user when no app takes a mention or shows a chat, keeping the chat's bubbles, and offers the share button only under a chrome", async () => {
     const store = await startedStore();
     setOwnIdentityForTesting({

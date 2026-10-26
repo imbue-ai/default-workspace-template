@@ -61,7 +61,7 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         "stop_when_no_windows = true\n"
         'priority = "files"\n'
         'default_shortcut = {launch = "new", mode = "focus"}\n'
-        'launch_paths = [{id = "new", label = "Files", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}]\n'
+        'launch_paths = [{id = "new", label = "Files", path = "/", params = ["path"], text_param = "path"}, {id = "recent", label = "Recent", path = "/recent"}, {id = "draft", label = "Draft", path = "/api/intake", method = "POST", params = ["message"], presets = {target = "current_chat"}, draft_param = "message"}, {id = "app-chat", label = "Chat about this app", path = "/api/intake", method = "POST", params = ["app", "app_display_name"], presets = {target = "app_chat"}, app_params = {name = "app", display_name = "app_display_name"}}]\n'
         "launcher_rank = 20\n"
         'pin = {path = "/", style = "avatar", scope = "independent", default_mode = "floating"}\n'
         'window_closed_path = "/api/window-closed"\n'
@@ -91,13 +91,21 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         ("new", "Files", "/", ("path",), "path"),
         ("recent", "Recent", "/recent", (), None),
         ("draft", "Draft", "/api/intake", ("message",), None),
+        ("app-chat", "Chat about this app", "/api/intake", ("app", "app_display_name"), None),
     ]
     # A row without a method is a GET launch path.
     assert [(launch_path.method.value, launch_path.presets, launch_path.draft_param) for launch_path in row.launch_paths] == [
         ("GET", {}, None),
         ("GET", {}, None),
         ("POST", {"target": "current_chat"}, "message"),
+        ("POST", {"target": "app_chat"}, None),
     ]
+    assert [launch_path.app_params for launch_path in row.launch_paths[:3]] == [None, None, None]
+    assert row.launch_paths[3].app_params is not None
+    assert (row.launch_paths[3].app_params.name, row.launch_paths[3].app_params.display_name) == (
+        "app",
+        "app_display_name",
+    )
     assert row.launcher_rank == 20
     assert row.pin is not None
     assert (row.pin.path, row.pin.style.value, row.pin.scope.value, row.pin.default_mode.value) == (

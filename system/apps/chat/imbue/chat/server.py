@@ -88,6 +88,9 @@ from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import is_genuine_user_turn
+from imbue.chat.chat_intakes import APP_CHAT_LABEL
+from imbue.chat.chat_intakes import app_chat_hint
+from imbue.chat.chat_intakes import app_chat_title
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
@@ -200,6 +203,7 @@ from imbue.chat.models import SwitchChatRequest
 from imbue.chat.models import SwitchChatResponse
 from imbue.chat.models import parse_subagent_key
 from imbue.chat.naming import canonical_agent_name
+from imbue.chat.naming import is_name_conflict
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import AGENT_ID_PATTERN
@@ -1913,18 +1917,54 @@ def _lounge_or_refusal(state: ChatAppState) -> _ResolvedIntakeChat | Response:
     return _ResolvedIntakeChat(chat_id=lounge_id)
 
 
+def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
+    """The chat about an app (the multiplayer spec, section 9.2): the chat labelled ``app_chat`` with the app's
+    registered name (so a renamed app keeps its chat), else the one titled "<display name> Chat" by the rule the
+    create refuses a taken name by (``is_name_conflict``: canonical forms compared case-insensitively, so "docs chat"
+    is found rather than refused), of either kind or still being made; else one created with that title and label on
+    the default account (never auto-named, since the title is not a "Chat N"); with nothing signed in, a chat
+    awaiting its first send under them, whose page asks for a provider. The refusals are the create route's."""
+    if not intake.app or not intake.app_display_name:
+        return error_response("A chat about an app names the app and its display name", 400)
+    title = app_chat_title(intake.app_display_name)
+    labels = {APP_CHAT_LABEL: intake.app}
+    agent_manager = state.agent_manager
+    snapshots = agent_manager.get_chat_snapshots()
+    provisional = agent_manager.get_provisional_chats()
+    for is_match in (
+        lambda chat_labels, chat_title: chat_labels.get(APP_CHAT_LABEL) == intake.app,
+        lambda chat_labels, chat_title: is_name_conflict(title, (chat_title,)),
+    ):
+        for snapshot in snapshots:
+            if is_match(snapshot.labels, snapshot.title):
+                return _ResolvedIntakeChat(chat_id=snapshot.chat_id)
+        for chat in provisional:
+            if is_match(chat.labels, chat.name):
+                return _ResolvedIntakeChat(chat_id=chat.chat_id)
+    account = _resolve_intake_account(intake)
+    if isinstance(account, Response):
+        return account
+    if account is None:
+        minted = _created_or_refusal(lambda: agent_manager.mint_awaiting_chat("", name=title, labels=labels))
+        return minted if isinstance(minted, Response) else _ResolvedIntakeChat(chat_id=minted.chat_id)
+    created = _created_or_refusal(lambda: agent_manager.create_chat(title, account_id=account, labels=labels))
+    return created if isinstance(created, Response) else _ResolvedIntakeChat(chat_id=created.chat_id)
+
+
 def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
     """The chat an intake's target names (spec 3.5), or the 404 for an explicit chat the app does not list.
 
     ``new_chat`` answers no chat: the caller creates or mints one. ``current_chat``,
     ``main_chat`` and ``chat_selector`` fall back to that when nothing qualifies; ``lounge`` is the Lounge, made
-    when there is none.
+    when there is none, and ``app_chat`` the chat about the named app, made when there is none.
     """
     agent_manager = state.agent_manager
     snapshots = agent_manager.get_chat_snapshots()
     match intake.target:
         case IntakeTarget.LOUNGE:
             return _lounge_or_refusal(state)
+        case IntakeTarget.APP_CHAT:
+            return _app_chat_or_refusal(state, intake)
         case IntakeTarget.CHAT:
             parsed = parse_chat_ref(intake.chat_id)
             if parsed is None or not agent_manager.knows_chat(parsed):
@@ -2045,6 +2085,11 @@ def _intake_chat() -> Response:
         return model_response(IntakeResponse(path=intake_path(None, token)))
     if resolved.chat_id is None:
         return _intake_into_new_chat(state, intake)
+    if intake.target is IntakeTarget.APP_CHAT:
+        # Held even with nothing to send: the root applies it to set the composer's hint and focus it.
+        hint = app_chat_hint(intake.app_display_name)
+        token = state.pending_intakes.mint(intake, resolved.chat_id, needs_pick=False, hint=hint)
+        return model_response(IntakeResponse(path=intake_path(resolved.chat_id, token)))
     return _intake_into_listed_chat(state, resolved.chat_id, intake)
 
 
@@ -2099,6 +2144,7 @@ def _get_pending_intake(token: str) -> Response:
         is_draft=pending.request.is_draft,
         needs_pick=pending.needs_pick,
         chat_id=str(pending.chat_id) if pending.chat_id is not None else None,
+        hint=pending.hint or None,
     )
     return model_response(view)
 
@@ -2138,16 +2184,20 @@ def _apply_pending_intake(token: str) -> Response:
     # Section 3.6.1's three outcomes: a draft, or a text for a chat that can neither take a message nor be launched
     # by one, goes to the composer; a chat awaiting its first send is launched with the text; an agent is sent it.
     if intake.is_draft or (not is_agent and not is_awaiting):
-        composer_text = intake.message
+        composer_text = intake.message or None
     elif is_awaiting:
-        first_message = intake.message
+        first_message = intake.message or None
     elif intake.message:
         _deliver_intake_send_in_background(state, chat_id, intake, request_identity())
     else:
         # A chat that became an agent since the intake was held, with nothing to send: it is selected alone.
         pass
     response = IntakeApplyResponse(
-        path=intake_path(chat_id, None), chat_id=str(chat_id), composer_text=composer_text, first_message=first_message
+        path=intake_path(chat_id, None),
+        chat_id=str(chat_id),
+        composer_text=composer_text,
+        first_message=first_message,
+        hint=pending.hint or None,
     )
     return model_response(response)
 

@@ -4403,6 +4403,20 @@ def _token_of(path: str) -> str:
     return parse_qs(urlparse(path).query)["intake"][0]
 
 
+def _chat_id_of(path: str) -> str:
+    return parse_qs(urlparse(path).query)["chat"][0]
+
+
+def _signed_out_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[AgentManager, FlaskClient]:
+    """A chat app with nothing signed in whose agent list is known: an intake cannot launch a chat, so a new one
+    awaits its first send."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    return manager, create_application(build_test_state(agent_manager=manager)).test_client()
+
+
 def test_intake_is_not_ready_until_the_agent_list_is_known() -> None:
     manager = AgentManager.build(WebSocketBroadcaster())
     test_client = create_application(build_test_state(agent_manager=manager)).test_client()
@@ -4463,6 +4477,7 @@ def test_intake_holds_a_draft_for_the_chat_the_window_shows_until_the_root_appli
         "message": "Draw me a seal",
         "is_draft": True,
         "needs_pick": False,
+        "hint": None,
         "chat_id": "agent-00000000000000000000000000000123",
     }
     applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
@@ -4472,6 +4487,7 @@ def test_intake_holds_a_draft_for_the_chat_the_window_shows_until_the_root_appli
         "chat_id": "agent-00000000000000000000000000000123",
         "composer_text": "Draw me a seal",
         "first_message": None,
+        "hint": None,
     }
     assert client.get(f"/api/chats/intakes/{token}").status_code == 404
     assert client.post(f"/api/chats/intakes/{token}/apply", json={}).status_code == 404
@@ -4553,6 +4569,7 @@ def test_intake_with_several_chats_to_choose_from_holds_the_choice_for_the_picke
         "chat_id": "agent-00000000000000000000000000000002",
         "composer_text": None,
         "first_message": None,
+        "hint": None,
     }
     wait_for(lambda: messenger.sent == [("agent-00000000000000000000000000000002", "Carry on")], timeout=10.0)
 
@@ -4601,7 +4618,7 @@ def test_intake_main_chat_with_no_chats_falls_back_to_a_new_chat(
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    provisional = agent_manager.get_provisional_chat(parse_qs(urlparse(path).query)["chat"][0])
+    provisional = agent_manager.get_provisional_chat(_chat_id_of(path))
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
     applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
@@ -4634,7 +4651,7 @@ def test_intake_new_chat_with_an_account_creates_the_chat_with_the_text_as_its_f
     assert response.status_code == 200
     path = response.get_json()["path"]
     assert path.startswith("/?chat=agent-") and "intake" not in path
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.CREATING
@@ -4652,7 +4669,7 @@ def test_intake_new_chat_draft_mints_a_chat_awaiting_its_first_send_and_holds_th
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
@@ -4669,18 +4686,14 @@ def test_intake_new_chat_with_nothing_signed_in_holds_the_first_message_for_the_
 ) -> None:
     """With no account the server cannot launch: the chat waits for its first send, and applying the intake hands
     the root the message to launch it with once an account is chosen."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
-    manager.note_agent_list_known()
-    test_client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager, test_client = _signed_out_app(tmp_path, monkeypatch)
 
     response = test_client.post("/api/chats/intake", json={"message": "Teach me", "target": "new_chat"})
 
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = manager.get_provisional_chat(chat_id)
     assert provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
     assert provisional.account_id == ""
@@ -4690,6 +4703,7 @@ def test_intake_new_chat_with_nothing_signed_in_holds_the_first_message_for_the_
         "chat_id": chat_id,
         "composer_text": None,
         "first_message": "Teach me",
+        "hint": None,
     }
 
 
@@ -4741,6 +4755,7 @@ def test_intake_to_a_chat_awaiting_its_first_send_is_held_and_applies_as_its_fir
         "chat_id": str(awaiting.chat_id),
         "composer_text": None,
         "first_message": "Begin here",
+        "hint": None,
     }
 
 
@@ -5644,7 +5659,7 @@ def test_a_mention_intake_drafts_into_the_lounge_there_is(tmp_path: Path) -> Non
 
     assert response.status_code == 200
     path = response.get_json()["path"]
-    assert parse_qs(urlparse(path).query)["chat"] == [_LOUNGE_ID]
+    assert _chat_id_of(path) == _LOUNGE_ID
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
     assert applied.status_code == 200
     assert applied.get_json()["composer_text"] == "@Bob "
@@ -5663,13 +5678,130 @@ def test_a_mention_intake_makes_the_lounge_when_there_is_none(
 
     assert response.status_code == 200
     path = response.get_json()["path"]
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None and provisional.name == "Lounge"
     assert provisional.phase is ProvisionalChatPhase.CREATING
     # A second click while the room is still being created lands in the same Lounge.
     again = _intake(client, message="@Carol ", target="lounge", is_draft="true")
-    assert parse_qs(urlparse(again.get_json()["path"]).query)["chat"] == [chat_id]
+    assert _chat_id_of(again.get_json()["path"]) == chat_id
+
+
+_DOCS_CHAT_ID = "agent-00000000000000000000000000000077"
+
+
+def test_an_app_chat_intake_opens_the_chat_titled_for_the_app_and_makes_it_on_the_default_account(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A window's "Chat about this app" (the multiplayer spec, section 9.2): the chat titled "<display name> Chat" is
+    created on the default account when there is none, never auto-named, and the intake is held with the composer's
+    hint even with nothing to send; a second press lands in the same chat while it is still being made."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-00000000000000000000000000000123")
+    _register_agent(app, "agent-00000000000000000000000000000123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+
+    response = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+
+    assert response.status_code == 200, response.get_json()
+    path = response.get_json()["path"]
+    chat_id = _chat_id_of(path)
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    assert provisional is not None
+    assert provisional.name == "Docs Chat"
+    assert provisional.phase is ProvisionalChatPhase.CREATING
+    assert provisional.message == ""
+    token = _token_of(path)
+    held = client.get(f"/api/chats/intakes/{token}").get_json()
+    assert (held["chat_id"], held["message"], held["hint"]) == (chat_id, "", "How do you want to change Docs?")
+    again = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+    assert _chat_id_of(again.get_json()["path"]) == chat_id
+    applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
+    assert applied.status_code == 200
+    assert applied.get_json() == {
+        "path": f"/?chat={chat_id}",
+        "chat_id": chat_id,
+        "composer_text": None,
+        "first_message": None,
+        "hint": "How do you want to change Docs?",
+    }
+    assert provisional.labels == {"app_chat": "docs"}
+    assert _intake(client, target="app_chat", app="docs").status_code == 400
+    assert _intake(client, target="app_chat", app_display_name="Docs").status_code == 400
+
+
+def test_an_app_chat_intake_finds_the_chat_by_its_label_else_its_title_and_the_chat_app_opens_chat_chat(
+    tmp_path: Path,
+) -> None:
+    """The chat about an app is found by the ``app_chat`` label carrying the app's registered name, whatever it has
+    been retitled to, else by the title "<display name> Chat" (a chat so named by hand, or from before the label)."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    manager = state_of(app).agent_manager
+    seed_agent_state(manager, _DOCS_CHAT_ID, name="Docs Chat", labels={"display_name": "Docs Chat"})
+    client = app.test_client()
+
+    response = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+
+    assert _chat_id_of(response.get_json()["path"]) == _DOCS_CHAT_ID
+    labelled_id = "agent-00000000000000000000000000000078"
+    seed_agent_state(
+        manager, labelled_id, name="Notes Chat", labels={"display_name": "Notes, renamed", "app_chat": "notes"}
+    )
+    by_label = _intake(client, target="app_chat", app="notes", app_display_name="Notes")
+    assert _chat_id_of(by_label.get_json()["path"]) == labelled_id
+    # The Lounge is titled "Lounge", not "Lounge Chat", so an app so named gets a chat of its own.
+    other = _intake(client, target="app_chat", app="lounge", app_display_name="Lounge")
+    assert _chat_id_of(other.get_json()["path"]) != _LOUNGE_ID
+    # The chat app's own windows ask for "Chat Chat".
+    own = _intake(client, target="app_chat", app="chat", app_display_name="Chat")
+    own_id = _chat_id_of(own.get_json()["path"])
+    minted = manager.get_provisional_chat(own_id)
+    assert minted is not None and minted.name == "Chat Chat"
+
+
+def test_an_app_chat_intake_finds_a_title_the_create_would_refuse_as_taken(tmp_path: Path) -> None:
+    """The title fallback matches by the rule the create refuses a taken name by (canonical forms compared
+    case-insensitively): a chat titled "docs chat" or "Docs-Chat" by hand is the chat about Docs, rather than a name
+    the create of "Docs Chat" is refused beside on every press."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    manager = state_of(app).agent_manager
+    seed_agent_state(manager, _DOCS_CHAT_ID, name="docs-chat", labels={"display_name": "docs chat"})
+    canonical_id = "agent-00000000000000000000000000000079"
+    seed_agent_state(manager, canonical_id, name="Notes-Chat")
+    client = app.test_client()
+
+    by_case_variant = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+    by_true_name = _intake(client, target="app_chat", app="notes", app_display_name="Notes")
+
+    assert by_case_variant.status_code == 200, by_case_variant.get_json()
+    assert _chat_id_of(by_case_variant.get_json()["path"]) == _DOCS_CHAT_ID
+    assert by_true_name.status_code == 200, by_true_name.get_json()
+    assert _chat_id_of(by_true_name.get_json()["path"]) == canonical_id
+
+
+def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaiting_its_first_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, test_client = _signed_out_app(tmp_path, monkeypatch)
+
+    response = test_client.post(
+        "/api/chats/intake", json={"target": "app_chat", "app": "docs", "app_display_name": "Docs"}
+    )
+
+    assert response.status_code == 200, response.get_json()
+    path = response.get_json()["path"]
+    chat_id = _chat_id_of(path)
+    provisional = manager.get_provisional_chat(chat_id)
+    assert provisional is not None
+    assert (provisional.name, provisional.phase, provisional.account_id, provisional.labels) == (
+        "Docs Chat",
+        ProvisionalChatPhase.AWAITING_FIRST_SEND,
+        "",
+        {"app_chat": "docs"},
+    )
+    applied = test_client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
+    assert applied.get_json()["hint"] == "How do you want to change Docs?"
+    assert applied.get_json()["first_message"] is None
 
 
 def test_a_new_agent_chats_first_message_raises_a_bubble_as_the_create_is_accepted(tmp_path: Path) -> None:

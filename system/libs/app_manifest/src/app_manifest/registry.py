@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from app_manifest.errors import AppRegistrationError
 from app_manifest.errors import RegistryReadError
+from app_manifest.manifest import AppParams
 from app_manifest.manifest import DEFAULT_PRIORITY
 from app_manifest.manifest import DefaultShortcut
 from app_manifest.manifest import LaunchPathMethod
@@ -91,6 +92,11 @@ class RegistryLaunchPath(FrozenModel):
     mention_param: LaunchParamName | None = Field(
         default=None,
         description="The param the shell fills with a mention of a clicked person; absent means the path takes none",
+    )
+    app_params: AppParams | None = Field(
+        default=None,
+        description="The params the shell fills with an app's name and display name when its window's \"Chat about "
+        'this app" button is pressed; absent means the path is about no app',
     )
 
 
