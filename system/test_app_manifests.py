@@ -573,6 +573,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     for name in ("terminal", "files", "browser"):
         assert by_name[name].launch_paths[0].text_param is None, name
         assert by_name[name].launch_paths[0].draft_param is None, name
+        assert by_name[name].launch_paths[0].mention_param is None, name
         assert by_name[name].launch_paths[0].presets == {}, name
     assert [param.name for param in by_name["terminal"].launch_paths[0].params] == [
         "workdir"
