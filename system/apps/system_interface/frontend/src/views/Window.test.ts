@@ -33,6 +33,13 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
   return root.querySelector('[data-window-id="win-1"]') as HTMLElement;
 }
 
+/** The names of a rendered window's controls, in bar order. */
+function controlNamesOf(element: HTMLElement): (string | null)[] {
+  return [...element.querySelectorAll("[data-window-control]")].map((control) =>
+    control.getAttribute("data-window-control"),
+  );
+}
+
 describe("Window", () => {
   it("carries the contract's selectors, its rectangle, and its stacking order", () => {
     const element = render();
@@ -91,10 +98,7 @@ describe("Window", () => {
   it("offers the controls in the title bar's order and reports each", () => {
     const onControl = vi.fn();
     const element = render({ onControl });
-    const controls = [...element.querySelectorAll("[data-window-control]")].map((control) =>
-      control.getAttribute("data-window-control"),
-    );
-    expect(controls).toEqual(["menu", "refresh", "app-chat", "minimize", "maximize", "close"]);
+    expect(controlNamesOf(element)).toEqual(["menu", "refresh", "app-chat", "minimize", "maximize", "close"]);
     (element.querySelector('[data-window-control="close"]') as HTMLElement).click();
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
     (element.querySelector('[data-window-control="app-chat"]') as HTMLElement).click();
@@ -102,13 +106,15 @@ describe("Window", () => {
   });
 
   it("offers Chat about this app only where the caller says so, and no title action on an unfocused window", () => {
-    const controlsOf = (element: HTMLElement): (string | null)[] =>
-      [...element.querySelectorAll("[data-window-control]")].map((control) =>
-        control.getAttribute("data-window-control"),
-      );
-    expect(controlsOf(render({ hasAppChat: false }))).toEqual(["menu", "refresh", "minimize", "maximize", "close"]);
+    expect(controlNamesOf(render({ hasAppChat: false }))).toEqual([
+      "menu",
+      "refresh",
+      "minimize",
+      "maximize",
+      "close",
+    ]);
     unmountViews();
-    expect(controlsOf(render({ isFocused: false }))).toEqual(["minimize", "maximize", "close"]);
+    expect(controlNamesOf(render({ isFocused: false }))).toEqual(["minimize", "maximize", "close"]);
     unmountViews();
     const appChat = render().querySelector('[data-window-control="app-chat"]') as HTMLElement;
     expect(appChat.getAttribute("aria-label")).toBe("Chat about this app");
