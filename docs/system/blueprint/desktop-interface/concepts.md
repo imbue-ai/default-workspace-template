@@ -149,7 +149,7 @@ Nothing branches on a stored device kind, and the client record no longer carrie
 flowchart TB
     subgraph shared["Shared truth (server, every client)"]
         App["App (registry row, manifest, launch paths)"]
-        Desktop["Desktop: name, colour, glyph, wallpaper"]
+        Desktop["Desktop: name, owner, wallpaper"]
         Window["Window: id, app, path, title"]
         Shortcut["Shortcut: app, launch path, mode, cell"]
     end
@@ -160,8 +160,8 @@ flowchart TB
     end
     subgraph rendered["Rendered (browser, not stored)"]
         Backdrop["Backdrop: wallpaper + shortcut grid"]
-        Taskbar["Taskbar: launcher field, entries, tray"]
-        Tray["Tray widgets: Desktops"]
+        Taskbar["Taskbar: launcher field, overview button, entries, tray"]
+        Tray["Tray: the people and the agent"]
         Page["Live page (one iframe per window)"]
     end
     Desktop -->|holds| Window
@@ -181,7 +181,7 @@ flowchart TB
 |---|---|
 | Which apps exist, their display name, icon, launch paths; whether an app runs; Stop, Start, and Quit | Manifest and registry; the shell via supervisord (unchanged) |
 | What is inside an app: its chats, sessions, folders, their names and status | The app, in its own pages (new) |
-| Desktops: name, colour, glyph, wallpaper, shortcuts and cells, windows | Shell, shared |
+| Desktops: name, owner, wallpaper, shortcuts and cells, windows, and their order | Shell, shared |
 | Open and close a window; a window's path and title | Shell, shared; the page reports path and title |
 | Frame, state, minimized, stacking order; the active desktop | Shell, per client |
 | Which taskbar entries show, which tray widgets exist | Derived in the browser from the layout and the inventory |
