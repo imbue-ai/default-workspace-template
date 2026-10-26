@@ -434,11 +434,12 @@ right when it is minimized or was never placed) and the app's window to the
 other, the chat on top; the pinned window's own balloon, whose show navigates
 that very window, lays nothing out, and neither does a show whose window is
 pulled out into a window of the chrome's own. The chat app
-answers the chat titled "<App display name> Chat", made on the default provider
-when there is none (so the chat app's own windows open "Chat Chat"), with a
-pending intake whose `hint` the chat root puts on the composer as its
-placeholder, "How do you want to change <App>?", and focuses. The shell names no
-app in any of this.
+answers the chat about the app: the one labelled `app_chat` with the app's name
+(so a renamed app keeps its chat), else the one titled "<App display name>
+Chat", made with both on the default provider when there is none (so the chat
+app's own windows open "Chat Chat"), with a pending intake whose `hint` the chat
+root puts on the composer as its placeholder, "How do you want to change
+<App>?", and focuses. The shell names no app in any of this.
 
 **The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
 and `views/tray/`) is where the people and the agent live: the share button (a

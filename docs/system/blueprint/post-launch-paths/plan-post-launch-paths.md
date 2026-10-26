@@ -33,7 +33,7 @@ The principles of the workspace app model hold: one owner per fact; the shell is
 | Envelope | The fields the shell adds to every POST launch beside the params: the requesting client, its desktop, and the path of the window being launched into |
 | Launch target | Where the shell puts the page the launch answers: a new window, an existing window at that path (focus), a named window this client points at it, or wherever the `show` op's rule puts it (show) |
 | Intake | The chat app's one request for text arriving from outside a chat page: the text, how the receiving chat is chosen, and whether it is sent or drafted |
-| Intake target | How the receiving chat is chosen: `new_chat`, `main_chat`, `current_chat`, `chat_selector`, `lounge` (the chat titled Lounge; the multiplayer spec, section 7.5), `app_chat` (the chat titled "<app> Chat"; section 9.2), or `chat` (an explicit id) |
+| Intake target | How the receiving chat is chosen: `new_chat`, `main_chat`, `current_chat`, `chat_selector`, `lounge` (the chat titled Lounge; the multiplayer spec, section 7.5), `app_chat` (the chat about an app, by its `app_chat` label, else its title "<app> Chat"; section 9.2), or `chat` (an explicit id) |
 | Pending intake | An intake the chat app could not complete on the server (a draft, or a choice the user has to make), held under a one-time token until the chat root applies it |
 | Provisional chat | A chat the chat app has minted whose first agent does not exist yet (`ProvisionalChat` today); the `awaiting_first_send` phase now covers unseeded chats too |
 
