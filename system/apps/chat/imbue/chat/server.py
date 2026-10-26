@@ -1775,18 +1775,28 @@ def _record_room_first_message_author(
     state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, message))
 
 
-def _room_first_message_hook(
-    state: ChatAppState, message: str, identity: RequestIdentity, app_context: AppContext
-) -> Callable[[ChatId, str], None]:
+def _act_on_room_first_message(
+    state: ChatAppState,
+    message: str,
+    identity: RequestIdentity,
+    app_context: AppContext,
+    chat_id: ChatId,
+    message_id: str,
+) -> None:
     """What a new room's first message does once it has landed (the multiplayer spec, section 7.4): its mentions
     act as a message-route send's do, for the sender the create's request vouched for, under the app's context,
     since the create's thread has none of its own."""
+    with app_context:
+        _act_on_room_mentions(state, chat_id, message_id, message, identity)
 
-    def act(chat_id: ChatId, message_id: str) -> None:
-        with app_context:
-            _act_on_room_mentions(state, chat_id, message_id, message, identity)
 
-    return act
+def _room_first_message_hook(
+    state: ChatAppState, message: str, identity: RequestIdentity, app_context: AppContext
+) -> Callable[[ChatId, str], None]:
+    """The hook the create route hands the manager for a room's first message, bound to the sender and the app."""
+    return lambda chat_id, message_id: _act_on_room_first_message(
+        state, message, identity, app_context, chat_id, message_id
+    )
 
 
 def _create_chat() -> Response:
