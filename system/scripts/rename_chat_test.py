@@ -68,6 +68,11 @@ def test_a_refused_rename_and_an_unanswered_listing_exit_non_zero(
     assert rc == 1
     assert "already exists" in err
 
+    fake_chat_app.get_answers["/api/chats"] = (200, {"chats": "nope"})
+    rc, _out, err = _run("--title", "Docs Chat", "--new-title", "Notes Chat")
+    assert rc == 2
+    assert "no listing" in err
+
     del fake_chat_app.get_answers["/api/chats"]
     rc, _out, err = _run("--title", "Docs Chat", "--new-title", "Notes Chat")
     assert rc == 2
@@ -75,7 +80,11 @@ def test_a_refused_rename_and_an_unanswered_listing_exit_non_zero(
 
 
 def test_the_chat_id_is_found_by_the_exact_title_alone() -> None:
-    listing = _listing(("agent-1", "Docs Chat"), ("agent-2", "docs chat"))
-    assert rename_chat.chat_id_titled(listing, "Docs Chat") == "agent-1"
-    assert rename_chat.chat_id_titled(listing, "Docs") is None
-    assert rename_chat.chat_id_titled({"chats": "nope"}, "Docs Chat") is None
+    chats = rename_chat.chats_listed(
+        _listing(("agent-1", "Docs Chat"), ("agent-2", "docs chat"))
+    )
+    assert chats is not None
+    assert rename_chat.chat_id_titled(chats, "Docs Chat") == "agent-1"
+    assert rename_chat.chat_id_titled(chats, "Docs") is None
+    assert rename_chat.chats_listed({"chats": "nope"}) is None
+    assert rename_chat.chats_listed(None) is None

@@ -34,11 +34,16 @@ EXIT_REFUSED = 1
 EXIT_UNREACHABLE = 2
 
 
-def chat_id_titled(listing: object, title: str) -> str | None:
-    """The id of the listed chat titled exactly ``title``, or None; a listing of another shape is no chats."""
+def chats_listed(listing: object) -> list[object] | None:
+    """The chats of a ``GET /api/chats`` answer, or None for a body of another shape (no listing at all)."""
     if not isinstance(listing, dict) or not isinstance(listing.get("chats"), list):
         return None
-    for chat in listing["chats"]:
+    return listing["chats"]
+
+
+def chat_id_titled(chats: list[object], title: str) -> str | None:
+    """The id of the listed chat titled exactly ``title``, or None."""
+    for chat in chats:
         if (
             isinstance(chat, dict)
             and chat.get("title") == title
@@ -62,7 +67,11 @@ def rename_chat(
             file=stderr,
         )
         return EXIT_UNREACHABLE
-    chat_id = chat_id_titled(listed.body, title)
+    chats = chats_listed(listed.body)
+    if chats is None:
+        print("the chat app answered no listing", file=stderr)
+        return EXIT_UNREACHABLE
+    chat_id = chat_id_titled(chats, title)
     if chat_id is None:
         print(f"no chat is titled {title!r}; nothing to rename", file=stdout)
         return EXIT_OK
