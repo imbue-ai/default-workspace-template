@@ -743,7 +743,7 @@ class ShellState(MutableModel):
             glyph,
             [mint_window_id() for _ in source.windows],
             now,
-            participant_key_of(identity),
+            desktop_owner_of(identity),
         )
         created = self.desktops.add_desktop(seeded, apps_with_their_default_shortcut_on(seeded, self._registry_rows()))
         logger.info(
