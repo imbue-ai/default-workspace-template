@@ -4403,6 +4403,10 @@ def _token_of(path: str) -> str:
     return parse_qs(urlparse(path).query)["intake"][0]
 
 
+def _chat_id_of(path: str) -> str:
+    return parse_qs(urlparse(path).query)["chat"][0]
+
+
 def _signed_out_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[AgentManager, FlaskClient]:
     """A chat app with nothing signed in whose agent list is known: an intake cannot launch a chat, so a new one
     awaits its first send."""
@@ -4614,7 +4618,7 @@ def test_intake_main_chat_with_no_chats_falls_back_to_a_new_chat(
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    provisional = agent_manager.get_provisional_chat(parse_qs(urlparse(path).query)["chat"][0])
+    provisional = agent_manager.get_provisional_chat(_chat_id_of(path))
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
     applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
@@ -4647,7 +4651,7 @@ def test_intake_new_chat_with_an_account_creates_the_chat_with_the_text_as_its_f
     assert response.status_code == 200
     path = response.get_json()["path"]
     assert path.startswith("/?chat=agent-") and "intake" not in path
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.CREATING
@@ -4665,7 +4669,7 @@ def test_intake_new_chat_draft_mints_a_chat_awaiting_its_first_send_and_holds_th
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
@@ -4689,7 +4693,7 @@ def test_intake_new_chat_with_nothing_signed_in_holds_the_first_message_for_the_
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = manager.get_provisional_chat(chat_id)
     assert provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
     assert provisional.account_id == ""
@@ -5655,7 +5659,7 @@ def test_a_mention_intake_drafts_into_the_lounge_there_is(tmp_path: Path) -> Non
 
     assert response.status_code == 200
     path = response.get_json()["path"]
-    assert parse_qs(urlparse(path).query)["chat"] == [_LOUNGE_ID]
+    assert _chat_id_of(path) == _LOUNGE_ID
     applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
     assert applied.status_code == 200
     assert applied.get_json()["composer_text"] == "@Bob "
@@ -5674,13 +5678,13 @@ def test_a_mention_intake_makes_the_lounge_when_there_is_none(
 
     assert response.status_code == 200
     path = response.get_json()["path"]
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None and provisional.name == "Lounge"
     assert provisional.phase is ProvisionalChatPhase.CREATING
     # A second click while the room is still being created lands in the same Lounge.
     again = _intake(client, message="@Carol ", target="lounge", is_draft="true")
-    assert parse_qs(urlparse(again.get_json()["path"]).query)["chat"] == [chat_id]
+    assert _chat_id_of(again.get_json()["path"]) == chat_id
 
 
 _DOCS_CHAT_ID = "agent-00000000000000000000000000000077"
@@ -5701,7 +5705,7 @@ def test_an_app_chat_intake_opens_the_chat_titled_for_the_app_and_makes_it_on_th
 
     assert response.status_code == 200, response.get_json()
     path = response.get_json()["path"]
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None
     assert provisional.name == "Docs Chat"
@@ -5711,7 +5715,7 @@ def test_an_app_chat_intake_opens_the_chat_titled_for_the_app_and_makes_it_on_th
     held = client.get(f"/api/chats/intakes/{token}").get_json()
     assert (held["chat_id"], held["message"], held["hint"]) == (chat_id, "", "How do you want to change Docs?")
     again = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
-    assert parse_qs(urlparse(again.get_json()["path"]).query)["chat"] == [chat_id]
+    assert _chat_id_of(again.get_json()["path"]) == chat_id
     applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
     assert applied.status_code == 200
     assert applied.get_json() == {
@@ -5738,19 +5742,19 @@ def test_an_app_chat_intake_finds_the_chat_by_its_label_else_its_title_and_the_c
 
     response = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
 
-    assert parse_qs(urlparse(response.get_json()["path"]).query)["chat"] == [_DOCS_CHAT_ID]
+    assert _chat_id_of(response.get_json()["path"]) == _DOCS_CHAT_ID
     labelled_id = "agent-00000000000000000000000000000078"
     seed_agent_state(
         manager, labelled_id, name="Notes Chat", labels={"display_name": "Notes, renamed", "app_chat": "notes"}
     )
     by_label = _intake(client, target="app_chat", app="notes", app_display_name="Notes")
-    assert parse_qs(urlparse(by_label.get_json()["path"]).query)["chat"] == [labelled_id]
+    assert _chat_id_of(by_label.get_json()["path"]) == labelled_id
     # The Lounge is titled "Lounge", not "Lounge Chat", so an app so named gets a chat of its own.
     other = _intake(client, target="app_chat", app="lounge", app_display_name="Lounge")
-    assert parse_qs(urlparse(other.get_json()["path"]).query)["chat"] != [_LOUNGE_ID]
+    assert _chat_id_of(other.get_json()["path"]) != _LOUNGE_ID
     # The chat app's own windows ask for "Chat Chat".
     own = _intake(client, target="app_chat", app="chat", app_display_name="Chat")
-    own_id = parse_qs(urlparse(own.get_json()["path"]).query)["chat"][0]
+    own_id = _chat_id_of(own.get_json()["path"])
     minted = manager.get_provisional_chat(own_id)
     assert minted is not None and minted.name == "Chat Chat"
 
@@ -5770,9 +5774,9 @@ def test_an_app_chat_intake_finds_a_title_the_create_would_refuse_as_taken(tmp_p
     by_true_name = _intake(client, target="app_chat", app="notes", app_display_name="Notes")
 
     assert by_case_variant.status_code == 200, by_case_variant.get_json()
-    assert parse_qs(urlparse(by_case_variant.get_json()["path"]).query)["chat"] == [_DOCS_CHAT_ID]
+    assert _chat_id_of(by_case_variant.get_json()["path"]) == _DOCS_CHAT_ID
     assert by_true_name.status_code == 200, by_true_name.get_json()
-    assert parse_qs(urlparse(by_true_name.get_json()["path"]).query)["chat"] == [canonical_id]
+    assert _chat_id_of(by_true_name.get_json()["path"]) == canonical_id
 
 
 def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaiting_its_first_send(
@@ -5786,7 +5790,7 @@ def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaitin
 
     assert response.status_code == 200, response.get_json()
     path = response.get_json()["path"]
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = manager.get_provisional_chat(chat_id)
     assert provisional is not None
     assert (provisional.name, provisional.phase, provisional.account_id, provisional.labels) == (
