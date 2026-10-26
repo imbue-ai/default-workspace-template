@@ -89,7 +89,7 @@ export function gridFor(
 }
 
 /** The size the desktops row draws each thumbnail at: as wide as the token allows, narrower when the row would
- *  not fit that many, and in the backdrop's proportion. */
+ *  not fit that many (the viewer's own and the ones left behind alike), and in the backdrop's proportion. */
 export function thumbnailSize(backdrop: PixelSize, desktopCount: number, metrics: ThemeMetrics): PixelSize {
   const gap = metrics.overviewGap;
   const fitted = (backdrop.width - gap * 2) / Math.max(THUMBNAIL_ROW_MIN_COUNT, desktopCount + 1) - gap / 2;
@@ -449,7 +449,7 @@ export function Overview(): m.Component<OverviewAttrs> {
       const attrs = vnode.attrs;
       const { backdrop, metrics } = attrs;
       const gridHeight = backdrop.height * GRID_SHARE;
-      const size = thumbnailSize(backdrop, attrs.ownDesktops.length, metrics);
+      const size = thumbnailSize(backdrop, attrs.ownDesktops.length + attrs.leftBehind.length, metrics);
       const close = closeOnBareClick(attrs.onClose);
       return m(
         "div",

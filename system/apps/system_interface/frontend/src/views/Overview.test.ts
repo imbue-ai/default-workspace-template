@@ -236,4 +236,15 @@ describe("Overview", () => {
     expect(document.querySelector("[data-overview-drop-gap]")).not.toBeNull();
     expect(leftBehind.querySelector("[data-overview-drop-gap]")).toBeNull();
   });
+
+  it("sizes the thumbnails for the desktops left behind as for the viewer's own, so the row fits the backdrop", () => {
+    const many = Array.from({ length: 9 }, (_, index) => desktopRecord(`gone-${index}`, { owner: "user:user-gone" }));
+    render({ leftBehind: many });
+    const widths = [...document.querySelectorAll<HTMLElement>("[data-overview-desktop]")].map((thumbnail) =>
+      parseFloat(thumbnail.style.width),
+    );
+    expect(widths).toHaveLength(11);
+    expect(new Set(widths).size).toBe(1);
+    expect(widths[0]).toBeLessThan(METRICS.overviewThumbnailWidth);
+  });
 });
