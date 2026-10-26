@@ -2562,7 +2562,7 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
         chip = page.locator('[data-tray-widget="viewing"]')
         expect(chip).to_be_visible(timeout=5000)
         expect(chip.locator("[data-viewing-owner]")).to_have_text("alice")
-        expect(chip).to_contain_text("alice")
+        expect(chip).to_have_attribute("data-viewing-desktop", "alice")
         outline = page.locator('[data-viewing-outline="alice"]')
         expect(outline).to_be_visible()
         participants = _get_json(f"{e2e_server.base_url}/api/roster")["participants"]
