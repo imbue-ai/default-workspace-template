@@ -220,6 +220,7 @@ export const SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE =
 
 /** Why a click on a person's tray entry went nowhere: no app takes a mention of them. */
 export const NO_MENTION_APP_REASON = "No app in this workspace can open a chat with them";
+/** Why a window's "Chat about this app" went nowhere: no app declares a launch path about an app. */
 export const NO_APP_CHAT_REASON = "No app in this workspace can open a chat about an app";
 /** Why a chat could not be shown: no app takes the message that shows one. */
 export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
