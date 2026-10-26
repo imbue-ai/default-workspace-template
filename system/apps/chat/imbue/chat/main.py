@@ -35,6 +35,8 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.registry import build_one_shot_completion
+from imbue.chat.identity_matches import IDENTITY_MATCHES_DIRNAME
+from imbue.chat.identity_matches import IdentityMatchStore
 from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MainChatStore
@@ -194,6 +196,7 @@ def build_production_state(
         secret_requests=SecretRequestStore(
             requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
         ),
+        identity_matches=IdentityMatchStore(matches_directory=data_dir / IDENTITY_MATCHES_DIRNAME),
     )
     # Eviction wiring: the state drops what an agent holds resident -- the transcript,
     # watch thread, and inotify watches -- when the manager sees it destroyed (the whole

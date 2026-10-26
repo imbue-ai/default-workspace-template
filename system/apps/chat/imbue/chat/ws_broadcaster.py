@@ -6,6 +6,7 @@ from typing import Any
 from loguru import logger as _loguru_logger
 from pydantic import PrivateAttr
 
+from imbue.chat.identity_matches import IdentityMatch
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.primitives import ChatId
@@ -37,6 +38,11 @@ def chats_updated_message(snapshots: list[ChatSnapshot], main_chat_id: ChatId | 
         "chats": [snapshot.model_dump(mode="json") for snapshot in snapshots],
         "main_chat_id": main_chat_id,
     }
+
+
+def identity_match_updated_message(match: IdentityMatch) -> dict[str, Any]:
+    """The ``identity_match_updated`` message: a look-up's candidates, shown while pending and dropped once answered."""
+    return {"type": "identity_match_updated", "match": match.model_dump(mode="json")}
 
 
 def _drain_queue(client_queue: queue.Queue[str | None]) -> None:
@@ -137,6 +143,10 @@ class WebSocketBroadcaster(MutableModel):
     def broadcast_accounts_updated(self) -> None:
         """Broadcast an accounts_updated event: the account list changed, so every page reads it again."""
         self.broadcast({"type": "accounts_updated"})
+
+    def broadcast_identity_match_updated(self, match: IdentityMatch) -> None:
+        """Broadcast an identity_match_updated event: a match was filed, answered, or superseded."""
+        self.broadcast(identity_match_updated_message(match))
 
     def broadcast_provisional_chat_completed(self, chat_id: ChatId, success: bool, error: str | None) -> None:
         """Broadcast a provisional_chat_completed event: the chat is an agent, failed, or was discarded."""

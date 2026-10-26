@@ -292,11 +292,21 @@ LAST_COMPACTION_RECORD_MAX_AGE_SECONDS: Final[float] = 300.0
 # fast mode (``chat_fast_mode.py``) calls for it: it launches the fast-capable harnesses in fast mode.
 FAST_ROLE_TEMPLATE: Final[str] = "fast"
 
+# The create template (``.mngr/settings.toml``) the first agent of the installation's first workspace's seeded chat stacks
+# on ``chat``: the onboarding agent, which opens the Imbue Studio app's onboarding conversation in the workspace and hands
+# the user on to a plain chat. Only a seed the app marked as onboarding gets it; every other workspace's chat starts as a
+# plain chat agent.
+ONBOARDING_ROLE_TEMPLATE: Final[str] = "onboarding"
+
 
 @pure
-def launch_role_templates(is_fast: bool) -> tuple[str, ...]:
-    """The templates a chat create stacks beyond the caller's: fast mode when the chat's mode calls for it."""
-    return (FAST_ROLE_TEMPLATE,) if is_fast else ()
+def launch_role_templates(is_fast: bool, is_onboarding: bool = False) -> tuple[str, ...]:
+    """The templates a chat create stacks beyond the caller's: fast mode when the chat's mode calls for it, and the
+    onboarding role for the chat the app seeded as the first workspace's onboarding conversation."""
+    return (
+        *((FAST_ROLE_TEMPLATE,) if is_fast else ()),
+        *((ONBOARDING_ROLE_TEMPLATE,) if is_onboarding else ()),
+    )
 
 
 @pure
@@ -3405,7 +3415,7 @@ class AgentManager:
             raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
         return explicit_name
 
-    def seed_chat(self, title: str, turns: tuple[SeedTurn, ...]) -> CreatedChat:
+    def seed_chat(self, title: str, turns: tuple[SeedTurn, ...], is_onboarding: bool = False) -> CreatedChat:
         """Open a chat on a conversation that happened before the workspace existed (``chat_seed.py``).
 
         The Imbue Studio app's onboarding continues here as the workspace's first chat: the turns become
@@ -3422,6 +3432,10 @@ class AgentManager:
         no usable characters raises ``AgentCreationError`` and one already taken raises
         ``AgentNameConflictError`` here, rather than at the first send's ``mngr create``; an
         empty title mints the first free "Chat N".
+
+        ``is_onboarding`` marks the installation's first workspace's conversation: the record keeps it, and the
+        chat's first agent is launched as the onboarding agent (``launch_role_templates``). Any other seed starts a
+        plain chat agent.
         """
         explicit_title = explicit_chat_name(title)
         chat_id = ChatId(str(AgentId()))
@@ -3444,6 +3458,7 @@ class AgentManager:
                     ),
                 ),
                 seed_title=display_name,
+                is_onboarding=is_onboarding,
             )
             write_seed_file(self._chat_files_root / chat_id, events)
             self._write_record_locked(record)
@@ -3779,7 +3794,12 @@ class AgentManager:
         # chat stuck at "creating".
         _record_mru(account.id)
         account_args = _account_binding_args(harness, account.id, self._get_agent_state_dir(agent_id))
-        role_templates = (*extra_role_templates, *launch_role_templates(fast_mode.launches_fast))
+        role_templates = (
+            *extra_role_templates,
+            *launch_role_templates(
+                fast_mode.launches_fast, is_onboarding=seed_record is not None and seed_record.is_onboarding
+            ),
+        )
 
         # A seeded chat's first agent joins a conversation it cannot see: the seed is a segment
         # this app renders from a file, which no harness transcript holds, so its launch carries

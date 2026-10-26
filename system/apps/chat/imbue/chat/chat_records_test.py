@@ -187,6 +187,26 @@ def test_a_record_carries_whether_its_seed_is_pending_and_an_older_file_reads_it
     assert read_older is not None and read_older.is_seed_pending is False
 
 
+def test_a_record_carries_whether_its_seed_was_the_onboarding_conversation_and_an_older_file_reads_it_as_not(
+    tmp_path: Path,
+) -> None:
+    store = FileChatRecordStore(root=tmp_path / "chats")
+    first, second = _agent_id(), _agent_id()
+    onboarding = two_member_record(first, second).model_copy_update(
+        to_update(two_member_record(first, second).field_ref().is_onboarding, True)
+    )
+    store.write(onboarding)
+    read_back = store.read(ChatId(first))
+    assert read_back == onboarding
+    assert read_back is not None and read_back.is_onboarding is True
+
+    older = two_member_record(first, second).model_dump(mode="json")
+    del older["is_onboarding"]
+    (tmp_path / "chats" / first / "record.json").write_text(json.dumps(older))
+    read_older = store.read(ChatId(first))
+    assert read_older is not None and read_older.is_onboarding is False
+
+
 def test_a_file_store_raises_when_a_record_cannot_be_removed(tmp_path: Path) -> None:
     """A delete that leaves the record on disk must not look like a delete: the next build would
     read the record back and resurrect a destroyed chat."""

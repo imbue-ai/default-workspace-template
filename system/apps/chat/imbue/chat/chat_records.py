@@ -270,6 +270,11 @@ class ChatRecord(FrozenModel):
         description="The name the user gave a seeded chat before its first agent existed, which that agent is created "
         "with; None while it wears its seed title",
     )
+    is_onboarding: bool = Field(
+        default=False,
+        description="Whether the seed was the installation's first workspace's onboarding conversation, so the chat's "
+        "first agent is the onboarding agent; read once, when that agent is launched",
+    )
     is_seed_pending: bool = Field(
         default=False,
         description="Whether the seeded conversation has yet to reach the chat's first agent: it was launched with no "

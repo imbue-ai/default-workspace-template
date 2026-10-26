@@ -11,6 +11,7 @@ import { forgetPendingChoice } from "./models/ModelSettings";
 import { trackPendingLaneSettlement } from "./models/PendingLane";
 import { closeProviderChooser, isProviderChooserOpen, loadAccountsWithRetry } from "./models/Providers";
 import { ProviderChooserModal } from "./views/ProviderChooserModal";
+import { IdentityMatchPopup } from "./views/IdentityMatchPopup";
 import { llmApi } from "./llm-api";
 import type { LlmApi } from "./llm-api";
 import { runHook } from "./hooks";
@@ -48,6 +49,8 @@ function ChatDocument(chatId: string, agentId: string, sessionId: string): m.Com
         // The provider chooser: a chat with no provider to start on opens it from its composer, and
         // the model bar's "+ Add a provider" and a provider-fault notice open it too.
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
+        // "Is this you?": who the onboarding agent's background web look-up found, on the chat's own page only.
+        sessionId === "" ? m(IdentityMatchPopup, { chatId }) : null,
       ]);
     },
   };
