@@ -55,8 +55,10 @@ from workspace_layout.primitives import DesktopId
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
+from imbue.chat import identity_matches_endpoints
 from imbue.chat import latchkey_endpoints
 from imbue.chat import secret_requests_endpoints
+from imbue.chat import web_lookup_endpoints
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_exists
 from imbue.chat.activity_state import ActivityState
@@ -121,6 +123,7 @@ from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptReader
+from imbue.chat.identity_matches import IdentityMatchStore
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
@@ -200,6 +203,7 @@ from imbue.chat.state import ChatAppState
 from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
 from imbue.chat.ws_broadcaster import chats_updated_message
+from imbue.chat.ws_broadcaster import identity_match_updated_message
 from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.chat.wsgi import build_sock
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
@@ -1720,7 +1724,7 @@ def _seed_chat() -> Response:
         return _agent_list_not_known_response()
     seed_request = parse_request_body(SeedChatRequest)
     try:
-        created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns)
+        created = agent_manager.seed_chat(MAIN_CHAT_NAME, seed_request.turns, is_onboarding=seed_request.is_onboarding)
     except AgentNameConflictError as e:
         return error_response(str(e), 409)
     except AgentCreationError as e:
@@ -2307,10 +2311,13 @@ def _serve_static_file(basename: str) -> Response:
 
 def _ws_endpoint(websocket: Any) -> None:
     """The chat pages' socket: the chat snapshots and the provisional-chat events, as the manager broadcasts them."""
-    _run_ws_broadcast_loop(websocket=websocket, agent_manager=get_state().agent_manager)
+    state = get_state()
+    _run_ws_broadcast_loop(
+        websocket=websocket, agent_manager=state.agent_manager, identity_matches=state.identity_matches
+    )
 
 
-def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
+def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager, identity_matches: IdentityMatchStore) -> None:
     """Stream the broadcaster's messages to ``websocket`` until the page disconnects.
 
     Each connection owns its own thread (flask-sock + the threaded WSGI server), so this loop
@@ -2323,12 +2330,15 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
     _loguru_logger.info("WS /api/ws connection opened (conn {})", id(client_queue))
     disconnect_reason = "handler exited"
     try:
-        # The connect-time replay: every provisional chat this process holds, then the chat
-        # list. The list comes last on purpose -- it is how a page knows the replay is over,
-        # so a record it still holds that this process did not replay (a create the previous
-        # process was running) can be dropped rather than waited on forever.
+        # The connect-time replay: every provisional chat this process holds, every look-up
+        # still waiting for its popup's answer, then the chat list. The list comes last on
+        # purpose -- it is how a page knows the replay is over, so a record it still holds that
+        # this process did not replay (a create the previous process was running) can be
+        # dropped rather than waited on forever.
         for provisional in agent_manager.get_provisional_chats_as_shown():
             websocket.send(json.dumps(provisional_chat_created_message(provisional)))
+        for match in identity_matches.list_pending():
+            websocket.send(json.dumps(identity_match_updated_message(match)))
         websocket.send(
             json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
         )
@@ -2516,6 +2526,8 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     latchkey_endpoints.ROUTE_TABLE,
     focus_chat.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
+    identity_matches_endpoints.ROUTE_TABLE,
+    web_lookup_endpoints.ROUTE_TABLE,
 )
 
 
@@ -2610,6 +2622,8 @@ def create_application(state: ChatAppState) -> Flask:
     focus_chat.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
+    identity_matches_endpoints.register_routes(application)
+    web_lookup_endpoints.register_routes(application)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])
 

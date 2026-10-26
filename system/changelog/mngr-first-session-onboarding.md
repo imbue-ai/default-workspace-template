@@ -1,0 +1,7 @@
+- A new `[create_templates.onboarding]` role in `.mngr/settings.toml` carries the onboarding agent's rules. The chat app stacks it on the `chat` role for the first agent of an installation's first workspace only, so the agent keeps the chat role's "Engineering Subordinate" output style and follows it for how technical to be, treating the intake answers and shared app names as the user's own signals. It introduces no user groups or levels.
+
+- The approved profile reaches later chats: a new "About the user" section in `AGENTS.md` says how to use `data/profile/about-you.md`, and a new `SessionStart` hook, `system/scripts/user_profile_context.sh`, prints it into every chat agent's context. It is registered in `.claude/settings.json` for Claude, and in `.codex/hooks.json` with `--codex` for Codex, which emits the text as `additionalContext` JSON. `data/README.md` lists the new `profile/` folder.
+
+- The onboarding role's prompt makes the agent's first reply only the start of the background web look-up when the user asked to be looked up, and has it search the web about the user only through that look-up.
+
+- Tests: `system/test_mngr_template_stacking.py` checks that the onboarding role adds one prompt block to a chat agent, keeps the chat role marker and output style, and points at instruction files that exist; `system/scripts/agent_hook_wiring_test.py` checks that Claude and Codex both run the profile hook at session start.

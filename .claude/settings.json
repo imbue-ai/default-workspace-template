@@ -14,6 +14,10 @@
           {
             "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/system/services/oom_priority/bin/claude_shed_notice_hook.sh"
+          },
+          {
+            "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/user_profile_context.sh"
           }
         ]
       },

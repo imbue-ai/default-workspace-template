@@ -80,6 +80,7 @@ from imbue.chat.harnesses.registry import build_shoulder_tap
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
+from imbue.chat.identity_matches import IdentityCandidate
 from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentStateItem
@@ -3098,6 +3099,28 @@ def test_seeding_a_chat_lists_it_awaiting_its_first_send_with_the_turns_as_its_t
     assert events["events"][0]["content"] == "Wait.. what is honest software?"
 
 
+def _seeded_record_through_the_route(tmp_path: Path, body: dict[str, Any]) -> ChatRecord:
+    """Seed a chat through the route in a fresh app and read back the record it left."""
+    agent_manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path)
+    agent_manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=agent_manager)).test_client()
+    response = client.post("/api/chats/seed", json=body)
+    assert response.status_code == 201
+    record = agent_manager._chat_record_store.read(ChatId(response.get_json()["chat_id"]))
+    assert record is not None
+    return record
+
+
+def test_only_a_seed_marked_as_onboarding_gets_an_onboarding_record(tmp_path: Path) -> None:
+    """The app marks the first workspace's conversation; the chat's record keeps the mark for its first agent's
+    launch, and a seed without it (any later workspace's) leaves it off."""
+    marked = _seeded_record_through_the_route(tmp_path / "first", {**_seed_body(), "is_onboarding": True})
+    unmarked = _seeded_record_through_the_route(tmp_path / "later", _seed_body())
+
+    assert marked.is_onboarding is True
+    assert unmarked.is_onboarding is False
+
+
 def test_a_seeded_chat_waiting_for_its_first_send_can_be_renamed_and_deleted_through_its_routes(
     app: Flask, client: FlaskClient
 ) -> None:
@@ -3957,6 +3980,36 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
     assert first["type"] == "provisional_chat_created"
     assert first["chat_id"] == failed.chat_id
     assert first["phase"] == ProvisionalChatPhase.FAILED.value
+    assert second["type"] == "chats_updated"
+
+
+@pytest.mark.timeout(15)
+def test_websocket_replays_a_pending_look_up_so_a_page_opened_later_shows_its_popup(
+    app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A look-up that finished while no chat page was open is shown when one connects; an answered one is not."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+    store = state_of(app).identity_matches
+    candidate = IdentityCandidate(
+        name="Ada Lovelace", summary="Mathematician", source_url="https://example.org/ada", source_title="Ada"
+    )
+    answered = store.file_match("agent-999", "Ada", [candidate]).match
+    store.reject(answered.match_id)
+    pending = store.file_match("agent-123", "Ada", [candidate]).match
+
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            first = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            second = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+        finally:
+            close_ws(ws)
+
+    assert first["type"] == "identity_match_updated"
+    assert first["match"]["match_id"] == pending.match_id
+    assert first["match"]["status"] == "pending"
     assert second["type"] == "chats_updated"
 
 

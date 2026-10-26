@@ -82,7 +82,16 @@ observe`, its own supervised service) writes, and serves:
   `/api/harnesses`, `/api/uploads`,
   `/api/claude-auth`, `/api/accounts`, `/api/lanes`, `/api/latchkey`, and
   `/api/secret-requests` (an agent's `request_secret.py` files a secret request;
-  the transcript's secret card submits, declines, and re-reads it).
+  the transcript's secret card submits, declines, and re-reads it), and
+  `/api/identity-matches` (the onboarding agent's background web look-up files who it
+  found; the chat page's "Is this you?" popup confirms one or rejects them all, and the
+  answer reaches the agent as a message in the user's words), and
+  `POST /api/chats/<chat-id>/web-lookup` (one web search on the chat's own provider,
+  account and model, for the look-up script: the app builds the web look-up the chat's
+  harness registers (`harnesses/web_lookup.py`; Claude and Codex have one), runs it
+  with the web tools only, from an empty directory, on the model the chat is set to,
+  and answers the model's text; 501 for a provider with none yet, 502 when the search
+  could not run, 504 when it ran out of time).
   `/api/agents` is the plain listing of every mngr agent (the loopback callers'
   view of background agents too); the older `/api/agents/<id>/...` spellings of
   the per-chat routes are gone.
@@ -90,8 +99,10 @@ observe`, its own supervised service) writes, and serves:
   per chat, the agent-level facts under `active_agent` and the epoch seconds of
   its last message as `last_messaged_at`, which the chat root's list orders on)
   the provisional-chat events (`provisional_chat_created`,
-  `provisional_chat_completed`), and `accounts_updated` whenever the account
-  index changes, whichever process wrote it.
+  `provisional_chat_completed`), `accounts_updated` whenever the account
+  index changes, whichever process wrote it, and `identity_match_updated` whenever
+  a look-up's candidates are filed, answered, or superseded (a page that connects is
+  sent the pending ones before the chat list).
 - `POST /api/focus-chat`: what the shell posts for the Imbue Studio app's `minds:focus-chat` (the user opened a
   chat's notification), since the manifest registers the type under `[[message_handlers]]`. It takes the
   message's `chatId` and the `client_id` the shell adds, and asks the shell's `show` op
@@ -399,7 +410,9 @@ A chat can also start from a conversation that happened before the workspace
 existed. `POST /api/chats/seed` (`chat_seed.py`; the Imbue Studio app runs
 `system/scripts/seed_welcome_chat.py` through `mngr exec` the moment a
 workspace is ready) takes a title and the turns of the onboarding conversation
-and opens a chat on them: the turns are written as the chat's first segment
+and opens a chat on them (the app sets `is_onboarding` only for the installation's
+first workspace, the one whose first agent is the onboarding agent; any other
+workspace's chat starts as a plain chat agent): the turns are written as the chat's first segment
 (`data/.apps/chat/chats/<chat-id>/seed.jsonl`, read through the `seed`
 pseudo-harness like any archived segment), the record names the seed as its
 first member, and the chat is listed as a provisional chat in the
@@ -860,10 +873,10 @@ runs no automatic compaction, resumes no unfinished switch, opens no windows,
 reports no client activity to the shell, marks no chat read in the Imbue Studio
 app, and registers nothing. Sends from it are
 real, but a switch to another account is refused, since it would write the chat's
-record into the scratch copy only, and so is an answer to a secret card, since the
-answer belongs to the live chat. Point `CHAT_DATA_DIR` at a scratch copy of
-`data/.apps/chat/` so its writes (the message stamps, settings, chat records, and
-secret requests) never land in the live chat's data.
+record into the scratch copy only, and so is an answer to a secret card or to an
+"Is this you?" popup, since the answer belongs to the live chat. Point `CHAT_DATA_DIR` at a scratch copy of
+`data/.apps/chat/` so its writes (the message stamps, settings, chat records,
+secret requests, and identity matches) never land in the live chat's data.
 
 The frontend lives in `frontend/` and builds into `imbue/chat/static/`; see
 `system/apps/README.md` for the shared frontend library and the npm

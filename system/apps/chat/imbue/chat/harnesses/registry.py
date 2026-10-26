@@ -45,6 +45,7 @@ from imbue.chat.harnesses.claude.tap import ClaudeAtomicShoulderTap
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
 from imbue.chat.harnesses.claude.watcher import ClaudeTranscriptLoader
+from imbue.chat.harnesses.claude.web_lookup import ClaudeWebLookup
 from imbue.chat.harnesses.codex.account_binding import CodexAccountBinding
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import CODEX_CATALOG
@@ -54,6 +55,7 @@ from imbue.chat.harnesses.codex.one_shot import CodexOneShotCompletion
 from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
+from imbue.chat.harnesses.codex.web_lookup import CodexWebLookup
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import InterruptToComposer
@@ -86,6 +88,7 @@ from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
+from imbue.chat.harnesses.web_lookup import WebLookup
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -355,6 +358,9 @@ class HarnessSpec(FrozenModel):
     # How the chat app asks this harness one question on a chat's account, outside the chat (a new
     # chat's name). None for a harness that cannot yet: its chats keep the name they were minted with.
     one_shot_completion_class: type[OneShotCompletion] | None = None
+    # How the chat app has this harness search the public web on a chat's account and model, outside the chat
+    # (the onboarding agent's look-up of the user). None for a harness that cannot yet: a look-up there is refused.
+    web_lookup_class: type[WebLookup] | None = None
     # Whether mngr can compact this harness's context (the autocompact plugin's request), which is
     # what makes the chat's idle compaction setting meaningful for it. Shipped on the catalog.
     supports_compaction: bool = False
@@ -376,6 +382,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         startup_ready_marker=CLAUDE_STARTUP_READY_MARKER,
         binding_class=ClaudeAccountBinding,
         one_shot_completion_class=ClaudeOneShotCompletion,
+        web_lookup_class=ClaudeWebLookup,
         resolver_class=ClaudeModelResolver,
         catalog_factory=lambda: CLAUDE_CATALOG,
         model_state_relative_path=CLAUDE_STATE_RELATIVE_PATH,
@@ -415,6 +422,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         process_started_marker_filename=CodexActivityTracker.marker_filename,
         binding_class=CodexAccountBinding,
         one_shot_completion_class=CodexOneShotCompletion,
+        web_lookup_class=CodexWebLookup,
         resolver_class=CodexModelResolver,
         catalog_factory=lambda: CODEX_CATALOG,
         model_state_relative_path=CODEX_STATE_RELATIVE_PATH,
@@ -591,6 +599,12 @@ def build_one_shot_completion(harness: HarnessType) -> OneShotCompletion | None:
     """Build the one-shot completion for ``harness``, or None when the harness registers none."""
     completion_class = get_harness_spec(harness).one_shot_completion_class
     return completion_class() if completion_class is not None else None
+
+
+def build_web_lookup(harness: HarnessType) -> WebLookup | None:
+    """Build the web look-up for ``harness``, or None when the harness registers none."""
+    lookup_class = get_harness_spec(harness).web_lookup_class
+    return lookup_class() if lookup_class is not None else None
 
 
 def build_resolver(agent_info: AgentInfo) -> HarnessModelResolver:

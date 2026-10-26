@@ -34,6 +34,16 @@
         ]
       }
     ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$MNGR_AGENT_WORK_DIR/system/scripts/user_profile_context.sh\" --codex"
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "hooks": [

@@ -798,6 +798,11 @@ class SeedChatRequest(FrozenModel):
     # CLEANUP: drop ``title`` once no Imbue Studio app in use sends it (released ones send "Welcome").
     title: str = Field(default="", description="Ignored: the seeded chat is named ``MAIN_CHAT_NAME``")
     turns: tuple[SeedTurn, ...] = Field(min_length=1, description="The turns, in order")
+    is_onboarding: bool = Field(
+        default=False,
+        description="Whether this is the installation's first workspace, whose first agent is the onboarding agent; "
+        "the Imbue Studio app sets it only for a create that was granted its onboarding questions",
+    )
 
 
 class IntakeTarget(LowerCaseStrEnum):
