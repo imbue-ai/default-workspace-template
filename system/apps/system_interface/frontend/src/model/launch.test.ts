@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_WINDOW_PATH_LENGTH,
+  appChatLaunchOf,
+  appChatParams,
   appLaunchesOf,
   appShortcutOf,
   fillParamOf,
@@ -9,8 +11,6 @@ import {
   launchPathOf,
   launchRowKindOf,
   mentionParams,
-  appChatLaunchOf,
-  appChatParams,
   mentionRowsOf,
   orderAppLaunches,
   textRowDisabledReason,

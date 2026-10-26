@@ -27,9 +27,9 @@ import { StalePlacementsSaveError } from "../model/api";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
-  appShortcutOf,
   appChatLaunchOf,
   appChatParams,
+  appShortcutOf,
   draftRowsOf,
   freeTextParams,
   freeTextRowsOf,
