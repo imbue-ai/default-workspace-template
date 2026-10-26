@@ -88,6 +88,17 @@ describe("launch paths of an app", () => {
       mode: "focus",
     });
     expect(appShortcutOf(appRecord("gone", { default_shortcut: { launch: "missing", mode: "new" } }))).toBeNull();
+    // A path that takes a mention or is about an app is never the shortcut, as the shell seeds it.
+    const marked = appRecord("marked", {
+      program: "marked",
+      default_shortcut: null,
+      launch_paths: [
+        launchPathRecord({ id: "m", mention_param: "m", params: ["m"] }),
+        launchPathRecord({ id: "a", params: ["x", "y"], app_params: { name: "x", display_name: "y" } }),
+        launchPathRecord({ id: "plain", path: "/plain" }),
+      ],
+    });
+    expect(appShortcutOf(marked)).toEqual({ launch: "plain", mode: "focus" });
     const undeclared = { default_shortcut: null, launch_paths: buddy.launch_paths };
     expect(appShortcutOf(appRecord("own", undeclared))).toEqual({ launch: "root", mode: "focus" });
     // With no declared default and every launch path taking text, the first is still the app's shortcut.

@@ -88,6 +88,7 @@ from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import is_genuine_user_turn
+from imbue.chat.chat_intakes import APP_CHAT_LABEL
 from imbue.chat.chat_intakes import app_chat_hint
 from imbue.chat.chat_intakes import app_chat_title
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
@@ -1916,28 +1917,35 @@ def _lounge_or_refusal(state: ChatAppState) -> _ResolvedIntakeChat | Response:
 
 
 def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
-    """The chat about an app (the multiplayer spec, section 9.2): the chat titled exactly "<display name> Chat", of
-    either kind or still being made, else one created with that title on the default account (never auto-named,
-    since the title is not a "Chat N"); with nothing signed in, a chat awaiting its first send under the title,
-    whose page asks for a provider. The refusals are the create route's."""
-    if not intake.app_display_name:
-        return error_response("A chat about an app names the app's display name", 400)
+    """The chat about an app (the multiplayer spec, section 9.2): the chat labelled ``app_chat`` with the app's
+    registered name (so a renamed app keeps its chat), else the one titled exactly "<display name> Chat", of either
+    kind or still being made; else one created with that title and label on the default account (never auto-named,
+    since the title is not a "Chat N"); with nothing signed in, a chat awaiting its first send under them, whose
+    page asks for a provider. The refusals are the create route's."""
+    if not intake.app or not intake.app_display_name:
+        return error_response("A chat about an app names the app and its display name", 400)
     title = app_chat_title(intake.app_display_name)
+    labels = {APP_CHAT_LABEL: intake.app}
     agent_manager = state.agent_manager
-    listed = next(
-        (snapshot.chat_id for snapshot in agent_manager.get_chat_snapshots() if snapshot.title == title), None
-    )
-    if listed is None:
-        listed = next((chat.chat_id for chat in agent_manager.get_provisional_chats() if chat.name == title), None)
-    if listed is not None:
-        return _ResolvedIntakeChat(chat_id=listed)
+    snapshots = agent_manager.get_chat_snapshots()
+    provisional = agent_manager.get_provisional_chats()
+    for is_match in (
+        lambda chat_labels, chat_title: chat_labels.get(APP_CHAT_LABEL) == intake.app,
+        lambda chat_labels, chat_title: chat_title == title,
+    ):
+        for snapshot in snapshots:
+            if is_match(snapshot.labels, snapshot.title):
+                return _ResolvedIntakeChat(chat_id=snapshot.chat_id)
+        for chat in provisional:
+            if is_match(chat.labels, chat.name):
+                return _ResolvedIntakeChat(chat_id=chat.chat_id)
     account = _resolve_intake_account(intake)
     if isinstance(account, Response):
         return account
     if account is None:
-        minted = _created_or_refusal(lambda: agent_manager.mint_awaiting_chat("", name=title))
+        minted = _created_or_refusal(lambda: agent_manager.mint_awaiting_chat("", name=title, labels=labels))
         return minted if isinstance(minted, Response) else _ResolvedIntakeChat(chat_id=minted.chat_id)
-    created = _created_or_refusal(lambda: agent_manager.create_chat(title, account_id=account))
+    created = _created_or_refusal(lambda: agent_manager.create_chat(title, account_id=account, labels=labels))
     return created if isinstance(created, Response) else _ResolvedIntakeChat(chat_id=created.chat_id)
 
 

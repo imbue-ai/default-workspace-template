@@ -524,10 +524,12 @@ Two cases, two patterns:
 
 An app's `display_name` names more than its windows: every window's "Chat
 about this app" button opens the chat titled `<display_name> Chat` (the
-multiplayer spec, section 9), so when the display name changes, rename that
-chat too or the button starts a second one. `system/scripts/rename_chat.py`
-does it through the chat app's rename route (`POST /api/chats/<id>/rename`,
-beside the send route `message_chat.py` posts to):
+multiplayer spec, section 9). The button finds that chat again by the
+`app_chat` label it carries with the app's registered name, so a renamed app
+keeps its chat; its title is what no longer matches, so rename the chat too.
+`system/scripts/rename_chat.py` does it through the chat app's rename route
+(`POST /api/chats/<id>/rename`, beside the send route `message_chat.py` posts
+to):
 
 ```bash
 python3 system/scripts/rename_chat.py --title "<old display name> Chat" --new-title "<new display name> Chat"

@@ -242,6 +242,35 @@ def chat_app_url(environ: Mapping[str, str], cwd: Path) -> str:
     return CHAT_APP_FALLBACK_URL
 
 
+def get_json(base_url: str, path: str) -> ChatAppAnswer:
+    """GET ``path`` and answer what came back.
+
+    Raises ``ChatAppUnreachableError`` when the chat app cannot be connected to or answers
+    nothing; a read answers no state, so there is nothing acted on to be careful about.
+    """
+    parsed = urllib.parse.urlsplit(base_url)
+    connection = http.client.HTTPConnection(
+        parsed.hostname or "127.0.0.1",
+        parsed.port or 80,
+        timeout=CONNECT_TIMEOUT_SECONDS,
+    )
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        raw = response.read()
+    except (OSError, http.client.HTTPException) as exc:
+        raise ChatAppUnreachableError(
+            f"could not read {path} from the chat app at {base_url}: {exc}"
+        ) from exc
+    finally:
+        connection.close()
+    try:
+        parsed_body: object = json.loads(raw.decode("utf-8")) if raw else None
+    except ValueError:
+        parsed_body = None
+    return ChatAppAnswer(response.status, parsed_body)
+
+
 def post_json(base_url: str, path: str, body: Mapping[str, object]) -> ChatAppAnswer:
     """POST ``body`` and wait for the answer, however long it takes.
 

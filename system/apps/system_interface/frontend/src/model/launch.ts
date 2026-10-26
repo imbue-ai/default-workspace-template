@@ -134,7 +134,11 @@ export function appShortcutOf(app: AppRecord): DefaultShortcut | null {
   const declared = app.default_shortcut;
   if (declared !== null) return launchPathOf(app, declared.launch) === null ? null : declared;
   if (app.program === "") return null;
-  const first = app.launch_paths.find((launchPath) => fillParamOf(launchPath) === null) ?? app.launch_paths[0];
+  const first =
+    app.launch_paths.find(
+      (launchPath) =>
+        fillParamOf(launchPath) === null && launchPath.mention_param === null && launchPath.app_params === null,
+    ) ?? app.launch_paths[0];
   return first === undefined ? null : { launch: first.id, mode: "focus" };
 }
 

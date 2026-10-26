@@ -183,7 +183,7 @@ export async function launch(desktopId: string, request: LaunchRequest): Promise
     if (request.target.sendsWindowPath === false) target.sends_window_path = false;
   }
   if (request.target.kind === "show" && request.target.besideWindowId !== undefined) {
-    target.window_id = request.target.besideWindowId;
+    target.beside = request.target.besideWindowId;
   }
   const data = await postJson<{ window: unknown; path: string; is_new: boolean }>(desktopUrl(desktopId, "/launch"), {
     app: request.app,

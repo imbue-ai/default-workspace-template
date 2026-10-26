@@ -99,7 +99,7 @@ The shell's one launch route (section 5.3) takes a target saying where the answe
 - `focus`: a window of the app already at exactly that path is focused instead; otherwise as `new`.
 - `window`: point a named window of the app at the path, as the op route's `navigate` does (an independent window moves for this client alone; a linked window moves for everyone), and answer that window.
   The window's current path as this client sees it rides in the envelope as `window_path`.
-- `show`: put the path on screen by the `show` op's rule on this desktop (a window of the app already at the path raised, else the app's pinned window pointed at it for this client, else a new window), and, when the target names a window, lay the shown window out beside it: snapped to the half of the backdrop its frame's centre is on (the right when minimized or never placed), the named window to the other half, the shown one on top (the multiplayer spec, section 9.2). No `window_path` rides in the envelope.
+- `show`: put the path on screen by the `show` op's rule on this desktop (a window of the app already at the path raised, else the app's pinned window pointed at it for this client, else a new window), and, when the target names a window as `beside`, lay the shown window out beside it: snapped to the half of the backdrop its frame's centre is on (the right when minimized or never placed), the named window to the other half, the shown one on top (the multiplayer spec, section 9.2). No `window_path` rides in the envelope.
 
 With a POST launch path the `window` target is what the launcher's free-text rows use (section 4.1), and it is safe on a linked window too: the path every client follows is pure, so nothing runs twice.
 
@@ -135,7 +135,7 @@ The receiving chat resolves in this order:
 - `chat_selector`: the chats that are agents (a provisional chat cannot take a message).
   With none, the rules of `new_chat`; with one, that chat; with more, the choice is the user's, and the intake is held (section 3.6).
 - `lounge`: the chat titled Lounge, of either kind, made as a room when there is none (the multiplayer spec, section 7.5).
-- `app_chat`: the chat titled exactly "<`app_display_name`> Chat", of either kind or still being made, else one created with that title on the default account (never auto-named), else, with nothing signed in, one awaiting its first send under the title; the intake is always held, with a `hint` ("How do you want to change <app>?") the root puts on the composer as its placeholder and focuses (the multiplayer spec, section 9.2).
+- `app_chat`: the chat labelled `app_chat` with the `app`'s registered name (so a renamed app keeps its chat), else the one titled exactly "<`app_display_name`> Chat", of either kind or still being made; else one created with that title and label on the default account (never auto-named), else, with nothing signed in, one awaiting its first send under them; the intake is always held, with a `hint` ("How do you want to change <app>?") the root puts on the composer as its placeholder and focuses (the multiplayer spec, section 9.2).
 - `new_chat`: the account is `account_id`, else the workspace's default (the pinned default, else the most recently used).
   With an account and `is_draft` false, the chat is created through the existing create path with `message` as its first message, exactly as the chat root's New Chat button creates one.
   Otherwise (no account, or a draft) the app mints an unseeded provisional chat in the `awaiting_first_send` phase (section 3.7) and holds the intake for it.

@@ -457,9 +457,7 @@ class ShellState(MutableModel):
                 navigated = self.report_window_location(desktop.id, window.id, request.client_id, path, seen.title)
                 return LaunchOutcome(window=navigated, path=path, is_new=False)
             case LaunchTargetKind.SHOW:
-                beside = (
-                    require_window(desktop, request.target.window_id) if request.target.window_id is not None else None
-                )
+                beside = require_window(desktop, request.target.beside) if request.target.beside is not None else None
                 path = self.launch_destination(entry, launch_path, request.params, request.client_id, desktop.id, None)
                 shown = self.show_window(request.client_id, desktop, request.app, path, set(), set(), False)
                 if beside is not None and not shown.is_raised_in_own_window:

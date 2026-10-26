@@ -245,9 +245,12 @@ class LaunchTarget(FrozenModel):
         description="A new window, a window already at the path, a named window, or the show op's choice"
     )
     window_id: WindowId | None = Field(
+        default=None, description="The window this client points at the page; required for the window kind"
+    )
+    beside: WindowId | None = Field(
         default=None,
-        description="For the window kind, the window this client points at the page (required); for the show kind, "
-        "a window the shown one is laid out beside (the multiplayer spec, section 9.2), or none",
+        description="For the show kind, a window of the desktop the shown window is snapped beside (the multiplayer "
+        "spec, section 9.2); none lays nothing out",
     )
     sends_window_path: bool = Field(
         default=True,
@@ -257,10 +260,12 @@ class LaunchTarget(FrozenModel):
 
     @model_validator(mode="after")
     def _check_window_named_for_the_window_kind(self) -> "LaunchTarget":
-        if self.kind is LaunchTargetKind.WINDOW and self.window_id is None:
-            raise InvalidShellValueError("a launch target of the 'window' kind names its window")
-        if self.window_id is not None and self.kind not in (LaunchTargetKind.WINDOW, LaunchTargetKind.SHOW):
-            raise InvalidShellValueError("only a launch target of the 'window' or 'show' kind names a window")
+        if (self.kind is LaunchTargetKind.WINDOW) != (self.window_id is not None):
+            raise InvalidShellValueError("a launch target names a window exactly when its kind is 'window'")
+        if self.beside is not None and self.kind is not LaunchTargetKind.SHOW:
+            raise InvalidShellValueError(
+                "only a launch target of the 'show' kind lays the shown window out beside one"
+            )
         if not self.sends_window_path and self.kind is not LaunchTargetKind.WINDOW:
             raise InvalidShellValueError("only a launch target of the 'window' kind has a window path to withhold")
         return self

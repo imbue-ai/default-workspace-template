@@ -95,7 +95,6 @@ from imbue.system_interface.shell.api_models import WindowOpenedResponse
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
-from imbue.system_interface.shell.data_types import ClientDesktopView
 from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import WindowLocationReport
@@ -974,14 +973,6 @@ def _navigate(
     seen = next(candidate for candidate in named.seen_windows if candidate.id == named.window.id)
     shell.report_window_location(target.desktop.id, named.window.id, target.client_id, arguments.path, seen.title)
     return named.window.id
-
-
-def _client_desktop_view(shell: ShellState, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
-    return ClientDesktopView(
-        desktop=desktop,
-        layout=shell.read_desktop_layout(desktop, client_id),
-        seen_windows=shell.windows_for_client(desktop, client_id),
-    )
 
 
 class ShowResult(FrozenModel):

@@ -2808,7 +2808,7 @@ def test_a_show_launch_puts_the_page_on_screen_by_the_show_rule_and_lays_it_out_
             "app": "buddy",
             "launch": "new",
             "params": {"message": "hi"},
-            "target": {"kind": "show", "window_id": terminal["id"]},
+            "target": {"kind": "show", "beside": terminal["id"]},
         },
     )
     assert shown.status_code == 200, shown.get_json()
@@ -2831,7 +2831,7 @@ def test_a_show_launch_puts_the_page_on_screen_by_the_show_rule_and_lays_it_out_
             "app": "buddy",
             "launch": "new",
             "params": {"message": "hi"},
-            "target": {"kind": "show", "window_id": terminal["id"]},
+            "target": {"kind": "show", "beside": terminal["id"]},
         },
     )
     assert raised.status_code == 200 and raised.get_json()["window"]["id"] == pinned["id"]
@@ -2847,17 +2847,23 @@ def test_a_show_launch_puts_the_page_on_screen_by_the_show_rule_and_lays_it_out_
     assert opened.status_code == 201, opened.get_json()
     assert opened.get_json()["is_new"] is True and opened.get_json()["window"]["app"] == "terminal"
 
-    # The window laid out beside must be on the desktop, and only the window and show kinds name one.
+    # The window laid out beside must be on the desktop; only the show kind lays out beside one, and the show kind
+    # points no named window at the page.
     assert (
         _launch(
-            client,
-            {"app": "buddy", "launch": "new", "target": {"kind": "show", "window_id": "win-00000000000000ff"}},
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "show", "beside": "win-00000000000000ff"}}
         ).status_code
         == 404
     )
     assert (
         _launch(
-            client, {"app": "buddy", "launch": "new", "target": {"kind": "new", "window_id": pinned["id"]}}
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "new", "beside": pinned["id"]}}
+        ).status_code
+        == 400
+    )
+    assert (
+        _launch(
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "show", "window_id": pinned["id"]}}
         ).status_code
         == 400
     )

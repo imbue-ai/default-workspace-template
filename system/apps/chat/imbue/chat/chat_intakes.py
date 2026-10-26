@@ -65,6 +65,11 @@ def most_recently_messaged_chat_id(snapshots: Sequence[ChatSnapshot]) -> ChatId 
     return max(snapshots, key=lambda snapshot: snapshot.last_messaged_at or 0.0).chat_id
 
 
+# The label a chat about an app carries, with the app's registered name: what the button finds the chat by again
+# whatever its title has become (the multiplayer spec, section 9.2).
+APP_CHAT_LABEL: Final[str] = "app_chat"
+
+
 @pure
 def app_chat_title(app_display_name: str) -> str:
     """The title of the chat about an app (the multiplayer spec, section 9.2): the app's display name and "Chat"."""

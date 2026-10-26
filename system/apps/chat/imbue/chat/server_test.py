@@ -5715,12 +5715,16 @@ def test_an_app_chat_intake_opens_the_chat_titled_for_the_app_and_makes_it_on_th
         "first_message": None,
         "hint": "How do you want to change Docs?",
     }
+    assert provisional.labels == {"app_chat": "docs"}
     assert _intake(client, target="app_chat", app="docs").status_code == 400
+    assert _intake(client, target="app_chat", app_display_name="Docs").status_code == 400
 
 
-def test_an_app_chat_intake_finds_the_chat_by_its_exact_title_and_the_chat_app_opens_chat_chat(
+def test_an_app_chat_intake_finds_the_chat_by_its_label_else_its_exact_title_and_the_chat_app_opens_chat_chat(
     tmp_path: Path,
 ) -> None:
+    """The chat about an app is found by the ``app_chat`` label carrying the app's registered name, whatever it has
+    been retitled to, else by the title "<display name> Chat" (a chat so named by hand, or from before the label)."""
     app = _peopled_app(tmp_path, RecordingMngrMessenger())
     manager = state_of(app).agent_manager
     seed_agent_state(manager, _DOCS_CHAT_ID, name="Docs Chat", labels={"display_name": "Docs Chat"})
@@ -5729,6 +5733,12 @@ def test_an_app_chat_intake_finds_the_chat_by_its_exact_title_and_the_chat_app_o
     response = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
 
     assert parse_qs(urlparse(response.get_json()["path"]).query)["chat"] == [_DOCS_CHAT_ID]
+    labelled_id = "agent-00000000000000000000000000000078"
+    seed_agent_state(
+        manager, labelled_id, name="Notes Chat", labels={"display_name": "Notes, renamed", "app_chat": "notes"}
+    )
+    by_label = _intake(client, target="app_chat", app="notes", app_display_name="Notes")
+    assert parse_qs(urlparse(by_label.get_json()["path"]).query)["chat"] == [labelled_id]
     # The Lounge is titled "Lounge", not "Lounge Chat", so an app so named gets a chat of its own.
     other = _intake(client, target="app_chat", app="lounge", app_display_name="Lounge")
     assert parse_qs(urlparse(other.get_json()["path"]).query)["chat"] != [_LOUNGE_ID]
@@ -5757,10 +5767,11 @@ def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaitin
     chat_id = parse_qs(urlparse(path).query)["chat"][0]
     provisional = manager.get_provisional_chat(chat_id)
     assert provisional is not None
-    assert (provisional.name, provisional.phase, provisional.account_id) == (
+    assert (provisional.name, provisional.phase, provisional.account_id, provisional.labels) == (
         "Docs Chat",
         ProvisionalChatPhase.AWAITING_FIRST_SEND,
         "",
+        {"app_chat": "docs"},
     )
     applied = test_client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
     assert applied.get_json()["hint"] == "How do you want to change Docs?"

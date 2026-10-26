@@ -12,60 +12,26 @@ Exit codes:
     1  -- the chat app refused the rename (the reason is printed)
     2  -- the chat app could not be reached or answered no listing
 
-Standard-library only, like ``message_chat.py``, so it runs under a plain ``python3``.
+Standard-library only, like ``message_chat.py`` beside it (whose chat-app helpers it imports, as
+``seed_welcome_chat.py`` does), so it runs under a plain ``python3``.
 """
 
 from __future__ import annotations
 
 import argparse
-import http.client
-import json
 import os
 import sys
 import urllib.parse
 from pathlib import Path
 from typing import IO
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from message_chat import (
-    CONNECT_TIMEOUT_SECONDS,  # noqa: E402
-    ChatAppUnreachableError,  # noqa: E402
-    chat_app_url,  # noqa: E402
-    post_json,  # noqa: E402
-)
+from message_chat import ChatAppUnreachableError, chat_app_url, get_json, post_json
 
 CHATS_PATH = "/api/chats"
 
 EXIT_OK = 0
 EXIT_REFUSED = 1
 EXIT_UNREACHABLE = 2
-
-
-def get_json(base_url: str, path: str) -> tuple[int, object]:
-    """GET ``path`` and answer ``(status, parsed body)``; raises ``ChatAppUnreachableError`` when the chat app
-    cannot be connected to."""
-    parsed = urllib.parse.urlsplit(base_url)
-    connection = http.client.HTTPConnection(
-        parsed.hostname or "127.0.0.1",
-        parsed.port or 80,
-        timeout=CONNECT_TIMEOUT_SECONDS,
-    )
-    try:
-        connection.request("GET", path)
-        response = connection.getresponse()
-        raw = response.read()
-    except OSError as exc:
-        raise ChatAppUnreachableError(
-            f"could not reach the chat app at {base_url}: {exc}"
-        ) from exc
-    finally:
-        connection.close()
-    try:
-        body: object = json.loads(raw.decode("utf-8")) if raw else None
-    except ValueError:
-        body = None
-    return response.status, body
 
 
 def chat_id_titled(listing: object, title: str) -> str | None:
@@ -86,14 +52,17 @@ def rename_chat(
     base_url: str, title: str, new_title: str, stdout: IO[str], stderr: IO[str]
 ) -> int:
     try:
-        status, listing = get_json(base_url, CHATS_PATH)
+        listed = get_json(base_url, CHATS_PATH)
     except ChatAppUnreachableError as exc:
         print(str(exc), file=stderr)
         return EXIT_UNREACHABLE
-    if status != 200:
-        print(f"the chat app answered HTTP {status} to the chat listing", file=stderr)
+    if listed.status != 200:
+        print(
+            f"the chat app answered HTTP {listed.status} to the chat listing",
+            file=stderr,
+        )
         return EXIT_UNREACHABLE
-    chat_id = chat_id_titled(listing, title)
+    chat_id = chat_id_titled(listed.body, title)
     if chat_id is None:
         print(f"no chat is titled {title!r}; nothing to rename", file=stdout)
         return EXIT_OK
