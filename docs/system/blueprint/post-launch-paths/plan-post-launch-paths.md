@@ -126,6 +126,7 @@ A `desktops.json` written by the previous release carries `is_settling` on each 
 | `is_delivery_awaited` | bool, default false | Answer only once the send has been accepted by the harness (or refused), instead of as soon as the receiving chat is decided |
 | `client_id`, `desktop_id` | string, default `""` | The client the text came from, for the shell's client-activity attribution; both or neither |
 | `window_path` | string, default `""` | The path of the window the text was typed into, which `current_chat` reads |
+| `app`, `app_display_name` | string, default `""` | The registered name and the display name of the app an `app_chat` intake is about; the display name titles its chat and words the composer's hint (the multiplayer spec, section 9.2) |
 
 The receiving chat resolves in this order:
 
