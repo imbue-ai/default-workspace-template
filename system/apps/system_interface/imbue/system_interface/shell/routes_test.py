@@ -24,6 +24,7 @@ from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
+from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeLivenessProber
@@ -1006,6 +1007,7 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     assert created.get_json()["id"] == "research" and len(created.get_json()["shortcuts"]) == 2
     assert client.post("/api/desktops", json={"name": "research!", "color": "#12B5A5", "glyph": 4}).status_code == 409
     assert client.post("/api/desktops", json={"name": "Bad", "color": "red", "glyph": 4}).status_code == 400
+    assert client.post("/api/desktops", json={"name": "Bad", "glyph": GLYPH_COUNT}).status_code == 400
     settled = client.post(
         "/api/desktops/research/settings", json={"name": "Research 2", "color": "#222222", "glyph": 2}
     )

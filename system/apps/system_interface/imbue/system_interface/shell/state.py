@@ -97,6 +97,7 @@ from imbue.system_interface.shell.desktops import desktop_name_for_user
 from imbue.system_interface.shell.desktops import next_glyph_index
 from imbue.system_interface.shell.desktops import resolve_active_desktop
 from imbue.system_interface.shell.desktops import slugify_desktop_name
+from imbue.system_interface.shell.desktops import validated_desktop_glyph
 from imbue.system_interface.shell.errors import DesktopNotFoundError
 from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import InvalidShellValueError
@@ -295,7 +296,11 @@ class ShellState(MutableModel):
             is_registry_read = self.inventory.is_registry_read
             rows = self._registry_rows() if is_registry_read else []
             desktops = self._reconcile_desktops_with(rows) if is_registry_read else self.desktops.list_desktops()
-            chosen_glyph = glyph if glyph is not None else next_glyph_index([desktop.glyph for desktop in desktops])
+            chosen_glyph = (
+                validated_desktop_glyph(glyph)
+                if glyph is not None
+                else next_glyph_index([desktop.glyph for desktop in desktops])
+            )
             desktop = self.desktops.create_desktop(
                 name,
                 color if color is not None else DESKTOP_GLYPH_COLORS[chosen_glyph],
