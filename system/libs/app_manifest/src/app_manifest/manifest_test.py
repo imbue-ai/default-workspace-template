@@ -499,7 +499,7 @@ def test_a_launch_path_declares_at_most_one_of_text_param_draft_param_and_mentio
 def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_and_nothing_else() -> (
     None
 ):
-    """The ``app_params`` pair (the multiplayer spec, section 9.2) names two of the launch path's params, and
+    """The ``app_params`` pair (the multiplayer spec, section 9.2) names two distinct params of the launch path, and
     stands alone like a text, draft, or mention param."""
     data = _full_manifest_data()
     params = [
@@ -536,6 +536,21 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
     ):
         AppManifest.model_validate(
             {**data, "launch_paths": [{**about_an_app, "text_param": "app"}]}
+        )
+    with pytest.raises(
+        ValidationError,
+        match="names one param 'app' for both the name and the display name",
+    ):
+        AppManifest.model_validate(
+            {
+                **data,
+                "launch_paths": [
+                    {
+                        **about_an_app,
+                        "app_params": {"name": "app", "display_name": "app"},
+                    }
+                ],
+            }
         )
 
 

@@ -153,6 +153,14 @@ class AppParams(FrozenModel):
         description="The param that takes the app's display name"
     )
 
+    @model_validator(mode="after")
+    def _check_the_two_params_differ(self) -> Self:
+        if self.name == self.display_name:
+            raise InvalidManifestValueError(
+                f"app_params names one param {str(self.name)!r} for both the name and the display name"
+            )
+        return self
+
 
 class LaunchPath(FrozenModel):
     """A way of starting something the desktop offers (desktop-interface contracts.md section 2): a page path the
