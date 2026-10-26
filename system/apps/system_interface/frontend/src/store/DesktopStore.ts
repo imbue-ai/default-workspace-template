@@ -1146,8 +1146,6 @@ export class DesktopStore {
     return keys;
   }
 
-  // Desktops (the multiplayer spec, section 8)
-
   /** Whether the desktop is the viewer's own (section 8.1). */
   isOwnDesktop(desktop: Desktop): boolean {
     return isOwnDesktop(desktop, getOwnIdentity());
