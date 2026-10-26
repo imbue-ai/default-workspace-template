@@ -1,11 +1,14 @@
 """Rename the chat under one title to another through the chat app.
 
 For an app whose ``display_name`` changed: every window's "Chat about this app" opens the chat
-titled ``<display_name> Chat`` (the multiplayer spec, section 9), so the chat under the old
-title is renamed to the new one, or the button would start a second chat (the ``build-app``
-skill, "Renaming an app"). The chat app is reached as ``message_chat.py`` reaches it (its
-registry row, else the fixed fallback), the chats listed from ``GET /api/chats``, and the one
-titled exactly ``--title`` renamed with ``POST /api/chats/<id>/rename``.
+about the app, titled ``<display_name> Chat`` when it is made (the multiplayer spec, section
+9). The button finds that chat again by the ``app_chat`` label it carries, whatever its title;
+the title is what no longer matches the app, so the chat under the old title is renamed to the
+new one (the ``build-app`` skill, "Renaming an app"), which also keeps a chat from before the
+label, found by its title alone, findable. The chat app is reached as ``message_chat.py``
+reaches it (its registry row, else the fixed fallback), the chats listed from
+``GET /api/chats``, and the one titled exactly ``--title`` renamed with
+``POST /api/chats/<id>/rename``.
 
 Exit codes:
     0  -- renamed, or no chat carries the old title (nothing to do)
