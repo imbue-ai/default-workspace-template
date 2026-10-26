@@ -2566,8 +2566,8 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
         expect(chip).to_contain_text("alice")
         outline = page.locator('[data-viewing-outline="alice"]')
         expect(outline).to_be_visible()
-        color = _get_json(f"{e2e_server.base_url}/api/roster")["participants"]
-        (alice_entry,) = [participant for participant in color if participant["key"] == "user:user-alice"]
+        participants = _get_json(f"{e2e_server.base_url}/api/roster")["participants"]
+        (alice_entry,) = [participant for participant in participants if participant["key"] == "user:user-alice"]
         assert outline.evaluate("(el) => getComputedStyle(el).borderTopColor") == _css_rgb(alice_entry["color"])
         # The visitor's own client sees their picture ringed while the owner looks at their desktop.
         expect(visitor.locator('[data-tray-person="user:user-alice"][data-tray-ringed="true"]')).to_be_visible(
