@@ -146,8 +146,12 @@ class AppParams(FrozenModel):
     """The declared params of a launch path about an app (the multiplayer spec, section 9.2): the shell fills them
     with the name and the display name of the app whose window's "Chat about this app" button was pressed."""
 
-    name: LaunchParamName = Field(description="The param that takes the app's registered name")
-    display_name: LaunchParamName = Field(description="The param that takes the app's display name")
+    name: LaunchParamName = Field(
+        description="The param that takes the app's registered name"
+    )
+    display_name: LaunchParamName = Field(
+        description="The param that takes the app's display name"
+    )
 
 
 class LaunchPath(FrozenModel):
@@ -192,7 +196,7 @@ class LaunchPath(FrozenModel):
     app_params: AppParams | None = Field(
         default=None,
         description="The declared params the shell fills with the name and display name of the app whose window's "
-        "\"Chat about this app\" button was pressed (the multiplayer spec, section 9.2); never a launcher row",
+        '"Chat about this app" button was pressed (the multiplayer spec, section 9.2); never a launcher row',
     )
 
     @model_validator(mode="after")
@@ -202,15 +206,26 @@ class LaunchPath(FrozenModel):
             ("text_param", self.text_param),
             ("draft_param", self.draft_param),
             ("mention_param", self.mention_param),
-            ("app_params.name", None if self.app_params is None else self.app_params.name),
-            ("app_params.display_name", None if self.app_params is None else self.app_params.display_name),
+            (
+                "app_params.name",
+                None if self.app_params is None else self.app_params.name,
+            ),
+            (
+                "app_params.display_name",
+                None if self.app_params is None else self.app_params.display_name,
+            ),
         )
         for field_name, chosen in chosen_params:
             if chosen is not None and chosen not in param_names:
                 raise InvalidManifestValueError(
                     f"{field_name} {str(chosen)!r} is not one of the launch path's params {param_names}"
                 )
-        chosen_fields = (self.text_param, self.draft_param, self.mention_param, self.app_params)
+        chosen_fields = (
+            self.text_param,
+            self.draft_param,
+            self.mention_param,
+            self.app_params,
+        )
         if sum(chosen is not None for chosen in chosen_fields) > 1:
             raise InvalidManifestValueError(
                 "a launch path declares at most one of text_param, draft_param, mention_param, and app_params"

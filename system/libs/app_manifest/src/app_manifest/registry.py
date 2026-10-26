@@ -96,7 +96,7 @@ class RegistryLaunchPath(FrozenModel):
     app_params: AppParams | None = Field(
         default=None,
         description="The params the shell fills with an app's name and display name when its window's \"Chat about "
-        "this app\" button is pressed; absent means the path is about no app",
+        'this app" button is pressed; absent means the path is about no app',
     )
 
 

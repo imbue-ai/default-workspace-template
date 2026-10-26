@@ -523,7 +523,10 @@ def test_a_launch_path_about_an_app_declares_both_app_params_among_its_params_an
             {
                 **data,
                 "launch_paths": [
-                    {**about_an_app, "app_params": {"name": "app", "display_name": "title"}}
+                    {
+                        **about_an_app,
+                        "app_params": {"name": "app", "display_name": "title"},
+                    }
                 ],
             }
         )
