@@ -197,7 +197,7 @@ The agent-facing `workspace-layout` speaks the same verbs, targets exactly one c
 
 - dockview, its serialized document, the Python editor over it, tab groups, tiled splits, and the vendor CSS overrides.
 - The shell's instance layer: the instances API and the relay verbs, the inventory's instance lists and nudges, provisional and sub-agent instances, referenced-lifetime deletion, the tab rebind route, the `{tab}` placeholder, and the `app:<name>?instance=<key>` address grammar.
-- The left rail and its responsibilities, redistributed: view identity and switching to the Desktops widget; shortcut rows to the backdrop; the All-apps popover and search to the launcher; the tab list to the taskbar entries and the launcher's "On this desktop" section; the row menu to the window menu.
+- The left rail and its responsibilities, redistributed: view identity and switching to the Desktops widget (itself since replaced by the overview, section 2.8); shortcut rows to the backdrop; the All-apps popover and search to the launcher; the tab list to the taskbar entries and the launcher's "On this desktop" section; the row menu to the window menu.
 - The New Tab page as a panel: the "dock is never empty" rule and launcher retirement. An empty desktop is a backdrop with shortcuts.
 - The Everything view, the per-device seed files, and the stored device kind.
 - The boot-time layout migration; V1 is a hard cutover that ignores the old state files.
