@@ -32,6 +32,7 @@ export function chatSnapshotFixture(
       is_connecting: false,
       is_busy: false,
       background_tasks: [],
+      message_steps: [],
       ...agentOverrides,
     },
   };

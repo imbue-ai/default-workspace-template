@@ -81,8 +81,8 @@ describe("user-message-display status messages", () => {
       non_turn_tail: true,
       compaction_cause: "idle",
     };
-    expect(renderUserMessage(event)).toBeNull();
-    expect(renderUserMessage({ ...event, display_body: "Summary of earlier conversation." })).toBeNull();
+    expect(renderUserMessage(event, "chat-1")).toBeNull();
+    expect(renderUserMessage({ ...event, display_body: "Summary of earlier conversation." }, "chat-1")).toBeNull();
   });
 
   it("renders a typed /compact as the user's own bubble", () => {
@@ -95,7 +95,9 @@ describe("user-message-display status messages", () => {
       content: "/compact",
       non_turn_tail: true,
     };
-    expect(collectClasses(renderUserMessage(event))).toContain("message message-user flex flex-col items-end mb-5");
+    expect(collectClasses(renderUserMessage(event, "chat-1"))).toContain(
+      "message message-user flex flex-col items-end mb-5",
+    );
     expect(allText(renderInner(event))).toBe("/compact");
   });
 });

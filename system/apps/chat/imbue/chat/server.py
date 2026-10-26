@@ -894,10 +894,19 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # Alongside the delivery rather than after it, which can take seconds: the name should land
     # while the agent is still answering.
     _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
+    # Only a message that will wait for a busy agent gets a step from the chat; an idle agent declares its own.
+    # Reserved before the delivery, so the agent's prompt hook finds the id beside the message.
+    step_id = (
+        state.message_steps.on_message_sent(ChatId(chat_id), message_id, send_message_request.message)
+        if state.message_steps is not None and agent_manager.is_chat_busy_with_a_turn(ChatId(chat_id))
+        else None
+    )
     accepted = _send_to_chat(
         state, ChatId(chat_id), send_message_request, message_id, is_refused_on_signed_out_account=True
     )
     if isinstance(accepted, _SendRefused):
+        if state.message_steps is not None and step_id is not None:
+            state.message_steps.on_message_refused(step_id)
         return model_response(accepted.answer, accepted.status)
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.

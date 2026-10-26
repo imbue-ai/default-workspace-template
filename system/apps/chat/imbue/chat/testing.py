@@ -1111,6 +1111,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             is_connecting=False,
             is_busy=False,
             background_tasks=(),
+            message_steps=(),
         ),
         last_messaged_at=last_messaged_at,
     )

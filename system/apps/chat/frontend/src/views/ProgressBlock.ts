@@ -240,7 +240,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             class: "pv-stophook relative z-[2] mt-1.5 mb-3.5 bg-chat",
             key: `${item.kind}-${item.event.event_id}`,
           },
-          renderUserMessage(item.event),
+          renderUserMessage(item.event, chatId),
         );
       });
 

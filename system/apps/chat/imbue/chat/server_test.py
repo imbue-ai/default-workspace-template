@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,8 +22,8 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
-from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
@@ -82,7 +83,13 @@ from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_NAME
+from imbue.chat.message_steps import MessageStepFiles
+from imbue.chat.message_steps import MessageStepReservations
+from imbue.chat.message_steps import MessageStepTracker
+from imbue.chat.message_steps import MessageStepWriter
+from imbue.chat.message_steps import MessageSteps
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ChatAccountBinding
 from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
@@ -129,9 +136,11 @@ from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -986,7 +995,9 @@ def test_a_send_to_a_chat_launched_at_sign_in_carries_the_seeded_conversation_on
     )
     chat_id = ChatId(seeded.chat_id)
     manager.create_chat("", chat_id=seeded.chat_id)
-    wait_until_true(lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion")
+    wait_until_true(
+        lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+    )
     record = manager._chat_record_store.read(chat_id)
     assert record is not None and record.is_seed_pending is True
     member_id = record.agents[-1].agent_id
@@ -1043,6 +1054,118 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
     assert response.status_code == 200
     assert completion.prompts == [chat_naming_prompt("Help me plan 5 days in Rome")]
     assert renames == [(ChatId(agent_id), "Five days in Rome")]
+
+
+_MESSAGE_STEPS_CHAT_ID = "agent-00000000000000000000000000000951"
+
+
+class _ReservationCheckingMessenger(RecordingMngrMessenger):
+    """Records, at each send, the step ids already reserved for messages, as reservations or as written steps."""
+
+    files: MessageStepFiles
+    reservations: MessageStepReservations
+    reserved_ids_at_send: list[list[str]] = []
+
+    def send_to_agent(
+        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
+    ) -> SendFailure | None:
+        reserved = [path.stem for path in self.reservations.root.glob("*.json")]
+        self.reserved_ids_at_send.append([*reserved, *(step.step_id for step in self.files.read_all())])
+        return super().send_to_agent(agent_id, message, known_locations)
+
+
+def _message_step_folders(tmp_path: Path) -> tuple[MessageStepFiles, MessageStepReservations]:
+    (tmp_path / ".tickets").mkdir()
+    files = MessageStepFiles(tickets_dir=tmp_path / ".tickets")
+    return files, MessageStepReservations(root=tmp_path / "reservations", id_prefix="wor")
+
+
+def _client_making_message_steps(
+    tmp_path: Path,
+    folders: tuple[MessageStepFiles, MessageStepReservations],
+    messenger: RecordingMngrMessenger,
+    activity_state: ActivityState,
+    completion: ScriptedOneShotCompletion,
+) -> tuple[FlaskClient, AgentInfo]:
+    files, reservations = folders
+    agent_info = AgentInfo(
+        id=_MESSAGE_STEPS_CHAT_ID,
+        name="Chat-9",
+        state="RUNNING",
+        agent_state_dir=tmp_path / "agent",
+        claude_config_dir=tmp_path,
+    )
+    tracker = MessageStepTracker(files=files)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, message_steps=tracker)
+    manager.note_agent_list_known()
+    with manager._lock:
+        manager._agents[agent_info.id] = AgentStateItem(
+            id=agent_info.id, name="Chat-9", state="RUNNING", labels={}, work_dir=None, activity_state=activity_state
+        )
+    state = build_test_state(agent_manager=manager)
+    state.message_steps = MessageSteps(
+        files=files,
+        reservations=reservations,
+        writer=MessageStepWriter(
+            files=files,
+            reservations=reservations,
+            resolve_chat_account_binding=lambda _chat_id: ChatAccountBinding(
+                harness=HarnessType.CLAUDE, account_dir=tmp_path / "account"
+            ),
+            build_one_shot_completion=lambda _harness: completion,
+            on_change=tracker.refresh,
+            executor=InlineExecutor(),
+        ),
+    )
+    return create_application(state).test_client(), agent_info
+
+
+def test_a_message_to_a_busy_agent_has_its_step_id_reserved_before_it_reaches_the_agent(tmp_path: Path) -> None:
+    files, reservations = _message_step_folders(tmp_path)
+    messenger = _ReservationCheckingMessenger(files=files, reservations=reservations)
+    completion = ScriptedOneShotCompletion(["Add a dark mode"])
+    client, agent_info = _client_making_message_steps(
+        tmp_path, (files, reservations), messenger, ActivityState.TOOL_RUNNING, completion
+    )
+
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(
+            f"/api/chats/{agent_info.id}/message", json={"message": "Add a dark mode", "message_id": "message-77"}
+        )
+
+    assert response.status_code == 200
+    (step,) = files.read_all()
+    assert (step.chat_id, step.message_id, step.title) == (agent_info.id, "message-77", "Add a dark mode")
+    assert messenger.reserved_ids_at_send == [[step.step_id]]
+
+
+def test_a_message_to_an_idle_agent_gets_no_step_from_the_chat(tmp_path: Path) -> None:
+    files, reservations = _message_step_folders(tmp_path)
+    completion = ScriptedOneShotCompletion([])
+    client, agent_info = _client_making_message_steps(
+        tmp_path, (files, reservations), RecordingMngrMessenger(), ActivityState.IDLE, completion
+    )
+
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_info.id}/message", json={"message": "Add a dark mode"})
+
+    assert response.status_code == 200
+    assert files.read_all() == () and not reservations.root.exists()
+    assert completion.prompts == []
+
+
+def test_a_message_the_agent_never_got_loses_its_reserved_id(tmp_path: Path) -> None:
+    files, reservations = _message_step_folders(tmp_path)
+    completion = ScriptedOneShotCompletion(["Add a dark mode"])
+    client, agent_info = _client_making_message_steps(
+        tmp_path, (files, reservations), RecordingMngrMessenger(succeeds=False), ActivityState.THINKING, completion
+    )
+
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_info.id}/message", json={"message": "Add a dark mode"})
+
+    assert response.status_code == 500
+    assert list(reservations.root.glob("*.json")) == []
 
 
 def _client_with_account_labeled_chat(
@@ -3248,9 +3371,7 @@ def test_a_chats_fast_mode_defaults_to_the_workspaces_and_is_replaced_whole(tmp_
     client = app.test_client()
     _register_agent(app, "agent-fast", "Chat-1", "RUNNING")
 
-    assert client.get("/api/chats/agent-fast/fast-mode").get_json() == {
-        "state": {"mode": "off", "is_switched": False}
-    }
+    assert client.get("/api/chats/agent-fast/fast-mode").get_json() == {"state": {"mode": "off", "is_switched": False}}
 
     response = client.put("/api/chats/agent-fast/fast-mode", json={"mode": "auto", "is_switched": True})
 

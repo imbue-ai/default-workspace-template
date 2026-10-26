@@ -19,6 +19,7 @@ import { classifyUserMessage, isHiddenUserMessage } from "./message-classificati
 import type { UserMessageClass } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
+import { renderMessageStepLine } from "./MessageStepLine";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The user rail's shared recipes, owned here and composed by the queued and
@@ -111,14 +112,22 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   };
 }
 
+/** The step line under a prompt bubble: found by the message's text, or by the user's words behind machine context. */
+function renderStepLineForEvent(event: UserMessageEvent, chatId: string): m.Vnode | null {
+  return (
+    renderMessageStepLine(chatId, event.content) ??
+    (event.display_body === undefined ? null : renderMessageStepLine(chatId, event.display_body))
+  );
+}
+
 /**
  * Render a `user_message` as a top-level row, or `null` when it produces no row of its own
  * (hidden `/welcome`, a skill expansion folded into its Skill tool block, or a compaction,
  * whose chips the transcript walk places in the agent's chip rows). A `SystemChip` row gets
- * the collapsed-system class; a genuine prompt gets the user-bubble class; a notice sits on
- * the agent's rail instead.
+ * the collapsed-system class; a genuine prompt gets the user-bubble class, with the step the
+ * chat made for the message under it; a notice sits on the agent's rail instead.
  */
-export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
+export function renderUserMessage(event: UserMessageEvent, chatId: string): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;
   if (isHiddenUserMessage(event) || kind === UserMessageKind.StatusMessage) {
     return null;
@@ -131,5 +140,12 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
         : `${USER_MESSAGE_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
-  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, m(StableUserMessage, { event }));
+  const stepLine =
+    kind === UserMessageKind.SystemChip || kind === UserMessageKind.Notice
+      ? null
+      : renderStepLineForEvent(event, chatId);
+  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [
+    m(StableUserMessage, { event }),
+    stepLine,
+  ]);
 }

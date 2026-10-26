@@ -11,6 +11,9 @@ DEFAULT_CHAT_PORT: Final[int] = 8010
 # Where the chat persists the user's things (contracts.md section 17), relative to the repo
 # root every supervised program runs from.
 DEFAULT_CHAT_DATA_DIR: Final[Path] = Path("data/.apps/chat")
+# Where tk keeps the workspace's tickets, relative to the same root. The agents' own TICKETS_DIR
+# (``.mngr/settings.toml``) names the same folder.
+DEFAULT_CHAT_TICKETS_DIR: Final[Path] = Path("data/.tickets")
 
 
 class DuplicateStaticBasenameError(ValueError):
@@ -29,6 +32,8 @@ class Config(BaseSettings):
     # A secondary chat (a preview) points this at a scratch copy so its writes never land
     # in the live chat's data.
     chat_data_dir: Path = Field(default=DEFAULT_CHAT_DATA_DIR)
+    # The tickets folder the chat writes each sent message's step in (``message_steps.py``).
+    chat_tickets_dir: Path = Field(default=DEFAULT_CHAT_TICKETS_DIR)
 
     @field_validator("chat_javascript_plugins", "chat_static_paths", mode="before")
     @classmethod
