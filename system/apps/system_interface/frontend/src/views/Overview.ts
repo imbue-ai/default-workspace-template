@@ -85,7 +85,7 @@ export function gridFor(
     );
     if (scale > best.scale) best = { columns, scale };
   }
-  return best.scale > 0 ? best : { columns: 1, scale: 0 };
+  return best;
 }
 
 /** The size the desktops row draws each thumbnail at: as wide as the token allows, narrower when the row would
