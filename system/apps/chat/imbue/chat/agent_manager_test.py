@@ -1389,6 +1389,53 @@ def test_making_another_chat_the_main_chat_renames_the_old_one_still_named_main_
     assert "display_name=Chat 2 (was: Main)" in rename_argv
 
 
+def test_making_another_chat_the_main_chat_renames_an_empty_stand_in_main_on_its_record_without_mngr(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """An empty main chat opened in place of a gone one has no agent yet: it is shown under its new name at once and
+    takes it on its provisional record, which its first send's create carries."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(
+        broadcaster, mngr_binary=mngr_binary, main_chat=_main_chat_store_naming_a_gone_chat(tmp_path)
+    )
+    try:
+        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
+        manager.note_agent_list_known()
+        stand_in_id = manager.get_main_chat_id()
+        assert stand_in_id is not None
+        q = broadcaster.register()
+
+        assert manager.make_main_chat(ChatId("agent-trip"))
+
+        shown_names = [
+            message["name"]
+            for message in (json.loads(raw) for raw in _drain(q))
+            if message["type"] == "provisional_chat_created" and message["chat_id"] == stand_in_id
+        ]
+        assert shown_names[:1] == ["Chat 1 (was: Main)"]
+
+        def stand_in_name() -> str | None:
+            stand_in = manager.get_provisional_chat(stand_in_id)
+            return None if stand_in is None else stand_in.name
+
+        wait_until_true(lambda: stand_in_name() == "Chat 1 (was: Main)", 10, "the stand-in to take its new name")
+        assert manager.get_main_chat_id() == ChatId("agent-trip")
+    finally:
+        manager.stop()
+
+    assert not argv_log.exists()
+
+
+def _drain(q: queue.Queue[str | None]) -> list[str]:
+    """Every message waiting on ``q``."""
+    drained: list[str] = []
+    while not q.empty():
+        raw = q.get_nowait()
+        assert raw is not None
+        drained.append(raw)
+    return drained
+
+
 def test_a_new_chat_skips_the_number_a_former_main_chat_holds(broadcaster: WebSocketBroadcaster) -> None:
     manager = AgentManager.build(broadcaster)
     try:
