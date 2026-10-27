@@ -247,9 +247,11 @@ for spec in sys.argv[1:]:
             check=True,
         )
         print(result.stdout.strip())
-    except (OSError, subprocess.CalledProcessError):
+    except (OSError, subprocess.CalledProcessError) as error:
+        detail = error.stderr.strip() if isinstance(error, subprocess.CalledProcessError) else ""
+        print(f"could not resolve {spec}: {error} {detail}", file=sys.stderr)
         print("")
-' chromium chromium-headless-shell "chromium-headless-shell=$_TEST_BROWSERS_DIR") 2>/dev/null || true)"
+' chromium chromium-headless-shell "chromium-headless-shell=$_TEST_BROWSERS_DIR") || true)"
     _PW_DEFAULT_CHROMIUM="$(sed -n 1p <<< "$resolved")"
     _PW_DEFAULT_HEADLESS_SHELL="$(sed -n 2p <<< "$resolved")"
     _PW_TEST_HEADLESS_SHELL="$(sed -n 3p <<< "$resolved")"
