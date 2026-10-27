@@ -360,6 +360,9 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
                 self._reply_draft = (conv_id, draft_text)
             elif self._reply_draft is not None and self._reply_draft[0] == conv_id:
                 self._reply_draft = None
+            else:
+                # The draft, if any, is another conversation's, which this scan says nothing about.
+                pass
 
     def _read_rows(self, db_path: Path, scan_from: int) -> list[tuple[int, int, int, bytes]]:
         """Read the steps at/after ``scan_from`` via the held connection. Caller must hold
