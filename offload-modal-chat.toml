@@ -61,23 +61,26 @@ build_inputs = [
 type = "pytest"
 # Discovery starts at the repo root; execution starts in the app directory already.
 command = "bash -c '[ -d system/apps/chat ] && cd system/apps/chat; exec uv run pytest \"$@\"' --"
-# `-m ''` replaces the pyproject's default `-m "not browser and not real_claude"` for the
-# explicit test ids each batch runs, as CI's bare-runner step does; the coverage floor is
-# enforced once on the runner, over the combined data, not per batch.
+# `-m ''` replaces the pyproject's default `-m "not browser and not real_claude"`, in discovery as
+# well as for the explicit test ids each batch runs: offload collects every group in one pass and
+# applies the groups' own filters to what that pass collected, so the pyproject's filter would drop
+# the browser tests before any group saw them. Which tests run is the groups' filters below. The
+# coverage floor is enforced once on the runner, over the combined data, not per batch.
 run_args = "-m '' --cov-fail-under=0"
 # --assert=plain skips assertion-rewriting during collection (OFFLOAD-18).
-discovery_args = "--no-cov --assert=plain"
+discovery_args = "--no-cov --assert=plain -m ''"
 # Inside the image every workspace-only test can run, so a skip is a missing install (pytest-workspace-env).
 # The fake agent identity is cleared by the same plugin, so a batch that fails to load it fails.
 env = { DWT_REQUIRE_WORKSPACE_ENV = "1", MNGR_AGENT_ID = "agent-c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1", MNGR_AGENT_NAME = "ci-not-an-agent", MINDS_CHAT_ID = "agent-c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2" }
 
+# Some real_claude tests need a signed-in Claude account, which CI does not have.
 [groups.all]
 retry_count = 0
-filters = "-m 'not flaky'"
+filters = "-m 'not flaky and not real_claude'"
 
 [groups.flaky]
 retry_count = 4
-filters = "-m 'flaky'"
+filters = "-m 'flaky and not real_claude'"
 
 [report]
 output_dir = "test-results/chat"

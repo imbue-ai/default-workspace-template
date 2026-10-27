@@ -5,20 +5,18 @@ import pytest
 from pydantic import ValidationError
 
 from app_manifest.errors import ManifestLoadError
-from app_manifest.manifest import (
-    RESERVED_LAUNCH_PARAM_NAMES,
-    AppManifest,
-    EntryMode,
-    LaunchPathMethod,
-    LocationScope,
-    PinStyle,
-    PreviewSpec,
-    ShortcutMode,
-    ThemingMode,
-    load_manifest,
-    manifest_icon_path,
-    scaffold_preview_spec,
-)
+from app_manifest.manifest import AppManifest
+from app_manifest.manifest import EntryMode
+from app_manifest.manifest import LaunchPathMethod
+from app_manifest.manifest import LocationScope
+from app_manifest.manifest import PinStyle
+from app_manifest.manifest import PreviewSpec
+from app_manifest.manifest import RESERVED_LAUNCH_PARAM_NAMES
+from app_manifest.manifest import ShortcutMode
+from app_manifest.manifest import ThemingMode
+from app_manifest.manifest import load_manifest
+from app_manifest.manifest import manifest_icon_path
+from app_manifest.manifest import scaffold_preview_spec
 from app_manifest.primitives import AppName
 from app_manifest.testing import APP_ICON_MARKUP
 from app_manifest.testing import write_app_manifest

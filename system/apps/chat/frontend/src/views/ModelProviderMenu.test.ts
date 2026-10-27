@@ -17,13 +17,22 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: ChatSnapshot | null; provisional: { account_id: string } | undefined } = {
+const agentState: {
+  agent: ChatSnapshot | null;
+  provisional: { account_id: string; phase?: string; model_pick?: unknown } | undefined;
+} = {
   agent: null,
   provisional: undefined,
 };
+// Every launch choice made for a chat with no agent yet, as (chat id, account id, pick).
+const launchChoices: [string, string, unknown][] = [];
 vi.mock("../models/Chats", () => ({
   getChatById: () => agentState.agent ?? undefined,
   getProvisionalChat: () => agentState.provisional,
+  setLaunchChoice: (chatId: string, accountId: string, pick: unknown) => {
+    launchChoices.push([chatId, accountId, pick]);
+    return Promise.resolve();
+  },
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
@@ -306,9 +315,27 @@ describe("the combo card", () => {
     expect(ROOT().querySelector(".model-selector-loading")?.textContent).toBe("Loading…");
   });
 
-  it("names the account a chat with no agent yet starts on, with no menu to open", () => {
+  it("names the account a chat with no agent yet starts on, and lets its model be chosen before it runs", () => {
     agentState.agent = null;
-    agentState.provisional = { account_id: "" };
+    agentState.provisional = { account_id: "", phase: "creating", model_pick: null };
+    catalogState.catalog = catalogOf({
+      options: [OPUS, { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" }],
+    });
+    launchChoices.length = 0;
+    render();
+    expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
+
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+
+    // At the model's own starting effort: a harness refuses a model that has efforts picked without one.
+    expect(launchChoices).toEqual([["a1", "acct-1", { model_id: "sonnet", effort: "medium", fast: false }]]);
+  });
+
+  it("keeps the plain chip for a chat whose create failed", () => {
+    agentState.agent = null;
+    agentState.provisional = { account_id: "", phase: "failed", model_pick: null };
     render();
     expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
     expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();

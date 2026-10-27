@@ -305,7 +305,7 @@ class HarnessSpec(FrozenModel):
     # state dir -- the one per-harness difference the shared live read/watch takes as data.
     # ``Path(".")`` = the state-dir root (claude, pi); codex writes under its CODEX_HOME.
     model_state_relative_path: Path
-    # A factory for the per-harness model catalog, called (once, cached) by ``get_catalog``.
+    # A factory for the per-harness model catalog, called by ``get_catalog``.
     # Behind a factory rather than a value because pi PARSES thousands of models off
     # disk -- too much for import time, and importing this module must not fail on an image
     # where a harness's data is absent. claude/codex just return their hand-written constant.
@@ -622,19 +622,6 @@ def get_model_state_path(harness: HarnessType, agent_state_dir: Path) -> Path:
     return model_state_path(agent_state_dir, get_harness_spec(harness).model_state_relative_path)
 
 
-# Built once per process from each harness's factory. The parsed catalogs (pi)
-# read data files that ship in the image, so a non-empty catalog is immutable for the
-# container's life and cached unconditionally; an empty one (harness data absent) is NOT
-# cached, so a later call retries rather than freezing the blank.
-_CATALOG_CACHE: dict[HarnessType, HarnessCatalog] = {}
-
-
 def get_catalog(harness: HarnessType) -> HarnessCatalog:
-    """The model catalog for ``harness``, built via its factory and cached when non-empty."""
-    cached = _CATALOG_CACHE.get(harness)
-    if cached is not None:
-        return cached
-    catalog = get_harness_spec(harness).catalog_factory()
-    if catalog.options:
-        _CATALOG_CACHE[harness] = catalog
-    return catalog
+    """The model catalog for ``harness``, from its factory (pi's factory caches the catalogs it parses)."""
+    return get_harness_spec(harness).catalog_factory()

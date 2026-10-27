@@ -12,13 +12,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.primitives import NonEmptyStr
-from imbue.imbue_common.pure import pure
 from pydantic import Field
 
 from app_manifest.errors import SuiteSelectionError
 from app_manifest.primitives import RepoRelativePath
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.primitives import NonEmptyStr
+from imbue.imbue_common.pure import pure
 
 # The working directory of a command run from the repo root, and how uv.lock records the root
 # project's own directory.

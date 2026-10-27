@@ -3,8 +3,8 @@ import re
 from pathlib import Path
 
 import pytest
-from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from flask.testing import FlaskClient
 from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
 

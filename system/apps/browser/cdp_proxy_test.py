@@ -17,7 +17,12 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
-from browser.cdp_proxy import _ALWAYS_BLOCKED, _LAST_PAGE_GUARDED, BrowserProxy, ProxyServer
+from browser.cdp_proxy import (
+    _ALWAYS_BLOCKED,
+    _LAST_PAGE_GUARDED,
+    BrowserProxy,
+    ProxyServer,
+)
 
 
 def _proxy(*, allowed: bool = True, pages: int = 2) -> "tuple[BrowserProxy, dict[str, Any]]":
