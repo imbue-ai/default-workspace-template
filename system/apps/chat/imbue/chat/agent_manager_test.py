@@ -5971,16 +5971,27 @@ def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
         manager.stop()
 
 
-def test_a_resend_stop_takes_back_sends_nothing_after_it(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("outcome", "expected_attempts"),
+    [
+        pytest.param(SendOutcome.OK, ["first", "second"], id="each-lands-in-order"),
+        pytest.param(SendOutcome.WITHDRAWN, ["first"], id="stop-took-it-back"),
+        pytest.param(SendOutcome.NOT_READY, ["first"], id="not-ready"),
+        pytest.param(SendOutcome.FAILED, ["first"], id="failed"),
+    ],
+)
+def test_a_resend_sends_each_refused_message_until_one_does_not_land(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, outcome: SendOutcome, expected_attempts: list[str]
+) -> None:
     mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
     account = f"acct-{uuid4().hex}"
-    seed_agent_state(manager, f"agent-{uuid4().hex}", name="Stopped-Chat", labels={"account": account})
+    seed_agent_state(manager, f"agent-{uuid4().hex}", name="Resent-Chat", labels={"account": account})
     attempted: list[str] = []
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         attempted.append(text)
-        return SendOutcome.WITHDRAWN
+        return outcome
 
     manager.set_handoff_capabilities(
         HandoffCapabilities(
@@ -5993,10 +6004,14 @@ def test_a_resend_stop_takes_back_sends_nothing_after_it(broadcaster: WebSocketB
     )
     try:
         assert manager.restart_agents_on_account(account) == 1
-        wait_for(lambda: len(attempted) > 0, timeout=10.0, error_message="the refused message was never resent")
+        wait_for(
+            lambda: len(attempted) >= len(expected_attempts),
+            timeout=10.0,
+            error_message="the refused messages were never resent",
+        )
     finally:
         manager.stop()
-    assert attempted == ["first"]
+    assert attempted == expected_attempts
 
 
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
