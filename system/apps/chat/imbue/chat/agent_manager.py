@@ -1649,7 +1649,7 @@ class AgentManager:
         """A new chat awaiting its first send to stand in for a main chat that is gone: named ``MAIN_CHAT_NAME``
         while no other chat is, else the first free "Chat N". Lock held."""
         is_name_free = not is_name_conflict(MAIN_CHAT_NAME, self._taken_names_locked())
-        return self._mint_awaiting_chat_locked("", MAIN_CHAT_NAME if is_name_free else "")
+        return self._mint_awaiting_chat_locked(account_id="", explicit_name=MAIN_CHAT_NAME if is_name_free else "")
 
     def make_main_chat(self, chat_id: ChatId) -> bool:
         """Star ``chat_id`` as the workspace's main chat, keeping its name, and push the list that shows it; False
@@ -3849,7 +3849,7 @@ class AgentManager:
         this app drops it.
         """
         with self._lock:
-            provisional = self._mint_awaiting_chat_locked(account_id)
+            provisional = self._mint_awaiting_chat_locked(account_id=account_id, explicit_name="")
         self._broadcast_provisional(provisional)
         self._broadcast_chats_updated()
         return provisional
@@ -3869,12 +3869,12 @@ class AgentManager:
                 minted = self._mint_main_chat_locked()
                 self._main_chat.write(minted.chat_id)
             else:
-                minted = self._mint_awaiting_chat_locked("")
+                minted = self._mint_awaiting_chat_locked(account_id="", explicit_name="")
         self._broadcast_provisional(minted)
         self._broadcast_chats_updated()
         return minted
 
-    def _mint_awaiting_chat_locked(self, account_id: str, explicit_name: str = "") -> ProvisionalChat:
+    def _mint_awaiting_chat_locked(self, account_id: str, explicit_name: str) -> ProvisionalChat:
         chat_id = ChatId(str(AgentId()))
         provisional = ProvisionalChat(
             chat_id=chat_id,
