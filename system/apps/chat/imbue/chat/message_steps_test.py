@@ -254,25 +254,51 @@ def test_the_title_prompt_keeps_the_message_inside_its_frame() -> None:
     assert prompt.count("<message>") == 1 and prompt.count("</message>") == 1
 
 
-_QUIZ = OpenStep(step_id="wor-step-a1b2", title="Add a quiz to each topic", created_at="2026-10-27T22:00:00.000000Z")
+_QUIZ = OpenStep(
+    step_id="wor-step-a1b2",
+    title="Add a quiz to each topic",
+    status=MessageStepStatus.IN_PROGRESS,
+    created_at="2026-10-27T22:00:00.000000Z",
+)
+_GLOSSARY = OpenStep(
+    step_id="wor-step-c3d4",
+    title="Add a glossary",
+    status=MessageStepStatus.OPEN,
+    created_at="2026-10-27T22:01:00.000000Z",
+)
 
 
-def test_the_title_prompt_lists_the_open_steps_by_id_and_title() -> None:
-    prompt = message_step_title_prompt("never mind the quiz", (_QUIZ,))
-    assert "<open_tasks>\n- wor-step-a1b2: Add a quiz to each topic\n</open_tasks>" in prompt
+def test_the_title_prompt_lists_each_open_step_with_its_status() -> None:
+    prompt = message_step_title_prompt("never mind the quiz", (_QUIZ, _GLOSSARY))
+    assert (
+        "<open_tasks>\n- wor-step-a1b2 (in progress): Add a quiz to each topic\n"
+        "- wor-step-c3d4 (not started): Add a glossary\n</open_tasks>"
+    ) in prompt
+
+
+def _action(
+    kind: MessageActionKind,
+    title: str | None = None,
+    target: OpenStep | None = None,
+    reason: str | None = None,
+) -> MessageAction:
+    return MessageAction(kind=kind, title=title, target=target, reason=reason)
 
 
 @pytest.mark.parametrize(
     ("answer", "expected"),
     [
-        (" NONE ", MessageAction(kind=MessageActionKind.NOT_A_TASK, title=None, target=None)),
-        ('NEW: "Add a dark mode."', MessageAction(kind=MessageActionKind.NEW, title="Add a dark mode", target=None)),
-        ("SAME: wor-step-a1b2", MessageAction(kind=MessageActionKind.SAME, title=None, target=_QUIZ)),
+        (" NONE ", _action(MessageActionKind.NOT_A_TASK)),
+        ('NEW: "Add a dark mode."', _action(MessageActionKind.NEW, title="Add a dark mode")),
+        ("SAME: wor-step-a1b2", _action(MessageActionKind.SAME, target=_QUIZ)),
         (
             "MODIFY: wor-step-a1b2: Add a multiple-choice quiz",
-            MessageAction(kind=MessageActionKind.MODIFY, title="Add a multiple-choice quiz", target=_QUIZ),
+            _action(MessageActionKind.MODIFY, title="Add a multiple-choice quiz", target=_QUIZ),
         ),
-        ("cancel: wor-step-a1b2", MessageAction(kind=MessageActionKind.CANCEL, title=None, target=_QUIZ)),
+        (
+            "cancel: wor-step-a1b2: you called off the quiz",
+            _action(MessageActionKind.CANCEL, target=_QUIZ, reason="you called off the quiz"),
+        ),
     ],
 )
 def test_parse_message_action_reads_each_form(answer: str, expected: MessageAction) -> None:
@@ -284,13 +310,21 @@ def test_parse_message_action_reads_each_form(answer: str, expected: MessageActi
     [
         "NEW: Add a dark mode\nNEW: Add a sidebar",
         "Add a dark mode",
-        "CANCEL: wor-step-zzzz",
+        "CANCEL: wor-step-a1b2",
         "SAME: wor-step-a1b2: and more",
         "MODIFY: wor-step-a1b2",
-        "RENAME: wor-step-a1b2",
+        "RENAME: wor-step-a1b2: Add a quiz",
     ],
 )
 def test_parse_message_action_rejects_an_unusable_answer(answer: str) -> None:
+    assert parse_message_action(answer, (_QUIZ,)) is None
+
+
+@pytest.mark.parametrize(
+    "answer",
+    ["SAME: wor-step-zzzz", "MODIFY: wor-step-zzzz: Add a quiz", "CANCEL: wor-step-zzzz: not wanted"],
+)
+def test_parse_message_action_rejects_an_id_not_among_the_open_steps(answer: str) -> None:
     assert parse_message_action(answer, (_QUIZ,)) is None
 
 
@@ -488,10 +522,9 @@ def test_the_agent_hook_reads_the_same_records_the_chat_writes() -> None:
         hook.OUTCOME_NOT_A_TASK,
         hook.OUTCOME_FAILED,
         hook.OUTCOME_SAME_AS,
-        hook.OUTCOME_MODIFIES,
         hook.OUTCOME_CANCELS,
     ) == tuple(outcome.value for outcome in MessageStepOutcome)
-    assert hook.CANCELLED_FIELD == "cancelled"
+    assert (hook.CANCELLED_FIELD, hook.REPLACED_BY_FIELD) == ("cancelled", "replaced-by")
     assert hook.MAX_WAIT_SECONDS > TITLE_CALL_TIMEOUT_SECONDS * (TITLE_CALL_RETRY_COUNT + 1)
 
 
@@ -507,8 +540,9 @@ def _settled_record(folders: _Folders, step_id: str) -> dict[str, str]:
     return json.loads((folders.reservations.root / SETTLED_DIRNAME / f"{step_id}.json").read_text())
 
 
-def test_the_model_sees_the_chats_open_steps_its_agents_own_and_the_message_steps(folders: _Folders) -> None:
+def test_the_model_sees_only_the_chats_open_steps_its_agents_own_and_the_message_steps(folders: _Folders) -> None:
     own = _created_step_id(folders, "Write the paper's ten parts")
+    folders.run_tk("start", own)
     finished = _created_step_id(folders, "Read the paper")
     folders.run_tk("close", finished, "Read it")
     first = folders.reserve("Add a quiz", message_id="message-1")
@@ -521,7 +555,23 @@ def test_the_model_sees_the_chats_open_steps_its_agents_own_and_the_message_step
     folders.writer(completion).consider(second)
 
     assert [step.step_id for step in folders.files.open_steps_of_chat(_CHAT_ID)] == [own, first.step_id]
-    assert f"- {own}: Write the paper's ten parts\n- {first.step_id}: Add a quiz\n" in completion.prompts[0]
+    assert (
+        f"- {own} (in progress): Write the paper's ten parts\n- {first.step_id} (not started): Add a quiz\n"
+    ) in completion.prompts[0]
+
+
+def test_a_message_naming_a_step_the_agent_closed_is_an_unusable_answer(folders: _Folders) -> None:
+    own = _created_step_id(folders, "Add a quiz")
+    folders.run_tk("close", own, "Added the quiz")
+    reservation = folders.reserve("never mind the quiz")
+    attempt_count = TITLE_CALL_RETRY_COUNT + 1
+
+    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {own}: not wanted"] * attempt_count)).consider(reservation)
+
+    closed = folders.step(own)
+    assert closed is None  # never changed by the chat, so it is not one of its steps
+    assert "Added the quiz" in (folders.files.tickets_dir / f"{own}.md").read_text()
+    assert folders.outcome_of(reservation.step_id) is MessageStepOutcome.FAILED
 
 
 def test_a_message_the_same_as_an_open_step_gets_no_step_and_names_that_step(folders: _Folders) -> None:
@@ -541,7 +591,7 @@ def test_a_message_the_same_as_an_open_step_gets_no_step_and_names_that_step(fol
     assert changes == []
 
 
-def test_a_message_that_changes_the_agents_own_step_rewords_it_and_shows_it(folders: _Folders) -> None:
+def test_a_message_that_changes_a_step_replaces_it_with_its_own(folders: _Folders) -> None:
     changes: list[str] = []
     own = _created_step_id(folders, "Write the paper's ten parts and diagrams")
     folders.run_tk("start", own)
@@ -552,47 +602,55 @@ def test_a_message_that_changes_the_agents_own_step_rewords_it_and_shows_it(fold
     ).consider(reservation)
     folders.tracker.refresh()
 
-    (shown,) = folders.tracker.steps_of_chat(_CHAT_ID)
-    assert (shown.step_id, shown.title, shown.is_message_step, shown.cancelled) == (
+    replaced, replacement = folders.tracker.steps_of_chat(_CHAT_ID)
+    assert (replaced.step_id, replaced.title, replaced.status, replaced.summary) == (
         own,
-        "Write the paper's parts and diagrams, not ten",
-        False,
-        False,
+        "Write the paper's ten parts and diagrams",
+        MessageStepStatus.CLOSED,
+        "Replaced by an updated request",
     )
-    assert shown.status is MessageStepStatus.IN_PROGRESS
-    assert _settled_record(folders, reservation.step_id)["outcome"] == "modifies"
-    assert (
-        _settled_record(folders, reservation.step_id)["target_title"]
-        == "Write the paper's parts and diagrams, not ten"
+    assert replaced.closed_by_chat and not replaced.cancelled
+    assert f"replaced-by: {reservation.step_id}" in (folders.files.tickets_dir / f"{own}.md").read_text()
+    assert (replacement.step_id, replacement.title, replacement.status) == (
+        reservation.step_id,
+        "Write the paper's parts and diagrams, not ten",
+        MessageStepStatus.OPEN,
     )
     assert changes == ["changed"]
 
 
-def test_tk_keeps_working_on_a_step_the_chat_reworded(folders: _Folders) -> None:
+def test_a_message_that_changes_a_step_the_agent_just_closed_leaves_that_step_alone(folders: _Folders) -> None:
     own = _created_step_id(folders, "Add a quiz")
     reservation = folders.reserve("make it multiple choice")
-    folders.writer(ScriptedOneShotCompletion([f"MODIFY: {own}: Add a multiple-choice quiz"])).consider(reservation)
+    completion = ScriptedOneShotCompletion([f"MODIFY: {own}: Add a multiple-choice quiz"])
+    # The agent closes the step between the model's answer and the chat's write.
+    completion.on_call = lambda: folders.run_tk("close", own, "Added the quiz")
 
-    folders.run_tk("start", own)
-    folders.run_tk("close", own, "Added the quiz")
-    step = folders.step(own)
+    folders.writer(completion).consider(reservation)
 
-    assert step is not None and step.status is MessageStepStatus.CLOSED
-    assert (step.title, step.summary) == ("Add a multiple-choice quiz", "Added the quiz")
+    text = (folders.files.tickets_dir / f"{own}.md").read_text()
+    assert "replaced-by" not in text and text.count("## Summary") == 1 and "Added the quiz" in text
+    replacement = folders.step(reservation.step_id)
+    assert replacement is not None and replacement.title == "Add a multiple-choice quiz"
 
 
-def test_a_message_that_calls_off_a_message_step_cancels_it(folders: _Folders) -> None:
+def test_a_message_that_calls_off_a_message_step_closes_it_as_no_longer_needed(folders: _Folders) -> None:
     changes: list[str] = []
     first = folders.reserve("Add a quiz", message_id="message-1")
     folders.writer(ScriptedOneShotCompletion(["NEW: Add a quiz"])).consider(first)
     folders.run_tk("start", first.step_id)
     reservation = folders.reserve("never mind the quiz", message_id="message-2")
 
-    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {first.step_id}"]), changes).consider(reservation)
+    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {first.step_id}: you called off the quiz"]), changes).consider(
+        reservation
+    )
 
     cancelled = folders.step(first.step_id)
-    assert cancelled is not None and cancelled.cancelled
-    assert cancelled.status is MessageStepStatus.CLOSED
+    assert cancelled is not None and cancelled.cancelled and cancelled.closed_by_chat
+    assert (cancelled.status, cancelled.summary) == (
+        MessageStepStatus.CLOSED,
+        "No longer needed: you called off the quiz",
+    )
     assert cancelled.message_text == "Add a quiz"
     assert folders.files.open_steps_of_chat(_CHAT_ID) == ()
     assert _settled_record(folders, reservation.step_id)["outcome"] == "cancels"
@@ -600,15 +658,18 @@ def test_a_message_that_calls_off_a_message_step_cancels_it(folders: _Folders) -
     assert changes == ["changed"]
 
 
-def test_a_message_whose_target_went_away_settles_as_failed(folders: _Folders) -> None:
+def test_a_message_that_calls_off_a_step_the_agent_just_closed_leaves_it_closed_once(folders: _Folders) -> None:
     own = _created_step_id(folders, "Add a quiz")
+    folders.run_tk("start", own)
     reservation = folders.reserve("never mind the quiz")
-    completion = ScriptedOneShotCompletion([f"CANCEL: {own}"])
-    completion.on_call = lambda: (folders.files.tickets_dir / f"{own}.md").unlink()
+    completion = ScriptedOneShotCompletion([f"CANCEL: {own}: you called off the quiz"])
+    completion.on_call = lambda: folders.run_tk("close", own, "Added the quiz")
 
     folders.writer(completion).consider(reservation)
 
-    assert folders.outcome_of(reservation.step_id) is MessageStepOutcome.FAILED
+    text = (folders.files.tickets_dir / f"{own}.md").read_text()
+    assert "cancelled" not in text and text.count("## Summary") == 1 and "Added the quiz" in text
+    assert "status: closed" in text
 
 
 def _wait_hook(folders: _Folders, step_id: str) -> _WaitHookRun:
@@ -617,23 +678,23 @@ def _wait_hook(folders: _Folders, step_id: str) -> _WaitHookRun:
     return hook_run
 
 
-def test_the_wait_hook_points_a_start_on_a_joined_message_at_its_step(folders: _Folders) -> None:
+def test_the_wait_hook_points_a_replaced_step_at_its_replacement(folders: _Folders) -> None:
     own = _created_step_id(folders, "Add a quiz")
     reservation = folders.reserve("make it multiple choice")
     folders.writer(ScriptedOneShotCompletion([f"MODIFY: {own}: Add a multiple-choice quiz"])).consider(reservation)
 
-    hook_run = _wait_hook(folders, reservation.step_id)
+    on_old = _wait_hook(folders, own)
+    on_new = _wait_hook(folders, reservation.step_id)
 
-    assert hook_run.returncode == 0
-    assert '"permissionDecision": "deny"' in hook_run.stdout
-    assert f"tk start {own}" in hook_run.stdout
-    assert "Add a multiple-choice quiz" in hook_run.stdout
+    assert '"permissionDecision": "deny"' in on_old.stdout
+    assert f"tk start {reservation.step_id}" in on_old.stdout and "Add a multiple-choice quiz" in on_old.stdout
+    assert (on_new.returncode, on_new.stdout) == (0, "")
 
 
 def test_the_wait_hook_declines_starting_a_cancelled_step(folders: _Folders) -> None:
     own = _created_step_id(folders, "Add a quiz")
     reservation = folders.reserve("never mind the quiz")
-    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {own}"])).consider(reservation)
+    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {own}: you called off the quiz"])).consider(reservation)
 
     on_message = _wait_hook(folders, reservation.step_id)
     on_step = _wait_hook(folders, own)
@@ -643,13 +704,27 @@ def test_the_wait_hook_declines_starting_a_cancelled_step(folders: _Folders) -> 
         assert f"do not start or close {own}" in hook_run.stdout
 
 
+def test_the_wait_hook_says_a_called_off_step_was_already_done(folders: _Folders) -> None:
+    own = _created_step_id(folders, "Add a quiz")
+    reservation = folders.reserve("never mind the quiz")
+    completion = ScriptedOneShotCompletion([f"CANCEL: {own}: you called off the quiz"])
+    completion.on_call = lambda: folders.run_tk("close", own, "Added the quiz")
+    folders.writer(completion).consider(reservation)
+
+    hook_run = _wait_hook(folders, reservation.step_id)
+
+    assert "already done before it arrived" in hook_run.stdout
+
+
 def test_a_message_cannot_change_another_chats_step(folders: _Folders) -> None:
     other = folders.reserve("Add folders", chat_id=_OTHER_CHAT_ID, message_id="message-1")
     folders.writer(ScriptedOneShotCompletion(["NEW: Add folders"])).consider(other)
     reservation = folders.reserve("never mind the folders", message_id="message-2")
     attempt_count = TITLE_CALL_RETRY_COUNT + 1
 
-    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {other.step_id}"] * attempt_count)).consider(reservation)
+    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {other.step_id}: not wanted"] * attempt_count)).consider(
+        reservation
+    )
 
     untouched = folders.step(other.step_id)
     assert untouched is not None and not untouched.cancelled

@@ -33,10 +33,10 @@
  * ones waiting to start. When its last step is done it freezes at that point in the
  * conversation, and what follows (usually the agent's wrap-up reply) renders
  * below it. The next step after that starts a new timeline. A step never
- * renders twice, and a step a later message cancelled never renders. A step the
- * chat app made for a message waits on the live timeline from the moment it is
- * written, before the agent starts it (the chat snapshot says both; see
- * `ChatStep`).
+ * renders twice. A step the chat app made for a message waits on the live
+ * timeline from the moment it is written, before the agent starts it, and a step
+ * the chat app closed for a later message shows as done (the chat snapshot says
+ * both; see `ChatStep`).
  *
  * The walk maintains a single "current open step": events while a step is open
  * group under it and render inside its node; events while none is open render
@@ -157,14 +157,16 @@ export function isFreshStartNode(node: HandoffNode): boolean {
 }
 
 /** One of the chat's steps as the chat app knows it (the chat snapshot's ``message_steps``): a step it made for a
- *  message, or one it changed for a later message. Its title as last written wins over the transcript's, a cancelled
- *  one never renders, and a message step not started yet waits on the live timeline. */
+ *  message, or one it closed for a later message (cancelled, or replaced by an updated request). A message step not
+ *  started yet waits on the live timeline, and a step the chat app closed shows as done with the chat app's summary,
+ *  a close the agent's transcript never records. */
 export interface ChatStep {
   step_id: string;
   title: string;
-  cancelled: boolean;
   is_message_step: boolean;
   status: "open" | "in_progress" | "closed";
+  closed_by_chat: boolean;
+  summary: string;
 }
 
 /** One item of a section, in transcript order. */
@@ -635,12 +637,16 @@ export function buildSections(
   chatSteps: readonly ChatStep[] = [],
 ): SectionView[] {
   const { deco, knownSteps, createdOrder } = buildDecorationMap(events, toolResults);
-  // The chat app's own word on a step wins over the transcript's: a title a later message reworded, and a step a
-  // later message cancelled, which never shows (its work renders as if no step were open).
-  const cancelledIds = new Set<string>();
-  for (const change of chatSteps) {
-    if (change.cancelled) cancelledIds.add(change.step_id);
-    else deco.set(change.step_id, { ...deco.get(change.step_id), title: change.title });
+  // The chat app's steps: a title for the ones the transcript does not name yet (a message step
+  // not started), and the summary of the ones it closed.
+  const closedByChat = new Set<string>();
+  for (const step of chatSteps) {
+    const decoration = deco.get(step.step_id) ?? {};
+    deco.set(step.step_id, {
+      title: decoration.title ?? step.title,
+      summary: step.closed_by_chat ? step.summary : decoration.summary,
+    });
+    if (step.closed_by_chat) closedByChat.add(step.step_id);
   }
   const noticeAnchorId = autocompactNoticeAnchorId(events);
 
@@ -786,10 +792,8 @@ export function buildSections(
       // a `-step-` id nor a known step) rather than mint a phantom node titled
       // with the raw ticket id. Any work batched with that command stays in
       // the step that was already open (or renders inline if none was).
-      const transitions = parsed.transitions.filter(
-        (t) => (isStepId(t.id) || knownSteps.has(t.id)) && !cancelledIds.has(t.id),
-      );
-      const created = createdStepIds(e, toolResults).filter((id) => !cancelledIds.has(id));
+      const transitions = parsed.transitions.filter((t) => isStepId(t.id) || knownSteps.has(t.id));
+      const created = createdStepIds(e, toolResults);
       if (live === null && (created.length > 0 || transitions.length > 0)) {
         live = newTimeline(`timeline-${e.event_id}`);
       }
@@ -846,9 +850,9 @@ export function buildSections(
   // create whose id only the input fallback paired with its title, then each message step the
   // chat app wrote that the agent has not started yet.
   const unplaced = [
-    ...createdOrder.filter((id) => !placedStepIds.has(id) && !cancelledIds.has(id)),
+    ...createdOrder.filter((id) => !placedStepIds.has(id)),
     ...chatSteps
-      .filter((step) => step.is_message_step && step.status === "open" && !step.cancelled)
+      .filter((step) => step.is_message_step && step.status === "open")
       .map((step) => step.step_id)
       .filter((id) => !placedStepIds.has(id) && !createdOrder.includes(id)),
   ];
@@ -856,7 +860,15 @@ export function buildSections(
     if (live === null) live = newTimeline("timeline-tail");
     live.pending.push(...unplaced);
   }
-  if (live !== null) blocks.push(live);
+  if (live !== null) {
+    // The chat app's closes happened after everything the live timeline shows, so they apply
+    // last; a timeline left with nothing open then freezes at the end.
+    for (const id of [...live.step_order, ...live.pending]) {
+      if (closedByChat.has(id) && live.steps.get(id)?.status !== "done")
+        applyTransition(live, { id, status: "closed" });
+    }
+    blocks.push(live);
+  }
 
   const frontierId = live !== null && !isTailSettled ? live.current_step_id : null;
   const ejectedIds = new Set<string>();

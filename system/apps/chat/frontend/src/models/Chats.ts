@@ -49,27 +49,28 @@ export interface ActiveAgent {
   is_busy: boolean;
   // The background tasks the chat waits on, oldest first. Rendered as given.
   background_tasks: BackgroundTask[];
-  // The steps the chat app made for messages sent while the agent was busy, and the chat's steps later messages
-  // reworded or cancelled, oldest first. The timeline takes their titles and hides the cancelled ones.
+  // The steps the chat app made for messages sent while the agent was busy, and the chat's steps it closed for later
+  // messages, oldest first. The live timeline shows the message steps not started yet, and the chat app's closes.
   message_steps: MessageStep[];
 }
 
 /** A step's tk status. */
 export type MessageStepStatus = "open" | "in_progress" | "closed";
 
-/** A step the chat app made for a message, or one of the chat's steps it changed for a later message (the backend's
+/** A step the chat app made for a message, or one of the chat's steps it closed for a later message (the backend's
  *  ``MessageStepSnapshot``). */
 export interface MessageStep {
   step_id: string;
-  // Whether the chat app made the step for a message (else it is the agent's own, changed by a message).
+  // Whether the chat app made the step for a message (else it is the agent's own, closed for a message).
   is_message_step: boolean;
   message_id: string;
   message_text: string;
-  // The step's title as last written: the model's, or its rewording for a later message.
   title: string;
   status: MessageStepStatus;
   // A later message cancelled the step.
   cancelled: boolean;
+  // The chat app closed the step for a later message (cancelled, or replaced by an updated request).
+  closed_by_chat: boolean;
   summary: string;
   created_at: string;
 }

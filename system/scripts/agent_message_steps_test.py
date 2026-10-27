@@ -178,21 +178,32 @@ def _denial(printed: str) -> str:
     return decision["permissionDecisionReason"]
 
 
+def _write_step(folders: _Folders, step_id: str, title: str, *fields: str) -> None:
+    front = "\n".join([f"id: {step_id}", *fields])
+    (folders.tickets_dir / f"{step_id}.md").write_text(
+        f"---\n{front}\n---\n# {title}\n"
+    )
+
+
 @pytest.mark.parametrize(
-    ("outcome", "expected"),
+    ("outcome", "target_fields", "expected"),
     [
-        ("same_as", "already covers"),
-        ("modifies", 'reworded that step to "Add a multiple-choice quiz"'),
-        ("cancels", "do not start or close wor-step-qz01"),
+        ("same_as", ["status: in_progress"], "tk start wor-step-qz01"),
+        ("same_as", ["status: closed"], "already done"),
+        (
+            "cancels",
+            ["status: closed", "cancelled: 2026-10-27T22:53:48.000000Z"],
+            "do not start or close wor-step-qz01",
+        ),
+        ("cancels", ["status: closed"], "already done before it arrived"),
     ],
 )
-def test_starting_a_message_that_joined_an_open_step_names_that_step(
-    folders: _Folders, outcome: str, expected: str
+def test_starting_a_message_that_named_an_open_step_says_what_became_of_it(
+    folders: _Folders, outcome: str, target_fields: list[str], expected: str
 ) -> None:
-    folders.reserve("wor-step-ab12", "make the quiz multiple choice")
-    folders.settle(
-        "wor-step-ab12", outcome, target=("wor-step-qz01", "Add a multiple-choice quiz")
-    )
+    _write_step(folders, "wor-step-qz01", "Add a quiz", *target_fields)
+    folders.reserve("wor-step-ab12", "about the quiz")
+    folders.settle("wor-step-ab12", outcome, target=("wor-step-qz01", "Add a quiz"))
     payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-ab12"}}
 
     exit_code, printed = _run(["wait"], payload, folders.environ, max_wait_seconds=30.0)
@@ -202,15 +213,41 @@ def test_starting_a_message_that_joined_an_open_step_names_that_step(
 
 
 def test_starting_a_cancelled_step_is_declined(folders: _Folders) -> None:
-    (folders.tickets_dir / "wor-step-qz01.md").write_text(
-        "---\nid: wor-step-qz01\nstatus: closed\ncancelled: 2026-10-27T22:53:48.000000Z\n---\n# Add a quiz\n"
+    _write_step(
+        folders,
+        "wor-step-qz01",
+        "Add a quiz",
+        "status: closed",
+        "cancelled: 2026-10-27T22:53:48.000000Z",
     )
     payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-qz01"}}
 
     exit_code, printed = _run(["wait"], payload, folders.environ)
 
     assert exit_code == 0
-    assert 'Step wor-step-qz01 "Add a quiz" was cancelled' in _denial(printed)
+    assert 'Step wor-step-qz01 "Add a quiz" was called off' in _denial(printed)
+
+
+def test_closing_a_replaced_step_points_at_its_replacement(folders: _Folders) -> None:
+    _write_step(
+        folders,
+        "wor-step-qz01",
+        "Add a quiz",
+        "status: closed",
+        "replaced-by: wor-step-mc02",
+    )
+    _write_step(folders, "wor-step-mc02", "Add a multiple-choice quiz", "status: open")
+    payload = {
+        "tool_name": "Bash",
+        "tool_input": {"command": "tk close wor-step-qz01 'Done'"},
+    }
+
+    exit_code, printed = _run(["wait"], payload, folders.environ)
+
+    assert exit_code == 0
+    reason = _denial(printed)
+    assert 'replaced by step wor-step-mc02 "Add a multiple-choice quiz"' in reason
+    assert "tk start wor-step-mc02" in reason
 
 
 def test_the_wait_ends_when_the_step_is_written(folders: _Folders) -> None:
