@@ -296,7 +296,9 @@ _install_test_headless_shell() {
         _log "test-shell: could not resolve the headless shell's path; tests use Fortress"
         return 1
     fi
-    if [ ! -x "$shell_path" ]; then
+    # Playwright writes this marker only once the build is fully extracted, so an install
+    # interrupted mid-extract (its executable may already exist) is redone.
+    if [ ! -f "$(dirname "$(dirname "$shell_path")")/INSTALLATION_COMPLETE" ]; then
         _log "test-shell: installing Playwright's headless shell into $_TEST_BROWSERS_DIR"
         if ! (cd "$REPO_ROOT" && PLAYWRIGHT_BROWSERS_PATH="$_TEST_BROWSERS_DIR" uv run python -m playwright install --only-shell chromium); then
             _log "test-shell: install FAILED; tests use Fortress until the next converge"
