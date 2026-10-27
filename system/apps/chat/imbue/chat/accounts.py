@@ -161,13 +161,12 @@ def account_dir(account_id: str, home: Path | None = None) -> Path:
     return accounts_root(home) / account_id
 
 
-def read_signed_in_at(account_id: str, home: Path | None = None) -> datetime | None:
-    """When the account last finished a sign-in, or None for one never stamped."""
+def read_signed_in_at(account_id: str, home: Path | None = None) -> str | None:
+    """When the account last finished a sign-in (ISO 8601, UTC), or None for one never stamped."""
     try:
-        stamp = (account_dir(account_id, home) / SIGNED_IN_AT_FILENAME).read_text()
+        return (account_dir(account_id, home) / SIGNED_IN_AT_FILENAME).read_text().strip() or None
     except FileNotFoundError:
         return None
-    return datetime.fromisoformat(stamp.strip())
 
 
 def stamp_signed_in(account_id: str, home: Path | None = None) -> None:

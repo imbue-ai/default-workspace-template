@@ -11,7 +11,6 @@ starts a flow and the polls that advance it.
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from pathlib import Path
 from typing import Final
 
@@ -112,8 +111,8 @@ class AccountRow(FrozenModel):
     name: str = Field(description="The user's own name for the account; '' for none")
     label: str = Field(description="The provider, the harness and the number as one string")
     reauth_method: str = Field(description="The method 'Sign in again' runs for the account")
-    signed_in_at: datetime | None = Field(
-        description="When the account last finished a sign-in, or null for one signed in before this was kept"
+    signed_in_at: str | None = Field(
+        description="When the account last finished a sign-in (ISO 8601), or null for one signed in before this was kept"
     )
 
 
