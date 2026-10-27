@@ -109,9 +109,7 @@ tk create "update $CREATIONS" -t task -d "Worker: update-$SLUG" \
     | tee data/.tasks/harden/update-$SLUG/ticket_id.txt
 ```
 
-Then start it with the id that printed, in a call of its own (a shell variable
-does not survive into the next call, and an empty id makes `tk` match whatever
-single ticket it can find):
+Then start it with the id that printed, in a call of its own:
 
 ```bash
 tk start <ticket-id>

@@ -125,9 +125,7 @@ regular `tk` ticket (regular tickets are visible across agents).
        -d "Held by $MNGR_AGENT_NAME while editing this service; released at turn end."
    ```
 
-   Note the id it prints, then `tk start <lease-id>` as its own command (a
-   shell variable does not survive into the next call, and an empty id makes
-   `tk` match whatever single ticket it can find).
+   Note the id it prints, then `tk start <lease-id>` as its own command.
 
 **Release the lease at the end of every editing turn** with
 `tk close <lease-id> "Done editing for this turn."` -- never hold it across

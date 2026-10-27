@@ -107,9 +107,7 @@ tk create "updating workspace" -t chore \
     -d "Held by $MNGR_AGENT_NAME across the update-self pass; released at teardown."
 ```
 
-Note the id it prints, then `tk start <lease-id>` (a shell variable does not
-survive into the next call, and an empty id makes `tk` match whatever single
-ticket it can find).
+Note the id it prints, then `tk start <lease-id>`.
 
 **Record the run for the Imbue Studio app** -- as soon as the lease is yours, so the
 app can see a run is under way:
