@@ -227,7 +227,7 @@ process restarts:
   ```
 
   (Background services under `system/services/` run from the same venv:
-  `uv sync --all-packages`, then the `supervisorctl restart` above.)
+  `uv sync --all-packages`, then `supervisorctl restart <name>`.)
 
 - **Frontend-only change** (templates, static JS/CSS served fresh on each
   request): no restart needed -- the next request already serves the new
