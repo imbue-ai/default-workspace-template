@@ -2010,8 +2010,7 @@ class AgentManager:
 
         Once an agent is back, the message its sign-in failure refused is sent to it again
         (``_resend_turn_refused_for_sign_in``), so the user does not have to type it twice. Each
-        resend runs on its own thread: it waits for the restarted agent to take input, which must
-        not hold up the restarts after it, and a resend that fails must not stop them.
+        resend runs on its own thread, since it waits for the restarted agent to take input.
         """
         with self._lock:
             agents = [
@@ -2045,11 +2044,8 @@ class AgentManager:
     def _resend_turn_refused_for_sign_in(self, agent_id: str) -> None:
         """Send an agent that was just signed in again the messages its last reply refused for want of a sign-in.
 
-        Read after the restart rather than before it, so a message the user sent again by hand in the
-        meantime, once it is in the transcript, is its last turn and is not sent a second time. One
-        still on its way to the restarting agent is not seen and can go twice. The delivery is the message
-        route's, which waits for the restarted agent to take input. A failure is logged: the sign-in
-        itself succeeded, and the user can still send the message again.
+        Read after the restart rather than before it, so a message the user already sent again by hand
+        is the transcript's last turn and is not sent a second time.
 
         Nothing is resent while the agent's chat is switching to another agent or account: the message
         route holds that chat's sends for the agent it lands on, and one delivered to the agent it is
