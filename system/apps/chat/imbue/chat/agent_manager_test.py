@@ -6019,27 +6019,30 @@ def test_a_sign_in_resends_nothing_to_a_chat_that_is_switching(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, [])
-    first, _successor = _converging_chat(manager, store, phase=HandoffPhase.FAILED, is_retiring_archived=False)
+    _converging_chat(manager, store, phase=HandoffPhase.FAILED, is_retiring_archived=False)
+    # A chat on the same account that is not switching, so the run shows the resend does happen.
+    settled_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, settled_id, name="Settled-Chat", labels={"account": "acct-anthropic"})
     read_transcripts: list[str] = []
-    attempted: list[str] = []
+    attempted: list[tuple[str, str]] = []
 
     def ensure_watcher(agent_info: AgentInfo) -> TranscriptReader:
         read_transcripts.append(agent_info.id)
         return _FixedTranscriptReader([_typed_turn("hi"), _agent_reply(is_auth_error=True)])
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
-        attempted.append(text)
+        attempted.append((agent_info.id, text))
         return SendOutcome.OK
 
     manager.set_handoff_capabilities(
         HandoffCapabilities(ensure_watcher=ensure_watcher, drain_to_composer=lambda agent_info: "", deliver=deliver)
     )
     try:
-        assert manager.restart_agents_on_account("acct-anthropic") == 1
+        assert manager.restart_agents_on_account("acct-anthropic") == 2
     finally:
         manager.stop()
     assert "start Chat-1 --restart --no-resume" in argv_log.read_text().splitlines()
-    assert (read_transcripts, attempted) == ([], [])
+    assert (read_transcripts, attempted) == ([settled_id], [(settled_id, "hi")])
 
 
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
