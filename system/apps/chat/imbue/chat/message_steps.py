@@ -70,6 +70,8 @@ _NOT_A_TASK_ANSWER: Final[str] = "NONE"
 # tk's step ids: ``<prefix>-step-<4 lowercase alphanumerics>`` (``generate_id`` in ``system/vendor/tk/ticket``).
 _STEP_ID_HASH_ALPHABET: Final[str] = string.ascii_lowercase + string.digits
 _STEP_ID_HASH_LENGTH: Final[int] = 4
+# Far more draws than a tickets folder's worth of taken ids could use up among the 36^4 possible.
+_MAX_STEP_ID_DRAWS: Final[int] = 100
 _FRONT_MATTER_DELIMITER: Final[str] = "---"
 _SUMMARY_HEADING: Final[str] = "## Summary"
 _TITLE_WRAPPING_CHARACTERS: Final[str] = "\"'*_`"
@@ -116,6 +118,10 @@ Find out why the page loads slowly
 {_NOT_A_TASK_ANSWER}
 <message>thanks, that looks great!</message>
 {_NOT_A_TASK_ANSWER}"""
+
+
+class MessageStepIdError(RuntimeError):
+    """No free step id could be drawn."""
 
 
 class MessageStepOutcome(LowerCaseStrEnum):
@@ -404,11 +410,12 @@ class MessageStepReservations(MutableModel):
         self.release_locked(step_id)
 
     def _fresh_step_id(self, is_id_taken: Callable[[str], bool]) -> str:
-        while True:
+        for _ in range(_MAX_STEP_ID_DRAWS):
             suffix = "".join(secrets.choice(_STEP_ID_HASH_ALPHABET) for _ in range(_STEP_ID_HASH_LENGTH))
             step_id = f"{self.id_prefix}-step-{suffix}"
             if not is_id_taken(step_id) and not self._path_of(step_id).exists():
                 return step_id
+        raise MessageStepIdError(f"No free step id after {_MAX_STEP_ID_DRAWS} draws")
 
     def _path_of(self, step_id: str) -> Path:
         return self.root / f"{step_id}{_RECORD_SUFFIX}"

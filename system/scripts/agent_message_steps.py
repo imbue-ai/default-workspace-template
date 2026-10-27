@@ -249,16 +249,32 @@ def wait_for_step(
     step_path = tickets_dir / f"{step_id}.md"
     reservation_path = reservations_dir / f"{step_id}.json"
     deadline = monotonic() + max_wait_seconds
-    while True:
-        if step_path.exists():
-            return OUTCOME_WRITTEN
-        outcome = _settled_outcome(reservations_dir, step_id)
-        if outcome is not None:
-            return outcome
-        if not reservation_path.exists() or monotonic() >= deadline:
-            # Written and released between the checks reads as written.
-            return OUTCOME_WRITTEN if step_path.exists() else OUTCOME_UNKNOWN
+    outcome = _current_outcome(step_path, reservation_path, reservations_dir, step_id)
+    while outcome is None and monotonic() < deadline:
         sleep(_POLL_SECONDS)
+        outcome = _current_outcome(
+            step_path, reservation_path, reservations_dir, step_id
+        )
+    return (
+        outcome
+        if outcome is not None
+        else (OUTCOME_WRITTEN if step_path.exists() else OUTCOME_UNKNOWN)
+    )
+
+
+def _current_outcome(
+    step_path: Path, reservation_path: Path, reservations_dir: Path, step_id: str
+) -> str | None:
+    """How the reserved id stands now, or None while it is reserved and unwritten."""
+    if step_path.exists():
+        return OUTCOME_WRITTEN
+    settled = _settled_outcome(reservations_dir, step_id)
+    if settled is not None:
+        return settled
+    if reservation_path.exists():
+        return None
+    # Written and released between the checks reads as written.
+    return OUTCOME_WRITTEN if step_path.exists() else OUTCOME_UNKNOWN
 
 
 def cmd_wait(
