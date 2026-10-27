@@ -41,8 +41,9 @@ esac
 # Each artifact is one gzipped static binary, not an archive.
 asset="grok-${GROK_VERSION}-linux-${asset_arch}.gz"
 tmp="$(mktemp -d)"
+staged=""
+trap 'rm -rf "$tmp" ${staged:+"$staged"}' EXIT
 staged="$(mktemp "${INSTALL_PATH}.XXXXXX")"
-trap 'rm -rf "$tmp" "$staged"' EXIT
 
 curl -fsSL --retry 5 --retry-delay 2 --retry-all-errors -o "${tmp}/${asset}" "https://x.ai/cli/${asset}"
 if ! echo "${sha256}  ${tmp}/${asset}" | sha256sum -c --status -; then
