@@ -680,7 +680,7 @@ def test_reply_draft_is_kept_while_a_later_row_is_mid_write(tmp_path: Path) -> N
     set_step_status(db, 1, _STATUS_GENERATING, _tag_len_overrun())
     watcher._collect_new_events()
 
-    assert watcher.read_reply_draft(_NO_SOURCES).text == "Tides rise"
+    assert watcher.read_reply_draft(_NO_SOURCES) == ReplyDraft(after_event_id=f"{conv}:0:user", text="Tides rise")
 
 
 def test_reply_draft_is_empty_once_the_newest_row_is_not_a_planner_step_being_written(tmp_path: Path) -> None:
@@ -698,4 +698,5 @@ def test_reply_draft_is_empty_once_the_newest_row_is_not_a_planner_step_being_wr
     append_step(db, (2, _TYPE_RUN_COMMAND, _STATUS_RUNNING, _tool_payload("", short="Running ls")))
     watcher._collect_new_events()
 
-    assert watcher.read_reply_draft(_NO_SOURCES).text == ""
+    draft = watcher.read_reply_draft(_NO_SOURCES)
+    assert draft is not None and draft.text == ""
