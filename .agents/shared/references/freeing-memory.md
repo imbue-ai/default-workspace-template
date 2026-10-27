@@ -30,9 +30,9 @@ what could be freed and let them choose; you never stop anything on your own.
    to the others. A candidate's memory is its processes' own memory, roughly
    what stopping it frees, but say "about": pages a browser's processes share
    count more than once. After stopping something, the free memory the command
-   reports again is the real answer. Say that a stopped chat comes back by itself the next time
-   they send it a message. Ask which, if any, to stop. Never pick for them, and
-   never offer the chat they are talking to you in.
+   reports again is the real answer. Say that a stopped chat comes back by
+   itself the next time they send it a message. Ask which, if any, to stop.
+   Never pick for them, and never offer the chat they are talking to you in.
 
 3. **Stop only what they approve**, each the way the README's "Memory
    candidates" section says (a chat with `mngr stop`, a background agent with
