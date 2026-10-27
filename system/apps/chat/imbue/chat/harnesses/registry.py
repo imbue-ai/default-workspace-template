@@ -284,13 +284,15 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
 )
 
 # Grok Build commands the chat declines (action="notice"), by first token: typed and entered as mngr sends them, each
-# opens a picker or view over grok 1.0.62's composer, ends grok, or changes a setting or how grok takes later messages.
+# opens a picker or view over grok 1.0.62's composer, ends grok, changes a setting or how grok takes later messages,
+# or answers only in a side panel the chat does not show.
 _GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/agents",
     "/agents-dashboard",
     # These two leave always-approve, so the next tool call waits on a permission card.
     "/always-approve",
     "/auto",
+    "/btw",
     # Hides the footer hints mngr reads grok's state from.
     "/compact-mode",
     "/config",
@@ -335,6 +337,7 @@ _GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/prefs",
     "/privacy",
     "/quit",
+    "/recap",
     "/remember",
     "/rename",
     "/resume",
@@ -343,6 +346,7 @@ _GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/sessions",
     "/settings",
     "/skills",
+    "/summarize",
     "/t",
     "/theme",
     "/timeline",
@@ -354,6 +358,8 @@ _GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/undo",
     "/usage",
     "/vim-mode",
+    # Starts dictation from the machine's microphone.
+    "/voice",
     "/welcome",
     "/workflows",
 )

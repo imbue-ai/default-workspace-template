@@ -99,6 +99,10 @@ def test_grok_opens_the_sign_in_for_login_and_logout_and_declines_its_model_alia
         pytest.param("/timestamps", id="timestamps_picker_turns_timestamps_off"),
         pytest.param("/title", id="title_picker_renames_the_session"),
         pytest.param("/vim-mode", id="vim_mode_saves_vim_keys_on"),
+        pytest.param("/btw", id="btw_answers_in_a_side_panel"),
+        pytest.param("/recap", id="recap_answers_in_a_side_panel"),
+        pytest.param("/summarize", id="summarize_answers_in_a_side_panel"),
+        pytest.param("/voice", id="voice_starts_dictation"),
     ],
 )
 def test_grok_declines_a_command_whose_enter_answers_a_picker_or_changes_a_setting(command: str) -> None:
