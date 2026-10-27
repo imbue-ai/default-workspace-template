@@ -284,10 +284,9 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
 )
 
 # Grok Build slash commands the chat declines to send (action="notice"). A grok message is typed into
-# its pane, so each of these, measured on grok 1.0.62 by sending it to a live agent on a stub model and
-# then a message that runs a tool, left that message unsent or unfinished: most open a view over the
-# composer, /quit and /exit end grok, /dashboard's composer dispatches a new agent instead, and the rest
-# change how grok takes every later message. Aliases sit beside the command they resolve to; the
+# its pane, and on grok 1.0.62 each of these leaves the message sent after it unsent or unfinished: most
+# open a view over the composer, /quit and /exit end grok, /dashboard's composer dispatches a new agent
+# instead, and the rest change how grok takes every later message. Aliases sit beside the command they resolve to; the
 # first token matches, so every argument form is declined with its command.
 _GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/agents",

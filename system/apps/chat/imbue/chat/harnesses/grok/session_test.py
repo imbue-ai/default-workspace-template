@@ -256,7 +256,6 @@ def test_held_messages_are_not_also_returned_as_in_flight(tmp_path: Path) -> Non
 
 
 def test_a_send_after_grok_relaunched_adopts_the_new_session_before_holding_the_message(tmp_path: Path) -> None:
-    """Measured live: the worker adopted the relaunch first and dropped the message sent to revive grok."""
     agent_state_dir = tmp_path / "agent-relaunched"
     session = _session(agent_state_dir, [])
     tracker = get_tracker(agent_state_dir)

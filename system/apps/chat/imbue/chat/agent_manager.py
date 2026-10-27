@@ -4756,8 +4756,9 @@ class AgentManager:
         """After each background-task poller pass, recheck what no file stamp shows.
 
         Counts the pass against every held finished-task removal of an agent with no turn in
-        flight and applies the ones no turn claimed. Re-reads every busy chat's markers: a marker goes stale when its process dies,
-        which changes no file (a runner the memory shedder killed leaves its marker behind), and
+        flight and applies the ones no turn claimed. Re-reads every busy chat's markers: a marker
+        goes stale when its process dies, which changes no file (a runner the memory shedder
+        killed leaves its marker behind), and
         this is what returns such a chat to idle within a poll interval. Re-derives every closing
         turn, which its harness ends by removing a marker that nothing else re-reads.
         """
@@ -4962,7 +4963,7 @@ class AgentManager:
             _loguru_logger.warning("Failed to record the compaction request of agent {}: {}", agent_id, e)
 
     def withdraw_compaction_request(self, agent_id: str, requested_at: float) -> None:
-        """Forget the compaction this chat noted as requested at ``requested_at``, which mngr then declined or failed."""
+        """Forget the compaction this chat noted as requested at ``requested_at``, which mngr declined or failed."""
         with self._lock:
             pending = self._compaction_pending_by_agent.get(agent_id)
             if pending is None or pending[0] != requested_at:

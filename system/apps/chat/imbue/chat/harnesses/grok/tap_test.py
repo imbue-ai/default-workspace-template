@@ -342,7 +342,6 @@ def test_a_tap_whose_press_raises_releases_the_claim_and_wakes_the_worker(tmp_pa
 
 
 def test_a_tap_mngr_refuses_into_a_turn_grok_just_ended_is_no_error(tmp_path: Path) -> None:
-    """Measured live: a tap 12 ms after the turn's end answered 500 although the worker delivered 0.7 s later."""
     agent_info, watcher, grok = _setup(tmp_path)
     grok.begin_turn()
     _hold(watcher, "held")
@@ -381,7 +380,7 @@ def test_a_tap_whose_turn_goes_on_releases_the_claim(tmp_path: Path) -> None:
 def test_the_flush_worker_cannot_send_what_the_stop_returns_into_the_grok_its_cancel_leaves_idle(
     tmp_path: Path,
 ) -> None:
-    """Measured live: the root-turn file goes within 0.1s of the press, and woke the worker before stop took the queue."""
+    """The root-turn file goes within 0.1 s of the press, which wakes the worker before stop takes the queue."""
     agent_info, watcher, grok = _setup(tmp_path)
     grok.begin_turn()
     _hold(watcher, "held for the stop")
