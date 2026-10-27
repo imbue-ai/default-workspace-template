@@ -583,8 +583,8 @@ class GrokQueueTracker:
             )
 
 
-# One tracker per agent for the agent's life, shared by its watcher, its session, the stop and tap executors and
-# the model bar. Keyed by agent id alone; a grok relaunch is adopted in place by ``set_session``.
+# One tracker per agent for the agent's life, keyed by agent id alone; a grok relaunch is adopted in place by
+# ``set_session``.
 _TRACKERS: dict[str, GrokQueueTracker] = {}
 _TRACKERS_LOCK: Final[threading.Lock] = threading.Lock()
 
