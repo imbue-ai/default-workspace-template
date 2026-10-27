@@ -3717,8 +3717,9 @@ class AgentManager:
         ``title`` is the chat's display name, checked like a launch's requested name: one with
         no usable characters raises ``AgentCreationError`` and one already taken raises
         ``AgentNameConflictError`` here, rather than at the first send's ``mngr create``; an
-        empty title mints the first free "Chat N". A chat seeded as ``MAIN_CHAT_NAME`` takes the place
-        of an empty main chat this app opened in place of a gone one (``get_main_chat_id``).
+        empty title mints the first free "Chat N". The seeded chat becomes the main chat when there is none yet or the
+        chat the main chat file names is gone, whatever its title; one seeded as ``MAIN_CHAT_NAME`` also takes the
+        place of an empty main chat this app opened in place of a gone one (``get_main_chat_id``).
         """
         explicit_title = explicit_chat_name(title)
         with self._lock:
