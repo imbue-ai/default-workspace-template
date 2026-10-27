@@ -326,9 +326,11 @@ stops publishing for a given agent, which is not a state ordinary failures produ
 Unlike agy (E12), a message mngr confirmed grok took leaves the queue when the witness window ends
 even if no user turn holding it appeared, because grok can queue it behind a wake turn that
 started inside mngr's send and the retype would duplicate it. The exposure is that message, held
-inside grok, lost if grok is restarted before it runs it. Until that window ends the flush keeps the
-live emit muted, so the overtaking turn's events show only then. A send mngr could not confirm is
-still retyped, up to `MAX_DELIVERY_ATTEMPTS`.
+inside grok: it is lost if grok is restarted before it runs it; once its chip leaves at the end of
+the window it shows nowhere, neither chip nor turn, until grok runs it (A1a); and a stop does not
+return it to the composer (Interrupt step 2), because grok runs it as soon as the cancel lands.
+Until that window ends the flush keeps the live emit muted, so the overtaking turn's events show
+only then. A send mngr could not confirm is still retyped, up to `MAX_DELIVERY_ATTEMPTS`.
 
 ### E18. grok — a draft typed into grok's own composer
 A person typing at grok's pane leaves text mngr appends the next message to. grok runs both as one
