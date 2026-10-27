@@ -166,8 +166,8 @@ def is_e2e_browser_installed() -> bool:
 
     The test headless shell or Fortress (which the ``browser_type_launch_args``
     fixture prefers, in that order) or a browser in Playwright's own download
-    cache satisfies the check; with neither present the e2e tests
-    skip instead of erroring at browser launch.
+    cache satisfies the check; with none present the e2e tests skip
+    instead of erroring at browser launch.
     """
     if pick_e2e_browser_executable(is_headed=False) is not None:
         return True
