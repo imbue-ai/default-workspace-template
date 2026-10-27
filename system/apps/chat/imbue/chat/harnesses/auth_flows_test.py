@@ -14,11 +14,8 @@ from pathlib import Path
 import pytest
 
 from imbue.chat.accounts import AccountError
-from imbue.chat.accounts import SIGNED_IN_AT_FILENAME
-from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import harness_for
 from imbue.chat.accounts import read_index
-from imbue.chat.accounts import read_signed_in_at
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import FlowError
 from imbue.chat.harnesses.auth_flows import FlowShape
@@ -496,16 +493,6 @@ def test_re_keying_through_imbue_reuses_its_own_account(tmp_path: Path) -> None:
     assert len(read_index(tmp_path).accounts) == 1
     settings = json.loads((tmp_path / ".minds" / "accounts" / first.id / "settings.json").read_text())
     assert settings["env"]["ANTHROPIC_API_KEY"].endswith("B" * 40)
-
-
-def test_re_keying_through_imbue_stamps_a_sign_in(tmp_path: Path) -> None:
-    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
-    adopted = service.adopt_claude_credentials("sk-ant-api03-" + "A" * 40)
-    (account_dir(adopted.id, tmp_path) / SIGNED_IN_AT_FILENAME).write_text("2000-01-01T00:00:00+00:00")
-
-    service.adopt_claude_credentials("sk-ant-api03-" + "B" * 40)
-
-    assert read_signed_in_at(adopted.id, tmp_path) != "2000-01-01T00:00:00+00:00"
 
 
 def test_re_keying_does_not_overwrite_a_browser_sign_in(tmp_path: Path) -> None:

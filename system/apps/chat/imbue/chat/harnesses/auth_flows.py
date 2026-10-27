@@ -646,7 +646,6 @@ class AuthFlowService:
             if existing is not None:
                 path = accounts.account_dir(existing.id, self._home)
                 write_claude_env(path, managed_env)
-                accounts.stamp_signed_in(existing.id, self._home)
                 return existing
             account_id, path = accounts.mint_account_dir(self._home)
             build_account_binding(lane.harness).seed_account(path, self._work_dir)
