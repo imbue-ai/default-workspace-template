@@ -165,7 +165,6 @@ def test_compaction_event_does_not_drain_queue(tmp_path: Path) -> None:
     assert events[0]["display"] == DisplayKind.STATUS
 
 
-
 @pytest.mark.parametrize("sentinel_key", [PI_INTERRUPT_KEY, PI_RETRACT_KEY])
 def test_sentinel_line_clears_the_tracked_queue(tmp_path: Path, sentinel_key: str) -> None:
     # A flush or retract sentinel replays as a positional clear: every message before it was
@@ -490,7 +489,9 @@ def test_reply_draft_is_dropped_once_the_session_file_records_the_reply(tmp_path
         session,
         [
             _message_record("u1", _user("tell me about tides")),
-            _message_record("a1", {"role": "assistant", "content": [{"type": "text", "text": "Tides rise twice a day."}]}),
+            _message_record(
+                "a1", {"role": "assistant", "content": [{"type": "text", "text": "Tides rise twice a day."}]}
+            ),
         ],
     )
     _point_marker(tmp_path, session)
