@@ -1355,6 +1355,8 @@ _GROK_SEND_RESULT_WAIT_SECONDS = 3.0
 # How long a test waits on a staged step that happens at once.
 _GROK_STEP_WAIT_SECONDS = 5.0
 _GROK_THREAD_JOIN_SECONDS = 30.0
+# How often the storm's flush thread looks up from the worker's wake to see whether it should stop.
+_GROK_FLUSH_THREAD_POLL_SECONDS = 0.01
 _GROK_MAX_WAKES_PER_OP = 8
 
 # Logical seconds per storm op, against mngr's spacing between two Ctrl+C presses.
@@ -2151,7 +2153,6 @@ class _GrokFlushThread:
         traceback: TracebackType | None,
     ) -> None:
         self._stopping.set()
-        self._watcher._flush_wake.set()
         self._thread.join(timeout=_GROK_THREAD_JOIN_SECONDS)
         assert not self._thread.is_alive(), "the storm's flush thread never stopped"
         if self._errors:
@@ -2160,9 +2161,8 @@ class _GrokFlushThread:
     def _run(self) -> None:
         wake = self._watcher._flush_wake
         while not self._stopping.is_set():
-            wake.wait()
-            if self._stopping.is_set():
-                return
+            if not wake.wait(timeout=_GROK_FLUSH_THREAD_POLL_SECONDS) or self._stopping.is_set():
+                continue
             wake.clear()
             try:
                 self._watcher._attempt_flush()
