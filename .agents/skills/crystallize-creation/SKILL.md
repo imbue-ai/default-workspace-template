@@ -72,10 +72,15 @@ The ticket survives until the post-merge migration, so record its ID to disk:
 
 ```bash
 mkdir -p data/.tasks/harden/crystallize-$NAME
-TICKET_ID=$(tk create "crystallize $NAME" -t task \
-    --acceptance "task file written; worker launched; worker DONE; branch merged")
-tk start "$TICKET_ID"
-echo "$TICKET_ID" > data/.tasks/harden/crystallize-$NAME/ticket_id.txt
+tk create "crystallize $NAME" -t task \
+    --acceptance "task file written; worker launched; worker DONE; branch merged" \
+    | tee data/.tasks/harden/crystallize-$NAME/ticket_id.txt
+```
+
+Then start it with the id that printed, in a call of its own:
+
+```bash
+tk start <ticket-id>
 ```
 
 ## Step 3: Write the task file

@@ -121,14 +121,14 @@ regular `tk` ticket (regular tickets are visible across agents).
 2. Take your own lease:
 
    ```bash
-   LEASE_ID=$(tk create "editing service <name>" -t chore \
-       -d "Held by $MNGR_AGENT_NAME while editing this service; released at turn end.")
+   tk create "editing service <name>" -t chore \
+       -d "Held by $MNGR_AGENT_NAME while editing this service; released at turn end."
    ```
 
-   then `tk start "$LEASE_ID"` (as its own command).
+   Note the id it prints, then `tk start <lease-id>` as its own command.
 
 **Release the lease at the end of every editing turn** with
-`tk close "$LEASE_ID" "Done editing for this turn."` -- never hold it across
+`tk close <lease-id> "Done editing for this turn."` -- never hold it across
 an idle wait for user feedback. On the next feedback round, take a fresh
 lease before editing again. Between turns the changes are committed, so
 another chat editing sequentially on top is safe; only *simultaneous* editing
