@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """Claude hooks for the steps the chat app makes for the user's messages.
 
-When a user sends a chat a message, the chat app reserves a tk step id for it before typing it to the agent,
-then writes the step under that id once a small model has titled it (usually a few seconds; longer when a title
-call is retried)
-(``system/apps/chat/imbue/chat/message_steps.py``). A reservation is one JSON file under
-``$CHAT_MESSAGE_STEP_RESERVATIONS_DIR``; the written step is an ordinary tk step record in ``$TICKETS_DIR``,
-created with the chat's id as its creator. A message the model judges not a task, or whose title call failed every
-attempt, never gets a step: its reservation is removed and the reason recorded under ``settled/`` beside it.
+When a user sends a chat a message, the chat app reserves a tk step id for it before typing it to the agent, then
+asks a small model what the message does to the chat's open steps (usually a few seconds; longer when the call is
+retried) (``system/apps/chat/imbue/chat/message_steps.py``). A new request gets its step written under the reserved
+id, an ordinary tk step record in ``$TICKETS_DIR`` created with the chat's id as its creator. A message that repeats,
+changes or calls off an open step gets no step of its own: the chat leaves that step, rewords it, or closes it as
+cancelled (a ``cancelled`` field in its record). A reservation is one JSON file under
+``$CHAT_MESSAGE_STEP_RESERVATIONS_DIR``; every id that ends without a step of its own has its outcome recorded under
+``settled/`` beside it, naming the open step when there is one.
 
 Two hooks, one subcommand each:
 
@@ -16,9 +17,10 @@ Two hooks, one subcommand each:
   hook when the message is submitted, also while the agent is busy and the message waits in its queue; the
   hook's text reaches the agent together with the message.
 - ``wait`` (PreToolUse): a ``tk start`` or ``tk close`` of a reserved id whose step is not written yet waits for
-  it, at most as long as the chat app tries. An id judged not a task is answered at once: the command is declined
-  with that reason, which is not a failure. An id whose step could not be created blocks the command with an error.
-  Either way the command never reaches tk, which would only say the id is unknown.
+  it, at most as long as the chat app tries. An id judged not a task, or whose message belongs to an open step, is
+  answered at once: the command is declined with that reason, which is not a failure. An id whose step could not be
+  created blocks the command with an error. Either way the command never reaches tk, which would only say the id is
+  unknown. A ``tk start`` or ``tk close`` of a step a message cancelled is declined the same way.
 
 Standard library only: Claude runs hooks under a plain ``python3``.
 """
@@ -48,6 +50,18 @@ MAX_WAIT_SECONDS = 10.0 * 3 + 5.0
 SETTLED_DIRNAME = "settled"
 OUTCOME_NOT_A_TASK = "not_a_task"
 OUTCOME_FAILED = "failed"
+OUTCOME_SAME_AS = "same_as"
+OUTCOME_MODIFIES = "modifies"
+OUTCOME_CANCELS = "cancels"
+_SETTLED_OUTCOMES = (
+    OUTCOME_NOT_A_TASK,
+    OUTCOME_FAILED,
+    OUTCOME_SAME_AS,
+    OUTCOME_MODIFIES,
+    OUTCOME_CANCELS,
+)
+# Kept equal to the chat app's _CANCELLED_FIELD (message_steps.py).
+CANCELLED_FIELD = "cancelled"
 OUTCOME_WRITTEN = "written"
 OUTCOME_UNKNOWN = "unknown"
 _POLL_SECONDS = 0.2
@@ -180,16 +194,18 @@ def step_for_prompt(
 def message_step_context(step: PendingStep) -> str:
     return (
         "[Message step]\n"
-        f"If this message is a task, its step is being created under id {step.step_id}: it appears on the user's "
-        "progress timeline within seconds, titled with their request. If it is not a task (thanks, a question about "
-        "progress), no step is created. Either way, never create your own step for this message; you may add steps "
-        "for parts of your own work.\n"
+        f"If this message is a new task, its step is being created under id {step.step_id}: it appears on the user's "
+        "progress timeline within seconds, titled with their request. If it repeats, changes or calls off one of the "
+        "open steps, the chat leaves, rewords or cancels that step instead and tells you which. If it is not a task "
+        "(thanks, a question about progress), no step is created. Either way, never create your own step for this "
+        "message; you may add steps for parts of your own work.\n"
         f"- When you start on this message, run `tk start {step.step_id}` (it waits until the step exists) and do "
         "its work under that step.\n"
         f'- When it is done, run `tk close {step.step_id} "<one-line summary of the work>"`.\n'
         "- If you handle it together with other messages, start their steps together and close each one with its "
         "own summary when that work is done.\n"
-        f"- If `tk start {step.step_id}` says the message was judged not to be a task, reply or carry on without a step."
+        f"- If `tk start {step.step_id}` says the message was judged not to be a task, reply or carry on without a step.\n"
+        f"- If `tk start {step.step_id}` says the message belongs to another step, or cancelled one, do what it says."
     )
 
 
@@ -229,7 +245,17 @@ def reserved_step_ids_in_command(command: str) -> list[str]:
     return _TK_STEP_COMMAND.findall(command)
 
 
-def _settled_outcome(reservations_dir: Path, step_id: str) -> str | None:
+class Settled(NamedTuple):
+    """How a reserved id ended without a step of its own, from its record under ``settled/``."""
+
+    outcome: str
+    # The open step the message belongs to, for same_as, modifies and cancels; '' otherwise.
+    target_id: str
+    # That step's title, after any rewording.
+    target_title: str
+
+
+def read_settled(reservations_dir: Path, step_id: str) -> Settled | None:
     try:
         record = json.loads(
             (reservations_dir / SETTLED_DIRNAME / f"{step_id}.json").read_text(
@@ -238,8 +264,72 @@ def _settled_outcome(reservations_dir: Path, step_id: str) -> str | None:
         )
     except (OSError, ValueError):
         return None
-    outcome = record.get("outcome") if isinstance(record, dict) else None
-    return outcome if outcome in (OUTCOME_NOT_A_TASK, OUTCOME_FAILED) else None
+    if not isinstance(record, dict) or record.get("outcome") not in _SETTLED_OUTCOMES:
+        return None
+    return Settled(
+        outcome=str(record["outcome"]),
+        target_id=str(record.get("target_id", "")),
+        target_title=str(record.get("target_title", "")),
+    )
+
+
+def _settled_outcome(reservations_dir: Path, step_id: str) -> str | None:
+    settled = read_settled(reservations_dir, step_id)
+    return None if settled is None else settled.outcome
+
+
+def belonging_note(settled: Settled) -> str | None:
+    """What to tell the agent about a message that belongs to an open step, or None for any other outcome."""
+    target = f'step {settled.target_id} "{settled.target_title}"'
+    if settled.outcome == OUTCOME_SAME_AS:
+        return (
+            f"This message asks for what {target} already covers, so it has no step of its own. Do it under "
+            f"{settled.target_id}: run `tk start {settled.target_id}` if that step is not in progress, and close it "
+            "when the work is done."
+        )
+    if settled.outcome == OUTCOME_MODIFIES:
+        return (
+            f"This message changes what step {settled.target_id} asks for, so the chat reworded that step to "
+            f'"{settled.target_title}"; the message has no step of its own. Do the updated work under '
+            f"{settled.target_id}: run `tk start {settled.target_id}` if that step is not in progress, and close it "
+            "when the work is done."
+        )
+    if settled.outcome == OUTCOME_CANCELS:
+        return cancelled_note(settled.target_id, settled.target_title)
+    return None
+
+
+def cancelled_note(target_id: str, target_title: str) -> str:
+    return (
+        f'Step {target_id} "{target_title}" was cancelled by a message from the user: the chat closed it and no '
+        f"longer shows it. Stop that work, and do not start or close {target_id}."
+    )
+
+
+def read_step_fields(tickets_dir: Path, step_id: str) -> dict[str, str]:
+    """A step record's front matter fields and its title (under ``title``), or {} when it cannot be read."""
+    try:
+        lines = (tickets_dir / f"{step_id}.md").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    if not lines or lines[0].strip() != _FRONT_MATTER_DELIMITER:
+        return {}
+    fields: dict[str, str] = {}
+    for index, line in enumerate(lines[1:], start=1):
+        if line.strip() == _FRONT_MATTER_DELIMITER:
+            fields["title"] = next(
+                (
+                    rest[2:].strip()
+                    for rest in lines[index + 1 :]
+                    if rest.startswith("# ")
+                ),
+                "",
+            )
+            return fields
+        key, separator, value = line.partition(":")
+        if separator:
+            fields[key.strip()] = value.strip()
+    return {}
 
 
 def wait_for_step(
@@ -279,6 +369,16 @@ def _current_outcome(
     return OUTCOME_WRITTEN if step_path.exists() else OUTCOME_UNKNOWN
 
 
+def _deny(reason: str) -> int:
+    decision = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }
+    print(json.dumps({"hookSpecificOutput": decision}))
+    return 0
+
+
 def cmd_wait(
     payload: Mapping[str, object], environ: Mapping[str, str], max_wait_seconds: float
 ) -> int:
@@ -289,22 +389,24 @@ def cmd_wait(
     ):
         return 0
     tickets_dir, reservations_dir = _tickets_and_reservations_dirs(environ)
+    separately = " Run any other tk commands from this call separately."
     for step_id in reserved_step_ids_in_command(command):
+        fields = read_step_fields(tickets_dir, step_id)
+        if CANCELLED_FIELD in fields:
+            return _deny(cancelled_note(step_id, fields.get("title", "")) + separately)
         outcome = wait_for_step(
             step_id, tickets_dir, reservations_dir, max_wait_seconds
         )
         if outcome == OUTCOME_NOT_A_TASK:
-            reason = (
+            return _deny(
                 f"No step {step_id}: this message was judged not to be a task, so it has no step. Reply or carry on "
-                "without one, and do not create a step for it. Run any other tk commands from this call separately."
+                "without one, and do not create a step for it." + separately
             )
-            decision = {
-                "hookEventName": "PreToolUse",
-                "permissionDecision": "deny",
-                "permissionDecisionReason": reason,
-            }
-            print(json.dumps({"hookSpecificOutput": decision}))
-            return 0
+        if outcome in (OUTCOME_SAME_AS, OUTCOME_MODIFIES, OUTCOME_CANCELS):
+            settled = read_settled(reservations_dir, step_id)
+            note = None if settled is None else belonging_note(settled)
+            if note is not None:
+                return _deny(f"No step {step_id}. {note}" + separately)
         if outcome == OUTCOME_FAILED:
             sys.stderr.write(
                 f"No step {step_id}: the step for this message could not be created. Carry on with the work without "

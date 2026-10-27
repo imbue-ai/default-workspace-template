@@ -49,6 +49,29 @@ export interface ActiveAgent {
   is_busy: boolean;
   // The background tasks the chat waits on, oldest first. Rendered as given.
   background_tasks: BackgroundTask[];
+  // The steps the chat app made for messages sent while the agent was busy, and the chat's steps later messages
+  // reworded or cancelled, oldest first. The timeline takes their titles and hides the cancelled ones.
+  message_steps: MessageStep[];
+}
+
+/** A step's tk status. */
+export type MessageStepStatus = "open" | "in_progress" | "closed";
+
+/** A step the chat app made for a message, or one of the chat's steps it changed for a later message (the backend's
+ *  ``MessageStepSnapshot``). */
+export interface MessageStep {
+  step_id: string;
+  // Whether the chat app made the step for a message (else it is the agent's own, changed by a message).
+  is_message_step: boolean;
+  message_id: string;
+  message_text: string;
+  // The step's title as last written: the model's, or its rewording for a later message.
+  title: string;
+  status: MessageStepStatus;
+  // A later message cancelled the step.
+  cancelled: boolean;
+  summary: string;
+  created_at: string;
 }
 
 /** Who recorded a background task: the workspace's runner (``run_in_background.py``), which outlives the agent and

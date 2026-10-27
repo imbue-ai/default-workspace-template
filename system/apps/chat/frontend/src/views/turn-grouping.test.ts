@@ -877,9 +877,9 @@ describe("one live timeline", () => {
     expect(layout(sections)).toEqual(["u1", "between", "timeline:cod-step-1,cod-step-2"]);
   });
 
-  // A finished step keeps its check mark and summary on the live timeline, and a step started
-  // later is appended after it.
-  it("keeps finished steps on the live timeline and appends new ones", () => {
+  // A finished step keeps its check mark and summary on the live timeline. Steps show by state:
+  // done, then the one being worked on now, then the others in progress.
+  it("keeps finished steps on the live timeline and orders its steps by state", () => {
     const events = [
       userMsg("t0", "go", "u1"),
       tkMsg("t1", "tk start s1", "k1"),
@@ -893,11 +893,11 @@ describe("one live timeline", () => {
       result("t5", "k4", startOut("s3", "Third")),
     ];
     const sections = run(events, /* idle */ false);
-    expect(layout(sections)).toEqual(["u1", "u2", "timeline:s1,s2,s3"]);
+    expect(layout(sections)).toEqual(["u1", "u2", "timeline:s1,s3,s2"]);
     const steps = allSteps(sections);
     expect(steps.map((s) => s.status)).toEqual(["done", "active", "active"]);
     expect(steps[0].summary).toBe("did first");
-    expect(steps[2].is_frontier).toBe(true);
+    expect(steps[1].is_frontier).toBe(true);
   });
 
   // Once every step is done the timeline freezes where it is: what follows renders below it,
@@ -942,6 +942,126 @@ describe("one live timeline", () => {
     const [frozen, live] = timelines(sections);
     expect(stepItems(frozen.items)[0].status).toBe("done");
     expect(stepItems(live.items)[0].status).toBe("active");
+  });
+});
+
+describe("order by state", () => {
+  // Done steps lead in the order they closed, then the step being worked on, then the other open
+  // ones in the order they started, then the steps not started yet.
+  it("orders done steps by close, then the current step, then other open ones, then waiting ones", () => {
+    const events = [
+      userMsg("t0", "go", "u1"),
+      tkMsg("t1", "tk create --step 'Later'", "tc"),
+      result("t1", "tc", "Created cod-step-late: Later"),
+      tkMsg("t2", "tk start cod-step-a; tk start cod-step-b; tk start cod-step-c", "k1"),
+      result(
+        "t2",
+        "k1",
+        [startOut("cod-step-a", "A"), startOut("cod-step-b", "B"), startOut("cod-step-c", "C")].join("\n"),
+      ),
+      tkMsg("t3", "tk close cod-step-b", "k2"),
+      result("t3", "k2", closeOut("cod-step-b", "B", "did b")),
+      tkMsg("t4", "tk close cod-step-a; tk start cod-step-d", "k3"),
+      result("t4", "k3", closeOut("cod-step-a", "A", "did a") + "\n" + startOut("cod-step-d", "D")),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(allSteps(sections).map((s) => `${s.ticket_id}:${s.status}`)).toEqual([
+      "cod-step-b:done",
+      "cod-step-a:done",
+      "cod-step-d:active",
+      "cod-step-c:active",
+      "cod-step-late:pending",
+    ]);
+    expect(allSteps(sections)[2].is_frontier).toBe(true);
+  });
+});
+
+describe("the chat's step changes", () => {
+  const startedThenWorked = [
+    userMsg("t0", "go", "u1"),
+    tkMsg("t1", "tk start cod-step-a; tk start cod-step-b", "k1"),
+    result("t1", "k1", startOut("cod-step-a", "Write ten parts") + "\n" + startOut("cod-step-b", "Add a quiz")),
+    workMsg("t2", "Edit", "w1"),
+    result("t2", "w1", "ok"),
+  ];
+
+  // A step a later message cancelled never shows, and the work grouped under it renders in the
+  // conversation instead of vanishing.
+  it("hides a cancelled step and shows its work in the conversation", () => {
+    const events = [
+      userMsg("t0", "go", "u1"),
+      tkMsg("t1", "tk start cod-step-b", "k1"),
+      result("t1", "k1", startOut("cod-step-b", "Add a quiz")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+    ];
+    const toolResults = new Map<string, ToolResultEvent>();
+    for (const e of events) if (e.type === "tool_result") toolResults.set(e.tool_call_id, e);
+    const sections = buildSections(events, toolResults, false, null, [
+      { step_id: "cod-step-b", title: "Add a quiz", cancelled: true, is_message_step: true, status: "closed" },
+    ]);
+    expect(layout(sections)).toEqual(["u1", "a-w1"]);
+  });
+
+  // With the open step cancelled, nothing on the timeline is still open, so it freezes and what
+  // follows renders below it.
+  it("freezes the timeline when the only open step left is cancelled", () => {
+    const events = [
+      ...startedThenWorked,
+      tkMsg("t3", "tk close cod-step-a", "k2"),
+      result("t3", "k2", closeOut("cod-step-a", "Write ten parts", "wrote them")),
+      assistantText("t4", "Done.", "wrap"),
+    ];
+    const toolResults = new Map<string, ToolResultEvent>();
+    for (const e of events) if (e.type === "tool_result") toolResults.set(e.tool_call_id, e);
+    const sections = buildSections(events, toolResults, true, null, [
+      { step_id: "cod-step-b", title: "Add a quiz", cancelled: true, is_message_step: true, status: "closed" },
+    ]);
+    expect(layout(sections)).toEqual(["u1", "timeline:cod-step-a", "wrap"]);
+  });
+
+  // A message step the chat app wrote shows as waiting on the live timeline before the agent
+  // starts it, below the message.
+  it("shows a written message step the agent has not started as waiting on the live timeline", () => {
+    const events = [userMsg("t0", "go", "u1"), assistantText("t1", "On it.", "a1"), userMsg("t2", "add a quiz", "u2")];
+    const sections = buildSections(events, new Map(), false, null, [
+      { step_id: "wor-step-q1qb", title: "Add a quiz", cancelled: false, is_message_step: true, status: "open" },
+    ]);
+    expect(layout(sections)).toEqual(["u1", "a1", "u2", "timeline:wor-step-q1qb"]);
+    const [waiting] = allSteps(sections);
+    expect(waiting.status).toBe("pending");
+    expect(waiting.title).toBe("Add a quiz");
+  });
+
+  // Once the agent has started it, the transcript places the step; the snapshot adds no second row.
+  it("does not add a waiting row for a message step the transcript already placed", () => {
+    const events = [
+      userMsg("t0", "add a quiz", "u1"),
+      tkMsg("t1", "tk start wor-step-q1qb", "k1"),
+      result("t1", "k1", startOut("wor-step-q1qb", "Add a quiz")),
+    ];
+    const toolResults = new Map<string, ToolResultEvent>();
+    for (const e of events) if (e.type === "tool_result") toolResults.set(e.tool_call_id, e);
+    const sections = buildSections(events, toolResults, false, null, [
+      { step_id: "wor-step-q1qb", title: "Add a quiz", cancelled: false, is_message_step: true, status: "open" },
+    ]);
+    expect(layout(sections)).toEqual(["u1", "timeline:wor-step-q1qb"]);
+    expect(allSteps(sections)[0].status).toBe("active");
+  });
+
+  it("shows the title a later message reworded a step to", () => {
+    const toolResults = new Map<string, ToolResultEvent>();
+    for (const e of startedThenWorked) if (e.type === "tool_result") toolResults.set(e.tool_call_id, e);
+    const sections = buildSections(startedThenWorked, toolResults, false, null, [
+      {
+        step_id: "cod-step-a",
+        title: "Write the parts, not ten",
+        cancelled: false,
+        is_message_step: false,
+        status: "in_progress",
+      },
+    ]);
+    expect(allSteps(sections).find((s) => s.ticket_id === "cod-step-a")!.title).toBe("Write the parts, not ten");
   });
 });
 

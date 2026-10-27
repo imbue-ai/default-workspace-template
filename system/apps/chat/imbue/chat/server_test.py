@@ -1346,7 +1346,7 @@ def test_a_message_to_a_busy_agent_has_its_step_id_reserved_before_it_reaches_th
 ) -> None:
     files, reservations = _message_step_folders(tmp_path)
     messenger = _ReservationCheckingMessenger(files=files, reservations=reservations)
-    completion = ScriptedOneShotCompletion(["Add a dark mode"])
+    completion = ScriptedOneShotCompletion(["NEW: Add a dark mode"])
     client, agent_info = _client_making_message_steps(
         tmp_path,
         (files, reservations),
@@ -1392,7 +1392,7 @@ def test_a_message_to_an_idle_agent_gets_no_step_from_the_chat(tmp_path: Path) -
 
 def test_a_message_the_agent_never_got_loses_its_reserved_id(tmp_path: Path) -> None:
     files, reservations = _message_step_folders(tmp_path)
-    completion = ScriptedOneShotCompletion(["Add a dark mode"])
+    completion = ScriptedOneShotCompletion(["NEW: Add a dark mode"])
     client, agent_info = _client_making_message_steps(
         tmp_path,
         (files, reservations),

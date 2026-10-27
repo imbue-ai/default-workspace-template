@@ -28,10 +28,15 @@
  * done. While a step on it is not done, the timeline is live: it renders after
  * everything else in the conversation, so each user message and agent reply
  * that arrives meanwhile renders above it. Finished steps stay on it, with
- * their summaries. When its last step is done it freezes at that point in the
+ * their summaries. Its steps show by state: done first, in the order they
+ * closed, then the one being worked on now, the others in progress, and the
+ * ones waiting to start. When its last step is done it freezes at that point in the
  * conversation, and what follows (usually the agent's wrap-up reply) renders
  * below it. The next step after that starts a new timeline. A step never
- * renders twice.
+ * renders twice, and a step a later message cancelled never renders. A step the
+ * chat app made for a message waits on the live timeline from the moment it is
+ * written, before the agent starts it (the chat snapshot says both; see
+ * `ChatStep`).
  *
  * The walk maintains a single "current open step": events while a step is open
  * group under it and render inside its node; events while none is open render
@@ -149,6 +154,17 @@ export interface HandoffNode {
 /** Whether the node's switch was a fresh start, which had no handoff to show. */
 export function isFreshStartNode(node: HandoffNode): boolean {
   return node.switch !== null && node.switch.is_fresh_start;
+}
+
+/** One of the chat's steps as the chat app knows it (the chat snapshot's ``message_steps``): a step it made for a
+ *  message, or one it changed for a later message. Its title as last written wins over the transcript's, a cancelled
+ *  one never renders, and a message step not started yet waits on the live timeline. */
+export interface ChatStep {
+  step_id: string;
+  title: string;
+  cancelled: boolean;
+  is_message_step: boolean;
+  status: "open" | "in_progress" | "closed";
 }
 
 /** One item of a section, in transcript order. */
@@ -472,6 +488,8 @@ interface TimelineBuilder {
   step_order: string[];
   /** Steps created on this timeline that have not started or closed yet, in creation order. */
   pending: string[];
+  /** Done steps, in the order they last closed. */
+  closed_order: string[];
   current_step_id: string | null;
 }
 
@@ -480,7 +498,15 @@ function newSection(user_event: UserMessageEvent | null, key: string): SectionBu
 }
 
 function newTimeline(key: string): TimelineBuilder {
-  return { kind: "timeline", key, steps: new Map(), step_order: [], pending: [], current_step_id: null };
+  return {
+    kind: "timeline",
+    key,
+    steps: new Map(),
+    step_order: [],
+    pending: [],
+    closed_order: [],
+    current_step_id: null,
+  };
 }
 
 /** Whether every step on the timeline is done: it freezes in place. */
@@ -606,8 +632,16 @@ export function buildSections(
   toolResults: Map<string, ToolResultEvent>,
   isTailSettled: boolean,
   liveCompaction: LiveCompaction | null = null,
+  chatSteps: readonly ChatStep[] = [],
 ): SectionView[] {
   const { deco, knownSteps, createdOrder } = buildDecorationMap(events, toolResults);
+  // The chat app's own word on a step wins over the transcript's: a title a later message reworded, and a step a
+  // later message cancelled, which never shows (its work renders as if no step were open).
+  const cancelledIds = new Set<string>();
+  for (const change of chatSteps) {
+    if (change.cancelled) cancelledIds.add(change.step_id);
+    else deco.set(change.step_id, { ...deco.get(change.step_id), title: change.title });
+  }
   const noticeAnchorId = autocompactNoticeAnchorId(events);
 
   // Conversation sections and frozen timelines, in the order they render.
@@ -752,8 +786,10 @@ export function buildSections(
       // a `-step-` id nor a known step) rather than mint a phantom node titled
       // with the raw ticket id. Any work batched with that command stays in
       // the step that was already open (or renders inline if none was).
-      const transitions = parsed.transitions.filter((t) => isStepId(t.id) || knownSteps.has(t.id));
-      const created = createdStepIds(e, toolResults);
+      const transitions = parsed.transitions.filter(
+        (t) => (isStepId(t.id) || knownSteps.has(t.id)) && !cancelledIds.has(t.id),
+      );
+      const created = createdStepIds(e, toolResults).filter((id) => !cancelledIds.has(id));
       if (live === null && (created.length > 0 || transitions.length > 0)) {
         live = newTimeline(`timeline-${e.event_id}`);
       }
@@ -806,9 +842,16 @@ export function buildSections(
     current.entries.push({ kind: "status", part: runningCompaction(liveCompaction.cause) });
   }
 
-  // Created steps no walk placed (a historical create whose id only the input fallback paired
-  // with its title) wait on the live timeline, in creation order.
-  const unplaced = createdOrder.filter((id) => !placedStepIds.has(id));
+  // Created steps no walk placed wait on the live timeline, in creation order: a historical
+  // create whose id only the input fallback paired with its title, then each message step the
+  // chat app wrote that the agent has not started yet.
+  const unplaced = [
+    ...createdOrder.filter((id) => !placedStepIds.has(id) && !cancelledIds.has(id)),
+    ...chatSteps
+      .filter((step) => step.is_message_step && step.status === "open" && !step.cancelled)
+      .map((step) => step.step_id)
+      .filter((id) => !placedStepIds.has(id) && !createdOrder.includes(id)),
+  ];
   if (unplaced.length > 0) {
     if (live === null) live = newTimeline("timeline-tail");
     live.pending.push(...unplaced);
@@ -852,6 +895,7 @@ function openStep(timeline: TimelineBuilder, id: string): void {
 
 function applyTransition(timeline: TimelineBuilder, t: { id: string; status: "in_progress" | "closed" }): void {
   timeline.pending = timeline.pending.filter((id) => id !== t.id);
+  timeline.closed_order = timeline.closed_order.filter((id) => id !== t.id);
   if (t.status === "in_progress") {
     openStep(timeline, t.id);
     return;
@@ -874,6 +918,7 @@ function applyTransition(timeline: TimelineBuilder, t: { id: string; status: "in
     });
     timeline.step_order.push(t.id);
   }
+  timeline.closed_order.push(t.id);
   if (timeline.current_step_id === t.id) timeline.current_step_id = null;
 }
 
@@ -905,14 +950,16 @@ function collectEjectedProse(timeline: TimelineBuilder, frontierId: string | nul
 }
 
 /** Finalize a timeline: drop each step's ejected closing prose, attribute narration, join
- *  decoration, and emit its steps, then the steps still waiting to start. */
+ *  decoration, and emit its steps by state: done (in the order they closed), the one being
+ *  worked on now, the others in progress (in the order they started), then the steps still
+ *  waiting to start (in the order they were created). */
 function finalizeTimeline(
   timeline: TimelineBuilder,
   deco: Map<string, Decoration>,
   ejectedIds: ReadonlySet<string>,
   frontierId: string | null,
 ): SectionView {
-  const items: TimelineItem[] = [];
+  const nodes: StepNode[] = [];
   for (const id of timeline.step_order) {
     const node = timeline.steps.get(id)!;
     node.events = node.events.filter((ev) => !ejectedIds.has(ev.event_id));
@@ -932,8 +979,15 @@ function finalizeTimeline(
     if (d?.title) node.title = d.title;
     if (node.status === "done") node.summary = d?.summary ?? null;
     node.is_frontier = node.ticket_id === frontierId && node.status === "active";
-    items.push({ kind: "step", step: node });
+    nodes.push(node);
   }
+  const active = nodes.filter((node) => node.status === "active");
+  const ordered = [
+    ...timeline.closed_order.map((id) => timeline.steps.get(id)!),
+    ...active.filter((node) => node.is_frontier),
+    ...active.filter((node) => !node.is_frontier),
+  ];
+  const items: TimelineItem[] = ordered.map((step) => ({ kind: "step", step }));
   for (const id of timeline.pending) {
     items.push({
       kind: "step",

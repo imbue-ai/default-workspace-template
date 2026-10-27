@@ -622,15 +622,18 @@ class MessageStepStatus(LowerCaseStrEnum):
 
 
 class MessageStepSnapshot(FrozenModel):
-    """One message's step as the chat pages show it, under the message it was made for (``message_steps.py``)."""
+    """A step the chat app made for a message, or one of the chat's steps it changed for a later message (reworded or
+    cancelled), as the chat pages show it (``message_steps.py``)."""
 
     step_id: str = Field(description="The step's tk id")
-    message_id: str = Field(description="The send-time id of the message")
-    message_text: str = Field(description="The message, verbatim, which the page matches its bubbles against")
-    title: str = Field(description="The step's title, as the model wrote it")
+    is_message_step: bool = Field(description="Whether the chat app made the step for a message")
+    message_id: str = Field(description="The send-time id of the message the step was made for; '' for the agent's own")
+    message_text: str = Field(description="The message the step was made for, verbatim; '' for the agent's own")
+    title: str = Field(description="The step's title, as last written")
     status: MessageStepStatus = Field(description="The step's tk status")
+    cancelled: bool = Field(description="Whether a later message cancelled the step, which the pages then hide")
     summary: str = Field(description="The agent's close summary; '' before it closes")
-    created_at: str = Field(description="When the step was written (ISO 8601, UTC), once the model titled the message")
+    created_at: str = Field(description="When the step was created (ISO 8601, UTC)")
 
 
 class ActiveAgentSnapshot(FrozenModel):
@@ -663,7 +666,8 @@ class ActiveAgentSnapshot(FrozenModel):
         description="The chat's pending background tasks, oldest first"
     )
     message_steps: tuple[MessageStepSnapshot, ...] = Field(
-        description="The steps made for the messages sent to the chat while its agent was busy, oldest first"
+        description="The steps made for the messages sent to the chat while its agent was busy, and the chat's steps "
+        "later messages reworded or cancelled, oldest first"
     )
 
 

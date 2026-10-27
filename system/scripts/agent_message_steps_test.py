@@ -45,12 +45,16 @@ class _Folders:
         }
         (self.reservations_dir / f"{step_id}.json").write_text(json.dumps(record))
 
-    def settle(self, step_id: str, outcome: str) -> None:
+    def settle(
+        self, step_id: str, outcome: str, target: tuple[str, str] | None = None
+    ) -> None:
+        """An outcome as the chat app records it, with the open step a joining message names."""
         settled = self.reservations_dir / hooks.SETTLED_DIRNAME
         settled.mkdir(exist_ok=True)
-        (settled / f"{step_id}.json").write_text(
-            json.dumps({"step_id": step_id, "outcome": outcome})
-        )
+        record = {"step_id": step_id, "outcome": outcome}
+        if target is not None:
+            record.update(target_id=target[0], target_title=target[1])
+        (settled / f"{step_id}.json").write_text(json.dumps(record))
         (self.reservations_dir / f"{step_id}.json").unlink()
 
 
@@ -166,6 +170,47 @@ def test_starting_a_step_that_could_not_be_created_fails(
 
     assert exit_code == 2
     assert "could not be created" in capsys.readouterr().err
+
+
+def _denial(printed: str) -> str:
+    decision = json.loads(printed)["hookSpecificOutput"]
+    assert decision["permissionDecision"] == "deny"
+    return decision["permissionDecisionReason"]
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected"),
+    [
+        ("same_as", "already covers"),
+        ("modifies", 'reworded that step to "Add a multiple-choice quiz"'),
+        ("cancels", "do not start or close wor-step-qz01"),
+    ],
+)
+def test_starting_a_message_that_joined_an_open_step_names_that_step(
+    folders: _Folders, outcome: str, expected: str
+) -> None:
+    folders.reserve("wor-step-ab12", "make the quiz multiple choice")
+    folders.settle(
+        "wor-step-ab12", outcome, target=("wor-step-qz01", "Add a multiple-choice quiz")
+    )
+    payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-ab12"}}
+
+    exit_code, printed = _run(["wait"], payload, folders.environ, max_wait_seconds=30.0)
+
+    assert exit_code == 0
+    assert expected in _denial(printed)
+
+
+def test_starting_a_cancelled_step_is_declined(folders: _Folders) -> None:
+    (folders.tickets_dir / "wor-step-qz01.md").write_text(
+        "---\nid: wor-step-qz01\nstatus: closed\ncancelled: 2026-10-27T22:53:48.000000Z\n---\n# Add a quiz\n"
+    )
+    payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-qz01"}}
+
+    exit_code, printed = _run(["wait"], payload, folders.environ)
+
+    assert exit_code == 0
+    assert 'Step wor-step-qz01 "Add a quiz" was cancelled' in _denial(printed)
 
 
 def test_the_wait_ends_when_the_step_is_written(folders: _Folders) -> None:
