@@ -323,8 +323,6 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
     path = account_dir(account_id, home)
     if not path.is_dir():
         raise AccountError(f"cannot commit account {account_id}: {path} does not exist")
-    # Before the index write, so the account list that write announces to every chat page carries it.
-    (path / SIGNED_IN_AT_FILENAME).write_text(datetime.now(timezone.utc).isoformat())
     with _index_lock(home):
         index = read_index(home)
         # Re-authenticating writes the same folder a second time. The row already exists and
@@ -333,15 +331,17 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
         # bring-your-own-key lane may name a different provider, and leaving the old noun
         # there makes every label a lie ("OpenRouter (Pi)" for a Groq key).
         existing = next((a for a in index.accounts if a.id == account_id), None)
+        # `Account.lane` is immutable, and this is where that is enforced. Keeping the
+        # stored value and ignoring the argument would let a re-auth on the WRONG lane
+        # commit: the row still says anthropic while codex's config sits in its folder, and
+        # every chat bound there resolves a claude harness against codex credentials.
+        if existing is not None and existing.lane != lane:
+            raise AccountError(
+                f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; an account's lane never changes"
+            )
+        # Before the index write, so the account list that write announces to every chat page carries it.
+        (path / SIGNED_IN_AT_FILENAME).write_text(datetime.now(timezone.utc).isoformat())
         if existing is not None:
-            # `Account.lane` is immutable, and this is where that is enforced. Keeping the
-            # stored value and ignoring the argument would let a re-auth on the WRONG lane
-            # commit: the row still says anthropic while codex's config sits in its folder, and
-            # every chat bound there resolves a claude harness against codex credentials.
-            if existing.lane != lane:
-                raise AccountError(
-                    f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; an account's lane never changes"
-                )
             if existing.display != display:
                 existing = existing.model_copy_update(to_update(existing.field_ref().display, display))
             rows = tuple(existing if a.id == account_id else a for a in index.accounts)

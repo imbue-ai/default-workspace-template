@@ -176,6 +176,17 @@ def test_every_commit_stamps_when_the_account_signed_in(tmp_path: Path) -> None:
     assert datetime.fromisoformat(stamp) > datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 
+def test_a_commit_refused_for_the_wrong_lane_leaves_the_sign_in_stamp_alone(tmp_path: Path) -> None:
+    account_id, _ = mint_account_dir(tmp_path)
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    (account_dir(account_id, tmp_path) / SIGNED_IN_AT_FILENAME).write_text("2000-01-01T00:00:00+00:00")
+
+    with pytest.raises(AccountError):
+        commit_account(account_id, "openai", "OpenAI", tmp_path)
+
+    assert read_signed_in_at(account_id, tmp_path) == "2000-01-01T00:00:00+00:00"
+
+
 def test_committing_a_folder_that_does_not_exist_raises(tmp_path: Path) -> None:
     with pytest.raises(AccountError):
         commit_account("never-minted", "anthropic", "Anthropic", tmp_path)
