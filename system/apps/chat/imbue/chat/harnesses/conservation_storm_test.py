@@ -2530,6 +2530,21 @@ class _GrokChat:
         assert order == sorted(order), f"messages were delivered out of send order: {self.ledger.delivered}\n{note()}"
 
 
+@contextmanager
+def _grok_chat(
+    tmp_path: Path, storm_name: str, *, delivery_witness_seconds: float
+) -> Generator[_GrokChat, None, None]:
+    """A grok world in a fresh agent dir, its ledger, and the chat's real pieces over it, closed afterwards."""
+    chat = _GrokChat(
+        _GrokWorld(tmp_path / f"agent-{uuid4().hex}", _Ledger(storm_name)),
+        delivery_witness_seconds=delivery_witness_seconds,
+    )
+    try:
+        yield chat
+    finally:
+        chat.close()
+
+
 def test_grok_conservation_storm_stop_and_tap_executors(tmp_path: Path) -> None:
     """Seeded rounds of grok sends, turns, background work, gates, model switches, stops and taps.
 
@@ -2541,10 +2556,9 @@ def test_grok_conservation_storm_stop_and_tap_executors(tmp_path: Path) -> None:
     behind a turn, or one typed after a draft. Breaches that leave every message accounted for -- a message left
     Sending, a restart after a cancel that landed -- are collected and reported together once the rounds are done.
     """
-    ledger = _Ledger("grok")
-    world = _GrokWorld(tmp_path / f"agent-{uuid4().hex}", ledger)
-    chat = _GrokChat(world)
-    try:
+    with _grok_chat(tmp_path, "grok", delivery_witness_seconds=0.0) as chat:
+        world = chat.world
+        ledger = chat.ledger
         for round_index in range(_ROUND_COUNT):
             rng = random.Random(_BASE_SEED + round_index)
             ledger.log(f"round {round_index}:")
@@ -2569,8 +2583,6 @@ def test_grok_conservation_storm_stop_and_tap_executors(tmp_path: Path) -> None:
             f"the storm never reached {missing_paths}: reseed or reweight it\n{ledger.replay_note()}"
         )
         chat.assert_no_violations()
-    finally:
-        chat.close()
 
 
 @pytest.mark.parametrize("is_flush_slow", (False, True))
@@ -2584,10 +2596,13 @@ def test_grok_interrupt_during_a_flush_conserves_every_message(tmp_path: Path, i
 
     Either way stop hands back nothing: the claimed block is the flush's to settle, and it lands exactly once.
     """
-    ledger = _Ledger(f"grok-interrupt-during-flush[slow={is_flush_slow}]")
-    world = _GrokWorld(tmp_path / f"agent-{uuid4().hex}", ledger)
-    chat = _GrokChat(world, delivery_witness_seconds=_GROK_STEP_WAIT_SECONDS)
-    try:
+    with _grok_chat(
+        tmp_path,
+        f"grok-interrupt-during-flush[slow={is_flush_slow}]",
+        delivery_witness_seconds=_GROK_STEP_WAIT_SECONDS,
+    ) as chat:
+        world = chat.world
+        ledger = chat.ledger
         world.pane_turn()
         for _ in range(2):
             chat.send(world.new_text())
@@ -2615,16 +2630,13 @@ def test_grok_interrupt_during_a_flush_conserves_every_message(tmp_path: Path, i
         ledger.verify()
         chat.assert_the_transcript_holds_each_delivered_message_once()
         chat.assert_no_violations()
-    finally:
-        chat.close()
 
 
 def test_grok_tap_delivers_once_and_returns_nothing(tmp_path: Path) -> None:
     """A tap cancels the turn and hands nothing back to the composer: the flush worker delivers the held block once."""
-    ledger = _Ledger("grok-tap-handback")
-    world = _GrokWorld(tmp_path / f"agent-{uuid4().hex}", ledger)
-    chat = _GrokChat(world)
-    try:
+    with _grok_chat(tmp_path, "grok-tap-handback", delivery_witness_seconds=0.0) as chat:
+        world = chat.world
+        ledger = chat.ledger
         world.pane_turn()
         for _ in range(2):
             chat.send(world.new_text())
@@ -2642,5 +2654,3 @@ def test_grok_tap_delivers_once_and_returns_nothing(tmp_path: Path) -> None:
         ledger.verify()
         assert not chat.tracker.has_entries()
         chat.assert_no_violations()
-    finally:
-        chat.close()
