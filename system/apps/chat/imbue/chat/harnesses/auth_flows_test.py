@@ -920,9 +920,9 @@ def test_the_cli_is_given_the_browser_shim(tmp_path: Path) -> None:
 
 
 def test_no_agy_a_google_sign_in_runs_can_update_itself(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Any agy run outside an agent -- the sign-in itself, and the `agy models` probe after it --
-    spawns a background updater that swaps the image's pinned binary for the latest release, under
-    every agent from then on. So each one has to be spawned with the updater turned off."""
+    """Left to itself, both the sign-in's bare `agy` and the `agy models` probe after it spawn a
+    background updater that swaps the image's pinned binary for the latest release, under every
+    agent from then on. So each one has to be spawned with the updater turned off."""
     env_log = tmp_path / "agy-auto-update.log"
     argv_log = put_stand_in_cli_on_path(
         tmp_path,
