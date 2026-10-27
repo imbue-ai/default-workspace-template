@@ -46,8 +46,9 @@ def test_each_harness_scopes_through_exactly_one_variable(tmp_path: Path) -> Non
     """One variable per harness is the entire multi-account mechanism."""
     assert build_account_binding(HarnessType.CLAUDE).account_env(tmp_path) == {"CLAUDE_CONFIG_DIR": str(tmp_path)}
     assert build_account_binding(HarnessType.CODEX).account_env(tmp_path) == {"CODEX_HOME": str(tmp_path)}
-    # agy has no config-dir override at all; relocating HOME is the only scope it offers.
-    assert build_account_binding(HarnessType.ANTIGRAVITY).account_env(tmp_path) == {"HOME": str(tmp_path)}
+    # agy has no config-dir override at all; relocating HOME is the only scope it offers. Its env
+    # also turns off agy's self-update, which scopes nothing.
+    assert build_account_binding(HarnessType.ANTIGRAVITY).account_env(tmp_path)["HOME"] == str(tmp_path)
     assert build_account_binding(HarnessType.PI_CODING).account_env(tmp_path) == {"PI_CODING_AGENT_DIR": str(tmp_path)}
 
 
