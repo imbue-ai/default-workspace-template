@@ -96,16 +96,19 @@ from imbue.chat.harnesses.pi_coding.inbox import PI_RETRACT_KEY
 from imbue.chat.harnesses.pi_coding.model import PiFlushTapStatus
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.pi_coding.model import flush_pi_queue_atomic
+from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session import AtomicShoulderTap
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
+from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.chat.testing import agent_message_lock
 from imbue.mngr.errors import MngrError
 from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_grok.api import PROCESS_STARTED_MARKER_FILENAME
+from imbue.mngr_grok.api import SESSION_STARTED_MARKER_FILENAME
 from imbue.mngr_grok.api import composer_holds_text
 from imbue.mngr_grok.api import detect_gate_screen
 from imbue.mngr_grok.api import get_model_state_path as get_grok_model_state_path
@@ -1367,7 +1370,7 @@ _GROK_STAGED_ROUNDS: dict[int, tuple[str, ...]] = {
     7: ("send", "stop:stranded"),
     # A gate with a model switch held in the control lane, and a message sent to it.
     11: ("turn_ends", "streamer", "gate", "model_switch", "send", "gate"),
-    # The restart meets the consent notice: everything comes back, and the next message fails at the gate.
+    # The restart meets the consent notice: everything comes back, and the next message is refused as not ready.
     19: ("send", "stop:restart_fails", "send", "gate"),
     # grok exits with messages held: its relaunch, started by the next send, drops them with the old session.
     23: ("send", "send", "grok_exits", "send"),
@@ -1451,6 +1454,7 @@ _GROK_REQUIRED_PATHS = (
     "send_refused_busy",
     "send_blocked",
     "post_failed",
+    "post_not_ready",
     "restart",
     "restart_failed",
     "control_applied",
@@ -1515,7 +1519,9 @@ class _GrokWorld:
       own prompt, cannot confirm it. A `/model` or `/effort` rewrites mngr_grok's model_state.json.
     * **Exits and launches.** grok can exit (an OOM shed or a crash), and the chat's next send starts it again. Every
       launch touches the process marker, so the chat's queue, bound to the old session, dies with it (contract Part
-      B); a restart that meets the consent notice leaves grok up at the gate with no session.
+      B). mngr's hook records grok's pid and touches its session marker at a session's start, and its launch removes
+      both, so a restart that meets the consent notice leaves grok up at the gate with no session, not ready for a
+      send.
     """
 
     def __init__(self, agent_state_dir: Path, ledger: _Ledger) -> None:
@@ -1900,16 +1906,18 @@ class _GrokWorld:
                 self.on_turn_files_changed()
 
     def _launch(self, *, is_gated: bool) -> None:
-        """A grok launch: mngr resets its turn files and touches the process marker, and grok starts a fresh session."""
+        """A grok launch: mngr resets its turn files, pid record and session marker and touches the process marker, and
+        grok starts a fresh session unless a gate holds it."""
         self._process_count += 1
         for timer in self._timers:
             timer.cancel()
         get_root_turns_dir(self.dir).mkdir(parents=True, exist_ok=True)
+        (self.dir / GROK_PID_RELATIVE_PATH).unlink(missing_ok=True)
+        (self.dir / SESSION_STARTED_MARKER_FILENAME).unlink(missing_ok=True)
         marker = self.dir / PROCESS_STARTED_MARKER_FILENAME
         marker.touch()
         launched_at_ns = _GROK_PROCESS_CLOCK_BASE_NS + self._process_count * 1_000_000_000
         os.utime(marker, ns=(launched_at_ns, launched_at_ns))
-        write_live_grok_pid(self.dir)
         self.is_running = True
         self._reset_process_state(is_gated=is_gated)
         if not is_gated:
@@ -1933,8 +1941,11 @@ class _GrokWorld:
         self._is_turn_files_changed = True
 
     def _start_session(self) -> None:
+        """grok's root SessionStart, at which mngr's hook records grok's pid and touches the session marker."""
         self.session_id = str(uuid4())
         add_grok_session(self.dir, self.session_id, b"", is_root=True)
+        write_live_grok_pid(self.dir)
+        (self.dir / SESSION_STARTED_MARKER_FILENAME).touch()
 
     def _clear_gate(self) -> None:
         self.is_gated = False
@@ -2190,7 +2201,9 @@ class _GrokChat:
                 model_state_path=get_grok_model_state_path(world.dir),
                 send_to_harness=world.mngr_send,
                 notify_agents_changed=_do_nothing,
-                is_harness_starting_up=_is_never_true,
+                is_harness_starting_up=lambda: is_harness_starting_up(
+                    world.dir, get_harness_spec(HarnessType.GROK).startup_ready_marker, PROCESS_STARTED_MARKER_FILENAME
+                ),
                 is_tracked=_is_always_true,
                 on_queue_snapshot=lambda _snapshot: None,
                 on_user_turn=lambda _event: None,
@@ -2329,6 +2342,11 @@ class _GrokChat:
                     # The route starts the agent and sends again.
                     self.world.start_grok()
                     outcome = self.session.send(text, f"storm-{uuid4().hex}")
+                if outcome is SendOutcome.NOT_READY:
+                    # The route's 503 for a grok up with no session, as at a consent notice: the composer keeps it.
+                    self.ledger.returned.append(text)
+                    self.world.stats["post_not_ready"] += 1
+                    return
             except SendFailedError as error:
                 # A failed POST: the composer gets the text back, which is how the user sees it Returned.
                 assert error.kind == SendFailureKind.INPUT_BLOCKED.value, (
