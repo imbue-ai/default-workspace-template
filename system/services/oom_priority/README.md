@@ -90,12 +90,14 @@ ever acting on a laptop with swap.
 - **`agent_identity`** -- classifies an agent from its label (primary, chat, or
   worker), used by the launch wrapper to pick the band. An agent whose record
   can't be read matches none of these and is tagged least-protected (worker band).
-- **`registry`** -- one file per agent process recording its pid and start time, so a
-  killed pid can be mapped back to "which agent" (earlyoom's after-kill hook is
-  handed only a pid that is already gone), and so the chat app's prioritizer can
-  re-tag an agent's processes by its id. A reader counts an entry only while its
-  pid is still that process: pids are reused within hours under gVisor, and
-  `/proc/<id>` also resolves for another process's thread.
+- **`registry`** -- one file per agent process recording its pid, start time and
+  boot id, so a killed pid can be mapped back to "which agent" (earlyoom's
+  after-kill hook is handed only a pid that is already gone), and so the chat
+  app's prioritizer can re-tag an agent's processes by its id. A reader counts an
+  entry only while its pid is still that process, started at the recorded time in
+  the same boot: pids are reused within hours under gVisor, `/proc/<id>` also
+  resolves for another process's thread, and the registry outlives a container
+  restart while start times count from boot.
 - **`ledger`** -- the append-only shed ledger and the revival-notice bookkeeping.
 
 Tagging happens at three startup points, each setting a process's band directly
