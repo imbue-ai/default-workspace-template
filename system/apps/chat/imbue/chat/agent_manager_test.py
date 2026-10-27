@@ -1196,12 +1196,17 @@ def test_deleting_the_main_chat_gives_its_place_to_a_new_main_chat_rather_than_a
         manager.stop()
 
 
+def _main_chat_store_naming_a_gone_chat(tmp_path: Path) -> MainChatStore:
+    """A main chat file under ``tmp_path`` naming a chat this app does not list, as a stop or a delete leaves it."""
+    main_chat_path = tmp_path / MAIN_CHAT_FILENAME
+    MainChatStore(path=main_chat_path).write(ChatId("agent-" + "9" * 32))
+    return MainChatStore(path=main_chat_path)
+
+
 def test_a_new_main_chat_is_numbered_when_another_chat_is_already_named_main(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    main_chat_path = tmp_path / MAIN_CHAT_FILENAME
-    MainChatStore(path=main_chat_path).write(ChatId("agent-" + "9" * 32))
-    manager = AgentManager.build(broadcaster, main_chat=MainChatStore(path=main_chat_path))
+    manager = AgentManager.build(broadcaster, main_chat=_main_chat_store_naming_a_gone_chat(tmp_path))
     try:
         seed_agent_state(manager, "agent-other", name="Main", labels={"display_name": MAIN_CHAT_NAME})
         manager.note_agent_list_known()
@@ -1221,9 +1226,7 @@ def test_a_main_chat_pointer_left_with_no_chat_at_all_opens_no_new_chat_so_the_w
 ) -> None:
     """A stop part-way through seeding the welcome chat leaves the main chat file naming a chat that never got its
     files; the next start opens no stand-in, so the welcome chat seeded again keeps the name Main and the star."""
-    main_chat_path = tmp_path / MAIN_CHAT_FILENAME
-    MainChatStore(path=main_chat_path).write(ChatId("agent-" + "9" * 32))
-    manager, _store = _seed_manager(broadcaster, tmp_path, main_chat=MainChatStore(path=main_chat_path))
+    manager, _store = _seed_manager(broadcaster, tmp_path, main_chat=_main_chat_store_naming_a_gone_chat(tmp_path))
     try:
         assert manager.get_main_chat_id() is None
 
@@ -1288,9 +1291,7 @@ def test_a_main_chat_that_was_never_messaged_is_replaced_by_a_new_one_after_a_re
 ) -> None:
     """A chat awaiting its first send has no record, so a restart drops it; the main chat it was comes back as a new
     one rather than moving to another chat."""
-    main_chat_path = tmp_path / MAIN_CHAT_FILENAME
-    MainChatStore(path=main_chat_path).write(ChatId("agent-" + "9" * 32))
-    manager = AgentManager.build(broadcaster, main_chat=MainChatStore(path=main_chat_path))
+    manager = AgentManager.build(broadcaster, main_chat=_main_chat_store_naming_a_gone_chat(tmp_path))
     try:
         seed_agent_state(manager, "agent-other", name="Chat-1")
         manager.record_message_sent(ChatId("agent-other"))
@@ -1777,9 +1778,8 @@ def test_a_welcome_seed_stopped_before_its_files_are_written_leaves_the_main_cha
 def test_a_welcome_seed_that_fails_leaves_the_empty_main_chat_it_would_have_replaced(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
-    main_chat_path = tmp_path / MAIN_CHAT_FILENAME
-    MainChatStore(path=main_chat_path).write(ChatId("agent-" + "9" * 32))
-    manager, _store = _seed_manager(broadcaster, tmp_path, main_chat=MainChatStore(path=main_chat_path))
+    main_chat = _main_chat_store_naming_a_gone_chat(tmp_path)
+    manager, _store = _seed_manager(broadcaster, tmp_path, main_chat=main_chat)
     try:
         seed_agent_state(manager, "agent-other", name="Chat-1")
         stand_in_id = manager.get_main_chat_id()
@@ -1793,7 +1793,7 @@ def test_a_welcome_seed_that_fails_leaves_the_empty_main_chat_it_would_have_repl
         assert stand_in is not None
         assert stand_in.name == MAIN_CHAT_NAME
         assert manager.get_main_chat_id() == stand_in_id
-        assert MainChatStore(path=main_chat_path).read() == stand_in_id
+        assert MainChatStore(path=main_chat.path).read() == stand_in_id
     finally:
         manager.stop()
 
