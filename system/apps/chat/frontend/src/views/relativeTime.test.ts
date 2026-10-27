@@ -17,6 +17,7 @@ describe("shortAge", () => {
     [DAY, "1d"],
     [29 * DAY, "29d"],
     [65 * DAY, "2mo"],
+    [362 * DAY, "11mo"],
     [400 * DAY, "1y"],
     [-5 * MINUTE, "now"],
   ])("writes an age of %i ms as %s", (elapsed, expected) => {

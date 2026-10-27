@@ -34,7 +34,8 @@ function ageOf(atMs: number, nowMs: number): { value: number; unit: AgeUnit } | 
   if (elapsed < HOUR_MS) return { value: Math.floor(elapsed / MINUTE_MS), unit: "minute" };
   if (elapsed < DAY_MS) return { value: Math.floor(elapsed / HOUR_MS), unit: "hour" };
   if (elapsed < MONTH_MS) return { value: Math.floor(elapsed / DAY_MS), unit: "day" };
-  if (elapsed < YEAR_MS) return { value: Math.floor(elapsed / MONTH_MS), unit: "month" };
+  // Twelve 30-day months fall short of a year, so the last days before one still read as 11 months.
+  if (elapsed < YEAR_MS) return { value: Math.min(11, Math.floor(elapsed / MONTH_MS)), unit: "month" };
   return { value: Math.floor(elapsed / YEAR_MS), unit: "year" };
 }
 
