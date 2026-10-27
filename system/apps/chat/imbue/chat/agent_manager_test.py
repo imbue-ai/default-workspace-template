@@ -1414,7 +1414,7 @@ def test_making_another_chat_the_main_chat_renames_an_empty_stand_in_main_on_its
 
         shown_names = [
             message["name"]
-            for message in (json.loads(raw) for raw in _drain(q))
+            for message in _drain(q)
             if message["type"] == "provisional_chat_created" and message["chat_id"] == stand_in_id
         ]
         assert shown_names[:1] == ["Chat 1 (was: Main)"]
@@ -1429,16 +1429,6 @@ def test_making_another_chat_the_main_chat_renames_an_empty_stand_in_main_on_its
         manager.stop()
 
     assert not argv_log.exists()
-
-
-def _drain(q: queue.Queue[str | None]) -> list[str]:
-    """Every message waiting on ``q``."""
-    drained: list[str] = []
-    while not q.empty():
-        raw = q.get_nowait()
-        assert raw is not None
-        drained.append(raw)
-    return drained
 
 
 def test_a_new_chat_skips_the_number_a_former_main_chat_holds(broadcaster: WebSocketBroadcaster) -> None:
