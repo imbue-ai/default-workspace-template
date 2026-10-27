@@ -29,6 +29,9 @@ It joins four sources, each read independently so one failing leaves the others 
 A source that cannot be read is reported as unknown (``null`` candidates plus a note), never as
 "nothing to stop".
 
+``--free-memory`` prints only the free memory and reads nothing else, so it is cheap enough to
+poll while memory is short.
+
 Self-contained beyond the stdlib-only ``oom_priority`` and ``chat_background_tasks`` packages
 (imported via ``sys.path`` inserts), so it runs under a plain ``python3``.
 """
