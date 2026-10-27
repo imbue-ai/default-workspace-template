@@ -3,8 +3,11 @@
 The main chat is a pointer, like a star on one chat, kept in one small JSON file beside the chat app's
 other state; no chat is special in itself, so a handoff, a crash, or a relaunch changes nothing about
 which chat it is. The welcome chat the Imbue Studio app seeds (``chat_seed.py``) takes it first.
-When the chat it names is gone (deleted, or never listed), a new chat named ``MAIN_CHAT_NAME``,
-awaiting its first send, takes it at once; no other chat is promoted in its place. A workspace with
+When the chat it names is gone (deleted, or never listed) and other chats are listed, a new chat
+named ``MAIN_CHAT_NAME`` (the first free "Chat N" when another chat already is), awaiting its first
+send, takes it at once; no other chat is promoted in its place. With no chat listed the pointer is
+kept, so a listing that is empty for a moment moves nothing, and the chat the empty chat list opens,
+or a welcome chat seeded again, takes it. A workspace with
 no main chat yet gives it to the welcome chat if one is listed, else the chat messaged most recently,
 else one still awaiting its first send. A chat another agent started (a helper) never takes it.
 The welcome chat is recorded as the main chat before any of its own files are written, so a chat app
