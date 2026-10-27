@@ -1352,9 +1352,8 @@ _GROK_STEP_WAIT_SECONDS = 5.0
 _GROK_THREAD_JOIN_SECONDS = 30.0
 _GROK_MAX_WAKES_PER_OP = 8
 
-# Logical seconds per storm op, against grok's quit window and mngr's spacing between two Ctrl+C presses.
+# Logical seconds per storm op, against mngr's spacing between two Ctrl+C presses.
 _GROK_OP_SECONDS = 0.4
-_GROK_QUIT_WINDOW_SECONDS = 1.0
 _MNGR_CTRL_C_SPACING_SECONDS = 1.5
 
 _GROK_RECORD_CLOCK_BASE_MS = 1_792_500_000_000
@@ -1391,7 +1390,6 @@ _GROK_BUSY_TYPED_FOOTER = "  Enter:queue  │  Opt+Enter:newline  │  Shift+Tab
 _GROK_BUSY_QUEUED_FOOTER = (
     "  Enter:send now  │  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+;:queue  │  Ctrl+x:shortcuts"
 )
-_GROK_PRESS_AGAIN_FOOTER = "  Ctrl+c:press again to quit"
 _GROK_CONSENT_PANE = "\n".join(
     (
         "",
@@ -1505,10 +1503,10 @@ class _GrokWorld:
       leaves a ``pending-wake:`` placeholder until grok starts its wake turn; a background shell's wake turn starts at
       once with no placeholder. Work that ends during a turn wakes grok when that turn ends.
     * **The pane**, rendered from grok's own footers and read with mngr_grok's own predicates: the busy footer's
-      ``Ctrl+c:cancel``, the composer's text, grok's ``#N`` queue rows, a pending quit and a consent gate.
-    * **Ctrl+C.** It clears composer text and the turn runs on; it cancels a busy turn with an empty composer, after
-      which grok runs whatever it holds; on an idle grok it arms quit, and a second press inside a second QUITS grok,
-      which is fatal here.
+      ``Ctrl+c:cancel``, the composer's text, grok's ``#N`` queue rows and a consent gate.
+    * **Ctrl+C.** mngr presses it only into a busy turn with an empty composer, which it cancels, after which grok
+      runs whatever it holds; mngr refuses every other press (on an idle grok Ctrl+C arms quit, and with text in the
+      composer it only clears the text).
     * **mngr's send under REFUSE** types nothing into a running turn or a placeholder (AGENT_BUSY) or a gate
       (INPUT_BLOCKED). A turn that starts between that check and the paste still parks the paste in grok's own queue,
       where it runs as its own turn once that turn ends, which can be well after the worker's witness window.
@@ -1530,7 +1528,6 @@ class _GrokWorld:
         self.grok_queue: list[str] = []
         self.composer = ""
         self.is_gated = False
-        self.quit_armed_at: float | None = None
         self.subagent_ids: list[str] = []
         self.shell_ids: list[str] = []
         # Background work that ended during a turn, whose wake turn grok starts when the turn ends.
@@ -1630,21 +1627,13 @@ class _GrokWorld:
                 rows.extend(("", "    ⠸ Responding… 2.9s"))
             rows.extend(("", _GROK_BOX_TOP, f"  │ ❯ {self.composer:<72}│", _GROK_BOX_BOTTOM, "", self._footer(), ""))
             pane = "\n".join(rows)
-        is_quit_armed = self._is_quit_armed()
         is_busy = self.turn_prompt_id is not None and not self.is_gated
         assert (detect_gate_screen(pane) is not None) == self.is_gated, f"the gate misreads:\n{pane}"
-        assert has_cancel_hint(pane) == (is_busy and not is_quit_armed), f"the cancel hint misreads:\n{pane}"
-        assert composer_holds_text(pane) == (bool(self.composer) and not is_quit_armed), (
-            f"the composer misreads:\n{pane}"
-        )
+        assert has_cancel_hint(pane) == is_busy, f"the cancel hint misreads:\n{pane}"
+        assert composer_holds_text(pane) == bool(self.composer), f"the composer misreads:\n{pane}"
         return pane
 
-    def _is_quit_armed(self) -> bool:
-        return self.quit_armed_at is not None and self.clock - self.quit_armed_at < _GROK_QUIT_WINDOW_SECONDS
-
     def _footer(self) -> str:
-        if self._is_quit_armed():
-            return _GROK_PRESS_AGAIN_FOOTER
         if self.turn_prompt_id is None:
             return _GROK_IDLE_TYPED_FOOTER if self.composer else _GROK_IDLE_FOOTER
         if self.composer:
@@ -1936,7 +1925,6 @@ class _GrokWorld:
         self.placeholder_child_id = None
         self.grok_queue = []
         self.composer = ""
-        self.quit_armed_at = None
         self.subagent_ids = []
         self.shell_ids = []
         self.due_wakes = []
@@ -2053,20 +2041,9 @@ class _GrokWorld:
         self._recompute_active()
 
     def _take_ctrl_c(self) -> None:
-        """grok's own answer to one Ctrl+C."""
-        if self._is_quit_armed():
-            raise AssertionError(
-                f"FATAL: a Ctrl+C within {_GROK_QUIT_WINDOW_SECONDS}s of one that armed quit QUIT grok"
-                f"\n{self.ledger.replay_note()}"
-            )
-        if self.composer:
-            self.composer = ""
-            return
+        """grok's answer to a Ctrl+C mngr let through: the running turn, whose composer is empty, is cancelled."""
         prompt_id = self.turn_prompt_id
-        if prompt_id is None:
-            self.quit_armed_at = self.clock
-            self.stats["quit_armed"] += 1
-            return
+        assert prompt_id is not None and not self.composer, "mngr's rule let a press through that does not cancel"
         self.stats["cancel"] += 1
         self._log({"sessionUpdate": "turn_completed", "prompt_id": prompt_id, "stop_reason": "cancelled"})
         self.turn_prompt_id = None
@@ -2538,8 +2515,8 @@ def test_grok_conservation_storm_stop_and_tap_executors(tmp_path: Path) -> None:
 
     The property is the other storms' (contract A1), checked after every op rather than per round: each accepted
     message is Delivered, Returned, held (Queued) or parked inside grok, and in exactly one of them. grok's specific
-    risks are the worker typing into a turn mngr still reports (its files lag grok), stop or the tap pressing Ctrl+C
-    into an idle grok (a second press quits it), a restart that loses what it took, a model switch merged into a block,
+    risks are the worker typing into a turn mngr still reports (its files lag grok), stop or the tap meeting mngr's
+    refusal of a press, a restart that loses what it took, a model switch merged into a block,
     handed back by stop, or dropped, and a message grok already has typed again: a slash command it ran, one it parked
     behind a turn, or one typed after a draft. Breaches that leave every message accounted for -- a message left
     Sending, a restart after a cancel that landed -- are collected and reported together once the rounds are done.
@@ -2564,7 +2541,6 @@ def test_grok_conservation_storm_stop_and_tap_executors(tmp_path: Path) -> None:
             chat.assert_round_settled()
             ledger.verify()
         chat.assert_the_transcript_holds_each_delivered_message_once()
-        assert world.stats["quit_armed"] == 0, f"mngr pressed Ctrl+C into an idle grok\n{ledger.replay_note()}"
         missing_paths = [path for path in _GROK_REQUIRED_PATHS if not world.stats[path]]
         missing_paths.extend(
             f"tap:{status}" for status in ("flushed", "nothing_queued") if not chat.tap_statuses[status]
