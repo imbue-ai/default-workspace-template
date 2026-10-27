@@ -8,6 +8,7 @@ only assert that our fake behaves like our fake.
 
 import itertools
 import json
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import SIGNED_IN_AT_FILENAME
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import harness_for
+from imbue.chat.accounts import index_path
 from imbue.chat.accounts import read_index
 from imbue.chat.accounts import read_signed_in_at
 from imbue.chat.harnesses.auth_flows import AuthFlowService
@@ -506,6 +508,17 @@ def test_re_keying_through_imbue_stamps_a_sign_in(tmp_path: Path) -> None:
     service.adopt_claude_credentials("sk-ant-api03-" + "B" * 40)
 
     assert read_signed_in_at(adopted.id, tmp_path) != "2000-01-01T00:00:00+00:00"
+
+
+def test_re_keying_through_imbue_touches_the_index_so_open_chats_hear_of_it(tmp_path: Path) -> None:
+    """The re-key writes no index row, and chat pages re-read the accounts only when the index file changes."""
+    service = AuthFlowService.create(home=tmp_path, work_dir=tmp_path / "work", probe=lambda *_a: SignedIn.YES)
+    service.adopt_claude_credentials("sk-ant-api03-" + "A" * 40)
+    os.utime(index_path(tmp_path), (0, 0))
+
+    service.adopt_claude_credentials("sk-ant-api03-" + "B" * 40)
+
+    assert index_path(tmp_path).stat().st_mtime > 0
 
 
 def test_re_keying_does_not_overwrite_a_browser_sign_in(tmp_path: Path) -> None:

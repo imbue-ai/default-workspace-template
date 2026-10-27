@@ -169,8 +169,15 @@ def read_signed_in_at(account_id: str, home: Path | None = None) -> str | None:
 
 
 def stamp_signed_in(account_id: str, home: Path | None = None) -> None:
-    """Record that the account finished a sign-in now."""
+    """Record that the account finished a sign-in now, and touch the index so its poll announces it.
+
+    Chat pages re-read the account list only when the index file changes, and a re-key that
+    does not commit writes no index of its own. With no index yet, the commit that follows writes it.
+    """
     (account_dir(account_id, home) / SIGNED_IN_AT_FILENAME).write_text(datetime.now(timezone.utc).isoformat())
+    index = index_path(home)
+    if index.exists():
+        os.utime(index)
 
 
 def index_path(home: Path | None = None) -> Path:
