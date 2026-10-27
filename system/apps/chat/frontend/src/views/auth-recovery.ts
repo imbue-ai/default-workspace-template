@@ -14,7 +14,7 @@ import { addOutgoing, dropOutgoing } from "../models/OutgoingMessages";
 import { accountForAgent } from "../models/Providers";
 import { mintMessageId, sendMessage } from "../models/Response";
 import type { AssistantMessageEvent, TranscriptEvent, UserMessageEvent } from "../models/Response";
-import { isTurnUserMessage } from "./message-classification";
+import { classifyUserMessage, isTurnUserMessage } from "./message-classification";
 
 /** Whether the chat's account finished a sign-in after `event` failed on it. */
 export function isSignedInSince(event: Pick<AssistantMessageEvent, "timestamp">, chatId: string): boolean {
@@ -54,9 +54,10 @@ export function resendStateOf(failedEventId: string): ResendState | null {
   return resendStates.get(failedEventId) ?? null;
 }
 
-/** Send `prompt` again for the turn `failedEventId`, painted at once like any send. */
+/** Send `prompt` again for the turn `failedEventId`, painted at once like any send. Only the
+ *  user's own words go again, not machine context the turn carried with them. */
 export async function sendAgain(chatId: string, failedEventId: string, prompt: UserMessageEvent): Promise<void> {
-  const content = prompt.content ?? "";
+  const content = classifyUserMessage(prompt).body;
   const messageId = mintMessageId();
   const outgoingId = addOutgoing(chatId, content, messageId);
   resendStates.set(failedEventId, "sending");

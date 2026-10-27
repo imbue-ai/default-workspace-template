@@ -768,6 +768,27 @@ describe("the auth-error note's switch link", () => {
       );
     });
 
+    it("sends only the user's own words of a prompt that carried context", async () => {
+      transcript.events = [
+        {
+          ...PROMPT,
+          display: "prompt_with_context",
+          content: "<context>seed</context>\nSummarize the deploy thread",
+          display_body: "Summarize the deploy thread",
+        },
+        authErrorEvent(),
+      ];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      findButton(children, "Send your message again")!.attrs.onclick();
+      await Promise.resolve();
+      expect(transcript.sendMessage).toHaveBeenCalledExactlyOnceWith(
+        "chat-1",
+        "Summarize the deploy thread",
+        expect.any(String),
+      );
+    });
+
     it("offers nothing to send once the user has written since", () => {
       transcript.events = [PROMPT, authErrorEvent(), { ...PROMPT, event_id: "prompt-2", content: "Never mind" }];
       const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
