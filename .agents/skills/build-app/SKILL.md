@@ -361,12 +361,11 @@ real window and reacts to the actual look-and-feel.
 This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 
 - The mock is **a page the app serves, never a picture of one.** Do not draw the
-  screen as an image (an SVG, a PNG, a generated image) and show it in chat,
-  however the user worded the ask ("a mockup of the screen", "show me what it
-  will look like"): a picture cannot be clicked, so it shows none of the
-  interactions the user is judging, and it is thrown away rather than turned
-  into the real page. A served mock costs the same few minutes and is the
-  page the real build grows from.
+  screen as an image (an SVG, a PNG, a generated image) and show it in chat: a
+  picture cannot be clicked, so it shows none of the interactions the user is
+  judging, and it is thrown away rather than turned into the real page. A
+  served mock costs the same few minutes and is the page the real build grows
+  from.
 - The mock renders **static / hard-coded content** that demonstrates the proposed
   layout and interactions -- no real fetching, no persistence, no backend logic.
   Read the reference `references/frontend-choices.md` for recommended design
