@@ -148,6 +148,7 @@ from imbue.chat.main_chat import MainChatStore
 from imbue.chat.main_chat import adopted_main_chat_id
 from imbue.chat.main_chat import former_main_chat_name
 from imbue.chat.main_chat import is_main_chat_name
+from imbue.chat.main_chat import with_former_main_chat_numbers
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
@@ -3677,7 +3678,7 @@ class AgentManager:
         "Chat N". Raises ``AgentNameConflictError`` for a name already in use. Lock held."""
         taken_names = self._taken_names_locked()
         if not explicit_name:
-            return first_free_numbered_name(AUTO_NAME_WORD, taken_names)
+            return first_free_numbered_name(AUTO_NAME_WORD, with_former_main_chat_numbers(taken_names))
         if is_name_conflict(explicit_name, taken_names):
             raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
         return explicit_name

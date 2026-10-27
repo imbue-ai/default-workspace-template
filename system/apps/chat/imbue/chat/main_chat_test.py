@@ -9,6 +9,7 @@ from imbue.chat.main_chat import MainChatStore
 from imbue.chat.main_chat import adopted_main_chat_id
 from imbue.chat.main_chat import former_main_chat_name
 from imbue.chat.main_chat import is_main_chat_name
+from imbue.chat.main_chat import with_former_main_chat_numbers
 from imbue.chat.primitives import ChatId
 
 
@@ -50,6 +51,15 @@ def test_the_former_main_chat_takes_the_first_chat_number_free_both_bare_and_mar
     assert former_main_chat_name(["Main", "Chat 1", "Chat 3"]) == "Chat 2 (was: Main)"
     assert former_main_chat_name(["Chat 1", "Chat 2 (was: Main)"]) == "Chat 3 (was: Main)"
     assert former_main_chat_name([]) == "Chat 1 (was: Main)"
+
+
+def test_a_former_main_chat_holds_its_chat_number() -> None:
+    assert with_former_main_chat_numbers(["Chat 1", "Chat 2 (was: Main)", "Trip plan"]) == [
+        "Chat 1",
+        "Chat 2 (was: Main)",
+        "Trip plan",
+        "Chat 2",
+    ]
 
 
 def test_a_chat_is_named_main_however_it_is_capitalized_but_not_when_main_is_only_part_of_its_name() -> None:

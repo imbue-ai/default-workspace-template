@@ -100,12 +100,23 @@ def is_main_chat_name(name: str) -> bool:
 
 
 @pure
+def with_former_main_chat_numbers(taken_names: Iterable[str]) -> list[str]:
+    """``taken_names`` plus the "Chat N" each former main chat holds ("Chat 7 (was: Main)" holds "Chat 7"), so no
+    new chat is numbered like one."""
+    taken = list(taken_names)
+    return [
+        *taken,
+        *(name.removesuffix(FORMER_MAIN_CHAT_SUFFIX) for name in taken if name.endswith(FORMER_MAIN_CHAT_SUFFIX)),
+    ]
+
+
+@pure
 def former_main_chat_name(taken_names: Iterable[str]) -> str:
     """The name a chat still named ``MAIN_CHAT_NAME`` takes when another chat becomes the main chat: the first
-    "Chat N" free both bare and marked, then marked ("Chat 7 (was: Main)")."""
-    taken = list(taken_names)
-    unmarked = [name.removesuffix(FORMER_MAIN_CHAT_SUFFIX) for name in taken]
-    return first_free_numbered_name(AUTO_NAME_WORD, [*taken, *unmarked]) + FORMER_MAIN_CHAT_SUFFIX
+    "Chat N" no chat holds, marked ("Chat 7 (was: Main)")."""
+    return (
+        first_free_numbered_name(AUTO_NAME_WORD, with_former_main_chat_numbers(taken_names)) + FORMER_MAIN_CHAT_SUFFIX
+    )
 
 
 class MainChatStore(MutableModel):

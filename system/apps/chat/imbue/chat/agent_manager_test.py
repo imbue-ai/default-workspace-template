@@ -1263,7 +1263,9 @@ def test_a_listing_that_comes_back_empty_for_a_moment_keeps_the_main_chat(
         manager.stop()
 
 
-def test_deleting_the_last_chat_opens_a_new_main_chat_named_main(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+def test_deleting_the_last_chat_opens_a_new_main_chat_named_main(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
     mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
     try:
@@ -1384,6 +1386,22 @@ def test_making_another_chat_the_main_chat_renames_the_old_one_still_named_main_
     (rename_argv,) = argv_log.read_text().splitlines()
     assert rename_argv.startswith("rename agent-main ")
     assert "display_name=Chat 2 (was: Main)" in rename_argv
+
+
+def test_a_new_chat_skips_the_number_a_former_main_chat_holds(broadcaster: WebSocketBroadcaster) -> None:
+    manager = AgentManager.build(broadcaster)
+    try:
+        seed_agent_state(manager, "agent-one", name="Chat-1", labels={"display_name": "Chat 1"})
+        seed_agent_state(
+            manager, "agent-old-main", name="Chat-2-was-Main", labels={"display_name": "Chat 2 (was: Main)"}
+        )
+        manager.note_agent_list_known()
+
+        minted = manager.mint_awaiting_chat("")
+
+        assert minted.name == "Chat 3"
+    finally:
+        manager.stop()
 
 
 def test_making_another_chat_the_main_chat_leaves_a_name_the_user_chose_on_the_old_one(
