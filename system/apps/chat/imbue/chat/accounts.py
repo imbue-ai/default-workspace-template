@@ -319,6 +319,7 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
 
     This is the commit point of a sign-in. Everything before it is provisional.
     Idempotent: committing an id that is already indexed returns the existing row.
+    Every commit, a re-authentication included, stamps the folder with when it signed in.
     """
     path = account_dir(account_id, home)
     if not path.is_dir():
