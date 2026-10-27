@@ -39,7 +39,9 @@ from pydantic import ValidationError
 from imbue.chat.chat_naming import DaemonThreadExecutor
 from imbue.chat.chat_naming import framed_message_opening
 from imbue.chat.harnesses.agent_file_poll import AgentFilePoller
+from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.models import ChatAccountBinding
@@ -166,6 +168,14 @@ def message_step_snapshot(step: MessageStep) -> MessageStepSnapshot:
         summary=step.summary,
         created_at=step.created_at,
     )
+
+
+@pure
+def is_users_own_message(message: str) -> bool:
+    """Whether the chat shows the message as the user's own words, as opposed to a notice, chip or hidden line a
+    program posted to the chat (a background command's report)."""
+    decision = classify_user_message(message)
+    return decision is None or decision.display is DisplayKind.PROMPT_WITH_CONTEXT
 
 
 @pure
@@ -592,8 +602,8 @@ class MessageSteps(MutableModel):
 
     def on_message_sent(self, chat_id: ChatId, message_id: str, message: str) -> str | None:
         """Reserve a step id for a message about to be delivered and title it in the background; the id, or None for
-        a message with no words or a slash command."""
-        if not message.strip() or message.lstrip().startswith("/"):
+        a message with no words, a slash command, or one a program posted rather than the user."""
+        if not message.strip() or message.lstrip().startswith("/") or not is_users_own_message(message):
             return None
         reservation = self.reservations.reserve(chat_id, message_id, message, self.files.is_id_taken)
         self.writer.consider(reservation)

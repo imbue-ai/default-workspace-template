@@ -350,3 +350,16 @@ def test_a_start_on_a_thanks_sent_while_busy_is_answered_not_a_task(folders: _Fo
     assert '"permissionDecision": "deny"' in hook_thread.stdout
     assert "judged not to be a task" in hook_thread.stdout
     assert list(folders.files.tickets_dir.iterdir()) == []
+
+
+def test_a_report_a_program_posted_gets_no_reservation(folders: _Folders) -> None:
+    steps = MessageSteps(
+        files=folders.files, reservations=folders.reservations, writer=folders.writer(ScriptedOneShotCompletion([]))
+    )
+    report = (
+        "<background-task-report>\n<summary>Topic Explainer change checks (exit code 1)</summary>\n"
+        "A command you started with run_in_background.py has exited.\n</background-task-report>"
+    )
+
+    assert steps.on_message_sent(_CHAT_ID, "message-17", report) is None
+    assert not folders.reservations.root.exists()
