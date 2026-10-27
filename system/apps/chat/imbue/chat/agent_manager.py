@@ -1655,7 +1655,8 @@ class AgentManager:
 
         The chat it replaces, when still named ``MAIN_CHAT_NAME``, is shown under ``former_main_chat_name`` at
         once and renamed to it on a thread of its own; a rename that fails leaves it named as it was, and one with a
-        rename a person or an agent chose already running is left to that rename.
+        rename a person or an agent chose already running is left to that rename. A secondary chat renames nothing:
+        the star it moves is its scratch copy's, while the chat it would rename is still the live chat's main chat.
         """
         with self._lock:
             if not any(candidate.chat_id == chat_id for candidate in self._main_chat_candidates_locked()):
@@ -1664,7 +1665,10 @@ class AgentManager:
             self._main_chat.write(chat_id)
             previous_title = (
                 None
-                if previous is None or previous == chat_id or previous in self._chosen_renames_running_by_chat
+                if self._is_secondary
+                or previous is None
+                or previous == chat_id
+                or previous in self._chosen_renames_running_by_chat
                 else self._chat_title_locked(previous)
             )
             former_name = (

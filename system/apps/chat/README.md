@@ -455,7 +455,8 @@ crash, or a relaunch leaves it where it is. The seeded chat takes it first, name
 /api/chats/<chat-id>/make-main`, 409 for a helper another agent started) moves it there. The chat
 made main keeps its own name; the one it replaces, when still named "Main", is renamed to the
 first free "Chat N" marked as the former main chat ("Chat 7 (was: Main)"), shown at once and kept
-named as it was if mngr refuses the rename; a name anyone chose stays.
+named as it was if mngr refuses the rename; a name anyone chose stays, and a secondary chat
+(`--secondary`) renames nothing.
 A workspace that had chats before there was a main chat (one updated from an earlier
 version) gets a new one instead: when the app first reads the agent list and finds chats
 but no `main_chat.json`, it opens a seeded chat named "Main" on a short introduction to the

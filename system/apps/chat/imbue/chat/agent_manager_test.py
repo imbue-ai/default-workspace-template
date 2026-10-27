@@ -1529,6 +1529,25 @@ def test_making_another_chat_the_main_chat_leaves_the_old_one_to_a_rename_someon
     assert not argv_log.exists()
 
 
+def test_a_secondary_chat_making_another_chat_the_main_chat_renames_nothing(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A preview moves the star in its scratch copy only, so the chat it would rename is still the live main chat."""
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, is_secondary=True)
+    try:
+        _seed_main_and_trip_plan_with_main_starred(manager)
+
+        assert manager.make_main_chat(ChatId("agent-trip"))
+
+        assert manager.get_main_chat_id() == ChatId("agent-trip")
+        assert _shown_title(manager, "agent-main") == MAIN_CHAT_NAME
+    finally:
+        manager.stop()
+
+    assert not argv_log.exists()
+
+
 def test_a_former_main_chat_that_cannot_be_renamed_keeps_its_name(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
