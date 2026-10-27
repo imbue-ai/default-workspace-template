@@ -1011,12 +1011,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="List idle chats and workers, the apps, and browsers no window shows, alongside free memory. Stops nothing."
     )
-    parser.add_argument(
+    output_format = parser.add_mutually_exclusive_group()
+    output_format.add_argument(
         "--json",
         action="store_true",
         help="Print the report as JSON instead of a table",
     )
-    parser.add_argument(
+    output_format.add_argument(
         "--free-memory",
         action="store_true",
         help="Print only the free memory line, reading nothing but the meminfo files",
