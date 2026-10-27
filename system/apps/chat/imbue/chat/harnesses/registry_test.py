@@ -1,5 +1,7 @@
 """Unit tests for the harness registry's declared popups."""
 
+import pytest
+
 from imbue.chat.harnesses.registry import ComposerCompactHandling
 from imbue.chat.harnesses.registry import HARNESS_SPECS
 from imbue.chat.harnesses.registry import HarnessPopup
@@ -63,18 +65,44 @@ def test_the_model_bar_commands_are_not_also_in_a_harness_declined_tuple() -> No
             assert overlap == set(), f"{harness}: {overlap} duplicated in the terminal-notice tuple"
 
 
-def test_grok_opens_the_sign_in_for_login_and_logout_and_declines_its_model_alias_like_model() -> None:
-    actions = {
+def _grok_composer_actions() -> dict[str, tuple[PopupAction, str | None]]:
+    return {
         command: (popup.action, popup.notice_body)
         for popup in HARNESS_SPECS[HarnessType.GROK].popups
         if popup.trigger is PopupTrigger.COMPOSER_COMMAND
         for command in popup.commands
     }
+
+
+def test_grok_opens_the_sign_in_for_login_and_logout_and_declines_its_model_alias_like_model() -> None:
+    actions = _grok_composer_actions()
     assert actions["/login"] == (PopupAction.OPEN_AUTH, None)
     assert actions["/logout"] == (PopupAction.OPEN_AUTH, None)
     assert actions["/m"] == actions["/model"]
     assert actions["/quit"] == (PopupAction.NOTICE, None)
     assert "/compact" not in actions
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("/density", id="density_picker_saves_a_level"),
+        pytest.param("/info", id="info_opens_the_session_info_modal"),
+        pytest.param("/jump", id="jump_opens_a_turn_picker"),
+        pytest.param("/mem", id="mem_completes_to_the_memory_note_composer"),
+        pytest.param("/minimal", id="minimal_replaces_the_composer_mngr_reads"),
+        pytest.param("/rename", id="rename_picker_renames_the_session"),
+        pytest.param("/session-info", id="session_info_opens_a_modal"),
+        pytest.param("/t", id="t_switches_the_theme"),
+        pytest.param("/theme", id="theme_switches_the_theme"),
+        pytest.param("/timeline", id="timeline_saves_the_sidebar_setting"),
+        pytest.param("/timestamps", id="timestamps_picker_turns_timestamps_off"),
+        pytest.param("/title", id="title_picker_renames_the_session"),
+        pytest.param("/vim-mode", id="vim_mode_saves_vim_keys_on"),
+    ],
+)
+def test_grok_declines_a_command_whose_enter_answers_a_picker_or_changes_a_setting(command: str) -> None:
+    assert _grok_composer_actions()[command] == (PopupAction.NOTICE, None)
 
 
 def test_only_claude_adds_the_billing_line_to_the_fast_mode_notice() -> None:

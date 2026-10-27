@@ -283,11 +283,8 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/tree",
 )
 
-# Grok Build slash commands the chat declines to send (action="notice"). A grok message is typed into
-# its pane, and on grok 1.0.62 each of these leaves the message sent after it unsent or unfinished: most
-# open a view over the composer, /quit and /exit end grok, /dashboard's composer dispatches a new agent
-# instead, and the rest change how grok takes every later message. Aliases sit beside the command they resolve to; the
-# first token matches, so every argument form is declined with its command.
+# Grok Build commands the chat declines (action="notice"), by first token: typed and entered as mngr sends them, each
+# opens a picker or view over grok 1.0.62's composer, ends grok, or changes a setting or how grok takes later messages.
 _GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/agents",
     "/agents-dashboard",
@@ -302,6 +299,7 @@ _GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/cost",
     "/dashboard",
     "/delete",
+    "/density",
     "/docs",
     "/edit-prompt",
     "/exit",
@@ -315,9 +313,15 @@ _GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/hooks",
     "/howto",
     "/import-claude",
+    "/info",
+    "/jump",
     "/log",
     "/marketplace",
     "/mcps",
+    # grok's menu completes it to /remember, whose composer saves the next message as a memory note.
+    "/mem",
+    # Replaces the composer box and footer hints mngr reads grok's state from.
+    "/minimal",
     # Makes Enter insert a newline, so no later message is submitted.
     "/ml",
     "/multiline",
@@ -332,16 +336,24 @@ _GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/privacy",
     "/quit",
     "/remember",
+    "/rename",
     "/resume",
     "/rewind",
+    "/session-info",
     "/sessions",
     "/settings",
     "/skills",
+    "/t",
+    "/theme",
+    "/timeline",
+    "/timestamps",
+    "/title",
     "/tour",
     "/transcript",
     "/tutorial",
     "/undo",
     "/usage",
+    "/vim-mode",
     "/welcome",
     "/workflows",
 )
