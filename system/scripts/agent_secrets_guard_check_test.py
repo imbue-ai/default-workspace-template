@@ -279,6 +279,33 @@ def test_file_tools_off_the_secret_files_pass(payload: dict[str, object]) -> Non
     assert _run_guard(payload).returncode == 0
 
 
+@pytest.mark.parametrize(
+    "cwd",
+    ["data/.secrets", "/home/user/workspace/data/.secrets/", "/home/user/.mcpc"],
+)
+def test_a_subagent_started_inside_the_secrets_store_is_refused(cwd: str) -> None:
+    """grok's subagent shell would then read a secret file by its bare name."""
+    payload = {
+        "tool_name": "spawn_subagent",
+        "tool_input": {"prompt": "cat svc.env", "description": "x", "cwd": cwd},
+    }
+    completed = _run_guard(payload)
+    assert completed.returncode == 2
+    assert "starts work inside" in completed.stderr
+
+
+def test_a_subagent_whose_prompt_only_mentions_the_secrets_store_passes() -> None:
+    payload = {
+        "tool_name": "spawn_subagent",
+        "tool_input": {
+            "prompt": "run it under with_secrets.py data/.secrets/svc.env",
+            "description": "x",
+            "cwd": "system",
+        },
+    }
+    assert _run_guard(payload).returncode == 0
+
+
 def test_a_payload_that_never_names_the_directory_skips_the_checker_entirely() -> None:
     completed = _run_guard(_bash("cat README.md"))
     assert completed.returncode == 0

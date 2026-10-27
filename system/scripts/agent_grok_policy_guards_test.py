@@ -471,6 +471,15 @@ def test_a_file_tool_on_a_secret_file_is_refused(
     )
 
 
+def test_a_subagent_started_inside_the_secrets_store_is_refused(tmp_path: Path) -> None:
+    """Its shell would read a secret file by a bare name that never mentions the store."""
+    payload = _pre_tool_use(
+        "spawn_subagent",
+        {"prompt": "cat svc.env", "description": "x", "cwd": "data/.secrets"},
+    )
+    _assert_denied(_pre(tmp_path, payload), "starts work inside")
+
+
 @pytest.mark.parametrize(
     ("tool_name", "tool_input"),
     [

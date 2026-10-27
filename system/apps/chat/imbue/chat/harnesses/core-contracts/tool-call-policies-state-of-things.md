@@ -30,7 +30,9 @@ structural rather than unwired. Measured against codex-cli 0.147.0, pi 0.84.1 an
   allowed tool call gets none.
 - **grok P9 — live, partly by grok's own permission rule.** The shell half is live, and so is
   every grok tool that names a file: `read_file`, `search_replace`, `write` and `grep`'s `path`
-  are refused under the directory, and `list_dir` lists it as `ls` does. Two routes reach a
+  are refused under the directory, and `list_dir` lists it as `ls` does. A `spawn_subagent` whose
+  `cwd` is the directory is refused too, as the shell's `cd` there is, since its subagent's shell
+  would read a secret by its bare name. Two routes reach a
   secret file without naming it, so no check on the call's text sees them: `grep` with a `glob`
   such as `*`, and `use_tool` reading its arguments from a file (both under "Known bypasses").
   The `[agent_types.grok]` settings carry `[permission] deny = ["Read(**/.secrets/**)"]`, which
