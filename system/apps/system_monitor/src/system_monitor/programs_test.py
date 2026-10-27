@@ -136,8 +136,11 @@ def test_chats_on_any_harness_are_found_through_the_agent_registry(
         )
     (registry / "40.json").write_text(json.dumps({"agent_name": "no-id"}))
     (registry / "notes.txt").write_text("ignored")
+    proc = tmp_path / "proc"
+    for pid in (20, 21, 30, 40):
+        (proc / str(pid)).mkdir(parents=True)
 
-    assert programs.agents_by_pid(is_alive=lambda pid: pid != 31) == {
+    assert programs.agents_by_pid(proc) == {
         20: "agent-codex",
         21: "agent-codex",
         30: "agent-pi",

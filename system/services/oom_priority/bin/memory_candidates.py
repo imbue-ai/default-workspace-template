@@ -508,9 +508,7 @@ def collect_agent_section(sources: Sources) -> AgentSection:
     agents, notes = run_mngr_list(sources.run_command)
     if agents is None:
         return AgentSection(candidates=None, notes=tuple(notes))
-    registry_pids = live_pids_by_agent_id(
-        is_alive=lambda pid: (sources.proc_dir / str(pid)).is_dir()
-    )
+    registry_pids = live_pids_by_agent_id(sources.proc_dir)
     candidates = idle_agent_candidates(
         agents, registry_pids, sources.proc_dir, sources.now, sources.is_chat_busy
     )

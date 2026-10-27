@@ -90,9 +90,12 @@ ever acting on a laptop with swap.
 - **`agent_identity`** -- classifies an agent from its label (primary, chat, or
   worker), used by the launch wrapper to pick the band. An agent whose record
   can't be read matches none of these and is tagged least-protected (worker band).
-- **`registry`** -- one file per agent recording its main-process pid, so a
+- **`registry`** -- one file per agent process recording its pid and start time, so a
   killed pid can be mapped back to "which agent" (earlyoom's after-kill hook is
-  handed only a pid that is already gone).
+  handed only a pid that is already gone), and so the chat app's prioritizer can
+  re-tag an agent's processes by its id. A reader counts an entry only while its
+  pid is still that process: pids are reused within hours under gVisor, and
+  `/proc/<id>` also resolves for another process's thread.
 - **`ledger`** -- the append-only shed ledger and the revival-notice bookkeeping.
 
 Tagging happens at three startup points, each setting a process's band directly
@@ -307,7 +310,8 @@ a protected one.
   `claude_shed_notice_hook.py` only when the ledger names the agent) and the
   launch-task report poll.
 - **Agent-pid registry** (`data/.state/oom_priority/agent_pids/<pid>.json`): written
-  by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook.
+  by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook,
+  the chat app's prioritizer, System Monitor, the resource sampler and the memory candidates command.
 
 Both live under `runtime/` so they ride the runtime-backup branch. Their absolute
 location is pinned via `OOM_PRIORITY_RUNTIME_DIR` (see `.mngr/settings.toml`) so

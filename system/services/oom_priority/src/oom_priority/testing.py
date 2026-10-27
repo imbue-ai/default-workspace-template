@@ -3,7 +3,8 @@
 The cgroup headroom publisher's policy (``cgroup_meminfo``) and the supervisord program that
 runs it (``bin/publish_cgroup_meminfo.py``) are tested against the same fake cgroup v2 memory
 controller; the supervisord socket reader (``supervisor_rpc``) and the System Monitor app's
-Stop actions against the same stand-in for supervisord's control socket.
+Stop actions against the same stand-in for supervisord's control socket; the agent-pid
+registry and its readers against the same fake ``/proc`` processes.
 """
 
 import socketserver
@@ -28,6 +29,23 @@ def write_fake_cgroup(
     (cgroup_dir / "memory.current").write_text(f"{usage}\n")
     (cgroup_dir / "memory.stat").write_text(
         "".join(f"{key} {value}\n" for key, value in stat_lines.items())
+    )
+
+
+def write_fake_process(
+    proc_dir: Path, pid: int, start_ticks: int, tgid: int | None = None, comm: str = "claude"
+) -> None:
+    """Lay out ``/proc/<pid>`` with the ``stat`` and ``status`` a process's identity is read from.
+
+    ``tgid`` names the process ``pid`` is a thread of (default: itself). ``comm`` sits in
+    parentheses in ``stat``, the way the kernel writes it, so it may hold spaces or parentheses.
+    """
+    entry = proc_dir / str(pid)
+    entry.mkdir(parents=True, exist_ok=True)
+    after_comm = ["S", *(["0"] * 18), str(start_ticks), "0", "0"]
+    (entry / "stat").write_text(f"{pid} ({comm}) {' '.join(after_comm)}\n")
+    (entry / "status").write_text(
+        f"Name:\t{comm}\nTgid:\t{tgid if tgid is not None else pid}\nPid:\t{pid}\n"
     )
 
 

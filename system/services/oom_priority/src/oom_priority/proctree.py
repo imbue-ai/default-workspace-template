@@ -1,9 +1,10 @@
-"""Walking the live process tree under a pid, via ``/proc``.
+"""Reading processes through ``/proc``: the live tree under a pid, and what identifies one process.
 
-Used by the tagging backstops that must find the processes a service has
+The tree walk is used by the tagging backstops that must find the processes a service has
 already spawned: the supervisord event listener (``system/services/oom_priority/bin/oom_tag_backstop.py``)
-and the browser service's Chromium re-tagging sweep. Stdlib-only (see ``paths``):
-the backstop listener imports it under a plain ``python3``.
+and the browser service's Chromium re-tagging sweep. The identity readers are used by the
+agent-pid registry, which must tell the process it recorded from a later one that reused its
+pid. Stdlib-only (see ``paths``): the backstop listener imports it under a plain ``python3``.
 """
 
 from pathlib import Path
@@ -40,16 +41,19 @@ def list_descendant_pids(pid: int, proc_dir: Path = _PROC_DIR) -> list[int]:
                     continue
                 child = int(child_text)
                 seen.add(child)
-                if _is_thread(child, proc_dir):
+                if is_thread(child, proc_dir):
                     continue
                 descendants.append(child)
                 frontier.append(child)
     return descendants
 
 
-def _is_thread(task_id: int, proc_dir: Path) -> bool:
+def is_thread(task_id: int, proc_dir: Path = _PROC_DIR) -> bool:
     """Whether ``/proc`` says ``task_id`` is a thread of another process (its Tgid is
-    not its own id); False when its status cannot be read."""
+    not its own id); False when its status cannot be read.
+
+    ``/proc/<tid>`` resolves for a thread although ``/proc`` does not list it, so a path's
+    existence alone does not make an id a process."""
     try:
         status = (proc_dir / str(task_id) / "status").read_text()
     except OSError:
@@ -59,3 +63,22 @@ def _is_thread(task_id: int, proc_dir: Path) -> bool:
         if key == "Tgid":
             return value.strip() != str(task_id)
     return False
+
+
+def read_start_ticks(pid: int, proc_dir: Path = _PROC_DIR) -> int | None:
+    """When ``pid`` started, in clock ticks since boot (field 22 of ``/proc/<pid>/stat``); None
+    when it is gone or its stat cannot be parsed.
+
+    Under gVisor ``pid_max`` is 65536, so a pid is reused within hours of its process exiting,
+    but two processes that held the same pid never share a start time. The fields are counted
+    from after the last ``)``, since the command name before it may hold spaces or parentheses.
+    """
+    try:
+        stat = (proc_dir / str(pid) / "stat").read_text()
+    except OSError:
+        return None
+    fields = stat.rpartition(")")[2].split()
+    # fields[0] is field 3 (state), so field 22 (starttime) is fields[19].
+    if len(fields) < 20 or not fields[19].isdigit():
+        return None
+    return int(fields[19])
