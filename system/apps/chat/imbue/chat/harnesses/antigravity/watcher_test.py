@@ -24,9 +24,12 @@ from imbue.chat.harnesses.antigravity.testing import set_step_status
 from imbue.chat.harnesses.antigravity.testing import str_field
 from imbue.chat.harnesses.antigravity.turn_state import drop_turn_state
 from imbue.chat.harnesses.antigravity.watcher import AntigravitySessionWatcher
+from imbue.chat.harnesses.session_watcher import ReplyDraft
+from imbue.chat.harnesses.session_watcher import ReplyDraftSources
 
 _STATUS_RUNNING = 2
 _STATUS_DONE = 3
+_STATUS_GENERATING = 8
 _TYPE_USER = 14
 _TYPE_PLANNER = 15
 # The live tool-step type on agy 1.1.20: every tool call arrives as 132, whatever the
@@ -616,3 +619,83 @@ def test_a_loader_reads_a_settled_conversation_with_no_thread_and_releases_what_
     assert loader._connections != {}
     loader.close()
     assert loader._connections == {}
+
+
+_NO_SOURCES = ReplyDraftSources(capture_pane=lambda: None, read_streamed_reply=lambda: None)
+
+
+def test_reply_draft_is_the_planner_step_agy_is_writing(tmp_path: Path) -> None:
+    conv = "dddddddd-0000-0000-0000-000000000001"
+    watcher = _make_watcher(tmp_path, [conv])
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("tell me about tides")),
+            (1, _TYPE_PLANNER, _STATUS_GENERATING, _planner_payload("Tides rise ")),
+        ],
+    )
+    events = watcher._collect_new_events()
+
+    assert [e["type"] for e in events] == ["user_message"]
+    assert watcher.read_reply_draft(_NO_SOURCES) == ReplyDraft(after_event_id=f"{conv}:0:user", text="Tides rise")
+
+
+def test_reply_draft_follows_the_row_and_is_dropped_when_the_reply_lands(tmp_path: Path) -> None:
+    conv = "dddddddd-0000-0000-0000-000000000002"
+    watcher = _make_watcher(tmp_path, [conv])
+    db = _conv_db_path(tmp_path, conv)
+    build_steps_db(
+        db,
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("tell me about tides")),
+            (1, _TYPE_PLANNER, _STATUS_GENERATING, _planner_payload("Tides")),
+        ],
+    )
+    watcher._collect_new_events()
+    set_step_status(db, 1, _STATUS_GENERATING, _planner_payload("Tides rise twice"))
+    watcher._collect_new_events()
+    assert watcher.read_reply_draft(_NO_SOURCES) == ReplyDraft(
+        after_event_id=f"{conv}:0:user", text="Tides rise twice"
+    )
+
+    set_step_status(db, 1, _STATUS_DONE, _planner_payload("Tides rise twice a day."))
+    events = watcher._collect_new_events()
+
+    assert [e.get("text") for e in events] == ["Tides rise twice a day."]
+    assert watcher.read_reply_draft(_NO_SOURCES) == ReplyDraft(after_event_id=f"{conv}:1:assistant", text="")
+
+
+def test_reply_draft_is_kept_while_a_later_row_is_mid_write(tmp_path: Path) -> None:
+    conv = "dddddddd-0000-0000-0000-000000000003"
+    watcher = _make_watcher(tmp_path, [conv])
+    db = _conv_db_path(tmp_path, conv)
+    build_steps_db(
+        db,
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("tell me about tides")),
+            (1, _TYPE_PLANNER, _STATUS_GENERATING, _planner_payload("Tides rise")),
+        ],
+    )
+    watcher._collect_new_events()
+    set_step_status(db, 1, _STATUS_GENERATING, _tag_len_overrun())
+    watcher._collect_new_events()
+
+    assert watcher.read_reply_draft(_NO_SOURCES).text == "Tides rise"
+
+
+def test_reply_draft_is_empty_once_the_newest_row_is_not_a_planner_step_being_written(tmp_path: Path) -> None:
+    conv = "dddddddd-0000-0000-0000-000000000004"
+    watcher = _make_watcher(tmp_path, [conv])
+    db = _conv_db_path(tmp_path, conv)
+    build_steps_db(
+        db,
+        [
+            (0, _TYPE_USER, _STATUS_DONE, _user_payload("list files")),
+            (1, _TYPE_PLANNER, _STATUS_GENERATING, _planner_payload("Let me look")),
+        ],
+    )
+    watcher._collect_new_events()
+    append_step(db, (2, _TYPE_RUN_COMMAND, _STATUS_RUNNING, _tool_payload("", short="Running ls")))
+    watcher._collect_new_events()
+
+    assert watcher.read_reply_draft(_NO_SOURCES).text == ""

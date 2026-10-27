@@ -1,7 +1,7 @@
 """Stream the reply an agent is writing to the pages showing its chat, before its transcript has it.
 
-Claude and Codex record a reply only once they have finished writing it, so the chat would otherwise
-show a reply seconds after the agent's terminal does. One thread asks each watcher whose chat the user
+Claude, Codex, Pi and Antigravity record a reply only once they have finished writing it, so the chat
+would otherwise show a reply seconds after the agent's terminal does. One thread asks each watcher whose chat the user
 is looking at for its draft (``AgentSessionWatcher.read_reply_draft``) a few times a second and sends
 any change on the chat's stream as an ``assistant_draft`` frame: ``{"type": "assistant_draft",
 "agent_id", "after_event_id", "text"}``, with ``text`` empty once there is no draft. The frame is
@@ -11,8 +11,9 @@ end of the transcript until the reply itself lands.
 The work is bounded by what the user is looking at: only a chat a page streams *and* reports
 shown and focused (its presence, ``presence.py``) is read, so background chats, chats in a hidden
 or unfocused window, and chats the chat root keeps loaded out of sight cost nothing; a looked-at
-Claude agent with no turn in flight costs one stat of its ``active`` marker per pass, and a Codex
-agent one read of the reply its live connection already holds.
+Claude agent with no turn in flight costs one stat of its ``active`` marker per pass, a Codex
+agent one read of the reply its live connection already holds, a Pi agent one read of a small file,
+and an Antigravity agent one read of what its last scan kept.
 """
 
 import threading
