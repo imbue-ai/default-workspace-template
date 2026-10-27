@@ -846,7 +846,11 @@ account's harness as `type`, its binding (`env__extend` for claude, an
 `extra_provision_command__extend` credential link over `$MNGR_AGENT_STATE_DIR`
 for codex, agy and pi) and the `account=<id>` label a re-auth restarts agents
 by (only the live ones; a stopped agent picks up the new credentials when it
-next starts). The pin and the most recently used account stay in `index.json`;
+next starts). Once a restarted agent is back, the message (or messages) its
+sign-in error answered is sent to it again through the message route's send
+path, so the user does not retype it; nothing is sent when the agent had
+already worked on that turn before the sign-in failed, or when the user has
+written since. The pin and the most recently used account stay in `index.json`;
 the file is derived from them and nobody is expected to edit it, though keys
 outside the managed ones survive every rewrite. With no usable account the
 managed keys are removed, and a create in the workspace is then refused by
