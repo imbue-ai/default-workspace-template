@@ -247,6 +247,26 @@ def test_the_last_unsubscribe_of_a_directory_gives_back_exactly_the_threads_its_
         shared.close()
 
 
+def test_a_shared_observer_with_nothing_left_to_watch_holds_no_thread_until_the_next_subscription(
+    tmp_path: Path,
+) -> None:
+    """A released watcher leaves no watch thread behind, even though the observer it watched through lives on."""
+    before = len(_live_watchdog_threads())
+    shared = SharedWatchObserver.build()
+    first = WakeOnChangeHandler(threading.Event())
+    later_changed = threading.Event()
+    try:
+        assert shared.subscribe(tmp_path, False, first)
+        shared.unsubscribe(tmp_path, False, first)
+        assert len(_live_watchdog_threads()) == before
+
+        assert shared.subscribe(tmp_path, False, WakeOnChangeHandler(later_changed))
+        (tmp_path / "written-61904.txt").write_text("x")
+        assert later_changed.wait(timeout=5.0)
+    finally:
+        shared.close()
+
+
 def test_a_closed_shared_observer_stops_its_threads_and_refuses_new_subscriptions(tmp_path: Path) -> None:
     before = len(_live_watchdog_threads())
     shared = SharedWatchObserver.build()

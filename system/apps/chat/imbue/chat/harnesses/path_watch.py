@@ -93,7 +93,8 @@ class SharedWatchObserver:
             return True
 
     def unsubscribe(self, directory: Path, is_recursive: bool, handler: FileSystemEventHandler) -> None:
-        """Stop delivering ``directory``'s events to ``handler``, releasing the OS watch with its last subscriber."""
+        """Stop delivering ``directory``'s events to ``handler``, releasing the OS watch with its last subscriber,
+        and the observer's own thread with the last watch: the next subscription starts a fresh one."""
         key: _WatchKey = (str(directory), is_recursive)
         with self._lock:
             handlers = self._handlers_by_key.get(key)
@@ -107,6 +108,11 @@ class SharedWatchObserver:
             del self._handlers_by_key[key]
             del self._watch_by_key[key]
             self._observer.unschedule(watch)
+            if self._watch_by_key:
+                return
+            idle_observer = self._observer
+            self._observer = None
+        _stop_observer(idle_observer)
 
     def close(self) -> None:
         """Stop the observer and every watch it holds; later subscriptions are refused. Idempotent."""
@@ -117,8 +123,12 @@ class SharedWatchObserver:
             self._watch_by_key.clear()
             self._handlers_by_key.clear()
         if observer is not None:
-            observer.stop()
-            observer.join(timeout=5.0)
+            _stop_observer(observer)
+
+
+def _stop_observer(observer: Any) -> None:
+    observer.stop()
+    observer.join(timeout=5.0)
 
 
 class PathWatcher:
