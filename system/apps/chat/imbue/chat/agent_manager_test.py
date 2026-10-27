@@ -1353,6 +1353,14 @@ def test_making_a_chat_the_main_chat_moves_the_star_to_it_and_keeps_it_there(
         manager.stop()
 
 
+def _seed_main_and_trip_plan_with_main_starred(manager: AgentManager) -> None:
+    """List a chat named Main and one named "Trip plan", and make the Main one the main chat."""
+    seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
+    seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
+    manager.note_agent_list_known()
+    assert manager.make_main_chat(ChatId("agent-main"))
+
+
 def test_making_another_chat_the_main_chat_renames_the_old_one_still_named_main_and_keeps_the_new_ones_name(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -1361,11 +1369,8 @@ def test_making_another_chat_the_main_chat_renames_the_old_one_still_named_main_
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
     try:
-        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
-        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
+        _seed_main_and_trip_plan_with_main_starred(manager)
         seed_agent_state(manager, "agent-two", name="Chat-1", labels={"display_name": "Chat 1"})
-        manager.note_agent_list_known()
-        assert manager.make_main_chat(ChatId("agent-main"))
         q = broadcaster.register()
 
         assert manager.make_main_chat(ChatId("agent-trip"))
@@ -1462,10 +1467,7 @@ def test_a_new_chat_skips_the_number_a_former_main_chat_is_being_renamed_to(
     held_mngr.chmod(0o755)
     manager = AgentManager.build(broadcaster, mngr_binary=str(held_mngr))
     try:
-        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
-        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
-        manager.note_agent_list_known()
-        assert manager.make_main_chat(ChatId("agent-main"))
+        _seed_main_and_trip_plan_with_main_starred(manager)
         assert manager.make_main_chat(ChatId("agent-trip"))
         assert _shown_title(manager, "agent-main") == "Chat 1 (was: Main)"
 
@@ -1503,10 +1505,7 @@ def test_making_another_chat_the_main_chat_leaves_the_old_one_to_a_rename_someon
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
     try:
-        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
-        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
-        manager.note_agent_list_known()
-        assert manager.make_main_chat(ChatId("agent-main"))
+        _seed_main_and_trip_plan_with_main_starred(manager)
         with manager._lock:
             manager._chosen_renames_running_by_chat[ChatId("agent-main")] = 1
         q = broadcaster.register()
@@ -1530,10 +1529,7 @@ def test_a_former_main_chat_that_cannot_be_renamed_keeps_its_name(
     failing_mngr.chmod(0o755)
     manager = AgentManager.build(broadcaster, mngr_binary=str(failing_mngr))
     try:
-        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
-        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
-        manager.note_agent_list_known()
-        assert manager.make_main_chat(ChatId("agent-main"))
+        _seed_main_and_trip_plan_with_main_starred(manager)
 
         assert manager.make_main_chat(ChatId("agent-trip"))
 
@@ -1552,10 +1548,7 @@ def test_a_former_main_chat_deleted_before_its_rename_runs_frees_the_number_it_w
     mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
     manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
     try:
-        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
-        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
-        manager.note_agent_list_known()
-        assert manager.make_main_chat(ChatId("agent-main"))
+        _seed_main_and_trip_plan_with_main_starred(manager)
         rename_lock = manager._rename_lock_for(ChatId("agent-main"))
         with rename_lock:
             assert manager.make_main_chat(ChatId("agent-trip"))
