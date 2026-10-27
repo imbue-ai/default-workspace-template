@@ -58,10 +58,12 @@ def test_a_pid_reused_by_a_later_process_is_not_the_agents(runtime: Path, proc: 
 
 def test_an_id_that_is_now_another_processs_thread_is_not_the_agents(runtime: Path, proc: Path) -> None:
     # The agent's pid is now a thread id of the chat app: /proc/<id> resolves, and a write to
-    # its oom_score_adj would re-band the whole chat app.
-    directory = registry.agent_pids_dir()
-    directory.mkdir(parents=True)
-    (directory / "4242.json").write_text(json.dumps({"agent_name": "alpha", "agent_id": "agent-abc"}))
+    # its oom_score_adj would re-band the whole chat app. The start time still matches, so only
+    # the thread check can tell.
+    write_fake_process(proc, 4242, start_ticks=900)
+    registry.record_agent_pid(4242, "alpha", is_worker=False, agent_id="agent-abc", proc_dir=proc)
+    assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == [4242]
+
     write_fake_process(proc, 849, start_ticks=5, comm="chat-app")
     write_fake_process(proc, 4242, start_ticks=900, tgid=849, comm="chat-app")
 
