@@ -2043,7 +2043,8 @@ class AgentManager:
         """Send an agent that was just signed in again the messages its last reply refused for want of a sign-in.
 
         Read after the restart rather than before it, so a message the user sent again by hand in the
-        meantime is the transcript's last turn and nothing goes twice. The delivery is the message
+        meantime, once it is in the transcript, is its last turn and is not sent a second time. One
+        still on its way to the restarting agent is not seen and can go twice. The delivery is the message
         route's, which waits for the restarted agent to take input. A failure is logged: the sign-in
         itself succeeded, and the user can still send the message again.
         """
