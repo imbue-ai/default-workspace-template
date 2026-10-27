@@ -14,7 +14,6 @@ import type { DisplayDecision } from "../models/Chats";
 import type { OutgoingMessage } from "../models/OutgoingMessages";
 import { classifyDecidedMessage } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
-import { renderMessageStepLine } from "./MessageStepLine";
 import {
   NOTICE_ROW_SPACING_CLASS,
   USER_BUBBLE_CLASS,
@@ -41,8 +40,6 @@ export interface NotYetRealBubble {
   extraRowClass?: string;
   /** The backend's render decision for the text; a notice (a background-task report) draws as one. */
   displayDecision?: DisplayDecision;
-  /** The line under the bubble for the step the chat made for the message, when it made one. */
-  stepLine?: m.Vnode | null;
 }
 
 /** A user message that is not yet a real turn, drawn as the user bubble it will become, or as the
@@ -65,21 +62,19 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
     m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
     ]),
-    bubble.stepLine ?? null,
   ]);
 }
 
-function renderOutgoingBubble(chatId: string, outgoing: OutgoingMessage): m.Vnode {
+function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
   return renderNotYetRealBubble({
     key: outgoing.id,
     content: outgoing.content,
     displayDecision: outgoing.displayDecision,
-    stepLine: renderMessageStepLine(chatId, outgoing.content, outgoing.messageId),
   });
 }
 
 /** The optimistic outgoing bubbles for a chat, in send order. Returns [] when
  *  there are none. */
 export function renderOutgoingMessages(chatId: string): m.Vnode[] {
-  return getOutgoingMessages(chatId).map((outgoing) => renderOutgoingBubble(chatId, outgoing));
+  return getOutgoingMessages(chatId).map(renderOutgoingBubble);
 }

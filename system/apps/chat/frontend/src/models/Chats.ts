@@ -49,28 +49,6 @@ export interface ActiveAgent {
   is_busy: boolean;
   // The background tasks the chat waits on, oldest first. Rendered as given.
   background_tasks: BackgroundTask[];
-  // The steps the chat app made for the messages sent to the chat while its agent was busy, oldest first, each
-  // drawn under the message it was made for.
-  message_steps: MessageStep[];
-}
-
-/** A message step's tk status. */
-export type MessageStepStatus = "open" | "in_progress" | "closed";
-
-/** The step the chat app made for one message sent while the agent was busy (the backend's ``MessageStepSnapshot``). */
-export interface MessageStep {
-  step_id: string;
-  // The send-time id of the message.
-  message_id: string;
-  // The message, verbatim: what a bubble is matched against, since a transcript turn carries no message id.
-  message_text: string;
-  // The small model's task title for the message.
-  title: string;
-  status: MessageStepStatus;
-  // The agent's one-line summary once it closed the step; empty before.
-  summary: string;
-  // When the step was written, once the model titled the message (ISO 8601, UTC).
-  created_at: string;
 }
 
 /** Who recorded a background task: the workspace's runner (``run_in_background.py``), which outlives the agent and
@@ -481,11 +459,6 @@ export function getMainChatId(): string | null {
 
 export function getChatById(chatId: string): ChatSnapshot | undefined {
   return chats.find((c) => c.chat_id === chatId);
-}
-
-/** The steps made for the messages sent to the chat, oldest first. */
-export function getMessageStepsForChat(chatId: string): MessageStep[] {
-  return getChatById(chatId)?.active_agent.message_steps ?? [];
 }
 
 /** The full snapshot of the messages queued on the chat's active agent, in enqueue order. */

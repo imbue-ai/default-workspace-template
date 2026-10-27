@@ -19,7 +19,6 @@ const mocks = vi.hoisted(() => {
 
 vi.mock("../models/Chats", () => ({
   getQueuedMessagesForChat: () => mocks.queued,
-  getMessageStepsForChat: () => [],
   getShoulderTapAvailableForChat: () => mocks.available,
 }));
 vi.mock("../models/Response", () => ({

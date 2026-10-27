@@ -129,7 +129,7 @@ function buildRows(
         key: userEvent.event_id,
         estimate: ESTIMATED_USER_HEIGHT_PX,
         anchorEventId: userEvent.event_id,
-        render: () => renderUserMessage(userEvent, chatId) as m.Vnode,
+        render: () => renderUserMessage(userEvent) as m.Vnode,
       });
     }
 
@@ -226,7 +226,7 @@ function buildRows(
             key: chipEvent.event_id,
             estimate: ESTIMATED_USER_HEIGHT_PX,
             anchorEventId: chipEvent.event_id,
-            render: () => renderUserMessage(chipEvent, chatId) as m.Vnode,
+            render: () => renderUserMessage(chipEvent) as m.Vnode,
           });
         }
       } else if (item.kind === "handoff") {
