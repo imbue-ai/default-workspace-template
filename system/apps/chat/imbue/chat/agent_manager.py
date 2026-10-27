@@ -2061,6 +2061,9 @@ class AgentManager:
             except (SendFailedError, AgentNotFoundError) as e:
                 _loguru_logger.warning("Could not resend {}'s refused message after re-auth: {}", agent_info.name, e)
                 return
+            if outcome is SendOutcome.WITHDRAWN:
+                _loguru_logger.info("Stop took back {}'s resent message before it reached the agent", agent_info.name)
+                return
             if outcome is not SendOutcome.OK:
                 _loguru_logger.warning(
                     "Resending {}'s refused message after re-auth did not land ({})", agent_info.name, outcome.value
