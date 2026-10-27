@@ -3721,9 +3721,7 @@ class AgentManager:
         """
         explicit_title = explicit_chat_name(title)
         with self._lock:
-            replaced_stand_in = (
-                self._drop_main_chat_stand_in_locked() if is_main_chat_name(explicit_title) else None
-            )
+            replaced_stand_in = self._drop_main_chat_stand_in_locked() if is_main_chat_name(explicit_title) else None
             try:
                 provisional = self._seed_chat_locked(
                     explicit_title,
