@@ -1424,6 +1424,31 @@ def test_making_another_chat_the_main_chat_leaves_a_name_the_user_chose_on_the_o
     assert not argv_log.exists()
 
 
+def test_making_another_chat_the_main_chat_leaves_the_old_one_to_a_rename_someone_chose_that_is_running(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    try:
+        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
+        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
+        manager.note_agent_list_known()
+        assert manager.make_main_chat(ChatId("agent-main"))
+        with manager._lock:
+            manager._chosen_renames_running_by_chat[ChatId("agent-main")] = 1
+        q = broadcaster.register()
+
+        assert manager.make_main_chat(ChatId("agent-trip"))
+
+        listing = _next_chat_listing(q)
+        assert listing["main_chat_id"] == "agent-trip"
+        assert {chat["chat_id"]: chat["title"] for chat in listing["chats"]}["agent-main"] == MAIN_CHAT_NAME
+    finally:
+        manager.stop()
+
+    assert not argv_log.exists()
+
+
 def test_a_former_main_chat_that_cannot_be_renamed_keeps_its_name(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

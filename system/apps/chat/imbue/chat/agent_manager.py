@@ -1656,14 +1656,19 @@ class AgentManager:
         when the chat cannot be the main chat (a helper another agent started, or no chat this app lists).
 
         The chat it replaces, when still named ``MAIN_CHAT_NAME``, is shown under ``former_main_chat_name`` at
-        once and renamed to it on a thread of its own; a rename that fails leaves it named as it was.
+        once and renamed to it on a thread of its own; a rename that fails leaves it named as it was, and one with a
+        rename a person or an agent chose already running is left to that rename.
         """
         with self._lock:
             if not any(candidate.chat_id == chat_id for candidate in self._main_chat_candidates_locked()):
                 return False
             previous = self._main_chat.read()
             self._main_chat.write(chat_id)
-            previous_title = None if previous is None or previous == chat_id else self._chat_title_locked(previous)
+            previous_title = (
+                None
+                if previous is None or previous == chat_id or previous in self._chosen_renames_running_by_chat
+                else self._chat_title_locked(previous)
+            )
             former_name = (
                 former_main_chat_name(self._taken_names_locked())
                 if previous_title is not None and is_main_chat_name(previous_title)
