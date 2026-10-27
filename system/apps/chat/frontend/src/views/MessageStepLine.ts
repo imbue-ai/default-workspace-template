@@ -13,7 +13,7 @@ import { statusDoneIcon, statusPendingIcon, statusRingIcon } from "@imbue/worksp
 import { getMessageStepsForChat } from "../models/Chats";
 import type { MessageStep } from "../models/Chats";
 
-/** A message's text as two copies of it compare (the backend's ``normalized_message_text``). */
+/** A message's text as two copies of it compare (the agent hook's ``normalized_message_text``). */
 export function normalizedMessageText(text: string): string {
   return text.replace(/\r\n/g, "\n").trim();
 }

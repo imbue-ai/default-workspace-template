@@ -2,7 +2,8 @@
 """Claude hooks for the steps the chat app makes for the user's messages.
 
 When a user sends a chat a message, the chat app reserves a tk step id for it before typing it to the agent,
-then writes the step under that id once a small model has titled it, about two seconds later
+then writes the step under that id once a small model has titled it (usually a few seconds; longer when a title
+call is retried)
 (``system/apps/chat/imbue/chat/message_steps.py``). A reservation is one JSON file under
 ``$CHAT_MESSAGE_STEP_RESERVATIONS_DIR``; the written step is an ordinary tk step record in ``$TICKETS_DIR``,
 created with the chat's id as its creator. A message the model judges not a task, or whose title call failed every
@@ -101,15 +102,20 @@ def parse_message_step_record(text: str) -> PendingStep | None:
     )
     if title_index is None:
         return None
-    message_lines: list[str] = []
-    for line in body[title_index + 1 :]:
-        if line.startswith("## "):
-            break
-        message_lines.append(line)
+    after_title = body[title_index + 1 :]
+    # tk appends the close summary as the record's last section, whatever the message itself contains.
+    summary_index = max(
+        (
+            index
+            for index, line in enumerate(after_title)
+            if line.strip() == "## Summary"
+        ),
+        default=None,
+    )
     return PendingStep(
         step_id=fields.get("id", ""),
         creator=fields.get("agent", ""),
-        message_text="\n".join(message_lines).strip(),
+        message_text="\n".join(after_title[:summary_index]).strip(),
         since=fields.get("created", ""),
     )
 

@@ -32,7 +32,6 @@ class Config(BaseSettings):
     # A secondary chat (a preview) points this at a scratch copy so its writes never land
     # in the live chat's data.
     chat_data_dir: Path = Field(default=DEFAULT_CHAT_DATA_DIR)
-    # The tickets folder the chat writes each sent message's step in (``message_steps.py``).
     chat_tickets_dir: Path = Field(default=DEFAULT_CHAT_TICKETS_DIR)
 
     @field_validator("chat_javascript_plugins", "chat_static_paths", mode="before")

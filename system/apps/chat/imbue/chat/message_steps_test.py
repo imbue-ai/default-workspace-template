@@ -1,31 +1,35 @@
+import importlib.util
 import json
 import os
 import threading
 from pathlib import Path
 
 import pytest
-
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
-from imbue.chat.harnesses.one_shot import OneShotCompletion
-from imbue.chat.harnesses.one_shot import OneShotCompletionError
-from imbue.chat.message_steps import GeneratedTitle
-from imbue.chat.message_steps import MessageStep
-from imbue.chat.message_steps import MessageStepFiles
-from imbue.chat.message_steps import MessageStepOutcome
-from imbue.chat.message_steps import MessageStepReservation
-from imbue.chat.message_steps import MessageStepReservations
-from imbue.chat.message_steps import MessageStepTracker
-from imbue.chat.message_steps import MessageStepWriter
-from imbue.chat.message_steps import MessageSteps
-from imbue.chat.message_steps import SETTLED_DIRNAME
-from imbue.chat.message_steps import TITLE_CALL_RETRY_COUNT
-from imbue.chat.message_steps import message_step_title_prompt
-from imbue.chat.message_steps import parse_generated_step_title
-from imbue.chat.message_steps import parse_message_step
-from imbue.chat.message_steps import step_id_prefix
-from imbue.chat.models import ChatAccountBinding
-from imbue.chat.models import MessageStepStatus
+from imbue.chat.harnesses.one_shot import OneShotCompletion, OneShotCompletionError
+from imbue.chat.message_steps import (
+    MESSAGE_REF_PREFIX,
+    MESSAGE_STEP_RESERVATIONS_DIRNAME,
+    MESSAGE_STEP_TAG,
+    SETTLED_DIRNAME,
+    TITLE_CALL_RETRY_COUNT,
+    TITLE_CALL_TIMEOUT_SECONDS,
+    GeneratedTitle,
+    MessageStep,
+    MessageStepFiles,
+    MessageStepOutcome,
+    MessageStepReservation,
+    MessageStepReservations,
+    MessageSteps,
+    MessageStepTracker,
+    MessageStepWriter,
+    message_step_title_prompt,
+    parse_generated_step_title,
+    parse_message_step,
+    step_id_prefix,
+)
+from imbue.chat.models import ChatAccountBinding, MessageStepStatus
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import InlineExecutor
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
@@ -50,7 +54,10 @@ class _Folders:
         return self.reservations.reserve(chat_id, message_id, message, self.files.is_id_taken)
 
     def writer(
-        self, completion: OneShotCompletion, changes: list[str] | None = None, timeout_seconds: float = 10.0
+        self,
+        completion: OneShotCompletion,
+        changes: list[str] | None = None,
+        timeout_seconds: float = 10.0,
     ) -> MessageStepWriter:
         recorded = changes if changes is not None else []
         return MessageStepWriter(
@@ -75,7 +82,11 @@ class _Folders:
 
     def run_tk(self, *args: str) -> None:
         """Run tk as the chat's agent does, on this test's tickets folder."""
-        env = {**os.environ, "TICKETS_DIR": str(self.files.tickets_dir), "MINDS_CHAT_ID": str(_CHAT_ID)}
+        env = {
+            **os.environ,
+            "TICKETS_DIR": str(self.files.tickets_dir),
+            "MINDS_CHAT_ID": str(_CHAT_ID),
+        }
         run_local_command_modern_version(command=[str(_TK_SCRIPT), *args], timeout=30, env=env)
 
 
@@ -97,7 +108,9 @@ def test_a_reservation_writes_no_ticket(folders: _Folders) -> None:
     assert folders.reservations.read(reservation.step_id) == reservation
 
 
-def test_the_titled_step_is_written_under_the_reserved_id_with_its_final_title(folders: _Folders) -> None:
+def test_the_titled_step_is_written_under_the_reserved_id_with_its_final_title(
+    folders: _Folders,
+) -> None:
     changes: list[str] = []
     reservation = folders.reserve("I want each topic to have interactive diagrams.", message_id="message-7")
     completion = ScriptedOneShotCompletion(["Add interactive diagrams to each topic"])
@@ -203,7 +216,9 @@ def test_a_refused_send_gets_no_step_even_when_titled_later(folders: _Folders) -
     assert list(folders.files.tickets_dir.iterdir()) == []
 
 
-def test_the_tracker_groups_steps_by_chat_and_reports_a_change_once(folders: _Folders) -> None:
+def test_the_tracker_groups_steps_by_chat_and_reports_a_change_once(
+    folders: _Folders,
+) -> None:
     changes: list[str] = []
     folders.tracker.set_change_callback(lambda: changes.append("changed"))
     first = folders.reserve("Add notes")
@@ -219,7 +234,9 @@ def test_the_tracker_groups_steps_by_chat_and_reports_a_change_once(folders: _Fo
     assert changes == ["changed"]
 
 
-def test_steps_the_agent_declared_itself_are_not_message_steps(folders: _Folders) -> None:
+def test_steps_the_agent_declared_itself_are_not_message_steps(
+    folders: _Folders,
+) -> None:
     folders.run_tk("create", "--step", "Check it all works")
 
     assert folders.files.read_all() == ()
@@ -242,7 +259,9 @@ def test_parse_generated_title_reads_none_and_rejects_several_lines() -> None:
 
 def test_a_slash_command_gets_no_reservation(folders: _Folders) -> None:
     steps = MessageSteps(
-        files=folders.files, reservations=folders.reservations, writer=folders.writer(ScriptedOneShotCompletion([]))
+        files=folders.files,
+        reservations=folders.reservations,
+        writer=folders.writer(ScriptedOneShotCompletion([])),
     )
 
     assert steps.on_message_sent(_CHAT_ID, "message-16", "/compact") is None
@@ -290,7 +309,11 @@ class _WaitHookRun(threading.Thread):
             env=self.env,
             stdin_bytes=self.payload.encode(),
         )
-        self.returncode, self.stdout, self.stderr = finished.returncode, finished.stdout, finished.stderr
+        self.returncode, self.stdout, self.stderr = (
+            finished.returncode,
+            finished.stdout,
+            finished.stderr,
+        )
 
 
 def _start_through_the_wait_hook(folders: _Folders, step_id: str) -> _WaitHookRun:
@@ -300,7 +323,9 @@ def _start_through_the_wait_hook(folders: _Folders, step_id: str) -> _WaitHookRu
 
 
 def _title_in_background(
-    folders: _Folders, completion: OneShotCompletion, reservation: MessageStepReservation
+    folders: _Folders,
+    completion: OneShotCompletion,
+    reservation: MessageStepReservation,
 ) -> threading.Thread:
     thread = threading.Thread(target=folders.writer(completion).consider, args=(reservation,), daemon=True)
     thread.start()
@@ -326,7 +351,9 @@ def test_a_start_before_the_title_arrives_waits_for_the_step(folders: _Folders) 
     assert started is not None and started.status is MessageStepStatus.IN_PROGRESS
 
 
-def test_a_start_waiting_on_a_step_that_could_not_be_created_fails(folders: _Folders) -> None:
+def test_a_start_waiting_on_a_step_that_could_not_be_created_fails(
+    folders: _Folders,
+) -> None:
     reservation = folders.reserve("Add a dark mode")
     completion = _HeldCompletion([OneShotCompletionError("claude -p exited 1")] * (TITLE_CALL_RETRY_COUNT + 1))
     writer_thread = _title_in_background(folders, completion, reservation)
@@ -340,7 +367,9 @@ def test_a_start_waiting_on_a_step_that_could_not_be_created_fails(folders: _Fol
     assert "could not be created" in hook_thread.stderr
 
 
-def test_a_start_on_a_thanks_sent_while_busy_is_answered_not_a_task(folders: _Folders) -> None:
+def test_a_start_on_a_thanks_sent_while_busy_is_answered_not_a_task(
+    folders: _Folders,
+) -> None:
     reservation = folders.reserve("thanks!")
     completion = _HeldCompletion(["NONE"])
     writer_thread = _title_in_background(folders, completion, reservation)
@@ -358,7 +387,9 @@ def test_a_start_on_a_thanks_sent_while_busy_is_answered_not_a_task(folders: _Fo
 
 def test_a_report_a_program_posted_gets_no_reservation(folders: _Folders) -> None:
     steps = MessageSteps(
-        files=folders.files, reservations=folders.reservations, writer=folders.writer(ScriptedOneShotCompletion([]))
+        files=folders.files,
+        reservations=folders.reservations,
+        writer=folders.writer(ScriptedOneShotCompletion([])),
     )
     report = (
         "<background-task-report>\n<summary>Topic Explainer change checks (exit code 1)</summary>\n"
@@ -367,3 +398,57 @@ def test_a_report_a_program_posted_gets_no_reservation(folders: _Folders) -> Non
 
     assert steps.on_message_sent(_CHAT_ID, "message-17", report) is None
     assert not folders.reservations.root.exists()
+
+
+def test_a_message_with_its_own_headings_reads_back_verbatim_after_the_agent_closes_its_step(
+    folders: _Folders,
+) -> None:
+    message = "Restructure the page:\n## Layout\nput a summary box at the top\n## Details\nthen the details"
+    reservation = folders.reserve(message)
+    folders.writer(ScriptedOneShotCompletion(["Restructure the page with a summary box"])).consider(reservation)
+
+    folders.run_tk("close", reservation.step_id, "Moved the summary box to the top")
+    step = folders.step(reservation.step_id)
+
+    assert step is not None
+    assert step.message_text == message
+    assert step.summary == "Moved the summary box to the top"
+
+
+class _BrokenCompletion(OneShotCompletion):
+    """Raises an error no title call is expected to raise."""
+
+    def complete(self, account_dir: Path, system_prompt: str, prompt: str) -> str:
+        raise RuntimeError("unexpected")
+
+
+def test_an_unexpected_error_while_titling_settles_the_id_as_failed(
+    folders: _Folders,
+) -> None:
+    reservation = folders.reserve("Add a dark mode")
+    writer = folders.writer(_BrokenCompletion())
+
+    with pytest.raises(RuntimeError):
+        writer._title_and_write(reservation)
+
+    assert folders.reservations.read(reservation.step_id) is None
+    assert folders.outcome_of(reservation.step_id) is MessageStepOutcome.FAILED
+
+
+def test_the_agent_hook_reads_the_same_records_the_chat_writes() -> None:
+    spec = importlib.util.spec_from_file_location("agent_message_steps_for_chat_tests", _HOOK_SCRIPT)
+    assert spec is not None and spec.loader is not None
+    hook = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(hook)
+
+    assert (hook.MESSAGE_STEP_TAG, hook.MESSAGE_REF_PREFIX, hook.SETTLED_DIRNAME) == (
+        MESSAGE_STEP_TAG,
+        MESSAGE_REF_PREFIX,
+        SETTLED_DIRNAME,
+    )
+    assert hook.DEFAULT_RESERVATIONS_DIR.name == MESSAGE_STEP_RESERVATIONS_DIRNAME
+    assert (hook.OUTCOME_NOT_A_TASK, hook.OUTCOME_FAILED) == (
+        MessageStepOutcome.NOT_A_TASK.value,
+        MessageStepOutcome.FAILED.value,
+    )
+    assert hook.MAX_WAIT_SECONDS > TITLE_CALL_TIMEOUT_SECONDS * (TITLE_CALL_RETRY_COUNT + 1)

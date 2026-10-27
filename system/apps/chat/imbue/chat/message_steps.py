@@ -20,38 +20,28 @@ import re
 import secrets
 import string
 import threading
-from collections.abc import Callable
-from collections.abc import Sequence
-from concurrent.futures import Executor
-from concurrent.futures import Future
+from collections.abc import Callable, Sequence
+from concurrent.futures import Executor, Future
 from concurrent.futures import TimeoutError as FutureTimeoutError
-from datetime import datetime
-from datetime import timezone
+from datetime import datetime, timezone
 from enum import auto
 from pathlib import Path
 from typing import Final
 
-from loguru import logger
-from pydantic import Field
-from pydantic import PrivateAttr
-from pydantic import ValidationError
-
-from imbue.chat.chat_naming import DaemonThreadExecutor
-from imbue.chat.chat_naming import framed_message_opening
+from imbue.chat.chat_naming import DaemonThreadExecutor, framed_message_opening
 from imbue.chat.harnesses.agent_file_poll import AgentFilePoller
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import classify_user_message
-from imbue.chat.harnesses.one_shot import OneShotCompletion
-from imbue.chat.harnesses.one_shot import OneShotCompletionError
-from imbue.chat.models import ChatAccountBinding
-from imbue.chat.models import MessageStepSnapshot
-from imbue.chat.models import MessageStepStatus
+from imbue.chat.harnesses.one_shot import OneShotCompletion, OneShotCompletionError
+from imbue.chat.models import ChatAccountBinding, MessageStepSnapshot, MessageStepStatus
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from loguru import logger
+from pydantic import Field, PrivateAttr, ValidationError
 
 # The tag that marks a step as a message's, the prefix of the external ref carrying its message id, and the folders
 # of the reservations and of their outcomes. The agent hooks read the same (``system/scripts/agent_message_steps.py``).
@@ -64,8 +54,8 @@ _RECORD_SUFFIX: Final[str] = ".json"
 # A failed title call (an error, an unusable answer, or no answer within the timeout) is tried again this many times
 # before the message is left without a step.
 TITLE_CALL_RETRY_COUNT: Final[int] = 2
-# Just above the slowest title call measured (3.9 s, Haiku through ``claude -p``). A call past it is left to finish
-# on its own, and its answer is dropped.
+# Comfortably above how long a title call normally takes (a few seconds). A call past it is left to finish on its own,
+# and its answer is dropped.
 TITLE_CALL_TIMEOUT_SECONDS: Final[float] = 10.0
 _MAX_GENERATED_TITLE_CHARACTERS: Final[int] = 100
 _NOT_A_TASK_ANSWER: Final[str] = "NONE"
@@ -138,13 +128,19 @@ class MessageStep(FrozenModel):
     """One message's step as its tk record holds it."""
 
     step_id: str = Field(description="The step's tk id")
-    chat_id: ChatId = Field(description="The chat the message was sent to (the step's creator)")
+    chat_id: ChatId = Field(
+        description="The chat the message was sent to (the step's creator)"
+    )
     message_id: str = Field(description="The send-time id of the message")
     message_text: str = Field(description="The message, verbatim")
     title: str = Field(description="The step's title, as the model wrote it")
     status: MessageStepStatus = Field(description="The step's tk status")
-    summary: str = Field(description="The agent's one-line summary when it closed the step; '' before")
-    created_at: str = Field(description="When the step was written (ISO 8601, UTC), once the model titled it")
+    summary: str = Field(
+        description="The agent's one-line summary when it closed the step; '' before"
+    )
+    created_at: str = Field(
+        description="When the step was written (ISO 8601, UTC), once the model titled it"
+    )
 
 
 class MessageStepReservation(FrozenModel):
@@ -154,7 +150,9 @@ class MessageStepReservation(FrozenModel):
     chat_id: ChatId = Field(description="The chat the message was sent to")
     message_id: str = Field(description="The send-time id of the message")
     message_text: str = Field(description="The message, verbatim")
-    reserved_at: str = Field(description="When the id was reserved (ISO 8601, UTC), the moment the message was sent")
+    reserved_at: str = Field(
+        description="When the id was reserved (ISO 8601, UTC), the moment the message was sent"
+    )
 
 
 @pure
@@ -189,7 +187,9 @@ def message_step_title_prompt(message: str) -> str:
 class GeneratedTitle(FrozenModel):
     """What the model's answer says about a message: its task title, or that it is not a task."""
 
-    title: str | None = Field(description="The task title; None when the message is not a task")
+    title: str | None = Field(
+        description="The task title; None when the message is not a task"
+    )
 
 
 @pure
@@ -218,7 +218,9 @@ def tk_timestamp(moment: datetime) -> str:
 
 
 @pure
-def message_step_record_text(reservation: MessageStepReservation, title: str, created_at: str) -> str:
+def message_step_record_text(
+    reservation: MessageStepReservation, title: str, created_at: str
+) -> str:
     """The tk record of a reserved message's step: the fields and layout ``tk create --step`` writes."""
     return "\n".join(
         [
@@ -259,17 +261,6 @@ def _front_matter_fields(lines: Sequence[str]) -> tuple[dict[str, str], int] | N
 
 
 @pure
-def _section_text(lines: Sequence[str]) -> str:
-    """The lines up to the next ``## `` heading, joined and stripped."""
-    kept: list[str] = []
-    for line in lines:
-        if line.startswith("## "):
-            break
-        kept.append(line)
-    return "\n".join(kept).strip()
-
-
-@pure
 def parse_message_step(text: str) -> MessageStep | None:
     """The message step a tk record describes, or None for any record that is not one."""
     lines = text.splitlines()
@@ -279,14 +270,29 @@ def parse_message_step(text: str) -> MessageStep | None:
     fields, body_start = parsed
     reference = fields.get("external-ref", "")
     tags = tuple(tag.strip() for tag in fields.get("tags", "").strip("[]").split(","))
-    if fields.get("step") != "true" or MESSAGE_STEP_TAG not in tags or not reference.startswith(MESSAGE_REF_PREFIX):
+    if (
+        fields.get("step") != "true"
+        or MESSAGE_STEP_TAG not in tags
+        or not reference.startswith(MESSAGE_REF_PREFIX)
+    ):
         return None
     body = lines[body_start:]
-    title_index = next((index for index, line in enumerate(body) if line.startswith("# ")), None)
+    title_index = next(
+        (index for index, line in enumerate(body) if line.startswith("# ")), None
+    )
     if title_index is None:
         return None
     after_title = body[title_index + 1 :]
-    summary_index = next((index for index, line in enumerate(after_title) if line.strip() == _SUMMARY_HEADING), None)
+    # tk appends the close summary as the record's last section, so the last such heading is it, whatever the
+    # message itself contains.
+    summary_index = max(
+        (
+            index
+            for index, line in enumerate(after_title)
+            if line.strip() == _SUMMARY_HEADING
+        ),
+        default=None,
+    )
     try:
         status = MessageStepStatus(fields.get("status", ""))
     except ValueError:
@@ -295,10 +301,12 @@ def parse_message_step(text: str) -> MessageStep | None:
         step_id=fields.get("id", ""),
         chat_id=ChatId(fields.get("agent", "")),
         message_id=reference[len(MESSAGE_REF_PREFIX) :],
-        message_text=_section_text(after_title),
+        message_text="\n".join(after_title[:summary_index]).strip(),
         title=body[title_index][2:].strip(),
         status=status,
-        summary="" if summary_index is None else _section_text(after_title[summary_index + 1 :]),
+        summary=""
+        if summary_index is None
+        else "\n".join(after_title[summary_index + 1 :]).strip(),
         created_at=fields.get("created", ""),
     )
 
@@ -313,15 +321,22 @@ def _write_text_atomically(path: Path, text: str) -> None:
 class MessageStepFiles(MutableModel):
     """Writes and reads the message steps in the tickets folder."""
 
-    tickets_dir: Path = Field(frozen=True, description="The tickets folder tk reads and writes (its TICKETS_DIR)")
+    tickets_dir: Path = Field(
+        frozen=True,
+        description="The tickets folder tk reads and writes (its TICKETS_DIR)",
+    )
 
     # Parsed records by file name, with the (mtime_ns, size) they were parsed at, so a reread parses only what changed.
-    _parsed_by_name: dict[str, tuple[tuple[int, int], MessageStep | None]] = PrivateAttr(default_factory=dict)
+    _parsed_by_name: dict[str, tuple[tuple[int, int], MessageStep | None]] = (
+        PrivateAttr(default_factory=dict)
+    )
     _cache_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
     def write_step(self, reservation: MessageStepReservation, title: str) -> None:
         self.tickets_dir.mkdir(parents=True, exist_ok=True)
-        text = message_step_record_text(reservation, title, tk_timestamp(datetime.now(timezone.utc)))
+        text = message_step_record_text(
+            reservation, title, tk_timestamp(datetime.now(timezone.utc))
+        )
         _write_text_atomically(self.tickets_dir / f"{reservation.step_id}.md", text)
 
     def is_id_taken(self, step_id: str) -> bool:
@@ -332,7 +347,9 @@ class MessageStepFiles(MutableModel):
         try:
             paths = sorted(self.tickets_dir.glob("*-step-*.md"))
         except OSError as e:
-            logger.warning("Could not list the tickets folder {}: {}", self.tickets_dir, e)
+            logger.warning(
+                "Could not list the tickets folder {}: {}", self.tickets_dir, e
+            )
             return ()
         steps: list[MessageStep] = []
         with self._cache_lock:
@@ -361,8 +378,14 @@ class MessageStepFiles(MutableModel):
 class MessageStepReservations(MutableModel):
     """The step ids reserved for sent messages whose steps are not written yet, one small JSON file each."""
 
-    root: Path = Field(frozen=True, description="The folder holding one reservation file per reserved id")
-    id_prefix: str = Field(frozen=True, description="The prefix of the ids reserved, as tk would mint them here")
+    root: Path = Field(
+        frozen=True,
+        description="The folder holding one reservation file per reserved id",
+    )
+    id_prefix: str = Field(
+        frozen=True,
+        description="The prefix of the ids reserved, as tk would mint them here",
+    )
 
     # Held across a reservation's last read and its end, so a refused send's release and the step's writing never
     # both go ahead.
@@ -373,7 +396,11 @@ class MessageStepReservations(MutableModel):
         return self._lock
 
     def reserve(
-        self, chat_id: ChatId, message_id: str, message_text: str, is_id_taken: Callable[[str], bool]
+        self,
+        chat_id: ChatId,
+        message_id: str,
+        message_text: str,
+        is_id_taken: Callable[[str], bool],
     ) -> MessageStepReservation:
         """Reserve a fresh step id for a message; ``is_id_taken`` says which ids the tickets folder already holds."""
         self.root.mkdir(parents=True, exist_ok=True)
@@ -385,16 +412,22 @@ class MessageStepReservations(MutableModel):
                 message_text=message_text,
                 reserved_at=tk_timestamp(datetime.now(timezone.utc)),
             )
-            _write_text_atomically(self._path_of(reservation.step_id), reservation.model_dump_json())
+            _write_text_atomically(
+                self._path_of(reservation.step_id), reservation.model_dump_json()
+            )
         return reservation
 
     def read(self, step_id: str) -> MessageStepReservation | None:
         try:
-            return MessageStepReservation.model_validate_json(self._path_of(step_id).read_text(encoding="utf-8"))
+            return MessageStepReservation.model_validate_json(
+                self._path_of(step_id).read_text(encoding="utf-8")
+            )
         except FileNotFoundError:
             return None
         except ValidationError as e:
-            logger.error("Ignoring an unreadable message step reservation {}: {}", step_id, e)
+            logger.error(
+                "Ignoring an unreadable message step reservation {}: {}", step_id, e
+            )
             return None
 
     def release_locked(self, step_id: str) -> None:
@@ -415,7 +448,10 @@ class MessageStepReservations(MutableModel):
 
     def _fresh_step_id(self, is_id_taken: Callable[[str], bool]) -> str:
         for _ in range(_MAX_STEP_ID_DRAWS):
-            suffix = "".join(secrets.choice(_STEP_ID_HASH_ALPHABET) for _ in range(_STEP_ID_HASH_LENGTH))
+            suffix = "".join(
+                secrets.choice(_STEP_ID_HASH_ALPHABET)
+                for _ in range(_STEP_ID_HASH_LENGTH)
+            )
             step_id = f"{self.id_prefix}-step-{suffix}"
             if not is_id_taken(step_id) and not self._path_of(step_id).exists():
                 return step_id
@@ -436,7 +472,9 @@ class MessageStepTracker(MutableModel):
 
     files: MessageStepFiles = Field(frozen=True, description="The steps' records")
 
-    _steps_by_chat: dict[ChatId, tuple[MessageStep, ...]] = PrivateAttr(default_factory=dict)
+    _steps_by_chat: dict[ChatId, tuple[MessageStep, ...]] = PrivateAttr(
+        default_factory=dict
+    )
     _on_change: Callable[[], None] = PrivateAttr(default_factory=lambda: _ignore_change)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     # Held across one read of the folder and the store of what it read, so a slow read cannot overwrite a newer one.
@@ -466,7 +504,10 @@ class MessageStepTracker(MutableModel):
         with self._read_lock:
             steps_by_chat: dict[ChatId, tuple[MessageStep, ...]] = {}
             for step in self.files.read_all():
-                steps_by_chat[step.chat_id] = (*steps_by_chat.get(step.chat_id, ()), step)
+                steps_by_chat[step.chat_id] = (
+                    *steps_by_chat.get(step.chat_id, ()),
+                    step,
+                )
             with self._lock:
                 if steps_by_chat == self._steps_by_chat:
                     return
@@ -484,19 +525,31 @@ class MessageStepWriter(MutableModel):
     model_config = {"arbitrary_types_allowed": True}
 
     files: MessageStepFiles = Field(frozen=True, description="The steps' records")
-    reservations: MessageStepReservations = Field(frozen=True, description="The ids reserved for unwritten steps")
+    reservations: MessageStepReservations = Field(
+        frozen=True, description="The ids reserved for unwritten steps"
+    )
     resolve_chat_account_binding: Callable[[ChatId], ChatAccountBinding | None] = Field(
-        frozen=True, description="The harness and account a chat runs on, whose model answers"
+        frozen=True,
+        description="The harness and account a chat runs on, whose model answers",
     )
-    build_one_shot_completion: Callable[[HarnessType], OneShotCompletion | None] = Field(
-        frozen=True, description="The harness's way to ask one question outside the chat, if it has one"
+    build_one_shot_completion: Callable[[HarnessType], OneShotCompletion | None] = (
+        Field(
+            frozen=True,
+            description="The harness's way to ask one question outside the chat, if it has one",
+        )
     )
-    on_change: Callable[[], None] = Field(frozen=True, description="Runs after a step was written")
+    on_change: Callable[[], None] = Field(
+        frozen=True, description="Runs after a step was written"
+    )
     call_timeout_seconds: float = Field(
-        default=TITLE_CALL_TIMEOUT_SECONDS, frozen=True, description="See TITLE_CALL_TIMEOUT_SECONDS"
+        default=TITLE_CALL_TIMEOUT_SECONDS,
+        frozen=True,
+        description="See TITLE_CALL_TIMEOUT_SECONDS",
     )
     executor: Executor = Field(
-        default_factory=DaemonThreadExecutor, frozen=True, description="Where titling runs, off the request thread"
+        default_factory=DaemonThreadExecutor,
+        frozen=True,
+        description="Where titling runs, off the request thread",
     )
     call_executor: Executor = Field(
         default_factory=DaemonThreadExecutor,
@@ -506,37 +559,63 @@ class MessageStepWriter(MutableModel):
 
     def consider(self, reservation: MessageStepReservation) -> None:
         future = self.executor.submit(self._title_and_write, reservation)
-        future.add_done_callback(lambda done: _log_writing_failure(reservation.step_id, done))
+        future.add_done_callback(
+            lambda done: _log_writing_failure(reservation.step_id, done)
+        )
 
     def _title_and_write(self, reservation: MessageStepReservation) -> None:
-        generated = self._generated_title(reservation)
+        generated: GeneratedTitle | None = None
+        try:
+            generated = self._generated_title(reservation)
+        finally:
+            # Settled even when titling raised, so the agent's tk command on the id never waits out its limit.
+            self._finish(reservation, generated)
+
+    def _finish(
+        self, reservation: MessageStepReservation, generated: GeneratedTitle | None
+    ) -> None:
         with self.reservations.lock:
             # A refused send took its reservation back: the agent never got the message.
             if self.reservations.read(reservation.step_id) is None:
                 return
             if generated is None:
-                self.reservations.settle_locked(reservation.step_id, MessageStepOutcome.FAILED)
+                self.reservations.settle_locked(
+                    reservation.step_id, MessageStepOutcome.FAILED
+                )
             elif generated.title is None:
-                logger.info("No step for message {}: the model judged it not a task", reservation.message_id)
-                self.reservations.settle_locked(reservation.step_id, MessageStepOutcome.NOT_A_TASK)
+                logger.info(
+                    "No step for message {}: the model judged it not a task",
+                    reservation.message_id,
+                )
+                self.reservations.settle_locked(
+                    reservation.step_id, MessageStepOutcome.NOT_A_TASK
+                )
             else:
                 self.files.write_step(reservation, generated.title)
                 self.reservations.release_locked(reservation.step_id)
         if generated is not None and generated.title is not None:
             self.on_change()
 
-    def _generated_title(self, reservation: MessageStepReservation) -> GeneratedTitle | None:
+    def _generated_title(
+        self, reservation: MessageStepReservation
+    ) -> GeneratedTitle | None:
         """The model's answer, or None once every attempt failed (logged as an error)."""
         binding = self.resolve_chat_account_binding(reservation.chat_id)
-        completion = None if binding is None else self.build_one_shot_completion(binding.harness)
+        completion = (
+            None if binding is None else self.build_one_shot_completion(binding.harness)
+        )
         if binding is None or completion is None:
             logger.error(
-                "No step for message {}: chat {} has no model to title it", reservation.message_id, reservation.chat_id
+                "No step for message {}: chat {} has no model to title it",
+                reservation.message_id,
+                reservation.chat_id,
             )
             return None
         attempt_count = TITLE_CALL_RETRY_COUNT + 1
         for attempt in range(1, attempt_count + 1):
-            outcome = self._call_once(completion, binding.account_dir, reservation.message_text)
+            outcome = self._call_once(
+                completion, binding.account_dir, reservation.message_text
+            )
             if isinstance(outcome, GeneratedTitle):
                 return outcome
             log = logger.error if attempt == attempt_count else logger.warning
@@ -548,14 +627,21 @@ class MessageStepWriter(MutableModel):
                 outcome,
             )
         logger.error(
-            "No step for message {} in chat {}: every title call failed", reservation.message_id, reservation.chat_id
+            "No step for message {} in chat {}: every title call failed",
+            reservation.message_id,
+            reservation.chat_id,
         )
         return None
 
-    def _call_once(self, completion: OneShotCompletion, account_dir: Path, message_text: str) -> GeneratedTitle | str:
+    def _call_once(
+        self, completion: OneShotCompletion, account_dir: Path, message_text: str
+    ) -> GeneratedTitle | str:
         """One title call: its parsed answer, or what made it fail."""
         answer_future: Future[str | OneShotCompletionError] = self.call_executor.submit(
-            _answer_or_failure, completion, account_dir, message_step_title_prompt(message_text)
+            _answer_or_failure,
+            completion,
+            account_dir,
+            message_step_title_prompt(message_text),
         )
         try:
             answer = answer_future.result(timeout=self.call_timeout_seconds)
@@ -567,11 +653,15 @@ class MessageStepWriter(MutableModel):
         return f"the answer {answer!r} is no title" if generated is None else generated
 
 
-def _answer_or_failure(completion: OneShotCompletion, account_dir: Path, prompt: str) -> str | OneShotCompletionError:
+def _answer_or_failure(
+    completion: OneShotCompletion, account_dir: Path, prompt: str
+) -> str | OneShotCompletionError:
     """The model's answer, or the failure it raised: returned, since a call the writer stopped waiting for has nobody
     left to raise to."""
     try:
-        return completion.complete(account_dir, MESSAGE_STEP_TITLE_SYSTEM_PROMPT, prompt)
+        return completion.complete(
+            account_dir, MESSAGE_STEP_TITLE_SYSTEM_PROMPT, prompt
+        )
     except OneShotCompletionError as e:
         return e
 
@@ -591,15 +681,27 @@ class MessageSteps(MutableModel):
     model_config = {"arbitrary_types_allowed": True}
 
     files: MessageStepFiles = Field(frozen=True, description="The steps' records")
-    reservations: MessageStepReservations = Field(frozen=True, description="The ids reserved for unwritten steps")
-    writer: MessageStepWriter = Field(frozen=True, description="Titles each message and writes its step")
+    reservations: MessageStepReservations = Field(
+        frozen=True, description="The ids reserved for unwritten steps"
+    )
+    writer: MessageStepWriter = Field(
+        frozen=True, description="Titles each message and writes its step"
+    )
 
-    def on_message_sent(self, chat_id: ChatId, message_id: str, message: str) -> str | None:
+    def on_message_sent(
+        self, chat_id: ChatId, message_id: str, message: str
+    ) -> str | None:
         """Reserve a step id for a message about to be delivered and title it in the background; the id, or None for
         a message with no words, a slash command, or one a program posted rather than the user."""
-        if not message.strip() or message.lstrip().startswith("/") or not is_users_own_message(message):
+        if (
+            not message.strip()
+            or message.lstrip().startswith("/")
+            or not is_users_own_message(message)
+        ):
             return None
-        reservation = self.reservations.reserve(chat_id, message_id, message, self.files.is_id_taken)
+        reservation = self.reservations.reserve(
+            chat_id, message_id, message, self.files.is_id_taken
+        )
         self.writer.consider(reservation)
         return reservation.step_id
 
