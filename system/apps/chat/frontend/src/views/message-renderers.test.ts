@@ -11,6 +11,7 @@ import {
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { setBlockExpanded } from "./expansion-state";
 import { resetResendStatesForTesting } from "./auth-recovery";
+import { getOutgoingMessages } from "../models/OutgoingMessages";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import {
   closeProviderChooser,
@@ -787,6 +788,17 @@ describe("the auth-error note's switch link", () => {
         "Summarize the deploy thread",
         expect.any(String),
       );
+    });
+
+    it("drops the sending bubble of a resend the chat app took back", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      transcript.sendMessage.mockResolvedValueOnce("withdrawn");
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      const bubblesBefore = getOutgoingMessages("chat-1").length;
+      findButton(children, "Send your message again")!.attrs.onclick();
+      expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore + 1);
+      await vi.waitFor(() => expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore));
     });
 
     it("offers nothing to send once the user has written since", () => {

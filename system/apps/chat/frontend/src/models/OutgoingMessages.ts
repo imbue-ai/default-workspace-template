@@ -23,6 +23,7 @@ import m from "mithril";
 
 import { addChatsUpdatedListener, isHandoffCancellable } from "./Chats";
 import type { DisplayDecision, HandoffState } from "./Chats";
+import type { SendStatus } from "./Response";
 
 export interface OutgoingMessage {
   id: string;
@@ -131,6 +132,15 @@ export function clearOutgoing(chatId: string, ids: readonly string[]): void {
  *  send; its text is returned to the composer by the caller). */
 export function dropOutgoing(chatId: string, id: string): void {
   retainOutgoing(chatId, (entry) => entry.id !== id);
+}
+
+/** Drop the "Sending…" bubble of a send no transcript turn will retire: a /compact the server ran as a
+ *  compaction (its own status and chips show what the send did), or a message Stop took back while the
+ *  agent came up (it is in the composer again). */
+export function dropOutgoingNoTurnWillRetire(chatId: string, outgoingId: string, status: SendStatus | null): void {
+  if (status === "compaction_requested" || status === "withdrawn") {
+    dropOutgoing(chatId, outgoingId);
+  }
 }
 
 function removeOldest(chatId: string): void {

@@ -15,7 +15,6 @@ import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { stageElementReferences } from "../models/elementReferences";
 import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
-import type { SendStatus } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { addModelChoiceFailureListener } from "../models/ModelSettings";
 import {
@@ -27,7 +26,13 @@ import {
 } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
 import { beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
-import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
+import {
+  addOutgoing,
+  clearOutgoing,
+  dropOutgoing,
+  dropOutgoingNoTurnWillRetire,
+  getOutgoingMessages,
+} from "../models/OutgoingMessages";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
@@ -110,15 +115,6 @@ const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
   "nothing_to_compact",
   "compact_unavailable",
 ]);
-
-/** Drop the "Sending…" bubble of a send no transcript turn will retire: a /compact the server ran as a
- *  compaction (its own status and chips show what the send did), or a message Stop took back while the
- *  agent came up (it is in the composer again). */
-function dropOutgoingNoTurnWillRetire(chatId: string, outgoingId: string, status: SendStatus | null): void {
-  if (status === "compaction_requested" || status === "withdrawn") {
-    dropOutgoing(chatId, outgoingId);
-  }
-}
 
 function sendFailureKind(sendError: unknown): unknown {
   return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;

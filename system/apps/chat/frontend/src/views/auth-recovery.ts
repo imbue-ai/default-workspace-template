@@ -10,7 +10,7 @@
 
 import m from "mithril";
 import { getChatById } from "../models/Chats";
-import { addOutgoing, dropOutgoing } from "../models/OutgoingMessages";
+import { addOutgoing, dropOutgoing, dropOutgoingNoTurnWillRetire } from "../models/OutgoingMessages";
 import { accountForAgent } from "../models/Providers";
 import { mintMessageId, sendMessage } from "../models/Response";
 import type { AssistantMessageEvent, TranscriptEvent, UserMessageEvent } from "../models/Response";
@@ -63,7 +63,8 @@ export async function sendAgain(chatId: string, failedEventId: string, prompt: U
   resendStates.set(failedEventId, "sending");
   m.redraw();
   try {
-    await sendMessage(chatId, content, messageId);
+    const status = await sendMessage(chatId, content, messageId);
+    dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
     resendStates.set(failedEventId, "sent");
   } catch {
     dropOutgoing(chatId, outgoingId);
