@@ -96,6 +96,37 @@ def test_the_shell_is_installed_until_playwright_marks_it_complete(
     assert link.resolve() == shell.resolve()
 
 
+def test_a_failed_install_leaves_no_link_to_the_incomplete_shell(
+    tmp_path: Path,
+) -> None:
+    browsers_dir = tmp_path / "playwright-test-browsers"
+    shell = (
+        browsers_dir / "chromium_headless_shell-1" / "chrome-linux" / "headless_shell"
+    )
+    link = browsers_dir / "headless-shell"
+    # An earlier install got as far as the executable and the link, but never wrote its marker.
+    shell.parent.mkdir(parents=True)
+    shell.write_text("")
+    shell.chmod(0o755)
+    link.symlink_to(shell)
+    env = _put_on_path(tmp_path / "bin", "uv", "exit 1\n")
+
+    result = _run_unit_function(
+        "_install_test_headless_shell",
+        {
+            "REPO_ROOT": tmp_path,
+            "_TEST_BROWSERS_DIR": browsers_dir,
+            "_TEST_HEADLESS_SHELL_LINK": link,
+            "_PW_TEST_HEADLESS_SHELL": shell,
+        },
+        env=env,
+    )
+
+    assert result.returncode != 0
+    assert "install FAILED" in result.stdout
+    assert not link.is_symlink()
+
+
 def test_the_playwright_paths_resolve_from_the_locked_playwright(
     tmp_path: Path,
 ) -> None:

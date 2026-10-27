@@ -303,8 +303,14 @@ _install_test_headless_shell() {
         return 1
     fi
     # Playwright writes this marker only once the build is fully extracted, so an install
-    # interrupted mid-extract (its executable may already exist) is redone.
+    # interrupted mid-extract (its executable may already exist) is redone. The link comes
+    # down first so a failed install leaves the tests on Fortress, not on a partial or
+    # previous build.
     if [ ! -f "$(dirname "$(dirname "$shell_path")")/INSTALLATION_COMPLETE" ]; then
+        if ! rm -f "$_TEST_HEADLESS_SHELL_LINK"; then
+            _log "test-shell: could not remove $_TEST_HEADLESS_SHELL_LINK before reinstalling; tests may launch an incomplete build"
+            return 1
+        fi
         _log "test-shell: installing Playwright's headless shell into $_TEST_BROWSERS_DIR"
         if ! (cd "$REPO_ROOT" && PLAYWRIGHT_BROWSERS_PATH="$_TEST_BROWSERS_DIR" uv run python -m playwright install --only-shell chromium); then
             _log "test-shell: install FAILED; tests use Fortress until the next converge"
