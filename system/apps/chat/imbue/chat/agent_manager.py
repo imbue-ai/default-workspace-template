@@ -1014,7 +1014,7 @@ class HandoffCapabilities(FrozenModel):
 
     model_config = {"arbitrary_types_allowed": True}
 
-    # The agent's watcher, built if need be: the summary wait reads its transcript through it.
+    # The agent's watcher, built if need be: the summary wait and the re-auth resend read its transcript through it.
     ensure_watcher: Callable[[AgentInfo], TranscriptReader]
     # The stop button's path: interrupt the turn and return the queue as one block.
     drain_to_composer: Callable[[AgentInfo], str]
