@@ -1,8 +1,6 @@
 """grok's session: a send holds the message for the flush worker and never types into grok."""
 
 import threading
-from datetime import datetime
-from datetime import timezone
 from typing import Final
 
 from loguru import logger
@@ -13,6 +11,7 @@ from imbue.chat.harnesses.grok.queue_tracker import SEND_REJECTING_VERDICTS
 from imbue.chat.harnesses.grok.queue_tracker import get_tracker
 from imbue.chat.harnesses.grok.queue_tracker import session_token
 from imbue.chat.harnesses.grok.turn_state import is_hold_required
+from imbue.chat.harnesses.queued_set import now_enqueue_timestamp
 from imbue.chat.harnesses.sending_registry import SendingRegistry
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
@@ -59,7 +58,7 @@ class GrokHarnessSession(FileHarnessSession):
         queue = self._queue()
         queue.set_session(session_token(self._deps.state_dir))
         is_turn_open = is_hold_required(self._deps.state_dir)
-        queued_id = queue.enqueue(text, _now_iso(), is_turn_open=is_turn_open)
+        queued_id = queue.enqueue(text, now_enqueue_timestamp(), is_turn_open=is_turn_open)
         self._deps.notify_agents_changed()
         logger.debug("grok: holding message {} for the flush worker", message_id)
         if is_turn_open:
@@ -79,7 +78,3 @@ class GrokHarnessSession(FileHarnessSession):
 
     def _queue(self) -> GrokQueueTracker:
         return get_tracker(self._deps.state_dir)
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

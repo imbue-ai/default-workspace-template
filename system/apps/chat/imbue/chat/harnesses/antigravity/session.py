@@ -12,8 +12,6 @@ delivers it when no turn is open. See :meth:`send` and
 """
 
 import threading
-from datetime import datetime
-from datetime import timezone
 
 from loguru import logger
 
@@ -26,6 +24,7 @@ from imbue.chat.harnesses.antigravity.turn_state import get_turn_state
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import match_option
 from imbue.chat.harnesses.model import read_model_identity
+from imbue.chat.harnesses.queued_set import now_enqueue_timestamp
 from imbue.chat.harnesses.sending_registry import SendingRegistry
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
@@ -71,7 +70,7 @@ class AntigravityHarnessSession(FileHarnessSession):
         # queued chip. Reporting Queued there tells the user a message is waiting when it is
         # already on its way, and flashes the shoulder-tap button on every ordinary send.
         is_turn_open = get_turn_state(self._deps.state_dir.name).is_hold_required(self._deps.state_dir)
-        self._queue().enqueue(text, _now_iso(), is_turn_open=is_turn_open)
+        self._queue().enqueue(text, now_enqueue_timestamp(), is_turn_open=is_turn_open)
         self._deps.notify_agents_changed()
         logger.debug("antigravity: holding a message for the flush worker ({})", message_id)
         return SendOutcome.OK
@@ -119,8 +118,3 @@ class AntigravityHarnessSession(FileHarnessSession):
         if identity is None or match_option(identity, options) is not None:
             return options
         return (*options, derived_option(identity.model_id))
-
-
-def _now_iso() -> str:
-    """The enqueue timestamp, in the same ISO/Z shape the other harnesses' entries carry."""
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
