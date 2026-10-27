@@ -1,4 +1,4 @@
-Two changes to how the main chat behaves when it moves or goes away:
+Changes to how the main chat behaves when it moves or goes away:
 
 - Making another chat the main chat no longer leaves a chat called "Main" below it. The chat that was the main chat, if it is still named "Main", is renamed to the next free "Chat N" marked as the former main chat ("Chat 7 (was: Main)"). The new list shows the new name at once. If the rename cannot be made, the chat keeps its old name. A chat you named yourself keeps its name, and the chat you make main keeps its own name too.
 
