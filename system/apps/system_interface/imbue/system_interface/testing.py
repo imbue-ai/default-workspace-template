@@ -62,13 +62,15 @@ FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
 TEST_HEADLESS_SHELL_PATH = Path("/opt/playwright-test-browsers/headless-shell")
 
 
-def pick_e2e_browser_executable() -> Path | None:
+def pick_e2e_browser_executable(is_headed: bool) -> Path | None:
     """The browser binary the e2e fixtures launch: the test headless shell, else Fortress.
 
-    None when neither is installed (CI hosts that ran ``playwright install``), leaving the
-    launch to Playwright's own managed-browser lookup.
+    A headed run (``--headed``) skips the shell, which cannot show a window. None when
+    neither is installed (CI hosts that ran ``playwright install``), leaving the launch to
+    Playwright's own managed-browser lookup.
     """
-    for candidate in (TEST_HEADLESS_SHELL_PATH, FORTRESS_CHROMIUM_PATH):
+    candidates = (FORTRESS_CHROMIUM_PATH,) if is_headed else (TEST_HEADLESS_SHELL_PATH, FORTRESS_CHROMIUM_PATH)
+    for candidate in candidates:
         if candidate.exists():
             return candidate
     return None
@@ -167,7 +169,7 @@ def is_e2e_browser_installed() -> bool:
     cache satisfies the check; with neither present the e2e tests
     skip instead of erroring at browser launch.
     """
-    if pick_e2e_browser_executable() is not None:
+    if pick_e2e_browser_executable(is_headed=False) is not None:
         return True
     env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
     if env_path:

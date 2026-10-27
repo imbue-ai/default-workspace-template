@@ -133,7 +133,7 @@ def browser_type_launch_args(pytestconfig: pytest.Config) -> dict[str, Any]:
     browser_channel = pytestconfig.getoption("--browser-channel", default=None)
     if browser_channel:
         launch_options["channel"] = browser_channel
-    elif (executable := pick_e2e_browser_executable()) is not None:
+    elif (executable := pick_e2e_browser_executable(is_headed=headed)) is not None:
         # The workspace's test headless shell, else Fortress (see
         # ``pick_e2e_browser_executable``); Playwright's own cache is empty here. An
         # explicit ``--browser-channel`` wins because Playwright rejects a launch

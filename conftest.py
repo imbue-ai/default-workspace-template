@@ -27,7 +27,14 @@ def browser_type_launch_args(
     # With neither (CI, a developer laptop) leave the launch args untouched so
     # Playwright falls through to its own managed browser. Never skip on browser
     # absence: a browser that cannot launch must fail the run loudly.
-    for executable in (TEST_HEADLESS_SHELL_PATH, FORTRESS_CHROMIUM_PATH):
+    # A headed run (`--headed`) skips the shell, which cannot show a window.
+    is_headed = browser_type_launch_args.get("headless") is False
+    candidates = (
+        (FORTRESS_CHROMIUM_PATH,)
+        if is_headed
+        else (TEST_HEADLESS_SHELL_PATH, FORTRESS_CHROMIUM_PATH)
+    )
+    for executable in candidates:
         if executable.exists():
             return {**browser_type_launch_args, "executable_path": str(executable)}
     return browser_type_launch_args
