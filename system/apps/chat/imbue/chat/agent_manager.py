@@ -2050,10 +2050,19 @@ class AgentManager:
         still on its way to the restarting agent is not seen and can go twice. The delivery is the message
         route's, which waits for the restarted agent to take input. A failure is logged: the sign-in
         itself succeeded, and the user can still send the message again.
+
+        Nothing is resent while the agent's chat is switching to another agent or account: the message
+        route holds that chat's sends for the agent it lands on, and one delivered to the agent it is
+        leaving would start a turn the switch does not account for.
         """
         capabilities = self._handoff_capabilities
         agent_info = self.get_agent_info_by_id(agent_id)
         if capabilities is None or agent_info is None:
+            return
+        with self._lock:
+            chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent_id))
+        if chat is not None and chat.transition is not None:
+            _loguru_logger.info("Not resending {}'s refused message: its chat is switching", agent_info.name)
             return
         refused = user_turns_refused_for_sign_in(
             capabilities.ensure_watcher(agent_info).get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS)

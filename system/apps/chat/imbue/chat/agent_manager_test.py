@@ -90,6 +90,7 @@ from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReade
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
+from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MAIN_CHAT_INTRODUCTION
 from imbue.chat.main_chat import MAIN_CHAT_NAME
@@ -6012,6 +6013,33 @@ def test_a_resend_sends_each_refused_message_until_one_does_not_land(
     finally:
         manager.stop()
     assert attempted == expected_attempts
+
+
+def test_a_sign_in_resends_nothing_to_a_chat_that_is_switching(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, [])
+    first, _successor = _converging_chat(manager, store, phase=HandoffPhase.FAILED, is_retiring_archived=False)
+    read_transcripts: list[str] = []
+    attempted: list[str] = []
+
+    def ensure_watcher(agent_info: AgentInfo) -> TranscriptReader:
+        read_transcripts.append(agent_info.id)
+        return _FixedTranscriptReader([_typed_turn("hi"), _agent_reply(is_auth_error=True)])
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        attempted.append(text)
+        return SendOutcome.OK
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(ensure_watcher=ensure_watcher, drain_to_composer=lambda agent_info: "", deliver=deliver)
+    )
+    try:
+        assert manager.restart_agents_on_account("acct-anthropic") == 1
+    finally:
+        manager.stop()
+    assert "start Chat-1 --restart --no-resume" in argv_log.read_text().splitlines()
+    assert (read_transcripts, attempted) == ([], [])
 
 
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(

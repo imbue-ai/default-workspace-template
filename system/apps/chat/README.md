@@ -836,7 +836,8 @@ restarts the live agents bound to the account (by the `account=<id>` label descr
 and once a restarted agent is back, the message (or messages) its sign-in error
 answered is sent to it again through the delivery the message route uses, so
 the user does not retype it. Nothing is sent when the agent had already worked
-on that turn before the sign-in failed, or when the user has written since.
+on that turn before the sign-in failed, when the user has written since, or while
+the chat is switching to another agent or account.
 
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
