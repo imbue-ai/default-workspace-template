@@ -34,8 +34,10 @@ import fcntl
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import IO, NamedTuple
@@ -70,6 +72,10 @@ GROK_KINDS = ("shell", "monitor", "subagent")
 SUBAGENT_KIND = "subagent"
 # Where mngr's SessionStart hook records the pid of the grok process, under the agent's state dir.
 GROK_PID_RELATIVE_PATH = Path("plugin", "grok", "grok.pid")
+# Beside it, where ``/proc`` has it: that process's start in clock ticks since boot.
+GROK_START_TICKS_RELATIVE_PATH = Path("plugin", "grok", "grok.start_ticks")
+# How much later than its pid record a process may have started and still be the recorded one.
+START_TIME_TOLERANCE_SECONDS = 5.0
 # Set to ``1`` for every grok tool, and so for a grok one starts; never for the main grok's hooks.
 NESTED_GROK_ENV = "GROK_AGENT"
 # Under the agent's state dir: ``{"pid": <grok pid>, "sessions": {<task id>: <session id>}}``.
@@ -105,18 +111,49 @@ def hook_caller(environ: Mapping[str, str]) -> HookCaller | None:
 def recorded_grok_pid(state_dir: Path) -> int | None:
     """The pid of the agent's grok process, or None when none was recorded or that process is gone.
 
-    The record ``imbue.mngr_grok.api.read_grok_pid`` reads, read the same way: a hook's system
-    ``python3`` cannot import it.
+    The records ``imbue.mngr_grok.api.read_grok_pid`` reads, read the same way: a hook's system
+    ``python3`` cannot import it. A live process other than the recorded one holds a reused pid, so
+    it counts as gone: with a start-ticks record, one with another start; without, one that started
+    after the pid record was written.
     """
+    pid_path = state_dir / GROK_PID_RELATIVE_PATH
     try:
-        raw = (state_dir / GROK_PID_RELATIVE_PATH).read_text(encoding="utf-8")
+        pid = int(pid_path.read_text(encoding="utf-8").strip())
+        recorded_at = pid_path.stat().st_mtime
+    except (OSError, ValueError):
+        return None
+    if pid <= 1:
+        return None
+    recorded_start_ticks = _recorded_start_ticks(state_dir)
+    if recorded_start_ticks is not None:
+        return pid if process_start_time(pid) == recorded_start_ticks else None
+    if not is_pid_alive(pid):
+        return None
+    started_at = _process_started_at(pid)
+    return pid if started_at is None or started_at <= recorded_at + START_TIME_TOLERANCE_SECONDS else None
+
+
+def _recorded_start_ticks(state_dir: Path) -> str | None:
+    try:
+        ticks = (state_dir / GROK_START_TICKS_RELATIVE_PATH).read_text(encoding="utf-8").strip()
     except OSError:
         return None
+    return ticks if ticks.isdigit() else None
+
+
+def _process_started_at(pid: int) -> float | None:
+    """A live process's start, in epoch seconds, from ``ps``; None when ``ps`` cannot say."""
     try:
-        pid = int(raw.strip())
-    except ValueError:
+        finished = subprocess.run(
+            ["ps", "-o", "lstart=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={**os.environ, "LC_ALL": "C"},
+        )
+        return time.mktime(time.strptime(finished.stdout.strip(), "%a %b %d %H:%M:%S %Y"))
+    except (OSError, subprocess.SubprocessError, ValueError):
         return None
-    return pid if pid > 1 and is_pid_alive(pid) else None
 
 
 def top_level_session_id(payload: object) -> str | None:
