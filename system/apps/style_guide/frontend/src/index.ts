@@ -14,6 +14,7 @@ import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu"
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
+import { relayTheme } from "./models/themeRelay";
 import { readDesignTokens } from "./models/tokens";
 import { StyleGuidePage } from "./views/StyleGuidePage";
 
@@ -26,8 +27,10 @@ function bootstrap(): void {
   const connection = connectToShell({
     onHandshake: (received) => (handshake = received),
     // Redraw once the theme's stylesheet has loaded: the catalog reads the values the page wears.
-    onTheme: (theme, revision, isPreview) =>
-      void wearThemeFromMessage({ theme, revision, isPreview }).then(() => m.redraw()),
+    onTheme: (theme, revision, isPreview) => {
+      relayTheme({ theme, revision, isPreview });
+      void wearThemeFromMessage({ theme, revision, isPreview }).then(() => m.redraw());
+    },
   });
   window.addEventListener("focus", () => connection.focused());
   installElementContextMenu({ connection, handshake: () => handshake, open: createContextMenuOpener().open });

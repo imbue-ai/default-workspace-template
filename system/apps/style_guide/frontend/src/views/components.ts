@@ -358,7 +358,9 @@ function tooltipsSection(): CatalogSection {
     desc: [
       "Spread ",
       code("hoverTooltipAttrs(text, placement)"),
-      " in place of a native title. Centred below by default; above where below has no room; right only for the rail.",
+      " in place of a native title. Centred below by default; above where below has no room; right only for the rail. A ",
+      code("detail"),
+      " option adds a quieter second line under the text, cut to two lines.",
     ],
     body: () =>
       m("div", { class: "flex flex-wrap items-center gap-3" }, [
@@ -375,6 +377,14 @@ function tooltipsSection(): CatalogSection {
             ),
           },
           "Long text",
+        ),
+        m(
+          Button,
+          {
+            id: "tooltip-with-detail",
+            ...hoverTooltipAttrs("Open in Files", "below", { detail: "data/reports/q4-summary.md" }),
+          },
+          "With a detail line",
         ),
       ]),
   };

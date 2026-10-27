@@ -137,4 +137,20 @@ describe("StyleGuidePage", () => {
       theme.remove();
     }
   });
+
+  it("shows a tooltip with a quieter second line", () => {
+    const button = mountPage().querySelector("#tooltip-with-detail");
+    expect(button?.getAttribute("data-hover-tooltip-detail")).toBe("data/reports/q4-summary.md");
+  });
+
+  it("frames the plain page kit sample, taking the page's theme, and names sections by their contents label", () => {
+    const root = mountPage();
+    const frameElement = root.querySelector("#page-kit-frame");
+    expect(frameElement?.getAttribute("src")).toBe("/page-kit-sample");
+    expect(frameElement?.hasAttribute("data-theme-relay")).toBe(true);
+    expect(root.querySelector('#theme-parts [data-part-section="buttons"]')?.textContent).toBe("Shown under Buttons");
+    expect(root.querySelector('#theme-parts [data-part-section="page-kit"]')?.textContent).toBe(
+      "Shown under Plain pages",
+    );
+  });
 });

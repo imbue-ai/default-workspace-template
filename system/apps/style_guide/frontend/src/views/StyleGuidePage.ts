@@ -84,7 +84,11 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
       demos.dispose();
     },
     view({ attrs: { tokens } }) {
-      const groups: readonly CatalogGroup[] = [foundationsGroup(tokens), componentsGroup(demos), themingGroup()];
+      const catalog: readonly CatalogGroup[] = [foundationsGroup(tokens), componentsGroup(demos)];
+      const labels = new Map(catalog.flatMap((group) => group.sections.map((section) => [section.id, section.toc])));
+      // The page kit is the Theming group's own section, so it is named here rather than looked up.
+      labels.set("page-kit", "Plain pages");
+      const groups: readonly CatalogGroup[] = [...catalog, themingGroup((id) => labels.get(id) ?? id)];
       return m("div", { class: "style-guide h-screen bg-surface" }, [
         m(
           "div",

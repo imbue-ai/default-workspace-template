@@ -10,6 +10,7 @@ import m from "mithril";
 import { PARTS, type Part } from "@imbue/workspace-ui/src/themes/parts";
 import { STANDARD_THEME_ID } from "@imbue/workspace-ui/src/themes/themeClient";
 
+import { relayToLoadedFrame, THEME_RELAY_ATTRIBUTE } from "../models/themeRelay";
 import { caption, code, type CatalogGroup, type CatalogSection } from "./catalog";
 
 /** The catalog section each part is shown in; a part missing here is drawn only by the shell or by another app. */
@@ -26,12 +27,12 @@ export const PART_SECTIONS: Partial<Record<Part, string>> = {
   "dialog-actions": "dialogs",
   tooltip: "tooltips",
   badge: "badges",
+  tile: "page-kit",
+  "list-row": "page-kit",
 };
 
 /** Where a part the catalog does not show is drawn. */
 function drawnBy(part: Part): string {
-  if (part === "tile") return "Getting Started's tiles, a picker's choices";
-  if (part === "list-row") return "a selectable row in a list (Files, the launcher)";
   if (part === "avatar") return "the pinned chat's avatar";
   return "the desktop and its windows (the shell)";
 }
@@ -48,7 +49,7 @@ function jumpTo(id: string): (event: MouseEvent) => void {
   };
 }
 
-function partsSection(): CatalogSection {
+function partsSection(labelOf: (sectionId: string) => string): CatalogSection {
   return {
     id: "theme-parts",
     toc: "Parts",
@@ -76,7 +77,7 @@ function partsSection(): CatalogSection {
                     class: "type-helper text-accent hover:underline",
                     onclick: jumpTo(section),
                   },
-                  `Shown under ${section}`,
+                  `Shown under ${labelOf(section)}`,
                 ),
           ];
         }),
@@ -84,11 +85,36 @@ function partsSection(): CatalogSection {
   };
 }
 
-export function themingGroup(): CatalogGroup {
+function pageKitSection(): CatalogSection {
+  return {
+    id: "page-kit",
+    toc: "Plain pages",
+    title: "Plain pages: the page kit",
+    desc: [
+      "An app page built as plain HTML rather than on the shared components loads the page kit, ",
+      code("/_static/workspace_theme.css"),
+      " and ",
+      code("/_static/workspace_theme.js"),
+      ", from its own origin. The stylesheet gives its plain buttons, fields and selects the standard look and the script wears the workspace's theme, so a theme dresses them as their parts. This frame is such a page: plain markup, no classes, the kit and nothing else.",
+    ],
+    body: () =>
+      m("iframe", {
+        id: "page-kit-frame",
+        src: "/page-kit-sample",
+        title: "A plain page wearing the page kit",
+        [THEME_RELAY_ATTRIBUTE]: "",
+        class: "block h-[620px] w-full rounded-lg border border-default bg-page",
+        onload: (event: Event) => relayToLoadedFrame(event.currentTarget as HTMLIFrameElement),
+      }),
+  };
+}
+
+/** The Theming group; ``labelOf`` names a catalog section by its contents-list label. */
+export function themingGroup(labelOf: (sectionId: string) => string): CatalogGroup {
   return {
     id: "theming",
     label: "Theming",
     description: "How a theme reaches what is on this page.",
-    sections: [partsSection()],
+    sections: [partsSection(labelOf), pageKitSection()],
   };
 }

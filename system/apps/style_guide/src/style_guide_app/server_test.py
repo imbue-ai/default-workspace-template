@@ -69,3 +69,32 @@ def test_the_workspace_theme_is_served_from_the_pages_own_origin(
 
     assert response.status_code == 200 and response.mimetype == "text/css"
     assert create_app(static_directory).test_client().get("/_static/themes/no-such-theme/theme.css").status_code == 404
+
+
+def test_the_page_kit_sample_is_a_plain_page_loading_the_kit(client: FlaskClient) -> None:
+    response = client.get("/page-kit-sample")
+    page = response.get_data(as_text=True)
+    assert response.status_code == 200 and response.mimetype == "text/html"
+    assert '<link rel="stylesheet" href="/_static/workspace_theme.css" />' in page
+    assert '<script src="/_static/workspace_theme.js"></script>' in page
+    assert "Content-Security-Policy" in response.headers
+
+
+def test_the_page_kit_files_are_served_from_the_shells_build_and_nothing_else_is(
+    static_directory: Path, tmp_path: Path
+) -> None:
+    kit = tmp_path / "shell-static"
+    kit.mkdir()
+    (kit / "workspace_theme.js").write_text("/* kit */")
+    (kit / "workspace_theme.css").write_text(":root {}")
+    (kit / "app_contract.js").write_text("/* not the kit */")
+    client = create_app(static_directory, shell_static_directory=kit).test_client()
+
+    script = client.get("/_static/workspace_theme.js")
+    assert script.status_code == 200 and script.mimetype == "text/javascript"
+    assert script.get_data(as_text=True) == "/* kit */"
+    assert client.get("/_static/workspace_theme.css").mimetype == "text/css"
+    assert client.get("/_static/app_contract.js").status_code == 404
+    assert create_app(static_directory, shell_static_directory=tmp_path / "unbuilt").test_client().get(
+        "/_static/workspace_theme.js"
+    ).status_code == 404

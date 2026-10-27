@@ -16,7 +16,9 @@ contents list beside the catalog, in three groups.
   dialogs, toasts, and the surfaces stacked as the apps stack them.
 - **Theming**: the theme the page wears, and every part of the theme contract
   (`docs/system/blueprint/workspace-themes/`, section 4.2) with the section
-  that shows it, or what draws it when the catalog does not.
+  that shows it, or what draws it when the catalog does not; and a framed
+  plain-HTML page (`/page-kit-sample`) wearing the page kit, the shell-built
+  `/_static/workspace_theme.css` and `.js` the app serves from its own origin.
 
 Nothing here is a copy. The colours and the scales are read out of the
 library's `base.css` at build time (`frontend/src/models/tokens.ts`), so a new
