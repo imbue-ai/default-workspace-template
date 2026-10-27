@@ -10,6 +10,7 @@ from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
 from imbue.chat.message_steps import GeneratedTitle
+from imbue.chat.message_steps import MessageStep
 from imbue.chat.message_steps import MessageStepFiles
 from imbue.chat.message_steps import MessageStepOutcome
 from imbue.chat.message_steps import MessageStepReservation
@@ -64,6 +65,9 @@ class _Folders:
             executor=InlineExecutor(),
         )
 
+    def step(self, step_id: str) -> MessageStep | None:
+        return next((step for step in self.files.read_all() if step.step_id == step_id), None)
+
     def outcome_of(self, step_id: str) -> MessageStepOutcome | None:
         """Why the reserved id ended without a step, as the agent hook reads it; None when it did not."""
         path = self.reservations.root / SETTLED_DIRNAME / f"{step_id}.json"
@@ -100,7 +104,7 @@ def test_the_titled_step_is_written_under_the_reserved_id_with_its_final_title(f
 
     folders.writer(completion, changes).consider(reservation)
 
-    step = folders.files.read(reservation.step_id)
+    step = folders.step(reservation.step_id)
     assert step is not None
     assert (step.chat_id, step.message_id) == (_CHAT_ID, "message-7")
     assert step.title == "Add interactive diagrams to each topic"
@@ -116,9 +120,9 @@ def test_tk_starts_and_closes_a_step_the_chat_wrote(folders: _Folders) -> None:
     folders.writer(ScriptedOneShotCompletion(["Add a glossary to each topic"])).consider(reservation)
 
     folders.run_tk("start", reservation.step_id)
-    started = folders.files.read(reservation.step_id)
+    started = folders.step(reservation.step_id)
     folders.run_tk("close", reservation.step_id, "Added a glossary to every topic")
-    closed = folders.files.read(reservation.step_id)
+    closed = folders.step(reservation.step_id)
 
     assert started is not None and started.status is MessageStepStatus.IN_PROGRESS
     assert closed is not None and closed.status is MessageStepStatus.CLOSED
@@ -144,7 +148,7 @@ def test_a_failed_title_call_is_tried_again(folders: _Folders) -> None:
 
     folders.writer(completion).consider(reservation)
 
-    step = folders.files.read(reservation.step_id)
+    step = folders.step(reservation.step_id)
     assert step is not None and step.title == "Add a light mode"
     assert len(completion.prompts) == 2
 
@@ -184,7 +188,7 @@ def test_a_title_call_past_the_timeout_counts_as_a_failure(folders: _Folders) ->
     folders.writer(completion, timeout_seconds=0.1).consider(reservation)
     completion.release.set()
 
-    step = folders.files.read(reservation.step_id)
+    step = folders.step(reservation.step_id)
     assert step is not None and step.title == "Store notes in a file"
     assert completion.call_count == 2
 
@@ -318,7 +322,7 @@ def test_a_start_before_the_title_arrives_waits_for_the_step(folders: _Folders) 
 
     assert is_waiting_before_title
     assert hook_thread.returncode == 0
-    started = folders.files.read(reservation.step_id)
+    started = folders.step(reservation.step_id)
     assert started is not None and started.status is MessageStepStatus.IN_PROGRESS
 
 

@@ -255,11 +255,7 @@ def wait_for_step(
         outcome = _current_outcome(
             step_path, reservation_path, reservations_dir, step_id
         )
-    return (
-        outcome
-        if outcome is not None
-        else (OUTCOME_WRITTEN if step_path.exists() else OUTCOME_UNKNOWN)
-    )
+    return outcome if outcome is not None else OUTCOME_UNKNOWN
 
 
 def _current_outcome(

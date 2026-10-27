@@ -327,12 +327,6 @@ class MessageStepFiles(MutableModel):
     def is_id_taken(self, step_id: str) -> bool:
         return (self.tickets_dir / f"{step_id}.md").exists()
 
-    def read(self, step_id: str) -> MessageStep | None:
-        try:
-            return parse_message_step((self.tickets_dir / f"{step_id}.md").read_text(encoding="utf-8"))
-        except OSError:
-            return None
-
     def read_all(self) -> tuple[MessageStep, ...]:
         """Every message step in the folder, oldest first; records that are not message steps are skipped."""
         try:
