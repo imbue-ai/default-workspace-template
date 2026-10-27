@@ -1674,10 +1674,15 @@ class AgentManager:
                 if previous_title is not None and is_main_chat_name(previous_title)
                 else None
             )
+            former_provisional: ProvisionalChat | None = None
+            if previous is not None and former_name is not None:
+                self._title_override_by_chat[previous] = former_name
+                former_provisional = self._provisional_chats.get(previous)
+        if former_provisional is not None:
+            self._broadcast_provisional(former_provisional)
+        self._broadcast_chats_updated()
         if previous is None or former_name is None:
-            self._broadcast_chats_updated()
             return True
-        self.show_automatic_title(previous, former_name)
         self._creation_cg.start_new_thread(
             target=self._rename_former_main_chat,
             args=(previous, former_name),
