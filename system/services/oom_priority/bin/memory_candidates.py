@@ -34,6 +34,7 @@ Self-contained beyond the stdlib-only ``oom_priority`` and ``chat_background_tas
 """
 
 import argparse
+import enum
 import http.client
 import json
 import os
@@ -148,6 +149,14 @@ RunCommand = Callable[[Sequence[str], float], "subprocess.CompletedProcess[str]"
 FetchJson = Callable[[str, float], Any]
 IsChatBusy = Callable[[str], bool]
 ReadSupervisedPids = Callable[[], Mapping[str, int]]
+
+
+class OutputFormat(enum.Enum):
+    """What the command prints: the full report as a table or as JSON, or only the free memory line."""
+
+    TABLE = "table"
+    JSON = "json"
+    FREE_MEMORY = "free_memory"
 
 
 class FreeMemory(NamedTuple):
@@ -341,7 +350,9 @@ def process_trees_anonymous_kib(root_pids: Iterable[int], proc_dir: Path) -> int
         pids.update(list_descendant_pids(root, proc_dir=proc_dir))
     readings = [
         anonymous
-        for anonymous in (read_process_anonymous_kib(pid, proc_dir) for pid in sorted(pids))
+        for anonymous in (
+            read_process_anonymous_kib(pid, proc_dir) for pid in sorted(pids)
+        )
         if anonymous is not None
     ]
     return sum(readings) if readings else None
@@ -488,7 +499,11 @@ def idle_agent_candidates(
         )
     return sorted(
         candidates,
-        key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0), -c.idle_seconds),
+        key=lambda c: (
+            c.anonymous_kib is None,
+            -(c.anonymous_kib or 0),
+            -c.idle_seconds,
+        ),
     )
 
 
@@ -627,10 +642,14 @@ def unviewed_browser_candidates(
                 if isinstance(active_url, str) and active_url
                 else None,
                 pids=pids,
-                anonymous_kib=process_trees_anonymous_kib(pids, proc_dir) if pids else None,
+                anonymous_kib=process_trees_anonymous_kib(pids, proc_dir)
+                if pids
+                else None,
             )
         )
-    return sorted(candidates, key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0)))
+    return sorted(
+        candidates, key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0))
+    )
 
 
 def _fetch(fetch_json: FetchJson, url: str) -> tuple[Any, str | None]:
@@ -730,7 +749,9 @@ def stoppable_app_candidates(
                 anonymous_kib=process_trees_anonymous_kib((pid,), proc_dir),
             )
         )
-    return sorted(candidates, key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0)))
+    return sorted(
+        candidates, key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0))
+    )
 
 
 def collect_app_section(sources: Sources, shell: ShellAnswer) -> AppSection:
@@ -887,9 +908,13 @@ def render_free_memory(free: FreeMemory | None) -> str:
     if free is None:
         return "Free memory: unknown (no readable meminfo)"
     total = (
-        "" if free.total_kib is None else f"; {MEMINFO_TOTAL_FIELD} {_mib(free.total_kib)}"
+        ""
+        if free.total_kib is None
+        else f"; {MEMINFO_TOTAL_FIELD} {_mib(free.total_kib)}"
     )
-    return f"Free memory: {_mib(free.free_kib)} ({free.field} from {free.source}{total})"
+    return (
+        f"Free memory: {_mib(free.free_kib)} ({free.field} from {free.source}{total})"
+    )
 
 
 def render_table(report: Report) -> str:
@@ -1011,38 +1036,58 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="List idle chats and workers, the apps, and browsers no window shows, alongside free memory. Stops nothing."
     )
+    parser.set_defaults(output_format=OutputFormat.TABLE)
     output_format = parser.add_mutually_exclusive_group()
     output_format.add_argument(
         "--json",
-        action="store_true",
+        action="store_const",
+        dest="output_format",
+        const=OutputFormat.JSON,
         help="Print the report as JSON instead of a table",
     )
     output_format.add_argument(
         "--free-memory",
-        action="store_true",
+        action="store_const",
+        dest="output_format",
+        const=OutputFormat.FREE_MEMORY,
         help="Print only the free memory line, reading nothing but the meminfo files",
     )
     args = parser.parse_args()
-    sys.stdout.write(_render_output(args.free_memory, args.json))
+    sys.stdout.write(_render_output(args.output_format))
 
 
-def _render_output(is_free_memory_only: bool, is_json: bool) -> str:
+def _render_output(output_format: OutputFormat) -> str:
     now = datetime.now(timezone.utc)
-    if is_free_memory_only:
-        return render_free_memory(read_free_memory(_PROC_DIR / "meminfo", HOST_MEMINFO_PATH, now)) + "\n"
-    sources = Sources(
-        proc_dir=_PROC_DIR,
-        host_meminfo=HOST_MEMINFO_PATH,
-        run_command=_run_command,
-        fetch_json=fetch_json_over_http,
-        read_supervised_pids=supervised_pids,
-        browser_service_url=resolve_browser_service_url(),
-        shell_url=os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/"),
-        now=now,
-        is_chat_busy=busy_chat_check(os.environ),
+    match output_format:
+        case OutputFormat.FREE_MEMORY:
+            return (
+                render_free_memory(
+                    read_free_memory(_PROC_DIR / "meminfo", HOST_MEMINFO_PATH, now)
+                )
+                + "\n"
+            )
+        case OutputFormat.JSON:
+            return (
+                json.dumps(report_to_json(_collect_live_report(now)), indent=2) + "\n"
+            )
+        case OutputFormat.TABLE:
+            return render_table(_collect_live_report(now))
+
+
+def _collect_live_report(now: datetime) -> Report:
+    return collect_report(
+        Sources(
+            proc_dir=_PROC_DIR,
+            host_meminfo=HOST_MEMINFO_PATH,
+            run_command=_run_command,
+            fetch_json=fetch_json_over_http,
+            read_supervised_pids=supervised_pids,
+            browser_service_url=resolve_browser_service_url(),
+            shell_url=os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/"),
+            now=now,
+            is_chat_busy=busy_chat_check(os.environ),
+        )
     )
-    report = collect_report(sources)
-    return json.dumps(report_to_json(report), indent=2) + "\n" if is_json else render_table(report)
 
 
 if __name__ == "__main__":
