@@ -990,69 +990,56 @@ describe("the chat's steps from the snapshot", () => {
     return toolResults;
   };
 
-  // The chat app closes a step by writing its record, which the transcript never shows: the
-  // snapshot's close makes it done, with the chat app's summary.
-  it("shows a step the chat app closed as done, with its summary", () => {
-    const sections = buildSections(startedThenWorked, resultsOf(startedThenWorked), false, null, [
-      {
-        step_id: "cod-step-b",
-        title: "Add a quiz",
-        is_message_step: false,
-        status: "closed",
-        closed_by_chat: true,
-        summary: "No longer needed: you called off the quiz",
-      },
-    ]);
-    const steps = allSteps(sections);
-    expect(steps.map((s) => `${s.ticket_id}:${s.status}`)).toEqual(["cod-step-b:done", "cod-step-a:active"]);
-    expect(steps[0].summary).toBe("No longer needed: you called off the quiz");
+  // A step a later message called off never shows, and the work grouped under it renders in the
+  // conversation instead of vanishing.
+  it("leaves out a step the chat hides and shows its work in the conversation", () => {
+    const events = [
+      userMsg("t0", "go", "u1"),
+      tkMsg("t1", "tk start cod-step-b", "k1"),
+      result("t1", "k1", startOut("cod-step-b", "Add a quiz")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+    ];
+    const sections = buildSections(events, resultsOf(events), false, null, [], ["cod-step-b"]);
+    expect(layout(sections)).toEqual(["u1", "a-w1"]);
   });
 
-  // A replaced step closes and its replacement, written for the updated request, waits on the
+  // The agent closing the called-off step, as the hook tells it to, keeps it out of view.
+  it("keeps a hidden step out of view after the agent closes it", () => {
+    const events = [
+      ...startedThenWorked,
+      tkMsg("t3", "tk close cod-step-b", "k2"),
+      result("t3", "k2", closeOut("cod-step-b", "Add a quiz", "No longer needed: you called it off")),
+    ];
+    const sections = buildSections(events, resultsOf(events), false, null, [], ["cod-step-b"]);
+    expect(allSteps(sections).map((s) => s.ticket_id)).toEqual(["cod-step-a"]);
+  });
+
+  // A replaced step is hidden, and the message's own step for the updated request waits on the
   // same live timeline.
-  it("shows a replaced step as done and its replacement as waiting", () => {
-    const sections = buildSections(startedThenWorked, resultsOf(startedThenWorked), false, null, [
-      {
-        step_id: "cod-step-a",
-        title: "Write ten parts",
-        is_message_step: false,
-        status: "closed",
-        closed_by_chat: true,
-        summary: "Replaced by an updated request",
-      },
-      {
-        step_id: "wor-step-new1",
-        title: "Write the parts, not ten",
-        is_message_step: true,
-        status: "open",
-        closed_by_chat: false,
-        summary: "",
-      },
-    ]);
-    expect(layout(sections)).toEqual(["u1", "timeline:cod-step-a,cod-step-b,wor-step-new1"]);
-    expect(allSteps(sections).map((s) => s.status)).toEqual(["done", "active", "pending"]);
+  it("hides a replaced step and shows its replacement as waiting", () => {
+    const sections = buildSections(
+      startedThenWorked,
+      resultsOf(startedThenWorked),
+      false,
+      null,
+      [{ step_id: "wor-step-new1", title: "Write the parts, not ten", status: "open" }],
+      ["cod-step-a"],
+    );
+    expect(layout(sections)).toEqual(["u1", "timeline:cod-step-b,wor-step-new1"]);
+    expect(allSteps(sections).map((s) => s.status)).toEqual(["active", "pending"]);
   });
 
-  // With its last open step closed by the chat app, the timeline freezes, and what follows
-  // renders below it.
-  it("freezes the live timeline when the chat app closes its last open step", () => {
+  // With the only other open step hidden, the timeline freezes once the rest are done.
+  it("freezes the timeline when the only step left open is hidden", () => {
     const events = [
       ...startedThenWorked,
       tkMsg("t3", "tk close cod-step-a", "k2"),
       result("t3", "k2", closeOut("cod-step-a", "Write ten parts", "wrote them")),
+      assistantText("t4", "Done.", "wrap"),
     ];
-    const sections = buildSections(events, resultsOf(events), true, null, [
-      {
-        step_id: "cod-step-b",
-        title: "Add a quiz",
-        is_message_step: true,
-        status: "closed",
-        closed_by_chat: true,
-        summary: "No longer needed: you called off the quiz",
-      },
-    ]);
-    expect(timelines(sections)).toHaveLength(1);
-    expect(allSteps(sections).every((s) => s.status === "done")).toBe(true);
+    const sections = buildSections(events, resultsOf(events), true, null, [], ["cod-step-b"]);
+    expect(layout(sections)).toEqual(["u1", "timeline:cod-step-a", "wrap"]);
   });
 
   // A message step the chat app wrote shows as waiting on the live timeline before the agent
@@ -1060,14 +1047,7 @@ describe("the chat's steps from the snapshot", () => {
   it("shows a written message step the agent has not started as waiting on the live timeline", () => {
     const events = [userMsg("t0", "go", "u1"), assistantText("t1", "On it.", "a1"), userMsg("t2", "add a quiz", "u2")];
     const sections = buildSections(events, new Map(), false, null, [
-      {
-        step_id: "wor-step-q1qb",
-        title: "Add a quiz",
-        is_message_step: true,
-        status: "open",
-        closed_by_chat: false,
-        summary: "",
-      },
+      { step_id: "wor-step-q1qb", title: "Add a quiz", status: "open" },
     ]);
     expect(layout(sections)).toEqual(["u1", "a1", "u2", "timeline:wor-step-q1qb"]);
     const [waiting] = allSteps(sections);
@@ -1083,14 +1063,7 @@ describe("the chat's steps from the snapshot", () => {
       result("t1", "k1", startOut("wor-step-q1qb", "Add a quiz")),
     ];
     const sections = buildSections(events, resultsOf(events), false, null, [
-      {
-        step_id: "wor-step-q1qb",
-        title: "Add a quiz",
-        is_message_step: true,
-        status: "open",
-        closed_by_chat: false,
-        summary: "",
-      },
+      { step_id: "wor-step-q1qb", title: "Add a quiz", status: "open" },
     ]);
     expect(layout(sections)).toEqual(["u1", "timeline:wor-step-q1qb"]);
     expect(allSteps(sections)[0].status).toBe("active");

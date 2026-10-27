@@ -7,13 +7,18 @@ import json
 import os
 import threading
 import time
-from collections.abc import Callable, Generator, Sequence
+from collections.abc import Callable
+from collections.abc import Generator
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Final
+from typing import Any
+from typing import Final
 from unittest.mock import patch
-from urllib.parse import parse_qs, quote, urlparse
+from urllib.parse import parse_qs
+from urllib.parse import quote
+from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
@@ -22,131 +27,124 @@ from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
-from imbue.chat.accounts import (
-    INDEX_VERSION,
-    account_dir,
-    commit_account,
-    delete_account,
-    index_path,
-    mint_account_dir,
-)
-from imbue.chat.activity_state import ActivityState, CompactionCause
-from imbue.chat.agent_discovery import (
-    COMPACT_UNAVAILABLE_SEND_FAILURE_KIND,
-    COMPACT_WHILE_BUSY_DETAIL,
-    AgentInfo,
-    SendFailure,
-    agent_state_dir,
-)
-from imbue.chat.agent_manager import (
-    PENDING_COMPACTION_TIMEOUT_SECONDS,
-    SKIP_CLAUDE_INSTALLATION_CHECK_SETTING,
-    AgentManager,
-    _build_chat_destroy_command,
-    _build_chat_stop_command,
-)
+from mngr_cli_contract.contract import assert_mngr_argv_valid
+from oom_priority import bands
+from pydantic import Field
+from pydantic import SecretStr
+from werkzeug.test import TestResponse
+
+from imbue.chat.accounts import INDEX_VERSION
+from imbue.chat.accounts import account_dir
+from imbue.chat.accounts import commit_account
+from imbue.chat.accounts import delete_account
+from imbue.chat.accounts import index_path
+from imbue.chat.accounts import mint_account_dir
+from imbue.chat.activity_state import ActivityState
+from imbue.chat.activity_state import CompactionCause
+from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
+from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
+from imbue.chat.agent_discovery import SendFailure
+from imbue.chat.agent_discovery import agent_state_dir
+from imbue.chat.agent_manager import AgentManager
+from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
+from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
+from imbue.chat.agent_manager import _build_chat_destroy_command
+from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.background_tasks import BackgroundTaskReader
-from imbue.chat.chat_naming import ChatNamer, chat_naming_prompt
+from imbue.chat.chat_naming import ChatNamer
+from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
-from imbue.chat.chat_seed import SeedRole, SeedTurn
+from imbue.chat.chat_seed import SeedRole
+from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
-from imbue.chat.harnesses.codex.ledger import CodexMessageLedger, ShoulderTapResult
+from imbue.chat.harnesses.codex.ledger import CodexMessageLedger
+from imbue.chat.harnesses.codex.ledger import ShoulderTapResult
 from imbue.chat.harnesses.codex.live_connection import CodexLiveConnection
-from imbue.chat.harnesses.codex.model import (
-    codex_models_to_options,
-    get_codex_model_options_path,
-    read_codex_model_options,
-)
+from imbue.chat.harnesses.codex.model import codex_models_to_options
+from imbue.chat.harnesses.codex.model import get_codex_model_options_path
+from imbue.chat.harnesses.codex.model import read_codex_model_options
 from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
-from imbue.chat.harnesses.message_display import (
-    BACKGROUND_TASK_REPORT_TAG,
-    SEED_CONTEXT_TAG,
-)
+from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
+from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
-from imbue.chat.harnesses.registry import (
-    build_interrupt_to_composer,
-    build_shoulder_tap,
-)
-from imbue.chat.harnesses.session import FileHarnessSession, SendOutcome, SessionDeps
+from imbue.chat.harnesses.registry import build_interrupt_to_composer
+from imbue.chat.harnesses.registry import build_shoulder_tap
+from imbue.chat.harnesses.session import FileHarnessSession
+from imbue.chat.harnesses.session import SendOutcome
+from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_NAME
-from imbue.chat.message_steps import (
-    MessageStepFiles,
-    MessageStepReservations,
-    MessageSteps,
-    MessageStepTracker,
-    MessageStepWriter,
-)
-from imbue.chat.models import (
-    AgentStateItem,
-    ChatAccountBinding,
-    CreateChatRequest,
-    HandoffPhase,
-    HeldSendOrigin,
-    ModelPick,
-    ProvisionalChat,
-    ProvisionalChatPhase,
-    SendMessageRequest,
-)
+from imbue.chat.message_steps import MessageStepFiles
+from imbue.chat.message_steps import MessageStepReservations
+from imbue.chat.message_steps import MessageStepTracker
+from imbue.chat.message_steps import MessageStepWriter
+from imbue.chat.message_steps import MessageSteps
+from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ChatAccountBinding
+from imbue.chat.models import CreateChatRequest
+from imbue.chat.models import HandoffPhase
+from imbue.chat.models import HeldSendOrigin
+from imbue.chat.models import ModelPick
+from imbue.chat.models import ProvisionalChat
+from imbue.chat.models import ProvisionalChatPhase
+from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
-from imbue.chat.presence import PresenceReport, PresenceState
+from imbue.chat.presence import PresenceReport
+from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
-from imbue.chat.server import (
-    _DEFAULT_TAIL_COUNT,
-    COMPACT_WHILE_STOPPED_DETAIL,
-    _agent_switch_options,
-    _open_chat_stream,
-    _revive_and_retry_send,
-    _stream_events,
-    _stream_filtered_events,
-    create_application,
-)
-from imbue.chat.state import ChatAppState, state_of
-from imbue.chat.testing import (
-    InlineExecutor,
-    RecordingGateway,
-    RecordingMngrMessenger,
-    VanishedAgentMngrMessenger,
-    build_test_state,
-    close_ws,
-    compact_summary_record,
-    drain_is_connecting_pushes,
-    is_chat_connecting,
-    make_agent_fixture,
-    make_chat_agent_entry,
-    make_chat_handoff_record,
-    make_chat_rebind_record,
-    make_two_member_chat_record,
-    open_ws,
-    seed_agent_state,
-    seed_failed_chat,
-    serve_app,
-    utc_iso_seconds_ago,
-    wait_until_true,
-    write_background_task_marker,
-    write_compacting_marker,
-    write_recording_mngr_binary,
-)
+from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
+from imbue.chat.server import _DEFAULT_TAIL_COUNT
+from imbue.chat.server import _agent_switch_options
+from imbue.chat.server import _open_chat_stream
+from imbue.chat.server import _revive_and_retry_send
+from imbue.chat.server import _stream_events
+from imbue.chat.server import _stream_filtered_events
+from imbue.chat.server import create_application
+from imbue.chat.state import ChatAppState
+from imbue.chat.state import state_of
+from imbue.chat.testing import InlineExecutor
+from imbue.chat.testing import RecordingGateway
+from imbue.chat.testing import RecordingMngrMessenger
+from imbue.chat.testing import VanishedAgentMngrMessenger
+from imbue.chat.testing import build_test_state
+from imbue.chat.testing import close_ws
+from imbue.chat.testing import compact_summary_record
+from imbue.chat.testing import drain_is_connecting_pushes
+from imbue.chat.testing import is_chat_connecting
+from imbue.chat.testing import make_agent_fixture
+from imbue.chat.testing import make_chat_agent_entry
+from imbue.chat.testing import make_chat_handoff_record
+from imbue.chat.testing import make_chat_rebind_record
+from imbue.chat.testing import make_two_member_chat_record
+from imbue.chat.testing import open_ws
+from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import seed_failed_chat
+from imbue.chat.testing import serve_app
+from imbue.chat.testing import utc_iso_seconds_ago
+from imbue.chat.testing import wait_until_true
+from imbue.chat.testing import write_background_task_marker
+from imbue.chat.testing import write_compacting_marker
+from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
-from imbue.mngr.errors import AgentIdNotFoundError, AgentStartError, MngrError
+from imbue.mngr.errors import AgentIdNotFoundError
+from imbue.mngr.errors import AgentStartError
+from imbue.mngr.errors import MngrError
 from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
-from imbue.mngr_codex.app_server_client import CodexAppServerError, CodexModel
-from mngr_cli_contract.contract import assert_mngr_argv_valid
-from oom_priority import bands
-from pydantic import Field, SecretStr
-from werkzeug.test import TestResponse
+from imbue.mngr_codex.app_server_client import CodexAppServerError
+from imbue.mngr_codex.app_server_client import CodexModel
 
 # Generous: the first receive can take several seconds on a loaded machine even
 # though passing runs complete in well under a second -- the wait is pure
@@ -1311,7 +1309,7 @@ def _client_making_message_steps(
         agent_state_dir=tmp_path / "agent",
         claude_config_dir=tmp_path,
     )
-    tracker = MessageStepTracker(files=files)
+    tracker = MessageStepTracker(files=files, reservations=reservations)
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, message_steps=tracker)
     manager.note_agent_list_known()
     with manager._lock:

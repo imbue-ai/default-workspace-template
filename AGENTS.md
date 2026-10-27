@@ -56,7 +56,7 @@ A message the user sends while you are busy gets its step from the chat: the cha
 - When one piece of work answers several messages (a follow-up that refines an earlier request, or requests you build together), start their steps together and close each with its own summary when that work is done. Several message steps may be `in_progress` at once.
 - A message that arrives while you are busy with something else keeps its step open until you get to it. Do not close it only to clear the list.
 - A message the chat judges not a task (thanks, a question about progress) gets no step: `tk start` on its id says so at once. Reply or carry on without a step, and do not create one for it.
-- A message that changes what one of your open steps asks for gets its own step with the updated request, and the chat closes the old step as replaced: do the updated work under the new step, and do not start or close the old one. A message that repeats an open step gets no step of its own: do it under that step. A message that calls an open step off gets no step, and the chat closes that step as no longer needed: stop its work, and do not start or close it. `tk start` or `tk close` on any of these ids says which step to use.
+- A message may repeat, change or call off one of your open steps. The chat never changes your steps; `tk start` on the message's id tells you what it suggests, and you make the change. A repeat gets no step of its own: do it under that step. A changed request gets its own step: close the old step with a short note, then work under the new one. A call-off gets no step: stop that work and close the step with a short note. The user's timeline hides a called-off or replaced step.
 
 ## When you don't need records
 

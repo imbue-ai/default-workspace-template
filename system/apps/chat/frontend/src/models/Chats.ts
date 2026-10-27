@@ -49,29 +49,30 @@ export interface ActiveAgent {
   is_busy: boolean;
   // The background tasks the chat waits on, oldest first. Rendered as given.
   background_tasks: BackgroundTask[];
-  // The steps the chat app made for messages sent while the agent was busy, and the chat's steps it closed for later
-  // messages, oldest first. The live timeline shows the message steps not started yet, and the chat app's closes.
+  // The steps the chat app made for the messages sent to the chat while its agent was busy, oldest first. The live
+  // timeline shows the ones not started yet.
   message_steps: MessageStep[];
+  // The chat's steps a later message called off or replaced, which the timeline leaves out until the agent starts
+  // one again.
+  hidden_step_ids: string[];
 }
 
-/** A step's tk status. */
+/** A message step's tk status. */
 export type MessageStepStatus = "open" | "in_progress" | "closed";
 
-/** A step the chat app made for a message, or one of the chat's steps it closed for a later message (the backend's
- *  ``MessageStepSnapshot``). */
+/** The step the chat app made for one message sent while the agent was busy (the backend's ``MessageStepSnapshot``). */
 export interface MessageStep {
   step_id: string;
-  // Whether the chat app made the step for a message (else it is the agent's own, closed for a message).
-  is_message_step: boolean;
+  // The send-time id of the message.
   message_id: string;
+  // The message, verbatim.
   message_text: string;
+  // The small model's task title for the message.
   title: string;
   status: MessageStepStatus;
-  // A later message cancelled the step.
-  cancelled: boolean;
-  // The chat app closed the step for a later message (cancelled, or replaced by an updated request).
-  closed_by_chat: boolean;
+  // The agent's one-line summary once it closed the step; empty before.
   summary: string;
+  // When the step was written, once the model titled the message (ISO 8601, UTC).
   created_at: string;
 }
 

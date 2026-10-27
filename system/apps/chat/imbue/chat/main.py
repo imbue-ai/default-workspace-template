@@ -146,7 +146,9 @@ def build_production_state(
     message_step_reservations = MessageStepReservations(
         root=data_dir / MESSAGE_STEP_RESERVATIONS_DIRNAME, id_prefix=step_id_prefix(Path.cwd().name)
     )
-    message_step_tracker = None if is_secondary else MessageStepTracker(files=message_step_files)
+    message_step_tracker = (
+        None if is_secondary else MessageStepTracker(files=message_step_files, reservations=message_step_reservations)
+    )
     agent_manager = AgentManager.build(
         broadcaster,
         message_stamps=MessageStampStore(path=data_dir / STAMPS_FILENAME),

@@ -9,6 +9,13 @@ tickets folder, in the record format ``tk create --step`` writes, so tk works on
 the model judges not a task never gets a step, and neither does one whose every title call failed (logged as an
 error); either outcome is recorded beside the reservations, for the hook to answer the agent at once.
 
+The model also sees the chat's open steps, and may answer that the message repeats one, calls one off, or changes
+what one asks for. The chat app never edits a ticket it did not just create: the agent owns every status change. So
+a repeat or a call-off is only a suggestion, recorded beside the reservations naming that step; a changed request
+gets its own step, the step it replaces recorded the same way. The agent's hook passes each suggestion to the agent
+when it starts or closes the message's id. The chat pages leave out a step called off or replaced, and the model is
+not offered it again, until the agent starts that step after the suggestion.
+
 The step is created with the chat's id as its creator (what tk's ``tk_creator`` stamps), tagged
 ``user-message``, carrying the send-time message id as its external ref and the message, verbatim, as its body.
 The chat pages see each chat's message steps on its snapshot (``ActiveAgentSnapshot.message_steps``), read from
@@ -16,6 +23,7 @@ the tickets folder at once after the chat app writes one, and within a poll inte
 """
 
 import json
+import os
 import re
 import secrets
 import string
@@ -59,6 +67,8 @@ MESSAGE_STEP_TAG: Final[str] = "user-message"
 MESSAGE_REF_PREFIX: Final[str] = "message:"
 MESSAGE_STEP_RESERVATIONS_DIRNAME: Final[str] = "message_step_reservations"
 SETTLED_DIRNAME: Final[str] = "settled"
+# Where a message's own step that replaces an open step records which (see MessageStepReservations).
+REPLACEMENTS_DIRNAME: Final[str] = "replacements"
 _RECORD_SUFFIX: Final[str] = ".json"
 
 # A failed title call (an error, an unusable answer, or no answer within the timeout) is tried again this many times
@@ -80,16 +90,9 @@ _STEP_ID_HASH_LENGTH: Final[int] = 4
 # Far more draws than a tickets folder's worth of taken ids could use up among the 36^4 possible.
 _MAX_STEP_ID_DRAWS: Final[int] = 100
 _FRONT_MATTER_DELIMITER: Final[str] = "---"
+# The length of a tk timestamp up to its seconds (``2026-10-27T22:53:48``).
+_TIMESTAMP_SECOND_LENGTH: Final[int] = 19
 _SUMMARY_HEADING: Final[str] = "## Summary"
-# The fields the chat app adds to a step it closes for a later message: when a message cancelled it (and which
-# message), or the step that replaced it with the updated request. tk keeps fields it does not know. The agent hooks
-# read the same (``system/scripts/agent_message_steps.py``).
-_CANCELLED_FIELD: Final[str] = "cancelled"
-_CANCELLED_BY_FIELD: Final[str] = "cancelled-by"
-_REPLACED_BY_FIELD: Final[str] = "replaced-by"
-# The close summaries of those steps, as the user reads them on the timeline.
-_REPLACED_SUMMARY: Final[str] = "Replaced by an updated request"
-_CANCELLED_SUMMARY_PREFIX: Final[str] = "No longer needed: "
 _TITLE_WRAPPING_CHARACTERS: Final[str] = "\"'*_`"
 
 # Small models answer or obey a bare message, so the message goes in tags the prompt calls data, and the examples
@@ -171,8 +174,8 @@ class MessageStepOutcome(LowerCaseStrEnum):
     # The model answered NONE.
     NOT_A_TASK = auto()
     FAILED = auto()
-    # The message belongs to an open step, left as it is (SAME) or cancelled (CANCEL); the settled record names that
-    # step as its target. (A MODIFY writes the message's own step, which replaces the target.)
+    # The model suggested the message repeats an open step (SAME) or calls one off (CANCEL); the settled record names
+    # that step as its target. (A MODIFY writes the message's own step, recording the step it replaces.)
     SAME_AS = auto()
     CANCELS = auto()
 
@@ -197,23 +200,25 @@ class OpenStep(FrozenModel):
 
 
 class MessageStep(FrozenModel):
-    """A step the chat app made for a message or changed for one, as its tk record holds it."""
+    """One message's step as its tk record holds it."""
 
     step_id: str = Field(description="The step's tk id")
-    chat_id: ChatId = Field(description="The chat whose step it is (the step's creator)")
-    is_message_step: bool = Field(description="Whether the chat app made the step for a message")
-    message_id: str = Field(
-        description="The send-time id of the message the step was made for; '' for the agent's own"
-    )
-    message_text: str = Field(description="The message the step was made for, verbatim; '' for the agent's own")
-    title: str = Field(description="The step's title")
-    cancelled: bool = Field(description="Whether a later message cancelled the step")
-    closed_by_chat: bool = Field(
-        description="Whether the chat app closed the step for a later message (cancelled or replaced)"
-    )
+    chat_id: ChatId = Field(description="The chat the message was sent to (the step's creator)")
+    message_id: str = Field(description="The send-time id of the message")
+    message_text: str = Field(description="The message, verbatim")
+    title: str = Field(description="The step's title, as the model wrote it")
     status: MessageStepStatus = Field(description="The step's tk status")
     summary: str = Field(description="The agent's one-line summary when it closed the step; '' before")
     created_at: str = Field(description="When the step was written (ISO 8601, UTC), once the model titled it")
+
+
+class StepSuggestion(FrozenModel):
+    """A suggestion the model made about one of the chat's open steps for a later message: called off, or replaced by
+    the message's own step. The agent decides what happens to the step."""
+
+    chat_id: ChatId = Field(description="The chat whose step it is")
+    step_id: str = Field(description="The step the suggestion is about")
+    suggested_at: str = Field(description="When the model answered (tk's timestamp format, which orders as text)")
 
 
 class MessageStepReservation(FrozenModel):
@@ -230,13 +235,10 @@ class MessageStepReservation(FrozenModel):
 def message_step_snapshot(step: MessageStep) -> MessageStepSnapshot:
     return MessageStepSnapshot(
         step_id=step.step_id,
-        is_message_step=step.is_message_step,
         message_id=step.message_id,
         message_text=step.message_text,
         title=step.title,
         status=step.status,
-        cancelled=step.cancelled,
-        closed_by_chat=step.closed_by_chat,
         summary=step.summary,
         created_at=step.created_at,
     )
@@ -427,32 +429,22 @@ def _is_message_step_record(record: _StepRecord) -> bool:
 
 
 @pure
-def _is_closed_by_chat(record: _StepRecord) -> bool:
-    return _CANCELLED_FIELD in record.fields or _REPLACED_BY_FIELD in record.fields
-
-
-@pure
 def parse_message_step(text: str) -> MessageStep | None:
-    """The step a tk record describes when the chat app made it for a message or closed it for one, else None."""
+    """The message step a tk record describes, or None for any record that is not one."""
     record = _parse_step_record(text)
-    if record is None:
+    if record is None or not _is_message_step_record(record):
         return None
-    is_message_step = _is_message_step_record(record)
-    is_closed_by_chat = _is_closed_by_chat(record)
     status = record.status
-    if status is None or not (is_message_step or is_closed_by_chat):
+    if status is None:
         return None
     body, summary = record.body_and_summary()
     return MessageStep(
         step_id=record.fields.get("id", ""),
         chat_id=ChatId(record.fields.get("agent", "")),
-        is_message_step=is_message_step,
-        message_id=record.fields.get("external-ref", "")[len(MESSAGE_REF_PREFIX) :] if is_message_step else "",
-        message_text=body if is_message_step else "",
+        message_id=record.fields.get("external-ref", "")[len(MESSAGE_REF_PREFIX) :],
+        message_text=body,
         title=record.title,
         status=status,
-        cancelled=_CANCELLED_FIELD in record.fields,
-        closed_by_chat=is_closed_by_chat,
         summary=summary,
         created_at=record.fields.get("created", ""),
     )
@@ -460,15 +452,14 @@ def parse_message_step(text: str) -> MessageStep | None:
 
 @pure
 def open_step_of_chat(text: str, chat_id: ChatId) -> OpenStep | None:
-    """The record as one of the chat's open steps (created by the chat or its agents, not started or in progress, not
-    closed by the chat), or None."""
+    """The record as one of the chat's open steps (created by the chat or its agents, not started or in progress), or
+    None."""
     record = _parse_step_record(text)
     status = None if record is None else record.status
     if (
         record is None
         or record.fields.get("agent") != chat_id
         or status not in (MessageStepStatus.OPEN, MessageStepStatus.IN_PROGRESS)
-        or _is_closed_by_chat(record)
     ):
         return None
     return OpenStep(
@@ -480,30 +471,16 @@ def open_step_of_chat(text: str, chat_id: ChatId) -> OpenStep | None:
 
 
 @pure
-def _with_fields(record: _StepRecord, changes: Sequence[tuple[str, str]]) -> list[str]:
-    """The record's lines with each field set: replaced in place, or added right after the opening delimiter, as
-    tk's own field updates do."""
-    lines = list(record.lines)
-    for key, value in changes:
-        # Each added field moves the closing delimiter down a line.
-        front_matter_end = record.front_matter_end + (len(lines) - len(record.lines))
-        index = next((i for i in range(1, front_matter_end - 1) if lines[i].partition(":")[0].strip() == key), None)
-        if index is None:
-            lines.insert(1, f"{key}: {value}")
-        else:
-            lines[index] = f"{key}: {value}"
-    return lines
-
-
-@pure
-def closed_record_text(text: str, fields: Sequence[tuple[str, str]], summary: str, moment: str) -> str | None:
-    """The step record closed the way ``tk close`` closes it (status, close time, a summary section), with the given
-    extra fields; None when the text is no step record or the step is already closed, which is left as it is."""
-    record = _parse_step_record(text)
-    if record is None or record.status not in (MessageStepStatus.OPEN, MessageStepStatus.IN_PROGRESS):
-        return None
-    lines = _with_fields(record, [("status", MessageStepStatus.CLOSED.value), ("closed", moment), *fields])
-    return "\n".join([*lines, "", _SUMMARY_HEADING, "", summary]) + "\n"
+def is_suggestion_in_force(suggestion: StepSuggestion, step_text: str | None) -> bool:
+    """Whether a suggestion still stands: its step's record exists and the agent has not started the step since (tk
+    stamps the start time in the record, in the same text-ordered format as the suggestion's). The agent closing the
+    step, as the suggestion asks, leaves it standing. The times compare to the second, since tk stamps no fraction
+    where its ``date`` cannot (macOS): a start in the suggestion's own second counts as after it."""
+    record = None if step_text is None else _parse_step_record(step_text)
+    if record is None:
+        return False
+    started_second = record.fields.get("started", "")[:_TIMESTAMP_SECOND_LENGTH]
+    return started_second < suggestion.suggested_at[:_TIMESTAMP_SECOND_LENGTH]
 
 
 def _write_text_atomically(path: Path, text: str) -> None:
@@ -511,6 +488,20 @@ def _write_text_atomically(path: Path, text: str) -> None:
     temp_path = path.with_name(f".{path.name}.chat.tmp")
     temp_path.write_text(text, encoding="utf-8")
     temp_path.replace(path)
+
+
+def _create_text_exclusively(path: Path, text: str) -> bool:
+    """Create a file whole, only if nothing is at its path yet; False (and nothing written) when something is. The
+    temp file is linked into place, which fails rather than replacing an existing file."""
+    temp_path = path.with_name(f".{path.name}.chat.tmp")
+    temp_path.write_text(text, encoding="utf-8")
+    try:
+        os.link(temp_path, path)
+    except FileExistsError:
+        return False
+    finally:
+        temp_path.unlink(missing_ok=True)
+    return True
 
 
 class MessageStepFiles(MutableModel):
@@ -525,52 +516,33 @@ class MessageStepFiles(MutableModel):
     _parsed_by_name: dict[str, tuple[tuple[int, int], MessageStep | None]] = PrivateAttr(default_factory=dict)
     _cache_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
 
-    def write_step(self, reservation: MessageStepReservation, title: str) -> None:
+    def write_step(self, reservation: MessageStepReservation, title: str) -> bool:
+        """Create the message's step; False when a ticket already sits at its id, which is never overwritten."""
         self.tickets_dir.mkdir(parents=True, exist_ok=True)
         text = message_step_record_text(reservation, title, tk_timestamp(datetime.now(timezone.utc)))
-        _write_text_atomically(self.tickets_dir / f"{reservation.step_id}.md", text)
+        return _create_text_exclusively(self.tickets_dir / f"{reservation.step_id}.md", text)
+
+    def read_step_text(self, step_id: str) -> str | None:
+        try:
+            return (self.tickets_dir / f"{step_id}.md").read_text(encoding="utf-8")
+        except OSError:
+            return None
 
     def is_id_taken(self, step_id: str) -> bool:
         return (self.tickets_dir / f"{step_id}.md").exists()
 
-    def open_steps_of_chat(self, chat_id: ChatId) -> tuple[OpenStep, ...]:
-        """The chat's open steps, its agents' own and the ones made for messages, oldest first."""
+    def open_steps_of_chat(self, chat_id: ChatId, excluded_ids: frozenset[str] = frozenset()) -> tuple[OpenStep, ...]:
+        """The chat's open steps, its agents' own and the ones made for messages, oldest first, except
+        ``excluded_ids``."""
         steps: list[OpenStep] = []
         for path in self._step_paths():
             try:
                 step = open_step_of_chat(path.read_text(encoding="utf-8"), chat_id)
             except OSError:
                 continue
-            if step is not None:
+            if step is not None and step.step_id not in excluded_ids:
                 steps.append(step)
         return tuple(sorted(steps, key=lambda step: step.created_at))
-
-    def close_as_replaced(self, step_id: str, replacement_id: str) -> bool:
-        """Close an open step as replaced by the step of an updated request; False when the step is gone or already
-        closed."""
-        return self._close(step_id, [(_REPLACED_BY_FIELD, replacement_id)], _REPLACED_SUMMARY)
-
-    def close_as_cancelled(self, step_id: str, message_id: str, reason: str) -> bool:
-        """Close an open step as cancelled by a message; False when the step is gone or already closed."""
-        moment = tk_timestamp(datetime.now(timezone.utc))
-        return self._close(
-            step_id,
-            [(_CANCELLED_FIELD, moment), (_CANCELLED_BY_FIELD, f"{MESSAGE_REF_PREFIX}{message_id}")],
-            f"{_CANCELLED_SUMMARY_PREFIX}{reason}",
-        )
-
-    def _close(self, step_id: str, fields: Sequence[tuple[str, str]], summary: str) -> bool:
-        path = self.tickets_dir / f"{step_id}.md"
-        try:
-            closed = closed_record_text(
-                path.read_text(encoding="utf-8"), fields, summary, tk_timestamp(datetime.now(timezone.utc))
-            )
-        except OSError:
-            return False
-        if closed is None:
-            return False
-        _write_text_atomically(path, closed)
-        return True
 
     def _step_paths(self) -> list[Path]:
         try:
@@ -580,7 +552,7 @@ class MessageStepFiles(MutableModel):
             return []
 
     def read_all(self) -> tuple[MessageStep, ...]:
-        """Every step the chat app made or changed in the folder, oldest first; other records are skipped."""
+        """Every message step in the folder, oldest first; records that are not message steps are skipped."""
         paths = self._step_paths()
         steps: list[MessageStep] = []
         with self._cache_lock:
@@ -663,17 +635,67 @@ class MessageStepReservations(MutableModel):
         with self._lock:
             self.release_locked(step_id)
 
-    def settle_locked(self, step_id: str, outcome: MessageStepOutcome, target: OpenStep | None = None) -> None:
-        """Record why the reserved id ends without a step of its own (with the open step the message belongs to, for
-        SAME_AS and CANCELS), then drop its reservation. The caller holds ``lock``."""
-        settled_dir = self.root / SETTLED_DIRNAME
-        settled_dir.mkdir(parents=True, exist_ok=True)
-        fields: dict[str, str] = {"step_id": step_id, "outcome": outcome.value}
-        if target is not None:
-            fields.update(target_id=target.step_id, target_title=target.title)
-        record = json.dumps(fields)
-        _write_text_atomically(settled_dir / f"{step_id}{_RECORD_SUFFIX}", record)
+    def settle_locked(self, step_id: str, outcome: MessageStepOutcome) -> None:
+        """Record why the reserved id ends without a step, then drop its reservation. The caller holds ``lock``."""
+        self._write_record(SETTLED_DIRNAME, step_id, {"step_id": step_id, "outcome": outcome.value})
         self.release_locked(step_id)
+
+    def settle_as_suggestion_locked(
+        self, reservation: MessageStepReservation, outcome: MessageStepOutcome, target: OpenStep, reason: str
+    ) -> None:
+        """Record that the reserved id ends without a step because the message repeats (SAME_AS) or calls off
+        (CANCELS, with the model's short reason) an open step, naming that step, then drop the reservation. The
+        caller holds ``lock``."""
+        record = {
+            "step_id": reservation.step_id,
+            "outcome": outcome.value,
+            "reason": reason,
+            **self._suggestion(reservation, target),
+        }
+        self._write_record(SETTLED_DIRNAME, reservation.step_id, record)
+        self.release_locked(reservation.step_id)
+
+    def record_replacement_locked(self, reservation: MessageStepReservation, target: OpenStep) -> None:
+        """Record that the message's step (written under its reserved id) replaces an open step. The caller holds
+        ``lock``."""
+        record = {"step_id": reservation.step_id, **self._suggestion(reservation, target)}
+        self._write_record(REPLACEMENTS_DIRNAME, reservation.step_id, record)
+
+    def suggestions(self) -> tuple[StepSuggestion, ...]:
+        """Every call-off and replacement suggestion, whether in force or not."""
+        suggestions: list[StepSuggestion] = []
+        for dirname in (SETTLED_DIRNAME, REPLACEMENTS_DIRNAME):
+            for path in sorted((self.root / dirname).glob(f"*{_RECORD_SUFFIX}")):
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    continue
+                is_closing = (
+                    dirname == REPLACEMENTS_DIRNAME or record.get("outcome") == MessageStepOutcome.CANCELS.value
+                )
+                if not isinstance(record, dict) or not is_closing or not isinstance(record.get("target_id"), str):
+                    continue
+                suggestions.append(
+                    StepSuggestion(
+                        chat_id=ChatId(str(record.get("chat_id", ""))),
+                        step_id=record["target_id"],
+                        suggested_at=str(record.get("suggested_at", "")),
+                    )
+                )
+        return tuple(suggestions)
+
+    def _suggestion(self, reservation: MessageStepReservation, target: OpenStep) -> dict[str, str]:
+        return {
+            "chat_id": reservation.chat_id,
+            "target_id": target.step_id,
+            "target_title": target.title,
+            "suggested_at": tk_timestamp(datetime.now(timezone.utc)),
+        }
+
+    def _write_record(self, dirname: str, step_id: str, record: dict[str, str]) -> None:
+        directory = self.root / dirname
+        directory.mkdir(parents=True, exist_ok=True)
+        _write_text_atomically(directory / f"{step_id}{_RECORD_SUFFIX}", json.dumps(record))
 
     def _fresh_step_id(self, is_id_taken: Callable[[str], bool]) -> str:
         for _ in range(_MAX_STEP_ID_DRAWS):
@@ -687,18 +709,39 @@ class MessageStepReservations(MutableModel):
         return self.root / f"{step_id}{_RECORD_SUFFIX}"
 
 
+def suggestions_in_force(
+    files: MessageStepFiles, reservations: MessageStepReservations, chat_id: ChatId | None = None
+) -> tuple[StepSuggestion, ...]:
+    """The suggestions that still stand (``is_suggestion_in_force``), the latest per step, of one chat or of all."""
+    latest: dict[str, StepSuggestion] = {}
+    for suggestion in reservations.suggestions():
+        if chat_id is not None and suggestion.chat_id != chat_id:
+            continue
+        current = latest.get(suggestion.step_id)
+        if current is None or current.suggested_at < suggestion.suggested_at:
+            latest[suggestion.step_id] = suggestion
+    return tuple(
+        suggestion
+        for suggestion in latest.values()
+        if is_suggestion_in_force(suggestion, files.read_step_text(suggestion.step_id))
+    )
+
+
 def _ignore_change() -> None:
     """The change callback of a tracker nothing has subscribed to."""
 
 
 class MessageStepTracker(MutableModel):
-    """Each chat's message steps as the chat pages see them, re-read on every change to the tickets folder."""
+    """Each chat's message steps, and the suggestions about its steps in force, as the chat pages see them; re-read on
+    every change to the tickets folder and after every model answer."""
 
     model_config = {"arbitrary_types_allowed": True}
 
     files: MessageStepFiles = Field(frozen=True, description="The steps' records")
+    reservations: MessageStepReservations = Field(frozen=True, description="Where the suggestions are recorded")
 
     _steps_by_chat: dict[ChatId, tuple[MessageStep, ...]] = PrivateAttr(default_factory=dict)
+    _suggestions_by_chat: dict[ChatId, tuple[StepSuggestion, ...]] = PrivateAttr(default_factory=dict)
     _on_change: Callable[[], None] = PrivateAttr(default_factory=lambda: _ignore_change)
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     # Held across one read of the folder and the store of what it read, so a slow read cannot overwrite a newer one.
@@ -724,23 +767,33 @@ class MessageStepTracker(MutableModel):
             self._poller.stop()
 
     def refresh(self) -> None:
-        """Reread every chat's steps, and run the change callback when any chat's changed."""
+        """Reread every chat's steps and suggestions, and run the change callback when any chat's changed."""
         with self._read_lock:
             steps_by_chat: dict[ChatId, tuple[MessageStep, ...]] = {}
             for step in self.files.read_all():
-                steps_by_chat[step.chat_id] = (
-                    *steps_by_chat.get(step.chat_id, ()),
-                    step,
+                steps_by_chat[step.chat_id] = (*steps_by_chat.get(step.chat_id, ()), step)
+            suggestions_by_chat: dict[ChatId, tuple[StepSuggestion, ...]] = {}
+            for suggestion in sorted(
+                suggestions_in_force(self.files, self.reservations), key=lambda each: each.suggested_at
+            ):
+                suggestions_by_chat[suggestion.chat_id] = (
+                    *suggestions_by_chat.get(suggestion.chat_id, ()),
+                    suggestion,
                 )
             with self._lock:
-                if steps_by_chat == self._steps_by_chat:
+                if steps_by_chat == self._steps_by_chat and suggestions_by_chat == self._suggestions_by_chat:
                     return
                 self._steps_by_chat = steps_by_chat
+                self._suggestions_by_chat = suggestions_by_chat
         self._on_change()
 
     def steps_of_chat(self, chat_id: ChatId) -> tuple[MessageStep, ...]:
         with self._lock:
             return self._steps_by_chat.get(chat_id, ())
+
+    def suggestions_of_chat(self, chat_id: ChatId) -> tuple[StepSuggestion, ...]:
+        with self._lock:
+            return self._suggestions_by_chat.get(chat_id, ())
 
 
 class MessageStepWriter(MutableModel):
@@ -798,36 +851,39 @@ class MessageStepWriter(MutableModel):
             elif action.kind is MessageActionKind.NOT_A_TASK:
                 logger.info("No step for message {}: the model judged it not a task", reservation.message_id)
                 self.reservations.settle_locked(reservation.step_id, MessageStepOutcome.NOT_A_TASK)
-            elif action.kind is MessageActionKind.NEW:
-                assert action.title is not None
-                self.files.write_step(reservation, action.title)
-                self.reservations.release_locked(reservation.step_id)
+            elif action.kind is MessageActionKind.SAME:
+                assert action.target is not None
+                self.reservations.settle_as_suggestion_locked(
+                    reservation, MessageStepOutcome.SAME_AS, action.target, ""
+                )
+            elif action.kind is MessageActionKind.CANCEL:
+                assert action.target is not None and action.reason is not None
+                self.reservations.settle_as_suggestion_locked(
+                    reservation,
+                    MessageStepOutcome.CANCELS,
+                    action.target,
+                    action.reason,
+                )
                 is_changed = True
             else:
-                is_changed = self._apply_to_target(reservation, action)
+                assert action.title is not None
+                is_changed = self._write_own_step(reservation, action.title, action.target)
         if is_changed:
             self.on_change()
 
-    def _apply_to_target(self, reservation: MessageStepReservation, action: MessageAction) -> bool:
-        """Act on the open step the message belongs to, with the operations the agent itself uses on steps: leave it
-        (SAME), close it and write the message's own step with the updated request (MODIFY), or close it as no longer
-        needed (CANCEL). A target the agent closed meanwhile is left as it is. Whether a record changed. The caller
-        holds the reservations' lock."""
-        target = action.target
-        assert target is not None
-        if action.kind is MessageActionKind.SAME:
-            self.reservations.settle_locked(reservation.step_id, MessageStepOutcome.SAME_AS, target)
+    def _write_own_step(self, reservation: MessageStepReservation, title: str, replaced: OpenStep | None) -> bool:
+        """Create the message's step (NEW, or MODIFY recording the step it replaces); a ticket already at the id is
+        never overwritten, and the id settles as failed. The caller holds the reservations' lock."""
+        if not self.files.write_step(reservation, title):
+            logger.error(
+                "No step for message {}: a ticket already exists at {}", reservation.message_id, reservation.step_id
+            )
+            self.reservations.settle_locked(reservation.step_id, MessageStepOutcome.FAILED)
             return False
-        if action.kind is MessageActionKind.MODIFY:
-            assert action.title is not None
-            self.files.close_as_replaced(target.step_id, reservation.step_id)
-            self.files.write_step(reservation, action.title)
-            self.reservations.release_locked(reservation.step_id)
-            return True
-        assert action.reason is not None
-        is_closed = self.files.close_as_cancelled(target.step_id, reservation.message_id, action.reason)
-        self.reservations.settle_locked(reservation.step_id, MessageStepOutcome.CANCELS, target)
-        return is_closed
+        if replaced is not None:
+            self.reservations.record_replacement_locked(reservation, replaced)
+        self.reservations.release_locked(reservation.step_id)
+        return True
 
     def _decided_action(self, reservation: MessageStepReservation) -> MessageAction | None:
         """The model's action for the message, or None once every attempt failed (logged as an error)."""
@@ -840,7 +896,12 @@ class MessageStepWriter(MutableModel):
                 reservation.chat_id,
             )
             return None
-        open_steps = self.files.open_steps_of_chat(reservation.chat_id)
+        # A step called off or replaced is not offered again (the chat pages leave it out too).
+        closed_by_suggestion = frozenset(
+            suggestion.step_id
+            for suggestion in suggestions_in_force(self.files, self.reservations, reservation.chat_id)
+        )
+        open_steps = self.files.open_steps_of_chat(reservation.chat_id, closed_by_suggestion)
         attempt_count = TITLE_CALL_RETRY_COUNT + 1
         for attempt in range(1, attempt_count + 1):
             outcome = self._call_once(completion, binding.account_dir, reservation.message_text, open_steps)

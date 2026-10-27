@@ -5,9 +5,9 @@ When a user sends a chat a message, the chat app reserves a tk step id for it be
 asks a small model what the message does to the chat's open steps (usually a few seconds; longer when the call is
 retried) (``system/apps/chat/imbue/chat/message_steps.py``). A new request gets its step written under the reserved
 id, an ordinary tk step record in ``$TICKETS_DIR`` created with the chat's id as its creator. So does a message that
-changes what an open step asks for: the chat closes that step as replaced (a ``replaced-by`` field naming the new
-one). A message that repeats an open step gets no step of its own, and neither does one that calls an open step off:
-the chat closes that step as no longer needed (a ``cancelled`` field). A reservation is one JSON file under
+changes what an open step asks for, recorded as replacing that step under ``replacements/``. A message that repeats
+an open step gets no step of its own, and neither does one that calls an open step off. The chat app never changes
+the open step itself: the agent does, told by this hook what the message suggests. A reservation is one JSON file under
 ``$CHAT_MESSAGE_STEP_RESERVATIONS_DIR``; every id that ends without a step of its own has its outcome recorded under
 ``settled/`` beside it, naming the open step when there is one.
 
@@ -21,7 +21,8 @@ Two hooks, one subcommand each:
   it, at most as long as the chat app tries. An id judged not a task, or whose message belongs to an open step, is
   answered at once: the command is declined with that reason, which is not a failure. An id whose step could not be
   created blocks the command with an error. Either way the command never reaches tk, which would only say the id is
-  unknown. A ``tk start`` or ``tk close`` of a step a message cancelled or replaced is declined the same way.
+  unknown. A ``tk start`` of a message's own step that replaces a step still open is declined until the agent has
+  closed the step it replaces.
 
 Standard library only: Claude runs hooks under a plain ``python3``.
 """
@@ -59,9 +60,8 @@ _SETTLED_OUTCOMES = (
     OUTCOME_SAME_AS,
     OUTCOME_CANCELS,
 )
-# Kept equal to the chat app's _CANCELLED_FIELD and _REPLACED_BY_FIELD (message_steps.py).
-CANCELLED_FIELD = "cancelled"
-REPLACED_BY_FIELD = "replaced-by"
+# Kept equal to the chat app's REPLACEMENTS_DIRNAME (message_steps.py).
+REPLACEMENTS_DIRNAME = "replacements"
 OUTCOME_WRITTEN = "written"
 OUTCOME_UNKNOWN = "unknown"
 _POLL_SECONDS = 0.2
@@ -195,9 +195,8 @@ def message_step_context(step: PendingStep) -> str:
     return (
         "[Message step]\n"
         f"If this message is a new task, its step is being created under id {step.step_id}: it appears on the user's "
-        "progress timeline within seconds, titled with their request; if the message changes what one of the open "
-        "steps asks for, that step is closed as replaced by this one. If it repeats an open step, or calls one off, "
-        "no step is created for it, and a called-off step is closed as no longer needed. If it is not a task "
+        "progress timeline within seconds, titled with their request. If it repeats, changes or calls off one of your "
+        "open steps, `tk start` on this id tells you which and what to do with that step. If it is not a task "
         "(thanks, a question about progress), no step is created. Either way, never create your own step for this "
         "message; you may add steps for parts of your own work.\n"
         f"- When you start on this message, run `tk start {step.step_id}` (it waits until the step exists) and do "
@@ -206,7 +205,7 @@ def message_step_context(step: PendingStep) -> str:
         "- If you handle it together with other messages, start their steps together and close each one with its "
         "own summary when that work is done.\n"
         f"- If `tk start {step.step_id}` says the message was judged not to be a task, reply or carry on without a step.\n"
-        f"- If `tk start {step.step_id}` says the message belongs to another step, or called one off, do what it says."
+        f"- If `tk start {step.step_id}` says the message repeats, replaces or calls off another step, do what it says."
     )
 
 
@@ -250,10 +249,12 @@ class Settled(NamedTuple):
     """How a reserved id ended without a step of its own, from its record under ``settled/``."""
 
     outcome: str
-    # The open step the message belongs to, for same_as and cancels; '' otherwise.
+    # The open step the message repeats or calls off, for same_as and cancels; '' otherwise.
     target_id: str
     # That step's title.
     target_title: str
+    # Why the step is no longer needed, for cancels; '' otherwise.
+    reason: str
 
 
 def read_settled(reservations_dir: Path, step_id: str) -> Settled | None:
@@ -271,6 +272,7 @@ def read_settled(reservations_dir: Path, step_id: str) -> Settled | None:
         outcome=str(record["outcome"]),
         target_id=str(record.get("target_id", "")),
         target_title=str(record.get("target_title", "")),
+        reason=str(record.get("reason", "")),
     )
 
 
@@ -279,12 +281,15 @@ def _settled_outcome(reservations_dir: Path, step_id: str) -> str | None:
     return None if settled is None else settled.outcome
 
 
+def _is_open(fields: Mapping[str, str]) -> bool:
+    return fields.get("status") in ("open", "in_progress")
+
+
 def belonging_note(settled: Settled, target_fields: Mapping[str, str]) -> str | None:
-    """What to tell the agent about a message that repeats or calls off an open step, given that step's record now,
-    or None for any other outcome."""
+    """What to tell the agent about a message the model judged to repeat or call off an open step, given that step's
+    record now, or None for any other outcome."""
     target = f'step {settled.target_id} "{settled.target_title}"'
-    is_target_closed = target_fields.get("status") == "closed"
-    if settled.outcome == OUTCOME_SAME_AS and is_target_closed:
+    if settled.outcome == OUTCOME_SAME_AS and not _is_open(target_fields):
         return (
             f"This message asks for what {target} covered, and that step is already done. Reply or carry on "
             f"without a step, and do not start {settled.target_id} again."
@@ -295,31 +300,43 @@ def belonging_note(settled: Settled, target_fields: Mapping[str, str]) -> str | 
             f"{settled.target_id}: run `tk start {settled.target_id}` if that step is not in progress, and close it "
             "when the work is done."
         )
-    if settled.outcome == OUTCOME_CANCELS and CANCELLED_FIELD in target_fields:
-        return cancelled_note(settled.target_id, settled.target_title)
+    if settled.outcome == OUTCOME_CANCELS and not _is_open(target_fields):
+        return (
+            f"This message calls off {target}, which was already done before it arrived. Tell the user it was "
+            "already done, and do not start it again."
+        )
     if settled.outcome == OUTCOME_CANCELS:
         return (
-            f"This message calls off {target}, which was already done before it arrived, so nothing was cancelled. "
-            "Tell the user it was already done, and do not start or close it."
+            f"This message calls off {target} ({settled.reason}), so it has no step of its own. Stop that work and "
+            f'close the step with a short note: `tk close {settled.target_id} "No longer needed: {settled.reason}"`.'
         )
     return None
 
 
-def cancelled_note(target_id: str, target_title: str) -> str:
-    return (
-        f'Step {target_id} "{target_title}" was called off by a message from the user: the chat closed it as no '
-        f"longer needed. Stop that work, and do not start or close {target_id}."
-    )
-
-
-def replaced_note(
-    step_id: str, step_title: str, replacement_id: str, replacement_title: str
+def replacement_note(
+    step_id: str, step_title: str, replaced_id: str, replaced_title: str
 ) -> str:
     return (
-        f'Step {step_id} "{step_title}" was replaced by step {replacement_id} "{replacement_title}" for the user\'s '
-        f"updated request: the chat closed {step_id}. Do the updated work under {replacement_id}: run "
-        f"`tk start {replacement_id}` when you start on it, and do not start or close {step_id}."
+        f'This message replaces step {replaced_id} "{replaced_title}" with its own step {step_id} "{step_title}", '
+        f"for the user's updated request. First close the old step with a short note: "
+        f'`tk close {replaced_id} "Replaced by an updated request"`. Then run `tk start {step_id}` and do the '
+        "updated work under it."
     )
+
+
+def read_replacement(reservations_dir: Path, step_id: str) -> tuple[str, str] | None:
+    """The step a message's own step replaces (id and title), or None."""
+    try:
+        record = json.loads(
+            (reservations_dir / REPLACEMENTS_DIRNAME / f"{step_id}.json").read_text(
+                encoding="utf-8"
+            )
+        )
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict) or not isinstance(record.get("target_id"), str):
+        return None
+    return record["target_id"], str(record.get("target_title", ""))
 
 
 def read_step_fields(tickets_dir: Path, step_id: str) -> dict[str, str]:
@@ -407,20 +424,6 @@ def cmd_wait(
     tickets_dir, reservations_dir = _tickets_and_reservations_dirs(environ)
     separately = " Run any other tk commands from this call separately."
     for step_id in reserved_step_ids_in_command(command):
-        fields = read_step_fields(tickets_dir, step_id)
-        if CANCELLED_FIELD in fields:
-            return _deny(cancelled_note(step_id, fields.get("title", "")) + separately)
-        replacement_id = fields.get(REPLACED_BY_FIELD, "")
-        if replacement_id:
-            replacement_title = read_step_fields(tickets_dir, replacement_id).get(
-                "title", ""
-            )
-            return _deny(
-                replaced_note(
-                    step_id, fields.get("title", ""), replacement_id, replacement_title
-                )
-                + separately
-            )
         outcome = wait_for_step(
             step_id, tickets_dir, reservations_dir, max_wait_seconds
         )
@@ -428,6 +431,18 @@ def cmd_wait(
             return _deny(
                 f"No step {step_id}: this message was judged not to be a task, so it has no step. Reply or carry on "
                 "without one, and do not create a step for it." + separately
+            )
+        replaced = (
+            read_replacement(reservations_dir, step_id)
+            if outcome == OUTCOME_WRITTEN
+            else None
+        )
+        if replaced is not None and _is_open(
+            read_step_fields(tickets_dir, replaced[0])
+        ):
+            title = read_step_fields(tickets_dir, step_id).get("title", "")
+            return _deny(
+                replacement_note(step_id, title, replaced[0], replaced[1]) + separately
             )
         if outcome in (OUTCOME_SAME_AS, OUTCOME_CANCELS):
             settled = read_settled(reservations_dir, step_id)

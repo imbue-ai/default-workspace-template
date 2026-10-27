@@ -716,6 +716,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const tailTurnSettled = isTailTurnSettled(activityState);
     const liveCompaction = liveCompactionOf(activityState, chat?.active_agent.compaction_cause);
     const chatSteps = chat?.active_agent.message_steps ?? [];
+    const hiddenStepIds = chat?.active_agent.hidden_step_ids ?? [];
 
     // A new chat starts on fast mode; once it has run the workspace's turn limit,
     // switch it to standard speed. Checked here because this is where the loaded
@@ -725,19 +726,20 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // Memoize the turn-grouping -> rows pipeline. buildSections walks the entire
     // held transcript, so recomputing it on every scroll-driven redraw is the
     // dominant scroll cost on a long conversation. Its output depends only on the
-    // held events, the settled flag, the running compaction and the chat app's step
-    // changes -- captured by the render version (bumped on any data mutation) plus
-    // those three -- so a scroll-only redraw reuses the cached rows.
+    // held events, the settled flag, the running compaction and the chat app's
+    // message steps and hidden steps -- captured by the render version (bumped on any
+    // data mutation) plus those -- so a scroll-only redraw reuses the cached rows.
     const renderKey =
       `${chatId}|${getRenderVersion(chatId)}|${tailTurnSettled ? 1 : 0}|` +
       `${liveCompaction === null ? "-" : (liveCompaction.cause ?? "unknown")}|` +
-      chatSteps.map((change) => `${change.step_id}:${change.cancelled ? 1 : 0}:${change.title}`).join("|");
+      chatSteps.map((step) => `${step.step_id}:${step.status}:${step.title}`).join("|") +
+      `|hidden:${hiddenStepIds.join(",")}`;
     if (renderKey !== rowsCacheKey) {
-      // Structure and decoration come from the transcript walk, except the titles and
-      // cancellations the chat app wrote for later messages. The same pipeline feeds the
+      // Structure and decoration come from the transcript walk, plus the chat app's
+      // message steps not started yet and the steps it hides. The same pipeline feeds the
       // subagent view, so a subagent's "View conversation" renders an identical progress timeline.
       if (liveCompaction === null) closeRunningCompactionChips();
-      cachedRows = buildConversationRows(chatId, events, tailTurnSettled, liveCompaction, chatSteps);
+      cachedRows = buildConversationRows(chatId, events, tailTurnSettled, liveCompaction, chatSteps, hiddenStepIds);
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;

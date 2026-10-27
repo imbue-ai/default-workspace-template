@@ -46,12 +46,16 @@ class _Folders:
         (self.reservations_dir / f"{step_id}.json").write_text(json.dumps(record))
 
     def settle(
-        self, step_id: str, outcome: str, target: tuple[str, str] | None = None
+        self,
+        step_id: str,
+        outcome: str,
+        target: tuple[str, str] | None = None,
+        reason: str = "",
     ) -> None:
-        """An outcome as the chat app records it, with the open step a joining message names."""
+        """An outcome as the chat app records it, with the open step a repeating or calling-off message names."""
         settled = self.reservations_dir / hooks.SETTLED_DIRNAME
         settled.mkdir(exist_ok=True)
-        record = {"step_id": step_id, "outcome": outcome}
+        record = {"step_id": step_id, "outcome": outcome, "reason": reason}
         if target is not None:
             record.update(target_id=target[0], target_title=target[1])
         (settled / f"{step_id}.json").write_text(json.dumps(record))
@@ -186,24 +190,29 @@ def _write_step(folders: _Folders, step_id: str, title: str, *fields: str) -> No
 
 
 @pytest.mark.parametrize(
-    ("outcome", "target_fields", "expected"),
+    ("outcome", "target_status", "expected"),
     [
-        ("same_as", ["status: in_progress"], "tk start wor-step-qz01"),
-        ("same_as", ["status: closed"], "already done"),
+        ("same_as", "in_progress", "tk start wor-step-qz01"),
+        ("same_as", "closed", "already done"),
         (
             "cancels",
-            ["status: closed", "cancelled: 2026-10-27T22:53:48.000000Z"],
-            "do not start or close wor-step-qz01",
+            "in_progress",
+            'tk close wor-step-qz01 "No longer needed: you called it off"',
         ),
-        ("cancels", ["status: closed"], "already done before it arrived"),
+        ("cancels", "closed", "already done before it arrived"),
     ],
 )
-def test_starting_a_message_that_named_an_open_step_says_what_became_of_it(
-    folders: _Folders, outcome: str, target_fields: list[str], expected: str
+def test_starting_a_message_that_named_an_open_step_says_what_to_do_with_it(
+    folders: _Folders, outcome: str, target_status: str, expected: str
 ) -> None:
-    _write_step(folders, "wor-step-qz01", "Add a quiz", *target_fields)
+    _write_step(folders, "wor-step-qz01", "Add a quiz", f"status: {target_status}")
     folders.reserve("wor-step-ab12", "about the quiz")
-    folders.settle("wor-step-ab12", outcome, target=("wor-step-qz01", "Add a quiz"))
+    folders.settle(
+        "wor-step-ab12",
+        outcome,
+        target=("wor-step-qz01", "Add a quiz"),
+        reason="you called it off",
+    )
     payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-ab12"}}
 
     exit_code, printed = _run(["wait"], payload, folders.environ, max_wait_seconds=30.0)
@@ -212,42 +221,41 @@ def test_starting_a_message_that_named_an_open_step_says_what_became_of_it(
     assert expected in _denial(printed)
 
 
-def test_starting_a_cancelled_step_is_declined(folders: _Folders) -> None:
-    _write_step(
-        folders,
-        "wor-step-qz01",
-        "Add a quiz",
-        "status: closed",
-        "cancelled: 2026-10-27T22:53:48.000000Z",
+def _record_replacement(folders: _Folders, step_id: str, replaced_id: str) -> None:
+    replacements = folders.reservations_dir / hooks.REPLACEMENTS_DIRNAME
+    replacements.mkdir(exist_ok=True)
+    (replacements / f"{step_id}.json").write_text(
+        json.dumps(
+            {"step_id": step_id, "target_id": replaced_id, "target_title": "Add a quiz"}
+        )
     )
-    payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-qz01"}}
-
-    exit_code, printed = _run(["wait"], payload, folders.environ)
-
-    assert exit_code == 0
-    assert 'Step wor-step-qz01 "Add a quiz" was called off' in _denial(printed)
 
 
-def test_closing_a_replaced_step_points_at_its_replacement(folders: _Folders) -> None:
-    _write_step(
-        folders,
-        "wor-step-qz01",
-        "Add a quiz",
-        "status: closed",
-        "replaced-by: wor-step-mc02",
-    )
+def test_starting_a_replacement_waits_for_the_agent_to_close_the_old_step(
+    folders: _Folders,
+) -> None:
+    _write_step(folders, "wor-step-qz01", "Add a quiz", "status: in_progress")
     _write_step(folders, "wor-step-mc02", "Add a multiple-choice quiz", "status: open")
-    payload = {
-        "tool_name": "Bash",
-        "tool_input": {"command": "tk close wor-step-qz01 'Done'"},
-    }
+    _record_replacement(folders, "wor-step-mc02", "wor-step-qz01")
+    payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-mc02"}}
 
     exit_code, printed = _run(["wait"], payload, folders.environ)
 
     assert exit_code == 0
     reason = _denial(printed)
-    assert 'replaced by step wor-step-mc02 "Add a multiple-choice quiz"' in reason
+    assert 'tk close wor-step-qz01 "Replaced by an updated request"' in reason
     assert "tk start wor-step-mc02" in reason
+
+
+def test_starting_a_replacement_goes_through_once_the_old_step_is_closed(
+    folders: _Folders,
+) -> None:
+    _write_step(folders, "wor-step-qz01", "Add a quiz", "status: closed")
+    _write_step(folders, "wor-step-mc02", "Add a multiple-choice quiz", "status: open")
+    _record_replacement(folders, "wor-step-mc02", "wor-step-qz01")
+    payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-mc02"}}
+
+    assert _run(["wait"], payload, folders.environ) == (0, "")
 
 
 def test_the_wait_ends_when_the_step_is_written(folders: _Folders) -> None:
