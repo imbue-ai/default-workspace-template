@@ -51,6 +51,29 @@ def _put_on_path(bin_dir: Path, name: str, body: str) -> dict[str, str]:
     return {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
 
 
+def _write_empty_executable(path: Path) -> None:
+    """Creates ``path`` (and its parent directories) as an empty executable file."""
+    path.parent.mkdir(parents=True)
+    path.write_text("")
+    path.chmod(0o755)
+
+
+def _run_install_test_headless_shell(
+    repo_root: Path, browsers_dir: Path, link: Path, shell: Path, env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Runs the unit's ``_install_test_headless_shell`` with the shell resolved to ``shell``."""
+    return _run_unit_function(
+        "_install_test_headless_shell",
+        {
+            "REPO_ROOT": repo_root,
+            "_TEST_BROWSERS_DIR": browsers_dir,
+            "_TEST_HEADLESS_SHELL_LINK": link,
+            "_PW_TEST_HEADLESS_SHELL": shell,
+        },
+        env=env,
+    )
+
+
 @pytest.mark.parametrize("is_install_complete", [True, False])
 def test_the_shell_is_installed_until_playwright_marks_it_complete(
     tmp_path: Path, is_install_complete: bool
@@ -61,9 +84,7 @@ def test_the_shell_is_installed_until_playwright_marks_it_complete(
     marker = browser_dir / "INSTALLATION_COMPLETE"
     link = browsers_dir / "headless-shell"
     # The executable exists either way: an install interrupted mid-extract leaves it without the marker.
-    shell.parent.mkdir(parents=True)
-    shell.write_text("")
-    shell.chmod(0o755)
+    _write_empty_executable(shell)
     if is_install_complete:
         marker.write_text("")
     calls = tmp_path / "uv-calls"
@@ -74,16 +95,7 @@ def test_the_shell_is_installed_until_playwright_marks_it_complete(
         f'printf "%s %s\\n" "$PLAYWRIGHT_BROWSERS_PATH" "$*" >> {str(calls)!r}\ntouch {str(marker)!r}\n',
     )
 
-    result = _run_unit_function(
-        "_install_test_headless_shell",
-        {
-            "REPO_ROOT": tmp_path,
-            "_TEST_BROWSERS_DIR": browsers_dir,
-            "_TEST_HEADLESS_SHELL_LINK": link,
-            "_PW_TEST_HEADLESS_SHELL": shell,
-        },
-        env=env,
-    )
+    result = _run_install_test_headless_shell(tmp_path, browsers_dir, link, shell, env)
 
     assert result.returncode == 0, result.stdout + result.stderr
     expected_calls = (
@@ -105,22 +117,11 @@ def test_a_failed_install_leaves_no_link_to_the_incomplete_shell(
     )
     link = browsers_dir / "headless-shell"
     # An earlier install got as far as the executable and the link, but never wrote its marker.
-    shell.parent.mkdir(parents=True)
-    shell.write_text("")
-    shell.chmod(0o755)
+    _write_empty_executable(shell)
     link.symlink_to(shell)
     env = _put_on_path(tmp_path / "bin", "uv", "exit 1\n")
 
-    result = _run_unit_function(
-        "_install_test_headless_shell",
-        {
-            "REPO_ROOT": tmp_path,
-            "_TEST_BROWSERS_DIR": browsers_dir,
-            "_TEST_HEADLESS_SHELL_LINK": link,
-            "_PW_TEST_HEADLESS_SHELL": shell,
-        },
-        env=env,
-    )
+    result = _run_install_test_headless_shell(tmp_path, browsers_dir, link, shell, env)
 
     assert result.returncode != 0
     assert "install FAILED" in result.stdout
@@ -162,9 +163,7 @@ def test_both_playwright_defaults_point_at_fortress_and_a_failed_link_only_warns
 ) -> None:
     install_dir = tmp_path / "fortress"
     fortress = install_dir / "tilion-fortress" / "tilion"
-    fortress.parent.mkdir(parents=True)
-    fortress.write_text("")
-    fortress.chmod(0o755)
+    _write_empty_executable(fortress)
     default_chromium = tmp_path / "cache" / "chromium-1" / "chrome-linux" / "chrome"
     # A regular file where a parent directory should be makes the link impossible.
     shell_root = tmp_path / ("blocker" if is_shell_path_blocked else "cache")
