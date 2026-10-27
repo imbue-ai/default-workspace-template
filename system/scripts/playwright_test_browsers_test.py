@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import stat
 import subprocess
 import sys
@@ -13,11 +14,32 @@ import pytest
 _UNIT_PATH = Path(__file__).parent / "env.d" / "1000-playwright-fortress.sh"
 
 
-def _function(name: str) -> str:
-    """The definition of the unit's shell function ``name``, through its closing brace."""
+def _run_unit_function(
+    name: str,
+    variables: dict[str, Path],
+    env: dict[str, str] | None = None,
+    after: str = "",
+) -> subprocess.CompletedProcess[str]:
+    """Runs the unit's shell function ``name`` under ``set -euo pipefail``, called outside ``||``
+    as main() calls it, with ``variables`` set and ``after`` run once it returns."""
     unit = _UNIT_PATH.read_text()
     start = unit.index(f"\n{name}() {{\n") + 1
-    return unit[start : unit.index("\n}\n", start) + len("\n}\n")]
+    function = unit[start : unit.index("\n}\n", start) + len("\n}\n")]
+    assignments = "".join(
+        f"{variable}={shlex.quote(str(value))}\n"
+        for variable, value in variables.items()
+    )
+    script = (
+        "set -euo pipefail\n"
+        "_log() { printf '%s\\n' \"$*\"; }\n"
+        + assignments
+        + function
+        + f"{name}\n"
+        + after
+    )
+    return subprocess.run(
+        ["bash", "-c", script], env=env, capture_output=True, text=True
+    )
 
 
 def _put_on_path(bin_dir: Path, name: str, body: str) -> dict[str, str]:
@@ -51,19 +73,16 @@ def test_the_shell_is_installed_until_playwright_marks_it_complete(
         "uv",
         f'printf "%s %s\\n" "$PLAYWRIGHT_BROWSERS_PATH" "$*" >> {str(calls)!r}\ntouch {str(marker)!r}\n',
     )
-    script = (
-        "set -euo pipefail\n"
-        "_log() { printf '%s\\n' \"$*\"; }\n"
-        f"REPO_ROOT={str(tmp_path)!r}\n"
-        f"_TEST_BROWSERS_DIR={str(browsers_dir)!r}\n"
-        f"_TEST_HEADLESS_SHELL_LINK={str(link)!r}\n"
-        f"_PW_TEST_HEADLESS_SHELL={str(shell)!r}\n"
-        + _function("_install_test_headless_shell")
-        + "_install_test_headless_shell\n"
-    )
 
-    result = subprocess.run(
-        ["bash", "-c", script], env=env, capture_output=True, text=True
+    result = _run_unit_function(
+        "_install_test_headless_shell",
+        {
+            "REPO_ROOT": tmp_path,
+            "_TEST_BROWSERS_DIR": browsers_dir,
+            "_TEST_HEADLESS_SHELL_LINK": link,
+            "_PW_TEST_HEADLESS_SHELL": shell,
+        },
+        env=env,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -86,17 +105,12 @@ def test_the_playwright_paths_resolve_from_the_locked_playwright(
         tmp_path / "bin", "uv", f'shift 2\nexec {sys.executable!r} "$@"\n'
     )
     env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
-    script = (
-        "set -euo pipefail\n"
-        f"REPO_ROOT={str(Path(__file__).parents[2])!r}\n"
-        f"_TEST_BROWSERS_DIR={str(browsers_dir)!r}\n"
-        + _function("_resolve_playwright_paths")
-        + "_resolve_playwright_paths\n"
-        'printf "%s\\n" "$_PW_DEFAULT_CHROMIUM" "$_PW_DEFAULT_HEADLESS_SHELL" "$_PW_TEST_HEADLESS_SHELL"\n'
-    )
 
-    result = subprocess.run(
-        ["bash", "-c", script], env=env, capture_output=True, text=True
+    result = _run_unit_function(
+        "_resolve_playwright_paths",
+        {"REPO_ROOT": Path(__file__).parents[2], "_TEST_BROWSERS_DIR": browsers_dir},
+        env=env,
+        after='printf "%s\\n" "$_PW_DEFAULT_CHROMIUM" "$_PW_DEFAULT_HEADLESS_SHELL" "$_PW_TEST_HEADLESS_SHELL"\n',
     )
 
     assert result.returncode == 0, result.stderr
@@ -128,19 +142,16 @@ def test_both_playwright_defaults_point_at_fortress_and_a_failed_link_only_warns
     default_shell = (
         shell_root / "chromium_headless_shell-1" / "chrome-linux" / "headless_shell"
     )
-    # Called the way main() calls it: outside `||`, so `set -e` is in force.
-    script = (
-        "set -euo pipefail\n"
-        "_log() { printf '%s\\n' \"$*\"; }\n"
-        f"_FORTRESS_INSTALL_DIR={str(install_dir)!r}\n"
-        f"_PW_DEFAULT_CHROMIUM={str(default_chromium)!r}\n"
-        f"_PW_DEFAULT_HEADLESS_SHELL={str(default_shell)!r}\n"
-        + _function("_point_playwright_defaults_at_fortress")
-        + "_point_playwright_defaults_at_fortress\n"
-        "echo unit-continued\n"
-    )
 
-    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+    result = _run_unit_function(
+        "_point_playwright_defaults_at_fortress",
+        {
+            "_FORTRESS_INSTALL_DIR": install_dir,
+            "_PW_DEFAULT_CHROMIUM": default_chromium,
+            "_PW_DEFAULT_HEADLESS_SHELL": default_shell,
+        },
+        after="echo unit-continued\n",
+    )
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.splitlines()[-1] == "unit-continued"
