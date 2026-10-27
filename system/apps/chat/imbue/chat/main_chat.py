@@ -114,12 +114,16 @@ def with_former_main_chat_numbers(taken_names: Iterable[str]) -> list[str]:
 
 
 @pure
+def first_free_chat_name(taken_names: Iterable[str]) -> str:
+    """The first "Chat N" no chat holds, a former main chat's number included."""
+    return first_free_numbered_name(AUTO_NAME_WORD, with_former_main_chat_numbers(taken_names))
+
+
+@pure
 def former_main_chat_name(taken_names: Iterable[str]) -> str:
     """The name a chat still named ``MAIN_CHAT_NAME`` takes when another chat becomes the main chat: the first
     "Chat N" no chat holds, marked ("Chat 7 (was: Main)")."""
-    return (
-        first_free_numbered_name(AUTO_NAME_WORD, with_former_main_chat_numbers(taken_names)) + FORMER_MAIN_CHAT_SUFFIX
-    )
+    return first_free_chat_name(taken_names) + FORMER_MAIN_CHAT_SUFFIX
 
 
 class MainChatStore(MutableModel):

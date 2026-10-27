@@ -146,9 +146,9 @@ from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.main_chat import MainChatCandidate
 from imbue.chat.main_chat import MainChatStore
 from imbue.chat.main_chat import adopted_main_chat_id
+from imbue.chat.main_chat import first_free_chat_name
 from imbue.chat.main_chat import former_main_chat_name
 from imbue.chat.main_chat import is_main_chat_name
-from imbue.chat.main_chat import with_former_main_chat_numbers
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
@@ -181,9 +181,7 @@ from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
 from imbue.chat.models import SignedOutAccountError
 from imbue.chat.models import TransitionKind
-from imbue.chat.naming import AUTO_NAME_WORD
 from imbue.chat.naming import canonical_agent_name
-from imbue.chat.naming import first_free_numbered_name
 from imbue.chat.naming import is_minted_chat_name
 from imbue.chat.naming import is_name_conflict
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
@@ -3695,9 +3693,7 @@ class AgentManager:
         """The display name a new chat gets: ``explicit_name`` when it is free, else the first free
         "Chat N". Raises ``AgentNameConflictError`` for a name already in use. Lock held."""
         if not explicit_name:
-            return first_free_numbered_name(
-                AUTO_NAME_WORD, with_former_main_chat_numbers(self._numbered_names_locked())
-            )
+            return first_free_chat_name(self._numbered_names_locked())
         if is_name_conflict(explicit_name, self._taken_names_locked()):
             raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
         return explicit_name

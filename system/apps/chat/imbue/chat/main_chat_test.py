@@ -7,6 +7,7 @@ from pathlib import Path
 from imbue.chat.main_chat import MainChatCandidate
 from imbue.chat.main_chat import MainChatStore
 from imbue.chat.main_chat import adopted_main_chat_id
+from imbue.chat.main_chat import first_free_chat_name
 from imbue.chat.main_chat import former_main_chat_name
 from imbue.chat.main_chat import is_main_chat_name
 from imbue.chat.main_chat import with_former_main_chat_numbers
@@ -51,6 +52,11 @@ def test_the_former_main_chat_takes_the_first_chat_number_free_both_bare_and_mar
     assert former_main_chat_name(["Main", "Chat 1", "Chat 3"]) == "Chat 2 (was: Main)"
     assert former_main_chat_name(["Chat 1", "Chat 2 (was: Main)"]) == "Chat 3 (was: Main)"
     assert former_main_chat_name([]) == "Chat 1 (was: Main)"
+
+
+def test_a_new_chat_name_skips_the_number_a_former_main_chat_holds() -> None:
+    assert first_free_chat_name(["Chat 1", "Chat 2 (was: Main)"]) == "Chat 3"
+    assert first_free_chat_name(["Chat 2 (was: Main)"]) == "Chat 1"
 
 
 def test_a_former_main_chat_holds_its_chat_number() -> None:
