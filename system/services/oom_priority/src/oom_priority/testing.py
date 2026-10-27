@@ -33,7 +33,11 @@ def write_fake_cgroup(
 
 
 def write_fake_process(
-    proc_dir: Path, pid: int, start_ticks: int, tgid: int | None = None, comm: str = "claude"
+    proc_dir: Path,
+    pid: int,
+    start_ticks: int,
+    tgid: int | None = None,
+    comm: str = "claude",
 ) -> None:
     """Lay out ``/proc/<pid>`` with the ``stat`` and ``status`` a process's identity is read from.
 

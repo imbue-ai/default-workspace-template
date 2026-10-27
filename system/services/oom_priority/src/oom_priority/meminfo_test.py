@@ -46,7 +46,9 @@ def test_meminfo_follows_the_memory_guard_to_a_fresh_host_meminfo(
     )
 
 
-def test_process_memory_is_anonymous_memory_from_smaps_rollup_else_summed_smaps(tmp_path: Path) -> None:
+def test_process_memory_is_anonymous_memory_from_smaps_rollup_else_summed_smaps(
+    tmp_path: Path,
+) -> None:
     entry = tmp_path / "10"
     entry.mkdir()
     # Under gVisor there is no rollup: every mapping's Anonymous line is summed, and the binary's

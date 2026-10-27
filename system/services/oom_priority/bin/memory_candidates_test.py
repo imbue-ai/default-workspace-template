@@ -110,7 +110,14 @@ def _register_pid(runtime_dir: Path, pid: int, agent_id: str) -> None:
     directory = runtime_dir / "agent_pids"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{pid}.json").write_text(
-        json.dumps({"agent_name": "x", "is_worker": False, "agent_id": agent_id, "start_ticks": pid})
+        json.dumps(
+            {
+                "agent_name": "x",
+                "is_worker": False,
+                "agent_id": agent_id,
+                "start_ticks": pid,
+            }
+        )
     )
 
 
@@ -547,7 +554,9 @@ def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
     )
 
     apps = report.apps.candidates
-    assert [(a.name, a.display_name, a.window_count, a.anonymous_kib) for a in apps] == [
+    assert [
+        (a.name, a.display_name, a.window_count, a.anonymous_kib) for a in apps
+    ] == [
         ("daily-digest", "Daily Digest", 2, 3072),
         ("lineup-scout", "lineup-scout", 0, 512),
     ]

@@ -63,10 +63,8 @@ def _is_recorded_process(pid: int, record: dict, proc_dir: Path) -> bool:
     """
     if not _has_process_identity(record) or not _is_live_process(pid, proc_dir):
         return False
-    return (
-        read_start_ticks(pid, proc_dir) == record[_START_TICKS_KEY]
-        and read_boot_id(proc_dir) == record.get(_BOOT_ID_KEY)
-    )
+    is_same_start = read_start_ticks(pid, proc_dir) == record[_START_TICKS_KEY]
+    return is_same_start and read_boot_id(proc_dir) == record.get(_BOOT_ID_KEY)
 
 
 def _is_current_entry(pid: int, record: dict | None, proc_dir: Path) -> bool:
@@ -98,7 +96,9 @@ def _read_entries(directory: Path) -> list[tuple[Path, int, dict | None]]:
             data = json.loads(entry.read_text())
         except (OSError, json.JSONDecodeError):
             data = None
-        entries.append((entry, int(entry.stem), data if isinstance(data, dict) else None))
+        entries.append(
+            (entry, int(entry.stem), data if isinstance(data, dict) else None)
+        )
     return entries
 
 
@@ -162,7 +162,11 @@ def live_pids_by_agent_id(proc_dir: Path = _PROC_DIR) -> dict[str, list[int]]:
         if data is None:
             continue
         agent_id = data.get("agent_id")
-        if isinstance(agent_id, str) and agent_id and _is_recorded_process(pid, data, proc_dir):
+        if (
+            isinstance(agent_id, str)
+            and agent_id
+            and _is_recorded_process(pid, data, proc_dir)
+        ):
             pids_by_agent_id.setdefault(agent_id, []).append(pid)
     return pids_by_agent_id
 

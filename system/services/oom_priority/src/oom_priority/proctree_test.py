@@ -47,18 +47,24 @@ def test_descendant_walk_leaves_out_threads_listed_as_children(tmp_path: Path) -
     assert sorted(found) == [11, 12]
 
 
-def test_start_ticks_are_read_past_a_command_name_with_spaces_and_parentheses(tmp_path: Path) -> None:
+def test_start_ticks_are_read_past_a_command_name_with_spaces_and_parentheses(
+    tmp_path: Path,
+) -> None:
     write_fake_process(tmp_path, 42, start_ticks=123456, comm="a) b (c")
     assert read_start_ticks(42, proc_dir=tmp_path) == 123456
     assert read_start_ticks(43, proc_dir=tmp_path) is None
 
 
-def test_a_command_name_that_is_not_utf8_neither_hides_the_start_time_nor_raises(tmp_path: Path) -> None:
+def test_a_command_name_that_is_not_utf8_neither_hides_the_start_time_nor_raises(
+    tmp_path: Path,
+) -> None:
     # The kernel writes comm into stat and status as raw bytes.
     write_fake_process(tmp_path, 42, start_ticks=123456, tgid=7)
     entry = tmp_path / "42"
     for name in ("stat", "status"):
-        (entry / name).write_bytes((entry / name).read_bytes().replace(b"claude", b"cl\xffude"))
+        (entry / name).write_bytes(
+            (entry / name).read_bytes().replace(b"claude", b"cl\xffude")
+        )
     assert read_start_ticks(42, proc_dir=tmp_path) == 123456
     assert is_thread(42, proc_dir=tmp_path)
 

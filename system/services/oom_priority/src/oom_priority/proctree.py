@@ -72,7 +72,9 @@ def read_boot_id(proc_dir: Path = _PROC_DIR) -> str | None:
     was read in; a file that outlives a restart needs both.
     """
     try:
-        return (proc_dir / "sys" / "kernel" / "random" / "boot_id").read_text().strip() or None
+        return (
+            proc_dir / "sys" / "kernel" / "random" / "boot_id"
+        ).read_text().strip() or None
     except OSError:
         return None
 

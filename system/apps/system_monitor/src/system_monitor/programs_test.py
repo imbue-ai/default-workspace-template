@@ -136,12 +136,20 @@ def test_chats_on_any_harness_are_found_through_the_agent_registry(
         write_fake_process(proc, pid, start_ticks=pid)
         (registry / f"{pid}.json").write_text(
             json.dumps(
-                {"agent_name": "x", "is_worker": False, "agent_id": agent_id, "start_ticks": pid}
+                {
+                    "agent_name": "x",
+                    "is_worker": False,
+                    "agent_id": agent_id,
+                    "start_ticks": pid,
+                }
             )
         )
-    write_fake_process(proc, 31, start_ticks=999)  # 31's agent exited and its pid was reused
+    # 31's agent exited and its pid was reused.
+    write_fake_process(proc, 31, start_ticks=999)
     write_fake_process(proc, 40, start_ticks=40)
-    (registry / "40.json").write_text(json.dumps({"agent_name": "no-id", "start_ticks": 40}))
+    (registry / "40.json").write_text(
+        json.dumps({"agent_name": "no-id", "start_ticks": 40})
+    )
     (registry / "notes.txt").write_text("ignored")
 
     assert programs.agents_by_pid(proc) == {
