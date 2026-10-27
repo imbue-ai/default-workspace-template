@@ -1499,6 +1499,34 @@ def test_a_former_main_chat_that_cannot_be_renamed_keeps_its_name(
         manager.stop()
 
 
+def test_a_former_main_chat_deleted_before_its_rename_runs_frees_the_number_it_was_shown_under(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    try:
+        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
+        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
+        manager.note_agent_list_known()
+        assert manager.make_main_chat(ChatId("agent-main"))
+        rename_lock = manager._rename_lock_for(ChatId("agent-main"))
+        with rename_lock:
+            assert manager.make_main_chat(ChatId("agent-trip"))
+            with manager._lock:
+                del manager._agents["agent-main"]
+
+        def is_title_cleared() -> bool:
+            with manager._lock:
+                return ChatId("agent-main") not in manager._title_override_by_chat
+
+        wait_until_true(is_title_cleared, 10, "the gone former main chat's shown title to be dropped")
+        assert manager.mint_awaiting_chat("").name == "Chat 1"
+    finally:
+        manager.stop()
+
+    assert not argv_log.exists()
+
+
 def _display_name(manager: AgentManager, agent_id: str) -> str | None:
     agent = manager.get_agent_by_id(agent_id)
     assert agent is not None
