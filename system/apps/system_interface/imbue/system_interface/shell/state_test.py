@@ -26,6 +26,9 @@ from workspace_layout.records import Desktop
 from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import StoredWindowPath
 from workspace_layout.windows import WindowClosedHint
+from workspace_themes.contract import WORKSPACE_THEMES_DIRECTORY
+from workspace_themes.testing import write_standard_theme
+from workspace_themes.testing import write_test_theme
 
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
@@ -112,6 +115,37 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
             poll_interval=0.02,
             error_message="the periodic prune never took the stale client",
         )
+    finally:
+        shell.stop()
+
+
+@pytest.mark.timeout(30)
+def test_a_theme_made_while_the_shell_runs_reaches_every_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    repo_root = tmp_path / "repo"
+    write_standard_theme(repo_root)
+    shell = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster),
+        repo_root=repo_root,
+    )
+    window = broadcaster.register()
+    heard: list[str] = []
+
+    def has_heard_of_paper() -> bool:
+        for message in drain_messages(window):
+            if message["type"] == "themes_changed":
+                heard.extend(theme["id"] for theme in message["catalog"]["themes"])
+        return "paper" in heard
+
+    shell.start()
+    try:
+        write_test_theme(repo_root / WORKSPACE_THEMES_DIRECTORY, "paper", "")
+        wait_for(has_heard_of_paper, timeout=10.0, poll_interval=0.05, error_message="no window heard of the theme")
     finally:
         shell.stop()
 

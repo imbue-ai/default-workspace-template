@@ -101,6 +101,7 @@ _IMPORTED_SOURCE_PREFIXES = (
     "system/libs/app_schema/",
     "system/libs/chat_background_tasks/",
     "system/libs/workspace_layout/",
+    "system/libs/workspace_themes/",
 )
 # The manifests this environment was resolved from. The root ``uv.lock`` is
 # deliberately absent: scaffolding an app relocks it (``uv sync
@@ -121,6 +122,7 @@ _BACKEND_MANIFESTS = frozenset(
         "system/libs/app_schema/pyproject.toml",
         "system/libs/chat_background_tasks/pyproject.toml",
         "system/libs/workspace_layout/pyproject.toml",
+        "system/libs/workspace_themes/pyproject.toml",
         "pyproject.toml",
     }
 )

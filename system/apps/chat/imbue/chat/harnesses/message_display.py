@@ -16,8 +16,9 @@ Order of decision (:func:`classify_user_message`):
 
 1. An explicit detector matches (for a harness note only: grok's stop-hook note and its
    interrupted-turn note; then stop hook, fleet, task-notification, background-task report,
-   grok's wake report, skill, /welcome, a seeded chat's context block, model-bar traffic, a
-   latchkey resolution, a secret-card resolution, reports merged into a turn with the user's words)
+   workspace-update note, grok's wake report, skill, /welcome, a seeded chat's context block,
+   model-bar traffic, a latchkey resolution, a secret-card resolution, reports merged into a turn
+   with the user's words)
    -> that decision. Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is
    ``is_meta`` yet deliberately surfaces as a chip.
 2. else ``is_wake`` (a turn the harness started itself to report background work) -> a notice.
@@ -51,6 +52,15 @@ BROWSER_FLEET_TAG = "agentic-browser-fleet"
 # ``<summary>`` line is for the user; ``message_display_test.py`` pins the two tags equal.
 BACKGROUND_TASK_REPORT_TAG = "background-task-report"
 
+# Cross-layer contract: the wrapper the update-self skill puts around the note it sends each chat
+# it paused for an update's apply (``.agents/skills/update-self/scripts/update_resume_note.py``,
+# sent by ``run-status resume-chats``). The opening tag says whether the update landed, which
+# picks the notice's label; only the ``<summary>`` line is for the user. ``message_display_test.py``
+# pins the tag and both outcomes equal.
+WORKSPACE_UPDATE_NOTE_TAG = "workspace-update-note"
+WORKSPACE_UPDATE_OUTCOME_LANDED = "landed"
+WORKSPACE_UPDATE_OUTCOME_NOT_LANDED = "not-landed"
+
 # Cross-layer contract: the tag the chat app wraps a seeded chat's context in when it launches
 # that chat's first agent (``chat_seed.seed_context_message``). The agent reads the whole
 # message -- the conversation the chat opened on, then the user's own words -- while the page
@@ -70,6 +80,14 @@ _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_F
 _BACKGROUND_TASK_REPORT_RE = re.compile(
     rf"^\s*<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>([^\n]*?)</summary>[\s\S]*</{BACKGROUND_TASK_REPORT_TAG}>\s*$"
 )
+_WORKSPACE_UPDATE_NOTE_RE = re.compile(
+    rf'^\s*<{WORKSPACE_UPDATE_NOTE_TAG} outcome="({WORKSPACE_UPDATE_OUTCOME_LANDED}|{WORKSPACE_UPDATE_OUTCOME_NOT_LANDED})">'
+    rf"\s*<summary>([^\n]*?)</summary>[\s\S]*</{WORKSPACE_UPDATE_NOTE_TAG}>\s*$"
+)
+_WORKSPACE_UPDATE_LABELS = {
+    WORKSPACE_UPDATE_OUTCOME_LANDED: "Workspace updated",
+    WORKSPACE_UPDATE_OUTCOME_NOT_LANDED: "Workspace update not applied",
+}
 # One report in a text that newline-joins several messages (a queue handed back on Stop). A
 # report is a whole message, so its tags sit on lines of their own; its output is the command's
 # raw text and may carry the tag mid-line.
@@ -413,6 +431,19 @@ def _wake_notice(content: str) -> MessageDisplay:
     return MessageDisplay(display=DisplayKind.NOTICE, display_label=_WAKE_NOTICE_LABEL, display_body="")
 
 
+def _match_workspace_update_note(content: str) -> MessageDisplay | None:
+    """The note a chat paused for a workspace update gets when it resumes; a NOTICE showing only its
+    summary line, labelled by whether the update landed."""
+    match = _WORKSPACE_UPDATE_NOTE_RE.match(content)
+    if match is None:
+        return None
+    return MessageDisplay(
+        display=DisplayKind.NOTICE,
+        display_label=_WORKSPACE_UPDATE_LABELS[match.group(1)],
+        display_body=match.group(2).strip(),
+    )
+
+
 def _match_merged_background_task_reports(content: str) -> MessageDisplay | None:
     """The user's words merged into one turn with reports that were queued beside them (a harness
     that flushes its queue as one message); the page shows only the words."""
@@ -539,6 +570,7 @@ _DETECTORS = (
     _match_stop_hook,
     _match_task_notification,
     _match_background_task_report,
+    _match_workspace_update_note,
     _match_grok_wake,
     _match_browser_fleet,
     _match_composer_command,

@@ -36,9 +36,10 @@ SNAPSHOTS_DIRNAME = "snapshots"
 # The run-status file: the whole machine-readable contract between an
 # update-self pass and the Imbue Studio app. The lead records the run's start here
 # (``run-status start``, once it holds the updating-workspace lease), the
-# worker it hands the merge to (``run-status delegate``), its one mid-flight
-# hold and its clearing (``run-status hold`` / ``resume``), and its
-# one terminal verdict (``run-status verdict``); the apply mirrors its marker's
+# worker it hands the merge to (``run-status delegate``), each wait on the
+# user and its clearing (``run-status hold`` / ``resume``), the chats and
+# workers it paused for the apply (``run-status stop-chats`` / ``resume-chats``),
+# and its one terminal verdict (``run-status verdict``); the apply mirrors its marker's
 # phase and restamp in alongside. The app's poll reads this file over ``mngr
 # exec`` together with the run's chat agent, and needs nothing else -- it never
 # opens the marker, and a run recorded here is visible to it whoever launched
@@ -231,11 +232,15 @@ class LastGoodRecord:
 
     ``merge_sha`` is the merge the apply landed and ``rollback_to`` the tree it
     landed on; ``programs`` are the supervisord programs a rollback restarts (the
-    touched critical apps', the shell's included) and ``apps`` the app names the
-    shell raises the notice on. ``needs_system_services_restart`` says the diff reached
-    the bootstrap or the services agent's own setup, which a program restart
-    cannot undo. ``progress`` is what a running rollback is doing right now and
-    ``outcome`` how it ended, both for the notice to show.
+    touched critical apps', the shell's included, and those the harden pass's scope
+    names for its other apps and services, except one the merge added, which a
+    rollback removes) and ``apps`` the app names the shell raises the notice on, an
+    added app included. ``unrestarted`` names the pass's apps and services with no
+    program to restart, which the rollback's outcome leaves to the agent.
+    ``needs_system_services_restart`` says the diff reached the bootstrap or the
+    services agent's own setup, which a program restart cannot undo. ``progress``
+    is what a running rollback is doing right now and ``outcome`` how it ended, both
+    for the notice to show.
     """
 
     merge_sha: str
@@ -248,6 +253,7 @@ class LastGoodRecord:
     needs_system_services_restart: bool
     progress: str | None = None
     outcome: str | None = None
+    unrestarted: list[str] = field(default_factory=list)
 
     def to_json(self) -> str:
         return json.dumps(
@@ -265,6 +271,7 @@ class LastGoodRecord:
                 "needs_system_services_restart": self.needs_system_services_restart,
                 "progress": self.progress,
                 "outcome": self.outcome,
+                "unrestarted": list(self.unrestarted),
             },
             indent=2,
         )
@@ -293,6 +300,7 @@ class LastGoodRecord:
                 raw.get("needs_system_services_restart", False)
             ),
             progress=str(progress) if progress is not None else None,
+            unrestarted=[str(name) for name in raw.get("unrestarted", [])],
             outcome=str(outcome) if outcome is not None else None,
         )
 
@@ -395,9 +403,10 @@ def write_marker(
     _mirror_apply_into_run_status(marker.phase, marker.updated_at, repo_root, now)
 
 
-def clear_marker(repo_root: Path) -> None:
+def clear_marker(repo_root: Path, *, landed_at: float | None = None) -> None:
+    """Take the marker down; ``landed_at`` is when the apply went live, which the run record keeps."""
     marker_path(repo_root).unlink(missing_ok=True)
-    _mirror_apply_into_run_status(None, None, repo_root, time.time)
+    _mirror_apply_into_run_status(None, None, repo_root, time.time, landed_at=landed_at)
 
 
 def _mirror_apply_into_run_status(
@@ -405,6 +414,8 @@ def _mirror_apply_into_run_status(
     apply_updated_at: float | None,
     repo_root: Path,
     now: Callable[[], float],
+    *,
+    landed_at: float | None = None,
 ) -> None:
     """Keep the run record's apply fields equal to the marker's presence and phase.
 
@@ -412,16 +423,24 @@ def _mirror_apply_into_run_status(
     Imbue Studio app reads. Stamping the two together at the marker's chokepoints is
     what lets the app size its apply window off this file alone -- the app
     stands back while ``apply_phase`` is set and for the recovery grace after
-    its last restamp, exactly as it did off the marker. A workspace with no run
-    record (an apply run by hand outside a pass) has nothing to report to.
+    its last restamp, exactly as it did off the marker. ``landed_at`` is
+    stamped as ``applied_at``, which the app reads to say the update is finishing.
+    A workspace with no run record (an apply run by hand outside a pass) has
+    nothing to report to.
     """
     status = read_run_status(repo_root)
     if status is None:
         return
-    if status.apply_phase == phase and status.apply_updated_at == apply_updated_at:
+    if (
+        status.apply_phase == phase
+        and status.apply_updated_at == apply_updated_at
+        and landed_at is None
+    ):
         return
     status.apply_phase = phase
     status.apply_updated_at = apply_updated_at
+    if landed_at is not None:
+        status.applied_at = landed_at
     write_run_status(status, repo_root, now)
 
 
@@ -440,6 +459,10 @@ RUN_VERDICT_STUCK = "STUCK"
 
 RUN_VERDICT_REFUSED = "REFUSED"
 
+# The update cannot keep something the user built: the run ends with the worker
+# stopped and its branch kept, and the user's answer in the lead chat re-lands it.
+RUN_VERDICT_NEEDS_DECISION = "NEEDS_DECISION"
+
 RUN_VERDICTS = (
     RUN_VERDICT_UPDATED,
     RUN_VERDICT_UPDATED_WITH_REBUILD_ITEMS,
@@ -447,7 +470,74 @@ RUN_VERDICTS = (
     RUN_VERDICT_NEEDS_RECREATION,
     RUN_VERDICT_STUCK,
     RUN_VERDICT_REFUSED,
+    RUN_VERDICT_NEEDS_DECISION,
 )
+
+# How a run was started, as the app's dispatcher records it in the last-dispatch
+# file beside the run record: by the workspace's own schedule, or by the user's
+# "Update now". The run record carries it so the app can tell the two apart.
+STARTED_BY_SCHEDULED = "scheduled"
+
+STARTED_BY_IMMEDIATE = "immediate"
+
+STARTED_BY_VALUES = (STARTED_BY_SCHEDULED, STARTED_BY_IMMEDIATE)
+
+# Written by the app's in-workspace command and dispatcher whenever they create an
+# update chat; this side only reads it.
+LAST_DISPATCH_FILENAME = "last-dispatch.json"
+
+
+@dataclass
+class StoppedAgent:
+    """One chat or background worker ``run-status stop-chats`` paused for the apply.
+
+    ``chat_id`` is the chat the agent belongs to (a worker's own id, since a worker
+    is its own chat); a worker's ``lead_chat_id`` is the chat its lead runs in, which
+    is told on resume, because a restarted worker does not pick its work back up.
+    ``interrupted_tasks`` names the background commands that were stopped with it.
+    ``is_restarted`` and ``is_told`` are ``resume-chats``'s progress, so a re-run
+    restarts and tells only what is left.
+    """
+
+    id: str
+    name: str
+    chat_id: str
+    is_worker: bool = False
+    lead_chat_id: str = ""
+    interrupted_tasks: list[str] = field(default_factory=list)
+    is_restarted: bool = False
+    is_told: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "chat_id": self.chat_id,
+            "is_worker": self.is_worker,
+            "lead_chat_id": self.lead_chat_id,
+            "interrupted_tasks": list(self.interrupted_tasks),
+            "is_restarted": self.is_restarted,
+            "is_told": self.is_told,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: object) -> "StoppedAgent | None":
+        """The entry, or ``None`` for one without an id (nothing could restart it)."""
+        if not isinstance(raw, dict) or not raw.get("id"):
+            return None
+        tasks = raw.get("interrupted_tasks")
+        return cls(
+            id=str(raw["id"]),
+            name=str(raw.get("name", "")),
+            chat_id=str(raw.get("chat_id", "")),
+            is_worker=bool(raw.get("is_worker", False)),
+            lead_chat_id=str(raw.get("lead_chat_id", "")),
+            interrupted_tasks=[str(task) for task in tasks]
+            if isinstance(tasks, list)
+            else [],
+            is_restarted=bool(raw.get("is_restarted", False)),
+            is_told=bool(raw.get("is_told", False)),
+        )
 
 
 @dataclass
@@ -474,6 +564,14 @@ class RunStatus:
       completed phase. Mirrored from the apply marker on its every restamp and
       cleared with it, so the app reads the apply's liveness from this one
       file and never has to know the marker exists.
+    * ``applied_at`` -- when the apply went live. Between it and the verdict
+      the update is in place while the run finishes its own checks, which the
+      app says instead of "preparing". Cleared by the next run's ``start``.
+
+    ``started_by`` is how the run was started (``STARTED_BY_VALUES``), or
+    ``None`` when nothing recorded it, and is then left out of the file.
+    ``stopped_agents`` is what ``run-status stop-chats`` paused, for
+    ``resume-chats``.
     """
 
     chat_agent_name: str
@@ -484,31 +582,36 @@ class RunStatus:
     hold_detail: str = ""
     apply_phase: str | None = None
     apply_updated_at: float | None = None
+    applied_at: float | None = None
     verdict: str | None = None
     detail: str = ""
     resulting_ref: str = ""
     in_place_compatible_ref: str = ""
     verdict_at: float | None = None
+    started_by: str | None = None
+    stopped_agents: list[StoppedAgent] = field(default_factory=list)
 
     def to_json(self) -> str:
-        return json.dumps(
-            {
-                "chat_agent_name": self.chat_agent_name,
-                "started_at": self.started_at,
-                "updated_at": self.updated_at,
-                "worker_agent_name": self.worker_agent_name,
-                "is_holding": self.is_holding,
-                "hold_detail": self.hold_detail,
-                "apply_phase": self.apply_phase,
-                "apply_updated_at": self.apply_updated_at,
-                "verdict": self.verdict,
-                "detail": self.detail,
-                "resulting_ref": self.resulting_ref,
-                "in_place_compatible_ref": self.in_place_compatible_ref,
-                "verdict_at": self.verdict_at,
-            },
-            indent=2,
-        )
+        payload: dict[str, object] = {
+            "chat_agent_name": self.chat_agent_name,
+            "started_at": self.started_at,
+            "updated_at": self.updated_at,
+            "worker_agent_name": self.worker_agent_name,
+            "is_holding": self.is_holding,
+            "hold_detail": self.hold_detail,
+            "apply_phase": self.apply_phase,
+            "apply_updated_at": self.apply_updated_at,
+            "applied_at": self.applied_at,
+            "verdict": self.verdict,
+            "detail": self.detail,
+            "resulting_ref": self.resulting_ref,
+            "in_place_compatible_ref": self.in_place_compatible_ref,
+            "verdict_at": self.verdict_at,
+            "stopped_agents": [agent.to_dict() for agent in self.stopped_agents],
+        }
+        if self.started_by is not None:
+            payload["started_by"] = self.started_by
+        return json.dumps(payload, indent=2)
 
     @classmethod
     def from_json(cls, text: str) -> "RunStatus":
@@ -518,8 +621,19 @@ class RunStatus:
         worker_agent_name = raw.get("worker_agent_name")
         apply_phase = raw.get("apply_phase")
         apply_updated_at = raw.get("apply_updated_at")
+        applied_at = raw.get("applied_at")
         verdict = raw.get("verdict")
         verdict_at = raw.get("verdict_at")
+        started_by = raw.get("started_by")
+        stopped = raw.get("stopped_agents")
+        stopped_agents = [
+            agent
+            for agent in (
+                StoppedAgent.from_dict(entry)
+                for entry in (stopped if isinstance(stopped, list) else [])
+            )
+            if agent is not None
+        ]
         return cls(
             chat_agent_name=str(raw.get("chat_agent_name", "")),
             started_at=float(raw.get("started_at", 0.0)),
@@ -533,16 +647,41 @@ class RunStatus:
             apply_updated_at=float(apply_updated_at)
             if apply_updated_at is not None
             else None,
+            applied_at=float(applied_at) if applied_at is not None else None,
             verdict=str(verdict) if verdict is not None else None,
             detail=str(raw.get("detail", "")),
             resulting_ref=str(raw.get("resulting_ref", "")),
             in_place_compatible_ref=str(raw.get("in_place_compatible_ref", "")),
             verdict_at=float(verdict_at) if verdict_at is not None else None,
+            started_by=str(started_by) if started_by in STARTED_BY_VALUES else None,
+            stopped_agents=stopped_agents,
         )
 
 
 def run_status_path(repo_root: Path) -> Path:
     return repo_root / STATE_DIR_REL / RUN_STATUS_FILENAME
+
+
+def last_dispatch_path(repo_root: Path) -> Path:
+    return repo_root / STATE_DIR_REL / LAST_DISPATCH_FILENAME
+
+
+def dispatched_started_by(repo_root: Path, chat_agent_name: str) -> str | None:
+    """How the app's last dispatch started ``chat_agent_name``'s run, or ``None``.
+
+    ``None`` unless the last-dispatch file names that very chat: a run started by
+    hand, or an older run's chat, was not started by that dispatch. A missing or
+    unreadable file is the same ``None``; the field is the app's to show, never a
+    reason to fail a run's start.
+    """
+    try:
+        raw = json.loads(last_dispatch_path(repo_root).read_text())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(raw, dict) or raw.get("chat_agent_name") != chat_agent_name:
+        return None
+    started_by = raw.get("started_by")
+    return started_by if started_by in STARTED_BY_VALUES else None
 
 
 def read_run_status(repo_root: Path) -> RunStatus | None:

@@ -8,7 +8,7 @@ repos:
     hooks:
     -   id: ruff
         name: "Python formatter + import sorter (ruff)"
-        entry: bash -c 'uvx ruff check --select UP006,UP007,I,F401 --fix "$@" && uvx ruff format "$@"' --
+        entry: bash -c 'uv run --no-sync ruff check --select UP006,UP007,I,F401 --fix "$@" && uv run --no-sync ruff format "$@"' --
         language: system
         types: [python]
         exclude: '^vendor/'

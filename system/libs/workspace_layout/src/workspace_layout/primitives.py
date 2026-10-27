@@ -141,6 +141,15 @@ class WallpaperKind(LowerCaseStrEnum):
     FILE = auto()
 
 
+class AppTheming(LowerCaseStrEnum):
+    """Where an app's Theming submenu stands (a wire value): a themeable app's theming is on or off, and an unthemed
+    app offers to be made themeable."""
+
+    ON = auto()
+    OFF = auto()
+    UNTHEMED = auto()
+
+
 class ClientActivityKind(LowerCaseStrEnum):
     """What a client-activity report records: a message a client sent to an app's page (a wire value)."""
 

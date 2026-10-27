@@ -44,7 +44,7 @@ class ChatSettings(FrozenModel):
     """What the settings file holds. Every field has a default, so an older file reads whole."""
 
     fast_mode_default: FastModeMode = Field(
-        default=FastModeMode.AUTO,
+        default=FastModeMode.OFF,
         description="The fast mode a new chat starts in",
     )
     fast_mode_turn_limit: int = Field(

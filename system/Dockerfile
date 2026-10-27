@@ -6,7 +6,7 @@
 # runbook in the mngr monorepo (apps/minds/docs/deploy/ops/app-release.md, step
 # 0) and its release test check that the pair still agrees. Resolve a tag's
 # current index digest with `docker buildx imagetools inspect python:3.12-slim-trixie`.
-FROM python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+FROM python:3.12-slim-trixie@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
 
 # /root/.local/bin holds uv + claude (installed by system/scripts/setup_system.sh); put
 # it on PATH for every build layer and at runtime.

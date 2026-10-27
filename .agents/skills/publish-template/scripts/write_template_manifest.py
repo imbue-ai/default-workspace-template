@@ -19,23 +19,26 @@ line in `template.md` without its counterpart here.
 Secrets are the one requirement derived rather than written: an app declares
 the env files it needs in its `app.toml` (`[[secrets]]`: `file`, `variables`,
 `note`) and a skill under `secrets:` in its SKILL.md front matter, and the
-snapshot's `mcp-servers.json` and supervisord programs name the files they
-run under. Every referenced `data/.secrets/<file>.env` must be declared, and
+included `mcp-servers.json` and supervisord programs name the files they run
+under (read by the schema module's `secret_references_in`, the same scan the
+validator runs). Every referenced `data/.secrets/<file>.env` must be declared, and
 every declared variable must exist in the publishing workspace's own file, or
 the publish stops here: an adopter is asked for exactly what the declarations
 say, so a declaration that lies breaks adoption silently. The aggregated lines
 are also written to `--secret-lines-output` so `template.md` carries the matching
 `requires_secret:` lines.
 
-Pure standard library: it runs in the assembly worker's post-reset worktree,
-where there is no venv, so it must work under a bare `python3`. Strings are
-emitted with `json.dumps`, whose escaping is a valid subset of TOML's
+It runs in the assembly worker's post-reset worktree, where there is no venv,
+so it needs only the standard library plus the pydantic the schema module
+imports (`uv run --no-project --with 'pydantic>=2'`). Strings are emitted with
+`json.dumps`, whose escaping is a valid subset of TOML's
 basic-string escaping -- and any mistake is caught immediately, because
 `build_template.sh` validates the file it just wrote.
 
 Usage (from the assembled repo root):
 
-    python3 write_template_manifest.py --slug S --title T --description D \\
+    uv run --no-project --with 'pydantic>=2' python write_template_manifest.py \\
+        --slug S --title T --description D \\
         --version v1 --include PATH [--include PATH ...] \\
         [--data-include PATH ...] [--previous-manifest PATH] \\
         [--workspace-dir PATH] [--secret-lines-output PATH] --output PATH
@@ -49,15 +52,12 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from validate_template import load_schema_module
+
 APP_MANIFEST_NAME = "app.toml"
 SKILL_FILE_NAME = "SKILL.md"
 SECRETS_DIRECTORY = "data/.secrets"
-MCP_SERVERS_FILE = "mcp-servers.json"
-SUPERVISORD_DROPIN_DIRECTORY = "system/supervisord.conf.d"
 
-# A reference to a secret file anywhere in a config: the file's slug is what a
-# declaration is keyed by.
-_SECRET_REFERENCE_RE = re.compile(r"data/\.secrets/([a-z0-9][a-z0-9-]*)\.env")
 _SECRET_FILE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
 _VARIABLE_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # The names an env file sets: what `system/scripts/with_secrets.py` reads, names only.
@@ -278,24 +278,6 @@ def collect_declarations(
     return declaration_by_file
 
 
-def collect_references(repo_root: Path) -> dict[str, list[str]]:
-    """Every secret file the snapshot's MCP config and supervisord programs name, with where."""
-    sources_by_file: dict[str, list[str]] = {}
-    candidates = [repo_root / MCP_SERVERS_FILE]
-    dropins = repo_root / SUPERVISORD_DROPIN_DIRECTORY
-    if dropins.is_dir():
-        candidates.extend(sorted(dropins.glob("*.conf")))
-    for path in candidates:
-        if not path.is_file():
-            continue
-        relative = path.relative_to(repo_root).as_posix()
-        for match in _SECRET_REFERENCE_RE.finditer(
-            path.read_text(encoding="utf-8", errors="replace")
-        ):
-            sources_by_file.setdefault(match.group(1), []).append(relative)
-    return sources_by_file
-
-
 def env_file_variable_names(text: str) -> set[str]:
     return set(_ENV_ASSIGNMENT_RE.findall(text))
 
@@ -419,7 +401,7 @@ def render_manifest(
         "#",
         "#   The [[requirements.secret]] entries below were AGGREGATED from the",
         "#   included apps' app.toml [[secrets]] and skills' SKILL.md secrets:",
-        "#   declarations, plus every data/.secrets/<file>.env the snapshot's",
+        "#   declarations, plus every data/.secrets/<file>.env the included",
         "#   mcp-servers.json and supervisord programs run under. Fix a wrong one",
         "#   at its declaration, not here.",
         "#",
@@ -522,14 +504,17 @@ def main(argv: list[str] | None = None) -> int:
         lineage = read_inherited_lineage(Path(args.previous_manifest))
 
     repo_root = Path(args.repo_root).resolve()
+    schema = load_schema_module(Path(__file__).resolve())
     try:
         declarations = collect_declarations(repo_root, list(args.include))
         problems = check_declarations(
             declarations,
-            collect_references(repo_root),
+            schema.secret_references_in(
+                repo_root, list(args.include) + list(args.data_include)
+            ),
             Path(args.workspace_dir) if args.workspace_dir else None,
         )
-    except SecretDeclarationError as e:
+    except (SecretDeclarationError, schema.TemplateManifestError) as e:
         print(f"write_template_manifest: {e}", file=sys.stderr)
         return 1
     if problems:

@@ -377,9 +377,6 @@ def _notes_lines(archive: zipfile.ZipFile) -> list[str]:
     return archive.read("collection-notes.txt").decode("utf-8").splitlines()
 
 
-# --- Caps and contract constants ---
-
-
 def test_the_scan_gate_path_points_at_a_gate_that_exists_in_this_repo() -> None:
     """The gate is addressed by a hardcoded path, so a rename silently disables it.
 
@@ -445,9 +442,6 @@ def test_select_log_files_drops_logs_not_written_to_in_the_last_day(
     ]
 
 
-# --- No ownership or stream filtering ---
-
-
 def test_select_log_files_keeps_every_programs_logs_both_streams(
     tmp_path: Path,
 ) -> None:
@@ -472,9 +466,6 @@ def test_select_log_files_keeps_every_programs_logs_both_streams(
         "terminal-stdout.log",
         "geopolitical-dashboard-stderr.log",
     ]
-
-
-# --- Chat selection ---
 
 
 def test_every_agent_is_a_transcript_candidate(
@@ -782,9 +773,6 @@ def test_transcript_member_names_stay_unique_within_one_archive() -> None:
     assert second.endswith(".jsonl")
 
 
-# --- Zip timestamp clamps ---
-
-
 def test_zip_records_an_epoch_fallback_mtime_at_the_formats_floor() -> None:
     """A transcript whose mtime falls back to the 1970 epoch is clamped to the
     earliest instant a zip can record, rather than failing the whole archive --
@@ -820,9 +808,6 @@ def test_zip_records_a_far_future_chat_at_the_formats_ceiling() -> None:
         # The last instant the format holds, read back a second early because a
         # DOS time records seconds in two-second steps.
         assert archive.infolist()[0].date_time == (2107, 12, 31, 23, 59, 58)
-
-
-# --- Scan verdicts (fail closed) ---
 
 
 def test_scan_targets_releases_every_file_on_a_clean_scan(tmp_path: Path) -> None:
@@ -956,9 +941,6 @@ def test_scan_targets_fails_closed_when_the_scan_times_out(tmp_path: Path) -> No
         "/tmp/logs.txt": module.NOTE_SCANNER_UNAVAILABLE,
         "/tmp/transcript.txt": module.NOTE_SCANNER_UNAVAILABLE,
     }
-
-
-# --- End-to-end output shape ---
 
 
 def test_main_prints_only_the_base64_zip_line_with_all_content_on_a_clean_scan(
@@ -1226,6 +1208,145 @@ def test_main_withholds_only_the_logs_when_the_finding_is_in_the_logs(
         ]
 
 
+def _write_update_apply_state(
+    workspace: Path, *, log_lines: int, line_padding: str = ""
+) -> Path:
+    """The update flow's state directory as the app's dispatcher and an update pass leave it,
+    with the pre-apply snapshots and the dispatcher program beside the records."""
+    state = workspace / "data" / ".state" / "update-apply"
+    (state / "snapshots" / "frontend").mkdir(parents=True)
+    (state / "snapshots" / "frontend" / "index.html").write_text(
+        "<html>the old shell</html>"
+    )
+    (state / "dispatcher.pyz").write_text("print('the app program')\n")
+    (state / "schedule.json").write_text('{"schema": 1, "ceiling": "minds-v0.9.0"}\n')
+    (state / "run.json").write_text(
+        '{"chat_agent_name": "update-to-minds-v0-9-0", "verdict": null}\n'
+    )
+    (state / "last-dispatch.json").write_text(
+        '{"schema": 1, "started_by": "scheduled"}\n'
+    )
+    (state / "dispatch-attempt.json").write_text(
+        '{"schema": 1, "attempt_id": "0123456789abcdef0123456789abcdef"}\n'
+    )
+    (state / "provision-incomplete.json").write_text(
+        '{"ref": "minds-v0.9.0", "error": "npm ci failed"}\n'
+    )
+    (state / "dispatcher.log").write_text(
+        "".join(
+            f"2026-10-20T02:00:{i:02d} dispatched{line_padding} line {i}\n"
+            for i in range(log_lines)
+        )
+    )
+    return state
+
+
+def test_the_update_records_ride_with_the_logs_but_never_the_snapshots_or_the_dispatcher(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Why an update ran or did not is in these files, so a report carries them whole -- and the
+    dispatcher log's tail -- while the workspace copies under snapshots/ and the app's own
+    dispatcher program stay behind."""
+    gate = tmp_path / "gate"
+    _write_stub_scan_gate(gate, exit_code=0)
+    conf = tmp_path / "supervisord.conf"
+    conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    module = _load_collector(
+        supervisor_log_dir=tmp_path / "supervisor",
+        mngr_binary=_mngr_stub_for_chats(tmp_path, {}),
+        supervisord_conf=conf,
+        workspace_dir=workspace,
+        scan_gate_dir=gate,
+    )
+    lines = module.MAX_UPDATE_APPLY_LOG_LINES + 20
+    _write_update_apply_state(workspace, log_lines=lines)
+
+    module.main(["--logs"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        update_members = [
+            name for name in archive.namelist() if name.startswith("update-apply/")
+        ]
+        assert update_members == [
+            "update-apply/schedule.json",
+            "update-apply/run.json",
+            "update-apply/last-dispatch.json",
+            "update-apply/dispatch-attempt.json",
+            "update-apply/provision-incomplete.json",
+            "update-apply/dispatcher.log",
+        ]
+        assert (
+            json.loads(archive.read("update-apply/last-dispatch.json"))["started_by"]
+            == "scheduled"
+        )
+        log_lines = (
+            archive.read("update-apply/dispatcher.log").decode("utf-8").splitlines()
+        )
+    assert len(log_lines) == module.MAX_UPDATE_APPLY_LOG_LINES
+    assert log_lines[-1].endswith(f"dispatched line {lines - 1}")
+
+
+def test_a_dispatcher_log_as_long_as_a_read_still_rides_beside_the_records(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Failing ticks write long lines, so the tail can fill a whole read; the log is the member
+    that says why, and must not be the one the class budget drops."""
+    gate = tmp_path / "gate"
+    _write_stub_scan_gate(gate, exit_code=0)
+    conf = tmp_path / "supervisord.conf"
+    conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    module = _load_collector(
+        supervisor_log_dir=tmp_path / "supervisor",
+        mngr_binary=_mngr_stub_for_chats(tmp_path, {}),
+        supervisord_conf=conf,
+        workspace_dir=workspace,
+        scan_gate_dir=gate,
+    )
+    _write_update_apply_state(
+        workspace, log_lines=module.MAX_UPDATE_APPLY_LOG_LINES, line_padding=" x" * 400
+    )
+
+    module.main(["--logs"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert "update-apply/dispatcher.log" in archive.namelist()
+        assert "update-apply/schedule.json" in archive.namelist()
+
+
+def test_a_secret_in_the_update_records_withholds_them_and_nothing_else(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    secret = "AKIAIOSFODNN7EXAMPLE"
+    gate = tmp_path / "gate"
+    _write_content_matching_stub_scan_gate(gate, secret=secret)
+    log_dir = tmp_path / "supervisor"
+    _write_log(log_dir, "chat-stderr.log", mtime=time.time(), content="chat started\n")
+    conf = tmp_path / "supervisord.conf"
+    conf.write_text(_FIXTURE_SUPERVISORD_CONF, encoding="utf-8")
+    workspace = tmp_path / "workspace"
+    state = _write_update_apply_state(workspace, log_lines=3)
+    (state / "dispatcher.log").write_text(f"created the chat with token {secret}\n")
+    module = _load_collector(
+        supervisor_log_dir=log_dir,
+        mngr_binary=_mngr_stub_for_chats(tmp_path, {}),
+        supervisord_conf=conf,
+        workspace_dir=workspace,
+        scan_gate_dir=gate,
+    )
+
+    module.main(["--logs"])
+
+    with _zip_from_stdout(capsys.readouterr().out) as archive:
+        assert not any(name.startswith("update-apply/") for name in archive.namelist())
+        assert "logs/chat.log" in archive.namelist()
+        assert (
+            "update records: withheld: the secret scan reported findings"
+            in _notes_lines(archive)
+        )
+
+
 def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1268,9 +1389,6 @@ def test_main_reports_everything_scanner_unavailable_when_the_gate_is_missing(
         ]
 
 
-# --- The size cap ---
-
-
 def test_main_packs_every_collected_chat_with_no_size_cap(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -1303,9 +1421,6 @@ def test_main_packs_every_collected_chat_with_no_size_cap(
             "chats/agent-b-claude.jsonl",
             "chats/agent-a-claude.jsonl",
         ]
-
-
-# --- Agent (harness) logs ---
 
 
 def test_agent_logs_are_collected_from_every_shape_a_harness_writes(

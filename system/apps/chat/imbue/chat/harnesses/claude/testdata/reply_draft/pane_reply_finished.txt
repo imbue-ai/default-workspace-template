@@ -1,0 +1,50 @@
+
+
+[38;5;246m✻[39m [38;5;246mBrewed for 9s · done 2:34 AM[39m                                                                                                                                                                          
+
+[38;5;246m[48;5;237m❯ [38;5;231mNo tools. Begin your reply with the word ZQX, then write about 300 words on the history of lighthouses as plain paragraphs.[39m                                                                           
+
+[38;5;231m[49m●[39m ZQX. People have marked dangerous coasts with fire for more than two thousand years. The most famous early lighthouse was the Pharos of Alexandria, built in Egypt around 280 BC under Ptolemy II. It
+  stood well over 100 meters tall and burned a fire at its top that ships could reportedly see from far out at sea. It survived for centuries before earthquakes brought it down in the 1300s. Its name
+  lives on in several languages: "faro" in Spanish and Italian and "phare" in French both mean lighthouse.                                                                                              
+
+  The Romans built lighthouses across their empire, from Dover in England to the Tower of Hercules in northern Spain, which is still in use today. After Rome fell, upkeep stopped and many towers     
+  crumbled. Through the Middle Ages, coastal lights were mostly kept by monasteries, towns, or merchant guilds. They usually burned wood, coal, or candles, which gave a weak, smoky light.            
+                                                                                                                                                                                                       
+  Big changes came in the 1700s and 1800s as sea trade grew. Builders learned to put towers on open rocks, where storms had wrecked earlier attempts. John Smeaton's Eddystone Lighthouse, finished in 
+  1759, used interlocking granite blocks and set the pattern for later stone towers. Oil lamps with reflectors replaced open fires and gave a brighter, steadier light.                                
+                                                                                                                                                                                                       
+  The biggest jump came in 1822, when the French engineer Augustin Fresnel designed a new kind of lens. It used rings of glass prisms to bend scattered light into one strong beam. A Fresnel lens could
+  be seen more than 20 miles away, and it soon spread around the world.                                                                                                                               
+                                                                                                                                                                                                      
+  In the 1900s, electric lamps replaced oil, and lights were automated so keepers were no longer needed. Today, satellite navigation does most of the work lighthouses once did. Many towers still    
+  shine, but they are now kept mainly as historic landmarks and backup aids for ships.                                                                                                                  
+                                                                                                                                                                                                        
+[38;5;246m✻[39m [38;5;246mCooked for 14s · done 2:35 AM[39m                                                                                                                                                                         
+                                                                                                                                                                                                        
+[38;5;246m[48;5;237m❯ [38;5;231mNo tools. Write about 250 words on how tides work: a short heading, two paragraphs, a bulleted list of three items with some [1mbold[0m[38;5;231m[48;5;237m and [38;5;153minline code[38;5;231m, then a final paragraph.[39m                            
+[49m                                                                                                                                                                                                  
+[38;5;231m●[39m [1mHow Tides Work[0m                                                                                                                                                                                  
+
+  Tides are the regular rise and fall of the sea, and the Moon's gravity drives most of it. Gravity gets weaker with distance. Because of that, the Moon pulls hardest on the side of Earth facing it,  
+  less on Earth's center, and least on the far side. The water facing the Moon bulges toward it. On the far side, the Moon pulls the solid Earth away from the water more than it pulls the water
+  itself, so a second bulge forms there.
+
+  Earth turns underneath these two bulges once a day. As a result, most coastlines get two high tides and two low tides about every 24 hours and 50 minutes. The extra 50 minutes is there because the
+  Moon moves along its orbit while Earth spins, so a given spot needs a little longer to catch up to it. The Sun also raises tides, but its effect is less than half the Moon's.                      
+                                                                                                                                                                                                      
+  - [1mSpring tides[0m happen at new and full moon, when the Sun and Moon line up and their pulls add together. That gives the highest highs and the lowest lows.                                           
+  - [1mNeap tides[0m happen at the quarter moons, when the two pulls work at right angles. That gives the smallest range.                                                                                   
+  - [1mTide tables[0m list the predicted times and heights for each port. Forecasters often store them as simple records, such as [38;5;153mtime, height_m[39m.                                                           
+                                                                                                                                                                                                      
+  Local shape matters as much as astronomy. Coastline outline, sea depth, and the size of the basin can greatly amplify tides. In Canada's Bay of Fundy, the water rises and falls by more than 15    
+  meters. Some enclosed seas, such as the Mediterranean, barely see tides at all.                                                                                                                     
+                                                                                                                                                                                
+[38;5;174m✽[39m [38;5;216mUndulating…[38;5;174m [38;5;246m(running Stop hooks… 1/5 · 7s · ↓[39m [38;5;246m517 tokens)[39m                                                                                                
+[38;5;246m  ⎿  Tip: Running multiple Claude sessions? Use /color and /rename to tell them apart at a glance.[39m                                                                                                
+                                                                           [38;5;220mYou've used 89% of your weekly limit · resets Oct 20, 10am (America/Los_Angeles) · /usage-credits to keep using Claude Code
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+[38;5;246m❯ [7m[39m [0m                                                                                                                                                                                
+[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+[39m  [38;5;211m⏵⏵ bypass permissions on[38;5;246m (shift+tab to cycle) · ← for agents

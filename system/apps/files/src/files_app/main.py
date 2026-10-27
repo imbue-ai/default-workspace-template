@@ -1,5 +1,6 @@
 """Run Files: the Files server on the app's port and the app registered, until supervisord's SIGTERM."""
 
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -29,7 +30,12 @@ def run_files_app(
     is_registered: bool,
     wait_for_shutdown: Callable[[], int],
 ) -> int:
-    app = create_app(gateway=Gateway.from_environment(), static_directory=static_directory, root=root)
+    app = create_app(
+        gateway=Gateway.from_environment(),
+        static_directory=static_directory,
+        root=root,
+        agent_id=os.environ.get("MNGR_AGENT_ID", ""),
+    )
     with serve_in_background(HOST, app_port, app):
         if is_registered:
             with log_span("Registering files at port {}", app_port):
