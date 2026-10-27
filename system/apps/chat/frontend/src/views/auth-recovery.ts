@@ -25,7 +25,8 @@ export function isSignedInSince(event: Pick<AssistantMessageEvent, "timestamp">,
 }
 
 /** The message `failed` was the reply to, while nothing has happened in the chat since: `failed`
- *  is its newest assistant turn and no prompt of the user's came after it. Null otherwise. */
+ *  is its newest assistant turn and no prompt of the user's came after it. Null otherwise, and
+ *  for a prompt with none of the user's own words to send. */
 export function messageToSendAgain(
   events: readonly TranscriptEvent[],
   failed: Pick<AssistantMessageEvent, "event_id">,
@@ -42,7 +43,8 @@ export function messageToSendAgain(
     if (isPastFailed) return null;
     prompt = event;
   }
-  return isPastFailed ? prompt : null;
+  if (!isPastFailed || prompt === null || classifyUserMessage(prompt).body.trim() === "") return null;
+  return prompt;
 }
 
 export type ResendState = "sending" | "sent" | "failed";

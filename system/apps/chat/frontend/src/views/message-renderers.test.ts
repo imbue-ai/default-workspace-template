@@ -790,6 +790,17 @@ describe("the auth-error note's switch link", () => {
       );
     });
 
+    it("offers nothing to send for a prompt that carried no words of the user's", () => {
+      transcript.events = [
+        { ...PROMPT, display: "prompt_with_context", content: "<context>seed</context>", display_body: "" },
+        authErrorEvent(),
+      ];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      expect(allText(children)).toContain("Signed in again.");
+      expect(findButton(children, "Send your message again")).toBeNull();
+    });
+
     it("drops the sending bubble of a resend the chat app took back", async () => {
       transcript.events = [PROMPT, authErrorEvent()];
       transcript.sendMessage.mockResolvedValueOnce("withdrawn");
