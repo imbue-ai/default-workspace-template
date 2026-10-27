@@ -316,50 +316,38 @@ def test_every_scoped_harness_but_grok_can_be_rebound_and_the_unscoped_one_canno
     assert not is_rebind_supported(HarnessType.OPENCODE)
 
 
-def test_rebinding_claude_rewrites_only_the_config_dir_line_and_lands_whole(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("harness", "variable", "account_file"),
+    ((HarnessType.CLAUDE, "CLAUDE_CONFIG_DIR", ""), (HarnessType.GROK, "GROK_AUTH_PATH", "auth.json")),
+)
+def test_rebinding_rewrites_only_the_binding_line_and_lands_whole(
+    tmp_path: Path, harness: HarnessType, variable: str, account_file: str
+) -> None:
+    binding = build_account_binding(harness)
     state = tmp_path / "state"
     state.mkdir()
     env_path = state / "env"
-    env_path.write_text(f"MNGR_AGENT_ID=agent-1\nCLAUDE_CONFIG_DIR={tmp_path / 'old'}\nMINDS_CHAT_ID=agent-1\n")
-    env_path.chmod(0o600)
-
-    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "new", state)
-
-    assert (
-        env_path.read_text() == f"MNGR_AGENT_ID=agent-1\nMINDS_CHAT_ID=agent-1\nCLAUDE_CONFIG_DIR={tmp_path / 'new'}\n"
+    env_path.write_text(
+        f"MNGR_AGENT_ID=agent-1\n{variable}={tmp_path / 'old' / account_file}\nMINDS_CHAT_ID=agent-1\n"
     )
+    env_path.chmod(0o600)
+    rebound_text = f"MNGR_AGENT_ID=agent-1\nMINDS_CHAT_ID=agent-1\n{variable}={tmp_path / 'new' / account_file}\n"
+
+    binding.rebind_agent(tmp_path / "new", state)
+
+    assert env_path.read_text() == rebound_text
     assert oct(env_path.stat().st_mode & 0o777) == "0o600"
     assert not env_path.with_name("env.rebind-tmp").exists()
     # Again is the same file; a value with a space is quoted the way mngr quotes its own.
-    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "new", state)
-    assert env_path.read_text().count("CLAUDE_CONFIG_DIR=") == 1
-    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "with space", state)
-    assert env_path.read_text().endswith(f'CLAUDE_CONFIG_DIR="{tmp_path / "with space"}"\n')
+    binding.rebind_agent(tmp_path / "new", state)
+    assert env_path.read_text() == rebound_text
+    binding.rebind_agent(tmp_path / "with space", state)
+    assert env_path.read_text().endswith(f'{variable}="{tmp_path / "with space" / account_file}"\n')
     # An agent with no env file yet gets one holding just the line.
     bare = tmp_path / "bare"
     bare.mkdir()
-    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "new", bare)
-    assert (bare / "env").read_text() == f"CLAUDE_CONFIG_DIR={tmp_path / 'new'}\n"
-
-
-def test_rebinding_grok_rewrites_only_the_auth_path_line_and_lands_whole(tmp_path: Path) -> None:
-    state = tmp_path / "state"
-    state.mkdir()
-    env_path = state / "env"
-    old_auth_path = tmp_path / "old" / "auth.json"
-    env_path.write_text(f"MNGR_AGENT_ID=agent-1\nGROK_AUTH_PATH={old_auth_path}\nMINDS_CHAT_ID=agent-1\n")
-    env_path.chmod(0o600)
-
-    build_account_binding(HarnessType.GROK).rebind_agent(tmp_path / "new", state)
-
-    assert env_path.read_text() == (
-        f"MNGR_AGENT_ID=agent-1\nMINDS_CHAT_ID=agent-1\nGROK_AUTH_PATH={tmp_path / 'new' / 'auth.json'}\n"
-    )
-    assert oct(env_path.stat().st_mode & 0o777) == "0o600"
-    assert not env_path.with_name("env.rebind-tmp").exists()
-    build_account_binding(HarnessType.GROK).rebind_agent(tmp_path / "new", state)
-    assert env_path.read_text().count("GROK_AUTH_PATH=") == 1
-    assert "GROK_HOME" not in env_path.read_text()
+    binding.rebind_agent(tmp_path / "new", bare)
+    assert (bare / "env").read_text() == f"{variable}={tmp_path / 'new' / account_file}\n"
 
 
 def test_a_grok_account_holding_only_a_key_reads_as_that_key(tmp_path: Path) -> None:
