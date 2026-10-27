@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
 import { BASE_CSS as baseCss } from "../testing/baseCss";
@@ -7,8 +8,11 @@ describe("readDesignTokens over the shared stylesheet", () => {
   const tokens = readDesignTokens(baseCss);
   const colours = tokens.colourGroups.flatMap((group) => group.colours);
 
-  it("lists every --c-* value of :root exactly once", () => {
-    const declared = Array.from(blockBody(baseCss, /:root\s*\{/).matchAll(/--(c-[\w-]+)\s*:/g), (match) => match[1]);
+  it("lists every --c-* colour value of :root exactly once", () => {
+    const declared = Array.from(
+      blockBody(baseCss, /:root\s*\{/).matchAll(/--(c-[\w-]+)\s*:/g),
+      (match) => match[1],
+    ).filter((name) => !name.startsWith("c-shadow-"));
     expect(declared.length).toBeGreaterThan(20);
     expect(colours.map((colour) => colour.variable).sort()).toEqual([...declared].sort());
   });
@@ -28,7 +32,10 @@ describe("readDesignTokens over the shared stylesheet", () => {
   });
 
   it("reads the scales from :root and the theme block, without the colours", () => {
-    expect(tokens.scales.some((token) => token.name.startsWith("c-"))).toBe(false);
+    expect(tokens.scales.filter((token) => token.name.startsWith("c-")).map((token) => token.name)).toEqual([
+      "c-shadow-raised",
+      "c-shadow-overlay",
+    ]);
     expect(tokensWithPrefix(tokens.scales, "font-size-").map((token) => token.name)).toContain("font-size-body");
     expect(tokensWithPrefix(tokens.scales, "dur-").map((token) => token.value)).toEqual(["80ms", "120ms", "200ms"]);
     expect(tokensWithPrefix(tokens.theme, "radius-").map((token) => token.name)).toEqual([
@@ -37,9 +44,10 @@ describe("readDesignTokens over the shared stylesheet", () => {
       "radius-lg",
       "radius-xl",
     ]);
-    expect(tokensWithPrefix(tokens.theme, "shadow-").map((token) => token.name)).toEqual([
-      "shadow-raised",
-      "shadow-overlay",
+    expect(tokensWithPrefix(tokens.theme, "font-").map((token) => token.name)).toEqual([
+      "font-sans",
+      "font-mono",
+      "font-display",
     ]);
   });
 });
@@ -73,5 +81,13 @@ describe("readDesignTokens over a small stylesheet", () => {
   it("keeps the plain theme block apart from the inline one", () => {
     expect(tokens.theme).toEqual([{ name: "radius-md", value: "6px" }]);
     expect(tokens.scales).toEqual([{ name: "font-size-body", value: "14px" }]);
+  });
+});
+
+describe("readDesignTokens over a stylesheet with shadow values in the value layer", () => {
+  it("keeps a --c-shadow-* value out of the colours", () => {
+    const tokens = readDesignTokens(":root { --c-ink: #111; --c-shadow-raised: 0 1px 2px #000; }");
+    expect(tokens.colourGroups.flatMap((group) => group.colours).map((colour) => colour.variable)).toEqual(["c-ink"]);
+    expect(tokens.scales).toEqual([{ name: "c-shadow-raised", value: "0 1px 2px #000" }]);
   });
 });

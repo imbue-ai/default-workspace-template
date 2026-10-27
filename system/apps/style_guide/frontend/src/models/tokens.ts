@@ -36,10 +36,16 @@ export interface ColourGroup {
 
 export interface DesignTokens {
   readonly colourGroups: readonly ColourGroup[];
-  /** Every ``:root`` property that is not a colour: the type, motion, stacking and width scales. */
+  /** Every ``:root`` property that is not a colour: the type, motion, stacking and width scales, and the shadow
+   *  values (``--c-shadow-*``), which sit in the value layer so a theme can redeclare them but draw no swatch. */
   readonly scales: readonly DeclaredToken[];
   /** The plain ``@theme`` block: font stacks, the spacing base, radii and shadows. */
   readonly theme: readonly DeclaredToken[];
+}
+
+/** A ``--c-*`` value that is not a colour: the elevation values a theme may redeclare. */
+function isColourValue(name: string): boolean {
+  return name.startsWith("c-") && !name.startsWith("c-shadow-");
 }
 
 const COMMENT_OR_DECLARATION = /\/\*([\s\S]*?)\*\/|--([\w-]+)\s*:\s*([^;]+);/g;
@@ -109,7 +115,7 @@ export function readDesignTokens(css: string): DesignTokens {
   }
 
   // A raw colour value with no utility over it still belongs in the catalog, under a group that says so.
-  const unmapped = root.filter((token) => token.name.startsWith("c-") && !mapped.has(token.name));
+  const unmapped = root.filter((token) => isColourValue(token.name) && !mapped.has(token.name));
   if (unmapped.length > 0) {
     colourGroups.push({
       label: "values with no utility",
@@ -125,7 +131,7 @@ export function readDesignTokens(css: string): DesignTokens {
 
   return {
     colourGroups: colourGroups.filter((group) => group.colours.length > 0),
-    scales: root.filter((token) => !token.name.startsWith("c-")),
+    scales: root.filter((token) => !isColourValue(token.name)),
     theme: declarations(blockBody(css, /@theme\s*\{/)),
   };
 }

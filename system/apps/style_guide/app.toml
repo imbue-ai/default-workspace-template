@@ -15,6 +15,11 @@ priority = "user"
 # Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group.
 system = true
 
+# Built only from the shared components and the design tokens, so every theme styles it with no work of its own
+# (docs/system/blueprint/workspace-themes/, section 7). Under a theme it is a live sample of that theme.
+[theming]
+mode = "tokens"
+
 # A preview serves the page on a free port. The app keeps nothing under data/.apps/, so there is nothing to copy.
 [preview]
 env = {STYLE_GUIDE_APP_PORT = "{port:main}", STYLE_GUIDE_APP_HOST = "{host}"}

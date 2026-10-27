@@ -2,7 +2,8 @@
 
 The page is a build of ``frontend/`` (one of the npm workspace's frontends), which renders the shared library's
 own tokens and components (``system/libs/workspace_ui``) rather than copies of them, so the catalog cannot drift
-from what the other apps draw. The app stores nothing.
+from what the other apps draw. It wears the workspace's theme like any other page built on the tokens, so under a
+theme it shows that theme's values and parts. The app stores nothing.
 
 - Listen address: bind ``HOST`` and ``PORT``, which default to the loopback address and this app's assigned port
   but honor ``STYLE_GUIDE_APP_HOST`` and ``STYLE_GUIDE_APP_PORT``, so a preview can boot on a spare port beside
@@ -34,6 +35,8 @@ from app_schema.api_schema import register_api_schema_route
 from app_schema.routes import model_response
 from imbue.imbue_common.logging import setup_logging
 from style_guide_app.data_types import HealthResponse
+from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
+from workspace_themes.flask_routes import register_workspace_theme_route
 
 HOST: Final[str] = os.environ.get("STYLE_GUIDE_APP_HOST", "127.0.0.1")
 PORT: Final[int] = int(os.environ.get("STYLE_GUIDE_APP_PORT", "8060"))
@@ -60,6 +63,7 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/"): SchemalessRoute(reason="the style guide page"),
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="one file of the page's built bundle"),
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
+    **THEME_STATIC_ROUTE_TABLE,
 }
 
 
@@ -69,6 +73,8 @@ def create_app(static_directory: Path) -> Flask:
         app, DEFAULT_API_SCHEMA_PATH, title=APP_DISPLAY_NAME, description=APP_DESCRIPTION, route_table=ROUTE_TABLE
     )
     attach_document_policy(app, None)
+    # The workspace's themes, from this app's own origin, so the page can wear the one the shell names.
+    register_workspace_theme_route(app)
     static_directory = static_directory.resolve()
 
     @app.get("/")

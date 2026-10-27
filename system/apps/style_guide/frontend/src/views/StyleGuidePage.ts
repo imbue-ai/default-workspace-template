@@ -1,6 +1,6 @@
 /**
  * The style guide: a sticky contents list beside the catalog, which is split into Foundations (the tokens and the
- * icon set) and Components (the shared controls). The page scrolls inside its own container (the shared base
+ * icon set), Components (the shared controls), and Theming (the parts a theme styles). The page scrolls inside its own container (the shared base
  * stylesheet pins the body to the viewport), and the contents entry for the section nearest the top of it reads at
  * full strength.
  */
@@ -11,6 +11,7 @@ import type { DesignTokens } from "../models/tokens";
 import { renderSection, type CatalogGroup } from "./catalog";
 import { ComponentDemos, componentsGroup } from "./components";
 import { foundationsGroup } from "./foundations";
+import { themingGroup, wornThemeId } from "./theming";
 
 export interface StyleGuidePageAttrs {
   readonly tokens: DesignTokens;
@@ -83,7 +84,7 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
       demos.dispose();
     },
     view({ attrs: { tokens } }) {
-      const groups: readonly CatalogGroup[] = [foundationsGroup(tokens), componentsGroup(demos)];
+      const groups: readonly CatalogGroup[] = [foundationsGroup(tokens), componentsGroup(demos), themingGroup()];
       return m("div", { class: "style-guide h-screen bg-surface" }, [
         m(
           "div",
@@ -125,6 +126,11 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
                   ", components in ",
                   m("code", { class: "font-mono text-primary" }, "system/libs/workspace_ui/src/components/"),
                   ". A convention for the default look, not a rule: a restyle to your own taste is always welcome.",
+                ]),
+                m("p", { id: "worn-theme", class: "type-helper mt-2 text-secondary" }, [
+                  "Showing the ",
+                  m("code", { class: "font-mono text-primary" }, wornThemeId()),
+                  " theme, the one this desktop wears; values a theme changed show the standard one struck through.",
                 ]),
               ]),
               groups.map((group, index) => [

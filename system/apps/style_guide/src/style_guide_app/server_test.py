@@ -5,6 +5,7 @@ from flask.testing import FlaskClient
 
 from app_schema.testing import assert_api_schema_describes_app
 from style_guide_app.server import create_app
+from workspace_themes.testing import write_standard_theme
 
 MANIFEST_PATH = Path(__file__).resolve().parents[2] / "app.toml"
 
@@ -56,3 +57,15 @@ def test_an_unbuilt_page_says_how_to_build_it_and_health_reports_it(tmp_path: Pa
 
 def test_health_reports_a_built_page(client: FlaskClient) -> None:
     assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": True}
+
+
+def test_the_workspace_theme_is_served_from_the_pages_own_origin(
+    static_directory: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_standard_theme(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    response = create_app(static_directory).test_client().get("/_static/themes/standard/theme.css")
+
+    assert response.status_code == 200 and response.mimetype == "text/css"
+    assert create_app(static_directory).test_client().get("/_static/themes/no-such-theme/theme.css").status_code == 404

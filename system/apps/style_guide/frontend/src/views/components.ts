@@ -21,6 +21,7 @@ import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialo
 import { SegmentedControl } from "@imbue/workspace-ui/src/components/segmentedControl";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
+import { BADGE_PART, FIELD_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 import { caption, code, demoRow, type CatalogGroup, type CatalogSection } from "./catalog";
 
@@ -220,16 +221,22 @@ function fieldsSection(demos: ComponentDemos): CatalogSection {
       m("div", { class: "grid max-w-[480px] gap-4" }, [
         m("label", { class: "block" }, [
           m("span", { class: MODAL_LABEL_CLASS }, "Text input"),
-          m("input", { id: "field-text", class: inputClass(), placeholder: "you@example.com" }),
+          m("input", { ...FIELD_PART, id: "field-text", class: inputClass(), placeholder: "you@example.com" }),
         ]),
         m("label", { class: "block" }, [
           m("span", { class: MODAL_LABEL_CLASS }, "Mono"),
-          m("input", { id: "field-mono", class: inputClass({ mono: true }), value: "sk-ant-0123456789" }),
+          m("input", {
+            ...FIELD_PART,
+            id: "field-mono",
+            class: inputClass({ mono: true }),
+            value: "sk-ant-0123456789",
+          }),
         ]),
         m("label", { class: "block" }, [
           m("span", { class: MODAL_LABEL_CLASS }, "With an inline action"),
           m("div", { class: "relative" }, [
             m("input", {
+              ...FIELD_PART,
               id: "field-action",
               class: inputClass({ withAction: true, mono: true }),
               value: "https://share.example.com/w/abc",
@@ -252,11 +259,21 @@ function fieldsSection(demos: ComponentDemos): CatalogSection {
         ]),
         m("label", { class: "block" }, [
           m("span", { class: MODAL_LABEL_CLASS }, "Disabled"),
-          m("input", { id: "field-disabled", class: inputClass(), value: "Not editable", disabled: true }),
+          m("input", {
+            ...FIELD_PART,
+            id: "field-disabled",
+            class: inputClass(),
+            value: "Not editable",
+            disabled: true,
+          }),
         ]),
         m("label", { class: "block" }, [
           m("span", { class: MODAL_LABEL_CLASS }, "Textarea"),
-          m("textarea", { id: "field-textarea", class: inputClass({ extra: "resize-y" }), rows: 3 }, "Some text"),
+          m(
+            "textarea",
+            { ...FIELD_PART, id: "field-textarea", class: inputClass({ extra: "resize-y" }), rows: 3 },
+            "Some text",
+          ),
         ]),
       ]),
   };
@@ -372,15 +389,18 @@ function badgesSection(): CatalogSection {
     body: () => [
       demoRow(
         "Tones",
-        BADGE_TONES.map((tone) => m("span", { id: `badge-${tone}`, class: badgeClass(tone) }, tone)),
+        BADGE_TONES.map((tone) => m("span", { ...BADGE_PART, id: `badge-${tone}`, class: badgeClass(tone) }, tone)),
       ),
       demoRow("Mono, for an id", [
-        m("span", { class: badgeClass("neutral", { mono: true }) }, "claude-sonnet-5-5"),
-        m("span", { class: badgeClass("accent", { mono: true }) }, "agent-7f3a"),
+        m("span", { ...BADGE_PART, class: badgeClass("neutral", { mono: true }) }, "claude-sonnet-5-5"),
+        m("span", { ...BADGE_PART, class: badgeClass("accent", { mono: true }) }, "agent-7f3a"),
       ]),
       demoRow("With a glyph", [
-        m("span", { class: badgeClass("success") }, [m.trust(icon("check", { size: 12 })), "Connected"]),
-        m("span", { class: badgeClass("danger") }, [m.trust(icon("alert", { size: 12 })), "Failing"]),
+        m("span", { ...BADGE_PART, class: badgeClass("success") }, [
+          m.trust(icon("check", { size: 12 })),
+          "Connected",
+        ]),
+        m("span", { ...BADGE_PART, class: badgeClass("danger") }, [m.trust(icon("alert", { size: 12 })), "Failing"]),
       ]),
     ],
   };
@@ -481,7 +501,7 @@ function overlaysSection(demos: ComponentDemos): CatalogSection {
               ),
               m("label", { class: "mb-4 block" }, [
                 m("span", { class: MODAL_LABEL_CLASS }, "Name"),
-                m("input", { class: inputClass(), value: "Quarterly report" }),
+                m("input", { ...FIELD_PART, class: inputClass(), value: "Quarterly report" }),
               ]),
             ],
           )

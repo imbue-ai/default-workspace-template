@@ -12,6 +12,8 @@ dependencies = [
     "loguru>=0.7",
     "pydantic>=2.0",
     "werkzeug>=3.0",
+    # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
+    "workspace-themes",
 ]
 
 [dependency-groups]
@@ -51,7 +53,7 @@ ignore = ["E501"]
 force-single-line = true
 case-sensitive = true
 order-by-type = false
-known-first-party = ["style_guide_app", "imbue", "app_manifest", "app_schema"]
+known-first-party = ["style_guide_app", "workspace_themes", "imbue", "app_manifest", "app_schema"]
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
 [tool.ty]

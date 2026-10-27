@@ -22,6 +22,7 @@ import {
 } from "@imbue/workspace-ui/src/components/icons";
 
 import { tokensWithPrefix, type ColourToken, type DeclaredToken, type DesignTokens } from "../models/tokens";
+import { themeValue } from "../models/themeValues";
 import { caption, code, subCaption, type CatalogGroup, type CatalogSection } from "./catalog";
 
 /** A type role: its utility (written out in full so the scanner sees it) and the tokens it bundles. */
@@ -96,7 +97,7 @@ function valueIn(tokens: readonly DeclaredToken[], name: string): string {
 
 /** A theme token as a CSS value: the live variable, falling back to the declared value. Tailwind emits a theme
  *  variable only when a utility reads it through ``var()``, and some (the shadows) inline their value instead. */
-function themeValue(token: DeclaredToken): string {
+function cssValueOf(token: DeclaredToken): string {
   return `var(--${token.name}, ${token.value})`;
 }
 
@@ -122,9 +123,22 @@ function swatch(colour: ColourToken): m.Vnode {
     m("div", [
       colour.utility === null ? caption(`--${colour.variable}`) : caption(colour.utility),
       colour.utility === null ? null : subCaption(`--${colour.variable}`),
-      subCaption(colour.value),
+      valueCaptions(colour.variable, colour.value),
     ]),
   ]);
+}
+
+/** A token's value as the page wears it, and, when a theme has changed it, the standard value beside it. */
+function valueCaptions(name: string, declared: string): m.Children {
+  const themed = themeValue(name);
+  return themed === null || themed === declared
+    ? subCaption(declared)
+    : [subCaption(themed), m("code", { class: "block font-mono type-helper text-faint line-through" }, declared)];
+}
+
+/** What the page wears for a token: the theme's value when it sets one, else the standard one. */
+function wornValue(name: string, declared: string): string {
+  return themeValue(name) ?? declared;
 }
 
 function coloursSection(tokens: DesignTokens): CatalogSection {
@@ -141,7 +155,7 @@ function coloursSection(tokens: DesignTokens): CatalogSection {
       code("border-default"),
       "); hand-written CSS uses the ",
       code("--c-*"),
-      " value. Each swatch is drawn with the live value, so this is the palette as it ships.",
+      " value. Each swatch is drawn with the value the page wears, so under a theme it is that theme's palette.",
     ],
     body: () =>
       tokens.colourGroups.map((group) =>
@@ -177,7 +191,8 @@ function typeSection(tokens: DesignTokens): CatalogSection {
           m("div", { id: `type-${role.utility}`, class: "type-sample" }, [
             m("p", { class: role.className }, role.sample),
             caption(
-              `${role.utility} -- ${valueIn(tokens.scales, role.sizeToken)} / ${valueIn(tokens.scales, role.weightToken)}` +
+              `${role.utility} -- ${wornValue(role.sizeToken, valueIn(tokens.scales, role.sizeToken))} / ` +
+                `${wornValue(role.weightToken, valueIn(tokens.scales, role.weightToken))}` +
                 (role.note === undefined ? "" : ` / ${role.note}`),
               "mt-0.5",
             ),
@@ -196,11 +211,19 @@ function typeSection(tokens: DesignTokens): CatalogSection {
       m("div", { class: "flex flex-col gap-3" }, [
         m("div", { id: "font-sans" }, [
           m("p", { class: "font-sans type-body text-primary" }, "font-sans -- The workspace's interface text"),
-          subCaption(valueIn(tokens.theme, "font-sans")),
+          valueCaptions("font-sans", valueIn(tokens.theme, "font-sans")),
         ]),
         m("div", { id: "font-mono" }, [
           m("p", { class: "font-mono type-body text-primary" }, "font-mono -- ids, paths, code"),
-          subCaption(valueIn(tokens.theme, "font-mono")),
+          valueCaptions("font-mono", valueIn(tokens.theme, "font-mono")),
+        ]),
+        m("div", { id: "font-display" }, [
+          m(
+            "p",
+            { class: "type-body text-primary", style: { fontFamily: "var(--font-display)" } },
+            "font-display -- headings, section labels, and a theme's titles, buttons and menus",
+          ),
+          valueCaptions("font-display", valueIn(tokens.theme, "font-display")),
         ]),
       ]),
     ],
@@ -214,7 +237,7 @@ function tokenTable(tokens: readonly DeclaredToken[], demo: (token: DeclaredToke
     { class: "token-table grid grid-cols-[minmax(160px,auto)_minmax(80px,auto)_1fr] items-center gap-x-6 gap-y-2" },
     tokens.flatMap((token) => [
       caption(`--${token.name}`),
-      subCaption(token.value),
+      m("div", valueCaptions(token.name, token.value)),
       m("div", { id: `token-${token.name}`, class: "min-w-0 type-body text-primary" }, demo(token)),
     ]),
   );
@@ -276,10 +299,10 @@ function radiusSection(tokens: DesignTokens): CatalogSection {
           m("div", { id: `token-${token.name}`, class: "flex flex-col items-center gap-1.5" }, [
             m("div", {
               class: "h-16 w-16 border border-default bg-surface-secondary",
-              style: { borderRadius: themeValue(token) },
+              style: { borderRadius: cssValueOf(token) },
             }),
             caption(`rounded-${token.name.slice("radius-".length)}`),
-            subCaption(token.value),
+            valueCaptions(token.name, token.value),
           ]),
         ),
         m("div", { id: "token-radius-full", class: "flex flex-col items-center gap-1.5" }, [
@@ -306,13 +329,16 @@ function elevationSection(tokens: DesignTokens): CatalogSection {
       m(
         "div",
         { class: "flex flex-wrap gap-8 rounded-lg bg-page p-6" },
-        tokensWithPrefix(tokens.theme, "shadow-").map((token) =>
-          m("div", { id: `token-${token.name}`, class: "flex flex-col gap-2" }, [
+        // The values live in the value layer (--c-shadow-*), where a theme redeclares them.
+        tokensWithPrefix(tokens.scales, "c-shadow-").map((token) =>
+          m("div", { id: `token-${token.name}`, class: "flex max-w-64 flex-col gap-2" }, [
             m("div", {
               class: "h-20 w-40 rounded-lg border border-default bg-surface",
-              style: { boxShadow: themeValue(token) },
+              style: { boxShadow: `var(--${token.name})` },
             }),
-            caption(token.name),
+            caption(token.name.slice("c-".length)),
+            subCaption(`--${token.name}`),
+            valueCaptions(token.name, token.value),
           ]),
         ),
       ),

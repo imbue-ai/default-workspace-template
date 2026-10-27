@@ -10,6 +10,8 @@ import { readDesignTokens } from "../models/tokens";
 import { BASE_CSS as baseCss } from "../testing/baseCss";
 import { BADGE_TONES, BUTTON_VARIANTS } from "./components";
 import { StyleGuidePage } from "./StyleGuidePage";
+import { PART_SECTIONS } from "./theming";
+import { PARTS } from "@imbue/workspace-ui/src/themes/parts";
 
 afterEach(() => unmountViews());
 
@@ -85,5 +87,54 @@ describe("StyleGuidePage", () => {
     click(root.querySelector('[data-segment="list"]'));
     expect(root.querySelector('[data-segment="list"]')?.getAttribute("aria-checked")).toBe("true");
     expect(root.querySelector('[data-segment="grid"]')?.getAttribute("aria-checked")).toBe("false");
+  });
+
+  it("lists every theme part, linking each the catalog shows to a section that exists", () => {
+    const root = mountPage();
+    for (const part of PARTS) expect(root.querySelector(`#part-${part}`), part).not.toBeNull();
+    for (const section of Object.values(PART_SECTIONS))
+      expect(root.querySelector(`#${section}`), section).not.toBeNull();
+  });
+
+  it("marks the controls it draws as the parts a theme styles them by", () => {
+    const root = mountPage();
+    for (const part of ["button", "field", "select", "badge"]) {
+      expect(
+        root.querySelector(`#${PART_SECTIONS[part as keyof typeof PART_SECTIONS]} [data-part="${part}"]`),
+        part,
+      ).not.toBeNull();
+    }
+    click(root.querySelector("#open-modal"));
+    for (const part of ["dialog", "dialog-header", "dialog-title", "dialog-actions"])
+      expect(document.querySelector(`[data-part="${part}"]`), part).not.toBeNull();
+  });
+
+  it("names the theme the page wears, standard when none is marked", () => {
+    expect(mountPage().querySelector("#worn-theme")?.textContent).toContain("standard");
+    unmountViews();
+    document.documentElement.setAttribute("data-ui-theme", "windows-2000");
+    try {
+      expect(mountPage().querySelector("#worn-theme")?.textContent).toContain("windows-2000");
+    } finally {
+      document.documentElement.removeAttribute("data-ui-theme");
+    }
+  });
+
+  it("shows a value a theme changed beside the standard one, struck through, and strikes nothing unthemed", () => {
+    expect(mountPage().querySelectorAll(".line-through")).toHaveLength(0);
+    unmountViews();
+    const theme = document.createElement("style");
+    theme.setAttribute("data-workspace-theme", "");
+    theme.textContent = ":root { --c-accent: #000080; }";
+    document.head.appendChild(theme);
+    try {
+      const root = mountPage();
+      const swatch = root.querySelector("#colour-accent");
+      expect(swatch?.textContent).toContain("#000080");
+      expect(swatch?.querySelector(".line-through")?.textContent).toBe("#2f6b4f");
+      expect(root.querySelectorAll(".line-through")).toHaveLength(1);
+    } finally {
+      theme.remove();
+    }
   });
 });
