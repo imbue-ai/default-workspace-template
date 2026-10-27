@@ -67,6 +67,9 @@ PRE_TOOL_USE_BUDGET_SECONDS = 45.0
 
 SHELL_TOOL_NAMES = frozenset({"run_terminal_command", "monitor"})
 ALWAYS_BACKGROUNDED_TOOL_NAME = "monitor"
+# grok moves a shell call still running when its ``block_until_ms`` ends to the background; a shorter wait
+# than this ends before a gateway request has echoed back.
+MIN_FOREGROUND_BLOCK_UNTIL_MS = 1000
 USE_TOOL_NAME = "use_tool"
 USE_TOOL_INLINE_KEYS = frozenset({"tool_name", "tool_input"})
 WORKFLOW_TOOL_NAME = "workflow"
@@ -217,21 +220,26 @@ def rewrap(
     return result
 
 
+def _is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
 def _is_zero(value: object) -> bool:
-    return (
-        isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
-    )
+    return _is_number(value) and value == 0
 
 
 def is_backgrounded(tool_name: str, tool_input: Mapping[str, object]) -> bool:
     """Whether grok runs a shell call in the background: a ``monitor`` always; otherwise, when
-    ``block_until_ms`` is set, exactly when it is 0, and when it is not, when ``is_background`` is
-    true or ``timeout`` is 0."""
+    ``block_until_ms`` is set, when it is below ``MIN_FOREGROUND_BLOCK_UNTIL_MS``, and when it is
+    not, when ``is_background`` is true or ``timeout`` is 0."""
     if tool_name == ALWAYS_BACKGROUNDED_TOOL_NAME:
         return True
     block_until_ms = tool_input.get("block_until_ms")
     if block_until_ms is not None:
-        return _is_zero(block_until_ms)
+        return (
+            _is_number(block_until_ms)
+            and block_until_ms < MIN_FOREGROUND_BLOCK_UNTIL_MS
+        )
     return tool_input.get("is_background") is True or _is_zero(
         tool_input.get("timeout")
     )

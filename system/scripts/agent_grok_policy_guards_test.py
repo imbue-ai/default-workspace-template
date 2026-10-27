@@ -400,6 +400,11 @@ def test_the_prefix_carries_the_agents_git_identity(tmp_path: Path) -> None:
     "background_arguments",
     [
         pytest.param({"block_until_ms": 0}, id="block_until_ms-0"),
+        pytest.param({"block_until_ms": 1}, id="block_until_ms-1"),
+        pytest.param(
+            {"block_until_ms": hook.MIN_FOREGROUND_BLOCK_UNTIL_MS - 1},
+            id="block_until_ms-just-under-the-floor",
+        ),
         pytest.param({"is_background": True}, id="is_background"),
         pytest.param({"timeout": 0}, id="timeout-0"),
         pytest.param(

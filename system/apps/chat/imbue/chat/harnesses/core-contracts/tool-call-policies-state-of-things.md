@@ -233,9 +233,11 @@ require-a-step check.
 * **Shell calls** (`run_terminal_command`, and `monitor`, whose command also runs a shell and
   whose result is always a background task) reach the guards as
   `{"tool_name":"Bash","tool_input":{"command","run_in_background"}}`. The background flag is
-  grok's own rule, measured: when `block_until_ms` is set it decides (`0` backgrounds), and when
-  it is absent or `null`, `is_background: true` or `timeout: 0` backgrounds; claude's
-  `run_in_background` means nothing to grok.
+  grok's own rule, measured: when `block_until_ms` is set it decides (grok moves a command still
+  running when the wait ends to the background, so a wait below the dispatcher's
+  `MIN_FOREGROUND_BLOCK_UNTIL_MS`, `0` included, counts as backgrounded), and when it is absent or
+  `null`, `is_background: true` or `timeout: 0` backgrounds; claude's `run_in_background` means
+  nothing to grok.
 * **Every other tool** reaches only the guards that police every tool (`agent_secrets_guard.sh`)
   and the step nudge, under its grok name and input.
 * **`use_tool`** arrives under the name of the tool it calls, with `{tool_name, tool_input}` as
