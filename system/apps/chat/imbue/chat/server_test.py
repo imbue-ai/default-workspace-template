@@ -30,6 +30,7 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
+from watchdog.observers.api import BaseObserver
 from werkzeug.test import TestResponse
 
 from imbue.chat.accounts import INDEX_VERSION
@@ -692,6 +693,54 @@ def _claude_agent_info_with_one_message(tmp_path: Path, agent_id: str, state: st
         agent_state_dir=agent_state_dir,
         claude_config_dir=claude_config_dir,
     )
+
+
+def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watch_of_its_projects_tree(
+    tmp_path: Path,
+) -> None:
+    """The chats of one account all watch that account's projects tree; the app watches it once, through one
+    observer, however many of them are open."""
+    state = build_test_state()
+    account_dir = tmp_path / "account"
+    (account_dir / "projects" / "hash123").mkdir(parents=True)
+    observers_before = {thread for thread in threading.enumerate() if isinstance(thread, BaseObserver)}
+    try:
+        for index in range(4):
+            agent_id = f"account-chat-{index}"
+            agent_state_dir = tmp_path / agent_id
+            agent_state_dir.mkdir()
+            (agent_state_dir / "claude_session_id_history").write_text(f"s{index}\n")
+            info = AgentInfo(
+                id=agent_id,
+                name=agent_id,
+                state="RUNNING",
+                agent_state_dir=agent_state_dir,
+                claude_config_dir=account_dir,
+            )
+            state.get_or_create_watcher(info)
+
+        def app_observers() -> list[BaseObserver]:
+            return [
+                thread
+                for thread in threading.enumerate()
+                if isinstance(thread, BaseObserver) and thread not in observers_before
+            ]
+
+        def watch_count(path: Path) -> int:
+            return sum(
+                1 for observer in app_observers() for emitter in observer.emitters if emitter.watch.path == str(path)
+            )
+
+        # Each chat's own state dir is watched once its watcher has subscribed to everything.
+        wait_until_true(
+            lambda: all(watch_count(tmp_path / f"account-chat-{index}") == 1 for index in range(4)),
+            5.0,
+            "every chat's watches in place",
+        )
+        assert watch_count(account_dir / "projects") == 1
+        assert len(app_observers()) == 1
+    finally:
+        state.shutdown()
 
 
 def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:

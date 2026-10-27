@@ -23,6 +23,7 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
@@ -116,6 +117,11 @@ class ChatAppState(MutableModel):
     secret_requests: SecretRequestStore
     secret_request_bridge: SecretRequestChatBridge | None = None
     watchers: dict[str, AgentSessionWatcher] = {}
+    watch_observer: SharedWatchObserver = Field(
+        default_factory=SharedWatchObserver.build,
+        description="The one filesystem observer every session watcher watches through, so chats watching the same "
+        "directory share its OS watch and threads",
+    )
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``, or
     # ``release_unviewed_stopped_transcripts`` for a stopped one), so a chat that is not
@@ -187,6 +193,7 @@ class ChatAppState(MutableModel):
             watcher.set_finished_tasks_callback(
                 lambda task_ids: self.agent_manager.forget_finished_tasks(agent_info.id, agent_info.harness, task_ids)
             )
+            watcher.set_watch_observer(self.watch_observer)
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
             self.agent_manager.register_queue_busy_handler(agent_info.id, watcher.notify_busy)
             # A harness that holds the queue on its agent's behalf (antigravity) also needs to
@@ -420,6 +427,7 @@ class ChatAppState(MutableModel):
         self.broadcaster.shutdown()
         self.agent_manager.stop()
         self.stop_all_watchers()
+        self.watch_observer.close()
         try:
             self.http_client.close()
         except (httpx.HTTPError, RuntimeError) as e:

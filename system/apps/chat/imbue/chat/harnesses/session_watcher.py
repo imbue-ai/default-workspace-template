@@ -25,6 +25,7 @@ from typing import Any
 from pydantic import Field
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.imbue_common.frozen_model import FrozenModel
 
 # Called with (agent_id, newly parsed events) each time the watcher reads new lines.
@@ -159,6 +160,10 @@ class AgentSessionWatcher(TranscriptReader, ABC):
     # The queued-message (shoulder-tap) surface has concrete no-op defaults so a harness
     # without a queued-message populator needs no changes. Everything downstream
     # (the WS snapshot field and the two common actions) is harness-agnostic.
+
+    def set_watch_observer(self, watch_observer: SharedWatchObserver) -> None:
+        """Watch the transcript's files through ``watch_observer``, the app's one observer, rather than one of the
+        watcher's own. Set before ``start``. No-op by default, for a harness that watches no files."""
 
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         """Register the sink that receives each new queued-message snapshot. No-op by default."""

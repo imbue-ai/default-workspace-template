@@ -28,7 +28,6 @@ from typing import Callable
 from typing import Final
 
 from loguru import logger
-from watchdog.observers import Observer
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.antigravity.agy_transcript import TruncatedError
@@ -43,6 +42,7 @@ from imbue.chat.harnesses.antigravity.session_parser import parse_step_detail
 from imbue.chat.harnesses.antigravity.turn_state import TurnState
 from imbue.chat.harnesses.antigravity.turn_state import drop_turn_state
 from imbue.chat.harnesses.antigravity.turn_state import get_turn_state
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
@@ -115,7 +115,12 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     # Instance-level so a test can shorten it by assignment. A module constant would have to be
     # monkeypatched, which the ratchets forbid (and rightly -- it leaks across tests).
     _delivery_witness_seconds: float
-    _observer: Any
+    # The app's observer once ``set_watch_observer`` hands it over; until then ``start`` watches through one of
+    # its own, closed by ``stop``.
+    _watch_observer: SharedWatchObserver | None
+    _owned_watch_observer: SharedWatchObserver | None
+    _wake_handler: WakeOnChangeHandler
+    _watched_dirs: list[Path]
     # One held read-only connection per conversation db, guarded by ``self._lock``. Held
     # rather than opened per read because open/close is what WRITES to the watched
     # directory (open builds the wal-index in ``-shm``, close resets the ``-wal``), and
@@ -152,7 +157,10 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._flush_is_alive = None
         self._flush_wake = threading.Event()
         self._flush_thread = None
-        self._observer = None
+        self._watch_observer = None
+        self._owned_watch_observer = None
+        self._wake_handler = WakeOnChangeHandler(self._wake)
+        self._watched_dirs = []
         self._connections = {}
         return self
 
@@ -212,13 +220,14 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             # Publish during priming, not one poll later: an unpublished turn state makes the
             # first send after every backend restart fall back to the marker alone.
             self._publish_turn_state()
-        self._observer = Observer()
-        handler = WakeOnChangeHandler(self._wake)
+        watch_observer = self._watch_observer
+        if watch_observer is None:
+            watch_observer = SharedWatchObserver.build()
+            self._owned_watch_observer = watch_observer
         # Watch whatever exists now; the 1s poll safety net covers a dir/file created later.
         for directory in (self._state_dir, self._conversations_dir()):
-            if directory.is_dir():
-                self._observer.schedule(handler, str(directory), recursive=False)
-        self._observer.start()
+            if directory.is_dir() and watch_observer.subscribe(directory, False, self._wake_handler):
+                self._watched_dirs.append(directory)
         self._thread = threading.Thread(target=self._run, name=f"agy-watcher-{self._agent_id}", daemon=True)
         self._thread.start()
         # Its own thread: a flush runs mngr's send, which blocks on a lock and a bounded
@@ -232,10 +241,13 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._stopping.set()
         self._wake.set()
         self._flush_wake.set()
-        if self._observer is not None:
-            self._observer.stop()
-            self._observer.join(timeout=2.0)
-            self._observer = None
+        if self._owned_watch_observer is not None:
+            self._owned_watch_observer.close()
+            self._owned_watch_observer = None
+        elif self._watch_observer is not None:
+            for directory in self._watched_dirs:
+                self._watch_observer.unsubscribe(directory, False, self._wake_handler)
+        self._watched_dirs = []
         if self._thread is not None:
             self._thread.join(timeout=2.0)
             self._thread = None
@@ -452,6 +464,9 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     # invisibly inside its TUI, so instead we hold the messages and deliver them ourselves
     # once agy goes idle. These overrides are what make the shared consumers -- the WS
     # snapshot, stop's return block, the tap's availability gate -- see a real queue.
+
+    def set_watch_observer(self, watch_observer: SharedWatchObserver) -> None:
+        self._watch_observer = watch_observer
 
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         self._queue_snapshot_callback = callback
