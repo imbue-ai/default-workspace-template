@@ -1343,8 +1343,8 @@ def test_antigravity_tap_delivers_once_and_returns_nothing(tmp_path: Path) -> No
 _GROK_PENDING_WAKE_PREFIX = "pending-wake:"
 _GROK_CONTROL_VERBS = frozenset({"/model", "/effort"})
 
-# How long a root-turn file outlives its turn once something waits on it in real time: mngr's StopCancelled hook clears
-# a cancelled turn's 39-65 ms after the cancel, and its streamer a finished turn's within its next poll.
+# How long a root-turn file outlives its turn once something waits on it in real time: a shortened stand-in, well
+# inside _GROK_TURN_END_DEADLINE_SECONDS, for the lag mngr's StopCancelled hook and streamer leave.
 _GROK_TURN_FILE_LAG_SECONDS = 0.03
 # How long stop and the tap wait for a turn to end: one their press ends, and one it cannot (which ends the same way
 # however long they wait).
