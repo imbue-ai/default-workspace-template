@@ -247,6 +247,15 @@ def _step_env(work_dir: Path, *, steps: str, in_progress: str) -> dict[str, str]
     }
 
 
+def _one_open_step_env(tmp_path: Path) -> dict[str, str]:
+    """The environment of an agent whose tk lists one open step, already in progress."""
+    return _step_env(
+        _tk_work_dir(tmp_path),
+        steps="s-1  [open] - Tidy the report",
+        in_progress="s-1  [in_progress] - Tidy",
+    )
+
+
 def _hook_beside_stand_ins(tmp_path: Path, guards: dict[str, str]) -> Path:
     """A copy of the hook in a scripts dir of its own, beside ``guards`` (script name to source)."""
     scripts_dir = tmp_path / "scripts"
@@ -837,12 +846,7 @@ def test_input_the_hook_cannot_use_lets_the_call_through_and_is_logged(
 def test_the_open_steps_reminder_rides_the_first_allowed_call_of_the_turn_once(
     tmp_path: Path,
 ) -> None:
-    work_dir = _tk_work_dir(tmp_path)
-    env = _step_env(
-        work_dir,
-        steps="s-1  [open] - Tidy the report",
-        in_progress="s-1  [in_progress] - Tidy",
-    )
+    env = _one_open_step_env(tmp_path)
     prompt = _run_hook(
         tmp_path, hook.USER_PROMPT_SUBMIT_COMMAND, _CAPTURED_ROOT_PROMPT, env=env
     )
@@ -869,12 +873,7 @@ def test_the_open_steps_reminder_rides_the_first_allowed_call_of_the_turn_once(
 def test_a_refused_first_call_leaves_the_reminder_for_the_next_allowed_one(
     tmp_path: Path,
 ) -> None:
-    work_dir = _tk_work_dir(tmp_path)
-    env = _step_env(
-        work_dir,
-        steps="s-1  [open] - Tidy the report",
-        in_progress="s-1  [in_progress] - Tidy",
-    )
+    env = _one_open_step_env(tmp_path)
     _run_hook(tmp_path, hook.USER_PROMPT_SUBMIT_COMMAND, _CAPTURED_ROOT_PROMPT, env=env)
     refused = _pre(tmp_path, _shell("git rebase -i HEAD~2"), env=env)
     assert (
@@ -891,12 +890,7 @@ def test_a_refused_first_call_leaves_the_reminder_for_the_next_allowed_one(
 def test_a_subagents_prompt_and_tool_calls_neither_open_nor_take_the_reminder(
     tmp_path: Path,
 ) -> None:
-    work_dir = _tk_work_dir(tmp_path)
-    env = _step_env(
-        work_dir,
-        steps="s-1  [open] - Tidy the report",
-        in_progress="s-1  [in_progress] - Tidy",
-    )
+    env = _one_open_step_env(tmp_path)
     stamp = tmp_path / "state" / hook.TURN_STAMP_FILE_NAME
 
     _run_hook(
