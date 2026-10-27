@@ -1698,7 +1698,8 @@ class AgentManager:
             self.rename_chat(chat_id, name)
         except (AgentRenameError, ChatConvergingError) as e:
             _loguru_logger.warning("Could not rename the former main chat {} to {!r}: {}", chat_id, name, e)
-        self.clear_automatic_title(chat_id)
+        finally:
+            self.clear_automatic_title(chat_id)
 
     def _chat_title_locked(self, chat_id: ChatId) -> str | None:
         """The name a chat is listed under, ignoring a title shown ahead of its rename; None for a chat this app
