@@ -147,7 +147,9 @@ def test_grok_wires_the_dispatcher_for_pretooluse_and_userpromptsubmit() -> None
         assert commands[0].split()[-1] == command
 
 
-def test_a_wired_grok_dispatcher_whose_script_is_gone_does_not_refuse(tmp_path: Path) -> None:
+def test_a_wired_grok_dispatcher_whose_script_is_gone_does_not_refuse(
+    tmp_path: Path,
+) -> None:
     """grok keeps the hooks it started with, so a session can outlive the dispatcher (a worktree
     checked out at an older commit). grok refuses a call on a PreToolUse exit 2, which python3 gives
     for a missing script, and goes ahead after any other failure."""
@@ -195,8 +197,14 @@ def test_grok_hook_commands_expand_no_bare_variable() -> None:
 def test_grok_runs_code_guardians_stop_gate_only_at_a_turns_end() -> None:
     """grok also fires Stop when a session ends (quit, `/new`, a resume), where the gate has no turn to check."""
     grok = json.loads(_GROK_HOOKS.read_text())
-    (gate_command,) = [command for command in _hook_commands(grok, "Stop") if "stop_hook_entrypoint.sh" in command]
-    assert gate_command.startswith(f"{_GROK_WORK_DIR_REFERENCE}/system/scripts/grok_turn_end_stop_hook.sh bash ")
+    (gate_command,) = [
+        command
+        for command in _hook_commands(grok, "Stop")
+        if "stop_hook_entrypoint.sh" in command
+    ]
+    assert gate_command.startswith(
+        f"{_GROK_WORK_DIR_REFERENCE}/system/scripts/grok_turn_end_stop_hook.sh bash "
+    )
 
 
 def test_grok_records_its_background_tasks_where_claude_does_and_at_a_spawn() -> None:

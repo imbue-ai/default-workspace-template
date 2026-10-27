@@ -23,7 +23,9 @@ def _run_filter(payload: str, received_path: Path) -> subprocess.CompletedProces
     )
 
 
-def test_a_turn_end_runs_the_gate_on_the_payload_and_keeps_its_exit_status(tmp_path: Path) -> None:
+def test_a_turn_end_runs_the_gate_on_the_payload_and_keeps_its_exit_status(
+    tmp_path: Path,
+) -> None:
     payload = {"hook_event_name": "Stop", "session_id": "s-1", "reason": "end_turn"}
     received_path = tmp_path / "received.json"
 
@@ -36,7 +38,10 @@ def test_a_turn_end_runs_the_gate_on_the_payload_and_keeps_its_exit_status(tmp_p
 @pytest.mark.parametrize(
     "payload",
     [
-        pytest.param(json.dumps({"hook_event_name": "Stop", "reason": "shutdown"}), id="session-end"),
+        pytest.param(
+            json.dumps({"hook_event_name": "Stop", "reason": "shutdown"}),
+            id="session-end",
+        ),
         pytest.param(json.dumps({"hook_event_name": "Stop"}), id="no-reason"),
         pytest.param("not json", id="unreadable"),
     ],
