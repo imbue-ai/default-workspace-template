@@ -3,9 +3,9 @@
 Grok's own queue lives inside its TUI where nothing can see it, so the chat never lets grok queue anything: every
 message waits here, and the watcher's flush worker, the only typist, sends it once no top-level turn is in flight.
 Entries are journalled, with the delivery attempts each has spent, under the current grok process's session token,
-so they survive a chat app restart and are dropped when grok relaunches (contract Part B). A held slash command is sent alone, since grok may run it itself
-without logging a user turn. The control lane is never published, journalled or returned: each command is sent
-alone, `/model` first, ahead of any held message.
+so they survive a chat app restart and are dropped when grok relaunches (contract Part B). A held slash command is
+sent alone, since grok may run it itself without logging a user turn. The control lane is never published,
+journalled or returned: each command is sent alone, `/model` first, ahead of any held message.
 """
 
 import json
