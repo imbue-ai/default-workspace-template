@@ -9,6 +9,7 @@
  */
 
 import m from "mithril";
+import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { getChatById } from "../models/Chats";
 import { addOutgoing, dropOutgoing, dropOutgoingNoTurnWillRetire } from "../models/OutgoingMessages";
 import { accountForAgent } from "../models/Providers";
@@ -66,7 +67,8 @@ export async function sendAgain(chatId: string, failedEventId: string, prompt: U
     const status = await sendMessage(chatId, content, messageId);
     dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
     resendStates.set(failedEventId, "sent");
-  } catch {
+  } catch (err) {
+    console.error(`Failed to send the message again to chat ${chatId}: ${describeRequestError(err)}`);
     dropOutgoing(chatId, outgoingId);
     resendStates.set(failedEventId, "failed");
   }
