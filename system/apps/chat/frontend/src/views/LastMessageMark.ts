@@ -3,8 +3,8 @@
  * nobody has touched in days from one in use before stopping or deleting it. The exact time is its tooltip.
  *
  * The time is the transcript's own timestamp of the latest message from either side, so a helper chat messaged
- * only by the agent that started it reads as right as one the user talks to. A compaction or other bookkeeping
- * the agent records while idle does not count. It hides while the agent works on a turn (the status row says
+ * only by the agent that started it reads as right as one the user talks to. A compaction, a system chip or
+ * another injection the transcript records as a user message does not count. It hides while the agent works on a turn (the status row says
  * so) and while a send of this page is on its way.
  */
 
@@ -12,9 +12,13 @@ import m from "mithril";
 import { getChatById } from "../models/Chats";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import type { TranscriptEvent } from "../models/Response";
+import { isTurnUserMessage } from "./message-classification";
 import { Age, longAge } from "./relativeTime";
 
-const MESSAGE_EVENT_TYPES: ReadonlySet<string> = new Set(["user_message", "assistant_message"]);
+function isMessage(event: TranscriptEvent): boolean {
+  if (event.type === "assistant_message") return true;
+  return event.type === "user_message" && isTurnUserMessage(event);
+}
 
 /** When the transcript's latest message was, in epoch milliseconds, or null when the mark shows nothing. */
 export function lastMessageAtMs(chatId: string, events: readonly TranscriptEvent[]): number | null {
@@ -23,7 +27,7 @@ export function lastMessageAtMs(chatId: string, events: readonly TranscriptEvent
   if (getOutgoingMessages(chatId).length > 0) return null;
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
-    if (!MESSAGE_EVENT_TYPES.has(event.type)) continue;
+    if (!isMessage(event)) continue;
     const at = Date.parse(event.timestamp);
     if (!Number.isNaN(at)) return at;
   }
