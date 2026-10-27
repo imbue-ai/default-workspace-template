@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 
 import pytest
-
 from oom_priority.testing import write_fake_process
+
 from system_monitor import programs
 
 
