@@ -4539,6 +4539,9 @@ class AgentManager:
         for agent_info in agents:
             self._ensure_activity_tracking(agent_info.id)
             self._ensure_model_tracking(agent_info.id)
+        # The app serves before this first read finishes, and a page that connected meanwhile was sent no chat
+        # list (``_run_ws_broadcast_loop``): this push is its first.
+        self._broadcast_chats_updated()
 
     def _refresh_agents(self) -> None:
         """Re-discover all agents and broadcast updates."""

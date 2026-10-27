@@ -1001,6 +1001,7 @@ def _fake_watcher(
         notify_idle=lambda: [],
         notify_busy=lambda: None,
         set_flush_hooks=lambda _send, _is_alive: None,
+        set_watch_observer=lambda _watch_observer: None,
         get_all_events=get_all_events,
         start=start,
         stop=stop,
@@ -4169,6 +4170,44 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
     assert first["chat_id"] == failed.chat_id
     assert first["phase"] == ProvisionalChatPhase.FAILED.value
     assert second["type"] == "chats_updated"
+
+
+@pytest.mark.timeout(15)
+def test_a_page_that_connects_before_the_first_agent_listing_gets_its_chat_list_from_that_listing(
+    config: Config, signed_in_account: str, tmp_path: Path, messenger: RecordingMngrMessenger
+) -> None:
+    """The app serves while it first reads the agent list. A page connected by then is replayed what the app
+    holds but no chat list -- an empty one would read as every chat gone -- and gets the list the read pushes."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    app = create_application(build_test_state(config=config, agent_manager=manager))
+    failed = seed_failed_chat(manager, ChatId("failed-1"), "Chat 1")
+
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            replayed = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            assert ws.receive(timeout=0.5) is None
+            manager._adopt_initial_listing(
+                [
+                    AgentInfo(
+                        id="listed-chat",
+                        name="listed-chat",
+                        state="RUNNING",
+                        agent_state_dir=tmp_path / "listed-chat",
+                        claude_config_dir=tmp_path / "claude_config",
+                        labels={"user_created": "true"},
+                    )
+                ]
+            )
+            pushed = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))]
+            while pushed[-1]["type"] != "chats_updated":
+                pushed.append(json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)))
+        finally:
+            close_ws(ws)
+
+    assert replayed["type"] == "provisional_chat_created"
+    assert replayed["chat_id"] == failed.chat_id
+    assert "listed-chat" in {chat["chat_id"] for chat in pushed[-1]["chats"]}
 
 
 def _write_claude_session(claude_config_dir: Path, session_id: str, events: list[dict[str, Any]]) -> None:
