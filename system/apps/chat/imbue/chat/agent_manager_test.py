@@ -5924,9 +5924,10 @@ def test_a_sign_in_resends_the_message_its_failure_refused_once_the_agent_is_bac
     )
     try:
         assert manager.restart_agents_on_account(account) == 2
-        assert delivered == [(refused_id, "Who is Aaron?")]
+        wait_for(lambda: len(delivered) > 0, timeout=10.0, error_message="the refused message was never resent")
     finally:
         manager.stop()
+    assert delivered == [(refused_id, "Who is Aaron?")]
 
 
 def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
@@ -5952,6 +5953,7 @@ def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
     )
     try:
         assert manager.restart_agents_on_account(account) == 2
+        wait_for(lambda: len(attempted) == 2, timeout=10.0, error_message="a refused message was never resent")
         assert sorted(attempted) == ["First-Chat", "Second-Chat"]
     finally:
         manager.stop()

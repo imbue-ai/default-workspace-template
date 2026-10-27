@@ -2006,7 +2006,9 @@ class AgentManager:
         must not revive an agent its chat has moved on from.
 
         Once an agent is back, the message its sign-in failure refused is sent to it again
-        (``_resend_turn_refused_for_sign_in``), so the user does not have to type it twice.
+        (``_resend_turn_refused_for_sign_in``), so the user does not have to type it twice. Each
+        resend runs on its own thread: it waits for the restarted agent to take input, which must
+        not hold up the restarts after it, and a resend that fails must not stop them.
         """
         with self._lock:
             agents = [
@@ -2027,7 +2029,12 @@ class AgentManager:
             )
             if result.returncode == 0:
                 restarted += 1
-                self._resend_turn_refused_for_sign_in(agent_id)
+                self._creation_cg.start_new_thread(
+                    target=self._resend_turn_refused_for_sign_in,
+                    args=(agent_id,),
+                    name=f"reauth-resend-{name[:14]}",
+                    is_checked=False,
+                )
             else:
                 _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
         return restarted
