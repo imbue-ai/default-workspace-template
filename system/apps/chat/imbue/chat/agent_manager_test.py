@@ -5917,12 +5917,12 @@ def test_a_sign_in_resends_the_message_its_failure_refused_once_the_agent_is_bac
         ],
         answered_id: [_typed_turn("hi"), _agent_reply()],
     }
-    delivered: list[tuple[str, str]] = []
+    # Each send, and whether the agent's restart had run by then.
+    delivered: list[tuple[str, str, bool]] = []
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
-        # The restart has run by the time anything is sent.
-        assert f"start {agent_info.name} --restart --no-resume" in argv_log.read_text().splitlines()
-        delivered.append((agent_info.id, text))
+        is_restarted = f"start {agent_info.name} --restart --no-resume" in argv_log.read_text().splitlines()
+        delivered.append((agent_info.id, text, is_restarted))
         return SendOutcome.OK
 
     manager.set_handoff_capabilities(
@@ -5937,7 +5937,7 @@ def test_a_sign_in_resends_the_message_its_failure_refused_once_the_agent_is_bac
         wait_for(lambda: len(delivered) > 0, timeout=10.0, error_message="the refused message was never resent")
     finally:
         manager.stop()
-    assert delivered == [(refused_id, "Who is Aaron?")]
+    assert delivered == [(refused_id, "Who is Aaron?", True)]
 
 
 def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
