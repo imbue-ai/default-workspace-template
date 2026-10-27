@@ -173,7 +173,7 @@ def test_every_commit_stamps_when_the_account_signed_in(tmp_path: Path) -> None:
 
     stamp = read_signed_in_at(account_id, tmp_path)
     assert stamp is not None
-    assert datetime.fromisoformat(stamp) > datetime(2000, 1, 1, tzinfo=timezone.utc)
+    assert stamp > datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 
 def test_a_commit_refused_for_the_wrong_lane_leaves_the_sign_in_stamp_alone(tmp_path: Path) -> None:
@@ -184,7 +184,7 @@ def test_a_commit_refused_for_the_wrong_lane_leaves_the_sign_in_stamp_alone(tmp_
     with pytest.raises(AccountError):
         commit_account(account_id, "openai", "OpenAI", tmp_path)
 
-    assert read_signed_in_at(account_id, tmp_path) == "2000-01-01T00:00:00+00:00"
+    assert read_signed_in_at(account_id, tmp_path) == datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 
 def test_committing_a_folder_that_does_not_exist_raises(tmp_path: Path) -> None:

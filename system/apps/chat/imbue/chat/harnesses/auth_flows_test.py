@@ -10,6 +10,8 @@ import itertools
 import json
 import os
 from collections.abc import Callable
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -507,7 +509,9 @@ def test_re_keying_through_imbue_stamps_a_sign_in(tmp_path: Path) -> None:
 
     service.adopt_claude_credentials("sk-ant-api03-" + "B" * 40)
 
-    assert read_signed_in_at(adopted.id, tmp_path) != "2000-01-01T00:00:00+00:00"
+    stamp = read_signed_in_at(adopted.id, tmp_path)
+    assert stamp is not None
+    assert stamp > datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 
 def test_re_keying_through_imbue_touches_the_index_so_open_chats_hear_of_it(tmp_path: Path) -> None:
