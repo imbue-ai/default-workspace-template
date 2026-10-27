@@ -1200,8 +1200,8 @@ def test_the_chat_list_leads_with_the_main_chat_and_lands_on_a_new_main_chat_whe
         assert agent_manager.discard_provisional_chat(welcome.chat_id)
 
         new_main_id = agent_manager.get_main_chat_id()
-        assert new_main_id not in (None, ChatId(welcome.chat_id), ChatId(FIXTURE_AGENT_ID))
         assert new_main_id is not None
+        assert new_main_id not in (ChatId(welcome.chat_id), ChatId(FIXTURE_AGENT_ID))
         expect(page).to_have_url(f"{server.chat_url}{chat_root_path(new_main_id)}", timeout=15000)
         expect(rows).to_have_count(2)
         expect(rows.nth(0)).to_have_attribute("data-chat-id", new_main_id)

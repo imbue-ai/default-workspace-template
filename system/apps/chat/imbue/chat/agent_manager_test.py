@@ -1184,8 +1184,8 @@ def test_deleting_the_main_chat_gives_its_place_to_a_new_main_chat_rather_than_a
         manager.destroy_chat(ChatId("agent-newer"))
 
         new_main_id = manager.get_main_chat_id()
-        assert new_main_id not in (None, ChatId("agent-newer"), ChatId("agent-older"))
         assert new_main_id is not None
+        assert new_main_id not in (ChatId("agent-newer"), ChatId("agent-older"))
         new_main = manager.get_provisional_chat(new_main_id)
         assert new_main is not None
         assert new_main.name == MAIN_CHAT_NAME
@@ -1299,8 +1299,8 @@ def test_a_main_chat_that_was_never_messaged_is_replaced_by_a_new_one_after_a_re
 
         new_main_id = manager.get_main_chat_id()
 
-        assert new_main_id not in (None, ChatId("agent-other"))
         assert new_main_id is not None
+        assert new_main_id != ChatId("agent-other")
         assert manager.get_provisional_chat(new_main_id) is not None
         assert manager.get_main_chat_id() == new_main_id
     finally:
@@ -1830,14 +1830,14 @@ def test_a_welcome_seed_stopped_before_its_files_are_written_leaves_the_main_cha
         restarted._handle_observe_event(make_full_agent_state_event([first]))
 
         stand_in_id = restarted.get_main_chat_id()
-        assert stand_in_id not in (None, ChatId(str(first.id)))
+        assert stand_in_id is not None
+        assert stand_in_id != ChatId(str(first.id))
         assert store.read_all() == {}
 
         seeded = restarted.seed_chat(MAIN_CHAT_NAME, _seed_turns())
 
         assert seeded.display_name == MAIN_CHAT_NAME
         assert restarted.get_main_chat_id() == ChatId(seeded.chat_id)
-        assert stand_in_id is not None
         assert restarted.get_provisional_chat(stand_in_id) is None
     finally:
         restarted.stop()
