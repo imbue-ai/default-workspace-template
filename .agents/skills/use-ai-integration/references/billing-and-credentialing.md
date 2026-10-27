@@ -43,12 +43,12 @@ nearly all of it (measured on this repo, Haiku, a one-line prompt):
 ## Credential resolution
 
 Workspace credentials live in a per-ACCOUNT config directory. Signing in through the provider
-chooser mints `~/.minds/accounts/<id>/`, and a chat is bound to one at create time by an env var
-naming that folder -- `CLAUDE_CONFIG_DIR` for claude, `CODEX_HOME` for codex, `HOME` for
-antigravity, `PI_CODING_AGENT_DIR` for pi, and `GROK_AUTH_PATH` (the folder's `auth.json`) for
-grok. Switching a chat to another account of the same harness later rebinds it in place, except a
-grok chat, which moves to a new agent bound to the other account; a switch to another harness's
-account always moves the chat to a new agent.
+chooser mints `~/.minds/accounts/<id>/`, and a chat is bound to one at create time: claude by
+`CLAUDE_CONFIG_DIR` naming that folder and grok by `GROK_AUTH_PATH` naming the folder's
+`auth.json`, both env vars of the agent; codex, antigravity and pi by a link from the agent's own
+state dir to the folder's credential file. Switching a chat to another account of the same
+harness and lane later rebinds it in place, except a grok chat, which moves to a new agent bound
+to the other account; any other switch moves the chat to a new agent.
 
 This used to be one shared `~/.claude/settings.json` written by a single sign-in modal, which is
 why the resolver below still falls back to it when no account exists. The shared path is still what
