@@ -48,6 +48,7 @@ from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
+from imbue.chat.agent_manager import user_turns_refused_for_sign_in
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
@@ -5823,6 +5824,135 @@ def test_a_sign_in_restarts_only_the_live_agents_on_the_account(
             "start Unobserved-Chat --restart --no-resume",
             "start Waiting-Chat --restart --no-resume",
         ]
+    finally:
+        manager.stop()
+
+
+def _typed_turn(text: str, display: str | None = None) -> dict[str, Any]:
+    return {"type": "user_message", "content": text, **({"display": display} if display is not None else {})}
+
+
+def _agent_reply(is_auth_error: bool = False) -> dict[str, Any]:
+    return {
+        "type": "assistant_message",
+        "content": "Login expired" if is_auth_error else "Hi",
+        "is_auth_error": is_auth_error,
+    }
+
+
+@pytest.mark.parametrize(
+    ("events", "expected"),
+    [
+        pytest.param(
+            [_typed_turn("hi"), _agent_reply(), _typed_turn("Who is Aaron?"), _agent_reply(is_auth_error=True)],
+            ("Who is Aaron?",),
+            id="the-message-the-auth-error-answered",
+        ),
+        pytest.param(
+            [_typed_turn("first"), _typed_turn("second"), _agent_reply(is_auth_error=True), {"type": "special"}],
+            ("first", "second"),
+            id="every-message-of-the-turn-in-order",
+        ),
+        pytest.param(
+            [_typed_turn("hi"), _agent_reply(is_auth_error=True), _typed_turn("hi again"), _agent_reply(is_auth_error=True)],
+            ("hi again",),
+            id="only-the-last-refused-turn",
+        ),
+        pytest.param(
+            [_typed_turn("hi"), _agent_reply(is_auth_error=True), _agent_reply(is_auth_error=True)],
+            ("hi",),
+            id="a-repeated-auth-error",
+        ),
+        pytest.param(
+            [_typed_turn("hi"), _typed_turn("nudge", display="chip"), _agent_reply(is_auth_error=True)],
+            ("hi",),
+            id="not-a-machine-line",
+        ),
+        pytest.param([_typed_turn("hi"), _agent_reply()], (), id="a-reply-that-is-not-an-auth-error"),
+        pytest.param(
+            [_typed_turn("hi"), _agent_reply(is_auth_error=True), _typed_turn("again")], (), id="the-user-spoke-since"
+        ),
+        pytest.param(
+            [_typed_turn("do it"), _agent_reply(), {"type": "tool_result"}, _agent_reply(is_auth_error=True)],
+            (),
+            id="a-turn-the-agent-had-worked-on",
+        ),
+        pytest.param([], (), id="an-empty-transcript"),
+    ],
+)
+def test_the_turns_refused_for_sign_in_are_the_ones_the_last_auth_error_answered(
+    events: list[dict[str, Any]], expected: tuple[str, ...]
+) -> None:
+    assert user_turns_refused_for_sign_in(events) == expected
+
+
+class _FixedTranscriptReader(ListTranscriptReader):
+    """A transcript of the given events, as they are."""
+
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        super().__init__([])
+        self._events = events
+
+
+def test_a_sign_in_resends_the_message_its_failure_refused_once_the_agent_is_back(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    account = f"acct-{uuid4().hex}"
+    refused_id, answered_id = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    seed_agent_state(manager, refused_id, name="Refused-Chat", labels={"account": account})
+    seed_agent_state(manager, answered_id, name="Answered-Chat", labels={"account": account})
+    transcripts = {
+        refused_id: [_typed_turn("hi"), _agent_reply(), _typed_turn("Who is Aaron?"), _agent_reply(is_auth_error=True)],
+        answered_id: [_typed_turn("hi"), _agent_reply()],
+    }
+    delivered: list[tuple[str, str]] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        # The restart has run by the time anything is sent.
+        assert f"start {agent_info.name} --restart --no-resume" in argv_log.read_text().splitlines()
+        delivered.append((agent_info.id, text))
+        return SendOutcome.OK
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: _FixedTranscriptReader(transcripts[agent_info.id]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    try:
+        assert manager.restart_agents_on_account(account) == 2
+        assert delivered == [(refused_id, "Who is Aaron?")]
+    finally:
+        manager.stop()
+
+
+def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    account = f"acct-{uuid4().hex}"
+    for name in ("First-Chat", "Second-Chat"):
+        seed_agent_state(manager, f"agent-{uuid4().hex}", name=name, labels={"account": account})
+    attempted: list[str] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        attempted.append(agent_info.name)
+        raise SendFailedError("the agent is in shell mode", "blocked_input")
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(
+            ensure_watcher=lambda agent_info: _FixedTranscriptReader([_typed_turn("hi"), _agent_reply(is_auth_error=True)]),
+            drain_to_composer=lambda agent_info: "",
+            deliver=deliver,
+        )
+    )
+    try:
+        assert manager.restart_agents_on_account(account) == 2
+        assert sorted(attempted) == ["First-Chat", "Second-Chat"]
     finally:
         manager.stop()
 

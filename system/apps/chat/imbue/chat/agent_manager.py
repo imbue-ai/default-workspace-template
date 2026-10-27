@@ -41,6 +41,7 @@ from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_discovery import delivered_or_raise
@@ -205,6 +206,7 @@ from imbue.mngr.api.observe import AgentStateEvent
 from imbue.mngr.api.observe import FullAgentStateEvent
 from imbue.mngr.api.observe import ObserveEventFollower
 from imbue.mngr.api.observe import parse_observe_event_line
+from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.primitives import AgentId
@@ -252,6 +254,10 @@ _MAIN_CHAT_WAKE_TIMEOUT_SECONDS: Final[float] = 60.0
 # host), so they are short local operations -- but they run inside a request the
 # user is waiting on, so they are bounded rather than left to hang.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
+
+# How far back a re-auth looks for the turn a sign-in failure refused: the user's message and the
+# auth error answering it sit at the very end of the transcript, a few events at most.
+_SIGN_IN_REFUSAL_TAIL_EVENTS: Final[int] = 50
 
 # A finished harness task's notice normally starts a turn at once; the marker of one whose notice
 # starts none (a task the user stopped from the harness's own task list) goes after this many
@@ -659,6 +665,30 @@ def _is_current_compaction_event(event: dict[str, Any], now: float, pending_requ
 
 
 @pure
+def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, ...]:
+    """The words of the user turns the transcript's last reply refused for want of a working sign-in, oldest first.
+
+    Empty unless that reply is an auth error that answered them directly: a turn the agent had already
+    worked on before its sign-in failed is not sent again (it could repeat what the agent did), and
+    nothing is sent when the user has spoken since.
+    """
+    refused: list[str] = []
+    is_after_auth_error = False
+    for event in reversed(events):
+        if event.get("type") == "assistant_message":
+            if refused:
+                break
+            if event.get("is_auth_error") is not True:
+                return ()
+            is_after_auth_error = True
+        elif is_genuine_user_turn(event):
+            if not is_after_auth_error:
+                return ()
+            refused.append(str(event.get("content") or ""))
+    return tuple(text for text in reversed(refused) if text.strip())
+
+
+@pure
 def _has_user_turn_since(events: list[dict[str, Any]], since: float) -> bool:
     """Whether one of the events is a user turn timestamped at or after ``since`` (epoch seconds).
 
@@ -977,7 +1007,7 @@ def _observed_with_recent_rename(observed: AgentStateItem, rename: _RecentRename
 
 
 class HandoffCapabilities(FrozenModel):
-    """What a handoff needs from the app state and the routes, bound by the composition root."""
+    """What a handoff (and a re-auth's resend) needs from the app state and the routes, bound by the composition root."""
 
     model_config = {"arbitrary_types_allowed": True}
 
@@ -1974,10 +2004,13 @@ class AgentManager:
         restarting it tears down supervisord and every background service. Nor is an archived
         member of a chat: it keeps the ``account`` label it was created with, and a sign-in
         must not revive an agent its chat has moved on from.
+
+        Once an agent is back, the message its sign-in failure refused is sent to it again
+        (``_resend_turn_refused_for_sign_in``), so the user does not have to type it twice.
         """
         with self._lock:
-            names = [
-                agent.name
+            agents = [
+                (agent.id, agent.name)
                 for agent in self._agents.values()
                 if agent.labels.get("account") == account_id
                 and agent.labels.get("is_primary") != "true"
@@ -1985,7 +2018,7 @@ class AgentManager:
                 and not is_lifecycle_dead(agent.state)
             ]
         restarted = 0
-        for name in names:
+        for agent_id, name in agents:
             result = run_local_command_modern_version(
                 command=[self._mngr_binary, "start", name, "--restart", "--no-resume"],
                 cwd=None,
@@ -1994,9 +2027,39 @@ class AgentManager:
             )
             if result.returncode == 0:
                 restarted += 1
+                self._resend_turn_refused_for_sign_in(agent_id)
             else:
                 _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
         return restarted
+
+    def _resend_turn_refused_for_sign_in(self, agent_id: str) -> None:
+        """Send an agent that was just signed in again the messages its last reply refused for want of a sign-in.
+
+        Read after the restart rather than before it, so a message the user sent again by hand in the
+        meantime is the transcript's last turn and nothing goes twice. The delivery is the message
+        route's, which waits for the restarted agent to take input. A failure is logged: the sign-in
+        itself succeeded, and the user can still send the message again.
+        """
+        capabilities = self._handoff_capabilities
+        agent_info = self.get_agent_info_by_id(agent_id)
+        if capabilities is None or agent_info is None:
+            return
+        refused = user_turns_refused_for_sign_in(
+            capabilities.ensure_watcher(agent_info).get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS)
+        )
+        for text in refused:
+            message_id = uuid4().hex
+            try:
+                outcome = capabilities.deliver(agent_info, text, message_id)
+            except (SendFailedError, AgentNotFoundError) as e:
+                _loguru_logger.warning("Could not resend {}'s refused message after re-auth: {}", agent_info.name, e)
+                return
+            if outcome is not SendOutcome.OK:
+                _loguru_logger.warning(
+                    "Resending {}'s refused message after re-auth did not land ({})", agent_info.name, outcome.value
+                )
+                return
+            _loguru_logger.info("Resent {}'s message {} refused for want of a sign-in", agent_info.name, message_id)
 
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
         """Record one chat page's presence report: re-tags the chats, and marks the chat read in the Imbue
@@ -2065,10 +2128,10 @@ class AgentManager:
     # ``chat_rebinds.py`` run the steps).
 
     def set_handoff_capabilities(self, capabilities: HandoffCapabilities) -> None:
-        """Install what a handoff or a rebind needs from the app state.
+        """Install what a handoff, a rebind or a re-auth's resend needs from the app state.
 
         ``create_application`` calls this once, where the routes are; a manager built without
-        the app (a test that never assembles it) refuses every switch.
+        the app (a test that never assembles it) refuses every switch and resends nothing.
         """
         self._handoff_capabilities = capabilities
 
