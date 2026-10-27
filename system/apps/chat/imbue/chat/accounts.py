@@ -168,6 +168,11 @@ def read_signed_in_at(account_id: str, home: Path | None = None) -> str | None:
         return None
 
 
+def stamp_signed_in(account_id: str, home: Path | None = None) -> None:
+    """Record that the account finished a sign-in now."""
+    (account_dir(account_id, home) / SIGNED_IN_AT_FILENAME).write_text(datetime.now(timezone.utc).isoformat())
+
+
 def index_path(home: Path | None = None) -> Path:
     return accounts_root(home) / _INDEX_FILENAME
 
@@ -341,7 +346,7 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
                 f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; an account's lane never changes"
             )
         # Before the index write, so the account list that write announces to every chat page carries it.
-        (path / SIGNED_IN_AT_FILENAME).write_text(datetime.now(timezone.utc).isoformat())
+        stamp_signed_in(account_id, home)
         if existing is not None:
             if existing.display != display:
                 existing = existing.model_copy_update(to_update(existing.field_ref().display, display))
