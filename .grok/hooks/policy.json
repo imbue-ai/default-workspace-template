@@ -55,7 +55,7 @@
           },
           {
             "type": "command",
-            "command": "bash /opt/agent-plugins/imbue-code-guardian/plugins/imbue-code-guardian/scripts/stop_hook_entrypoint.sh",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/grok_turn_end_stop_hook.sh bash /opt/agent-plugins/imbue-code-guardian/plugins/imbue-code-guardian/scripts/stop_hook_entrypoint.sh",
             "timeout": 900
           },
           {

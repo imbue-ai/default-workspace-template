@@ -192,6 +192,13 @@ def test_grok_hook_commands_expand_no_bare_variable() -> None:
         assert "$" not in command.replace(_GROK_WORK_DIR_REFERENCE, ""), command
 
 
+def test_grok_runs_code_guardians_stop_gate_only_at_a_turns_end() -> None:
+    """grok also fires Stop when a session ends (quit, `/new`, a resume), where the gate has no turn to check."""
+    grok = json.loads(_GROK_HOOKS.read_text())
+    (gate_command,) = [command for command in _hook_commands(grok, "Stop") if "stop_hook_entrypoint.sh" in command]
+    assert gate_command.startswith(f"{_GROK_WORK_DIR_REFERENCE}/system/scripts/grok_turn_end_stop_hook.sh bash ")
+
+
 def test_grok_records_its_background_tasks_where_claude_does_and_at_a_spawn() -> None:
     """Each event runs its own subcommand, and `|| true` keeps a missing script's exit 2 from
     holding grok's turn open at Stop."""

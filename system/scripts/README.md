@@ -51,7 +51,8 @@ Provisioning and utility scripts:
   markers; the Claude-specific logic lives in this script, over the same
   library's markers), `grok_background_task_hooks.py` (grok's Stop, PostToolUse
   and SessionStart hooks, wired in `.grok/hooks/policy.json`, that do the same
-  for grok's shells, monitors and subagents),
+  for grok's shells, monitors and subagents), `grok_turn_end_stop_hook.sh` (runs
+  a grok Stop hook only at a turn's end, not when a session ends),
   `with_secrets.py` (run a
   command with one `data/.secrets/<name>.env` file's variables in its
   environment; the one sanctioned reader of that directory, which

@@ -266,7 +266,9 @@ Project hooks load only for a trusted folder, which mngr seeds for every work di
 `.grok/hooks/policy.json` runs for a root session in a linked worktree whose main checkout is the
 trusted one, and in every kind of subagent (shared, `cwd`, `isolation: "worktree"`). The `Stop`
 entries are the stop nudge, code-guardian's stop gate, by its absolute path under
-`/opt/agent-plugins` (grok sets no plugin root), gated by `.reviewer` settings as on claude, and
+`/opt/agent-plugins` (grok sets no plugin root), gated by `.reviewer` settings as on claude and run
+through `grok_turn_end_stop_hook.sh` only for a turn's end (grok also fires `Stop` with reason
+`shutdown` when a session ends: at quit, `/new` or a resume), and
 `grok_background_task_hooks.py stop`, which records the background tasks the turn left running.
 There is no cwd `Stop` hook: grok runs hooks from the workspace root.
 
