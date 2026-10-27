@@ -315,7 +315,10 @@ _install_test_headless_shell() {
         _log "test-shell: $_TEST_HEADLESS_SHELL_LINK already points at $shell_path, satisfied"
         return 0
     fi
-    ln -sfn "$shell_path" "$_TEST_HEADLESS_SHELL_LINK"
+    if ! ln -sfn "$shell_path" "$_TEST_HEADLESS_SHELL_LINK"; then
+        _log "test-shell: could not link $_TEST_HEADLESS_SHELL_LINK -> $shell_path; tests use Fortress"
+        return 1
+    fi
     _log "test-shell: $_TEST_HEADLESS_SHELL_LINK -> $shell_path"
 }
 
