@@ -54,7 +54,7 @@ from imbue.system_interface.testing import is_e2e_browser_installed
 
 
 def _playwright_browsers_installed() -> bool:
-    """Check whether a launchable browser is present (Fortress or Playwright's cache)."""
+    """Check whether a launchable browser is present (the test headless shell, Fortress, or Playwright's cache)."""
     return is_e2e_browser_installed()
 
 
