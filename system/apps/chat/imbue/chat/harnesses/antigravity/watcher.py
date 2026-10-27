@@ -115,10 +115,12 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     # Instance-level so a test can shorten it by assignment. A module constant would have to be
     # monkeypatched, which the ratchets forbid (and rightly -- it leaks across tests).
     _delivery_witness_seconds: float
-    # The app's observer once ``set_watch_observer`` hands it over; until then ``start`` watches through one of
-    # its own, closed by ``stop``.
+    # The app's observer once ``set_watch_observer`` hands it over; without it ``start`` watches through one of
+    # its own.
     _watch_observer: SharedWatchObserver | None
-    _owned_watch_observer: SharedWatchObserver | None
+    # The observer ``start`` watches through, and whether it is this watcher's own, for ``stop`` to release.
+    _active_watch_observer: SharedWatchObserver | None
+    _is_active_watch_observer_owned: bool
     _wake_handler: WakeOnChangeHandler
     _watched_dirs: list[Path]
     # One held read-only connection per conversation db, guarded by ``self._lock``. Held
@@ -158,7 +160,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._flush_wake = threading.Event()
         self._flush_thread = None
         self._watch_observer = None
-        self._owned_watch_observer = None
+        self._active_watch_observer = None
+        self._is_active_watch_observer_owned = False
         self._wake_handler = WakeOnChangeHandler(self._wake)
         self._watched_dirs = []
         self._connections = {}
@@ -220,10 +223,9 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             # Publish during priming, not one poll later: an unpublished turn state makes the
             # first send after every backend restart fall back to the marker alone.
             self._publish_turn_state()
-        watch_observer = self._watch_observer
-        if watch_observer is None:
-            watch_observer = SharedWatchObserver.build()
-            self._owned_watch_observer = watch_observer
+        self._is_active_watch_observer_owned = self._watch_observer is None
+        watch_observer = SharedWatchObserver.build() if self._watch_observer is None else self._watch_observer
+        self._active_watch_observer = watch_observer
         # Watch whatever exists now; the 1s poll safety net covers a dir/file created later.
         for directory in (self._state_dir, self._conversations_dir()):
             if directory.is_dir() and watch_observer.subscribe(directory, False, self._wake_handler):
@@ -241,12 +243,13 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._stopping.set()
         self._wake.set()
         self._flush_wake.set()
-        if self._owned_watch_observer is not None:
-            self._owned_watch_observer.close()
-            self._owned_watch_observer = None
-        elif self._watch_observer is not None:
+        watch_observer = self._active_watch_observer
+        self._active_watch_observer = None
+        if watch_observer is not None:
             for directory in self._watched_dirs:
-                self._watch_observer.unsubscribe(directory, False, self._wake_handler)
+                watch_observer.unsubscribe(directory, False, self._wake_handler)
+            if self._is_active_watch_observer_owned:
+                watch_observer.close()
         self._watched_dirs = []
         if self._thread is not None:
             self._thread.join(timeout=2.0)

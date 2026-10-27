@@ -7,13 +7,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from watchdog.events import FileSystemEvent
-from watchdog.events import FileSystemEventHandler
 from watchdog.utils import BaseThread
 
 from imbue.chat.harnesses.path_watch import PathWatcher
 from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.chat.testing import wait_until_true
+from imbue.chat.watcher_common import WakeOnChangeHandler
 
 
 class _StopGatedDirPath(Path):
@@ -163,17 +162,6 @@ def test_stopping_a_batched_watcher_does_not_wait_out_its_interval(tmp_path: Pat
     assert time.monotonic() - stop_started_at < 2.0
 
 
-class _RecordingHandler(FileSystemEventHandler):
-    """Sets ``changed`` on the first event naming a file other than the ones a test only reads."""
-
-    def __init__(self) -> None:
-        self.changed = threading.Event()
-
-    def on_any_event(self, event: FileSystemEvent) -> None:
-        if event.event_type not in ("opened", "closed", "closed_no_write"):
-            self.changed.set()
-
-
 def _wait_for_thread_count(expected: int) -> None:
     """Wait for the live watchdog thread count to reach ``expected``: an emitter's threads exit a moment after its
     watch is unscheduled."""
@@ -214,13 +202,14 @@ def test_watchers_sharing_an_observer_watch_one_directory_with_the_threads_of_on
 
 def test_shared_observer_delivers_a_directory_event_to_every_subscriber(tmp_path: Path) -> None:
     shared = SharedWatchObserver.build()
-    first, second = _RecordingHandler(), _RecordingHandler()
+    first_changed, second_changed = threading.Event(), threading.Event()
+    first, second = WakeOnChangeHandler(first_changed), WakeOnChangeHandler(second_changed)
     try:
         assert shared.subscribe(tmp_path, False, first)
         assert shared.subscribe(tmp_path, False, second)
         (tmp_path / "written-91537.txt").write_text("x")
-        assert first.changed.wait(timeout=5.0)
-        assert second.changed.wait(timeout=5.0)
+        assert first_changed.wait(timeout=5.0)
+        assert second_changed.wait(timeout=5.0)
     finally:
         shared.close()
 
@@ -232,7 +221,10 @@ def test_the_last_unsubscribe_of_a_directory_gives_back_exactly_the_threads_its_
     kept_dir.mkdir()
     released_dir.mkdir()
     shared = SharedWatchObserver.build()
-    staying, leaving, other = _RecordingHandler(), _RecordingHandler(), _RecordingHandler()
+    staying_changed, leaving_changed, other_changed = threading.Event(), threading.Event(), threading.Event()
+    staying = WakeOnChangeHandler(staying_changed)
+    leaving = WakeOnChangeHandler(leaving_changed)
+    other = WakeOnChangeHandler(other_changed)
     try:
         assert shared.subscribe(kept_dir, False, other)
         threads_without_released_dir = len(_live_watchdog_threads())
@@ -244,13 +236,13 @@ def test_the_last_unsubscribe_of_a_directory_gives_back_exactly_the_threads_its_
         shared.unsubscribe(released_dir, False, leaving)
         assert len(_live_watchdog_threads()) == threads_with_released_dir
         (released_dir / "written-28461.txt").write_text("x")
-        assert staying.changed.wait(timeout=5.0)
-        assert not leaving.changed.is_set()
+        assert staying_changed.wait(timeout=5.0)
+        assert not leaving_changed.is_set()
 
         shared.unsubscribe(released_dir, False, staying)
         _wait_for_thread_count(threads_without_released_dir)
         (kept_dir / "written-28462.txt").write_text("x")
-        assert other.changed.wait(timeout=5.0)
+        assert other_changed.wait(timeout=5.0)
     finally:
         shared.close()
 
@@ -258,11 +250,11 @@ def test_the_last_unsubscribe_of_a_directory_gives_back_exactly_the_threads_its_
 def test_a_closed_shared_observer_stops_its_threads_and_refuses_new_subscriptions(tmp_path: Path) -> None:
     before = len(_live_watchdog_threads())
     shared = SharedWatchObserver.build()
-    assert shared.subscribe(tmp_path, True, _RecordingHandler())
+    assert shared.subscribe(tmp_path, True, WakeOnChangeHandler(threading.Event()))
     assert len(_live_watchdog_threads()) > before
 
     shared.close()
 
     _wait_for_thread_count(before)
-    assert not shared.subscribe(tmp_path, True, _RecordingHandler())
+    assert not shared.subscribe(tmp_path, True, WakeOnChangeHandler(threading.Event()))
     assert len(_live_watchdog_threads()) == before
