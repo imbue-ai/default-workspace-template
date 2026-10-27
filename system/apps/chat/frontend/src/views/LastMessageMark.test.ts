@@ -10,16 +10,12 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
 import { addOutgoing, clearOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
-import type { TranscriptEvent, UserMessageEvent } from "../models/Response";
+import type { AssistantMessageEvent, UserMessageEvent } from "../models/Response";
 import { LastMessageMark, lastMessageAtMs } from "./LastMessageMark";
 
 const CHAT_ID = "agent-1";
 const NOW = Date.parse("2026-10-27T12:00:00Z");
 const chats = new Map<string, ChatSnapshot>();
-
-function event(type: string, timestamp: string): TranscriptEvent {
-  return { type, event_id: `${type}-${timestamp}`, timestamp, source: "test" } as unknown as TranscriptEvent;
-}
 
 function userMessage(timestamp: string, display: Partial<UserMessageEvent> = {}): UserMessageEvent {
   return {
@@ -33,7 +29,23 @@ function userMessage(timestamp: string, display: Partial<UserMessageEvent> = {})
   };
 }
 
-const reply = (timestamp: string): TranscriptEvent => event("assistant_message", timestamp);
+function reply(timestamp: string): AssistantMessageEvent {
+  return {
+    type: "assistant_message",
+    event_id: `a-${timestamp}`,
+    timestamp,
+    source: "test",
+    model: "test-model",
+    text: "done",
+    tool_calls: [],
+    stop_reason: "end_turn",
+    usage: null,
+    is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
+  };
+}
 
 function setChat(overrides: Partial<Omit<ChatSnapshot, "active_agent">> = {}): void {
   chats.set(CHAT_ID, chatSnapshotFixture(CHAT_ID, overrides));
