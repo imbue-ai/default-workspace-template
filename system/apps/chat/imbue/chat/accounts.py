@@ -49,6 +49,7 @@ from imbue.chat.harnesses.lanes import account_label
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.utils.file_utils import atomic_write
 
 logger = _loguru_logger
 
@@ -174,7 +175,7 @@ def stamp_signed_in(account_id: str, home: Path | None = None) -> None:
     Chat pages re-read the account list only when the index file changes, and a re-key that
     does not commit writes no index of its own. With no index yet, the commit that follows writes it.
     """
-    (account_dir(account_id, home) / SIGNED_IN_AT_FILENAME).write_text(datetime.now(timezone.utc).isoformat())
+    atomic_write(account_dir(account_id, home) / SIGNED_IN_AT_FILENAME, datetime.now(timezone.utc).isoformat())
     index = index_path(home)
     if index.exists():
         os.utime(index)
