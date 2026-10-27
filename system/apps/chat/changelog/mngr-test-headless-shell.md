@@ -1,0 +1,1 @@
+The browser tests launch Playwright's headless shell when the workspace has it (installed for the tests by the browser env.d unit), and Fortress otherwise. On a staging workspace the browser suite passed every test on both and ran about a third faster in about a third less memory on the headless shell.

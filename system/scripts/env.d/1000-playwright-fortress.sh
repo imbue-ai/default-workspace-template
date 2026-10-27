@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# env.d unit: Fortress (stealth Chromium) + its apt system libs. Too heavy to
+# env.d unit: Fortress (stealth Chromium) + its apt system libs, and Playwright's
+# headless shell for the test suites (see _install_test_headless_shell). Too heavy to
 # bake into the Docker image, and no boot-time service execs it directly (the
 # browser service degrades gracefully until the engine arrives), so it installs
 # on first boot via the `env-converge` one-shot. xvfb + xclip are baked into
@@ -193,26 +194,99 @@ _install_fortress() {
         return 1
     fi
     chmod +x "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion"
-    # Point Playwright's DEFAULT chromium at Fortress too. A bare `chromium.launch()`
-    # (no executable_path) looks in Playwright's own browser cache, which this install
-    # deliberately leaves empty (we run `install-deps`, not `install`, so no managed
-    # Chromium is downloaded). Symlink Fortress into that expected path -- resolved
-    # from Playwright itself so it tracks the pinned version's revision/layout -- so
-    # ad-hoc Playwright calls use the same one engine instead of erroring on a missing
-    # build. Chromium finds its resources via /proc/self/exe (the real Fortress dir),
-    # so symlinking just the binary is enough.
-    local pw_chrome
-    pw_chrome="$(cd "$REPO_ROOT" && uv run python -c 'from playwright.sync_api import sync_playwright; p=sync_playwright().start(); print(p.chromium.executable_path); p.stop()' 2>/dev/null)"
-    if [ -n "$pw_chrome" ]; then
-        mkdir -p "$(dirname "$pw_chrome")"
-        ln -sf "$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion" "$pw_chrome"
-        # Some Playwright versions gate launch() on a per-browser install marker.
-        touch "$(dirname "$(dirname "$pw_chrome")")/INSTALLATION_COMPLETE" 2>/dev/null || true
-        _log "fortress: pointed Playwright's default chromium at Fortress ($pw_chrome)"
-    else
-        _log "fortress: WARNING could not resolve Playwright's chromium path; a bare chromium.launch() will still need an explicit executable_path"
-    fi
     _log "fortress: install complete (${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion)"
+}
+
+# The executable Playwright looks for under the current PLAYWRIGHT_BROWSERS_PATH for
+# one browser of its registry (`chromium`, `chromium-headless-shell`), asked of
+# Playwright's own registry so the path tracks the locked version's revision and
+# per-architecture layout. Prints nothing when it cannot be resolved.
+_playwright_executable_path() {
+    (cd "$REPO_ROOT" && uv run python -c '
+import pathlib
+import subprocess
+import sys
+
+import playwright
+
+driver = pathlib.Path(playwright.__file__).parent / "driver"
+script = (
+    "const {registry} = require(process.argv[1]); "
+    "process.stdout.write(registry.findExecutable(process.argv[2]).executablePath(\"python\") || \"\")"
+)
+result = subprocess.run(
+    [str(driver / "node"), "-e", script, str(driver / "package/lib/server/registry/index.js"), sys.argv[1]],
+    capture_output=True,
+    text=True,
+    check=True,
+)
+print(result.stdout)
+' "$1") 2>/dev/null || true
+}
+
+# Point Playwright's default browsers at Fortress, so a bare `chromium.launch()` (no
+# executable_path) runs the workspace's one browser instead of failing on a missing
+# build: this unit runs `install-deps`, not `install`, so Playwright's own cache is
+# empty. A headless launch (the default) looks for the separate headless-shell build,
+# a headed one for full Chromium, so both get the link. Chromium finds its resources
+# through /proc/self/exe (the real Fortress dir), so linking the binary is enough.
+# Re-checked every converge, because a Playwright upgrade moves both paths.
+_point_playwright_defaults_at_fortress() {
+    local fortress="$_FORTRESS_INSTALL_DIR/tilion-fortress/tilion"
+    [ -x "$fortress" ] || return 0
+    local rc=0 browser path
+    for browser in chromium chromium-headless-shell; do
+        path="$(_playwright_executable_path "$browser")"
+        if [ -z "$path" ]; then
+            _log "playwright-default: WARNING could not resolve $browser's path; a bare launch needs an explicit executable_path"
+            rc=1
+            continue
+        fi
+        if [ "$(readlink "$path" 2>/dev/null)" = "$fortress" ]; then
+            _log "playwright-default: $browser already points at Fortress, satisfied"
+            continue
+        fi
+        mkdir -p "$(dirname "$path")"
+        ln -sfn "$fortress" "$path"
+        # Some Playwright versions gate launch() on a per-browser install marker.
+        touch "$(dirname "$(dirname "$path")")/INSTALLATION_COMPLETE" 2>/dev/null || true
+        _log "playwright-default: pointed $browser at Fortress ($path)"
+    done
+    return "$rc"
+}
+
+# Playwright's headless shell, for the test suites' browser fixtures only. It is a
+# separate build (about 110 MB) from Fortress, kept for tests because it is lighter:
+# a chat or shell browser suite ran about a third faster in about a third less memory
+# on it than on Fortress, with every test passing on both. It lives in its own
+# directory, outside Playwright's default cache, so nothing reaches it by default:
+# a bare launch keeps using Fortress (above), whose stealth the browser service and
+# agents' own browsing rely on. The fixtures launch it through the stable link
+# below and fall back to Fortress when it is missing. Re-checked every converge, so
+# a Playwright upgrade installs the matching build.
+readonly _TEST_BROWSERS_DIR="/opt/playwright-test-browsers"
+readonly _TEST_HEADLESS_SHELL_LINK="${_TEST_BROWSERS_DIR}/headless-shell"
+
+_install_test_headless_shell() {
+    local shell_path
+    shell_path="$(PLAYWRIGHT_BROWSERS_PATH="$_TEST_BROWSERS_DIR" _playwright_executable_path chromium-headless-shell)"
+    if [ -z "$shell_path" ]; then
+        _log "test-shell: could not resolve the headless shell's path; tests use Fortress"
+        return 1
+    fi
+    if [ ! -x "$shell_path" ]; then
+        _log "test-shell: installing Playwright's headless shell into $_TEST_BROWSERS_DIR"
+        if ! (cd "$REPO_ROOT" && PLAYWRIGHT_BROWSERS_PATH="$_TEST_BROWSERS_DIR" uv run python -m playwright install --only-shell chromium); then
+            _log "test-shell: install FAILED; tests use Fortress until the next converge"
+            return 1
+        fi
+    fi
+    if [ "$(readlink "$_TEST_HEADLESS_SHELL_LINK" 2>/dev/null)" = "$shell_path" ]; then
+        _log "test-shell: $_TEST_HEADLESS_SHELL_LINK already points at $shell_path, satisfied"
+        return 0
+    fi
+    ln -sfn "$shell_path" "$_TEST_HEADLESS_SHELL_LINK"
+    _log "test-shell: $_TEST_HEADLESS_SHELL_LINK -> $shell_path"
 }
 
 # Unpacked Chrome extensions loaded into every fleet browser, PINNED by version.
@@ -301,7 +375,10 @@ main() {
     local rc=0
     _install_distrust_policy || rc=$?
     _install_fortress || rc=$?
+    _point_playwright_defaults_at_fortress || rc=$?
     _install_xvfb || rc=$?
+    # The tests fall back to Fortress without it, so a failure must not fail the unit.
+    _install_test_headless_shell || _log "test-shell: not installed this pass; will retry next converge"
     # Extensions are a nice-to-have: a failure here must not fail the unit, because a
     # browser without an ad blocker still works and the converge retries next boot.
     _install_extensions || _log "extensions: not installed this pass; will retry next converge"

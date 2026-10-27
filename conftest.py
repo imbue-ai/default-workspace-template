@@ -5,13 +5,15 @@ from typing import Any, Final, NoReturn
 import pytest
 from playwright.sync_api import Browser, BrowserContext, ViewportSize, sync_playwright
 
-# The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
-# provisioned by env-converge before any agent starts. Playwright's browser-cache
-# lookup only auto-discovers builds Playwright downloaded itself, so a launch has
-# to name this binary explicitly. Every suite collected under the repo root
-# inherits this override, so `module_browser` drives Fortress with no per-app
-# setup. The `chat` and `system_interface` apps are NOT under it: the root pytest
-# config ignores them and each runs from its own directory.
+# The browser the suites launch, both provisioned by env-converge before any agent
+# starts (system/scripts/env.d/1000-playwright-fortress.sh): Playwright's headless
+# shell, installed for the tests alone because a browser suite runs about a third
+# faster in about a third less memory on it, else Fortress (the workspace's
+# stealth-patched Chromium fork). A launch names the binary explicitly, so every
+# suite collected under the repo root inherits this override and `module_browser`
+# needs no per-app setup. The `chat` and `system_interface` apps are NOT under it:
+# the root pytest config ignores them and each runs from its own directory.
+TEST_HEADLESS_SHELL_PATH = Path("/opt/playwright-test-browsers/headless-shell")
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
 
 # The phone the plan's e2e sizes name (an iPhone 15 in portrait), with touch.
@@ -22,12 +24,13 @@ _PHONE_VIEWPORT: Final[ViewportSize] = {"width": 393, "height": 852}
 def browser_type_launch_args(
     browser_type_launch_args: dict[str, Any],
 ) -> dict[str, Any]:
-    # Without Fortress (CI, a developer laptop) leave the launch args untouched
-    # so Playwright falls through to its own managed browser. Never skip on
-    # browser absence: a browser that cannot launch must fail the run loudly.
-    if not FORTRESS_CHROMIUM_PATH.exists():
-        return browser_type_launch_args
-    return {**browser_type_launch_args, "executable_path": str(FORTRESS_CHROMIUM_PATH)}
+    # With neither (CI, a developer laptop) leave the launch args untouched so
+    # Playwright falls through to its own managed browser. Never skip on browser
+    # absence: a browser that cannot launch must fail the run loudly.
+    for executable in (TEST_HEADLESS_SHELL_PATH, FORTRESS_CHROMIUM_PATH):
+        if executable.exists():
+            return {**browser_type_launch_args, "executable_path": str(executable)}
+    return browser_type_launch_args
 
 
 @pytest.fixture(scope="session")

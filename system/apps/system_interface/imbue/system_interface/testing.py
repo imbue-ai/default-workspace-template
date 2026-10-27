@@ -56,6 +56,23 @@ from imbue.system_interface.wsgi import make_threaded_server
 # ``browser_type_launch_args`` fixture override in ``conftest.py``).
 FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
 
+# Playwright's headless shell, which the same env-converge unit installs for the test suites
+# alone (system/scripts/env.d/1000-playwright-fortress.sh): a browser suite runs about a third
+# faster in about a third less memory on it than on Fortress.
+TEST_HEADLESS_SHELL_PATH = Path("/opt/playwright-test-browsers/headless-shell")
+
+
+def pick_e2e_browser_executable() -> Path | None:
+    """The browser binary the e2e fixtures launch: the test headless shell, else Fortress.
+
+    None when neither is installed (CI hosts that ran ``playwright install``), leaving the
+    launch to Playwright's own managed-browser lookup.
+    """
+    for candidate in (TEST_HEADLESS_SHELL_PATH, FORTRESS_CHROMIUM_PATH):
+        if candidate.exists():
+            return candidate
+    return None
+
 
 class _FakeSupervisorRequestHandler(SimpleXMLRPCRequestHandler):
     """XML-RPC request handler usable over a unix socket."""
@@ -145,12 +162,12 @@ class FakeSupervisorServer:
 def is_e2e_browser_installed() -> bool:
     """True when a Chromium the e2e suite can launch is present on this host.
 
-    Either the workspace-provisioned Fortress build (which the
-    ``browser_type_launch_args`` fixture prefers) or a browser in Playwright's
-    own download cache satisfies the check; with neither present the e2e tests
+    The test headless shell or Fortress (which the ``browser_type_launch_args``
+    fixture prefers, in that order) or a browser in Playwright's own download
+    cache satisfies the check; with neither present the e2e tests
     skip instead of erroring at browser launch.
     """
-    if FORTRESS_CHROMIUM_PATH.exists():
+    if pick_e2e_browser_executable() is not None:
         return True
     env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
     if env_path:

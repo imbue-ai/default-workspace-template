@@ -28,7 +28,6 @@ from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_two_app_registry
-from imbue.system_interface.testing import FORTRESS_CHROMIUM_PATH
 from imbue.system_interface.testing import FakeSupervisorServer
 from imbue.system_interface.testing import PIPELINE_CLIENT_ID
 from imbue.system_interface.testing import PIPELINE_DEFAULT_DESKTOP_ID
@@ -38,6 +37,7 @@ from imbue.system_interface.testing import PipelineHarness
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_server_answering
+from imbue.system_interface.testing import pick_e2e_browser_executable
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.testing import stand_in_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
@@ -120,18 +120,14 @@ def browser_type_launch_args(pytestconfig: pytest.Config) -> dict[str, Any]:
     browser_channel = pytestconfig.getoption("--browser-channel", default=None)
     if browser_channel:
         launch_options["channel"] = browser_channel
-    elif FORTRESS_CHROMIUM_PATH.exists():
-        # Prefer the workspace-provisioned Fortress build over Playwright's
-        # downloaded chromium/headless-shell, which is absent in a fresh
-        # workspace (only env-converge installs a browser here). An explicit
-        # ``--browser-channel`` wins because Playwright rejects a launch that
-        # names both ``channel`` and ``executable_path``.
-        launch_options["executable_path"] = str(FORTRESS_CHROMIUM_PATH)
-    else:
-        # No channel requested and no Fortress install (e.g. CI hosts that ran
-        # `playwright install`): leave both keys unset so the launch falls
-        # through to Playwright's managed-browser lookup.
-        pass
+    elif (executable := pick_e2e_browser_executable()) is not None:
+        # The workspace's test headless shell, else Fortress (see
+        # ``pick_e2e_browser_executable``); Playwright's own cache is empty here. An
+        # explicit ``--browser-channel`` wins because Playwright rejects a launch
+        # that names both ``channel`` and ``executable_path``. With neither
+        # installed (CI hosts that ran `playwright install`), both keys stay unset
+        # so the launch falls through to Playwright's managed-browser lookup.
+        launch_options["executable_path"] = str(executable)
     slowmo = pytestconfig.getoption("--slowmo", default=0)
     if slowmo:
         launch_options["slow_mo"] = slowmo
