@@ -837,7 +837,7 @@ and once a restarted agent is back, the message (or messages) its sign-in error
 answered is sent to it again through the delivery the message route uses, so
 the user does not retype it. Nothing is sent when the agent had already worked
 on that turn before the sign-in failed, when the user has written since, or while
-the chat is switching to another agent or account.
+the chat is switching to another agent or account (or once it has switched).
 
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.

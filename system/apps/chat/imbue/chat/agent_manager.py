@@ -2053,7 +2053,8 @@ class AgentManager:
 
         Nothing is resent while the agent's chat is switching to another agent or account: the message
         route holds that chat's sends for the agent it lands on, and one delivered to the agent it is
-        leaving would start a turn the switch does not account for.
+        leaving would start a turn the switch does not account for. Nor once the chat has moved on
+        from the agent (a switch that finished while the restarts ran): the switch carried the message.
         """
         capabilities = self._handoff_capabilities
         agent_info = self.get_agent_info_by_id(agent_id)
@@ -2061,8 +2062,12 @@ class AgentManager:
             return
         with self._lock:
             chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent_id))
+            is_archived_member = self._is_archived_member_locked(agent_id)
         if chat is not None and chat.transition is not None:
             _loguru_logger.info("Not resending {}'s refused message: its chat is switching", agent_info.name)
+            return
+        if is_archived_member:
+            _loguru_logger.info("Not resending {}'s refused message: its chat has moved on from it", agent_info.name)
             return
         refused = user_turns_refused_for_sign_in(
             capabilities.ensure_watcher(agent_info).get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS)

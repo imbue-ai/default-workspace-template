@@ -6045,6 +6045,46 @@ def test_a_sign_in_resends_nothing_to_a_chat_that_is_switching(
     assert (read_transcripts, attempted) == ([settled_id], [(settled_id, "hi")])
 
 
+def test_a_sign_in_resends_nothing_to_an_agent_its_chat_moved_on_from_during_the_restart(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log, gate = write_gated_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store, mngr_binary=mngr_binary)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"account": "acct-1"})
+    # Restarted after Chat-1, so once its resend runs, Chat-1's has been started too.
+    settled_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, settled_id, name="Settled-Chat", labels={"account": "acct-1"})
+    read_transcripts: list[str] = []
+    attempted: list[str] = []
+
+    def ensure_watcher(agent_info: AgentInfo) -> TranscriptReader:
+        read_transcripts.append(agent_info.id)
+        return _FixedTranscriptReader([_typed_turn("hi"), _agent_reply(is_auth_error=True)])
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        attempted.append(agent_info.id)
+        return SendOutcome.OK
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(ensure_watcher=ensure_watcher, drain_to_composer=lambda agent_info: "", deliver=deliver)
+    )
+    try:
+        manager.restart_agents_on_account_in_background("acct-1")
+        wait_for(lambda: argv_log.exists() and argv_log.read_text() != "", error_message="the restart never ran")
+        # The chat finishes moving to another agent while the restart is still running.
+        seed_agent_state(manager, second, name="Chat-1-next", labels={"account": "acct-2", "chat_id": first})
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+        gate.touch()
+        wait_for(lambda: settled_id in attempted, error_message="the settled chat's message was never resent")
+    finally:
+        manager.stop()
+    assert argv_log.read_text().splitlines()[0] == "start Chat-1 --restart --no-resume"
+    assert (read_transcripts, attempted) == ([settled_id], [settled_id])
+
+
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
