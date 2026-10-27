@@ -35,7 +35,6 @@ from imbue.chat.testing import ServedApp
 from imbue.chat.testing import StandInAnthropicApi
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import is_chat_frontend_built
-from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import prepare_isolated_mngr_host_dir
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import serve_app
@@ -44,6 +43,7 @@ from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
+from imbue.system_interface.testing import is_e2e_browser_installed
 
 pytestmark = [
     pytest.mark.real_claude,

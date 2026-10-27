@@ -41,7 +41,6 @@ from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import get_json
 from imbue.chat.testing import is_chat_frontend_built
-from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import utc_iso_seconds_ago
@@ -49,6 +48,7 @@ from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_last_compaction_record
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.testing import find_free_port
+from imbue.system_interface.testing import is_e2e_browser_installed
 
 pytestmark = [
     pytest.mark.browser,

@@ -1,1 +1,1 @@
-The web-frontend testing reference says the browser fixtures launch the test browser (Playwright's headless shell, or Fortress where it is missing) instead of always Fortress.
+The web-frontend testing reference points workers at the root conftest's `module_browser` (and `phone_context`) fixtures, which launch the test browser (Playwright's headless shell, or Fortress where it is missing), instead of pytest-playwright's `page` / `context` / `browser`, which that conftest refuses.

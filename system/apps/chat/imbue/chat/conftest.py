@@ -16,8 +16,8 @@ from playwright.sync_api import Playwright
 from playwright.sync_api import sync_playwright
 
 from imbue.chat.agent_manager import AgentManager
-from imbue.chat.testing import pick_e2e_browser_executable
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.system_interface.testing import pick_e2e_browser_executable
 
 
 @pytest.fixture(autouse=True)

@@ -53,7 +53,6 @@ from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
 from imbue.chat.testing import get_json
 from imbue.chat.testing import is_chat_frontend_built
-from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import put_stand_in_pi_on_path
 from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import running_workspace
@@ -69,6 +68,7 @@ from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import running_files
 from imbue.system_interface.testing import find_free_port
+from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.testing import serve_app
 
 

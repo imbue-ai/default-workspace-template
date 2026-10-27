@@ -46,11 +46,11 @@ from imbue.chat.server import create_application
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import is_chat_frontend_built
-from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.testing import find_free_port
+from imbue.system_interface.testing import is_e2e_browser_installed
 
 
 def _playwright_browsers_installed() -> bool:

@@ -21,7 +21,6 @@ import queue
 import shutil
 import socket
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -115,32 +114,6 @@ from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state as build_shell_test_state
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.wsgi import make_threaded_server as make_shell_server
-
-# The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
-# provisioned by env-converge. Playwright's own browser-cache lookup only
-# auto-discovers builds Playwright downloaded itself, so launches must name
-# this binary explicitly via ``executable_path`` (see the
-# ``browser_type_launch_args`` fixture override in ``conftest.py``).
-FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
-
-# Playwright's headless shell, which the same env-converge unit installs for the test suites
-# alone (system/scripts/env.d/1000-playwright-fortress.sh): a browser suite runs about a third
-# faster in about a third less memory on it than on Fortress.
-TEST_HEADLESS_SHELL_PATH = Path("/opt/playwright-test-browsers/headless-shell")
-
-
-def pick_e2e_browser_executable(is_headed: bool) -> Path | None:
-    """The browser binary the e2e fixtures launch: the test headless shell, else Fortress.
-
-    A headed run (``--headed``) skips the shell, which cannot show a window. None when
-    neither is installed (CI hosts that ran ``playwright install``), leaving the launch to
-    Playwright's own managed-browser lookup.
-    """
-    candidates = (FORTRESS_CHROMIUM_PATH,) if is_headed else (TEST_HEADLESS_SHELL_PATH, FORTRESS_CHROMIUM_PATH)
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
 
 
 @contextmanager
@@ -332,26 +305,6 @@ def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
 def is_chat_frontend_built() -> bool:
     """True when the chat page's bundle (``static/chat.html``) exists, which the browser tests serve."""
     return (Path(__file__).parent / "static" / "chat.html").is_file()
-
-
-def is_e2e_browser_installed() -> bool:
-    """True when a Chromium the e2e suite can launch is present on this host.
-
-    The test headless shell or Fortress (which the ``browser_type_launch_args``
-    fixture prefers, in that order) or a browser in Playwright's own download
-    cache satisfies the check; with neither present the e2e tests
-    skip instead of erroring at browser launch.
-    """
-    if pick_e2e_browser_executable(is_headed=False) is not None:
-        return True
-    env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if env_path:
-        cache_dir = Path(env_path)
-    elif sys.platform == "darwin":
-        cache_dir = Path.home() / "Library" / "Caches" / "ms-playwright"
-    else:
-        cache_dir = Path.home() / ".cache" / "ms-playwright"
-    return cache_dir.exists() and any(cache_dir.iterdir())
 
 
 def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: str) -> list[bool]:
