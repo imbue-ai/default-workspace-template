@@ -25,7 +25,7 @@ judged by the call inside it. ``workflow`` is refused, and so is a shell call wh
 truncated, since the truncation hides the end of the command.
 
 grok discards an allowing UserPromptSubmit hook's output, so ``user-prompt-submit`` only records the
-turn, and the first PreToolUse of that turn in the same session delivers the open-steps reminder.
+turn, and the first allowed PreToolUse of that turn in the same session delivers the open-steps reminder.
 
 Every guard fails open on its own: only its exit 2 refuses, and a crash, a missing script or a run
 past the budget is logged to ``$MNGR_AGENT_STATE_DIR/grok_policy_guards.log`` while the call goes
