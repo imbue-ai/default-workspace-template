@@ -109,3 +109,43 @@ def test_the_playwright_paths_resolve_from_the_locked_playwright(
     default_cache = default_shell.parents[2]
     assert default_shell.parents[1].name.startswith("chromium_headless_shell-")
     assert test_shell == browsers_dir / default_shell.relative_to(default_cache)
+
+
+@pytest.mark.parametrize("is_shell_path_blocked", [False, True])
+def test_both_playwright_defaults_point_at_fortress_and_a_failed_link_only_warns(
+    tmp_path: Path, is_shell_path_blocked: bool
+) -> None:
+    install_dir = tmp_path / "fortress"
+    fortress = install_dir / "tilion-fortress" / "tilion"
+    fortress.parent.mkdir(parents=True)
+    fortress.write_text("")
+    fortress.chmod(0o755)
+    default_chromium = tmp_path / "cache" / "chromium-1" / "chrome-linux" / "chrome"
+    # A regular file where a parent directory should be makes the link impossible.
+    shell_root = tmp_path / ("blocker" if is_shell_path_blocked else "cache")
+    if is_shell_path_blocked:
+        shell_root.write_text("")
+    default_shell = (
+        shell_root / "chromium_headless_shell-1" / "chrome-linux" / "headless_shell"
+    )
+    # Called the way main() calls it: outside `||`, so `set -e` is in force.
+    script = (
+        "set -euo pipefail\n"
+        "_log() { printf '%s\\n' \"$*\"; }\n"
+        f"_FORTRESS_INSTALL_DIR={str(install_dir)!r}\n"
+        f"_PW_DEFAULT_CHROMIUM={str(default_chromium)!r}\n"
+        f"_PW_DEFAULT_HEADLESS_SHELL={str(default_shell)!r}\n"
+        + _function("_point_playwright_defaults_at_fortress")
+        + "_point_playwright_defaults_at_fortress\n"
+        "echo unit-continued\n"
+    )
+
+    result = subprocess.run(["bash", "-c", script], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines()[-1] == "unit-continued"
+    assert default_chromium.readlink() == fortress
+    if is_shell_path_blocked:
+        assert "WARNING could not link chromium-headless-shell" in result.stdout
+    else:
+        assert default_shell.readlink() == fortress

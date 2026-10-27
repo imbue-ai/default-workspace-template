@@ -282,8 +282,12 @@ _point_playwright_defaults_at_fortress() {
             _log "playwright-default: $browser already points at Fortress, satisfied"
             continue
         fi
-        mkdir -p "$(dirname "$path")"
-        ln -sfn "$fortress" "$path"
+        # main() calls this outside `||`, so `set -e` applies: an unchecked failure here
+        # would abort the whole unit.
+        if ! { mkdir -p "$(dirname "$path")" && ln -sfn "$fortress" "$path"; }; then
+            _log "playwright-default: WARNING could not link $browser at $path; a bare launch needs an explicit executable_path"
+            continue
+        fi
         # Some Playwright versions gate launch() on a per-browser install marker.
         touch "$(dirname "$(dirname "$path")")/INSTALLATION_COMPLETE" 2>/dev/null || true
         _log "playwright-default: pointed $browser at Fortress ($path)"
