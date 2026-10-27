@@ -151,14 +151,14 @@ class AgentSessionWatcher(TranscriptReader, ABC):
         """Register the sink that receives the ids of harness-native background tasks as they end.
 
         No-op by default: only a harness whose transcript records the end of its own background
-        tasks (Claude's ``<task-notification>``) calls it.
+        tasks calls it.
         """
 
     def set_wake_pending_tasks_callback(self, callback: FinishedTasksCallback) -> None:
         """Register the sink that receives the ids of harness-native background tasks that ended and
         will start a turn of their own that has not started yet, a turn in flight or not.
 
-        No-op by default: only a harness whose transcript says so (grok's ``will_wake``) calls it.
+        No-op by default: only a harness whose transcript says so calls it.
         """
 
     def get_queued_messages(self) -> list[dict[str, Any]]:
