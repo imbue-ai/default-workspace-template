@@ -1724,6 +1724,30 @@ def test_a_welcome_seed_stopped_before_its_files_are_written_leaves_the_main_cha
         restarted.stop()
 
 
+def test_a_welcome_seed_that_fails_leaves_the_empty_main_chat_it_would_have_replaced(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    main_chat_path = tmp_path / MAIN_CHAT_FILENAME
+    MainChatStore(path=main_chat_path).write(ChatId("agent-" + "9" * 32))
+    manager, _store = _seed_manager(broadcaster, tmp_path, main_chat=MainChatStore(path=main_chat_path))
+    try:
+        seed_agent_state(manager, "agent-other", name="Chat-1")
+        stand_in_id = manager.get_main_chat_id()
+        assert stand_in_id is not None
+        _seed_files_root(tmp_path).write_text("not a folder")
+
+        with pytest.raises(OSError):
+            manager.seed_chat(MAIN_CHAT_NAME, _seed_turns())
+
+        stand_in = manager.get_provisional_chat(stand_in_id)
+        assert stand_in is not None
+        assert stand_in.name == MAIN_CHAT_NAME
+        assert manager.get_main_chat_id() == stand_in_id
+        assert MainChatStore(path=main_chat_path).read() == stand_in_id
+    finally:
+        manager.stop()
+
+
 def test_a_main_chat_left_by_an_opening_stopped_part_way_is_made_the_main_chat_rather_than_opened_again(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

@@ -3707,26 +3707,33 @@ class AgentManager:
             replaced_stand_in = (
                 self._drop_main_chat_stand_in_locked() if is_main_chat_name(explicit_title) else None
             )
-            provisional = self._seed_chat_locked(
-                explicit_title,
-                turns,
-                is_recorded_as_main_first=replaced_stand_in is not None
-                or self._main_chat.read() is None
-                or self._is_main_chat_gone_locked(),
-            )
+            try:
+                provisional = self._seed_chat_locked(
+                    explicit_title,
+                    turns,
+                    is_recorded_as_main_first=replaced_stand_in is not None
+                    or self._main_chat.read() is None
+                    or self._is_main_chat_gone_locked(),
+                )
+            except (AgentNameConflictError, OSError):
+                if replaced_stand_in is not None:
+                    self._provisional_chats[replaced_stand_in.chat_id] = replaced_stand_in
+                    self._main_chat.write(replaced_stand_in.chat_id)
+                raise
         if replaced_stand_in is not None:
-            self._auto_open.forget(replaced_stand_in)
+            self._auto_open.forget(replaced_stand_in.chat_id)
             self._broadcaster.broadcast_provisional_chat_completed(
-                chat_id=replaced_stand_in, success=False, error=None
+                chat_id=replaced_stand_in.chat_id, success=False, error=None
             )
         self._publish_seeded_chat(provisional)
         return CreatedChat(
             chat_id=provisional.chat_id, name=canonical_agent_name(provisional.name), display_name=provisional.name
         )
 
-    def _drop_main_chat_stand_in_locked(self) -> ChatId | None:
+    def _drop_main_chat_stand_in_locked(self) -> ProvisionalChat | None:
         """Drop the main chat when it is one this app opened in place of a gone one and nothing has happened in
-        it: named ``MAIN_CHAT_NAME``, with no seed, still awaiting its first send. Its id, or None. Lock held."""
+        it: named ``MAIN_CHAT_NAME``, with no seed, still awaiting its first send. The dropped chat, or None. Lock
+        held."""
         main_chat_id = self._main_chat.read()
         provisional = self._provisional_chats.get(main_chat_id) if main_chat_id is not None else None
         if (
@@ -3737,7 +3744,7 @@ class AgentManager:
         ):
             return None
         del self._provisional_chats[provisional.chat_id]
-        return provisional.chat_id
+        return provisional
 
     def _seed_chat_locked(
         self, explicit_title: str, turns: tuple[SeedTurn, ...], is_recorded_as_main_first: bool
