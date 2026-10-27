@@ -685,6 +685,9 @@ def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, .
             if not is_after_auth_error:
                 return ()
             refused.append(str(event.get("content") or ""))
+        else:
+            # A tool result, a chip or a turn marker neither answers the user nor carries their words.
+            continue
     return tuple(text for text in reversed(refused) if text.strip())
 
 
