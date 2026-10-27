@@ -1578,8 +1578,9 @@ def _touched_critical_apps(
     change), or, for the shell, when anything the shell's process runs changed. A
     frontend apply replaces every bundle, so include each critical owner even if that
     app's source was unchanged. An extra restart is acceptable; rollback targeting
-    does not need to compare installed and kept source stamps. An app the merge added has no program once a rollback removes it, so it is
-    named with ``None`` for its program: nothing to restart or wait on.
+    does not need to compare installed and kept source stamps. An app the merge added
+    has no program once a rollback removes it, so it is named with ``None`` for its
+    program: nothing to restart or wait on.
     """
     paths = [path for _, path in name_status]
     added_paths = {path for status, path in name_status if status.startswith("A")}
