@@ -251,8 +251,9 @@ def _is_interrupt_sentinel_record(raw: dict[str, Any]) -> bool:
 
     Matches the plain streaming-abort sentinel (``[Request interrupted by user]``). The
     mid-tool ``for tool use`` variant is a different string and is deliberately NOT matched
-    here (it is the sibling interrupt plan's concern). Mirrors the parser's own suppression
-    (``_parse_user_message``), which is why the raw tail -- not parsed events -- is scanned.
+    here (the stop button's :func:`_is_interrupt_abort_record` matches both). Mirrors the
+    parser's own suppression (``_parse_user_message``), which is why the raw tail -- not
+    parsed events -- is scanned.
     """
     if raw.get("type") != _USER_RECORD_TYPE:
         return False
