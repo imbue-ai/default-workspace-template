@@ -98,7 +98,11 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
               "nav",
               {
                 "aria-label": "Style guide sections",
-                class: "toc sticky top-10 hidden max-h-[calc(100vh-5rem)] w-44 shrink-0 overflow-y-auto md:block",
+                // Its own scroller in a short window: a thin bar, in a gutter of its own with room before it, so a
+                // system that always shows scrollbars never lays one over the labels.
+                class:
+                  "toc sticky top-10 hidden max-h-[calc(100vh-5rem)] w-52 shrink-0 overflow-y-auto pr-3 " +
+                  "[scrollbar-gutter:stable] [scrollbar-width:thin] md:block",
               },
               groups.map((group) =>
                 m("div", { class: "mb-5" }, [
