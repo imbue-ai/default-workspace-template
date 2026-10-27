@@ -2357,7 +2357,7 @@ class _GrokChat:
                 return
         assert outcome is SendOutcome.OK, f"the POST answered {outcome}\n{self.ledger.replay_note()}"
 
-    def stop(self, *, is_worker_thread_started: bool = True) -> None:
+    def stop(self, *, is_flush_thread_needed: bool = True) -> None:
         """The stop button through the real session, accounting for every message it hands back."""
         world = self.world
         note = self.ledger.replay_note
@@ -2371,7 +2371,7 @@ class _GrokChat:
             _GROK_STRANDED_TURN_DEADLINE_SECONDS if is_stranded else _GROK_TURN_END_DEADLINE_SECONDS
         )
         world.catch_up_streamer_soon()
-        if is_worker_thread_started:
+        if is_flush_thread_needed:
             with _GrokFlushThread(self.watcher):
                 block = self._interrupt()
         else:
@@ -2600,7 +2600,7 @@ def test_grok_interrupt_during_a_flush_conserves_every_message(tmp_path: Path, i
             if not is_flush_slow:
                 world.paste_gate.set()
                 wait_for(lambda: world.turn_prompt_id is not None, timeout=_GROK_STEP_WAIT_SECONDS)
-            chat.stop(is_worker_thread_started=False)
+            chat.stop(is_flush_thread_needed=False)
             world.paste_gate.set()
             wait_for(lambda: not chat.tracker.has_entries(), timeout=_GROK_STEP_WAIT_SECONDS, poll_interval=0.01)
         chat.assert_each_message_in_one_state("stop during the flush")
