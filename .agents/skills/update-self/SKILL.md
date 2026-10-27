@@ -103,11 +103,13 @@ stopping to ask. With no match, or once your own is closed, take it (each `tk`
 call as its own command, never chained):
 
 ```bash
-UPDATE_LEASE_ID=$(tk create "updating workspace" -t chore \
-    -d "Held by $MNGR_AGENT_NAME across the update-self pass; released at teardown.")
+tk create "updating workspace" -t chore \
+    -d "Held by $MNGR_AGENT_NAME across the update-self pass; released at teardown."
 ```
 
-then `tk start "$UPDATE_LEASE_ID"`.
+Note the id it prints, then `tk start <lease-id>` (a shell variable does not
+survive into the next call, and an empty id makes `tk` match whatever single
+ticket it can find).
 
 **Record the run for the Imbue Studio app** -- as soon as the lease is yours, so the
 app can see a run is under way:
@@ -518,7 +520,7 @@ each command on its own:
 
 3. Run Step 6's opening commands (they drop the history bridge and bring back
    any chat this pass paused), then release the `updating workspace` lease:
-   `tk close "$UPDATE_LEASE_ID" "Waiting on the user's decision."`. Leave the
+   `tk close <lease-id> "Waiting on the user's decision."`. Leave the
    tracking ticket open; the re-land closes it.
 
 4. Compose the decision message from their point of view per
@@ -903,7 +905,7 @@ mngr stop update-self
 
 Release the leases and close the ticket last, each as its own tool call: `tk
 close` each `editing critical app <name>` lease 5b took, then the
-`updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
+`updating workspace` lease (`tk close <lease-id> "Update pass
 finished."`), then `tk close <ticket-id> "Updated to <ref> -- worker branch
 merged and applied."`, adding the `archive/update-self-<timestamp>` name when
 Step 3b set a previous branch aside.

@@ -114,14 +114,16 @@ it so the new path takes effect:
 ## 5. Close the tracking ticket
 
 `crystallize-creation` Step 2 wrote the ticket ID to
-`data/.tasks/harden/crystallize-<name>/ticket_id.txt` at launch time. Read it and
-close:
+`data/.tasks/harden/crystallize-<name>/ticket_id.txt` at launch time. Read it:
 
 ```bash
-TICKET_FILE="data/.tasks/harden/crystallize-<name>/ticket_id.txt"
-if command -v tk >/dev/null 2>&1 && [ -s "$TICKET_FILE" ]; then
-    tk close "$(cat "$TICKET_FILE")"
-fi
+cat data/.tasks/harden/crystallize-<name>/ticket_id.txt
+```
+
+Then close the ticket with that id, in a call of its own:
+
+```bash
+tk close <ticket-id>
 ```
 
 If the file is missing (you deleted the runtime dir before

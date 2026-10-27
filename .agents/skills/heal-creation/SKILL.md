@@ -71,9 +71,17 @@ holder and worker needs:
 
 ```bash
 mkdir -p data/.tasks/harden/heal-$SLUG
-TICKET_ID=$(tk create "heal $CREATIONS" -t bug -d "Worker: heal-$SLUG" \
-    --acceptance "task file written; worker launched; worker DONE; branch merged")
-tk start "$TICKET_ID"
+tk create "heal $CREATIONS" -t bug -d "Worker: heal-$SLUG" \
+    --acceptance "task file written; worker launched; worker DONE; branch merged" \
+    | tee data/.tasks/harden/heal-$SLUG/ticket_id.txt
+```
+
+Then start it with the id that printed, in a call of its own (a shell variable
+does not survive into the next call, and an empty id makes `tk` match whatever
+single ticket it can find):
+
+```bash
+tk start <ticket-id>
 ```
 
 ## Step 2: Write the task file
@@ -190,8 +198,11 @@ has nothing to restart, since its next run reads the merged code. Then close
 the ticket:
 
 ```bash
-tk close "$TICKET_ID" "Healed $CREATIONS -- worker branch merged."
+tk close <ticket-id> "Healed $CREATIONS -- worker branch merged."
 ```
+
+The id is in `data/.tasks/harden/heal-$SLUG/ticket_id.txt` if it has left your
+context; read it there and pass it literally.
 
 ## Gotchas
 
