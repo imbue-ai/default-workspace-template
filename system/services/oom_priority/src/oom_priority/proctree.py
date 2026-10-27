@@ -65,6 +65,18 @@ def is_thread(task_id: int, proc_dir: Path = _PROC_DIR) -> bool:
     return False
 
 
+def read_boot_id(proc_dir: Path = _PROC_DIR) -> str | None:
+    """This boot's random id (``/proc/sys/kernel/random/boot_id``), or None when unreadable.
+
+    A start time counts from boot, so it identifies a process only together with the boot it
+    was read in; a file that outlives a restart needs both.
+    """
+    try:
+        return (proc_dir / "sys" / "kernel" / "random" / "boot_id").read_text().strip() or None
+    except OSError:
+        return None
+
+
 def read_start_ticks(pid: int, proc_dir: Path = _PROC_DIR) -> int | None:
     """When ``pid`` started, in clock ticks since boot (field 22 of ``/proc/<pid>/stat``); None
     when it is gone or its stat cannot be parsed.

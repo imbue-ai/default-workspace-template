@@ -19,6 +19,7 @@ from chat_background_tasks import markers
 from chat_background_tasks.testing import runner_task
 from imbue.mngr.cli.field_catalog import FieldContext, build_list_field_catalog
 from mngr_cli_contract.contract import assert_mngr_argv_valid
+from oom_priority.testing import write_fake_process
 
 _SCRIPT = Path(__file__).parent / "memory_candidates.py"
 _spec = importlib.util.spec_from_file_location("memory_candidates", _SCRIPT)
@@ -39,14 +40,15 @@ def _fake_process(
     children: Sequence[int] = (),
     argv: Sequence[str] = ("python3",),
 ) -> None:
-    """One process in the fake ``/proc``: its ``smaps`` (two mappings whose anonymous memory sums
-    to ``anonymous_kib``), its status (a VmRSS three times that, as gVisor inflates it), children,
-    and argv."""
+    """One process in the fake ``/proc``, started at tick ``pid``: its ``smaps`` (two mappings whose
+    anonymous memory sums to ``anonymous_kib``), its status (a VmRSS three times that, as gVisor
+    inflates it), children, and argv."""
+    write_fake_process(proc_dir, pid, start_ticks=pid, comm=Path(argv[0]).name)
     task_dir = proc_dir / str(pid) / "task" / str(pid)
     task_dir.mkdir(parents=True)
     (task_dir / "children").write_text(" ".join(str(child) for child in children) + " ")
     (proc_dir / str(pid) / "status").write_text(
-        f"Name:\t{Path(argv[0]).name}\nVmRSS:\t   {anonymous_kib * 3} kB\n"
+        f"Name:\t{Path(argv[0]).name}\nTgid:\t{pid}\nVmRSS:\t   {anonymous_kib * 3} kB\n"
     )
     first = anonymous_kib // 2
     (proc_dir / str(pid) / "smaps").write_text(
@@ -104,10 +106,11 @@ def _render_like_mngr(template: str, record: Mapping[str, Any]) -> str:
 
 
 def _register_pid(runtime_dir: Path, pid: int, agent_id: str) -> None:
+    """Register ``pid`` for ``agent_id`` as started at tick ``pid``, matching ``_fake_process``."""
     directory = runtime_dir / "agent_pids"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{pid}.json").write_text(
-        json.dumps({"agent_name": "x", "is_worker": False, "agent_id": agent_id})
+        json.dumps({"agent_name": "x", "is_worker": False, "agent_id": agent_id, "start_ticks": pid})
     )
 
 
@@ -264,17 +267,6 @@ def runtime_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     runtime = tmp_path / "runtime"
     monkeypatch.setenv("OOM_PRIORITY_RUNTIME_DIR", str(runtime))
     return runtime
-
-
-def test_process_memory_is_anonymous_memory_from_smaps_rollup_else_summed_smaps(tmp_path: Path) -> None:
-    _fake_process(tmp_path, 10, anonymous_kib=300)
-    assert memory_candidates.read_anonymous_kib(10, tmp_path) == 300
-
-    # Outside gVisor the kernel's rollup is there, and it is the one read.
-    (tmp_path / "10" / "smaps_rollup").write_text("Rss:   900 kB\nAnonymous:   250 kB\n")
-    assert memory_candidates.read_anonymous_kib(10, tmp_path) == 250
-
-    assert memory_candidates.read_anonymous_kib(11, tmp_path) is None
 
 
 def test_lists_idle_chats_and_workers_with_last_activity_and_the_memory_of_their_process_trees(
@@ -922,3 +914,18 @@ def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -
     assert document["browsers"]["notes"][0].startswith(
         "could not reach the browser service at http://127.0.0.1:9/browsers"
     )
+
+
+def test_the_free_memory_flag_prints_only_the_free_memory_line() -> None:
+    # The worker polls this while memory is short, so it must not run mngr or call the services.
+    completed = subprocess.run(
+        [sys.executable, str(_SCRIPT), "--free-memory"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "PATH": "/nonexistent"},
+        check=True,
+    )
+    lines = completed.stdout.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("Free memory: ")

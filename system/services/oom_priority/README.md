@@ -329,7 +329,12 @@ never stops, kills, or re-tags anything.
 ```bash
 python3 system/services/oom_priority/bin/memory_candidates.py          # a table
 python3 system/services/oom_priority/bin/memory_candidates.py --json   # the same report as JSON
+python3 system/services/oom_priority/bin/memory_candidates.py --free-memory   # only the free memory line
 ```
+
+`--free-memory` reads nothing but the meminfo files, so it is cheap enough to
+poll while memory is short, when the full report's `mngr list` and service
+calls would add to the pressure.
 
 It lists:
 
@@ -390,8 +395,8 @@ shell answered) or something started the browser through the service's API
 directly.
 
 Each figure sums the processes' anonymous memory (the `Anonymous` lines of
-`smaps_rollup`, or of `smaps` under gVisor, which has no rollup), the memory
-earlyoom scores by. It leaves out the binaries and libraries every process maps,
+`smaps_rollup`, or of `smaps` under gVisor, which has no rollup); under gVisor
+that is also the memory earlyoom scores by. It leaves out the binaries and libraries every process maps,
 which resident size counts in each of them: under gVisor an agent harness's
 `VmRSS` reads up to ten times its anonymous memory. Pages a process still shares
 with its parent after a fork count in both, so a browser can read somewhat above

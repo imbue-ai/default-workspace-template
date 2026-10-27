@@ -433,9 +433,8 @@ also surface as ordinary test errors (a browser that vanished mid-test), so
 run the same check when failures look unrelated to your change. Then judge
 whether a rerun would be shed again, from the ledger (are shed records still
 arriving, for processes other than yours?) and from the free memory the guard
-acts on, the first line of
-`python3 system/services/oom_priority/bin/memory_candidates.py` (is it
-recovering since the shed, or still falling?). Not `/proc/meminfo` or `free`:
+acts on, `python3 system/services/oom_priority/bin/memory_candidates.py
+--free-memory` (is it recovering since the shed, or still falling?). Not `/proc/meminfo` or `free`:
 under a memory cap they read far more free memory than the guard sees. If
 things are settling, rerun the shed command. If they are not, or the rerun is shed too,
 ask your lead with a `question` gate (`worker-reporting.md`) naming the

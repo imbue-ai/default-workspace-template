@@ -61,7 +61,11 @@ from oom_priority.agent_identity import (
     WORKER_LABEL,
     is_label_true,
 )
-from oom_priority.meminfo import HOST_MEMINFO_MAX_AGE_SECONDS, HOST_MEMINFO_PATH
+from oom_priority.meminfo import (
+    HOST_MEMINFO_MAX_AGE_SECONDS,
+    HOST_MEMINFO_PATH,
+    read_process_anonymous_kib,
+)
 from oom_priority.proctree import list_descendant_pids
 from oom_priority.registry import live_pids_by_agent_id
 from oom_priority.supervisor_rpc import supervised_pids
@@ -132,7 +136,6 @@ INVENTORY_ROUTE: Final[str] = "/api/inventory"
 MEMINFO_PREFERRED_FIELD: Final[str] = "MemAvailable"
 MEMINFO_FALLBACK_FIELD: Final[str] = "MemFree"
 MEMINFO_TOTAL_FIELD: Final[str] = "MemTotal"
-ANONYMOUS_SMAPS_FIELD: Final[str] = "Anonymous"
 KIB_PER_MIB: Final[int] = 1024
 README_SECTION: Final[str] = (
     'system/services/oom_priority/README.md, "Memory candidates"'
@@ -327,29 +330,6 @@ def read_free_memory(
 # Process memory
 
 
-def read_anonymous_kib(pid: int, proc_dir: Path) -> int | None:
-    """A process's anonymous memory, the ``Anonymous`` lines of ``/proc/<pid>/smaps_rollup`` (or of
-    ``smaps``, which is all gVisor provides) summed; None when it is gone or unreadable.
-
-    This is the memory stopping the process frees and the figure earlyoom scores by. Under gVisor
-    ``VmRSS`` counts the whole span of every mapping the process has touched, so it reads up to
-    ten times higher for an agent's harness, which maps a large binary.
-    """
-    for name in ("smaps_rollup", "smaps"):
-        try:
-            text = (proc_dir / str(pid) / name).read_text()
-        except OSError:
-            continue
-        total = 0
-        for line in text.splitlines():
-            key, _, rest = line.partition(":")
-            fields = rest.split()
-            if key == ANONYMOUS_SMAPS_FIELD and fields and fields[0].isdigit():
-                total += int(fields[0])
-        return total
-    return None
-
-
 def process_trees_anonymous_kib(root_pids: Iterable[int], proc_dir: Path) -> int | None:
     """Summed anonymous memory of the roots and all their descendants, each process counted once.
 
@@ -361,7 +341,7 @@ def process_trees_anonymous_kib(root_pids: Iterable[int], proc_dir: Path) -> int
         pids.update(list_descendant_pids(root, proc_dir=proc_dir))
     readings = [
         anonymous
-        for anonymous in (read_anonymous_kib(pid, proc_dir) for pid in sorted(pids))
+        for anonymous in (read_process_anonymous_kib(pid, proc_dir) for pid in sorted(pids))
         if anonymous is not None
     ]
     return sum(readings) if readings else None
@@ -903,20 +883,17 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
     ]
 
 
-def render_table(report: Report) -> str:
-    lines: list[str] = []
-    free = report.free_memory
+def render_free_memory(free: FreeMemory | None) -> str:
     if free is None:
-        lines.append("Free memory: unknown (no readable meminfo)")
-    else:
-        total = (
-            ""
-            if free.total_kib is None
-            else f"; {MEMINFO_TOTAL_FIELD} {_mib(free.total_kib)}"
-        )
-        lines.append(
-            f"Free memory: {_mib(free.free_kib)} ({free.field} from {free.source}{total})"
-        )
+        return "Free memory: unknown (no readable meminfo)"
+    total = (
+        "" if free.total_kib is None else f"; {MEMINFO_TOTAL_FIELD} {_mib(free.total_kib)}"
+    )
+    return f"Free memory: {_mib(free.free_kib)} ({free.field} from {free.source}{total})"
+
+
+def render_table(report: Report) -> str:
+    lines: list[str] = [render_free_memory(report.free_memory)]
 
     lines += [
         "",
@@ -1039,7 +1016,19 @@ def main() -> None:
         action="store_true",
         help="Print the report as JSON instead of a table",
     )
+    parser.add_argument(
+        "--free-memory",
+        action="store_true",
+        help="Print only the free memory line, reading nothing but the meminfo files",
+    )
     args = parser.parse_args()
+    sys.stdout.write(_render_output(args.free_memory, args.json))
+
+
+def _render_output(is_free_memory_only: bool, is_json: bool) -> str:
+    now = datetime.now(timezone.utc)
+    if is_free_memory_only:
+        return render_free_memory(read_free_memory(_PROC_DIR / "meminfo", HOST_MEMINFO_PATH, now)) + "\n"
     sources = Sources(
         proc_dir=_PROC_DIR,
         host_meminfo=HOST_MEMINFO_PATH,
@@ -1048,16 +1037,11 @@ def main() -> None:
         read_supervised_pids=supervised_pids,
         browser_service_url=resolve_browser_service_url(),
         shell_url=os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/"),
-        now=datetime.now(timezone.utc),
+        now=now,
         is_chat_busy=busy_chat_check(os.environ),
     )
     report = collect_report(sources)
-    output = (
-        json.dumps(report_to_json(report), indent=2) + "\n"
-        if args.json
-        else render_table(report)
-    )
-    sys.stdout.write(output)
+    return json.dumps(report_to_json(report), indent=2) + "\n" if is_json else render_table(report)
 
 
 if __name__ == "__main__":

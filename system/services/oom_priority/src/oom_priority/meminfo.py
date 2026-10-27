@@ -51,3 +51,26 @@ def read_meminfo(
     total = values["MemTotal"]
     available = values.get("MemAvailable", values.get("MemFree", 0))
     return {"total": total, "available": available, "used": total - available}
+
+
+def read_process_anonymous_kib(pid: int, proc: Path = PROC) -> int | None:
+    """A process's anonymous memory in KiB: the ``Anonymous`` lines of ``/proc/<pid>/smaps_rollup``,
+    or of ``smaps`` under gVisor, which has no rollup, summed. None when it is gone or unreadable.
+
+    Roughly what stopping the process frees. Under gVisor ``VmRSS`` counts the whole span of every
+    mapping the process has touched, so it reads up to ten times higher for an agent's harness,
+    which maps a large binary.
+    """
+    for name in ("smaps_rollup", "smaps"):
+        try:
+            text = (proc / str(pid) / name).read_text()
+        except OSError:
+            continue
+        total = 0
+        for line in text.splitlines():
+            key, _, rest = line.partition(":")
+            fields = rest.split()
+            if key == "Anonymous" and fields and fields[0].isdigit():
+                total += int(fields[0])
+        return total
+    return None

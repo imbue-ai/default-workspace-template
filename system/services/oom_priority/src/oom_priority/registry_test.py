@@ -68,15 +68,38 @@ def test_an_id_that_is_now_another_processs_thread_is_not_the_agents(runtime: Pa
     assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
 
 
-def test_an_entry_without_a_start_time_still_counts_while_its_pid_is_a_process(
+def test_an_entry_without_a_start_time_is_never_counted_but_kept_while_its_pid_lives(
     runtime: Path, proc: Path
 ) -> None:
+    # Written before start times were recorded: its pid alone cannot tell its agent from
+    # whatever reused the pid, so no reader counts it, but the kill hook can still name it.
     directory = registry.agent_pids_dir()
     directory.mkdir(parents=True)
     (directory / "4242.json").write_text(json.dumps({"agent_name": "alpha", "agent_id": "agent-abc"}))
+    (directory / "5000.json").write_text(json.dumps({"agent_name": "beta", "agent_id": "agent-def"}))
     write_fake_process(proc, 4242, start_ticks=100)
 
+    assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
+    registry.prune_stale_entries(proc_dir=proc)
+    assert sorted(path.name for path in directory.iterdir()) == ["4242.json"]
+    assert registry.lookup_agent(4242) is not None
+
+
+def test_an_entry_from_an_earlier_boot_is_not_the_agents(runtime: Path, proc: Path) -> None:
+    # The registry outlives a container restart, and a start time only counts from boot, so a
+    # new process can hold an old entry's pid and start time.
+    boot_id = proc / "sys" / "kernel" / "random" / "boot_id"
+    boot_id.parent.mkdir(parents=True)
+    boot_id.write_text("boot-one\n")
+    write_fake_process(proc, 4242, start_ticks=100)
+    registry.record_agent_pid(4242, "alpha", is_worker=False, agent_id="agent-abc", proc_dir=proc)
     assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == [4242]
+
+    boot_id.write_text("boot-two\n")
+
+    assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
+    registry.prune_stale_entries(proc_dir=proc)
+    assert registry.lookup_agent(4242) is None
 
 
 def test_lookup_ignores_entries_without_an_id(runtime: Path, proc: Path) -> None:

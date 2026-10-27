@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from oom_priority.testing import write_fake_process
 from system_monitor import programs
 
 
@@ -125,20 +126,23 @@ def test_chats_on_any_harness_are_found_through_the_agent_registry(
     registry = tmp_path / "agent_pids"
     registry.mkdir()
     # A codex chat registers both its TUI and its app-server; a pi chat its one process.
+    proc = tmp_path / "proc"
     for pid, agent_id in (
         (20, "agent-codex"),
         (21, "agent-codex"),
         (30, "agent-pi"),
         (31, "agent-gone"),
     ):
+        write_fake_process(proc, pid, start_ticks=pid)
         (registry / f"{pid}.json").write_text(
-            json.dumps({"agent_name": "x", "is_worker": False, "agent_id": agent_id})
+            json.dumps(
+                {"agent_name": "x", "is_worker": False, "agent_id": agent_id, "start_ticks": pid}
+            )
         )
-    (registry / "40.json").write_text(json.dumps({"agent_name": "no-id"}))
+    write_fake_process(proc, 31, start_ticks=999)  # 31's agent exited and its pid was reused
+    write_fake_process(proc, 40, start_ticks=40)
+    (registry / "40.json").write_text(json.dumps({"agent_name": "no-id", "start_ticks": 40}))
     (registry / "notes.txt").write_text("ignored")
-    proc = tmp_path / "proc"
-    for pid in (20, 21, 30, 40):
-        (proc / str(pid)).mkdir(parents=True)
 
     assert programs.agents_by_pid(proc) == {
         20: "agent-codex",
