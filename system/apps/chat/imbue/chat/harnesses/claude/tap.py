@@ -343,8 +343,8 @@ def deadline_verdict(mirror_is_empty: bool, facts: _TailFacts) -> TapVerdict:
 def resolve_live_session_baseline(watcher: TapWatcher) -> tuple[Path, int] | None:
     """Resolve the live session file and its current byte size, or None if there is none.
 
-    The baseline anchors the raw tail read after the chord. Shared with the sibling
-    interrupt path.
+    The baseline anchors the raw tail read after the chord. Shared with the stop button
+    (:func:`execute_claude_stop_to_composer`).
     """
     session_file = watcher.get_latest_main_session_file()
     if session_file is None:
