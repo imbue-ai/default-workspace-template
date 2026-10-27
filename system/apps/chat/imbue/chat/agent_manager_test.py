@@ -3525,19 +3525,30 @@ def test_the_sweep_names_the_providers_the_observe_stream_reported_its_agents_on
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """The sweep hands mngr the providers its chats are on, so mngr skips resolving their names through the whole
-    discovery event log; an agent the stream has not reported yet leaves mngr to resolve them itself."""
+    discovery event log; an agent the stream has not reported yet leaves mngr to resolve them itself. A name a
+    stopped agent on another provider shares still names the live one's provider."""
     manager = AgentManager.build(broadcaster, chat_files_root=tmp_path / "chats")
     try:
         local_chat = _agent_details("local-chat-41766", labels={"user_created": "true"})
         remote_chat = _agent_details(
             "remote-chat-41767", labels={"user_created": "true"}, provider_name=ProviderInstanceName("ssh")
         )
-        manager._handle_observe_event(make_full_agent_state_event([local_chat, remote_chat]))
+        live_namesake = _agent_details("shared-name-41769", labels={"user_created": "true"})
+        stopped_namesake = _agent_details(
+            "shared-name-41769",
+            state=AgentLifecycleState.STOPPED,
+            labels={"user_created": "true"},
+            provider_name=ProviderInstanceName("ssh"),
+        )
+        manager._handle_observe_event(
+            make_full_agent_state_event([local_chat, remote_chat, live_namesake, stopped_namesake])
+        )
         seed_agent_state(manager, "unreported-41768", name="unreported-chat-41768", labels={"user_created": "true"})
 
         assert manager.get_provider_names_of_agents(["local-chat-41766"]) == ("local",)
         assert manager.get_provider_names_of_agents(["local-chat-41766", "remote-chat-41767"]) == ("local", "ssh")
         assert manager.get_provider_names_of_agents(["local-chat-41766", "unreported-chat-41768"]) is None
+        assert manager.get_provider_names_of_agents(["shared-name-41769"]) == ("local", "ssh")
     finally:
         manager.stop()
 

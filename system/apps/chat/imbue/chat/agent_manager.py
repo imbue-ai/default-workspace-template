@@ -2061,16 +2061,21 @@ class AgentManager:
 
     def get_provider_names_of_agents(self, agent_names: Sequence[str]) -> tuple[str, ...] | None:
         """The providers the named tracked agents are on, as the observe stream reported them; None while any of
-        them has not been reported yet."""
+        them has not been reported yet. A name several tracked agents share names the providers of them all."""
         with self._lock:
-            agent_id_by_name = {agent.name: agent.id for agent in self._agents.values()}
+            agent_ids_by_name: dict[str, list[str]] = {}
+            for agent in self._agents.values():
+                agent_ids_by_name.setdefault(agent.name, []).append(agent.id)
             provider_names: set[str] = set()
             for name in agent_names:
-                agent_id = agent_id_by_name.get(name)
-                match = None if agent_id is None else self._match_by_agent_id.get(agent_id)
-                if match is None:
+                agent_ids = agent_ids_by_name.get(name)
+                if not agent_ids:
                     return None
-                provider_names.add(str(match.provider_name))
+                for agent_id in agent_ids:
+                    match = self._match_by_agent_id.get(agent_id)
+                    if match is None:
+                        return None
+                    provider_names.add(str(match.provider_name))
         return tuple(sorted(provider_names))
 
     def get_harness_of_agent_named(self, agent_name: str) -> str | None:
