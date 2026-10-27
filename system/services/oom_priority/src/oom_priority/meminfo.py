@@ -7,6 +7,9 @@ the file while it is fresh (``--host-meminfo``, ``earlyoom.conf``), and so does
 this, falling back to ``/proc/meminfo``. The resource sampler records memory
 through it, and the system monitor app shows the same figures.
 
+It also reads one process's anonymous memory, which the memory candidates command
+(``bin/memory_candidates.py``) sums per candidate.
+
 Stdlib-only (see ``paths``): the sampler runs under a plain ``python3``.
 """
 
