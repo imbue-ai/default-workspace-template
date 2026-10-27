@@ -21,8 +21,7 @@ that came from it: the gate will be shed again and the round is wasted.
 
 The command lists the idle chats and workers, the apps the workspace may stop with how many windows
 show each, and the browsers no window shows, each with its memory: the anonymous memory of its
-processes, roughly what stopping it frees. Read the free memory again after
-each round.
+processes, roughly what stopping it frees. Read the free memory again after each round.
 
 ## What this pass may stop
 

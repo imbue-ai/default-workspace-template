@@ -436,8 +436,9 @@ arriving, for processes other than yours?) and from the free memory the guard
 acts on,
 `python3 system/services/oom_priority/bin/memory_candidates.py --free-memory`
 (is it recovering since the shed, or still falling?). Not `/proc/meminfo` or
-`free`: under a memory cap they read far more free memory than the guard sees. If things are settling, rerun the shed command. If they
-are not, or the rerun is shed too, ask your lead with a `question` gate
+`free`: under a memory cap they read far more free memory than the guard
+sees. If things are settling, rerun the shed command. If they are not, or
+the rerun is shed too, ask your lead with a `question` gate
 (`worker-reporting.md`) naming the command, the ledger records, and the free
 memory you saw; your lead frees memory with the user, and answers when you can
 rerun.

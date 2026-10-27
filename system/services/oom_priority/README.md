@@ -373,9 +373,9 @@ It lists:
     and `start_time`. mngr's own `idle_seconds` is not used, because it also
     counts the host's SSH activity.
 
-  Its memory is the summed anonymous memory of its process trees (see below). The trees are rooted at the
-  `pid` mngr reports and at every live pid the agent-pid registry holds for it
-  (codex registers two).
+  Its memory is the summed anonymous memory of its process trees (see below).
+  The trees are rooted at the `pid` mngr reports and at every live pid the
+  agent-pid registry holds for it (codex registers two).
 - **Apps the workspace may stop**, from the shell's `GET /api/inventory` joined
   to the programs supervisord reports running. A candidate has a program, is not
   critical (the shell, the chat and the terminal are what the workspace is
@@ -398,11 +398,12 @@ directly.
 
 Each figure sums the processes' anonymous memory (the `Anonymous` lines of
 `smaps_rollup`, or of `smaps` under gVisor, which has no rollup); under gVisor
-that is also the memory earlyoom scores by. It leaves out the binaries and libraries every process maps,
-which resident size counts in each of them: under gVisor an agent harness's
-`VmRSS` reads up to ten times its anonymous memory. Pages a process still shares
-with its parent after a fork count in both, so a browser can read somewhat above
-what stopping it frees; read the free memory again after stopping something.
+that is also the memory earlyoom scores by. It leaves out the binaries and
+libraries every process maps, which resident size counts in each of them: under
+gVisor an agent harness's `VmRSS` reads up to ten times its anonymous memory.
+Pages a process still shares with its parent after a fork count in both, so a
+browser can read somewhat above what stopping it frees; read the free memory
+again after stopping something.
 
 Each source is read on its own. When `mngr list`, the browser service, the
 shell or supervisord cannot be read, that section says so, and its candidates are
