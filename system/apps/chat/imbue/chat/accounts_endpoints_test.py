@@ -110,6 +110,7 @@ def test_accounts_carry_every_key_the_picker_reads() -> None:
         "name",
         "label",
         "reauth_method",
+        "signed_in_at",
     }
     assert row["provider"] == "Anthropic"
     assert row["harness_label"] == "Claude Code"

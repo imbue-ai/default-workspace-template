@@ -32,6 +32,8 @@ import threading
 import uuid
 from collections.abc import Generator
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Final
 
@@ -57,6 +59,9 @@ logger = _loguru_logger
 INDEX_VERSION: Final = 2
 
 _INDEX_FILENAME: Final = "index.json"
+# When the account last finished a sign-in, kept in the account's folder rather than the index so
+# the index's shape (and an older build's reading of it) is unchanged.
+SIGNED_IN_AT_FILENAME: Final = ".signed_in_at"
 _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
 
 _ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
@@ -153,6 +158,14 @@ def accounts_root(home: Path | None = None) -> Path:
 
 def account_dir(account_id: str, home: Path | None = None) -> Path:
     return accounts_root(home) / account_id
+
+
+def read_signed_in_at(account_id: str, home: Path | None = None) -> str | None:
+    """When the account last finished a sign-in (ISO 8601, UTC), or None for one never stamped."""
+    try:
+        return (account_dir(account_id, home) / SIGNED_IN_AT_FILENAME).read_text().strip() or None
+    except FileNotFoundError:
+        return None
 
 
 def index_path(home: Path | None = None) -> Path:
@@ -310,6 +323,8 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
     path = account_dir(account_id, home)
     if not path.is_dir():
         raise AccountError(f"cannot commit account {account_id}: {path} does not exist")
+    # Before the index write, so the account list that write announces to every chat page carries it.
+    (path / SIGNED_IN_AT_FILENAME).write_text(datetime.now(timezone.utc).isoformat())
     with _index_lock(home):
         index = read_index(home)
         # Re-authenticating writes the same folder a second time. The row already exists and

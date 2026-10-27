@@ -42,7 +42,11 @@ observe`, its own supervised service) writes, and serves:
   account list changes (`accounts_updated` on `/api/ws`, from a poll of the
   account index) and reads it again, so a chat whose account was removed
   elsewhere shows the signed-out notice at once; a send refused for it anyway
-  offers "Choose a provider" in place of Retry.
+  offers "Choose a provider" in place of Retry. Each account carries when it
+  last finished a sign-in (`signed_in_at`, kept in its own folder), so a turn
+  that failed on the chat's sign-in before then reads "Signed in again." in
+  every open chat, offering to send the message it failed on again while it is
+  still the chat's newest turn.
   The list's right edge drags to resize it (100px to 480px, 180px by default,
   kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
   most 500px and a long side at most 1000px, either way round), or a window at

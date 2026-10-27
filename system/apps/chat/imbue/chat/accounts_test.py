@@ -6,6 +6,8 @@ Every test passes an explicit `home` so nothing touches the real `~/.minds`.
 import json
 import shutil
 import tomllib
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -13,6 +15,7 @@ import pytest
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import INDEX_VERSION
+from imbue.chat.accounts import SIGNED_IN_AT_FILENAME
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import accounts_root
 from imbue.chat.accounts import commit_account
@@ -21,6 +24,7 @@ from imbue.chat.accounts import discard_account_dir
 from imbue.chat.accounts import index_path
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
+from imbue.chat.accounts import read_signed_in_at
 from imbue.chat.accounts import reconcile
 from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.accounts import rename_account
@@ -155,6 +159,21 @@ def test_committing_the_same_folder_twice_keeps_its_id_and_position(tmp_path: Pa
     assert [a.id for a in index.accounts] == [other.id, account_id]
     assert [a.display for a in index.accounts] == ["Anthropic", "Renamed"]
     assert index.mru == account_id
+
+
+def test_every_commit_stamps_when_the_account_signed_in(tmp_path: Path) -> None:
+    """A re-authentication is a commit of the same folder, and it moves the stamp forward, so a
+    chat page can tell an account signed in again after a turn failed on it."""
+    account_id, _ = mint_account_dir(tmp_path)
+    assert read_signed_in_at(account_id, tmp_path) is None
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+    (account_dir(account_id, tmp_path) / SIGNED_IN_AT_FILENAME).write_text("2000-01-01T00:00:00+00:00")
+
+    commit_account(account_id, "anthropic", "Anthropic", tmp_path)
+
+    stamp = read_signed_in_at(account_id, tmp_path)
+    assert stamp is not None
+    assert datetime.fromisoformat(stamp) > datetime(2000, 1, 1, tzinfo=timezone.utc)
 
 
 def test_committing_a_folder_that_does_not_exist_raises(tmp_path: Path) -> None:

@@ -34,7 +34,9 @@ from playwright.sync_api import Page
 from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
 
+from imbue.chat.accounts import SIGNED_IN_AT_FILENAME
 from imbue.chat.accounts import account_dir
+from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import delete_account
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
@@ -1807,6 +1809,15 @@ _AUTH_FAILED_SESSION_EVENTS: list[dict[str, Any]] = [
 ]
 
 
+def _backdate_sign_ins(server: RunningWorkspace) -> None:
+    """Stamp every account as signed in before the fixture transcript's failed turn.
+
+    The harness signs its accounts in as it starts, after the fixed timestamps the fixture
+    transcript carries, which would read as a sign-in made since the turn failed."""
+    for account_id in server.account_ids:
+        (account_dir(account_id) / SIGNED_IN_AT_FILENAME).write_text("2000-01-01T00:00:00+00:00")
+
+
 def _pick_from_auth_error_note(chat: FrameLocator, server: RunningWorkspace, account_id: str) -> None:
     """Follow "switch to another provider" under the failed turn and pick ``account_id`` in the chooser.
 
@@ -1827,6 +1838,7 @@ def test_a_chat_whose_turn_failed_on_its_login_hands_off_from_the_error_note(tmp
     with _switched_workspace(
         tmp_path, messenger=SummaryWritingMngrMessenger(), session_events=_AUTH_FAILED_SESSION_EVENTS
     ) as server:
+        _backdate_sign_ins(server)
         _open_fixture_chat(page, server)
         chat = _chat(page)
         _pick_from_auth_error_note(chat, server, server.account_ids[1])
@@ -1854,6 +1866,7 @@ def test_a_chat_whose_turn_failed_on_its_login_rebinds_from_the_error_note(tmp_p
     with _switched_workspace(
         tmp_path, additional_accounts=(("anthropic", "Anthropic"),), session_events=_AUTH_FAILED_SESSION_EVENTS
     ) as server:
+        _backdate_sign_ins(server)
         _open_fixture_chat(page, server)
         chat = _chat(page)
         _pick_from_auth_error_note(chat, server, server.account_ids[1])
@@ -1866,6 +1879,30 @@ def test_a_chat_whose_turn_failed_on_its_login_rebinds_from_the_error_note(tmp_p
 
         snapshot = _rebound_chat_snapshot(server, server.account_ids[1])
         assert snapshot.agent_ids == (FIXTURE_AGENT_ID,)
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_a_chat_whose_turn_failed_on_its_login_offers_the_message_again_once_signed_in(
+    tmp_path: Path, page: Page
+) -> None:
+    """A sign-in of the chat's account finished anywhere reaches the open chat: the failed turn stops asking
+    for a sign-in, and its message goes to the agent again on one press."""
+    messenger = RecordingMngrMessenger()
+    with _switched_workspace(tmp_path, messenger=messenger, session_events=_AUTH_FAILED_SESSION_EVENTS) as server:
+        _backdate_sign_ins(server)
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.get_by_role("button", name="Sign in again")).to_be_visible(timeout=15000)
+
+        # The sign-in finishing, as it does wherever it was started: the account's folder committed again.
+        commit_account(server.account_ids[0], "anthropic", "Anthropic")
+        server.chat_state.agent_manager._accounts_index_poller.poll_once()
+
+        recovered = chat.locator(".message-list .message-auth-recovered")
+        expect(recovered).to_contain_text("Signed in again.", timeout=15000)
+        expect(chat.get_by_role("button", name="Sign in again")).to_have_count(0)
+        recovered.get_by_role("button", name="Send your message again").click()
+        wait_for(lambda: (FIXTURE_AGENT_ID, "Hello agent!") in messenger.sent, timeout=15.0)
 
 
 @pytest.mark.timeout(90, func_only=False)
