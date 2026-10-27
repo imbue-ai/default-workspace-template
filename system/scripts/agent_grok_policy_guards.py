@@ -220,12 +220,10 @@ def rewrap(
     return result
 
 
-def _is_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
 def _is_zero(value: object) -> bool:
-    return _is_number(value) and value == 0
+    return (
+        isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0
+    )
 
 
 def is_backgrounded(tool_name: str, tool_input: Mapping[str, object]) -> bool:
@@ -237,7 +235,8 @@ def is_backgrounded(tool_name: str, tool_input: Mapping[str, object]) -> bool:
     block_until_ms = tool_input.get("block_until_ms")
     if block_until_ms is not None:
         return (
-            _is_number(block_until_ms)
+            isinstance(block_until_ms, (int, float))
+            and not isinstance(block_until_ms, bool)
             and block_until_ms < MIN_FOREGROUND_BLOCK_UNTIL_MS
         )
     return tool_input.get("is_background") is True or _is_zero(
