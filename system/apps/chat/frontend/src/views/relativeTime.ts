@@ -65,28 +65,30 @@ export interface AgeAttrs {
 
 export function Age(): m.Component<AgeAttrs> {
   let current: AgeAttrs | null = null;
+  let element: HTMLElement | null = null;
   let timer: ReturnType<typeof setInterval> | null = null;
+  // The text is written here, never rendered as a child: the timer rewrites it between redraws, so a text node
+  // Mithril owned would go stale under it.
+  function writeAge(): void {
+    if (current !== null && element !== null) element.textContent = current.format(current.atMs, Date.now());
+  }
   return {
     oncreate(vnode) {
       current = vnode.attrs;
-      const element = vnode.dom as HTMLElement;
-      timer = setInterval(() => {
-        if (current !== null) element.textContent = current.format(current.atMs, Date.now());
-      }, AGE_REFRESH_MS);
+      element = vnode.dom as HTMLElement;
+      writeAge();
+      timer = setInterval(writeAge, AGE_REFRESH_MS);
     },
     onupdate(vnode) {
       current = vnode.attrs;
+      writeAge();
     },
     onremove() {
       if (timer !== null) clearInterval(timer);
     },
     view(vnode) {
-      const { atMs, format, tooltipLead } = vnode.attrs;
-      return m(
-        "span",
-        { class: vnode.attrs.class, title: `${tooltipLead} ${exactTime(atMs)}` },
-        format(atMs, Date.now()),
-      );
+      const { atMs, tooltipLead } = vnode.attrs;
+      return m("span", { class: vnode.attrs.class, title: `${tooltipLead} ${exactTime(atMs)}` });
     },
   };
 }

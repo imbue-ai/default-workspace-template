@@ -62,4 +62,19 @@ describe("Age", () => {
     vi.advanceTimersByTime(2 * MINUTE);
     expect(age?.textContent).toBe("2m");
   });
+
+  it("shows a new time at once, after its timer has rewritten the text", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    root = document.createElement("div");
+    document.body.appendChild(root);
+    let atMs = NOW - 3 * DAY;
+    m.mount(root, { view: () => m(Age, { atMs, format: shortAge, tooltipLead: "Last message", class: "age" }) });
+    vi.advanceTimersByTime(MINUTE);
+    expect(root.querySelector(".age")?.textContent).toBe("3d");
+
+    atMs = Date.now();
+    m.redraw.sync();
+    expect(root.querySelector(".age")?.textContent).toBe("now");
+  });
 });
