@@ -50,6 +50,7 @@ from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.autocompact import compact_stale_opted_in_agents
 from imbue.chat.background_tasks import BackgroundTask
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_autocompact import ChatAutocompactState
@@ -1414,6 +1415,9 @@ class AgentManager:
             if autocompactor is not None
             else ChatAutoCompactor.build(
                 list_opted_in_chat_agent_names=manager.get_opted_in_running_chat_agent_names,
+                compact=lambda names: compact_stale_opted_in_agents(
+                    names, manager.get_provider_names_of_agents(names)
+                ),
                 on_compaction_requested=manager.note_sweep_compaction_requested,
                 on_sweep_started=manager.note_sweep_started,
                 on_sweep_finished=manager.note_sweep_finished,
@@ -2054,6 +2058,20 @@ class AgentManager:
             if (default_state if state is None else state).is_enabled:
                 opted_in_names.append(name)
         return opted_in_names
+
+    def get_provider_names_of_agents(self, agent_names: Sequence[str]) -> tuple[str, ...] | None:
+        """The providers the named tracked agents are on, as the observe stream reported them; None while any of
+        them has not been reported yet."""
+        with self._lock:
+            agent_id_by_name = {agent.name: agent.id for agent in self._agents.values()}
+            provider_names: set[str] = set()
+            for name in agent_names:
+                agent_id = agent_id_by_name.get(name)
+                match = None if agent_id is None else self._match_by_agent_id.get(agent_id)
+                if match is None:
+                    return None
+                provider_names.add(str(match.provider_name))
+        return tuple(sorted(provider_names))
 
     def get_harness_of_agent_named(self, agent_name: str) -> str | None:
         """The harness a tracked agent runs, by its name; None for a name no tracked agent has."""
