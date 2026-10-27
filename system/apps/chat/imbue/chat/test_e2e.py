@@ -54,9 +54,11 @@ from imbue.chat.testing import SummaryWritingMngrMessenger
 from imbue.chat.testing import get_json
 from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
+from imbue.chat.testing import put_stand_in_pi_on_path
 from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
+from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
@@ -1416,8 +1418,9 @@ def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """With an account signed in the intake creates the chat at once on it, and the page is an empty chat with its composer
-    ready from the first frame: no placeholder text while the agent is created, and none once it lands -- not even
-    for a single frame, which is how a flash of a "not found" or "loading" screen shows up."""
+    ready from the first frame: it says the chat is starting while the agent is created, and that it is ready once it
+    lands, and never shows a placeholder screen -- not even for a single frame, which is how a flash of a "not found" or
+    "loading" screen shows up."""
     release_create = tmp_path / "release-create"
     monkeypatch.setenv("FAKE_MNGR_CREATE_RELEASE_FILE", str(release_create))
     page.add_init_script(_RECORD_PLACEHOLDERS_SEEN_SCRIPT)
@@ -1428,7 +1431,7 @@ def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
             # connect and bring the provisional record; the create itself is held until released below.
             expect(chat.locator(".message-list-creating")).to_have_count(1, timeout=45000)
             expect(chat.locator(".message-input-textbox")).to_be_editable()
-            expect(chat.locator(".message-list-creating")).to_have_text("")
+            expect(chat.locator(".message-list-creating")).to_have_text("Starting your chat…")
             # The provider row is there before the agent is: it names the account the chat starts on.
             expect(chat.locator(".model-selector-provisional")).to_have_text("Anthropic")
             composer_while_starting = chat.locator(".message-input-textbox").bounding_box()
@@ -1437,7 +1440,7 @@ def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
             release_create.touch()
 
         expect(chat.locator(".message-list-empty")).to_have_count(1, timeout=15000)
-        expect(chat.locator(".message-list-empty")).to_have_text("")
+        expect(chat.locator(".message-list-empty")).to_have_text("Your chat is ready.")
         expect(chat.locator(".message-input-textbox")).to_be_editable()
         # The agent's own menu takes the row over without moving the composer above it.
         expect(chat.locator(".model-selector-trigger")).to_be_visible()
@@ -2302,8 +2305,13 @@ def test_the_phone_header_kebab_renames_the_chat_on_screen(e2e_server: RunningWo
     field.press("Enter")
 
     expect(page.locator(".chat-header-title")).to_have_text("Phone rename", timeout=15000)
-    snapshot = e2e_server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
-    assert snapshot is not None and snapshot.title == "Phone rename"
+    # The header shows the name at once; the chat takes it when the rename lands.
+    wait_until_true(
+        lambda: (snapshot := e2e_server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)) is not None
+        and snapshot.title == "Phone rename",
+        timeout_seconds=15.0,
+        what="the chat to take the name typed in the header",
+    )
 
 
 @pytest.mark.timeout(60, func_only=False)
@@ -2365,6 +2373,51 @@ def test_the_phone_composer_settings_button_opens_the_model_menu_with_effort_seg
     menu.locator('[data-menu-row="source-view"] [role="switch"]').click()
     expect(menu).to_have_count(0)
     expect(chat.locator(".composer-under-bar .terminal-view-toggle")).to_have_attribute("aria-checked", "true")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_phone_model_menu_shows_a_pi_chats_model_search_inside_the_card(
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Pi chat's Model submenu opens on its search field, which takes focus; the slide still lands on the
+    submenu's pane, so the back row and the field sit inside the card rather than a pane to its side."""
+    model_ids = [f"vendor/model-{index}" for index in range(12)]
+    put_stand_in_pi_on_path(tmp_path, "openrouter", model_ids, monkeypatch)
+    with _running_e2e_server(tmp_path) as server:
+        manager = server.chat_state.agent_manager
+        seed_agent_state(
+            manager,
+            FIXTURE_AGENT_ID,
+            name=server.agent_info.name,
+            labels={"account": server.account_ids[0]},
+            harness=HarnessType.PI_CODING,
+        )
+        manager._ensure_activity_tracking(FIXTURE_AGENT_ID)
+        model_state = get_model_state_path(HarnessType.PI_CODING, server.agent_info.agent_state_dir)
+        model_state.parent.mkdir(parents=True, exist_ok=True)
+        model_state.write_text(json.dumps({"model": "openrouter/vendor/model-3", "effort": "high", "fast": False}))
+        manager.refresh_model_choice(FIXTURE_AGENT_ID)
+        _open_phone_chat_root(page, server)
+        chat = _shown_chat_of_root(page)
+        expect(chat.locator(".message-input-textbox")).to_be_visible(timeout=15000)
+
+        chat.locator("[data-composer-settings]").click()
+        menu = chat.locator(".model-provider-menu--compact")
+        expect(menu.locator('[data-menu-row="model"]')).to_contain_text("openrouter/vendor/model-3")
+        menu.locator('[data-menu-row="model"]').click()
+        expect(menu.locator("[data-menu-track]")).to_have_attribute("data-menu-track", "submenu")
+        search = menu.locator('input[placeholder="Search models"]')
+        expect(search).to_be_focused()
+        expect(menu.locator("button", has_text="openrouter/vendor/model-11")).to_be_attached()
+
+        track = menu.locator("[data-menu-track]")
+        card = track.bounding_box()
+        assert card is not None
+        for shown in (menu.locator("[data-menu-track-back]"), search):
+            box = shown.bounding_box()
+            assert box is not None
+            assert card["x"] <= box["x"] and box["x"] + box["width"] <= card["x"] + card["width"] + 1
+        assert track.evaluate("element => element.scrollLeft") == 0
 
 
 @pytest.mark.timeout(60, func_only=False)

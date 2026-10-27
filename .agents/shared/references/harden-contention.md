@@ -126,7 +126,7 @@ or a provisional milestone merge:
    app's merge lives in
    `update-app/references/critical-app.md` step 4, which applies this same
    check over the pass's footprint together with `system/libs/workspace_ui/`,
-   `system/libs/workspace_layout/`, `system/package.json`,
+   `system/libs/workspace_layout/`, `system/libs/workspace_themes/`, `system/package.json`,
    `system/package-lock.json`, and every file the pass branch changes. Empty
    output means fresh: merge normally. Any output means the base moved under
    the worker: the pass is stale -- do not merge; catch it up (below).

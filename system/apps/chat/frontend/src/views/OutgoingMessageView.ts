@@ -3,9 +3,9 @@
  * very tail of the transcript -- below the committed turns AND below the queued
  * group, so a just-sent message shows immediately as the last thing(s) until the
  * harness-sourced state catches up. Drawn exactly like the delivered turn that
- * replaces it, so a send reads as sent at once (contract A2). A send still waiting
- * for the agent to come up says so beside the model bar (ConnectingIndicator), not
- * here. A failed send is NOT rendered here -- the composer handles that (popup +
+ * replaces it, so a send reads as sent at once (contract A2). Where the send is (on
+ * its way, or waiting for the agent to come up) is the status row under it
+ * (ActivityIndicator), not the bubble. A failed send is NOT rendered here -- the composer handles that (popup +
  * text restored), and the bubble is dropped.
  */
 import m from "mithril";
@@ -17,6 +17,7 @@ import { UserMessageKind } from "./message-kinds";
 import {
   NOTICE_ROW_SPACING_CLASS,
   USER_BUBBLE_CLASS,
+  USER_MESSAGE_PART,
   USER_MESSAGE_ROW_CLASS,
   renderNoticeRow,
 } from "./user-message-display";
@@ -58,7 +59,7 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
     return renderNoticeRow(bubble.key, rowClass, cls);
   }
   return m("div", { class: rowClass, key: bubble.key }, [
-    m("div", { class: USER_BUBBLE_CLASS }, [
+    m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
     ]),
   ]);

@@ -18,8 +18,10 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_THEME,
   ShellContractError,
   connectToShell,
+  followShellTheme,
 } from "./app_contract";
 import type { ShellConnection } from "./app_contract";
 
@@ -89,6 +91,7 @@ describe("connectToShell", () => {
       desktopId: "home",
       app: "chat",
       path: "/?chat=agent-1",
+      opensLocalFiles: false,
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
     expect(handlers.onHidden).toHaveBeenCalledTimes(1);
@@ -115,7 +118,17 @@ describe("connectToShell", () => {
       desktopId: "home",
       app: "",
       path: "",
+      opensLocalFiles: false,
     });
+  });
+
+  it("reads whether the embedder opens its shared-files settings, and anything but true as no", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ ...HANDSHAKE, opensLocalFiles: true }, parent);
+    deliver({ ...HANDSHAKE, opensLocalFiles: "yes" }, parent);
+    expect(onHandshake.mock.calls.map((call) => call[0].opensLocalFiles)).toEqual([true, false]);
   });
 
   it("announces its capabilities to the parent once, before anything else", () => {
@@ -230,6 +243,48 @@ describe("connectToShell", () => {
     live.disconnect();
     deliver({ type: SHELL_SHOWN }, parent);
     expect(onShown).not.toHaveBeenCalled();
+  });
+});
+
+describe("followShellTheme", () => {
+  it("follows the parent's theme messages alone, without posting anything", () => {
+    const parent = framed();
+    const onTheme = vi.fn();
+    const stop = followShellTheme(onTheme);
+
+    deliver({ type: SHELL_THEME, theme: "windows-2000", revision: "r1" }, parent);
+    deliver({ type: SHELL_THEME, theme: "mac-classic" }, parent);
+    deliver({ type: SHELL_THEME, theme: 7 }, parent);
+    deliver({ type: SHELL_THEME, theme: "mac-classic", revision: "r2" }, {});
+    deliver({ type: SHELL_SHOWN }, parent);
+    stop();
+    deliver({ type: SHELL_THEME, theme: "standard", revision: "r3" }, parent);
+
+    expect(onTheme.mock.calls).toEqual([
+      ["windows-2000", "r1", false],
+      ["mac-classic", "", false],
+    ]);
+    expect(parent.postMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("connectToShell's theme", () => {
+  it("delivers the parent's theme with its revision, an empty revision when it names none, and a preview flag", () => {
+    const parent = framed();
+    const onTheme = vi.fn();
+    connection = connectToShell({ onTheme });
+
+    deliver({ type: SHELL_THEME, theme: "windows-2000", revision: "r1" }, parent);
+    deliver({ type: SHELL_THEME, theme: "mac-classic" }, parent);
+    deliver({ type: SHELL_THEME, theme: "paper", revision: "r2", isPreview: true }, parent);
+    deliver({ type: SHELL_THEME, theme: 7, revision: "r3" }, parent);
+    deliver({ type: SHELL_THEME, theme: "ink", revision: "r4" }, {});
+
+    expect(onTheme.mock.calls).toEqual([
+      ["windows-2000", "r1", false],
+      ["mac-classic", "", false],
+      ["paper", "r2", true],
+    ]);
   });
 });
 

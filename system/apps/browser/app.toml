@@ -44,6 +44,10 @@ copies = {data = "data/.apps/browser"}
 [wiring]
 programs = ["xvfb"]
 
+# The browser shows other sites; the window around it is themed.
+[theming]
+mode = "none"
+
 # A link to a local address no app is registered at, clicked in the workspace (a chat's ``http://localhost:3000/``
 # link, or a page's popup Imbue Studio hands back), opens as a tab in the one browser, whose window the route then
 # shows.

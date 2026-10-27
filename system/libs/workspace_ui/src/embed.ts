@@ -63,7 +63,8 @@ export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
 export const DETACHED_WINDOWS: "minds:detached-windows" =
   "DETACHED_WINDOWS" in embedContract ? embedContract.DETACHED_WINDOWS : "minds:detached-windows";
 // Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut,
-// opensExternalLinks?, opensCustomSchemeLinks? }: whether it takes OPEN_EXTERNAL, and custom-scheme links there.
+// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles? }: whether it takes OPEN_EXTERNAL, custom-scheme
+// links there, and OPEN_LOCAL_FILES.
 export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
   "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
@@ -101,6 +102,12 @@ export const OPEN_EXTERNAL: "minds:open-external" =
 // not know the type ignores it, and the tour's words never depend on the ring.
 export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
   "HIGHLIGHT_CHROME" in embedContract ? embedContract.HIGHLIGHT_CHROME : "minds:highlight-chrome";
+
+// Workspace -> embedder (contract v11): open the chrome's settings for the files shared from the user's computer
+// (its Permissions pane, at Local files). Payload: {}. Sent only to an embedder that said ``opensLocalFiles`` with
+// EMBEDDER_CAPABILITIES.
+export const OPEN_LOCAL_FILES: "minds:open-local-files" =
+  "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 

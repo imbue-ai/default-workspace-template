@@ -19,7 +19,8 @@ export interface EntryRecord {
 }
 
 /** What the server says of a path: a folder and its entries, or a file and whether it is small and reads as text. */
-export type PageData = { kind: "folder"; entries: EntryRecord[] } | { kind: "file"; is_text: boolean };
+export type PageData =
+  { kind: "folder"; entries: EntryRecord[]; stamp?: string | null } | { kind: "file"; is_text: boolean };
 
 /** An entry of a folder as the app holds it. */
 export interface Entry {
@@ -98,6 +99,8 @@ export interface Listing {
   /** False for a folder that is not there. */
   exists: boolean;
   entries: Entry[];
+  /** The folder's stamp as it was just before it was read (see `folderStamps`); null where there is none. */
+  stamp?: string | null;
 }
 
 export async function listFolder(folder: string, signal?: AbortSignal): Promise<Listing> {
@@ -106,7 +109,16 @@ export async function listFolder(folder: string, signal?: AbortSignal): Promise<
   if (!response.ok) throw await failureOf(response, `Couldn't open ${folder}`);
   const data = (await response.json()) as PageData;
   if (data.kind !== "folder") throw new ServerError(`Couldn't open ${folder}: it is a file`, 400);
-  return { exists: true, entries: data.entries.map((record) => entryOf(folder, record)) };
+  return { exists: true, entries: data.entries.map((record) => entryOf(folder, record)), stamp: data.stamp ?? null };
+}
+
+/** Where each workspace folder stands, by the path asked: a stamp that moves when anything in it is added, removed or
+ *  renamed, or null for a path that is not a folder. One stat a folder on the server. */
+export async function folderStamps(folders: readonly string[]): Promise<Record<string, string | null>> {
+  const query = folders.map((folder) => `path=${encodeURIComponent(folder)}`).join("&");
+  const response = await fetch(`/__files/api/stamps?${query}`);
+  if (!response.ok) throw await failureOf(response, "Couldn't check the folders");
+  return ((await response.json()) as { stamps: Record<string, string | null> }).stamps;
 }
 
 /** Whether anything, file or folder, is at `path`. Asked without the trailing slash, so it is the same question for

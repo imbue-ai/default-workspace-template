@@ -20,6 +20,8 @@ from flask.typing import ResponseReturnValue
 from loguru import logger
 from pydantic import Field
 from werkzeug.exceptions import NotFound
+from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
+from workspace_themes.flask_routes import register_workspace_theme_route
 
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.content_security_policy import url_origin
@@ -86,6 +88,7 @@ ROUTE_TABLE: RouteTable = {
     ("GET", CHAT_IMPORT_PATH): RouteModels(response_model=ChatImportResponse),
     ("POST", CHAT_IMPORT_DISMISS_PATH): RouteModels(response_model=ChatImportResponse),
     ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the app contract module, a JavaScript file"),
+    **THEME_STATIC_ROUTE_TABLE,
 }
 
 
@@ -100,6 +103,7 @@ def build_pages_blueprint(
         description=APP_DESCRIPTION,
         route_table=ROUTE_TABLE,
     )
+    register_workspace_theme_route(blueprint)
     # The template drawings live beside the catalog (catalog/README.md), so the page admits images from the
     # catalog's origin besides its own; with no catalog there is no templates section and nothing to admit.
     image_sources = "'self' data: blob:"
@@ -113,9 +117,8 @@ def build_pages_blueprint(
         document = static_directory / PAGE_DOCUMENT_FILENAME
         if not document.is_file():
             return Response(_NOT_BUILT_PAGE, mimetype="text/html", headers={"Cache-Control": "no-store"})
-        response = send_file(document.absolute(), mimetype="text/html")
-        response.headers["Cache-Control"] = "no-store"
-        return response
+        # Read rather than streamed, so the document policy can admit the page's inline theme boot by its hash.
+        return Response(document.read_text(), mimetype="text/html", headers={"Cache-Control": "no-store"})
 
     @blueprint.get("/assets/<path:filename>")
     def asset(filename: str) -> ResponseReturnValue:

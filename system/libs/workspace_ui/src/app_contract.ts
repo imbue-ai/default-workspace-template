@@ -48,6 +48,11 @@ export const SHELL_SHOWN = "shell:shown";
 export const SHELL_HIDDEN = "shell:hidden";
 /** Shell to app: the close chord fired while this window was focused. */
 export const SHELL_CLOSE_REQUEST = "shell:close-request";
+/** Shell to app: the theme the shell wears, the desktop on screen's (or one Desktop settings is previewing), its
+ *  revision, and whether it is such a preview (docs/system/blueprint/workspace-themes/, section 5.3), sent after the
+ *  handshake and on every change; the page wears it, and remembers it unless it is a preview
+ *  (`themes/themeClient.ts`). */
+export const SHELL_THEME = "shell:theme";
 /** Shell to app: the window's path changed elsewhere; the page should show that path in place. */
 export const SHELL_NAVIGATE = "shell:navigate";
 /** App to shell: what this page can do, sent once on connect. */
@@ -141,8 +146,10 @@ export function hasWorkspaceCoordinate(host: string): boolean {
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
- * the window belongs to, and the path the window is at (desktop-interface contracts.md section
- * 7). The client id is required; a field the shell does not send, a page reads as "".
+ * the window belongs to, the path the window is at, and whether the Imbue Studio chrome around the
+ * shell opens its settings for the files shared from the user's computer (desktop-interface
+ * contracts.md section 7). The client id is required; a text field the shell does not send, a page
+ * reads as "", and a flag it does not send, as false.
  */
 export interface ShellHandshake {
   clientId: string;
@@ -150,6 +157,7 @@ export interface ShellHandshake {
   desktopId: string;
   app: string;
   path: string;
+  opensLocalFiles: boolean;
 }
 
 /**
@@ -173,6 +181,8 @@ export interface ShellConnectionHandlers {
   onHidden?: () => void;
   onCloseRequest?: () => void;
   onNavigate?: (path: string) => void;
+  /** `isPreview`: the shell shows the theme without having saved it; a page wears it and does not remember it. */
+  onTheme?: (theme: string, revision: string, isPreview: boolean) => void;
   capabilities?: ShellCapabilities;
 }
 
@@ -212,7 +222,7 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path } = data;
+  const { clientId, windowId, desktopId, app, path, opensLocalFiles } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -220,6 +230,7 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     desktopId: optionalString(desktopId),
     app: optionalString(app),
     path: optionalString(path),
+    opensLocalFiles: opensLocalFiles === true,
   };
 }
 
@@ -235,6 +246,37 @@ function checkedCapabilities(handlers: ShellConnectionHandlers): ShellCapabiliti
     throw new ShellContractError("a page that declares capabilities.closeChord: true gives onCloseRequest");
   }
   return capabilities;
+}
+
+function readTheme(message: Record<string, unknown>): { theme: string; revision: string; isPreview: boolean } | null {
+  if (typeof message.theme !== "string") return null;
+  return {
+    theme: message.theme,
+    revision: typeof message.revision === "string" ? message.revision : "",
+    isPreview: message.isPreview === true,
+  };
+}
+
+/**
+ * Follow the shell's `shell:theme` without connecting to it: for the page kit, which runs beside whatever
+ * `connectToShell` the page makes itself. Answers a function that stops following.
+ */
+export function followShellTheme(onTheme: (theme: string, revision: string, isPreview: boolean) => void): () => void {
+  const boundWindow = window;
+  if (boundWindow.parent === boundWindow) return () => undefined;
+
+  function onMessage(event: MessageEvent): void {
+    if (event.source !== boundWindow.parent) return;
+    const data: unknown = event.data;
+    if (data === null || typeof data !== "object") return;
+    const message = data as Record<string, unknown>;
+    if (message.type !== SHELL_THEME) return;
+    const theme = readTheme(message);
+    if (theme !== null) onTheme(theme.theme, theme.revision, theme.isPreview);
+  }
+
+  boundWindow.addEventListener("message", onMessage);
+  return () => boundWindow.removeEventListener("message", onMessage);
 }
 
 /** The browser's own schemes a framed page hands on when a link to them is clicked, as it does every custom-scheme
@@ -374,6 +416,11 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       case SHELL_CLOSE_REQUEST:
         handlers.onCloseRequest?.();
         return;
+      case SHELL_THEME: {
+        const theme = readTheme(message);
+        if (theme !== null) handlers.onTheme?.(theme.theme, theme.revision, theme.isPreview);
+        return;
+      }
       case SHELL_NAVIGATE: {
         const path = message.path;
         if (typeof path === "string") handlers.onNavigate?.(path);

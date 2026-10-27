@@ -14,6 +14,9 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import shutil
+import subprocess
+import sys
 import threading
 import urllib.error
 import urllib.parse
@@ -40,6 +43,7 @@ from playwright.sync_api import WebSocket
 from playwright.sync_api import WebSocketRoute
 from playwright.sync_api import expect
 from pydantic import Field
+from workspace_themes.contract import BUILTIN_THEMES_DIRECTORY
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
@@ -56,6 +60,7 @@ from imbue.system_interface.shell.testing import running_files
 from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.shell.testing import write_rollback_point
 from imbue.system_interface.shell.testing import write_stub_update_self_script
+from imbue.system_interface.shell.tour import OFFER_TOUR_FILENAME
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_e2e_browser_installed
@@ -120,6 +125,13 @@ _CELL_HEIGHT = 112
 _GRID_INSET = 16
 _SNAP_THRESHOLD = 16
 _GEOMETRY_TOLERANCE_PX = 4
+# imbue/system_interface/test_e2e.py -> the template's root, whose built-in theme folders a themed shell copies.
+_TEMPLATE_ROOT = Path(__file__).resolve().parents[5]
+_BUILTIN_THEMES = ("standard", "mac-classic", "windows-2000")
+# Where the theme test sets its window: clear of the shortcuts, with room past its every edge for the resizes.
+_OPEN_SPOT = (260.0, 60.0)
+# How far from a window control's centre, each way, a press must still land on it, however small a theme draws it.
+_CONTROL_TARGET_REACH_PX = 6
 
 
 class E2EServer(FrozenModel):
@@ -130,9 +142,11 @@ class E2EServer(FrozenModel):
     repo_root: Path = Field(description="The workspace root the update notice reads its record under")
     stub_url: str = Field(description="The stub app's loopback URL, where its pages are framed from")
     pinned_url: str = Field(default="", description="The pinned stub app's loopback URL; empty when none is offered")
+    registry_path: Path = Field(description="The registry file the shell and ``workspace-layout`` read")
     agent_events_path: Path = Field(
         description="The agents event file the avatar's mood is read from, absent at first"
     )
+    theme: str | None = Field(default=None, description="The built-in theme the workspace wears by default, if set")
 
 
 def _get_json(url: str) -> Any:
@@ -156,6 +170,8 @@ def _running_e2e_server(
     pin: tuple[str, str, str] | None = None,
     # Further registry rows, for apps a test serves itself.
     extra_rows: tuple[str, ...] = (),
+    # A built-in theme the workspace wears by default; None leaves the standard look and no theme folders.
+    theme: str | None = None,
 ) -> Generator[E2EServer, None, None]:
     """Run the shell on a free port over the stub app (and the second one when asked).
 
@@ -234,6 +250,8 @@ def _running_e2e_server(
         state_dir = tmp_path / "shell-state"
         config = Config(system_interface_host="127.0.0.1", system_interface_port=port)
         repo_root = tmp_path / "repo"
+        if theme is not None:
+            shutil.copytree(_TEMPLATE_ROOT / BUILTIN_THEMES_DIRECTORY, repo_root / BUILTIN_THEMES_DIRECTORY)
         agent_events_path = tmp_path / "mngr-events" / "events.jsonl"
         agent_events_path.parent.mkdir()
         state = build_test_state(
@@ -257,6 +275,8 @@ def _running_e2e_server(
             )
             # Started only once the apps are serving: the first liveness probe must find them answering.
             state.shell.start()
+            if theme is not None:
+                _post_json(f"{base_url}/api/themes/default", {"theme": theme})
             try:
                 yield E2EServer(
                     base_url=base_url,
@@ -264,7 +284,9 @@ def _running_e2e_server(
                     repo_root=repo_root,
                     stub_url=stub_url,
                     pinned_url=pinned_served.http_url if pinned_served is not None else "",
+                    registry_path=registry_path,
                     agent_events_path=agent_events_path,
+                    theme=theme,
                 )
             finally:
                 state.shell.stop()
@@ -278,6 +300,13 @@ def _running_e2e_server(
 def e2e_server(tmp_path: Path) -> Generator[E2EServer, None, None]:
     """Start the shell over the one stub app."""
     with _running_e2e_server(tmp_path) as server:
+        yield server
+
+
+@pytest.fixture(params=_BUILTIN_THEMES)
+def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generator[E2EServer, None, None]:
+    """The shell over the one stub app, wearing each built-in theme as the workspace's default in turn."""
+    with _running_e2e_server(tmp_path, theme=request.param) as server:
         yield server
 
 
@@ -1206,6 +1235,176 @@ def test_title_bar_double_click_and_controls_toggle_maximize_and_minimize(e2e_se
     )
 
 
+# Each resize edge, and which sides of the window it moves: (left, top, right, bottom) as -1, 0, or +1 of the drag.
+_EDGE_SIDES: dict[str, tuple[int, int, int, int]] = {
+    "n": (0, 1, 0, 0),
+    "s": (0, 0, 0, 1),
+    "e": (0, 0, 1, 0),
+    "w": (1, 0, 0, 0),
+    "ne": (0, 1, 1, 0),
+    "nw": (1, 1, 0, 0),
+    "se": (0, 0, 1, 1),
+    "sw": (1, 0, 0, 1),
+}
+
+
+def _hit_at(page: Page, point: tuple[float, float], selector: str) -> str | None:
+    """What the pointer would land on at ``point``: the ``selector`` match it is in, by its outer HTML's opening tag,
+    or None when something else takes the point."""
+    return page.evaluate(
+        """([x, y, selector]) => {
+            const hit = document.elementFromPoint(x, y)?.closest(selector);
+            return hit === null || hit === undefined ? null : hit.outerHTML.slice(0, hit.outerHTML.indexOf(">") + 1);
+        }""",
+        [point[0], point[1], selector],
+    )
+
+
+def _edge_rim(handle: FloatRect, edge: str) -> tuple[float, float]:
+    """A point on a resize handle's outermost pixels: its outer side for an edge, its outer corner for a corner."""
+    x, y = _center(handle)
+    if "n" in edge:
+        y = handle["y"] + 1
+    if "s" in edge:
+        y = handle["y"] + handle["height"] - 1
+    if "w" in edge:
+        x = handle["x"] + 1
+    if "e" in edge:
+        x = handle["x"] + handle["width"] - 1
+    return x, y
+
+
+def _bare_bar_point(page: Page, bar: Locator) -> tuple[float, float]:
+    """A point on the title bar's own surface, clear of its title and its controls, scanned across its middle row."""
+    point = bar.evaluate(
+        """(bar) => {
+            const box = bar.getBoundingClientRect();
+            const y = box.top + box.height / 2;
+            for (let x = box.left + box.width / 2; x < box.right - 4; x += 2) {
+                const hit = document.elementFromPoint(x, y);
+                if (hit !== null && bar.contains(hit) && hit.closest("[data-window-control], [data-part='window-title']") === null) {
+                    return [x, y];
+                }
+            }
+            return null;
+        }"""
+    )
+    assert point is not None, "the title bar has no bare surface between its title and its controls"
+    return point[0], point[1]
+
+
+@pytest.mark.timeout(180, func_only=False)
+def test_every_theme_keeps_a_window_movable_resizable_from_every_edge_and_its_controls_on_target(
+    themed_e2e_server: E2EServer, page: Page
+) -> None:
+    """Under every built-in theme a window moves by its title bar, from its title and from its bare bar; resizes
+    from each of its four edges and four corners, moving only the sides that edge holds; and each control is what
+    the pointer lands on across a square around its centre, and does its job: maximize and restore, minimize and
+    back from the taskbar, the window menu, reload, and close. The launcher field and a shortcut still answer."""
+    _land(page, themed_e2e_server)
+    window_id = _open_via_shortcut(page, themed_e2e_server)
+    window = _window(page, window_id)
+    # In open desktop, with room past every edge: a handle's rim against the taskbar or the viewport is theirs.
+    opened = _box(window)
+    _drag_title_bar(page, window_id, _OPEN_SPOT[0] - opened["x"], _OPEN_SPOT[1] - opened["y"])
+    page.mouse.move(0, 0)
+
+    # The page wears the theme the fixture made the default, its bundle and every file it imports loaded, before
+    # anything is measured: the bundle's own sheet parses before the files it imports arrive.
+    page.wait_for_function(
+        "(theme) => document.documentElement.getAttribute('data-ui-theme') === theme", arg=themed_e2e_server.theme
+    )
+    page.wait_for_function(
+        """() => [...document.querySelectorAll('link[data-workspace-theme]')].every(
+            (link) => link.sheet !== null
+                && [...link.sheet.cssRules].every((rule) => !(rule instanceof CSSImportRule) || rule.styleSheet !== null)
+        )"""
+    )
+    bar = window.locator("[data-drag-handle]")
+
+    # Every control takes the pointer across a square around its centre, however small a theme draws it.
+    for control in window.locator("[data-window-control]").all():
+        name = control.get_attribute("data-window-control")
+        x, y = _center(_box(control))
+        reach = _CONTROL_TARGET_REACH_PX
+        for point in ((x, y), (x - reach, y), (x + reach, y), (x, y - reach), (x, y + reach)):
+            hit = _hit_at(page, point, "[data-window-control]")
+            assert hit is not None and f'data-window-control="{name}"' in hit, (name, point, hit)
+
+    # Every resize edge takes the pointer at its outer rim, just outside the window, where nothing of the theme's
+    # chrome lies over it (inside, a control near a corner is the press's, above the handle).
+    for edge in _EDGE_SIDES:
+        rim = _edge_rim(_box(window.locator(f'[data-resize-edge="{edge}"]')), edge)
+        hit = _hit_at(page, rim, "[data-resize-edge]")
+        assert hit is not None and f'data-resize-edge="{edge}"' in hit, (
+            edge,
+            rim,
+            _box(window),
+            page.evaluate("([x, y]) => document.elementFromPoint(x, y)?.outerHTML.slice(0, 200)", list(rim)),
+        )
+
+    # The title bar drags from its title and from bare bar between the title and the controls.
+    title = window.locator("[data-part='window-title']")
+    for start_at in (lambda: _center(_box(title)), lambda: _bare_bar_point(page, bar)):
+        start = start_at()
+        assert _hit_at(page, start, "[data-drag-handle]") is not None, start
+        before = _box(window)
+        _drag(page, start, (start[0] + 40, start[1] + 30))
+        after = _box(window)
+        _assert_close(after["x"], before["x"] + 40, f"moved x from {start}")
+        _assert_close(after["y"], before["y"] + 30, f"moved y from {start}")
+
+    # Each edge and corner resizes outward by its drag, moving only its own sides.
+    for edge, (left, top, right, bottom) in _EDGE_SIDES.items():
+        before = _box(window)
+        start = _edge_rim(_box(window.locator(f'[data-resize-edge="{edge}"]')), edge)
+        dx = 30 * (right - left)
+        dy = 24 * (bottom - top)
+        _drag(page, start, (start[0] + dx, start[1] + dy))
+        after = _box(window)
+        _assert_close(after["x"], before["x"] - 30 * left, f"{edge} left")
+        _assert_close(after["y"], before["y"] - 24 * top, f"{edge} top")
+        _assert_close(after["x"] + after["width"], before["x"] + before["width"] + 30 * right, f"{edge} right")
+        _assert_close(after["y"] + after["height"], before["y"] + before["height"] + 24 * bottom, f"{edge} bottom")
+
+    normal = _box(window)
+    window.locator('[data-window-control="maximize"]').click()
+    expect(window).to_have_attribute("data-window-state", "MAXIMIZED")
+    window.locator('[data-window-control="restore"]').click()
+    expect(window).to_have_attribute("data-window-state", "NORMAL")
+    _assert_same_box(_box(window), normal, "restored")
+
+    window.locator('[data-window-control="minimize"]').click()
+    expect(_shown_windows(page)).to_have_count(0)
+    _taskbar_entry(page, window_id).click()
+    expect(window).to_be_visible()
+
+    window.locator('[data-window-control="menu"]').click()
+    expect(page.locator('[data-menu-row="close"]')).to_be_visible()
+    page.keyboard.press("Escape")
+    expect(page.locator('[data-menu-row="close"]')).to_have_count(0)
+
+    # Reload reloads the page: what was typed into it is gone.
+    _page_frame(page, window_id).fill("#held", "typed before")
+    window.locator('[data-window-control="refresh"]').click()
+    wait_for(
+        lambda: _page_frame(page, window_id).input_value("#held") == "",
+        timeout=15.0,
+        poll_interval=0.2,
+        error_message="the reload control never reloaded the page",
+    )
+
+    window.locator('[data-window-control="close"]').click()
+    expect(_shown_windows(page)).to_have_count(0)
+    _wait_for_window_count(themed_e2e_server.base_url, 0)
+
+    # The taskbar's launcher field opens the launcher, and the shortcut opens its app again, under the theme's look.
+    _open_launcher(page)
+    page.keyboard.press("Escape")
+    expect(page.locator("[data-launcher-overlay]")).to_have_count(0)
+    _open_via_shortcut(page, themed_e2e_server)
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_events(
     e2e_server: E2EServer, page: Page
@@ -1826,8 +2025,10 @@ def test_an_independent_pinned_window_keeps_a_path_per_client_and_an_agent_navig
             frame.evaluate("() => window.__navigateTo('/?doc=1')")
             other_frame.evaluate("() => window.__navigateTo('/?doc=2')")
             wait_for(
-                lambda: _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1"
-                and _own_window_path(server.base_url, other_client_id, pinned["id"]) == "/?doc=2",
+                lambda: (
+                    _own_window_path(server.base_url, client_id, pinned["id"]) == "/?doc=1"
+                    and _own_window_path(server.base_url, other_client_id, pinned["id"]) == "/?doc=2"
+                ),
                 timeout=15.0,
                 poll_interval=0.1,
                 error_message="the two clients' own paths never reached their window path files",
@@ -1976,6 +2177,9 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
     "Design your own..." drafts the design prompt into this client's pinned window, which declares a launch path that
     takes a draft, rather than opening a chat."""
     with _running_e2e_server(tmp_path, pin=("avatar", "independent", "floating")) as server:
+        # A new workspace: the bootstrap marked it on its first boot, so the tour may start by itself.
+        server.state_dir.mkdir(parents=True, exist_ok=True)
+        (server.state_dir / OFFER_TOUR_FILENAME).touch()
         _land(page, server)
         entry = _pinned_entry(page)
         expect(entry).to_be_visible(timeout=15000)
@@ -2035,8 +2239,10 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
             )
             assert _get_json(f"{server.base_url}/api/avatars")["selected"] == "jelly-cat"
             wait_for(
-                lambda: _avatar_image_source(entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
-                and _avatar_image_source(other_entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle"),
+                lambda: (
+                    _avatar_image_source(entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
+                    and _avatar_image_source(other_entry).endswith("/api/avatars/jelly-cat/image.svg?mood=idle")
+                ),
                 timeout=10.0,
                 poll_interval=0.1,
                 error_message="the windows never drew the chosen design",
@@ -2697,6 +2903,120 @@ def test_an_apps_links_open_by_the_app_contract_with_no_link_code_of_its_own(tmp
     assert opened_urls == [{"type": "open:url", "client_id": client_id, "url": "http://localhost:3999/preview?x=1"}]
     assert opened_files == [{"type": "open:file", "client_id": client_id, "path": "/home/user/plan 1.md"}]
     assert page.context.pages == [page]
+
+
+# The console script the workspace-layout library installs beside this interpreter.
+_LAYOUT_COMMAND = Path(sys.executable).parent / "workspace-layout"
+
+
+def _run_layout_command(server: E2EServer, args: list[str], agent_id: str, cwd: Path) -> str:
+    """Run ``workspace-layout`` as a chat's agent runs it, against the shell; answers its stdout."""
+    result = subprocess.run(
+        [str(_LAYOUT_COMMAND), *args],
+        capture_output=True,
+        text=True,
+        cwd=str(cwd),
+        env={
+            "PATH": sys.exec_prefix + "/bin:/usr/bin:/bin",
+            "PYTHONPATH": "",
+            "MINDS_WORKSPACE_SERVER_URL": server.base_url,
+            "MINDS_APPS_FILE": str(server.registry_path),
+            "MNGR_AGENT_ID": agent_id,
+        },
+        timeout=15,
+    )
+    assert result.returncode == 0, f"stderr={result.stderr!r}"
+    return result.stdout
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_an_agents_show_of_its_own_chat_lands_in_the_pinned_window(tmp_path: Path, page: Page) -> None:
+    """The command the caretaker and manage-desktop give an agent for surfacing its own chat
+    (``show`` at the chat root on the chat, the chat's own page counting as showing it, the root page repointable)
+    points the user's pinned window at the chat and brings it on screen; a second agent's moves that same window. No
+    second window of the app opens, as an ``open`` at the path would."""
+    sandbox = tmp_path / "sandbox"
+    sandbox.mkdir()
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        expect(_window(page, pinned["id"])).to_be_hidden()
+        # The command targets the one connected client, so the page's socket has to be registered first.
+        wait_for(
+            lambda: any(
+                client["id"] == client_id and client["is_connected"]
+                for client in _get_json(f"{server.base_url}/api/clients")["clients"]
+            ),
+            timeout=15.0,
+            poll_interval=0.1,
+            error_message="the shell never registered the page's socket",
+        )
+
+        for agent_id in ("agent-1", "agent-2"):
+            shown = _run_layout_command(
+                server,
+                [
+                    "show",
+                    _PINNED_APP_NAME,
+                    "--path",
+                    f"/?chat={agent_id}",
+                    "--showing",
+                    f"/{agent_id}",
+                    "--repoint",
+                    "/",
+                ],
+                agent_id,
+                sandbox,
+            )
+            assert shown.strip() == pinned["id"]
+            _wait_for_own_window_path(server.base_url, client_id, pinned["id"], f"/?chat={agent_id}")
+            expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+            expect(_page_frame(page, pinned["id"]).locator("#where")).to_have_text(f"/?chat={agent_id}", timeout=15000)
+        assert [window["id"] for window in _windows(server.base_url) if window["app"] == _PINNED_APP_NAME] == [
+            pinned["id"]
+        ]
+
+
+@pytest.mark.timeout(90, func_only=False)
+def test_an_apps_links_to_the_pinned_page_in_a_state_of_its_own_land_in_the_pinned_window(
+    tmp_path: Path, page: Page
+) -> None:
+    """An app's page linking to the pinned app's home page with a query (as an app embedding the chat links a chat,
+    ``/?chat=<id>``) has the link shown in the pinned window, pointed there for this client and brought on screen; a
+    second such link moves that same window. No second window of the pinned app opens."""
+    first_path = f"{_PINNED_HOME_PATH}?chat=agent-1"
+    second_path = f"{_PINNED_HOME_PATH}?chat=agent-2"
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar")) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        client_id = _client_id(page)
+        window_id = _broadcast_op(server.base_url, "open", {"app": _STUB_APP_NAME, "path": "/", "client": client_id})[
+            "window_id"
+        ]
+        frame = _page_frame(page, window_id)
+        links = (
+            f'<a id="first" href="{server.pinned_url}{first_path}">first</a>'
+            f'<a id="second" href="{server.pinned_url}{second_path}">second</a>'
+        )
+        frame.evaluate(f"() => document.body.insertAdjacentHTML('beforeend', {json.dumps(links)})")
+        expect(_window(page, pinned["id"])).to_be_hidden()
+
+        frame.locator("#first").click()
+        _wait_for_own_window_path(server.base_url, client_id, pinned["id"], first_path)
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+        pinned_frame = _page_frame(page, pinned["id"])
+        expect(pinned_frame.locator("#where")).to_have_text(first_path, timeout=15000)
+
+        # The pinned window may now cover the link, so it is clicked as the page itself would be.
+        frame.locator("#second").evaluate("(link) => link.click()")
+        _wait_for_own_window_path(server.base_url, client_id, pinned["id"], second_path)
+        expect(pinned_frame.locator("#where")).to_have_text(second_path, timeout=15000)
+        page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+        assert [window["id"] for window in _windows(server.base_url) if window["app"] == _PINNED_APP_NAME] == [
+            pinned["id"]
+        ]
+        assert frame.evaluate("() => location.pathname") == "/"
 
 
 @pytest.mark.timeout(90, func_only=False)

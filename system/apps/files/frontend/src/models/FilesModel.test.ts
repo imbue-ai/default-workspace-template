@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fileEntry, folderEntry, memoryStorage } from "../testing/records";
 import * as server from "./server";
+import type { Connections } from "./connections";
 import { FilesModel, compareEntries, type ConflictChoice, type FilesHost } from "./FilesModel";
 
 vi.mock("./server", async (importOriginal) => {
@@ -10,6 +11,7 @@ vi.mock("./server", async (importOriginal) => {
   return {
     ...actual,
     listFolder: vi.fn(),
+    folderStamps: vi.fn(),
     exists: vi.fn(),
     movePath: vi.fn(),
     deletePath: vi.fn(),
@@ -294,5 +296,96 @@ describe("uploading", () => {
     replaceAnswer.value = "replace";
     await model.uploadInto(HOME, [{ file: file("b.txt"), relativePath: "b.txt" }]);
     expect(added.mock.calls[0][1].map((source) => source.relativePath)).toEqual(["b.txt"]);
+  });
+});
+
+describe("reloadShown", () => {
+  it("lists the open folder again, picking up what arrived in it", async () => {
+    const { model } = harness();
+    const arrived = fileEntry(HOME, "from-the-mac.txt", { size: 9, mtime: 4 });
+    vi.mocked(server.listFolder).mockResolvedValue({ exists: true, entries: [...ENTRIES, arrived] });
+
+    model.reloadShown();
+
+    await vi.waitFor(() =>
+      expect(model.visibleEntries(HOME).map((entry) => entry.name)).toContain("from-the-mac.txt"),
+    );
+  });
+
+  it("lists every column's folder again in the column view, and not one already being listed", async () => {
+    const { model } = harness();
+    model.setViewMode("columns");
+    await vi.waitFor(() => expect(model.folderState("/")?.status).toBe("ready"));
+    vi.mocked(server.listFolder).mockClear();
+    vi.mocked(server.listFolder).mockReturnValue(new Promise(() => {}));
+
+    model.reloadShown();
+    model.reloadShown();
+
+    expect(vi.mocked(server.listFolder).mock.calls.map(([folder]) => folder)).toEqual(["/", HOME]);
+  });
+});
+
+describe("reloadChangedShown", () => {
+  it("fetches a folder again only when its stamp is not the one it was fetched at, and never one on a computer", async () => {
+    const { model } = harness();
+    const stamps = vi.mocked(server.folderStamps);
+    const listed = vi.mocked(server.listFolder);
+    listed.mockClear();
+    listed.mockResolvedValue({ exists: true, entries: ENTRIES, stamp: "1:100" });
+
+    // The page came with no stamp, so the first check fetches it again, and that fetch takes the stamp.
+    stamps.mockResolvedValue({ [HOME]: "1:100" });
+    await model.reloadChangedShown();
+    await vi.waitFor(() => expect(listed).toHaveBeenCalledTimes(1));
+    await model.reloadChangedShown();
+    expect(listed).toHaveBeenCalledTimes(1);
+
+    // Something landed in it.
+    stamps.mockResolvedValue({ [HOME]: "1:200" });
+    await model.reloadChangedShown();
+    expect(listed).toHaveBeenCalledTimes(2);
+
+    model.navigate("/__remote/host-mac/Users/kim/notes/");
+    stamps.mockClear();
+    await model.reloadChangedShown();
+    expect(stamps).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadConnections", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("answers a second ask with the read already on its way", async () => {
+    const asked: { url: string; answer: (connections: Connections) => void }[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (url: string) =>
+          new Promise<Response>((resolve) =>
+            asked.push({
+              url,
+              answer: (connections) =>
+                resolve(
+                  new Response(JSON.stringify(connections), { headers: { "Content-Type": "application/json" } }),
+                ),
+            }),
+          ),
+      ),
+    );
+    // Opening the model starts the first read.
+    const { model } = harness();
+    const second = model.loadConnections();
+    expect(asked.map((ask) => ask.url)).toEqual(["/__files/api/connections"]);
+
+    const listed: Connections = { devices: [{ id: "host-mac", name: "Kims-Mac.local" }], shares: [] };
+    asked[0].answer(listed);
+    await second;
+    expect(model.connections).toEqual(listed);
+    // Once it is in, the next ask reads again.
+    const third = model.loadConnections();
+    expect(asked).toHaveLength(2);
+    asked[1].answer(listed);
+    await third;
   });
 });

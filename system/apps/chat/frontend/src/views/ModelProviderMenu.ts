@@ -33,7 +33,8 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getChatById, getProvisionalChat } from "../models/Chats";
+import { getChatById, getProvisionalChat, setLaunchChoice } from "../models/Chats";
+import type { ProvisionalChat } from "../models/Chats";
 import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { effortInEffect, ensureHarnessCatalogs, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
@@ -101,6 +102,7 @@ import { accountRow, emptyAccountRowState } from "./accountRow";
 import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import * as css from "./modelProviderMenuStyles";
 import { createSlidingMenuTrack } from "./slidingMenuTrack";
+import { FIELD_PART, MENU_ITEM_PART, MENU_SEPARATOR_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 /** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
  *  scriptable form, so the menu cannot drive it -- and says where the user can. */
@@ -160,8 +162,7 @@ function loadingChip(): m.Vnode {
   return m("span", { class: `model-selector-loading ${css.PROVISIONAL_CHIP}` }, "Loading…");
 }
 
-/** The chip for a chat with no agent yet: the account it starts on. With no agent there is no
- *  model to name or change. */
+/** The chip for a chat with no agent yet that cannot take a choice: the account it starts on. */
 function provisionalChip(chatId: string): m.Vnode {
   const provisional = getProvisionalChat(chatId);
   if (provisional === undefined || !areAccountsLoaded()) return loadingChip();
@@ -461,6 +462,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         role: "switch",
         "aria-checked": sourceView.on ? "true" : "false",
         class: menuRowClass({ extra: "text-primary" }),
+        ...MENU_ITEM_PART,
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
           menu.close();
@@ -488,6 +490,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       {
         type: "button",
         class: menuRowClass({ extra: "text-primary" }),
+        ...MENU_ITEM_PART,
         ...hoverTooltipAttrs(opts.tooltip, "above"),
         onclick: (event: MouseEvent) => {
           event.stopPropagation();
@@ -578,7 +581,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       ),
       // The shared menu's own rule, role and all: this submenu's content is free-form, so it
       // borrows the chrome instead of getting a `divider` row.
-      m("div", { role: "separator", class: menuDividerClass() }),
+      m("div", { role: "separator", class: menuDividerClass(), ...MENU_SEPARATOR_PART }),
       state.mode === "auto"
         ? m("label", { class: css.FAST_LIMIT_ROW }, [
             "Turn off after",
@@ -590,6 +593,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
                 min: 1,
                 step: 1,
                 class: inputClass({ extra: css.FAST_LIMIT_INPUT_EXTRA }),
+                ...FIELD_PART,
                 "aria-label": "Fast mode turn limit",
                 value: limitDraft ?? String(limit),
                 disabled: settings === null,
@@ -722,7 +726,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         { class: "autocompact-help px-3 py-1.5 type-helper text-faint" },
         "Saves ~50% by compacting right before the cache expires.",
       ),
-      m("div", { role: "separator", class: menuDividerClass() }),
+      m("div", { role: "separator", class: menuDividerClass(), ...MENU_SEPARATOR_PART }),
       newChatsDefaultRow({
         markerClass: "autocompact-default",
         groupLabel: "Auto-compact for new chats",
@@ -840,6 +844,74 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     ];
   }
 
+  /** The menu of a chat with no agent yet: the provider and model it starts on, which take effect as it
+   *  launches, or as its create lands. A failed create, or one with no account to run on, keeps the plain chip. */
+  function provisionalMenu(chatId: string, provisional: ProvisionalChat): m.Children {
+    const account = areAccountsLoaded() ? accountForFirstSend(provisional.account_id) : null;
+    if (provisional.phase === "failed" || account === null) return provisionalChip(chatId);
+    const options = (getHarnessCatalog(account.harness)?.options ?? []).filter((option) => option.in_picker);
+    const picked = options.find((option) => option.id === provisional.model_pick?.model_id) ?? null;
+    const choose = (accountId: string, pick: ModelIdentity | null): void => {
+      menu.close();
+      setLaunchChoice(chatId, accountId, pick).catch((err: unknown) =>
+        console.error(`Could not choose how chat ${chatId} starts: ${String(err)}`),
+      );
+    };
+    const trigger = m(
+      "button",
+      {
+        type: "button",
+        class: `model-selector-trigger model-selector-provisional ${css.TRIGGER}`,
+        ...menu.triggerAttrs(),
+        ...hoverTooltipAttrs(`This chat starts on ${account.label}. Change model or provider`, "above"),
+      },
+      m("span", picked?.label ?? account.provider),
+    );
+    if (!menu.isOpen()) return trigger;
+    const rows: MenuRow[] = [
+      {
+        kind: "submenu",
+        key: "providers",
+        label: "Provider",
+        value: account.provider,
+        sub: account.harness_label,
+        content: () =>
+          m(
+            "div",
+            { class: css.SUBMENU_SCROLL },
+            getAccounts().map((row) =>
+              accountRow({
+                row,
+                isCurrent: row.id === account.id,
+                isDefault: row.id === getDefaultAccountId(),
+                rowClass: row.id === account.id ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
+                onSelect: () => (row.id === account.id ? closeSubmenu() : choose(row.id, null)),
+                state: rowState,
+              }),
+            ),
+          ),
+      },
+      { kind: "divider" },
+      {
+        kind: "submenu",
+        key: "model",
+        label: "Model",
+        value: picked?.label ?? "Default",
+        truncateValue: "start",
+        maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
+        rows: () =>
+          options.map((option) => ({
+            kind: "action" as const,
+            key: `model-${option.id}`,
+            label: option.label,
+            trailing: option.id === picked?.id ? m.trust(icon("check", { size: 14 })) : undefined,
+            onSelect: () => choose(account.id, { model_id: option.id, effort: startingEffort(option), fast: false }),
+          })),
+      },
+    ];
+    return [trigger, menu.view(rows)];
+  }
+
   /** The Model row's submenu: the models this account can actually use. */
   function modelSubmenu(
     chatId: string,
@@ -867,6 +939,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
             m("span", { class: css.SEARCH_ICON }, m.trust(icon("search", { size: 13 }))),
             m("input", {
               class: inputClass({ extra: css.SEARCH_INPUT_EXTRA }),
+              ...FIELD_PART,
               type: "text",
               placeholder: "Search models",
               value: modelQuery,
@@ -944,7 +1017,10 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       // loaded; the live choice may not have resolved (every harness passes through this
       // before its first model read, and opencode never leaves it); or the live model may
       // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
-      if (chat === undefined) return provisionalChip(chatId);
+      if (chat === undefined) {
+        const provisional = getProvisionalChat(chatId);
+        return provisional === undefined ? loadingChip() : provisionalMenu(chatId, provisional);
+      }
       // A chat whose account was signed out runs on nothing until a provider is chosen for it, and
       // the composer's notice in its place says so and offers the choice: the model it last ran
       // stays out of the row rather than reading as current. A phone keeps its settings button.

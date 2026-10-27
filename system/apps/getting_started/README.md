@@ -1,17 +1,18 @@
 # getting-started
 
 The Getting Started app: the ways into the workspace, on one page a window of the desktop
-frames at the app's own origin (`docs/system/blueprint/launcher-and-getting-started/`). Top
-to bottom: a search field over its own content; "Bring in your chats", a card offering to
-copy the user's Claude and ChatGPT conversations into the workspace (until it is put away);
+frames at the app's own origin (`docs/system/blueprint/launcher-and-getting-started/`).
+Top to bottom: a search field over its own content; "Bring in your chats", a card offering to copy
+the user's Claude and ChatGPT conversations into the workspace (until it is put away);
 "Start something", eight intents two to a row (four at first, the rest behind "See more"),
-each with a seeded first message; "Start from a template", the published template catalog by
-shelf, with a detail page (the drawing, the write-up, what the template needs, its
-repository) whose two actions adopt the template into this workspace or have a new workspace
-made from it. Every tile and both actions start a chat through one contract message,
-`shell:start-with-text`, which the desktop runs as its launcher's primary text action; the
-page names no app, and the Getting Started window stays where it is while the chat comes up
-beside it.
+each with a seeded first message; "Start from a template", the published template catalog by shelf, with a detail page (the drawing,
+the write-up, what the template needs, its repository) whose two actions adopt the template
+into this workspace or have a new workspace made from it. Every tile and both actions start a
+chat through one contract message, `shell:start-with-text`, which the desktop runs as its
+launcher's primary text action; the page names no app, and the Getting Started window stays
+where it is while the chat comes up beside it. The page wears the workspace's theme: it is built
+from the shared components and design tokens, and declares one part of its own, `start-glyph`
+(a Start tile's two-tone glyph), which a theme may recolor (`[theming]` in `app.toml`).
 
 It runs as the `getting-started` supervisord program (`system/supervisord.conf.d/getting-started.conf`)
 from its own uv tool environment (`system/scripts/build_workspace.sh`), serving on
@@ -40,6 +41,8 @@ from its own uv tool environment (`system/scripts/build_workspace.sh`), serving 
   recorded in `data/.state/getting-started/chat_import.json`.
 - `GET /_static/app_contract.js`: the shell's browser-side contract module, served from this
   origin as every app serves it.
+- `GET /_static/themes/<path>`: the workspace's theme bundles and the files they load, served
+  from this origin as every themed app serves them (`workspace_themes.flask_routes`).
 
 On startup it registers `app.toml` and its port through `forward_port.py`. It opens no
 window of its own: a new workspace opens on the welcome chat, and the desktop's tour

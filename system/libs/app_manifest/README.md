@@ -47,7 +47,11 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   a throwaway instance boots, with named free ports, a scratch copy of the
   directories it names, and placeholders in its command, args, and env;
   absent, it is `scaffold_preview_spec(name)`, the build-app convention, so
-  every app previews by construction), `load_manifest(path, repo_root=None)`
+  every app previews by construction), `AppTheming` (the optional `[theming]`
+  table: how far the app takes part in workspace themes, a `ThemingMode` of
+  `tokens` (the default), `parts`, or `none`, and for `parts` the `AppPart`s
+  a theme may style, each an `AppPartName` unique within the app and a
+  description), `load_manifest(path, repo_root=None)`
   (reads, validates, checks the icon file exists beside the manifest, and --
   against the repo root, given or derived from a `system/apps/<package>/app.toml`
   layout -- that every reference exists, sits neither in the app's own

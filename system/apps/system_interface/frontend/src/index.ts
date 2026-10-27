@@ -36,8 +36,12 @@ import { initEmbedderRelay, setEmbedderAppMessageHandler } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
-import { followRenderModes } from "./theme/metrics";
+import { wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
+import { currentRenderModes, followRenderModes, readThemeMetrics } from "./theme/metrics";
+import { afterPageLoad } from "./theme/pageLoad";
 import { App, BACKDROP_AREA_ATTRIBUTE } from "./views/App";
+import { followShownTheme } from "./views/shownTheme";
+import { setIconTheme } from "./views/themeIcons";
 
 /** Rewrite the page's URL with its query string put through ``strip``, leaving the path, the hash, and the
  *  history entry as they are: how a boot-time parameter is removed once it has been read. */
@@ -125,6 +129,16 @@ function bootstrap(): void {
   );
   if (store === null) throw new Error("the render modes never reported");
   const desktopStore: DesktopStore = store;
+  followShownTheme(desktopStore, {
+    wear: (theme, isRemembered) => wearTheme(theme, document, { isRemembered }),
+    // A theme the boot script put on is already worn, and the page's load event is what waits for its stylesheet.
+    afterLoad: afterPageLoad,
+    takeMetrics: () => {
+      desktopStore.setThemeMetrics(readThemeMetrics(readStyle(root)), currentRenderModes(root));
+      m.redraw();
+    },
+    setIconTheme,
+  });
   const gestures = new PointerGestureSource();
   // Say this window is here (and learn who it is) for as long as it stays visible.
   startPresenceHeartbeat();
@@ -150,6 +164,7 @@ function bootstrap(): void {
       opensExternalLinks: message.opensExternalLinks === true,
       opensCustomSchemeLinks: message.opensCustomSchemeLinks === true,
     });
+    desktopStore.setOpensLocalFiles(message.opensLocalFiles === true);
   });
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;
