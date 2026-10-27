@@ -85,6 +85,7 @@ from imbue.chat.harnesses.pty_auth import extract_wrapped_value
 from imbue.chat.harnesses.pty_auth import safe_close
 from imbue.chat.harnesses.pty_auth import safe_terminate
 from imbue.chat.harnesses.pty_auth import spawn_pty
+from imbue.chat.harnesses.pty_auth import take_expect_output
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.chat.harnesses.sign_in_relay import BROWSER_ENV_VAR
 from imbue.chat.harnesses.sign_in_relay import BROWSER_SHIM_RELATIVE_PATH
@@ -522,7 +523,7 @@ class AuthFlowService:
             ):
                 self._fail_locked(session, "The sign-in screen did not appear as expected.")
                 raise FlowError(session.detail or "unexpected screen")
-            session.output += (session.process.before or "") + (session.process.after or "")
+            session.output += take_expect_output(session.process)
         else:
             # No anchor to expect, so wait for the screen itself to stop changing. Better
             # than a fixed pause: a CLI that draws fast is not made slow, and one that
@@ -559,7 +560,7 @@ class AuthFlowService:
             )
             if 1 <= index <= len(failure_patterns):
                 # Report the CLI's own words rather than a timeout it did not have.
-                session.output += (session.process.before or "") + (session.process.after or "")
+                session.output += take_expect_output(session.process)
                 _, copy = method.failures[index - 1]
                 match = re.search(failure_patterns[index - 1], session.output)
                 detail = copy.replace("{1}", match.group(1)) if match is not None and match.groups() else copy
@@ -568,7 +569,7 @@ class AuthFlowService:
             if index != 0:
                 self._fail_locked(session, "Timed out waiting for the sign-in details.")
                 raise FlowError(session.detail or "no value")
-            session.output += (session.process.before or "") + (session.process.after or "")
+            session.output += take_expect_output(session.process)
         # A URL is drained until it can be extracted -- the CLI animates forever afterwards,
         # so there is no quiet gap to wait for. A minted token is drained to process exit,
         # because the CLI prints it and leaves.

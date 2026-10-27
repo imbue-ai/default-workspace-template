@@ -805,6 +805,7 @@ class FakePexpectProcess:
         self.timeout: float | None = None
         self.before = ""
         self.after: str = ""
+        self.buffer = ""
 
     def expect(self, _patterns: object, timeout: float | None = None) -> int:
         entry_idx = min(self._call_idx, len(self._script) - 1)
