@@ -801,6 +801,23 @@ describe("the auth-error note's switch link", () => {
       await vi.waitFor(() => expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore));
     });
 
+    it("says the resend didn't go and offers it again when the send fails", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      transcript.sendMessage.mockRejectedValueOnce(new Error("offline"));
+      vi.spyOn(console, "error").mockImplementationOnce(() => {});
+      const bubblesBefore = getOutgoingMessages("chat-1").length;
+
+      findButton(
+        renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"),
+        "Send your message again",
+      )!.attrs.onclick();
+      await vi.waitFor(() => expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore));
+
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+      expect(allText(children)).toContain("That didn't send.");
+      expect(findButton(children, "Try again")).not.toBeNull();
+    });
+
     it("offers nothing to send once the user has written since", () => {
       transcript.events = [PROMPT, authErrorEvent(), { ...PROMPT, event_id: "prompt-2", content: "Never mind" }];
       const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
