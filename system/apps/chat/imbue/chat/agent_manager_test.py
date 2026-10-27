@@ -5854,7 +5854,12 @@ def _agent_reply(is_auth_error: bool = False) -> dict[str, Any]:
             id="every-message-of-the-turn-in-order",
         ),
         pytest.param(
-            [_typed_turn("hi"), _agent_reply(is_auth_error=True), _typed_turn("hi again"), _agent_reply(is_auth_error=True)],
+            [
+                _typed_turn("hi"),
+                _agent_reply(is_auth_error=True),
+                _typed_turn("hi again"),
+                _agent_reply(is_auth_error=True),
+            ],
             ("hi again",),
             id="only-the-last-refused-turn",
         ),
@@ -5904,7 +5909,12 @@ def test_a_sign_in_resends_the_message_its_failure_refused_once_the_agent_is_bac
     seed_agent_state(manager, refused_id, name="Refused-Chat", labels={"account": account})
     seed_agent_state(manager, answered_id, name="Answered-Chat", labels={"account": account})
     transcripts = {
-        refused_id: [_typed_turn("hi"), _agent_reply(), _typed_turn("Who is Aaron?"), _agent_reply(is_auth_error=True)],
+        refused_id: [
+            _typed_turn("hi"),
+            _agent_reply(),
+            _typed_turn("Who is Aaron?"),
+            _agent_reply(is_auth_error=True),
+        ],
         answered_id: [_typed_turn("hi"), _agent_reply()],
     }
     delivered: list[tuple[str, str]] = []
@@ -5946,7 +5956,9 @@ def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
 
     manager.set_handoff_capabilities(
         HandoffCapabilities(
-            ensure_watcher=lambda agent_info: _FixedTranscriptReader([_typed_turn("hi"), _agent_reply(is_auth_error=True)]),
+            ensure_watcher=lambda agent_info: _FixedTranscriptReader(
+                [_typed_turn("hi"), _agent_reply(is_auth_error=True)]
+            ),
             drain_to_composer=lambda agent_info: "",
             deliver=deliver,
         )
