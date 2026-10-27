@@ -4962,15 +4962,19 @@ class AgentManager:
         except OSError as e:
             _loguru_logger.warning("Failed to record the compaction request of agent {}: {}", agent_id, e)
 
+    def _forget_pending_compaction_locked(self, agent_id: str) -> None:
+        """Drop the agent's pending compaction request and the cause it shows. Must be called with the lock held."""
+        del self._compaction_pending_by_agent[agent_id]
+        self._compaction_cause_by_agent.pop(agent_id, None)
+        self._compaction_cause_seen_at_by_agent.pop(agent_id, None)
+
     def withdraw_compaction_request(self, agent_id: str, requested_at: float) -> None:
         """Forget the compaction this chat noted as requested at ``requested_at``, which mngr declined or failed."""
         with self._lock:
             pending = self._compaction_pending_by_agent.get(agent_id)
             if pending is None or pending[0] != requested_at:
                 return
-            del self._compaction_pending_by_agent[agent_id]
-            self._compaction_cause_by_agent.pop(agent_id, None)
-            self._compaction_cause_seen_at_by_agent.pop(agent_id, None)
+            self._forget_pending_compaction_locked(agent_id)
         try:
             (self._get_agent_state_dir(agent_id) / COMPACTION_REQUEST_FILENAME).unlink(missing_ok=True)
         except OSError as e:
@@ -5180,9 +5184,7 @@ class AgentManager:
             return pending
         with self._lock:
             if self._compaction_pending_by_agent.get(agent_id) == pending:
-                del self._compaction_pending_by_agent[agent_id]
-                self._compaction_cause_by_agent.pop(agent_id, None)
-                self._compaction_cause_seen_at_by_agent.pop(agent_id, None)
+                self._forget_pending_compaction_locked(agent_id)
         _loguru_logger.info("autocompact: compaction pending expired agent={} cause={}", agent_id, cause.value)
         return None
 
@@ -5504,9 +5506,7 @@ class AgentManager:
         with self._lock:
             if self._compaction_pending_by_agent.get(agent_id) != pending:
                 return False
-            del self._compaction_pending_by_agent[agent_id]
-            self._compaction_cause_by_agent.pop(agent_id, None)
-            self._compaction_cause_seen_at_by_agent.pop(agent_id, None)
+            self._forget_pending_compaction_locked(agent_id)
         _loguru_logger.info("autocompact: compaction pending ended by a turn agent={} cause={}", agent_id, cause.value)
         return True
 
