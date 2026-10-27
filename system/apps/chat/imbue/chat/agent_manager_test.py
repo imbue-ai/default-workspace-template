@@ -1221,6 +1221,27 @@ def test_a_new_main_chat_is_numbered_when_another_chat_is_already_named_main(
         manager.stop()
 
 
+def test_a_main_chat_gone_with_only_a_helper_chat_listed_is_replaced_by_a_new_main_chat(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A helper never takes the main chat, but a listed helper means the listing is not empty: the gone main chat
+    is replaced at once rather than left without a main chat."""
+    manager = AgentManager.build(broadcaster, main_chat=_main_chat_store_naming_a_gone_chat(tmp_path))
+    try:
+        seed_agent_state(manager, "agent-helper", name="Chat-1", labels={"agent_created": "true"})
+        manager.note_agent_list_known()
+
+        new_main_id = manager.get_main_chat_id()
+
+        assert new_main_id is not None
+        assert new_main_id != ChatId("agent-helper")
+        new_main = manager.get_provisional_chat(new_main_id)
+        assert new_main is not None
+        assert new_main.name == MAIN_CHAT_NAME
+    finally:
+        manager.stop()
+
+
 def test_a_main_chat_pointer_left_with_no_chat_at_all_opens_no_new_chat_so_the_welcome_chat_can_be_seeded(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

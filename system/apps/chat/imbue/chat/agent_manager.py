@@ -1626,7 +1626,7 @@ class AgentManager:
             candidates = self._main_chat_candidates_locked()
             if stored is not None and any(candidate.chat_id == stored for candidate in candidates):
                 return stored
-            if stored is not None and not candidates:
+            if stored is not None and not candidates and not self._listed_chats_locked():
                 return None
             if stored is not None:
                 replacement = self._mint_main_chat_locked()
