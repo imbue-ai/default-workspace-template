@@ -302,10 +302,10 @@ def main() -> None:
     # SSE streaming.
     server = make_threaded_server(config.chat_host, config.chat_port, application)
 
-    # Served before the agent manager starts: its first read of the agent list asks mngr about
-    # every agent, which takes the better part of a minute on a loaded workspace with many chats,
-    # and a page that connects first is told the list is not known yet rather than refused. The
-    # start stays on the main thread so a failure in it still ends the process for supervisord.
+    # Served before the agent manager starts, whose first read of the agent list asks mngr about
+    # every agent: a page that connects first is told the list is not known yet rather than
+    # refused. The start stays on the main thread so a failure in it still ends the process for
+    # supervisord.
     serving = threading.Thread(target=server.serve_forever, name="chat-server", daemon=True)
     serving.start()
 

@@ -18,11 +18,10 @@ claude's ``settings.json`` before first launch -- is caught the moment it appear
 Directories that do not exist yet are retried on each loop, mirroring the codex
 watcher's lazy observer start.
 
-Every watcher of one app watches through one :class:`SharedWatchObserver`. A watchdog
-observer is a thread of its own plus two threads per watched directory, and every
-claude chat on an account watches that account's whole projects tree, so a watcher with
-an observer of its own cost each chat several threads (each holding most of a megabyte
-of stack resident in a sandboxed workspace) to watch a tree another chat already watched.
+Every watcher of one app watches through one :class:`SharedWatchObserver`, so watchers
+of the same directory share its OS watch and watchdog's threads (one per observer, two per
+watched directory): every claude chat on an account watches that account's whole projects
+tree.
 """
 
 from __future__ import annotations

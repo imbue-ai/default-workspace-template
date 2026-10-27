@@ -1863,8 +1863,7 @@ def test_an_agent_that_is_not_running_contributes_no_pane(tmp_path: Path) -> Non
 
 def test_a_stopped_agent_is_never_asked_for_its_pane(tmp_path: Path) -> None:
     """A stopped agent's tmux session is gone, so asking mngr for its pane only
-    spends a CLI start on a failure; a report from a workspace of mostly stopped
-    agents made dozens of them."""
+    spends a CLI start on a failure."""
     stub = _write_mngr_stub(
         tmp_path,
         agents=("awake", "asleep"),
@@ -1883,9 +1882,8 @@ def test_a_stopped_agent_is_never_asked_for_its_pane(tmp_path: Path) -> None:
 
 
 def test_chats_are_read_several_at_a_time(tmp_path: Path) -> None:
-    """Each read is a whole mngr CLI start, so one after another they cost a
-    workspace with dozens of chats its collection budget; every read here finds
-    another in flight beside it."""
+    """Each read is a whole mngr CLI start, so reads overlap: every read here
+    finds another in flight beside it."""
     names = ("first", "second", "third", "fourth")
     rendezvous = tmp_path / "rendezvous"
     rendezvous.mkdir()

@@ -71,9 +71,8 @@ SCAN_GATE_DIR = WORKSPACE_DIR + "/.agents/skills/publish-template/scripts"
 # them. Named here rather than inline so a test can point it at a stub.
 MNGR_BINARY = "mngr"
 
-# How many mngr calls run at once. Each is a whole CLI start, which is most of
-# what one costs, and a report makes one or two per agent: run one after another,
-# a workspace with dozens of agents spent its whole collection budget on them.
+# How many mngr calls run at once: each is a whole CLI start, and a report makes
+# one or two per agent.
 MNGR_CALL_CONCURRENCY = 4
 
 # The lifecycle state of an agent whose tmux session is gone, so it has no pane
