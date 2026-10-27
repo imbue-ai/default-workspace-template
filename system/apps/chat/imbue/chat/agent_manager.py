@@ -1670,7 +1670,7 @@ class AgentManager:
                 else self._chat_title_locked(previous)
             )
             former_name = (
-                former_main_chat_name(self._taken_names_locked())
+                former_main_chat_name(self._numbered_names_locked())
                 if previous_title is not None and is_main_chat_name(previous_title)
                 else None
             )
@@ -3683,13 +3683,20 @@ class AgentManager:
                 taken.append(provisional.name)
         return taken
 
+    def _numbered_names_locked(self) -> list[str]:
+        """The names a new "Chat N" is numbered past: every taken name, and every title shown ahead of the rename
+        that will make it a chat's name (a former main chat's "Chat N (was: Main)" while mngr renames it). Lock
+        held."""
+        return [*self._taken_names_locked(), *self._title_override_by_chat.values()]
+
     def _mint_display_name_locked(self, explicit_name: str) -> str:
         """The display name a new chat gets: ``explicit_name`` when it is free, else the first free
         "Chat N". Raises ``AgentNameConflictError`` for a name already in use. Lock held."""
-        taken_names = self._taken_names_locked()
         if not explicit_name:
-            return first_free_numbered_name(AUTO_NAME_WORD, with_former_main_chat_numbers(taken_names))
-        if is_name_conflict(explicit_name, taken_names):
+            return first_free_numbered_name(
+                AUTO_NAME_WORD, with_former_main_chat_numbers(self._numbered_names_locked())
+            )
+        if is_name_conflict(explicit_name, self._taken_names_locked()):
             raise AgentNameConflictError(f"A chat named '{explicit_name}' already exists; pick another name")
         return explicit_name
 

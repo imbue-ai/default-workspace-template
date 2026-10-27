@@ -1404,6 +1404,31 @@ def test_a_new_chat_skips_the_number_a_former_main_chat_holds(broadcaster: WebSo
         manager.stop()
 
 
+def test_a_new_chat_skips_the_number_a_former_main_chat_is_being_renamed_to(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """While mngr renames the former main chat, its new name is only shown; a chat made then is numbered past it."""
+    release = tmp_path / "release-rename"
+    held_mngr = tmp_path / "held-mngr"
+    held_mngr.write_text(f"#!/bin/sh\nwhile [ ! -e '{release}' ]; do sleep 0.05; done\n")
+    held_mngr.chmod(0o755)
+    manager = AgentManager.build(broadcaster, mngr_binary=str(held_mngr))
+    try:
+        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
+        seed_agent_state(manager, "agent-trip", name="Trip-plan", labels={"display_name": "Trip plan"})
+        manager.note_agent_list_known()
+        assert manager.make_main_chat(ChatId("agent-main"))
+        assert manager.make_main_chat(ChatId("agent-trip"))
+        assert _shown_title(manager, "agent-main") == "Chat 1 (was: Main)"
+
+        minted = manager.mint_awaiting_chat("")
+
+        assert minted.name == "Chat 2"
+    finally:
+        release.touch()
+        manager.stop()
+
+
 def test_making_another_chat_the_main_chat_leaves_a_name_the_user_chose_on_the_old_one(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
