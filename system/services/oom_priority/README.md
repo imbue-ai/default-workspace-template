@@ -366,7 +366,7 @@ It lists:
     and `start_time`. mngr's own `idle_seconds` is not used, because it also
     counts the host's SSH activity.
 
-  Its memory is the summed RSS of its process trees. The trees are rooted at the
+  Its memory is the summed anonymous memory of its process trees (see below). The trees are rooted at the
   `pid` mngr reports and at every live pid the agent-pid registry holds for it
   (codex registers two).
 - **Apps the workspace may stop**, from the shell's `GET /api/inventory` joined
@@ -376,10 +376,10 @@ It lists:
   left out: its service holds almost nothing and its Chromium processes have
   their own section below. Each row carries how many windows show the app, which
   is what decides whether stopping it takes something off the user's screen, and
-  its memory is the summed RSS of its program's process tree.
+  its memory is the summed anonymous memory of its program's process tree.
 - **Browsers no window shows**, from the browser service's `GET /browsers`. A
   candidate is a `running` browser that no window names, according to the same
-  inventory document. Its memory is the summed RSS of the Chromium
+  inventory document. Its memory is the summed anonymous memory of the Chromium
   processes on its profile and their children.
 
 The browser service stops a browser on its own once a window has shown it and
@@ -389,10 +389,13 @@ browser it starts, so one reaches this list only when that open failed (no
 shell answered) or something started the browser through the service's API
 directly.
 
-The sums count shared pages once per process, so they overstate what stopping
-frees, most of all for Chromium, whose processes share most of their memory: a
-browser whose processes summed to 2.8 GB freed about 460 MB when stopped. Read
-them as a ranking, and read the free memory again after stopping something.
+Each figure sums the processes' anonymous memory (the `Anonymous` lines of
+`smaps_rollup`, or of `smaps` under gVisor, which has no rollup), the memory
+earlyoom scores by. It leaves out the binaries and libraries every process maps,
+which resident size counts in each of them: under gVisor an agent harness's
+`VmRSS` reads up to ten times its anonymous memory. Pages a process still shares
+with its parent after a fork count in both, so a browser can read somewhat above
+what stopping it frees; read the free memory again after stopping something.
 
 Each source is read on its own. When `mngr list`, the browser service, the
 shell or supervisord cannot be read, that section says so, and its candidates are

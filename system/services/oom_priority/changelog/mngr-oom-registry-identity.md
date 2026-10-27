@@ -1,0 +1,5 @@
+- The agent-pid registry now records each agent process's start time, and counts an entry only while its pid is still that process: not a thread of another process, and started at the recorded time. Under gVisor pids are reused within hours and `/proc/<id>` also resolves for a thread, so a leftover entry could point the chat app's prioritizer at an unrelated process. On one workspace it marked the chat app itself as an abandoned chat (`oom_score_adj` 800), and earlyoom shed it during an update. Entries written before this change keep only the thread check until their agent next starts.
+
+- `lookup_pids_by_agent_id` returns every live process of an agent, so both of a codex chat's processes (its TUI and its app-server) get re-tagged rather than only one.
+
+- The memory candidates command reports each candidate's anonymous memory (from `smaps_rollup`, or `smaps` under gVisor) instead of summed `VmRSS`. Under gVisor `VmRSS` counts every mapped binary in full and read about two times too high for a claude chat, three for a codex TUI and ten for codex's helper. The JSON field is now `anonymous_kib`.

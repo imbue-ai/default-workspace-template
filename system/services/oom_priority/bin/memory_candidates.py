@@ -16,14 +16,14 @@ It joins four sources, each read independently so one failing leaves the others 
   (``user_created``) or worker (``agent_created``) whose state is ``WAITING``, whose chat is not
   busy, and whose latest activity is at least ``IDLE_AFTER_SECONDS`` old. A chat is busy while a
   background task will wake its agent, which ``chat_background_tasks`` reads from the chats'
-  marker files. Its memory is the summed RSS of its process trees, rooted at the pid mngr
+  marker files. Its memory is the summed anonymous memory of its process trees, rooted at the pid mngr
   reports plus every live pid the agent-pid registry holds for it;
 - apps, from the shell's ``GET /api/inventory`` joined to the programs supervisord is running: an
   app the workspace is allowed to stop (not critical, not internal, and with a program), with how
   many windows show it, since that is what decides whether stopping it takes something off the
-  user's screen. Its memory is the summed RSS of its program's process tree;
+  user's screen. Its memory is the summed anonymous memory of its program's process tree;
 - browsers, from the browser service's ``GET /browsers``: a ``running`` browser that no desktop
-  window shows, per the same inventory document. Its memory is the summed RSS of every
+  window shows, per the same inventory document. Its memory is the summed anonymous memory of every
   Chromium process on its profile.
 
 A source that cannot be read is reported as unknown (``null`` candidates plus a note), never as
@@ -132,7 +132,7 @@ INVENTORY_ROUTE: Final[str] = "/api/inventory"
 MEMINFO_PREFERRED_FIELD: Final[str] = "MemAvailable"
 MEMINFO_FALLBACK_FIELD: Final[str] = "MemFree"
 MEMINFO_TOTAL_FIELD: Final[str] = "MemTotal"
-RSS_STATUS_FIELD: Final[str] = "VmRSS"
+ANONYMOUS_SMAPS_FIELD: Final[str] = "Anonymous"
 KIB_PER_MIB: Final[int] = 1024
 README_SECTION: Final[str] = (
     'system/services/oom_priority/README.md, "Memory candidates"'
@@ -183,7 +183,7 @@ class AgentCandidate(NamedTuple):
     last_activity: datetime
     idle_seconds: float
     pids: tuple[int, ...]
-    rss_kib: int | None
+    anonymous_kib: int | None
 
 
 class ShellAnswer(NamedTuple):
@@ -215,7 +215,7 @@ class AppCandidate(NamedTuple):
     window_count: int
     stops_when_no_windows: bool
     pids: tuple[int, ...]
-    rss_kib: int | None
+    anonymous_kib: int | None
 
 
 class BrowserCandidate(NamedTuple):
@@ -226,7 +226,7 @@ class BrowserCandidate(NamedTuple):
     tab_count: int
     active_url: str | None
     pids: tuple[int, ...]
-    rss_kib: int | None
+    anonymous_kib: int | None
 
 
 class AgentSection(NamedTuple):
@@ -327,34 +327,42 @@ def read_free_memory(
 # Process memory
 
 
-def read_rss_kib(pid: int, proc_dir: Path) -> int | None:
-    """A process's resident set size from ``/proc/<pid>/status``, or None when it is gone or unreadable."""
-    try:
-        text = (proc_dir / str(pid) / "status").read_text()
-    except OSError:
-        return None
-    for line in text.splitlines():
-        key, _, rest = line.partition(":")
-        fields = rest.split()
-        if key == RSS_STATUS_FIELD and fields and fields[0].isdigit():
-            return int(fields[0])
+def read_anonymous_kib(pid: int, proc_dir: Path) -> int | None:
+    """A process's anonymous memory, the ``Anonymous`` lines of ``/proc/<pid>/smaps_rollup`` (or of
+    ``smaps``, which is all gVisor provides) summed; None when it is gone or unreadable.
+
+    This is the memory stopping the process frees and the figure earlyoom scores by. Under gVisor
+    ``VmRSS`` counts the whole span of every mapping the process has touched, so it reads up to
+    ten times higher for an agent's harness, which maps a large binary.
+    """
+    for name in ("smaps_rollup", "smaps"):
+        try:
+            text = (proc_dir / str(pid) / name).read_text()
+        except OSError:
+            continue
+        total = 0
+        for line in text.splitlines():
+            key, _, rest = line.partition(":")
+            fields = rest.split()
+            if key == ANONYMOUS_SMAPS_FIELD and fields and fields[0].isdigit():
+                total += int(fields[0])
+        return total
     return None
 
 
-def process_trees_rss_kib(root_pids: Iterable[int], proc_dir: Path) -> int | None:
-    """Summed RSS of the roots and all their descendants, each process counted once.
+def process_trees_anonymous_kib(root_pids: Iterable[int], proc_dir: Path) -> int | None:
+    """Summed anonymous memory of the roots and all their descendants, each process counted once.
 
-    RSS counts shared pages in every process that maps them, so the sum overstates what stopping
-    them frees; it is a ranking, not a promise. None when no process in the trees could be read.
+    None when no process in the trees could be read.
     """
     pids: set[int] = set()
     for root in root_pids:
         pids.add(root)
         pids.update(list_descendant_pids(root, proc_dir=proc_dir))
     readings = [
-        rss
-        for rss in (read_rss_kib(pid, proc_dir) for pid in sorted(pids))
-        if rss is not None
+        anonymous
+        for anonymous in (read_anonymous_kib(pid, proc_dir) for pid in sorted(pids))
+        if anonymous is not None
     ]
     return sum(readings) if readings else None
 
@@ -493,14 +501,14 @@ def idle_agent_candidates(
                 last_activity=agent.last_activity,
                 idle_seconds=idle_seconds,
                 pids=tuple(sorted(root_pids)),
-                rss_kib=process_trees_rss_kib(root_pids, proc_dir)
+                anonymous_kib=process_trees_anonymous_kib(root_pids, proc_dir)
                 if root_pids
                 else None,
             )
         )
     return sorted(
         candidates,
-        key=lambda c: (c.rss_kib is None, -(c.rss_kib or 0), -c.idle_seconds),
+        key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0), -c.idle_seconds),
     )
 
 
@@ -639,10 +647,10 @@ def unviewed_browser_candidates(
                 if isinstance(active_url, str) and active_url
                 else None,
                 pids=pids,
-                rss_kib=process_trees_rss_kib(pids, proc_dir) if pids else None,
+                anonymous_kib=process_trees_anonymous_kib(pids, proc_dir) if pids else None,
             )
         )
-    return sorted(candidates, key=lambda c: (c.rss_kib is None, -(c.rss_kib or 0)))
+    return sorted(candidates, key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0)))
 
 
 def _fetch(fetch_json: FetchJson, url: str) -> tuple[Any, str | None]:
@@ -739,10 +747,10 @@ def stoppable_app_candidates(
                 window_count=windows.count_by_app.get(name, 0),
                 stops_when_no_windows=bool(app.get("stop_when_no_windows")),
                 pids=(pid,),
-                rss_kib=process_trees_rss_kib((pid,), proc_dir),
+                anonymous_kib=process_trees_anonymous_kib((pid,), proc_dir),
             )
         )
-    return sorted(candidates, key=lambda c: (c.rss_kib is None, -(c.rss_kib or 0)))
+    return sorted(candidates, key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0)))
 
 
 def collect_app_section(sources: Sources, shell: ShellAnswer) -> AppSection:
@@ -830,7 +838,7 @@ def report_to_json(report: Report) -> dict[str, object]:
                     "last_activity": _iso(agent.last_activity),
                     "idle_seconds": round(agent.idle_seconds),
                     "pids": list(agent.pids),
-                    "rss_kib": agent.rss_kib,
+                    "anonymous_kib": agent.anonymous_kib,
                 }
                 for agent in agents
             ],
@@ -847,7 +855,7 @@ def report_to_json(report: Report) -> dict[str, object]:
                     "window_count": app.window_count,
                     "stop_when_no_windows": app.stops_when_no_windows,
                     "pids": list(app.pids),
-                    "rss_kib": app.rss_kib,
+                    "anonymous_kib": app.anonymous_kib,
                 }
                 for app in apps
             ],
@@ -863,7 +871,7 @@ def report_to_json(report: Report) -> dict[str, object]:
                     "tab_count": browser.tab_count,
                     "active_url": browser.active_url,
                     "pids": list(browser.pids),
-                    "rss_kib": browser.rss_kib,
+                    "anonymous_kib": browser.anonymous_kib,
                 }
                 for browser in browsers
             ],
@@ -932,7 +940,7 @@ def render_table(report: Report) -> str:
                     agent.last_activity.astimezone(timezone.utc).strftime(
                         "%Y-%m-%d %H:%M"
                     ),
-                    _mib(agent.rss_kib),
+                    _mib(agent.anonymous_kib),
                 )
                 for agent in agents
             ],
@@ -954,7 +962,7 @@ def render_table(report: Report) -> str:
                     app.display_name,
                     app.program,
                     str(app.window_count),
-                    _mib(app.rss_kib),
+                    _mib(app.anonymous_kib),
                 )
                 for app in apps
             ],
@@ -976,7 +984,7 @@ def render_table(report: Report) -> str:
                     browser.controller,
                     str(browser.tab_count),
                     browser.active_url or "-",
-                    _mib(browser.rss_kib),
+                    _mib(browser.anonymous_kib),
                 )
                 for browser in browsers
             ],
@@ -985,7 +993,7 @@ def render_table(report: Report) -> str:
 
     lines += [
         "",
-        "Memory is summed RSS, so pages shared between processes count more than once.",
+        "Memory is each process's own anonymous memory, summed: roughly what stopping it frees.",
         f"Nothing was stopped. Stopping what the user approves: {README_SECTION}.",
     ]
     return "\n".join(lines) + "\n"

@@ -35,16 +35,24 @@ _PROFILE_ROOT = "/home/user/.mngr/browser-profiles"
 def _fake_process(
     proc_dir: Path,
     pid: int,
-    rss_kib: int,
+    anonymous_kib: int,
     children: Sequence[int] = (),
     argv: Sequence[str] = ("python3",),
 ) -> None:
-    """One process in the fake ``/proc``: its status (VmRSS), children, and argv."""
+    """One process in the fake ``/proc``: its ``smaps`` (two mappings whose anonymous memory sums
+    to ``anonymous_kib``), its status (a VmRSS three times that, as gVisor inflates it), children,
+    and argv."""
     task_dir = proc_dir / str(pid) / "task" / str(pid)
     task_dir.mkdir(parents=True)
     (task_dir / "children").write_text(" ".join(str(child) for child in children) + " ")
     (proc_dir / str(pid) / "status").write_text(
-        f"Name:\t{Path(argv[0]).name}\nVmRSS:\t   {rss_kib} kB\n"
+        f"Name:\t{Path(argv[0]).name}\nVmRSS:\t   {anonymous_kib * 3} kB\n"
+    )
+    first = anonymous_kib // 2
+    (proc_dir / str(pid) / "smaps").write_text(
+        f"00400000-00500000 r-xp 00000000 00:00 0\nRss:   {anonymous_kib} kB\nAnonymous:   {first} kB\n"
+        f"00600000-00700000 rw-p 00000000 00:00 0\nRss:   {anonymous_kib} kB\n"
+        f"Anonymous:   {anonymous_kib - first} kB\n"
     )
     (proc_dir / str(pid) / "cmdline").write_bytes("\0".join(argv).encode() + b"\0")
 
@@ -258,6 +266,17 @@ def runtime_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return runtime
 
 
+def test_process_memory_is_anonymous_memory_from_smaps_rollup_else_summed_smaps(tmp_path: Path) -> None:
+    _fake_process(tmp_path, 10, anonymous_kib=300)
+    assert memory_candidates.read_anonymous_kib(10, tmp_path) == 300
+
+    # Outside gVisor the kernel's rollup is there, and it is the one read.
+    (tmp_path / "10" / "smaps_rollup").write_text("Rss:   900 kB\nAnonymous:   250 kB\n")
+    assert memory_candidates.read_anonymous_kib(10, tmp_path) == 250
+
+    assert memory_candidates.read_anonymous_kib(11, tmp_path) is None
+
+
 def test_lists_idle_chats_and_workers_with_last_activity_and_the_memory_of_their_process_trees(
     tmp_path: Path, runtime_dir: Path
 ) -> None:
@@ -308,8 +327,8 @@ def test_lists_idle_chats_and_workers_with_last_activity_and_the_memory_of_their
     ]
     assert agents[0].last_activity == chat_activity
     assert agents[0].pids == (100, 150)
-    assert agents[0].rss_kib == 2200
-    assert agents[1].rss_kib == 300
+    assert agents[0].anonymous_kib == 2200
+    assert agents[1].anonymous_kib == 300
     assert report.agents.notes == ()
     table = memory_candidates.render_table(report)
     assert (
@@ -483,7 +502,7 @@ def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(
         ("browser-1", "free", 2, "https://b.test/")
     ]
     assert browsers[0].pids == (300,)
-    assert browsers[0].rss_kib == 1000
+    assert browsers[0].anonymous_kib == 1000
 
 
 def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
@@ -536,7 +555,7 @@ def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
     )
 
     apps = report.apps.candidates
-    assert [(a.name, a.display_name, a.window_count, a.rss_kib) for a in apps] == [
+    assert [(a.name, a.display_name, a.window_count, a.anonymous_kib) for a in apps] == [
         ("daily-digest", "Daily Digest", 2, 3072),
         ("lineup-scout", "lineup-scout", 0, 512),
     ]
@@ -822,7 +841,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
                     "last_activity": "2026-09-24T11:00:00Z",
                     "idle_seconds": 3600,
                     "pids": [100],
-                    "rss_kib": 2048,
+                    "anonymous_kib": 2048,
                 }
             ],
             "notes": [],
@@ -836,7 +855,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
                     "window_count": 1,
                     "stop_when_no_windows": False,
                     "pids": [400],
-                    "rss_kib": 256,
+                    "anonymous_kib": 256,
                 }
             ],
             "notes": [],
@@ -849,7 +868,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
                     "tab_count": 1,
                     "active_url": "https://a.test/",
                     "pids": [300],
-                    "rss_kib": 512,
+                    "anonymous_kib": 512,
                 }
             ],
             "notes": [],
