@@ -292,6 +292,7 @@ def main() -> None:
         # the one place the follower is started; ``build_application`` only constructs, so
         # tests that build an app never follow anything.
         state.agent_manager.start()
+        state.start_reply_draft_publisher()
 
     # Tear down the broadcaster, watchers, agent manager, and http clients on
     # exit. ``atexit`` covers a normal return; the signal handlers cover

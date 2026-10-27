@@ -2,15 +2,17 @@
  * The messages the chat app holds while the chat switches harness, at the tail of the transcript.
  *
  * They come from the chat's snapshot (``handoff.held_sends``), not from the page: the confirming
- * message first, then anything sent since. Each renders as the user bubble the optimistic outgoing
- * overlay uses, drawn as an ordinary send: the switch's own progress is the handoff node's to tell
- * (``handoff-node.ts``). They stay until the snapshot stops listing them,
- * so a reloaded page shows them too; the confirming message stands down earlier, once the switch
- * marker that carries it is on the transcript (the successor's opening turn is its real form).
+ * message first, then anything sent since. Each renders as the row the optimistic outgoing overlay
+ * uses (the user bubble, or the notice a background-task report becomes), drawn as an ordinary
+ * send: the switch's own progress is the handoff node's to tell (``handoff-node.ts``). They stay
+ * until the snapshot stops listing them, so a reloaded page shows them too; the confirming message
+ * stands down earlier, once the switch marker that carries it is on the transcript (the
+ * successor's opening turn is its real form).
  */
 
 import m from "mithril";
-import { getChatById } from "../models/Chats";
+import { getChatById, getProvisionalChat } from "../models/Chats";
+import { getOutgoingMessages } from "../models/OutgoingMessages";
 import { isMessageCarriedBySwitch } from "../models/Response";
 import { renderNotYetRealBubble } from "./OutgoingMessageView";
 
@@ -19,6 +21,25 @@ export function renderHeldSends(chatId: string): m.Vnode[] {
   if (chat === undefined || chat.handoff === null) return [];
   const standing = chat.handoff.held_sends.filter((held) => !isMessageCarriedBySwitch(chatId, held.message_id));
   return standing.map((held) =>
-    renderNotYetRealBubble({ key: `held-${held.message_id}`, content: held.text, extraRowClass: "held-send" }),
+    renderNotYetRealBubble({
+      key: `held-${held.message_id}`,
+      content: held.text,
+      extraRowClass: "held-send",
+      displayDecision: held,
+    }),
   );
+}
+
+/** The messages the chat app holds for a chat still being created (or whose create failed), at the tail of its
+ *  empty conversation. This page's own bubble for one of them stands in its place, so a page that sent it shows
+ *  it once; any other page, or this one reloaded, shows it from the record. */
+export function renderProvisionalHeldSends(chatId: string): m.Vnode[] {
+  const provisional = getProvisionalChat(chatId);
+  if (provisional === undefined) return [];
+  const ownBubbleIds = new Set(getOutgoingMessages(chatId).map((outgoing) => outgoing.messageId));
+  return provisional.held_sends
+    .filter((held) => !ownBubbleIds.has(held.message_id))
+    .map((held) =>
+      renderNotYetRealBubble({ key: `held-${held.message_id}`, content: held.text, extraRowClass: "held-send" }),
+    );
 }

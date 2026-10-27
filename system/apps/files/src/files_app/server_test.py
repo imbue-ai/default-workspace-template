@@ -6,8 +6,10 @@ import zipfile
 from pathlib import Path
 
 import httpx
+import pytest
 from app_schema.testing import assert_api_schema_describes_app
 from werkzeug.test import TestResponse
+from workspace_themes.testing import write_standard_theme
 
 from files_app.connections import shared_paths
 from files_app.device_files import safe_content_disposition
@@ -33,6 +35,7 @@ def _app(computer: FakeComputer | None, tmp_path: Path):
     return create_app(
         gateway=computer.gateway() if computer is not None else None,
         static_directory=static,
+        agent_id="agent-main",
         root=root,
         synced_root=tmp_path / "synced",
     ).test_client()
@@ -40,6 +43,31 @@ def _app(computer: FakeComputer | None, tmp_path: Path):
 
 def _page_data(response: TestResponse) -> dict:
     return json.loads(base64.b64decode(response.get_data(as_text=True).split("</script>")[1]))
+
+
+def test_a_folder_stamp_moves_when_something_is_added_to_it_and_not_when_a_file_in_it_is_edited(
+    tmp_path: Path,
+) -> None:
+    folder = tmp_path / "fonts"
+    folder.mkdir()
+    (folder / "Inter.ttf").write_text("a")
+    client = create_app(gateway=None, static_directory=tmp_path, agent_id="agent-main", root=tmp_path).test_client()
+
+    def stamps() -> dict[str, str | None]:
+        return json_of(client.get("/__files/api/stamps?path=/fonts/&path=/fonts/Inter.ttf&path=/missing/"))["stamps"]
+
+    first = stamps()
+    assert first["/fonts/"] is not None
+    # The listing carries the stamp it was read at, for the page to check against.
+    assert json_of(client.get("/fonts/?json"))["stamp"] == first["/fonts/"]
+    assert first["/fonts/Inter.ttf"] is None
+    assert first["/missing/"] is None
+
+    (folder / "Inter.ttf").write_text("edited")
+    assert stamps()["/fonts/"] == first["/fonts/"]
+
+    (folder / "Atkinson.otf").write_text("b")
+    assert stamps()["/fonts/"] != first["/fonts/"]
 
 
 def test_a_folder_is_listed_with_its_entries_kinds_sizes_and_links(tmp_path: Path) -> None:
@@ -301,7 +329,33 @@ def test_a_grant_naming_its_device_is_read_with_the_device_apart_from_the_path()
     assert shared_paths(rules) == {("host-mac", "/Users/kim/notes"): "write", (None, "/Users/kim/a:b"): "read"}
 
 
-def test_connections_say_how_each_share_reaches_the_workspace_and_when_a_copy_is_behind(tmp_path: Path) -> None:
+def _sync(local_path: str, **fields: object) -> dict[str, object]:
+    """A sync as Imbue Studio answers for it, up to date unless ``fields`` say otherwise."""
+    return {
+        "local_path": local_path,
+        "workspace_path": f"~/synced_folders/{DEVICE}{local_path}",
+        "activity": "ACTIVE",
+        "state": "SYNCED",
+        "message": None,
+        "bytes_done": None,
+        "bytes_total": None,
+        "direction": "BOTH",
+        "conflict": "NEWER",
+        **fields,
+    }
+
+
+def _shown(sync: dict[str, object]) -> dict[str, object]:
+    """The part of a sync Files passes on."""
+    return {field: sync[field] for field in ("state", "message", "bytes_done", "bytes_total")}
+
+
+def test_connections_say_how_each_share_reaches_the_workspace_and_how_its_sync_stands(tmp_path: Path) -> None:
+    fonts = _sync("/Users/kim/Brand Fonts", state="SYNCING", bytes_done=10, bytes_total=40)
+    notes = _sync("/Users/kim/notes")
+    atkinson = _sync("/Users/kim/Atkinson")
+    # A sync the user turned off is no copy here.
+    old = _sync("/Users/kim/old", activity="INACTIVE", state="STOPPED")
     computer = FakeComputer(
         permissions=[
             "minds-file-server-read-/Users/kim/Brand Fonts",
@@ -309,34 +363,61 @@ def test_connections_say_how_each_share_reaches_the_workspace_and_when_a_copy_is
             "minds-file-server-write-/Users/kim/notes",
             "minds-file-server-read-/Users/kim/Atkinson",
             "minds-file-server-write-/Users/kim/photo.png",
+            "minds-file-server-read-/Users/kim/old",
         ],
         folders={
-            "/Users/kim/Brand Fonts": [("Diatype", True, 0), (".DS_Store", False, 6)],
+            "/Users/kim/Brand Fonts": [("Diatype", True, 0)],
             "/Users/kim/notes": [("todo.md", False, 4)],
             "/Users/kim/Atkinson": [("Mono.otf", False, 3)],
+            "/Users/kim/old": [],
         },
+        syncs=[fonts, notes, atkinson, old],
     )
     computer.files["/Users/kim/photo.png"] = b"\x89PNG"
-    (tmp_path / "synced" / DEVICE / "Users/kim/Brand Fonts").mkdir(parents=True)
-    notes_copy = tmp_path / "synced" / DEVICE / "Users/kim/notes"
-    notes_copy.mkdir(parents=True)
-    (notes_copy / "todo.md").write_text("- a")
 
     listed = json_of(_app(computer, tmp_path).get("/__files/api/connections"))
     assert listed["devices"] == [{"id": DEVICE, "name": "Kims-Mac.local", "has_device_paths": False}]
     shares = {share["path"]: share for share in listed["shares"]}
-    assert shares["/Users/kim/Brand Fonts"]["sync_state"] == "behind"
-    assert shares["/Users/kim/Brand Fonts"]["access"] == "read"
-    assert shares["/Users/kim/notes"]["sync_state"] == "current"
+    assert shares["/Users/kim/Brand Fonts"]["sync"] == _shown(fonts)
+    assert shares["/Users/kim/Brand Fonts"]["synced_copy"] == f"{tmp_path}/synced/{DEVICE}/Users/kim/Brand Fonts/"
+    assert shares["/Users/kim/notes"]["sync"] == _shown(notes)
     assert shares["/Users/kim/notes"]["access"] == "write"
-    assert shares["/Users/kim/notes"]["synced_copy"] == f"{notes_copy}/"
-    assert shares["/Users/kim/Atkinson"]["synced_copy"] is None
+    assert shares["/Users/kim/old"]["sync"] is None and shares["/Users/kim/old"]["synced_copy"] is None
+    assert shares["/Users/kim/Atkinson"]["synced_copy"] == f"{tmp_path}/synced/{DEVICE}/Users/kim/Atkinson/"
     assert shares["/Users/kim/Atkinson"]["kind"] == "folder"
     assert shares["/Users/kim/photo.png"]["kind"] == "file"
+    (asked,) = [request for request in computer.requests if request.url.path.endswith("/folder-syncs")]
+    assert asked.url.path == "/minds-api-proxy/api/v1/agents/agent-main/folder-syncs"
+    assert asked.headers["X-Latchkey-Device"] == DEVICE
     # Every call through the gateway names the device, and none puts it in the file path.
     file_calls = [request for request in computer.requests if "/files/" in request.url.path]
     assert all(request.headers["X-Latchkey-Device"] == DEVICE for request in file_calls)
     assert all(DEVICE not in request.url.path for request in file_calls)
+
+
+def test_a_copy_whose_computer_does_not_say_how_it_stands_is_listed_with_no_sync(tmp_path: Path) -> None:
+    computer = FakeComputer(
+        permissions=["minds-file-server-read-/Users/kim/notes"], folders={"/Users/kim/notes": []}, syncs=None
+    )
+    copy = tmp_path / "synced" / DEVICE / "Users/kim/notes"
+    copy.mkdir(parents=True)
+    (share,) = json_of(_app(computer, tmp_path).get("/__files/api/connections"))["shares"]
+    assert share["synced_copy"] == f"{copy}/"
+    assert share["sync"] is None
+
+
+def test_a_sync_in_a_shape_files_does_not_read_is_listed_as_cant_check(tmp_path: Path) -> None:
+    """A state this Files does not know is not guessed at: the copy reads as one whose computer did not say."""
+    computer = FakeComputer(
+        permissions=["minds-file-server-read-/Users/kim/notes"],
+        folders={"/Users/kim/notes": []},
+        syncs=[_sync("/Users/kim/notes", state="PAUSED")],
+    )
+    copy = tmp_path / "synced" / DEVICE / "Users/kim/notes"
+    copy.mkdir(parents=True)
+    (share,) = json_of(_app(computer, tmp_path).get("/__files/api/connections"))["shares"]
+    assert share["synced_copy"] == f"{copy}/"
+    assert share["sync"] is None
 
 
 def test_a_computer_granting_per_device_lists_each_share_once_and_is_reached_under_its_id(tmp_path: Path) -> None:
@@ -377,11 +458,14 @@ def test_a_share_on_a_computer_granting_per_device_opens_live_before_any_listing
     assert [request.url.path for request in computer.requests].count("/permissions/self") == 1
 
 
-def test_a_sleeping_computer_leaves_its_shares_listed_but_unreachable(tmp_path: Path) -> None:
+def test_a_sleeping_computer_is_listed_without_failing_the_listing(tmp_path: Path) -> None:
     computer = FakeComputer(permissions=["minds-file-server-read-/Users/kim/Atkinson"], folders={}, is_awake=False)
-    (share,) = json_of(_app(computer, tmp_path).get("/__files/api/connections"))["shares"]
-    assert share["is_reachable"] is False
-    assert share["kind"] == "unknown"
+    response = _app(computer, tmp_path).get("/__files/api/connections")
+    assert response.status_code == 200
+    assert json_of(response) == {
+        "devices": [{"id": DEVICE, "name": "Kims-Mac.local", "has_device_paths": False}],
+        "shares": [],
+    }
 
 
 def test_a_shared_folder_with_no_copy_is_listed_live_as_a_workspace_folder_is(tmp_path: Path) -> None:
@@ -466,6 +550,17 @@ def test_a_real_listing_from_the_computer_reads_names_kinds_and_sizes() -> None:
         ("a.otf", False, 9),
     ]
     assert entries[2].content_type == "text/plain"
+
+
+def test_the_workspace_theme_is_served_from_files_own_origin_ahead_of_its_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    write_standard_theme(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    response = _app(None, tmp_path).get("/_static/themes/standard/theme.css")
+
+    assert response.status_code == 200 and response.mimetype == "text/css"
 
 
 def test_the_app_describes_its_api_the_way_its_manifest_says(tmp_path: Path) -> None:

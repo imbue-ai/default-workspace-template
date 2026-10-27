@@ -200,8 +200,9 @@ def build_test_state(
     directory by default); ``inventory`` substitutes an inventory built over a fake fetcher,
     and ``broadcaster`` the fan-out the inventory and the routes share. ``is_preview`` builds
     the preview shell, which refuses the verbs that would reach the live workspace. ``repo_root`` is
-    where the update notice reads its record and finds the update-self script (a fresh temp
-    directory by default, so no test reads the real workspace's). ``static_directory`` replaces the
+    where the update notice reads its record and finds the update-self script, and where the
+    workspace's themes are read from (a fresh temp directory by default, so no test reads the
+    real workspace's). ``static_directory`` replaces the
     package's built bundle directory (the frontend bundle and the bundled wallpapers) with one the
     test fills itself, and ``wallpaper_files_directory`` the directory the workspace's own wallpaper
     files are read from (one under the state directory by default). The avatar's catalog lives under
@@ -380,9 +381,23 @@ def serve_app(app: Flask) -> Generator[ServedApp, None, None]:
         thread.join(timeout=5.0)
 
 
+class HandshakeDrainingWebSocketClient(simple_websocket.Client):
+    """A ``simple_websocket`` client that also delivers frames read together with the handshake response.
+
+    ``simple_websocket.Client.handshake`` (1.1.0) stops at the first protocol event, the accept. Frames the
+    server sent right after accepting that arrive in the same socket read stay buffered in the protocol
+    state, and the reader thread only processes buffered events once more bytes arrive, so a server that
+    then goes quiet leaves them unread until ``receive`` times out.
+    """
+
+    def handshake(self) -> None:
+        super().handshake()
+        self.connected = self._handle_events()
+
+
 def open_ws(served: ServedApp, path: str, subprotocols: list[str] | None = None) -> simple_websocket.Client:
     """Open a WebSocket client against a ``ServedApp`` at ``path``."""
-    return simple_websocket.Client(f"{served.ws_url}{path}", subprotocols=subprotocols)
+    return HandshakeDrainingWebSocketClient(f"{served.ws_url}{path}", subprotocols=subprotocols)
 
 
 def close_ws(ws: simple_websocket.Client) -> None:

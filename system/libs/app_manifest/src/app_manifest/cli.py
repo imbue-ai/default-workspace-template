@@ -14,13 +14,18 @@ from app_manifest.primitives import RepoRelativePath
 from app_manifest.scope import CreationScope
 from app_manifest.scope import ManifestReferenceMatch
 from app_manifest.scope import compute_app_scope
+from app_manifest.scope import compute_pass_scope
 from app_manifest.scope import compute_skill_scope
 from app_manifest.scope import find_referencing_manifests
+from app_manifest.scope import parse_creation_spec
+from app_manifest.scope import read_pass_scope_file
+from app_manifest.scope import render_pass_scope_file
 from app_manifest.scope import render_scope_file
 from app_manifest.scope import with_diff_against_base
 from app_manifest.selection import render_selection
 from app_manifest.selection import render_selection_json
 from app_manifest.selection import select_tests_for_diff
+from app_manifest.selection import select_tests_for_pass_scope
 from app_manifest.selection import select_tests_for_paths
 
 
@@ -138,8 +143,77 @@ def _app_scope(repo_root: Path, manifest_path: Path) -> CreationScope:
     return compute_app_scope(repo_root, resolved_manifest_path, manifest)
 
 
+@app_manifest_cli.command("pass-scope")
+@click.option(
+    "--creation",
+    "creation_specs",
+    multiple=True,
+    required=True,
+    help="A creation the pass covers, as <type>:<name> (repeatable): app:<registered name or package>, "
+    "skill:<directory>, service:<package>, or shared:<path under .agents/shared>.",
+)
+@_repo_root_option
+@click.option(
+    "--diff-base",
+    "diff_base",
+    default=None,
+    help="A git ref to diff against; the file then splits the changes into those some creation's "
+    "footprint accounts for and those none does.",
+)
+@click.option(
+    "--diff-ref",
+    "diff_ref",
+    default=None,
+    help="The ref the diff runs to (default HEAD); only meaningful with --diff-base.",
+)
+@click.option(
+    "--lead-ref",
+    "lead_ref",
+    default=None,
+    help="The lead's branch or commit; the pass's own changes are then what the ref changes since "
+    "the newest commit of the lead's first-parent history it holds, every file of the branch's own "
+    "commits, and every file of a commit on the lead's line between the diff base and that one "
+    "that touched a footprint, and a changed file that is neither in a footprint nor the pass's "
+    "own is other work. Only meaningful with --diff-base.",
+)
+@click.option(
+    "--out",
+    "out_path",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Write the pass scope file here (parent directories are created); default: stdout.",
+)
+def pass_scope(
+    creation_specs: tuple[str, ...],
+    repo_root: Path | None,
+    diff_base: str | None,
+    diff_ref: str | None,
+    lead_ref: str | None,
+    out_path: Path | None,
+) -> None:
+    """Write the scope file for a harden pass: every creation's footprint, and the diff against all of them."""
+    if diff_ref is not None and diff_base is None:
+        raise click.UsageError("--diff-ref only says where a --diff-base diff runs to; pass both")
+    if lead_ref is not None and diff_base is None:
+        raise click.UsageError("--lead-ref only says whose work a --diff-base diff holds; pass both")
+    try:
+        scope = compute_pass_scope(
+            _resolved_repo_root(repo_root),
+            [parse_creation_spec(spec) for spec in creation_specs],
+            diff_base,
+            diff_ref if diff_ref is not None else "HEAD",
+            lead_ref,
+        )
+    except AppManifestError as e:
+        raise click.ClickException(str(e)) from e
+    _emit_rendered(render_pass_scope_file(scope), out_path)
+
+
 def _emit_scope_file(scope: CreationScope, out_path: Path | None) -> None:
-    rendered = render_scope_file(scope)
+    _emit_rendered(render_scope_file(scope), out_path)
+
+
+def _emit_rendered(rendered: str, out_path: Path | None) -> None:
     if out_path is None:
         click.echo(rendered, nl=False)
         return
@@ -199,6 +273,16 @@ def _lookup_row(repo_root: Path, match: ManifestReferenceMatch) -> ReferenceLook
     help="A changed repo-root-relative path (repeatable), instead of a diff.",
 )
 @click.option(
+    "--scope-file",
+    "scope_file",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="A harden pass's scope file, written by pass-scope with --diff-base and --lead-ref: the "
+    "change is what its footprints account for and what the pass itself changed, not the other "
+    "work in its diff, though the lead's work the branch merged in runs the suites of the pass's "
+    "creations it reaches. Instead of a diff or paths.",
+)
+@click.option(
     "--format",
     "output_format",
     type=click.Choice(["text", "json"]),
@@ -210,16 +294,21 @@ def select_tests(
     diff_base: str | None,
     diff_ref: str | None,
     paths: tuple[str, ...],
+    scope_file: Path | None,
     output_format: str,
 ) -> None:
     """Print the test commands a change calls for, in the order to run them."""
+    if scope_file is not None and (diff_base is not None or diff_ref is not None or paths):
+        raise click.UsageError("--scope-file names the change on its own; drop --diff-base, --diff-ref and --path")
     if diff_ref is not None and (diff_base is None or paths):
         raise click.UsageError("--diff-ref only says where a --diff-base diff runs to")
-    if not paths and diff_base is None:
-        raise click.UsageError("pass --diff-base, or the changed paths with --path")
+    if scope_file is None and not paths and diff_base is None:
+        raise click.UsageError("pass --diff-base, the changed paths with --path, or a pass's --scope-file")
     resolved_repo_root = _resolved_repo_root(repo_root)
     try:
-        if paths:
+        if scope_file is not None:
+            selection = select_tests_for_pass_scope(resolved_repo_root, read_pass_scope_file(scope_file))
+        elif paths:
             selection = select_tests_for_paths(resolved_repo_root, paths, diff_base)
         else:
             assert diff_base is not None

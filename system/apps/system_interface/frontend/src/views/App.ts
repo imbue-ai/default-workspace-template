@@ -9,6 +9,7 @@
  */
 
 import m from "mithril";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { createMenu } from "@imbue/workspace-ui/src/components/menu";
 import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
 import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
@@ -21,7 +22,14 @@ import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
 import { appShortcutOf, launchPathOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
-import type { AvatarDesign, Desktop, DesktopShortcut, WallpaperListing } from "../model/records";
+import type {
+  AppRecord,
+  AppTheming,
+  AvatarDesign,
+  Desktop,
+  DesktopShortcut,
+  WallpaperListing,
+} from "../model/records";
 import { shortcutKey } from "../model/records";
 import type { PixelPoint } from "../geometry/frames";
 import { mostRecentlyFocusedWindowOfApp, placementOf } from "../geometry/stack";
@@ -51,9 +59,15 @@ import type { GestureListener, GestureSource } from "../gestures/pointerGestures
 import { LivePagesLayer, WINDOW_ID_ATTRIBUTE } from "../pages/livePages";
 import type { MountPolicy } from "../pages/livePages";
 import type { DesktopStore } from "../store/DesktopStore";
+import type { TourController } from "../model/tour";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
-import { DesktopSettingsDialog, isSameWallpaper } from "./DesktopSettingsDialog";
+import {
+  DesktopSettingsDialog,
+  THEME_DESIGN_PROMPT,
+  THEME_PREVIEW_APP,
+  isSameWallpaper,
+} from "./DesktopSettingsDialog";
 import { LauncherMenu } from "./LauncherMenu";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyDropStyle, applyLiftStyle } from "./ShortcutIcon";
@@ -62,10 +76,18 @@ import { SNAP_PREVIEW_ATTRIBUTE, applySnapPreviewStyle } from "./SnapPreview";
 import { PhoneLayout, phoneMountPolicy } from "./phone/PhoneLayout";
 import { SoloView } from "./SoloView";
 import { Taskbar } from "./Taskbar";
+import { TourCard } from "./TourCard";
 import type { WindowControl } from "./TitleBar";
 import { UpdateNoticeBanner } from "./UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "./UpdateStalenessBanner";
-import { MENU_MIN_WIDTH, openShareSettings, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
+import {
+  MENU_MIN_WIDTH,
+  openShareSettings,
+  enableThemingPrompt,
+  taskbarEntryMenuRows,
+  windowMenuRows,
+  type WindowThemeActions,
+} from "./WindowMenu";
 import { windowSizeRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
 import { SQUIGGLE_GLYPHS } from "./squiggles";
@@ -138,6 +160,8 @@ interface AvatarChooserState {
 export interface AppAttrs {
   readonly store: DesktopStore;
   readonly gestures: GestureSource;
+  /** The show-around tour: what it shows, and the row that runs it. */
+  readonly tour: TourController;
   /** The shell document's host and protocol, which every page URL derives from. */
   readonly host: string;
   readonly protocol: string;
@@ -173,6 +197,7 @@ export function App(): m.Component<AppAttrs> {
   let gestureRoot: HTMLElement | null = null;
   let uninstallContextMenu: (() => void) | null = null;
   let store: DesktopStore | null = null;
+  let tour: TourController | null = null;
 
   // The one menu the desktop ever has open. Which menu it is and what it was opened for is
   // ``openMenu``; opening, placing, dismissing and closing are the component's, and its
@@ -577,7 +602,18 @@ export function App(): m.Component<AppAttrs> {
       quit: app !== undefined && current.canStopApp(app) ? () => void current.quitApp(app.name) : null,
       popOut: current.getCanPopOut() ? () => void current.detachWindow(windowId) : null,
       close: () => void current.closeOrMinimizeWindow(windowId),
+      theme: app === undefined || app.theming === null ? null : windowThemeActionsOf(current, app, app.theming),
     });
+  }
+
+  function windowThemeActionsOf(current: DesktopStore, app: AppRecord, theming: AppTheming): WindowThemeActions {
+    const canDraft = draftTargetOf(current.getState()) !== null;
+    return {
+      isThemeable: theming !== "unthemed",
+      isOn: theming === "on",
+      setOn: (isOn) => void current.setAppTheming(app.name, isOn),
+      enable: canDraft ? () => void current.draftIntoPinnedWindow(enableThemingPrompt(app.display_name), false) : null,
+    };
   }
 
   function rowsOfEntryMenu(current: DesktopStore, windowId: string): MenuRow[] | null {
@@ -829,9 +865,13 @@ export function App(): m.Component<AppAttrs> {
       desktop,
       wallpapers,
       isDeleting: dialog.isDeleting,
-      onSave: async (name, color, glyph, wallpaper) => {
+      onSave: async (name, color, glyph, wallpaper, themeChoice) => {
         await current.updateDesktopSettings(desktop.id, name, color, glyph);
         if (!isSameWallpaper(wallpaper, desktop.wallpaper)) await current.setDesktopWallpaper(desktop.id, wallpaper);
+        // A theme made the workspace's default is worn by this desktop as the default, not as its own.
+        if (themeChoice.isWorkspaceDefault) await current.setDefaultTheme(themeChoice.theme);
+        const ownTheme = themeChoice.isWorkspaceDefault ? null : themeChoice.theme;
+        if (ownTheme !== desktop.theme) await current.setDesktopTheme(desktop.id, ownTheme);
         settingsDialog = null;
       },
       onDelete: async () => {
@@ -841,6 +881,18 @@ export function App(): m.Component<AppAttrs> {
       onCancel: () => {
         settingsDialog = null;
       },
+      themes: current.isThemeCatalogKnown() ? current.getThemeCatalog() : null,
+      previewApp: appByName(current.getState(), THEME_PREVIEW_APP) ?? null,
+      onMakeTheme:
+        draftTargetOf(current.getState()) === null
+          ? null
+          : () => {
+              settingsDialog = null;
+              void current.draftIntoPinnedWindow(THEME_DESIGN_PROMPT);
+            },
+      onPreviewTheme: (choice) => current.previewDesktopTheme(desktop.id, choice),
+      isDesktopShown: activeDesktop(current.getState())?.id === desktop.id,
+      onClearPreview: () => current.clearThemePreview(),
     });
   }
 
@@ -885,7 +937,20 @@ export function App(): m.Component<AppAttrs> {
       case "text":
         void current.runFreeText(row.app.name, row.launchPath.id, row.text);
         return;
+      case "tour":
+        tour?.start();
+        return;
     }
+  }
+
+  /** The tour's card or exit badge over the desktop, while one is shown. */
+  function tourCardView(current: DesktopStore, shownTour: TourController): m.Children {
+    if (shownTour.getState().phase === "idle") return null;
+    return m(TourCard, {
+      tour: shownTour,
+      avatarDesign: current.getState().avatar.design,
+      openLink: (url) => void current.openLink(url, window.location.host, SHELL_APP_NAME),
+    });
   }
 
   function runHighlightedRow(current: DesktopStore): void {
@@ -987,6 +1052,7 @@ export function App(): m.Component<AppAttrs> {
     view(vnode) {
       const current = vnode.attrs.store;
       store = current;
+      tour = vnode.attrs.tour;
       const state = current.getState();
       const soloWindowId = current.getSoloWindowId();
       if (soloWindowId !== null) {
@@ -1038,7 +1104,9 @@ export function App(): m.Component<AppAttrs> {
       return m(
         "div",
         {
-          class: "app-layout flex h-dvh flex-col bg-page bg-cover bg-center bg-(image:--desk-default-wallpaper)",
+          ...partAttrs("desktop"),
+          class:
+            "app-layout flex h-dvh flex-col bg-(--desk-backdrop) bg-cover bg-center bg-(image:--desk-default-wallpaper)",
           style: wallpaperStyle,
         },
         [
@@ -1173,6 +1241,7 @@ export function App(): m.Component<AppAttrs> {
           settingsDialog === null ? null : settingsDialogView(current, settingsDialog),
           replacedDesktopNotice(current),
           avatarChooser === null ? null : avatarChooserView(current, avatarChooser),
+          tourCardView(current, vnode.attrs.tour),
         ],
       );
     },

@@ -61,7 +61,7 @@ def files_origin(files_root: Path, connections: Connections) -> Iterator[str]:
     """The origin of the Files server over `files_root`."""
     if not (STATIC_DIRECTORY / "index.html").is_file():
         pytest.fail("Files is not built: run `npm run build` at system/ first")
-    app = create_app(gateway=None, static_directory=STATIC_DIRECTORY, root=files_root)
+    app = create_app(gateway=None, static_directory=STATIC_DIRECTORY, agent_id="agent-main", root=files_root)
 
     def listed_connections() -> Response:
         # Through the route's model, as the real view answers: the route table refuses a hand-built JSON answer.

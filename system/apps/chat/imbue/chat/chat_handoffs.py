@@ -1045,6 +1045,11 @@ def deliver_held_send(
             e.detail,
         )
         return
+    if outcome is SendOutcome.WITHDRAWN:
+        logger.info(
+            "Chat {}: held send {} was taken back by Stop before it reached the agent", chat_id, held.message_id
+        )
+        return
     if outcome is not SendOutcome.OK:
         logger.warning(
             "Handoff of chat {}: held send {} to agent {} did not land ({})",

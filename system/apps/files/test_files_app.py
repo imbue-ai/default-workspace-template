@@ -20,6 +20,17 @@ PHONE = (393, 852)
 OpenFilesPage = Callable[..., Page]
 
 
+def _sync(**fields: object) -> dict[str, object]:
+    """A sync as Imbue Studio reports it, up to date unless ``fields`` say otherwise."""
+    return {
+        "state": "SYNCED",
+        "message": None,
+        "bytes_done": None,
+        "bytes_total": None,
+        **fields,
+    }
+
+
 def _entry(page: Page, path: str) -> Locator:
     return page.locator(f'[data-entry-path="{path}"]')
 
@@ -136,6 +147,8 @@ def test_the_sidebar_lists_the_shortcuts_and_every_share_with_how_it_reaches_the
     notes_copy.mkdir(parents=True)
     (notes_copy / "todo.md").write_text("- call\n")
     (files_root / "home/user/synced_folders/host-mac/Users/kim/Brand Fonts").mkdir(parents=True)
+    (files_root / "home/user/synced_folders/host-mac/Users/kim/Atkinson").mkdir(parents=True)
+    (files_root / "home/user/synced_folders/host-mac/Users/kim/Taxes").mkdir(parents=True)
     connections.listed = {
         "devices": [{"id": "host-mac", "name": "Kims-Mac.local", "has_device_paths": True}],
         "shares": [
@@ -146,7 +159,7 @@ def test_the_sidebar_lists_the_shortcuts_and_every_share_with_how_it_reaches_the
                 "kind": "folder",
                 "is_reachable": True,
                 "synced_copy": "/home/user/synced_folders/host-mac/Users/kim/notes/",
-                "sync_state": "current",
+                "sync": _sync(),
             },
             {
                 "device": "host-mac",
@@ -155,7 +168,26 @@ def test_the_sidebar_lists_the_shortcuts_and_every_share_with_how_it_reaches_the
                 "kind": "folder",
                 "is_reachable": True,
                 "synced_copy": "/home/user/synced_folders/host-mac/Users/kim/Brand Fonts/",
-                "sync_state": "behind",
+                "sync": _sync(state="FAILED", message="Unison exited with code 3."),
+            },
+            {
+                "device": "host-mac",
+                "path": "/Users/kim/Atkinson",
+                "access": "write",
+                "kind": "folder",
+                "is_reachable": True,
+                "synced_copy": "/home/user/synced_folders/host-mac/Users/kim/Atkinson/",
+                "sync": _sync(state="SYNCING", bytes_done=2_000_000, bytes_total=8_000_000),
+            },
+            {
+                "device": "host-mac",
+                "path": "/Users/kim/Taxes",
+                "access": "write",
+                "kind": "folder",
+                "is_reachable": True,
+                "synced_copy": "/home/user/synced_folders/host-mac/Users/kim/Taxes/",
+                # Its computer did not say how the sync stands.
+                "sync": None,
             },
             {
                 "device": "host-mac",
@@ -164,14 +196,14 @@ def test_the_sidebar_lists_the_shortcuts_and_every_share_with_how_it_reaches_the
                 "kind": "file",
                 "is_reachable": True,
                 "synced_copy": None,
-                "sync_state": None,
+                "sync": None,
             },
         ],
     }
     page = open_files_page("/home/user/workspace/")
 
     expect(page.locator("[data-sidebar-row] .files-sidebar-label")).to_have_text(
-        ["Workspace", "Uploads", "notes", "Brand Fonts", "photo.png"]
+        ["Workspace", "Uploads", "notes", "Brand Fonts", "Atkinson", "Taxes", "photo.png"]
     )
     expect(page.locator('[data-sidebar-row="shortcut:workspace"]')).to_have_attribute("aria-current", "true")
 
@@ -181,8 +213,19 @@ def test_the_sidebar_lists_the_shortcuts_and_every_share_with_how_it_reaches_the
         return badge, row.locator("[data-mark]").evaluate_all("els => els.map(el => el.dataset.mark)")
 
     assert marks("/Users/kim/notes") == ("synced", [])
-    assert marks("/Users/kim/Brand Fonts") == ("synced", ["read-only", "stuck"])
+    assert marks("/Users/kim/Brand Fonts") == ("synced", ["read-only", "failed"])
+    # A sync on its way turns its badge rather than adding a mark.
+    assert marks("/Users/kim/Atkinson") == ("syncing", [])
     assert marks("/Users/kim/photo.png") == ("linked", ["read-only"])
+    # A computer not answering greys its share out, icon and all, rather than adding a mark.
+    assert marks("/Users/kim/Taxes") == ("synced", [])
+
+    def icon_opacity(path: str) -> str:
+        icon = page.locator(f'[data-sidebar-row="share:host-mac:{path}"] [data-share-badge]')
+        return icon.evaluate("el => getComputedStyle(el).opacity")
+
+    assert icon_opacity("/Users/kim/Taxes") == "0.5"
+    assert icon_opacity("/Users/kim/notes") == "1"
     expect(
         page.locator('[data-sidebar-row="share:host-mac:/Users/kim/photo.png"] [data-mark="read-only"]')
     ).to_have_text("Read-only")
@@ -196,7 +239,9 @@ def test_the_sidebar_lists_the_shortcuts_and_every_share_with_how_it_reaches_the
     )
 
     page.locator('[data-sidebar-row="share:host-mac:/Users/kim/Brand Fonts"]').hover()
-    expect(page.get_by_role("tooltip")).to_have_text("Synced from Kims-Mac. Read-only. Hasn't caught up yet.")
+    tooltip = page.get_by_role("tooltip")
+    expect(tooltip.locator(":scope > span").first).to_have_text("Sync with Kims-Mac stopped")
+    expect(tooltip.locator(".hover-tooltip-detail")).to_have_text("Unison exited with code 3")
 
     page.locator('[data-sidebar-row="share:host-mac:/Users/kim/notes"]').click()
     expect(_entry(page, "/home/user/synced_folders/host-mac/Users/kim/notes/todo.md")).to_be_visible()
@@ -204,16 +249,160 @@ def test_the_sidebar_lists_the_shortcuts_and_every_share_with_how_it_reaches_the
     expect(page.locator(".files-crumb")).to_have_text(["Kims-Mac", "notes"])
 
     page.locator('[data-sidebar-row="share:host-mac:/Users/kim/Brand Fonts"]').click()
-    expect(page.locator(".files-stuck-sync")).to_contain_text("Not synced yet from Kims-Mac")
-    expect(page.locator(".files-stuck-sync")).not_to_contain_text(".local")
+    expect(page.locator(".files-sync-notice")).to_contain_text("Sync with Kims-Mac stopped")
+    expect(page.locator(".files-sync-notice")).to_contain_text("Unison exited with code 3.")
+    expect(page.locator(".files-sync-notice")).not_to_contain_text(".local")
+    page.locator('[data-sidebar-row="share:host-mac:/Users/kim/Atkinson"]').click()
+    expect(page.locator(".files-sync-notice")).to_contain_text("Syncing from Kims-Mac")
+    expect(page.locator(".files-sync-notice")).to_contain_text("25% done")
     page.locator('[data-view-mode="columns"]').click()
-    expect(page.locator(".files-column .files-stuck-sync")).to_contain_text("Not synced yet")
+    expect(page.locator(".files-column .files-sync-notice")).to_contain_text("Syncing from Kims-Mac")
 
     # Listed in the folder that holds it, a synced copy wears the same badge as its sidebar row.
     page.goto(page.url.split("/home/")[0] + "/home/user/synced_folders/host-mac/Users/kim/")
     expect(
         _entry(page, "/home/user/synced_folders/host-mac/Users/kim/notes/").locator("[data-icon-badge]")
     ).to_have_attribute("data-icon-badge", "synced")
+
+
+def test_a_long_reason_for_a_stopped_sync_is_cut_to_two_lines_in_the_tooltip_and_read_in_full_in_the_folder(
+    open_files_page: OpenFilesPage, files_root: Path, connections: Any
+) -> None:
+    (files_root / "home/user/workspace").mkdir(parents=True)
+    (files_root / "home/user/synced_folders/host-mac/Users/kim/notes").mkdir(parents=True)
+    reason = (
+        "Unison could not finish: the archive for /Users/kim/notes is locked by another copy of Unison, "
+        "which may still be running or may have stopped without letting go of it. Close it and try again."
+    )
+    connections.listed = {
+        "devices": [{"id": "host-mac", "name": "Kims-Mac.local", "has_device_paths": True}],
+        "shares": [
+            {
+                "device": "host-mac",
+                "path": "/Users/kim/notes",
+                "access": "write",
+                "kind": "folder",
+                "is_reachable": True,
+                "synced_copy": "/home/user/synced_folders/host-mac/Users/kim/notes/",
+                "sync": _sync(state="FAILED", message=reason),
+            }
+        ],
+    }
+    page = open_files_page("/home/user/workspace/")
+
+    row = page.locator('[data-sidebar-row="share:host-mac:/Users/kim/notes"]')
+    row.hover()
+    detail = page.get_by_role("tooltip").locator(".hover-tooltip-detail")
+    expect(detail).to_be_visible()
+    shown_lines, holds_more = detail.evaluate(
+        "el => [Math.round(el.clientHeight / parseFloat(getComputedStyle(el).lineHeight)),"
+        " el.scrollHeight > el.clientHeight]"
+    )
+    assert (shown_lines, holds_more) == (2, True)
+
+    row.click()
+    expect(page.locator(".files-sync-notice")).to_contain_text(reason)
+
+
+_FROM_STUDIO = """(message) => window.postMessage(message, "*")"""
+
+
+def test_manage_connected_files_shows_only_inside_imbue_studio_and_asks_it_for_its_local_files_settings(
+    open_files_page: OpenFilesPage, connections: Any
+) -> None:
+    connections.listed = {
+        "devices": [{"id": "host-mac", "name": "Kims-Mac.local", "has_device_paths": True}],
+        "shares": [],
+    }
+    page = open_files_page("/")
+    expect(page.locator(".files-connected-empty")).to_contain_text("Share a file or folder from Imbue Studio")
+    expect(page.locator('[data-action="manage-connected"]')).to_have_count(0)
+
+    # A page with no frame around it is its own embedder: what it sends lands on itself, and so does Studio's word.
+    page.evaluate("window.sent = []; window.addEventListener('message', (event) => window.sent.push(event.data))")
+    page.evaluate(_FROM_STUDIO, {"type": "minds:embedder-capabilities", "canPopOut": False, "opensLocalFiles": True})
+    manage = page.locator('[data-action="manage-connected"]')
+    expect(manage).to_have_text("Manage connected files")
+    expect(page.locator(".files-connected-empty")).to_have_count(0)
+    manage.click()
+    page.wait_for_function("window.sent.some((message) => message.type === 'minds:open-local-files')")
+
+    # The user shares something in Studio's settings, and coming back to the window lists it.
+    connections.listed = {
+        "devices": [{"id": "host-mac", "name": "Kims-Mac.local", "has_device_paths": True}],
+        "shares": [
+            {
+                "device": "host-mac",
+                "path": "/Users/kim/notes",
+                "access": "read",
+                "kind": "folder",
+                "is_reachable": True,
+                "synced_copy": None,
+                "sync": None,
+            }
+        ],
+    }
+    page.evaluate("window.dispatchEvent(new Event('focus'))")
+    expect(page.locator('[data-sidebar-row="share:host-mac:/Users/kim/notes"]')).to_be_visible(timeout=2_000)
+
+
+def test_the_sidebar_follows_a_share_changed_in_studio_without_the_window_coming_back_to_the_front(
+    open_files_page: OpenFilesPage, connections: Any
+) -> None:
+    notes = {
+        "device": "host-mac",
+        "path": "/Users/kim/notes",
+        "access": "write",
+        "kind": "folder",
+        "is_reachable": True,
+        "synced_copy": "/home/user/synced_folders/host-mac/Users/kim/notes/",
+        "sync": _sync(state="SYNCING", bytes_done=1, bytes_total=4),
+    }
+    fonts = {**notes, "path": "/Users/kim/Brand Fonts", "access": "read", "synced_copy": None, "sync": None}
+    device = {"id": "host-mac", "name": "Kims-Mac.local", "has_device_paths": True}
+    connections.listed = {"devices": [device], "shares": [notes]}
+    page = open_files_page("/")
+    row = page.locator('[data-sidebar-row="share:host-mac:/Users/kim/notes"]')
+    expect(row.locator('[data-share-badge="syncing"] .files-badge-turning')).to_be_visible()
+
+    connections.listed = {
+        "devices": [device],
+        "shares": [{**notes, "sync": _sync(state="FAILED", message="Disk full.")}, fonts],
+    }
+    # Read again within a few seconds while a sync is moving, with nothing from the user.
+    expect(row.locator('[data-mark="failed"]')).to_be_visible(timeout=10_000)
+    expect(row.locator(".files-badge-turning")).to_have_count(0)
+    expect(page.locator('[data-sidebar-row="share:host-mac:/Users/kim/Brand Fonts"]')).to_be_visible()
+
+
+def test_a_file_a_sync_brings_into_the_open_folder_shows_with_nothing_from_the_user(
+    open_files_page: OpenFilesPage, files_root: Path, connections: Any
+) -> None:
+    copy = files_root / "home/user/synced_folders/host-mac/Users/kim/Brand Fonts"
+    copy.mkdir(parents=True)
+    (copy / "Inter.ttf").write_text("font\n")
+    connections.listed = {
+        "devices": [{"id": "host-mac", "name": "Kims-Mac.local", "has_device_paths": True}],
+        "shares": [
+            {
+                "device": "host-mac",
+                "path": "/Users/kim/Brand Fonts",
+                "access": "write",
+                "kind": "folder",
+                "is_reachable": True,
+                "synced_copy": "/home/user/synced_folders/host-mac/Users/kim/Brand Fonts/",
+                # Settled, so the shares are read again only every 15 s: the folder's own check finds the file.
+                "sync": _sync(),
+            }
+        ],
+    }
+    folder = "/home/user/synced_folders/host-mac/Users/kim/Brand Fonts/"
+    page = open_files_page(folder)
+    expect(_entry(page, folder + "Inter.ttf")).to_be_visible()
+
+    (copy / "Atkinson.otf").write_text("font\n")
+
+    expect(_entry(page, folder + "Atkinson.otf")).to_be_visible(timeout=5_000)
 
 
 def test_enter_on_a_focused_button_presses_it_rather_than_opening_the_selection(
@@ -263,7 +452,7 @@ def test_a_file_dropped_on_a_shared_folder_uploads_into_it(
                 "kind": "folder",
                 "is_reachable": True,
                 "synced_copy": "/home/user/synced_folders/host-mac/Users/kim/notes/",
-                "sync_state": "current",
+                "sync": _sync(),
             }
         ],
     }
@@ -460,6 +649,18 @@ def test_a_phone_lists_entries_and_opens_one_with_a_tap(
     _entry(page, "/projects/app/").click()
     _entry(page, "/projects/app/main.py").click()
     expect(page).to_have_url(page.url.split("/projects")[0] + "/projects/app/main.py?view")
+
+
+def test_a_narrow_desktop_window_keeps_its_sidebar_beside_the_folder_without_the_column_view(
+    open_files_page: OpenFilesPage,
+) -> None:
+    page = open_files_page("/", 600, 600)
+    expect(page.locator(".files-sidebar")).to_be_visible()
+    expect(page.locator('[data-action="sidebar"]')).to_have_count(0)
+    page.locator('[data-view-mode="list"]').click()
+    # A desktop window: no "..." button on every entry, as on a phone.
+    expect(page.locator(".files-entry-menu-button")).to_have_count(0)
+    expect(page.locator('[data-view-mode="columns"]')).to_have_count(0)
 
 
 def test_a_text_file_is_edited_and_saved_from_its_page(open_files_page: OpenFilesPage, files_root: Path) -> None:

@@ -14,7 +14,12 @@ from pathlib import Path
 import pytest
 from app_manifest.manifest import MANIFEST_FILENAME, load_manifest
 from app_manifest.primitives import RESERVED_APP_NAMES
-from app_manifest.scope import APP_CONVENTIONS, SKILL_CONVENTIONS, compute_app_scope
+from app_manifest.scope import (
+    APP_CONVENTIONS,
+    SERVICE_CONVENTIONS,
+    SKILL_CONVENTIONS,
+    compute_app_scope,
+)
 from oom_priority import bands
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -175,7 +180,9 @@ def test_every_manifest_validates_against_the_repo_root(manifest_path: Path) -> 
 
 
 @pytest.mark.parametrize(
-    "convention_path", sorted(set(APP_CONVENTIONS + SKILL_CONVENTIONS)), ids=str
+    "convention_path",
+    sorted(set(APP_CONVENTIONS + SKILL_CONVENTIONS + SERVICE_CONVENTIONS)),
+    ids=str,
 )
 def test_every_convention_doc_the_scope_file_names_exists(convention_path: str) -> None:
     # The scope file points every review pass at these; a renamed doc would otherwise
@@ -443,8 +450,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["getting-started"].default_shortcut.launch == "open"
     assert by_name["getting-started"].default_shortcut.mode == "focus"
     assert by_name["getting-started"].pin is None
-    # Its preview (update-app's preview_app.py) boots unregistered, so it neither re-points the live row nor opens
-    # the first-visit window.
+    # Its preview (update-app's preview_app.py) boots unregistered, so it does not re-point the live row.
     assert by_name["getting-started"].preview.command[:2] == (
         "getting-started",
         "--no-register",

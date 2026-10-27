@@ -19,6 +19,10 @@ label = "Files"
 path = "/home/user/workspace/"
 params = [{name = "path", label = "Path", required = false}]
 
+# Files' page is built from the shared components and wears the workspace's theme itself.
+[theming]
+mode = "tokens"
+
 # A link to a file or folder (a chat's absolute-path link) opens on its view page in a Files window: a file's own
 # page, or for a folder the folder itself, which Files reads ``?view`` on a folder as. A window already at the file or
 # folder, however it got there (moving through Files leaves it at ``/a/b/``), is raised instead.

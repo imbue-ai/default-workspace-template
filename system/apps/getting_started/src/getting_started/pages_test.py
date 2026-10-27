@@ -42,10 +42,12 @@ def test_the_page_says_it_is_not_built_until_the_bundle_exists_and_then_serves_i
     assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": False}
 
     (tmp_path / "static" / "assets").mkdir(parents=True)
-    (tmp_path / "static" / "index.html").write_text("<!doctype html><title>Getting Started</title>")
+    # The build puts the theme boot inline in the head (workspace_ui's themeBoot), so the policy must admit it.
+    built_page = "<!doctype html><title>Getting Started</title><script>wearRememberedTheme()</script>"
+    (tmp_path / "static" / "index.html").write_text(built_page)
     (tmp_path / "static" / "assets" / "index.js").write_text("console.log(1)")
     built = client.get("/")
-    assert built.data == b"<!doctype html><title>Getting Started</title>"
+    assert built.get_data(as_text=True) == built_page
     assert built.headers["Cache-Control"] == "no-store"
     assert_document_policy_admits_page(built)
     assert client.get("/api/health").get_json() == {"status": "ok", "is_frontend_built": True}
@@ -60,7 +62,9 @@ def test_the_page_admits_images_from_the_catalogs_origin_and_only_its_own_withou
     policy = _client(tmp_path).get("/").headers["Content-Security-Policy"]
     assert "img-src 'self' data: blob: https://example.test;" in policy
 
-    policy_without_catalog = _client(tmp_path / "no-catalog", catalog_url="").get("/").headers["Content-Security-Policy"]
+    policy_without_catalog = (
+        _client(tmp_path / "no-catalog", catalog_url="").get("/").headers["Content-Security-Policy"]
+    )
     assert "img-src 'self' data: blob:;" in policy_without_catalog
 
 

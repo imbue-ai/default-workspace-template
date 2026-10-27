@@ -13,15 +13,17 @@ one ``logs/<program>.log`` member per collected service log, and one
 supervisord and agents run under tmux, so the two halves come from different
 places and neither sees the other's failures. A harness that keeps a structured
 log database rather than a text log (codex's app-server) contributes it too,
-rendered to text as ``agent-logs/<agent-name>/<db>.log``. Under --transcript it
+rendered to text as ``agent-logs/<agent-name>/<db>.log``. The update flow's own
+records ride under --logs as well, as ``update-apply/<file>``: its small state
+records and the tail of the dispatcher's log. Under --transcript it
 holds one ``chats/<agent-name>-<harness>.jsonl`` per selected chat, newest
 first -- one member per conversation the user held, which is one member per
 agent only until a chat is handed to another harness. With BOTH flags each
 running agent also contributes an ``agent-logs/<agent-name>/pane.txt``: a TUI
 harness renders the conversation into its pane, so its scrollback needs the
-chats consent as well as the logs one. The workspace logs, the harness logs,
-the log databases and the chats are each scanned and released or withheld on
-their own. Anything requested that is not in the archive whole -- a class
+chats consent as well as the logs one. The workspace logs, the update records,
+the harness logs, the log databases and the chats are each scanned and
+released or withheld on their own. Anything requested that is not in the archive whole -- a class
 withheld by the secret scan, or one the size budget could not fit -- is a
 plain-words line in the archive's own ``collection-notes.txt`` member, so the
 archive explains itself; a content type that was not requested appears in
@@ -92,6 +94,7 @@ MIN_TRANSCRIPT_COUNT = 5
 LOG_RECENCY_WINDOW_SECONDS = 24 * 60 * 60
 
 WORKSPACE_LOGS_KEY = "workspace_logs"
+UPDATE_APPLY_KEY = "update_apply"
 TRANSCRIPT_KEY = "transcript"
 AGENT_LOGS_KEY = "agent_logs"
 AGENT_LOG_DB_KEY = "agent_log_db"
@@ -131,8 +134,33 @@ LOG_DB_TIMEOUT_SECONDS = 2
 # Where each kind of member lives inside the archive.
 METADATA_MEMBER_NAME = "metadata.json"
 LOG_MEMBER_DIR = "logs"
+UPDATE_APPLY_MEMBER_DIR = "update-apply"
 CHAT_MEMBER_DIR = "chats"
 AGENT_LOG_MEMBER_DIR = "agent-logs"
+
+# The update flow's state directory under the workspace (``update_apply_contract.py`` in the
+# update-self skill, and the Imbue Studio app's in-workspace dispatcher), and the small records in
+# it a report reads whole: why an update did or did not run is in these. Named rather than
+# globbed, so the directory's ``snapshots/`` (pre-apply copies of the workspace's own files) and
+# ``dispatcher.pyz`` (the app's program, which says nothing about this workspace) never ride.
+UPDATE_APPLY_STATE_REL = "data/.state/update-apply"
+UPDATE_APPLY_RECORD_FILES = (
+    "schedule.json",
+    "run.json",
+    "last-dispatch.json",
+    "dispatch-attempt.json",
+    "watchdog.json",
+    "marker.json",
+    "emergency.json",
+    "provision-incomplete.json",
+    "last-good.json",
+)
+# The dispatcher writes a line only when it acts, so its tail is the recent history.
+UPDATE_APPLY_LOG_FILE = "dispatcher.log"
+MAX_UPDATE_APPLY_LOG_LINES = 500
+# Its own class budget, so a long dispatcher log cannot crowd the records out. The log rides last,
+# so it is the member dropped when the records alone come near the budget.
+MAX_UPDATE_APPLY_CLASS_BYTES = MAX_READ_BYTES + 64 * 1024
 
 # What the agent half of a report is read out of: the per-agent state
 # directories mngr keeps as siblings of this collector's own. Taken from the env
@@ -525,6 +553,36 @@ def collect_log_members() -> tuple[list[tuple[str, str, float]], int]:
         )
         members.append((member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path)))
     return take_within_byte_budget(members, MAX_LOG_CLASS_BYTES)
+
+
+def collect_update_apply_members() -> tuple[list[tuple[str, str, float]], int]:
+    """The update flow's records and the dispatcher log's tail, as members, and the budget's drop count.
+
+    Read at call time from ``WORKSPACE_DIR``; a workspace that never armed or ran an update has
+    none of them, and contributes nothing.
+    """
+    state_dir = os.path.join(WORKSPACE_DIR, UPDATE_APPLY_STATE_REL)
+    members: list[tuple[str, str, float]] = []
+    for name in UPDATE_APPLY_RECORD_FILES:
+        path = os.path.join(state_dir, name)
+        if os.path.isfile(path):
+            members.append(
+                (
+                    "{}/{}".format(UPDATE_APPLY_MEMBER_DIR, name),
+                    read_bounded(path, False),
+                    safe_mtime(path),
+                )
+            )
+    log_path = os.path.join(state_dir, UPDATE_APPLY_LOG_FILE)
+    if os.path.isfile(log_path):
+        members.append(
+            (
+                "{}/{}".format(UPDATE_APPLY_MEMBER_DIR, UPDATE_APPLY_LOG_FILE),
+                read_tail(log_path, MAX_UPDATE_APPLY_LOG_LINES),
+                safe_mtime(log_path),
+            )
+        )
+    return take_within_byte_budget(members, MAX_UPDATE_APPLY_CLASS_BYTES)
 
 
 def select_agent_log_files(agent_id: str) -> list[str]:
@@ -1135,6 +1193,12 @@ def main(argv: Sequence[str]) -> None:
                 ],
             )
         )
+        # Its own class, so a secret in a record or the dispatcher's log costs the report
+        # these files and not the service logs.
+        update_members, dropped_update = collect_update_apply_members()
+        dropped_by_key[UPDATE_APPLY_KEY] = dropped_update
+        collected.append((UPDATE_APPLY_KEY, "update records", update_members))
+
         # The pane needs the chats consent as well as this one: it is where a TUI
         # harness renders the conversation, so its scrollback is chat content and
         # not only diagnostics.
