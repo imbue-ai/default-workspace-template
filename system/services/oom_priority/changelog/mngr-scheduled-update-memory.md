@@ -1,0 +1,7 @@
+The memory candidates command (`system/services/oom_priority/bin/memory_candidates.py`) now reports the free memory the memory daemon actually decides on, and lists the workspace's apps.
+
+Before, it read free memory from the container's `/proc/meminfo`. On a workspace with a memory cap that is not the figure earlyoom acts on: earlyoom reads the headroom file the workspace publishes for its `--host-meminfo`, and the two disagree. On one capped workspace `/proc/meminfo` said 3.1 GB free while the real headroom was 1.0 GB, and an agent that believed the first figure kept rerunning a build that kept being killed. The command now prefers the headroom file while it is fresh, falls back to `/proc/meminfo`, and names which file and which field it read. The rule is the one `oom_priority.meminfo` already applied for the resource sampler and the system monitor.
+
+It also lists the apps the workspace may stop, each with how many windows show it, its supervisord program, and the memory its program's process tree holds. A critical app, an internal app, an app with no program and one that is not running are all left out, and so is the browser, whose Chromium processes already have their own section. Before, the apps were missing entirely, so anyone freeing memory had to work out the list by hand.
+
+The apps and the browsers now come from one read of the shell's inventory document rather than two reads of its desktops; a shell that cannot be reached takes both sections to "unknown" together.

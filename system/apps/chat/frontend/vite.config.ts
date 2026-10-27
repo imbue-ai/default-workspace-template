@@ -2,6 +2,7 @@ import { defineConfig } from "vite";
 import tailwindcss from "@tailwindcss/vite";
 import { configDefaults } from "vitest/config";
 import path from "path";
+import { themeBoot } from "@imbue/workspace-ui/src/themes/themeBoot";
 
 export default defineConfig({
   // `dist/` is not part of this project's output -- the bundle goes to
@@ -18,7 +19,8 @@ export default defineConfig({
   test: {
     exclude: [...configDefaults.exclude, "dist/**"],
   },
-  plugins: [tailwindcss()],
+  // themeBoot wears the theme this origin last wore before the first paint (workspace-themes plan section 5.3).
+  plugins: [tailwindcss(), themeBoot()],
   publicDir: "media",
   root: ".",
   resolve: {

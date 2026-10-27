@@ -23,13 +23,15 @@ class RegistryReadError(AppManifestError):
 
 
 class ScopeComputationError(AppManifestError):
-    """A creation's footprint cannot be computed: a git command failed, or a config it reads is unparseable."""
+    """A creation's footprint cannot be computed: a git command failed, a config it reads is
+    unparseable, the branch did not fork from the lead ref it is judged against, or a pass scope
+    file cannot be read back."""
 
 
 class SuiteSelectionError(AppManifestError):
     """The suite selection cannot be computed: a file it reads cannot be read or parsed, a
-    guard it lists is not tracked by git, or a diff selection would miss the working tree's
-    uncommitted changes."""
+    guard it lists is not tracked by git, a diff selection would miss the working tree's
+    uncommitted changes, or a pass scope file has no fork point or no longer describes HEAD."""
 
 
 class AppRegistrationError(AppManifestError):

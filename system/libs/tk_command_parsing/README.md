@@ -31,7 +31,8 @@ interpreted the way a shell would.
 ## Consumers
 
 - `system/scripts/agent_tk_standalone_check.py` -- the PreToolUse gate that blocks a
-  non-standalone `tk start`/`tk close`. It uses `parse_command` to split the
+  `tk start`/`tk close` sharing its tool call with anything but other `tk create`/`start`/`close`
+  commands run in sequence. It uses `parse_command` to split the
   Bash command into segments and inspect the verbs.
 - `system/scripts/agent_latchkey_request_check.py` -- the PreToolUse gate that blocks a
   latchkey permission request that is batched, chained, or redirected. It reads

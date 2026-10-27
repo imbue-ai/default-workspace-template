@@ -34,14 +34,14 @@ Windows are positioned boxes that a separate live-page layer mirrors; they are n
 | Launcher | New Tab page, start menu | The text field at the taskbar's left and the menu it opens | Client, transient | start menu, spotlight |
 | System tray | -- | The taskbar's right end, a row of tray widgets | Taskbar | status area |
 | Tray widget | -- | One self-contained thing in the tray; V1 ships Desktops | Taskbar | applet, indicator |
-| Theme | design system tokens | The token table every component reads: colours, type, radii, metrics | Build-time file in V1 | skin |
+| Theme | design system tokens | A whole look: a folder of style files, assets, and a manifest, written to the tokens, parts, and chrome slots of the theme contract | A folder under `system/themes/` or `themes/`; the choices in `desktop_themes.json` | skin |
 | Phone layout, touch mode | device kind `mobile` | Two render policies, from the viewport's size and from pointer type | Derived at render time | mobile mode |
 
 The sections below define each one.
 
 ### 2.1 Desktop
 
-A desktop has an id (the slugified name, stable across renames), a name, a colour, a glyph, a **wallpaper**, its **shortcuts**, and its **windows**.
+A desktop has an id (the slugified name, stable across renames), a name, a colour, a glyph, a **wallpaper**, a **theme** (its own choice, or none to wear the workspace's default), its **shortcuts**, and its **windows**.
 Everything on a desktop is shared truth: every client sees the same desktops with the same windows, shortcuts, and wallpaper.
 A workspace always has at least one desktop; deleting the last one is refused, and a fresh workspace starts with one default desktop.
 There is no unfiltered "Everything" desktop; the launcher is how you reach everything on the machine.
@@ -130,10 +130,13 @@ Neither sense of "dock" survives V1; the change purges the word from every file 
 
 ### 2.10 Theme
 
-A theme is one table of CSS custom properties: the `--c-*` colour tokens and type roles of `system/libs/workspace_ui/src/base.css`, plus the desktop's own tokens (title bar height, taskbar height, cell size, minimum window size, window radius, the default wallpaper).
-Every component styles itself from tokens and semantic utilities only.
-The metrics behaviour needs are read once from the computed tokens by one function, so no number lives in two places.
-V1 ships one theme; switching themes is deferred.
+A theme is a folder: style files, assets, and a `theme.toml`, under `system/themes/` (built in) or `themes/` (made in the workspace).
+It styles the interface only through the theme contract: the tokens (the `--c-*` colour tokens and type roles of `system/libs/workspace_ui/src/base.css`, plus the desktop's own, such as title bar height and window radius), the named parts, and the title bar's chrome slots.
+The standard look is a theme too, and the base every other theme starts from; Classic Mac and Windows 2000 ship beside it.
+The workspace has a default theme, and a desktop may wear its own; a desktop's windows, and the pages in them of every app that takes part in themes, wear that desktop's theme.
+Every component styles itself from tokens, semantic utilities, and parts only.
+The metrics behaviour needs are read from the computed tokens by one function whenever the theme changes, so no number lives in two places.
+The spec is `docs/system/blueprint/workspace-themes/plan-workspace-themes.md`.
 
 ### 2.11 The phone layout and touch mode
 

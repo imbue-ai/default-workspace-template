@@ -35,9 +35,12 @@ touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.t
 If it says `critical = true` -- the shell (`system_interface`), the chat, the
 terminal, and any user app that declares it -- or if the change is under
 `system/libs/workspace_ui/` (the shared library both critical bundles are built
-from) or `system/libs/workspace_layout/` (the layout wire contract the shell, the
-chat, and the terminal all run), **follow [`references/critical-app.md`](references/critical-app.md) and
-stop reading here.** A critical app is never edited in the served tree: that
+from), `system/libs/workspace_layout/` (the layout wire contract the shell, the
+chat, and the terminal all run), or `system/libs/workspace_themes/` (the theme
+catalog and theme route the same three run), **follow [`references/critical-app.md`](references/critical-app.md) and
+stop reading here** -- for the whole change: when it also touches an ordinary
+app or a skill, those go through that flow with it. A critical app is never
+edited in the served tree: that
 flow runs the same live loop against an isolated worktree, with a preview window
 as the user's view, and goes live through the atomic update apply once a
 background worker has hardened the change. Everything below is for an app or
@@ -132,11 +135,12 @@ another chat editing sequentially on top is safe; only *simultaneous* editing
 needs the lease.
 
 **An in-flight harden pass does not block you -- the foreground wins.** If
-`tk ready` also shows an in-progress `update <name>` or `heal <name>` ticket
-(a background pass hardening an earlier change to this service), proceed with
+`tk ready` also shows an in-progress `update` or `heal` ticket whose title
+lists `<name>` among the creations its pass covers (a background pass hardening
+an earlier change to this service), proceed with
 your edit; your change simply makes that pass stale. Leave a note on that
-ticket (`tk add-note <id> "..."`) so its owner coalesces at merge time. The
-full contention rules live in
+ticket (`tk add-note <id> "..."`) so its owner catches the pass up to cover
+it at merge time. The full contention rules live in
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).
 
 ## The live change loop
@@ -191,7 +195,21 @@ don't watch their own source, so a code change is **not** live until the
 process restarts:
 
 - **Backend change** (Python / server logic, for an app or a
-  daemon): restart the program.
+  daemon): restart the program. For an app, steps 2 to 4 of this loop are
+  one call -- it restarts without waiting out the program's 30 s `startsecs`
+  window, waits for the port, checks a marker, and refreshes or opens the
+  window:
+
+  ```bash
+  python3 system/scripts/verify_app.py <name> --restart --marker "<text unique to your change>" --refresh
+  ```
+
+  With no window open yet, pass `--open` instead of `--refresh`: the call
+  opens the window only after the checks pass, the order step 3 asks for.
+
+  A daemon with no port cannot use `verify_app.py` (it needs a port to
+  check), so bounce it with supervisord directly; the call waits out the
+  program's `startsecs`, which is 30 s only if its block sets `startsecs=30`:
 
   ```bash
   supervisorctl restart <name>
@@ -208,7 +226,7 @@ process restarts:
   ```bash
   uv tool install -e system/apps/<package> --reinstall
   uv sync --all-packages            # the app is also a workspace member; keep the lockfile current
-  supervisorctl restart <name>
+  python3 system/scripts/verify_app.py <name> --restart --marker "<text>" --refresh
   ```
 
   (Background services under `system/services/` run from the root venv
@@ -278,9 +296,12 @@ names any channel that did not land on stderr and is never a reason to stop.
 Confirm the change actually does the right thing, exercised as the user
 would (not just "the process is up"):
 
-- **App**: `curl` against the registered backend URL
-  `http://127.0.0.1:<port>/` then a Playwright assertion on a
-  marker unique to your change. The recipe is in
+- **App**: the `verify_app.py --restart --marker ... --refresh` call of
+  step 2 is this check (HTTP against the registered backend URL
+  `http://127.0.0.1:<port>/`, the marker unique to your change, and
+  `--screenshot` for a rendered page only with `--open`, before any window
+  exists); add one `curl` of a changed route to the same call when the change
+  is an API. The recipe is in
   `build-app`'s [verify reference](../build-app/references/verify.md);
   the symptom-indexed gotchas (connection refused, a window stuck on the
   loading page, broken WebSockets) are in that skill's
@@ -479,14 +500,18 @@ and hold the harden pass until you are sure the user is satisfied. A single
 larger-scope change this gate is the *working* result, not just the mock,
 exactly as `build-app`'s Step 5 gates on the working site.)
 
-- **A change you and the user discussed and applied live, or repeatable
-  work you did by hand** -> invoke `update-creation` with
-  `type=app`. It opens a tracking ticket, dispatches the generic
-  harden worker to verify/test the change on its own branch, proxies the
-  gates, merges, and refreshes the window on go-live.
+- **A change you and the user discussed and applied live, or repeatable work you
+  did by hand** -> invoke `update-creation` once for the whole change, listing
+  every creation it touched: each app as `app:<name>`, each background service
+  as `service:<package>`, and any skill the same change edited as
+  `skill:<name>`. Two apps changed to work together are one pass with one
+  worker, never one per app. It opens a tracking ticket, dispatches the generic
+  harden worker to verify/test the change on its own branch, proxies the gates,
+  merges, and refreshes each window on go-live.
 - **The service errored or produced a wrong result and you worked around
-  it** -> invoke `heal-creation` with `type=app` (or `type=service` for a
-  background service) at turn-end instead.
+  it** -> invoke `heal-creation` at turn-end instead, again once, covering
+  every creation the failure spans (`app:<name>`, or `service:<package>` for
+  a background service).
 - **A critical app** (the shell, the chat, the terminal, or a user app whose
   manifest says so) never reaches this step from here: its live loop, harden
   handoff, and go-live through the atomic update apply are all
@@ -497,7 +522,7 @@ skills; this skill's turn-end step is just the service-shaped entry into
 them.
 
 Both flows enforce single-flight per creation: if another chat already has a
-harden pass in flight for this service, they leave a note on its ticket
-instead of dispatching a sibling, and the eventual superseding pass covers
-both changes. See
+harden pass in flight for any creation in yours, they leave a note on its
+ticket instead of dispatching a sibling, and that pass catches up at merge
+time to cover both changes. See
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).

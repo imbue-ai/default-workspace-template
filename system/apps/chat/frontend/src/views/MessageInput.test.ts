@@ -30,10 +30,16 @@ const mocks = vi.hoisted(() => {
   // working/idle branch (stop button, placeholder) on the agent's activity state --
   // both driven through this mutable holder (reset in beforeEach; an undefined
   // activity_state means "not working").
-  const agent: { harness: string | undefined; activity_state: string | undefined; account_id: string | null } = {
+  const agent: {
+    harness: string | undefined;
+    activity_state: string | undefined;
+    account_id: string | null;
+    is_connecting: boolean;
+  } = {
     harness: "claude",
     activity_state: undefined,
     account_id: null,
+    is_connecting: false,
   };
   // The chat's in-progress switch, the account its next send switches it to, and the model
   // picked for it, all null at rest.
@@ -73,8 +79,10 @@ const mocks = vi.hoisted(() => {
     // Resolved at once by default: the agent exists. A test of a chat still being created
     // swaps in a deferred promise.
     whenChatRegistered: vi.fn(async (_chatId: string) => {}),
+    refuseSendToFailedChat: vi.fn((_chatId: string) => {}),
     // Whether the chat list names the chat; false for a seeded chat awaiting its first send.
     isChatRegistered: true,
+    isLaunchInFlight: false,
     provisional: undefined as unknown,
     launchChat: vi.fn(async (_chatId: string, _accountId: string, _message?: string) => ({})),
     chooseFastMode: vi.fn(),
@@ -200,8 +208,10 @@ vi.mock("../models/Chats", async (importOriginal) => ({
   getChatById: () =>
     mocks.isChatRegistered ? { active_agent: mocks.agent, handoff: mocks.switching.handoff } : undefined,
   getProvisionalChat: () => mocks.provisional,
+  isLaunchInFlight: () => mocks.isLaunchInFlight,
   launchChat: (chatId: string, accountId: string, message?: string) => mocks.launchChat(chatId, accountId, message),
   whenChatRegistered: (chatId: string) => mocks.whenChatRegistered(chatId),
+  refuseSendToFailedChat: (chatId: string) => mocks.refuseSendToFailedChat(chatId),
 }));
 vi.mock("../models/Providers", () => ({
   openProviderChooser: mocks.openProviderChooser,
@@ -768,20 +778,10 @@ describe("MessageInput send to a chat still being created", () => {
     mocks.whenChatRegistered.mockImplementation(async (_chatId: string) => {});
   });
 
-  it("holds the send until the agent registers, then sends it", async () => {
-    let release: () => void = () => {};
-    mocks.whenChatRegistered.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          release = resolve;
-        }),
-    );
-    const sending = typeAndSend(MessageInput(), "agent-1", "hello");
-    await flushAsync();
-    expect(mocks.sendMessage).not.toHaveBeenCalled();
+  it("sends at once without waiting for the agent, which the chat app holds the message for", async () => {
+    mocks.whenChatRegistered.mockImplementation(() => new Promise<void>(() => {}));
 
-    release();
-    await sending;
+    await typeAndSend(MessageInput(), "agent-1", "hello");
 
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     const [calledChatId, calledText] = mocks.sendMessage.mock.calls[0] as unknown as [string, string];
@@ -789,8 +789,10 @@ describe("MessageInput send to a chat still being created", () => {
     expect(calledText).toContain("hello");
   });
 
-  it("returns the message to the composer with the reason when the create fails", async () => {
-    mocks.whenChatRegistered.mockRejectedValueOnce("mngr create exited with code 3");
+  it("returns the message to the composer with the reason when the create has already failed", async () => {
+    mocks.refuseSendToFailedChat.mockImplementationOnce(() => {
+      throw new Error("mngr create exited with code 3");
+    });
 
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
 
@@ -820,16 +822,28 @@ describe("MessageInput first send of a seeded chat", () => {
       phase: "awaiting_first_send",
       error: null,
       is_seeded: true,
+      held_sends: [],
     };
     mocks.selectedAccount = { id: "acct-1" };
   });
 
   afterEach(() => {
     mocks.isChatRegistered = true;
+    mocks.isLaunchInFlight = false;
     mocks.provisional = undefined;
     mocks.selectedAccount = null;
     mocks.accountsLoaded = true;
     mocks.whenChatRegistered.mockImplementation(async (_chatId: string) => {});
+  });
+
+  it("waits for the chat and sends to it when the sign-in's launch is already on its way, launching nothing itself", async () => {
+    // The sign-in launched the chat a moment ago and the page has not yet heard it is creating.
+    mocks.isLaunchInFlight = true;
+    await typeAndSend(MessageInput(), "agent-1", "Let's build something");
+
+    expect(mocks.launchChat).not.toHaveBeenCalled();
+    expect(mocks.whenChatRegistered).toHaveBeenCalledWith("agent-1");
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "Let's build something", expect.stringMatching(/^m-/));
   });
 
   it("launches the chat on the signed-in account with the message as its first, and sends nothing else", async () => {
@@ -892,6 +906,85 @@ describe("MessageInput first send of a seeded chat", () => {
     expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("Let's build something");
     expect(error).toHaveBeenCalledTimes(1);
     error.mockRestore();
+  });
+});
+
+describe("MessageInput first send of a chat with no seed", () => {
+  beforeEach(() => {
+    mocks.sendMessage.mockClear();
+    mocks.launchChat.mockClear();
+    mocks.getComposerAttachments.mockReturnValue([]);
+    localStorage.clear();
+    mocks.isChatRegistered = false;
+    mocks.provisional = {
+      chat_id: "agent-1",
+      name: "Chat 1",
+      account_id: "",
+      phase: "awaiting_first_send",
+      error: null,
+      is_seeded: false,
+      held_sends: [],
+    };
+    mocks.selectedAccount = { id: "acct-1" };
+  });
+
+  afterEach(() => {
+    mocks.isChatRegistered = true;
+    mocks.provisional = undefined;
+    mocks.selectedAccount = null;
+  });
+
+  it("launches the chat with nothing, then sends the message, which the chat holds where Stop can reach it", async () => {
+    await typeAndSend(MessageInput(), "agent-1", "Plan my week");
+
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", undefined);
+    expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
+    expect(mocks.sendMessage.mock.calls[0]).toEqual(expect.arrayContaining(["agent-1", "Plan my week"]));
+  });
+});
+
+describe("MessageInput stop while connecting", () => {
+  beforeEach(() => {
+    mocks.drainToComposer.mockReset();
+    mocks.agent.harness = "claude";
+    mocks.agent.activity_state = undefined;
+    mocks.agent.is_connecting = true;
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    mocks.agent.is_connecting = false;
+  });
+
+  it("offers Stop while a sent message waits for the agent, and puts the message back in the composer", async () => {
+    mocks.drainToComposer.mockResolvedValueOnce({ block: "hello there" });
+    const component = MessageInput();
+    const render = () => component.view!({ attrs: { chatId: "agent-1" } } as never);
+
+    const stopButton = findByAttr(render(), "aria-label", "Stop sending and bring your message back to draft area");
+    expect(stopButton, "Stop should be there while the chat connects").toBeDefined();
+    await (stopButton?.attrs?.onclick as () => Promise<void>)();
+
+    expect(mocks.drainToComposer).toHaveBeenCalledWith("agent-1");
+    expect(findByTag(render(), "textarea")?.attrs?.value).toBe("hello there");
+  });
+
+  it("offers no Stop when nothing is in progress", () => {
+    mocks.agent.is_connecting = false;
+    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(
+      findByAttr(rendered, "aria-label", "Stop sending and bring your message back to draft area"),
+    ).toBeUndefined();
+    expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeUndefined();
+  });
+
+  it("drops the bubble of a send Stop took back, which no transcript turn will retire", async () => {
+    mocks.agent.is_connecting = false;
+    mocks.sendMessage.mockResolvedValueOnce("withdrawn");
+
+    await typeAndSend(MessageInput(), "agent-1", "never mind");
+
+    expect(getOutgoingMessages("agent-1")).toEqual([]);
   });
 });
 
@@ -1498,6 +1591,7 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
       phase: "awaiting_first_send",
       error: null,
       is_seeded: true,
+      held_sends: [],
     };
     mocks.selectedAccount = null;
     localStorage.clear();
@@ -1530,6 +1624,49 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     (notice!.attrs!.oncreate as () => void)();
 
     expect(mocks.openProviderChooser).toHaveBeenCalledTimes(1);
+  });
+
+  it("launches the awaiting chat with no message as the chooser's sign-in completes, from the button or on appearing", async () => {
+    mocks.launchChat.mockClear();
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+    (findByClass(tree, "message-input-no-provider")!.attrs!.oncreate as () => void)();
+    (findButton(tree, "Choose a provider")!.attrs!.onclick as () => void)();
+
+    expect(mocks.openProviderChooser).toHaveBeenCalledTimes(2);
+    for (const call of mocks.openProviderChooser.mock.calls) {
+      const intent = call[0] as { onSignedIn: (accountId: string) => void };
+      intent.onSignedIn("acct-9");
+    }
+    await Promise.resolve();
+
+    // The agent is up before anything is typed; the first send then carries the seeded conversation.
+    expect(mocks.launchChat).toHaveBeenCalledTimes(2);
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-first-7731", "acct-9", undefined);
+  });
+
+  it("launches nothing on sign-in once the chat is no longer awaiting its first send or is already listed", () => {
+    mocks.launchChat.mockClear();
+    const tree = MessageInput().view!({ attrs: { chatId: "agent-first-7731" } } as never);
+    (findButton(tree, "Choose a provider")!.attrs!.onclick as () => void)();
+    const intent = mocks.openProviderChooser.mock.calls[0][0] as { onSignedIn: (accountId: string) => void };
+
+    // A send in the meantime launched it: the provisional chat is creating.
+    mocks.provisional = { ...(mocks.provisional as object), phase: "creating" };
+    intent.onSignedIn("acct-9");
+    expect(mocks.launchChat).not.toHaveBeenCalled();
+
+    // The page's own launch is on its way and the backend has not said so yet.
+    mocks.provisional = { ...(mocks.provisional as object), phase: "awaiting_first_send" };
+    mocks.isLaunchInFlight = true;
+    intent.onSignedIn("acct-9");
+    expect(mocks.launchChat).not.toHaveBeenCalled();
+    mocks.isLaunchInFlight = false;
+
+    // The create landed: the chat list names it.
+    mocks.provisional = { ...(mocks.provisional as object), phase: "awaiting_first_send" };
+    mocks.isChatRegistered = true;
+    intent.onSignedIn("acct-9");
+    expect(mocks.launchChat).not.toHaveBeenCalled();
   });
 
   it("keeps the phone's leading settings button beside the notice", () => {

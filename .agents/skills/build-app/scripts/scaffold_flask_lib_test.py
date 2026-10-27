@@ -24,6 +24,7 @@ import configparser
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tomllib
@@ -35,7 +36,9 @@ import scaffold_flask_lib
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import MAX_APP_DESCRIPTION_LENGTH, MAX_DISPLAY_NAME_LENGTH
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PATH
+from app_manifest.testing import commit_everything, init_git_repository
 from app_schema.api_schema import NO_SCHEMA_KEY
+from loguru import logger
 
 _SCRIPT = Path(__file__).resolve().parent / "scaffold_flask_lib.py"
 
@@ -44,6 +47,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[4]
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
 _DESCRIPTION = "a test app"
+
+# A whole second pytest session in a subprocess, which a cold or loaded box (gVisor especially)
+# can run past the suite's 10s per-test budget.
+_APP_TEST_RUN_TIMEOUT_SECONDS = 60
 
 # The shipped shape: the main config declares no programs at all, only the
 # daemon's own sections and the [include] that pulls in the drop-ins.
@@ -128,6 +135,12 @@ def _scaffold(root: Path, name: str, *extra: str) -> subprocess.CompletedProcess
         ],
         capture_output=True,
         text=True,
+    )
+
+
+def _write_inbox_status_lib(repo_root: Path) -> Path:
+    return scaffold_flask_lib._write_lib(
+        repo_root, "inbox-status", "inbox status dashboard", "Inbox status", 8081, [], _ICON
     )
 
 
@@ -320,15 +333,7 @@ def test_name_held_by_an_event_listener_is_refused(tmp_path: Path) -> None:
 
 
 def test_write_lib_writes_a_manifest_the_library_accepts(tmp_path: Path) -> None:
-    lib_dir = scaffold_flask_lib._write_lib(
-        tmp_path,
-        "inbox-status",
-        "inbox status dashboard",
-        "Inbox status",
-        8081,
-        [],
-        _ICON,
-    )
+    lib_dir = _write_inbox_status_lib(tmp_path)
 
     manifest = load_manifest(lib_dir / "app.toml")
 
@@ -377,13 +382,45 @@ def test_a_scaffolded_apps_ratchets_define_the_tests_every_project_defines() -> 
 
 
 def test_a_scaffolded_app_passes_its_own_type_check(tmp_path: Path) -> None:
-    lib_dir = scaffold_flask_lib._write_lib(
-        tmp_path, "inbox-status", "inbox status dashboard", "Inbox status", 8081, [], _ICON
-    )
+    lib_dir = _write_inbox_status_lib(tmp_path)
 
     result = subprocess.run(
         [str(Path(sys.executable).parent / "ty"), "check", "--python", sys.prefix],
         cwd=lib_dir,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+@pytest.mark.timeout(_APP_TEST_RUN_TIMEOUT_SECONDS)
+def test_a_scaffolded_app_passes_its_own_tests(tmp_path: Path) -> None:
+    """The tests the scaffold writes pass on the code it writes beside them, before the agent adds anything.
+
+    The ratchets list the app's files through git and blame the lines they flag, so the app is
+    committed first. Its type-check ratchet is left out: it runs ``uv run ty``, which outside a
+    workspace would install the app's dependencies, and
+    ``test_a_scaffolded_app_passes_its_own_type_check`` runs ty on a scaffolded app directly.
+    """
+    lib_dir = _write_inbox_status_lib(tmp_path)
+    init_git_repository(tmp_path)
+    commit_everything(tmp_path, "scaffold inbox-status")
+    # Options the outer run was given are not the app's: a `-k` naming this test would deselect all of its tests.
+    inherited = {name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"}
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "-p",
+            "no:cacheprovider",
+            "--deselect",
+            "test_inbox_status_ratchets.py::test_no_type_errors",
+        ],
+        cwd=lib_dir,
+        env={**inherited, "PYTHONPATH": str(lib_dir / "src")},
         capture_output=True,
         text=True,
     )
@@ -558,10 +595,8 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
     assert "Content-Security-Policy" not in client.get("/health").headers
 
 
-def test_the_runner_logs_what_its_policy_blocked(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A browser's report of a blocked resource lands on stderr naming the resource, the page and the directive.
+def test_the_runner_logs_what_its_policy_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A browser's report of a blocked resource is logged as an error naming the resource, the page and the directive.
 
     That line is how an agent learns a page pulled in something the policy does not admit: the
     page itself shows nothing server-side, and the supervisor log is what check-app-errors reads.
@@ -571,58 +606,66 @@ def test_the_runner_logs_what_its_policy_blocked(
     body that is not a report is answered without a trace.
     """
     client = _import_scaffolded_runner(tmp_path, monkeypatch).app.test_client()
-    report = client.post(
-        "/_csp-report",
-        data=json.dumps(
-            {
-                "csp-report": {
-                    "document-uri": "http://127.0.0.1:8081/",
-                    "blocked-uri": "https://cdn.jsdelivr.net/npm/chart.js",
-                    "effective-directive": "script-src-elem",
-                    "violated-directive": "script-src-elem",
-                }
-            }
-        ),
-        content_type="application/csp-report",
+    logged: list[str] = []
+    sink_id = logger.add(
+        lambda message: logged.append(f"{message.record['level'].name} {message.record['message']}"), level="DEBUG"
     )
-    assert report.status_code == 204
-    logged = capsys.readouterr().err
-    assert logged.splitlines() == [
-        "ERROR Content-Security-Policy blocked 'https://cdn.jsdelivr.net/npm/chart.js' on "
-        "'http://127.0.0.1:8081/' (script-src-elem); "
-        "add its origin to CONTENT_SECURITY_POLICY if the page needs it"
-    ]
+    try:
+        report = client.post(
+            "/_csp-report",
+            data=json.dumps(
+                {
+                    "csp-report": {
+                        "document-uri": "http://127.0.0.1:8081/",
+                        "blocked-uri": "https://cdn.jsdelivr.net/npm/chart.js",
+                        "effective-directive": "script-src-elem",
+                        "violated-directive": "script-src-elem",
+                    }
+                }
+            ),
+            content_type="application/csp-report",
+        )
+        assert report.status_code == 204
+        assert logged == [
+            "ERROR Content-Security-Policy blocked 'https://cdn.jsdelivr.net/npm/chart.js' on "
+            "'http://127.0.0.1:8081/' (script-src-elem); "
+            "add its origin to CONTENT_SECURITY_POLICY if the page needs it"
+        ]
+        logged.clear()
 
-    inline = {
-        "csp-report": {
-            "document-uri": "http://127.0.0.1:8081/stats",
-            "blocked-uri": "inline",
-            "effective-directive": "script-src-elem",
-            "source-file": "http://127.0.0.1:8081/stats",
-            "line-number": 42,
-            "column-number": 3,
-            "script-sample": "const chart = new Chart(document.getElemen",
+        inline = {
+            "csp-report": {
+                "document-uri": "http://127.0.0.1:8081/stats",
+                "blocked-uri": "inline",
+                "effective-directive": "script-src-elem",
+                "source-file": "http://127.0.0.1:8081/stats",
+                "line-number": 42,
+                "column-number": 3,
+                "script-sample": "const chart = new Chart(document.getElemen",
+            }
         }
-    }
-    assert client.post("/_csp-report", json=inline).status_code == 204
-    assert capsys.readouterr().err.splitlines() == [
-        "ERROR Content-Security-Policy blocked 'inline' on 'http://127.0.0.1:8081/stats' (script-src-elem) "
-        "at http://127.0.0.1:8081/stats:42 starting 'const chart = new Chart(document.getElemen'; "
-        "add its inline_script_source to CONTENT_SECURITY_POLICY if the page needs it"
-    ]
+        assert client.post("/_csp-report", json=inline).status_code == 204
+        assert logged == [
+            "ERROR Content-Security-Policy blocked 'inline' on 'http://127.0.0.1:8081/stats' (script-src-elem) "
+            "at http://127.0.0.1:8081/stats:42 starting 'const chart = new Chart(document.getElemen'; "
+            "add its inline_script_source to CONTENT_SECURITY_POLICY if the page needs it"
+        ]
+        logged.clear()
 
-    from_extension = {
-        "csp-report": {
-            "document-uri": "http://127.0.0.1:8081/",
-            "blocked-uri": "inline",
-            "source-file": "chrome-extension://abcdef/content.js",
-            "effective-directive": "script-src-elem",
+        from_extension = {
+            "csp-report": {
+                "document-uri": "http://127.0.0.1:8081/",
+                "blocked-uri": "inline",
+                "source-file": "chrome-extension://abcdef/content.js",
+                "effective-directive": "script-src-elem",
+            }
         }
-    }
-    assert client.post("/_csp-report", json=from_extension).status_code == 204
-    assert client.post("/_csp-report", json=["not", "a", "report"]).status_code == 204
-    assert client.post("/_csp-report", data=b"\x00garbage").status_code == 204
-    assert capsys.readouterr().err == ""
+        assert client.post("/_csp-report", json=from_extension).status_code == 204
+        assert client.post("/_csp-report", json=["not", "a", "report"]).status_code == 204
+        assert client.post("/_csp-report", data=b"\x00garbage").status_code == 204
+        assert logged == []
+    finally:
+        logger.remove(sink_id)
 
 
 def test_the_runner_does_not_use_reloader() -> None:

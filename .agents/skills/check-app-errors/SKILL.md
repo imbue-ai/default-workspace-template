@@ -118,5 +118,6 @@ rather than a re-scan.
   them as transient: capture anything you need to keep elsewhere.
 - Logs rotate (`<name>-stderr.log.1`, `.2`, ...). If a recent error is not in the
   live file, check the rotated backups.
-- To restart a crashed service after a fix, see the `update-service` skill
-  (`supervisorctl restart <name>`).
+- To restart a crashed service after a fix, see step 2 of the `update-app` skill:
+  `python3 system/scripts/verify_app.py <name> --restart ...` for an app,
+  `supervisorctl restart <name>` for a daemon with no port.

@@ -13,8 +13,9 @@
 
 import { setHoverTooltip } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import { buttonClass } from "@imbue/workspace-ui/src/components/Button";
+import { buttonClass, buttonPartAttrs } from "@imbue/workspace-ui/src/components/Button";
 import { startDownload } from "@imbue/workspace-ui/src/download";
+import { applyPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 function filenameFromUrl(imageUrl: string): string {
   try {
@@ -94,6 +95,7 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
 
   const downloadLink = document.createElement("a");
   downloadLink.className = buttonClass("ghost-inverse", { icon: true, extra: "image-lightbox-iconbtn no-underline" });
+  applyPartAttrs(downloadLink, buttonPartAttrs("ghost-inverse", true));
   downloadLink.href = imageUrl;
   // The workspace's own image downloads through startDownload below. Otherwise the link itself acts: a public-URL
   // image, which the browser will not download from another site, opens in a new tab rather than navigating away,
@@ -117,6 +119,7 @@ export function openImageLightbox(imageUrl: string, altText: string): void {
 
   const closeButton = document.createElement("button");
   closeButton.className = buttonClass("ghost-inverse", { icon: true, extra: "image-lightbox-iconbtn" });
+  applyPartAttrs(closeButton, buttonPartAttrs("ghost-inverse", true));
   closeButton.type = "button";
   closeButton.setAttribute("aria-label", "Close image viewer");
   closeButton.innerHTML = icon("close", { size: 20 });

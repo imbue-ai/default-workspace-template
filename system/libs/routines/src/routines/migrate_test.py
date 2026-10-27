@@ -170,6 +170,26 @@ def test_migration_writes_definitions_carries_state_over_and_removes_both_copies
     assert again.converted == ()
 
 
+def test_the_imbue_studio_update_dispatcher_stays_with_cron_untouched(
+    definitions: FileDefinitionStore, states: FileStateStore, legacy_cron_dir: Path, live_cron_dir: Path
+) -> None:
+    root = definitions.paths.repo_root
+    entry = (
+        "PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+        "* * * * * root flock -n /run/update-self-dispatch.lock -c 'cd /home/user/workspace && python3 "
+        "data/.state/update-apply/dispatcher.pyz tick >> data/.state/update-apply/dispatcher.log 2>&1'\n"
+    )
+    (legacy_cron_dir / "update-self-dispatch").write_text(entry)
+    (live_cron_dir / "update-self-dispatch").write_text(entry)
+
+    report = migrate_cron_entries(root, definitions, states, live_cron_dir=live_cron_dir)
+
+    assert (report.converted, report.skipped) == ((), ())
+    assert (legacy_cron_dir / "update-self-dispatch").read_text() == entry
+    assert (live_cron_dir / "update-self-dispatch").read_text() == entry
+    assert definitions.list_routines() == []
+
+
 def test_an_entry_whose_id_is_already_a_routine_stays_in_place(
     definitions: FileDefinitionStore, states: FileStateStore, legacy_cron_dir: Path, live_cron_dir: Path
 ) -> None:
