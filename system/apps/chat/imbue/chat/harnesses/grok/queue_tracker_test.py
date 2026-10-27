@@ -378,6 +378,20 @@ def test_adopting_a_new_session_drops_the_held_messages_and_the_journal(tmp_path
     assert not (tmp_path / OUTBOX_FILENAME).exists()
 
 
+def test_a_chat_app_restart_keeps_the_attempts_an_entry_spent(tmp_path: Path) -> None:
+    tracker = _tracker(tmp_path, token="session-1")
+    queued_id = tracker.enqueue("never committed", "t0", is_turn_open=True)
+    for _ in range(MAX_DELIVERY_ATTEMPTS):
+        _block, claimed, generation = tracker.begin_flush()
+        tracker.finish_flush(claimed, generation, delivered=(), result=_SENT)
+
+    restarted = _tracker(tmp_path, token="session-1")
+
+    assert restarted.is_exhausted(queued_id) is True
+    assert restarted.begin_flush()[1] == ()
+    assert _contents(restarted) == ["never committed"]
+
+
 def test_an_unknown_session_keeps_the_held_messages(tmp_path: Path) -> None:
     tracker = _tracker(tmp_path, token="session-1")
     tracker.enqueue("held", "t0", is_turn_open=True)

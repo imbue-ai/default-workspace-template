@@ -2,8 +2,8 @@
 
 Grok's own queue lives inside its TUI where nothing can see it, so the chat never lets grok queue anything: every
 message waits here, and the watcher's flush worker, the only typist, sends it once no top-level turn is in flight.
-Entries are journalled under the current grok process's session token, so they survive a chat app restart and are
-dropped when grok relaunches (contract Part B). A held slash command is sent alone, since grok may run it itself
+Entries are journalled, with the delivery attempts each has spent, under the current grok process's session token,
+so they survive a chat app restart and are dropped when grok relaunches (contract Part B). A held slash command is sent alone, since grok may run it itself
 without logging a user turn. The control lane is never published, journalled or returned: each command is sent
 alone, `/model` first, ahead of any held message.
 """
@@ -237,6 +237,9 @@ class GrokQueueTracker:
             timestamp = entry.get("timestamp")
             if isinstance(queued_id, str) and isinstance(content, str) and isinstance(timestamp, str):
                 self._queued.add(queued_id, content, timestamp, False)
+                attempts = entry.get("attempts")
+                if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts > 0:
+                    self._attempts[queued_id] = attempts
 
     def _write_journal_locked(self) -> None:
         if self._session_token is None:
@@ -248,7 +251,13 @@ class GrokQueueTracker:
             except OSError as error:
                 logger.opt(exception=error).warning("grok: could not remove the queue journal {}", self._outbox_path)
             return
-        payload = "".join(json.dumps({"session": self._session_token, **entry}) + "\n" for entry in entries)
+        payload = "".join(
+            json.dumps(
+                {"session": self._session_token, **entry, "attempts": self._attempts.get(entry["queued_id"], 0)}
+            )
+            + "\n"
+            for entry in entries
+        )
         tmp_path = self._outbox_path.with_suffix(self._outbox_path.suffix + ".tmp")
         try:
             tmp_path.write_text(payload)
