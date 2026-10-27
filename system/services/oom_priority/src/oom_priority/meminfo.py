@@ -66,7 +66,7 @@ def read_process_anonymous_kib(pid: int, proc: Path = PROC) -> int | None:
     """
     for name in ("smaps_rollup", "smaps"):
         try:
-            text = (proc / str(pid) / name).read_text()
+            text = (proc / str(pid) / name).read_text(errors="replace")
         except OSError:
             continue
         total = 0

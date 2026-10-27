@@ -55,7 +55,7 @@ def is_thread(task_id: int, proc_dir: Path = _PROC_DIR) -> bool:
     ``/proc/<tid>`` resolves for a thread although ``/proc`` does not list it, so a path's
     existence alone does not make an id a process."""
     try:
-        status = (proc_dir / str(task_id) / "status").read_text()
+        status = (proc_dir / str(task_id) / "status").read_text(errors="replace")
     except OSError:
         return False
     for line in status.splitlines():
@@ -83,10 +83,11 @@ def read_start_ticks(pid: int, proc_dir: Path = _PROC_DIR) -> int | None:
 
     Under gVisor ``pid_max`` is 65536, so a pid is reused within hours of its process exiting,
     but two processes that held the same pid never share a start time. The fields are counted
-    from after the last ``)``, since the command name before it may hold spaces or parentheses.
+    from after the last ``)``, since the command name before it may hold spaces or parentheses,
+    and it may be any bytes, so they are decoded leniently.
     """
     try:
-        stat = (proc_dir / str(pid) / "stat").read_text()
+        stat = (proc_dir / str(pid) / "stat").read_text(errors="replace")
     except OSError:
         return None
     fields = stat.rpartition(")")[2].split()

@@ -53,6 +53,16 @@ def test_start_ticks_are_read_past_a_command_name_with_spaces_and_parentheses(tm
     assert read_start_ticks(43, proc_dir=tmp_path) is None
 
 
+def test_a_command_name_that_is_not_utf8_neither_hides_the_start_time_nor_raises(tmp_path: Path) -> None:
+    # The kernel writes comm into stat and status as raw bytes.
+    write_fake_process(tmp_path, 42, start_ticks=123456, tgid=7)
+    entry = tmp_path / "42"
+    for name in ("stat", "status"):
+        (entry / name).write_bytes((entry / name).read_bytes().replace(b"claude", b"cl\xffude"))
+    assert read_start_ticks(42, proc_dir=tmp_path) == 123456
+    assert is_thread(42, proc_dir=tmp_path)
+
+
 @pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs a real /proc")
 def test_a_real_process_has_a_start_time_and_its_thread_is_not_a_process() -> None:
     assert read_start_ticks(os.getpid()) is not None
