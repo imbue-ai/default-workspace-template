@@ -2,8 +2,8 @@
 
 The one "watch these paths, wake this loop" block shared by everything that tails
 files: the model tracking (re-deriving an agent's choice whenever its live
-``model_state.json`` changes) and every store-backed session watcher
-(claude/codex/pi, via ``StoreBackedWatcher``). This wraps
+``model_state.json`` changes) and every store-backed session watcher (via
+``StoreBackedWatcher``). This wraps
 the one shared primitive that already exists --
 :class:`~imbue.chat.watcher_common.WakeOnChangeHandler` plus
 ``POLL_INTERVAL_SECONDS`` -- into a small object that watches a set of paths and
@@ -15,9 +15,8 @@ Per-path rule: an existing directory is watched recursively (so codex's rotating
 rollout files under a stable sessions root all wake the loop without rescheduling);
 anything else is watched via its parent directory (so a not-yet-created file --
 claude's ``settings.json`` before first launch -- is caught the moment it appears).
-Directories that do not exist yet are retried on each loop, mirroring the codex
-watcher's lazy observer start, and so is a watched directory that was deleted, whose watch
-watchdog stops for good.
+Directories that do not exist yet are retried on each loop, and so is a watched directory
+that was deleted, whose watch watchdog stops for good.
 """
 
 from __future__ import annotations
