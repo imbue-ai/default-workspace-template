@@ -75,7 +75,7 @@ def _probe_lock(account_dir: Path) -> threading.Lock:
 def codex_account_environment(account_dir: Path) -> dict[str, str]:
     """The server's environment with codex bound to ``account_dir`` and no ambient key to answer for instead."""
     environment = {key: value for key, value in os.environ.items() if key not in _AMBIENT_AUTH_KEYS}
-    environment.update(CodexAccountBinding().account_env(account_dir))
+    environment.update(CodexAccountBinding().cli_env(account_dir))
     return environment
 
 

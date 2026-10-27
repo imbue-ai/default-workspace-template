@@ -82,7 +82,7 @@ def claude_one_shot_env(ambient_env: Mapping[str, str], config_dir: Path) -> dic
         for key, value in ambient_env.items()
         if key not in MANAGED_AUTH_ENV_KEYS and key not in _SESSION_ENV_KEYS
     }
-    env.update(ClaudeAccountBinding().account_env(config_dir))
+    env.update(ClaudeAccountBinding().cli_env(config_dir))
     # An account that thinks by default spends most of a short answer's time thinking: measured
     # on Haiku, about 3s with thinking against under 1s without, for the same name.
     env["MAX_THINKING_TOKENS"] = "0"
