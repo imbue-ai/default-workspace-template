@@ -98,7 +98,7 @@ def test_tail_facts_an_assistant_record_before_any_sentinel_is_not_an_answer() -
 
 
 def test_tail_facts_mid_tool_variant_is_not_the_tap_sentinel() -> None:
-    """The mid-tool ``for tool use`` variant is the sibling interrupt plan's; not matched here."""
+    """The mid-tool ``for tool use`` variant is the stop button's to match, not the tap's sentinel."""
     facts = compute_tail_facts([_MID_TOOL_SENTINEL_LINE])
     assert facts.has_interrupt_sentinel is False
 
