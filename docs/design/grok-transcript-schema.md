@@ -26,8 +26,8 @@ with its own directory, named by its parent's `subagent_spawned` record.
   session (`call_stub_1` three times in `foreground_subagent_failing_hooks`), so the parser's ids
   come from the record's byte offset.
 - Grok writes compact JSON with non-ASCII characters as they are: re-serialising a record with
-  `json.dumps(record, ensure_ascii=False, separators=(",", ":"))` gave back 117 of 117 lines byte
-  for byte.
+  `json.dumps(record, ensure_ascii=False, separators=(",", ":"))` gives back every line of the
+  fixtures byte for byte.
 - `output` and `stdout` fields are sometimes a JSON list of byte values rather than a string.
 
 | Kind | Fields the chat reads | Chat event |
