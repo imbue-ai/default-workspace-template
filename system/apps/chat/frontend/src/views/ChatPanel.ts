@@ -77,6 +77,7 @@ import {
 } from "./conversation-rows";
 import { ActivityIndicator, turnStatusPlacement } from "./ActivityIndicator";
 import { TurnDoneMark } from "./TurnDoneMark";
+import { LastMessageMark } from "./LastMessageMark";
 import type { TranscriptEvent } from "../models/Response";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
@@ -770,7 +771,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         // The status row under the latest turn while the agent works on it, or that turn's done
         // mark once it has finished; anything queued behind it follows.
         ...(isTurnStatusAfterSends ? [] : [renderTurnStatus(chatId, events)]),
-        m(TurnDoneMark, { key: "turn-done", chatId, events }),
+        // Empty (and so hidden) when neither mark shows.
+        m("div", { key: "turn-end", class: "turn-end-marks mb-5 text-(length:--font-size-helper) empty:hidden" }, [
+          m(TurnDoneMark, { chatId, events }),
+          m(LastMessageMark, { chatId, events }),
+        ]),
         ...renderQueuedMessages(chatId),
         // The messages the chat app holds while the chat switches harness, then this page's
         // own not-yet-delivered sends.

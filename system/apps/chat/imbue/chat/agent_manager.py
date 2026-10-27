@@ -874,6 +874,7 @@ def chat_snapshot_for_active_agent(
     shoulder_tap_available: bool,
     is_connecting: bool,
     last_messaged_at: float | None,
+    last_replied_at: float | None,
     background_tasks: tuple[BackgroundTask, ...],
     compaction_cause: CompactionCause | None,
 ) -> ChatSnapshot:
@@ -920,6 +921,9 @@ def chat_snapshot_for_active_agent(
             background_tasks=tuple(background_task_snapshot(task) for task in background_tasks),
         ),
         last_messaged_at=last_messaged_at,
+        last_active_at=max(
+            (stamp for stamp in (last_messaged_at, last_replied_at) if stamp is not None), default=None
+        ),
     )
 
 
@@ -1180,6 +1184,9 @@ class AgentManager:
     # When each chat was last messaged from the UI, kept on disk so a restart seeds the OOM
     # prioritizer's recency ranking from real history.
     _message_stamps: MessageStampStore
+    # When each chat's agent last finished a turn, kept on disk; with the message stamps, when the chat was last
+    # active, which the chat list orders on and shows.
+    _reply_stamps: MessageStampStore
     # Which chat is the workspace's main chat (``main_chat.py``), kept on disk so a restart keeps it.
     _main_chat: MainChatStore
     # Whether the main chat's agent is started again whenever it is found stopped (the live chat app's).
@@ -1256,6 +1263,7 @@ class AgentManager:
         messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
         message_stamps: MessageStampStore | None = None,
+        reply_stamps: MessageStampStore | None = None,
         main_chat: MainChatStore | None = None,
         keeps_main_chat_awake: bool = False,
         auto_open: AutoOpenReactor | None = None,
@@ -1371,6 +1379,7 @@ class AgentManager:
         manager._sweep_started_at_by_agent = {}
         manager._compaction_finished_at_by_agent = {}
         manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
+        manager._reply_stamps = reply_stamps if reply_stamps is not None else MessageStampStore(path=None)
         manager._main_chat = main_chat if main_chat is not None else MainChatStore(path=None)
         manager._keeps_main_chat_awake = keeps_main_chat_awake
         manager._main_chat_wake_started_at = {}
@@ -1785,6 +1794,7 @@ class AgentManager:
                 agent.id: self._compaction_cause_by_agent.get(agent.id) for agent, _chat in listed
             }
         last_messaged = self._message_stamps.read()
+        last_replied = self._reply_stamps.read()
         return [
             self._snapshot_as_shown(
                 chat_snapshot_for_active_agent(
@@ -1794,6 +1804,7 @@ class AgentManager:
                     self._shoulder_tap_available(agent),
                     connecting_by_agent[agent.id],
                     last_messaged.get(chat.chat_id),
+                    last_replied.get(chat.chat_id),
                     tasks_by_chat.get(chat.chat_id, ()),
                     compaction_cause_by_agent[agent.id],
                 )
@@ -1827,6 +1838,7 @@ class AgentManager:
             self._shoulder_tap_available(agent),
             is_connecting,
             self._message_stamps.read().get(chat.chat_id),
+            self._reply_stamps.read().get(chat.chat_id),
             background_tasks,
             compaction_cause,
         )
@@ -4499,6 +4511,7 @@ class AgentManager:
         auto-open ledger entry, the create's settled event."""
         self._oom_prioritizer.forget_chat(chat_id)
         self._message_stamps.forget(chat_id)
+        self._reply_stamps.forget(chat_id)
         self._auto_open.forget(chat_id)
         with self._lock:
             self._creation_settled_by_chat.pop(chat_id, None)
@@ -5833,6 +5846,7 @@ class AgentManager:
             with self._lock:
                 ended_chat_id = self._chat_id_of_agent_if_active_locked(agent_id)
             if ended_chat_id is not None:
+                self._reply_stamps.record(ended_chat_id)
                 self._recompute_background_tasks(ended_chat_id, broadcast_on_change=False)
         # The turn a finished task's notice started: its markers go now, in the broadcast that
         # shows the turn.

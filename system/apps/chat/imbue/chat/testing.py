@@ -1130,6 +1130,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             background_tasks=(),
         ),
         last_messaged_at=last_messaged_at,
+        last_active_at=last_messaged_at,
     )
 
 
