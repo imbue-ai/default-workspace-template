@@ -3,10 +3,11 @@
 THE PROPERTY (system/apps/chat/imbue/chat/harnesses/core-contracts/messages-lifecycle-contract.md A1, U1): across any
 interleaving of send / park / stop / flush / restart, every accepted message ends in EXACTLY one
 terminal state -- delivered (a user turn on disk), or returned-to-composer (rides a captured stop
-block) -- never silently lost and never duplicated as a ghost re-queue after a replay. The one
-designed-in exception is the shipped "slow-send corner" (contract E2): a send still holding
-``message.lock`` past the bounded wait when a stop hammers is *stopped, never runs* -- the ledger admits that message as
-KILLED, and only when the storm deliberately staged such a send.
+block) -- never silently lost and never duplicated as a ghost re-queue after a replay. Two designed-in
+exceptions are admitted as KILLED. The shipped "slow-send corner" (contract E2): a send still holding
+``message.lock`` past the bounded wait when a stop hammers is *stopped, never runs*, admitted only when the storm
+deliberately staged such a send. And in the grok storm, the messages the chat held when grok exited, which grok's
+relaunch drops with its old session (contract Part B).
 
 Each storm drives the REAL executor under test -- claude's tap + stop executors over a REAL
 :class:`ClaudeSessionWatcher` reading real session JSONL, and pi's flush/retract inbox writers --
@@ -163,9 +164,10 @@ class _Ledger:
 
     ``accepted`` records every message a send op produced; ``delivered`` / ``returned`` /
     ``killed`` record terminal states as ground truth observes them (the simulated harness's
-    commits and discards, the executors' returned blocks, the staged slow-send deaths).
-    ``killable`` is the set of messages the storm deliberately staged as the slow-send corner --
-    the only ones allowed to die. ``ops`` is the cumulative op log for the replay report.
+    commits and discards, the executors' returned blocks, the staged slow-send deaths, grok's relaunch
+    drops). ``killable`` is the set of messages allowed to die: the ones the storm deliberately staged
+    as the slow-send corner, and the ones a grok relaunch dropped. ``ops`` is the cumulative op log for
+    the replay report.
     """
 
     def __init__(self, storm_name: str) -> None:
