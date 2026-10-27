@@ -806,6 +806,24 @@ def test_a_child_sessions_cancel_still_answers_its_open_calls() -> None:
     ]
 
 
+def test_a_turn_that_ends_in_an_error_answers_its_open_calls() -> None:
+    """A call left without a result would read as running through every later turn of its session."""
+    parsed = _parse("tool")
+    records = _records(parsed)
+    call_index = next(
+        index for index, record in enumerate(records) if record["params"]["update"]["sessionUpdate"] == "tool_call"
+    )
+    error_end = _record_of_kind(parsed, "turn_completed")
+    error_end["params"]["update"].update({"stop_reason": "error", "agent_result": "stream error"})
+
+    events = _wire_events("s", [*records[: call_index + 1], error_end], True)
+
+    assert [(event["is_error"], event["error_snippet"]) for event in events if event["type"] == "tool_result"] == [
+        (True, "Interrupted.")
+    ]
+    assert [event["type"] for event in events][-2:] == ["assistant_message", "special"]
+
+
 def test_a_reply_split_by_a_subagent_ending_mid_stream_is_one_message() -> None:
     """grok writes the run of text it is streaming as two lines when a background subagent ends meanwhile."""
     parsed = _parse("subagent_ends_mid_reply")

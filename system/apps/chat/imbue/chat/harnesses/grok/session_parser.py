@@ -12,8 +12,8 @@ offset; :func:`detail_for` re-reads an event's payloads from the record it came 
   agent_thought_chunk    readable reasoning, carried by the lane's next assistant event
   tool_call              a tool call
   tool_call_update       the call's result, once its status is completed or failed
-  turn_completed         the turn's end: end_turn, cancelled or interrupted (open calls read
-                         "Interrupted.") or error (its ``agent_result`` becomes an error message)
+  turn_completed         the turn's end: end_turn, cancelled, interrupted or error (its ``agent_result``
+                         becomes an error message); a call it leaves open reads "Interrupted."
   subagent_spawned       the child session a spawn_subagent call started
   task_completed,        background work that finished
   subagent_finished
@@ -430,7 +430,7 @@ def _on_tool_call_update(update: dict[str, Any], lane: GrokLaneState, timestamp:
 
 
 def _interrupted_results(lane: GrokLaneState, timestamp: str) -> list[dict[str, Any]]:
-    """A terminal "Interrupted." result for each call of the turn a cancel or an exit left without one."""
+    """A terminal "Interrupted." result for each call of the ending turn that has none."""
     results: list[dict[str, Any]] = []
     for call in lane.calls_by_tool_call_id.values():
         if call.is_resolved:
@@ -490,14 +490,12 @@ def _compaction_event(lane: GrokLaneState, offset: int, timestamp: str) -> list[
 def _on_turn_completed(
     update: dict[str, Any], lane: GrokLaneState, offset: int, timestamp: str
 ) -> list[dict[str, Any]]:
-    events: list[dict[str, Any]] = []
+    events = _interrupted_results(lane, timestamp)
     end_kind = SpecialEventKind.TURN_COMPLETED
     match update.get("stop_reason"):
         case GrokStopReason.CANCELLED:
-            events.extend(_interrupted_results(lane, timestamp))
             end_kind = SpecialEventKind.TURN_ABORTED
         case GrokStopReason.INTERRUPTED:
-            events.extend(_interrupted_results(lane, timestamp))
             interrupted_note_id = _event_id(lane.session_id, offset, "interrupted")
             events.extend(_system_note(lane, interrupted_note_id, timestamp, update.get("agent_result")))
             end_kind = SpecialEventKind.TURN_ABORTED
