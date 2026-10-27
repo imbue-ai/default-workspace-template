@@ -768,10 +768,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         // window reaches the live end. A node of its own rather than a row: a draft changes a few
         // times a second, and a row would re-walk the whole held transcript on every change.
         ...renderReplyDraft(chatId),
-        // The status row under the latest turn while the agent works on it, or that turn's done
-        // mark once it has finished; anything queued behind it follows.
+        // The status row under the latest turn while the agent works on it, or, once it has
+        // finished, that turn's done mark and when the last message was (the wrapper is empty, and
+        // so hidden, when neither shows); anything queued behind it follows.
         ...(isTurnStatusAfterSends ? [] : [renderTurnStatus(chatId, events)]),
-        // Empty (and so hidden) when neither mark shows.
         m("div", { key: "turn-end", class: "turn-end-marks mb-5 text-(length:--font-size-helper) empty:hidden" }, [
           m(TurnDoneMark, { chatId, events }),
           m(LastMessageMark, { chatId, events }),
