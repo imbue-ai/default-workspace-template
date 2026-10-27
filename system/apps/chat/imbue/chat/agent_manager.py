@@ -1611,10 +1611,11 @@ class AgentManager:
 
         The chat it names is kept while it is listed. When it is gone and other chats are left, a new chat named
         ``MAIN_CHAT_NAME`` and awaiting its first send takes its place at once, pushed to the pages; no other chat
-        is promoted. With no chat left there is no main chat until one exists, so a welcome chat whose seeding a
-        stop interrupted is seeded again under its own name. A workspace with no main chat yet adopts one
-        (``adopted_main_chat_id``). Until the agent list is read nothing is chosen, so a restart never moves the
-        main chat off a chat that simply has not been listed yet.
+        is promoted. With no chat listed there is no main chat, but the pointer is kept: a listing that comes back
+        empty for a moment (a host not reached yet) moves nothing, and the chat a list with none opens
+        (``awaiting_chat_for_empty_list``) or a welcome chat seeded again takes it. A workspace with no main chat yet
+        adopts one (``adopted_main_chat_id``). Until the agent list is read nothing is chosen, so a restart never
+        moves the main chat off a chat that simply has not been listed yet.
         """
         replacement: ProvisionalChat | None = None
         with self._lock:
@@ -1623,8 +1624,10 @@ class AgentManager:
                 return stored
             candidates = self._main_chat_candidates_locked()
             if stored is not None and any(candidate.chat_id == stored for candidate in candidates):
-                resolved = stored
-            elif stored is not None and candidates:
+                return stored
+            if stored is not None and not candidates:
+                return None
+            if stored is not None:
                 replacement = self._mint_main_chat_locked()
                 resolved = replacement.chat_id
             else:
@@ -1633,6 +1636,13 @@ class AgentManager:
         if replacement is not None:
             self._broadcast_provisional(replacement)
         return resolved
+
+    def _is_main_chat_gone_locked(self) -> bool:
+        """Whether the main chat pointer names a chat this app no longer lists. Lock held."""
+        stored = self._main_chat.read()
+        return stored is not None and not any(
+            candidate.chat_id == stored for candidate in self._main_chat_candidates_locked()
+        )
 
     def _mint_main_chat_locked(self) -> ProvisionalChat:
         """A new chat awaiting its first send to stand in for a main chat that is gone: named ``MAIN_CHAT_NAME``
@@ -3699,7 +3709,9 @@ class AgentManager:
             provisional = self._seed_chat_locked(
                 explicit_title,
                 turns,
-                is_recorded_as_main_first=replaced_stand_in is not None or self._main_chat.read() is None,
+                is_recorded_as_main_first=replaced_stand_in is not None
+                or self._main_chat.read() is None
+                or self._is_main_chat_gone_locked(),
             )
         if replaced_stand_in is not None:
             self._auto_open.forget(replaced_stand_in)
@@ -3821,13 +3833,18 @@ class AgentManager:
         """A chat for a chat list that has none to show: one already waiting for its first send, else a new one.
 
         The chat list is never left open empty; it shows this chat, which launches on the first message sent in it.
-        Handing back a waiting chat keeps two lists that open empty at once from minting two.
+        Handing back a waiting chat keeps two lists that open empty at once from minting two. When the main chat is
+        gone (the last chat was deleted), the new chat is a new main chat (``get_main_chat_id``).
         """
         with self._lock:
             for provisional in self._provisional_chats.values():
                 if provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND and not provisional.is_seeded:
                     return provisional
-            minted = self._mint_awaiting_chat_locked("")
+            if self._is_main_chat_gone_locked():
+                minted = self._mint_main_chat_locked()
+                self._main_chat.write(minted.chat_id)
+            else:
+                minted = self._mint_awaiting_chat_locked("")
         self._broadcast_provisional(minted)
         self._broadcast_chats_updated()
         return minted

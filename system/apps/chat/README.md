@@ -468,8 +468,10 @@ are written. Both happen in the same step that makes the agent list known, befor
 route answers anything but 503, so the two never race.
 When the chat it names is deleted (or a chat awaiting its first send is dropped by a restart of
 this app), a new chat named "Main" (else the first free "Chat N", when another chat is already
-called Main), awaiting its first send, takes it at once; no other chat is promoted. With no main
-chat recorded and no chat at all, the chat the list opens (one awaiting its first send) takes it. Every `chats_updated` push
+called Main), awaiting its first send, takes it at once; no other chat is promoted. With no chat
+listed the pointer is kept, so a listing that comes back empty for a moment moves nothing; the
+chat the list then opens (one awaiting its first send) is named "Main" and takes it when the
+main chat is gone, and takes it under its minted name in a workspace that never had one. Every `chats_updated` push
 and `GET /api/chats` carry its id as `main_chat_id`. The chat list leads with it, alone
 above a rule and in a medium weight, its helpers right under the rule; the root
 shows it when nothing is selected, including after the chat on screen is deleted; a text

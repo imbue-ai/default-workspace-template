@@ -1235,6 +1235,52 @@ def test_a_main_chat_pointer_left_with_no_chat_at_all_opens_no_new_chat_so_the_w
         manager.stop()
 
 
+def test_a_listing_that_comes_back_empty_for_a_moment_keeps_the_main_chat(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """A rebuild that lists no chat for a moment (a host not reached yet) does not hand the main chat to the chat
+    messaged most recently once the chats are listed again."""
+    stamps = MessageStampStore(path=None)
+    stamps.record(ChatId("agent-busy"), at=900.0)
+    main_chat_path = tmp_path / MAIN_CHAT_FILENAME
+    manager = AgentManager.build(broadcaster, message_stamps=stamps, main_chat=MainChatStore(path=main_chat_path))
+    try:
+        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
+        seed_agent_state(manager, "agent-busy", name="Chat-1")
+        manager.note_agent_list_known()
+        assert manager.make_main_chat(ChatId("agent-main"))
+        with manager._lock:
+            listed = dict(manager._agents)
+            manager._agents.clear()
+
+        assert manager.get_main_chat_id() is None
+
+        with manager._lock:
+            manager._agents.update(listed)
+        assert manager.get_main_chat_id() == ChatId("agent-main")
+        assert MainChatStore(path=main_chat_path).read() == ChatId("agent-main")
+    finally:
+        manager.stop()
+
+
+def test_deleting_the_last_chat_opens_a_new_main_chat_named_main(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        seed_agent_state(manager, "agent-main", name="Main", labels={"display_name": MAIN_CHAT_NAME})
+        manager.note_agent_list_known()
+        assert manager.make_main_chat(ChatId("agent-main"))
+        manager.destroy_chat(ChatId("agent-main"))
+        assert manager.get_main_chat_id() is None
+
+        opened = manager.awaiting_chat_for_empty_list()
+
+        assert opened.name == MAIN_CHAT_NAME
+        assert manager.get_main_chat_id() == opened.chat_id
+    finally:
+        manager.stop()
+
+
 def test_a_main_chat_that_was_never_messaged_is_replaced_by_a_new_one_after_a_restart(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
