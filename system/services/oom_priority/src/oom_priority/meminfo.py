@@ -34,6 +34,22 @@ def parse_kib_fields(text: str) -> dict[str, int]:
     return values
 
 
+def is_host_meminfo_fresh(host_meminfo: Path, now_seconds: float) -> bool:
+    """Whether the headroom file is new enough that earlyoom still acts on it.
+
+    One rule for every reader of the guard's figure (``read_meminfo`` here, the
+    candidates command's own ``read_free_memory``), since it is earlyoom's rule
+    and not ours. A file that cannot be stat'd is stale: there is nothing to act
+    on, so ``/proc/meminfo`` is the answer.
+    """
+    try:
+        return (
+            now_seconds - host_meminfo.stat().st_mtime <= HOST_MEMINFO_MAX_AGE_SECONDS
+        )
+    except OSError:
+        return False
+
+
 def read_meminfo(
     proc: Path = PROC,
     host_meminfo: Path = HOST_MEMINFO_PATH,
@@ -41,11 +57,11 @@ def read_meminfo(
 ) -> dict[str, int]:
     """Total, available, and used memory in bytes: the figures the memory guard acts on."""
     values: dict[str, int] = {}
-    try:
-        if clock() - host_meminfo.stat().st_mtime <= HOST_MEMINFO_MAX_AGE_SECONDS:
+    if is_host_meminfo_fresh(host_meminfo, clock()):
+        try:
             values = parse_kib_fields(host_meminfo.read_text())
-    except OSError:
-        values = {}
+        except OSError:
+            values = {}
     if "MemTotal" not in values or "MemAvailable" not in values:
         values = parse_kib_fields((proc / "meminfo").read_text())
     total = values["MemTotal"]
