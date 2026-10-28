@@ -2205,7 +2205,7 @@ class AgentManager:
                 return
             if self._is_queued_for_agent(agent_info.id, text):
                 deadline = time.monotonic() + timeout_seconds
-            elif time.monotonic() >= deadline:
+            if time.monotonic() >= deadline:
                 _loguru_logger.warning(
                     "{}'s resent message did not reach its transcript within {}s; its chat may offer to send it again",
                     agent_info.name,
