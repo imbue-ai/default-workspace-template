@@ -44,8 +44,6 @@ export interface RefusedTurn {
   prompts: UserMessageEvent[];
   /** Whether no real reply came after: the turn is the chat's last. */
   isLast: boolean;
-  /** Whether the user sent anything else after the last failure. */
-  isAnsweredSince: boolean;
 }
 
 function isAuthFailure(event: TranscriptEvent): event is AssistantMessageEvent {
@@ -85,15 +83,13 @@ export function refusedTurns(events: readonly TranscriptEvent[]): RefusedTurn[] 
     const lastFailure = failures[failures.length - 1];
     if (lastFailure !== undefined) {
       const prompts: UserMessageEvent[] = [];
-      let isAnsweredSince = false;
       for (let index = start; index < end; index++) {
         const candidate = events[index];
         if (candidate.type !== "user_message" || !isTurnUserMessage(candidate)) continue;
-        if (isSentAfter(candidate, index, lastFailure.event, lastFailure.index)) isAnsweredSince = true;
-        else prompts.push(candidate);
+        if (!isSentAfter(candidate, index, lastFailure.event, lastFailure.index)) prompts.push(candidate);
       }
       if (prompts.length > 0) {
-        turns.push({ failures: failures.map((failure) => failure.event), prompts, isLast, isAnsweredSince });
+        turns.push({ failures: failures.map((failure) => failure.event), prompts, isLast });
       }
     }
     start = end + 1;

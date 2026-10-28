@@ -40,7 +40,6 @@ describe("refusedTurns", () => {
     expect(ids(turn.prompts)).toEqual(["asked"]);
     expect(ids(turn.failures)).toEqual(["refused"]);
     expect(turn.isLast).toBe(true);
-    expect(turn.isAnsweredSince).toBe(false);
   });
 
   it("finds nothing for a turn the agent had worked on before its sign-in failed", () => {
