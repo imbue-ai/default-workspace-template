@@ -86,6 +86,16 @@ def test_resolve_fetches_the_profile_from_the_broker_and_caches_it(tmp_path: Pat
     assert cached["display_name"] == "Bob" and cached["is_fetch_failed"] is False
 
 
+def test_resolve_reads_an_empty_picture_url_as_no_picture(tmp_path: Path) -> None:
+    connector = _Connector()
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json={**_BOB_WIRE, "profile_picture_url": ""})
+    resolver = _resolver(tmp_path, connector)
+
+    assert resolver.resolve(_BOB, _T0) == UserProfile(
+        user_id="user-bob-4471", display_name="Bob", profile_picture_url=None
+    )
+
+
 def test_resolve_asks_again_once_the_cache_entry_is_past_its_ttl(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)

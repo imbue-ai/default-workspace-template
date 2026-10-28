@@ -24,63 +24,73 @@ const ENVELOPE_GLYPH_SIZE = 14;
 const SILHOUETTE_GLYPH_SIZE = 18;
 const BASE_CLASS = "tray-avatar flex shrink-0 items-center justify-center overflow-hidden select-none ";
 
-export const TrayAvatar: m.Component<TrayAvatarAttrs> = {
-  view(vnode) {
-    const { entry, sizePx, isFaded } = vnode.attrs;
-    const style: Record<string, string> = { width: `${sizePx}px`, height: `${sizePx}px` };
-    if (isFaded) style.opacity = String(DISCONNECTED_OPACITY);
-    if (entry.kind === "invited") {
+export const TrayAvatar: m.ClosureComponent<TrayAvatarAttrs> = () => {
+  // The picture URL whose load failed: the monogram stands in for it (a profile URL can 404 or expire),
+  // until the roster offers a different URL, which is tried afresh.
+  let failedUrl: string | null = null;
+  return {
+    view(vnode) {
+      const { entry, sizePx, isFaded } = vnode.attrs;
+      const style: Record<string, string> = { width: `${sizePx}px`, height: `${sizePx}px` };
+      if (isFaded) style.opacity = String(DISCONNECTED_OPACITY);
+      if (entry.kind === "invited") {
+        return m(
+          "span",
+          {
+            class: `${BASE_CLASS}rounded-full border border-dashed border-strong bg-surface text-faint`,
+            style,
+            "data-tray-avatar": "invited",
+          },
+          m.trust(icon("mail", { size: ENVELOPE_GLYPH_SIZE })),
+        );
+      }
+      if (entry.kind === "visiting_agent") {
+        return m(
+          "span",
+          {
+            class: `${BASE_CLASS}rounded-[32%] bg-surface-secondary text-(length:--font-size-helper) font-semibold text-secondary`,
+            style,
+            "data-tray-avatar": "visiting-agent",
+          },
+          monogramOf(entry),
+        );
+      }
+      if (entry.key === OWNER_KEY) {
+        return m(
+          "span",
+          {
+            class: `${BASE_CLASS}rounded-full bg-surface-secondary text-secondary`,
+            style,
+            "data-tray-avatar": "owner",
+          },
+          m.trust(icon("user", { size: SILHOUETTE_GLYPH_SIZE })),
+        );
+      }
+      // An empty URL is no picture, and a URL that failed to load falls back to the monogram too.
+      const pictureUrl = entry.profile_picture_url || null;
+      const hasPicture = pictureUrl !== null && pictureUrl !== failedUrl;
+      if (!hasPicture) style.backgroundColor = entry.color;
       return m(
         "span",
         {
-          class: `${BASE_CLASS}rounded-full border border-dashed border-strong bg-surface text-faint`,
+          class:
+            `${BASE_CLASS}rounded-full bg-surface text-(length:--font-size-helper) font-semibold ` +
+            (hasPicture ? "text-secondary" : "text-on-accent"),
           style,
-          "data-tray-avatar": "invited",
+          "data-tray-avatar": "person",
         },
-        m.trust(icon("mail", { size: ENVELOPE_GLYPH_SIZE })),
+        hasPicture
+          ? m("img", {
+              class: "h-full w-full object-cover",
+              src: pictureUrl,
+              alt: monogramOf(entry),
+              draggable: false,
+              onerror: () => {
+                failedUrl = pictureUrl;
+              },
+            })
+          : monogramOf(entry),
       );
-    }
-    if (entry.kind === "visiting_agent") {
-      return m(
-        "span",
-        {
-          class: `${BASE_CLASS}rounded-[32%] bg-surface-secondary text-(length:--font-size-helper) font-semibold text-secondary`,
-          style,
-          "data-tray-avatar": "visiting-agent",
-        },
-        monogramOf(entry),
-      );
-    }
-    if (entry.key === OWNER_KEY) {
-      return m(
-        "span",
-        {
-          class: `${BASE_CLASS}rounded-full bg-surface-secondary text-secondary`,
-          style,
-          "data-tray-avatar": "owner",
-        },
-        m.trust(icon("user", { size: SILHOUETTE_GLYPH_SIZE })),
-      );
-    }
-    const hasPicture = entry.profile_picture_url !== null;
-    if (!hasPicture) style.backgroundColor = entry.color;
-    return m(
-      "span",
-      {
-        class:
-          `${BASE_CLASS}rounded-full bg-surface text-(length:--font-size-helper) font-semibold ` +
-          (hasPicture ? "text-secondary" : "text-on-accent"),
-        style,
-        "data-tray-avatar": "person",
-      },
-      hasPicture
-        ? m("img", {
-            class: "h-full w-full object-cover",
-            src: entry.profile_picture_url,
-            alt: monogramOf(entry),
-            draggable: false,
-          })
-        : monogramOf(entry),
-    );
-  },
+    },
+  };
 };

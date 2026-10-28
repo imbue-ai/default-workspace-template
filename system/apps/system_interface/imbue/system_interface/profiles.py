@@ -197,6 +197,7 @@ class ProfileResolver(MutableModel):
         except ValidationError as e:
             logger.warning("Ignored an unreadable profile answer for {}: {}", user_id, e.errors()[0]["msg"])
             return None
+        # An empty URL is no picture: the pages draw a monogram for None, and an <img src=""> renders broken.
         return UserProfile(
-            user_id=wire.user_id, display_name=wire.display_name, profile_picture_url=wire.profile_picture_url
+            user_id=wire.user_id, display_name=wire.display_name, profile_picture_url=wire.profile_picture_url or None
         )

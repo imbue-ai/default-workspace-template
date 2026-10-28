@@ -31,4 +31,25 @@ describe("participantPicture", () => {
     expect(root.querySelector("img")).toBeNull();
     expect(root.textContent).toBe("F");
   });
+
+  it("treats an empty picture URL as no picture", () => {
+    const root = render(participantPicture({ name: "Bob", pictureUrl: "", size: 24 }));
+    expect(root.querySelector("img")).toBeNull();
+    expect(root.textContent).toBe("B");
+  });
+
+  it("falls back to the monogram when the picture fails to load, and tries a new URL afresh", () => {
+    const root = document.createElement("div");
+    const draw = (pictureUrl: string): void =>
+      m.render(root, participantPicture({ name: "Bob", pictureUrl, size: 24 }));
+
+    draw("https://p.example/gone.png");
+    root.querySelector("img")?.dispatchEvent(new Event("error"));
+    draw("https://p.example/gone.png");
+    expect(root.querySelector("img")).toBeNull();
+    expect(root.textContent).toBe("B");
+
+    draw("https://p.example/new.png");
+    expect(root.querySelector("img")?.getAttribute("src")).toBe("https://p.example/new.png");
+  });
 });
