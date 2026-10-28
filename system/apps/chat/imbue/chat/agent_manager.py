@@ -259,6 +259,10 @@ _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 # auth error answering it sit at the very end of the transcript, a few events at most.
 _SIGN_IN_REFUSAL_TAIL_EVENTS: Final[int] = 50
 
+# How long a delivered resend may take to show in the transcript before its chat stops reporting it as on its way.
+_RESENT_TURN_LANDING_TIMEOUT_SECONDS: Final[float] = 10.0
+_RESENT_TURN_LANDING_POLL_SECONDS: Final[float] = 0.25
+
 # A finished harness task's notice normally starts a turn at once; the marker of one whose notice
 # starts none (a task the user stopped from the harness's own task list) goes after this many
 # background-task poller passes instead.
@@ -706,6 +710,11 @@ def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, .
 
 
 @pure
+def _count_user_turns_saying(events: list[dict[str, Any]], text: str) -> int:
+    return sum(1 for event in events if is_genuine_user_turn(event) and event.get("content") == text)
+
+
+@pure
 def _has_user_turn_since(events: list[dict[str, Any]], since: float) -> bool:
     """Whether one of the events is a user turn timestamped at or after ``since`` (epoch seconds).
 
@@ -920,6 +929,7 @@ def chat_snapshot_for_active_agent(
     is_permission_pending: bool,
     shoulder_tap_available: bool,
     is_connecting: bool,
+    is_resending_after_sign_in: bool,
     last_messaged_at: float | None,
     background_tasks: tuple[BackgroundTask, ...],
     compaction_cause: CompactionCause | None,
@@ -963,6 +973,7 @@ def chat_snapshot_for_active_agent(
             queued_messages=agent.queued_messages,
             shoulder_tap_available=shoulder_tap_available,
             is_connecting=is_connecting,
+            is_resending_after_sign_in=is_resending_after_sign_in,
             is_busy=is_busy,
             background_tasks=tuple(background_task_snapshot(task) for task in background_tasks),
         ),
@@ -1272,6 +1283,9 @@ class AgentManager:
     _withdrawable_sends_by_agent: dict[str, dict[str, str]]
     # The send-time ids Stop took back while they waited for their agent, until their send ends.
     _withdrawn_message_ids: set[str]
+    # The agents a sign-in is restarting, until the message their sign-in failure refused, if any, is
+    # sent again or given up on: the snapshot's ``is_resending_after_sign_in``.
+    _resending_after_sign_in_agent_ids: set[str]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1441,6 +1455,7 @@ class AgentManager:
         manager._withdrawable_sends_by_agent = {}
         manager._abandoned_creates = set()
         manager._withdrawn_message_ids = set()
+        manager._resending_after_sign_in_agent_ids = set()
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
@@ -1827,6 +1842,7 @@ class AgentManager:
                 agent.id: bool(self._pending_permission_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
             connecting_by_agent = {agent.id: self._is_connecting_locked(agent.id) for agent, _chat in listed}
+            resending = set(self._resending_after_sign_in_agent_ids)
             tasks_by_chat = dict(self._background_tasks_by_chat)
             compaction_cause_by_agent = {
                 agent.id: self._compaction_cause_by_agent.get(agent.id) for agent, _chat in listed
@@ -1840,6 +1856,7 @@ class AgentManager:
                     pending_by_agent[agent.id],
                     self._shoulder_tap_available(agent),
                     connecting_by_agent[agent.id],
+                    agent.id in resending,
                     last_messaged.get(chat.chat_id),
                     tasks_by_chat.get(chat.chat_id, ()),
                     compaction_cause_by_agent[agent.id],
@@ -1863,6 +1880,7 @@ class AgentManager:
             agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
             is_connecting = agent is not None and self._is_connecting_locked(agent.id)
+            is_resending = agent is not None and agent.id in self._resending_after_sign_in_agent_ids
             background_tasks = () if chat is None else self._background_tasks_by_chat.get(chat.chat_id, ())
             compaction_cause = None if agent is None else self._compaction_cause_by_agent.get(agent.id)
         if chat is None or agent is None or is_primary_agent(agent):
@@ -1873,6 +1891,7 @@ class AgentManager:
             is_pending,
             self._shoulder_tap_available(agent),
             is_connecting,
+            is_resending,
             self._message_stamps.read().get(chat.chat_id),
             background_tasks,
             compaction_cause,
@@ -1986,10 +2005,15 @@ class AgentManager:
         Nothing waits on the answer. The flow is already committed and the user has already
         been told they are signed in; the restart is what makes their existing chats usable
         again, and it is no less effective for happening a few seconds later.
+
+        The agents are marked as resending before this returns, so each chat on the account says
+        its refused message is on its way from the moment the sign-in lands, and no page offers
+        to send it a second time.
         """
+        agents = self._begin_resends_after_sign_in(account_id)
         self._creation_cg.start_new_thread(
-            target=self.restart_agents_on_account,
-            args=(account_id,),
+            target=self._restart_agents_after_sign_in,
+            args=(agents,),
             name=f"reauth-restart-{account_id[:8]}",
             is_checked=False,
         )
@@ -2026,6 +2050,10 @@ class AgentManager:
         (``_resend_turn_refused_for_sign_in``), so the user does not have to type it twice. Each
         resend runs on its own thread, since it waits for the restarted agent to take input.
         """
+        return self._restart_agents_after_sign_in(self._begin_resends_after_sign_in(account_id))
+
+    def _begin_resends_after_sign_in(self, account_id: str) -> list[tuple[str, str]]:
+        """The live agents bound to the account, as (id, name), each marked as resending until its resend settles."""
         with self._lock:
             agents = [
                 (agent.id, agent.name)
@@ -2035,6 +2063,19 @@ class AgentManager:
                 and not self._is_archived_member_locked(agent.id)
                 and not is_lifecycle_dead(agent.state)
             ]
+            self._resending_after_sign_in_agent_ids.update(agent_id for agent_id, _name in agents)
+        if agents:
+            self._broadcast_chats_updated()
+        return agents
+
+    def _end_resend_after_sign_in(self, agent_id: str) -> None:
+        with self._lock:
+            was_resending = agent_id in self._resending_after_sign_in_agent_ids
+            self._resending_after_sign_in_agent_ids.discard(agent_id)
+        if was_resending:
+            self._broadcast_chats_updated()
+
+    def _restart_agents_after_sign_in(self, agents: list[tuple[str, str]]) -> int:
         restarted = 0
         for agent_id, name in agents:
             result = run_local_command_modern_version(
@@ -2053,9 +2094,16 @@ class AgentManager:
                 )
             else:
                 _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
+                self._end_resend_after_sign_in(agent_id)
         return restarted
 
     def _resend_turn_refused_for_sign_in(self, agent_id: str) -> None:
+        try:
+            self._resend_refused_turn(agent_id)
+        finally:
+            self._end_resend_after_sign_in(agent_id)
+
+    def _resend_refused_turn(self, agent_id: str) -> None:
         """Send an agent that was just signed in again the messages its last reply refused for want of a sign-in.
 
         Read after the restart rather than before it, so a message the user already sent again by hand
@@ -2079,10 +2127,10 @@ class AgentManager:
         if is_archived_member:
             _loguru_logger.info("Not resending {}'s refused message: its chat has moved on from it", agent_info.name)
             return
-        refused = user_turns_refused_for_sign_in(
-            capabilities.ensure_watcher(agent_info).get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS)
-        )
+        reader = capabilities.ensure_watcher(agent_info)
+        refused = user_turns_refused_for_sign_in(reader.get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS))
         for text in refused:
+            copies_before = _count_user_turns_saying(reader.get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS), text)
             message_id = uuid4().hex
             try:
                 outcome = capabilities.deliver(agent_info, text, message_id)
@@ -2098,6 +2146,16 @@ class AgentManager:
                 )
                 return
             _loguru_logger.info("Resent {}'s message {} refused for want of a sign-in", agent_info.name, message_id)
+            self._wait_for_resent_turn(reader, text, copies_before)
+
+    def _wait_for_resent_turn(self, reader: TranscriptReader, text: str, copies_before: int) -> None:
+        """Wait, briefly, for a delivered resend to reach the transcript: until it does, the chat's refused
+        turn is still its newest, and ending the resend would have the page offer to send it again."""
+        deadline = time.monotonic() + _RESENT_TURN_LANDING_TIMEOUT_SECONDS
+        while time.monotonic() < deadline and not self._shutdown_event.is_set():
+            if _count_user_turns_saying(reader.get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS), text) > copies_before:
+                return
+            self._pause(_RESENT_TURN_LANDING_POLL_SECONDS)
 
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
         """Record one chat page's presence report: re-tags the chats, and marks the chat read in the Imbue

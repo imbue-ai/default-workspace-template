@@ -769,7 +769,7 @@ describe("the auth-error note's switch link", () => {
       );
     });
 
-    it("sends only the user's own words of a prompt that carried context", async () => {
+    it("sends a prompt that carried context as it was first sent, and paints only the user's words", async () => {
       transcript.events = [
         {
           ...PROMPT,
@@ -780,14 +780,36 @@ describe("the auth-error note's switch link", () => {
         authErrorEvent(),
       ];
       const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+      const bubblesBefore = getOutgoingMessages("chat-1").length;
 
       findButton(children, "Send your message again")!.attrs.onclick();
+      expect(getOutgoingMessages("chat-1").slice(bubblesBefore).map((bubble) => bubble.content)).toEqual([
+        "Summarize the deploy thread",
+      ]);
       await Promise.resolve();
       expect(transcript.sendMessage).toHaveBeenCalledExactlyOnceWith(
         "chat-1",
-        "Summarize the deploy thread",
+        "<context>seed</context>\nSummarize the deploy thread",
         expect.any(String),
       );
+    });
+
+    it("offers the message the failure refused when the failure was written ahead of it", () => {
+      transcript.events = [authErrorEvent(), PROMPT];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      expect(findButton(children, "Send your message again")).not.toBeNull();
+    });
+
+    it("says the chat app is sending the message again, and offers no send of its own, while it does", () => {
+      switching.chat = chatSnapshotFixture("chat-1", {
+        active_agent: { harness: "codex", account_id: OPENAI_ID, is_resending_after_sign_in: true },
+      });
+      transcript.events = [PROMPT, authErrorEvent()];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      expect(allText(children)).toContain("Sending your message again");
+      expect(findButton(children, "Send your message again")).toBeNull();
     });
 
     it("offers nothing to send for a prompt that carried no words of the user's", () => {
@@ -830,7 +852,11 @@ describe("the auth-error note's switch link", () => {
     });
 
     it("offers nothing to send once the user has written since", () => {
-      transcript.events = [PROMPT, authErrorEvent(), { ...PROMPT, event_id: "prompt-2", content: "Never mind" }];
+      transcript.events = [
+        PROMPT,
+        authErrorEvent(),
+        { ...PROMPT, event_id: "prompt-2", timestamp: "2026-08-06T00:01:00.000Z", content: "Never mind" },
+      ];
       const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
 
       expect(allText(children)).toContain("Signed in again.");

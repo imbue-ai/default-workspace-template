@@ -636,6 +636,12 @@ class ActiveAgentSnapshot(FrozenModel):
             "harness had not finished starting. The Connecting sub-state of Sending (contract A1)."
         )
     )
+    is_resending_after_sign_in: bool = Field(
+        description=(
+            "Whether the account was signed in again and the chat app is restarting the agent to send it "
+            "the message its sign-in failure refused, if any"
+        )
+    )
     is_busy: bool = Field(
         description="Whether the agent will resume on its own: a turn is in flight, or a pending background task"
     )

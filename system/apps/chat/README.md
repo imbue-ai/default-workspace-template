@@ -45,8 +45,11 @@ observe`, its own supervised service) writes, and serves:
   offers "Choose a provider" in place of Retry. Each account carries when it
   last finished a sign-in (`signed_in_at`, kept in its own folder), so a turn
   that failed on the chat's sign-in before then reads "Signed in again." in
-  every open chat, offering to send the message it failed on again while it is
-  still the chat's newest turn.
+  every open chat. While the chat app is sending the refused message again
+  itself (its agent's snapshot reports `is_resending_after_sign_in`), the turn
+  says so; otherwise it offers to send the message again while it is still the
+  chat's newest turn. Once a copy of a refused message is in the chat, the
+  original and its sign-in error are hidden, so the message shows once.
   The list's right edge drags to resize it (100px to 480px, 180px by default,
   kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
   most 500px and a long side at most 1000px, either way round), or a window at
@@ -842,6 +845,9 @@ answered is sent to it again through the delivery the message route uses, so
 the user does not retype it. Nothing is sent when the agent had already worked
 on that turn before the sign-in failed, when the user has written since, or while
 the chat is switching to another agent or account (or once it has switched).
+Which messages a sign-in error refused goes by timestamp, on both the page
+(`auth-recovery.ts`) and the chat app: claude can write the error into its
+transcript ahead of the message it refused.
 
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.

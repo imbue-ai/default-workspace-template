@@ -163,7 +163,6 @@ def test_compaction_event_does_not_drain_queue(tmp_path: Path) -> None:
     assert events[0]["display"] == DisplayKind.STATUS
 
 
-
 @pytest.mark.parametrize("sentinel_key", [PI_INTERRUPT_KEY, PI_RETRACT_KEY])
 def test_sentinel_line_clears_the_tracked_queue(tmp_path: Path, sentinel_key: str) -> None:
     # A flush or retract sentinel replays as a positional clear: every message before it was

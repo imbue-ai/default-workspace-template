@@ -28,9 +28,9 @@ import {
   isChipOnlyEvent,
   renderPermissionItem,
   buildToolResultsWithSkillExpansions,
-  computeAuthErrorHiddenEventIds,
   type RunPart,
 } from "./message-renderers";
+import { computeAuthErrorHiddenEventIds } from "./auth-recovery";
 import { isHiddenUserMessage } from "./message-classification";
 import type { CompactionPart } from "./compaction-chips";
 import { buildSections, type LiveCompaction, type SectionView } from "./turn-grouping";

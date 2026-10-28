@@ -11,7 +11,7 @@ import { getChatById } from "../models/Chats";
 import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
-import { isSignedInSince, messageToSendAgain, resendStateOf, sendAgain } from "./auth-recovery";
+import { isResendingAfterSignIn, isSignedInSince, messagesToSendAgain, resendStateOf, sendAgain } from "./auth-recovery";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { getExpansionVersion, isBlockExpanded, setBlockExpanded } from "./expansion-state";
@@ -109,49 +109,6 @@ export function buildToolResultsWithSkillExpansions(events: TranscriptEvent[]): 
   return toolResults;
 }
 
-/**
- * Hide auth-error turns from the pre-login prefix once login has recovered.
- *
- * A fresh chat with no Claude credentials produces a run of "Not logged in"
- * assistant messages before the user authenticates. Once login succeeds, the
- * first visible turn should be the first successful reply, not the prior
- * failed attempts.
- *
- * Restricted to the PREFIX of the transcript (turns that occurred before any
- * successful assistant message). A mid-session token expiration -- where the
- * user has already had successful exchanges before the auth error -- is left
- * intact, since the user may want to scroll back to see what they were doing.
- */
-export function computeAuthErrorHiddenEventIds(events: TranscriptEvent[]): Set<string> {
-  const hidden = new Set<string>();
-
-  let firstSuccessIdx = -1;
-  for (let i = 0; i < events.length; i++) {
-    const ev = events[i];
-    if (ev.type === "assistant_message" && ev.is_auth_error !== true) {
-      firstSuccessIdx = i;
-      break;
-    }
-  }
-  if (firstSuccessIdx === -1) return hidden;
-
-  for (let i = 0; i < firstSuccessIdx; i++) {
-    const ev = events[i];
-    if (ev.type !== "assistant_message" || ev.is_auth_error !== true) continue;
-    hidden.add(ev.event_id);
-    for (let j = i - 1; j >= 0; j--) {
-      const prev = events[j];
-      if (prev.type === "user_message") {
-        hidden.add(prev.event_id);
-        break;
-      }
-      if (prev.type === "assistant_message") break;
-    }
-  }
-
-  return hidden;
-}
-
 export function countResolvedToolResults(
   toolCalls: ToolCall[] | undefined,
   toolResults: Map<string, ToolResultEvent>,
@@ -206,8 +163,9 @@ function reauthNoteSignature(event: AssistantMessageEvent, chatId: string): stri
   if (chat === undefined) return "unknown";
   const bound = `bound:${chat.active_agent.account_id ?? ""}`;
   if (!isSignedInSince(event, chatId)) return bound;
-  const prompt = messageToSendAgain(getEventsForChat(chatId), event);
-  return `${bound}|recovered|${prompt?.event_id ?? "-"}|${resendStateOf(event.event_id) ?? "-"}`;
+  const prompts = messagesToSendAgain(getEventsForChat(chatId), event);
+  const resending = isResendingAfterSignIn(chatId) ? "resending" : "-";
+  return `${bound}|recovered|${prompts?.map((prompt) => prompt.event_id).join(",") ?? "-"}|${resendStateOf(event.event_id) ?? "-"}|${resending}`;
 }
 
 export function StableAssistantMessage(): m.Component<{
@@ -499,12 +457,14 @@ function renderReauthAction(chatId: string): m.Children {
  *  neutral line in place of the red failure, and the message it failed on to send again while the
  *  turn is still the chat's newest. The provider's own text stays one click away. */
 function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text: string): m.Vnode {
-  const prompt = messageToSendAgain(getEventsForChat(chatId), event);
+  const prompts = messagesToSendAgain(getEventsForChat(chatId), event);
   const state = resendStateOf(event.event_id);
   const action =
-    prompt === null || state === "sent"
+    prompts === null || state === "sent"
       ? null
-      : [
+      : isResendingAfterSignIn(chatId)
+        ? " Sending your message again\u2026"
+        : [
           state === "failed" ? " That didn't send. " : " ",
           m(
             "button",
@@ -512,7 +472,7 @@ function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text:
               type: "button",
               class: REAUTH_ACTION_CLASS,
               disabled: state === "sending",
-              onclick: () => void sendAgain(chatId, event.event_id, prompt),
+              onclick: () => void sendAgain(chatId, event.event_id, prompts),
             },
             state === "failed" ? "Try again" : "Send your message again",
           ),

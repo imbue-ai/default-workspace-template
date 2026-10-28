@@ -253,4 +253,3 @@ def test_compaction_record_without_summary_or_blank_summary() -> None:
 def test_compaction_record_without_valid_id_is_skipped() -> None:
     assert parse_record({"type": "compaction", "timestamp": "t", "summary": "hi"}) == []
     assert parse_record({"type": "compaction", "id": "", "timestamp": "t", "summary": "hi"}) == []
-

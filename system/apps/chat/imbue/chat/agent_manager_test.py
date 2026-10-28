@@ -129,6 +129,7 @@ from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
+from imbue.chat.testing import is_chat_resending_after_sign_in
 from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
@@ -5925,6 +5926,24 @@ class _FixedTranscriptReader(ListTranscriptReader):
         self._events = events
 
 
+class _ResendTranscripts:
+    """Each agent's transcript as a resend reads it, one reader per agent; a message delivered with ``land``
+    shows up in it, as a real send's turn does."""
+
+    def __init__(self, events_of: Callable[[str], list[dict[str, Any]]]) -> None:
+        self._events_of = events_of
+        self._reader_by_agent: dict[str, _FixedTranscriptReader] = {}
+        self.read_agent_ids: list[str] = []
+
+    def reader(self, agent_info: AgentInfo) -> TranscriptReader:
+        self.read_agent_ids.append(agent_info.id)
+        return self._reader_by_agent.setdefault(agent_info.id, _FixedTranscriptReader(self._events_of(agent_info.id)))
+
+    def land(self, agent_info: AgentInfo, text: str) -> SendOutcome:
+        self._reader_by_agent[agent_info.id]._events.append(_typed_turn(text))
+        return SendOutcome.OK
+
+
 def test_a_sign_in_resends_the_message_its_failure_refused_once_the_agent_is_back(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -5946,24 +5965,80 @@ def test_a_sign_in_resends_the_message_its_failure_refused_once_the_agent_is_bac
     # Each send, and whether the agent's restart had run by then.
     delivered: list[tuple[str, str, bool]] = []
 
+    landing = _ResendTranscripts(lambda agent_id: transcripts[agent_id])
+
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         is_restarted = f"start {agent_info.name} --restart --no-resume" in argv_log.read_text().splitlines()
         delivered.append((agent_info.id, text, is_restarted))
-        return SendOutcome.OK
+        return landing.land(agent_info, text)
 
     manager.set_handoff_capabilities(
-        HandoffCapabilities(
-            ensure_watcher=lambda agent_info: _FixedTranscriptReader(transcripts[agent_info.id]),
-            drain_to_composer=lambda agent_info: "",
-            deliver=deliver,
-        )
+        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
     )
     try:
         assert manager.restart_agents_on_account(account) == 2
-        wait_for(lambda: len(delivered) > 0, timeout=10.0, error_message="the refused message was never resent")
+        wait_for(
+            lambda: not is_chat_resending_after_sign_in(manager, refused_id),
+            timeout=10.0,
+            error_message="the refused message's resend never settled",
+        )
     finally:
         manager.stop()
     assert delivered == [(refused_id, "Who is Aaron?", True)]
+
+
+def test_every_chat_on_a_signed_in_account_reports_its_resend_until_it_settles(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log, gate = write_gated_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    refused_id, answered_id = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    seed_agent_state(manager, refused_id, name="Refused-Chat", labels={"account": "acct-1"})
+    seed_agent_state(manager, answered_id, name="Answered-Chat", labels={"account": "acct-1"})
+    transcripts = {
+        refused_id: [_typed_turn("hi"), _agent_reply(is_auth_error=True)],
+        answered_id: [_typed_turn("hi"), _agent_reply()],
+    }
+    landing = _ResendTranscripts(lambda agent_id: transcripts[agent_id])
+    delivered: list[str] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        delivered.append(agent_info.id)
+        return landing.land(agent_info, text)
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
+    )
+    try:
+        manager.restart_agents_on_account_in_background("acct-1")
+        # From the moment the sign-in lands, before any restart has finished.
+        assert is_chat_resending_after_sign_in(manager, refused_id)
+        assert is_chat_resending_after_sign_in(manager, answered_id)
+        gate.touch()
+        wait_for(
+            lambda: not any(is_chat_resending_after_sign_in(manager, agent_id) for agent_id in transcripts),
+            timeout=10.0,
+            error_message="a chat kept reporting its resend after it settled",
+        )
+    finally:
+        manager.stop()
+    assert delivered == [refused_id]
+
+
+def test_a_restart_that_fails_after_a_sign_in_ends_its_resend(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    failing_mngr = tmp_path / "mngr"
+    failing_mngr.write_text("#!/bin/sh\necho 'no such agent' >&2\nexit 1\n")
+    failing_mngr.chmod(0o755)
+    manager = AgentManager.build(broadcaster, mngr_binary=str(failing_mngr))
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Unrestartable-Chat", labels={"account": "acct-1"})
+    try:
+        assert manager.restart_agents_on_account("acct-1") == 0
+        assert not is_chat_resending_after_sign_in(manager, agent_id)
+    finally:
+        manager.stop()
 
 
 def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
@@ -6014,19 +6089,16 @@ def test_a_resend_sends_each_refused_message_until_one_does_not_land(
     account = f"acct-{uuid4().hex}"
     seed_agent_state(manager, f"agent-{uuid4().hex}", name="Resent-Chat", labels={"account": account})
     attempted: list[str] = []
+    landing = _ResendTranscripts(
+        lambda agent_id: [_typed_turn("first"), _typed_turn("second"), _agent_reply(is_auth_error=True)]
+    )
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         attempted.append(text)
-        return outcome
+        return landing.land(agent_info, text) if outcome is SendOutcome.OK else outcome
 
     manager.set_handoff_capabilities(
-        HandoffCapabilities(
-            ensure_watcher=lambda agent_info: _FixedTranscriptReader(
-                [_typed_turn("first"), _typed_turn("second"), _agent_reply(is_auth_error=True)]
-            ),
-            drain_to_composer=lambda agent_info: "",
-            deliver=deliver,
-        )
+        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
     )
     try:
         assert manager.restart_agents_on_account(account) == 1
@@ -6048,26 +6120,22 @@ def test_a_sign_in_resends_nothing_to_a_chat_that_is_switching(
     # A chat on the same account that is not switching, so the run shows the resend does happen.
     settled_id = f"agent-{uuid4().hex}"
     seed_agent_state(manager, settled_id, name="Settled-Chat", labels={"account": "acct-anthropic"})
-    read_transcripts: list[str] = []
     attempted: list[tuple[str, str]] = []
-
-    def ensure_watcher(agent_info: AgentInfo) -> TranscriptReader:
-        read_transcripts.append(agent_info.id)
-        return _FixedTranscriptReader([_typed_turn("hi"), _agent_reply(is_auth_error=True)])
+    landing = _ResendTranscripts(lambda agent_id: [_typed_turn("hi"), _agent_reply(is_auth_error=True)])
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         attempted.append((agent_info.id, text))
-        return SendOutcome.OK
+        return landing.land(agent_info, text)
 
     manager.set_handoff_capabilities(
-        HandoffCapabilities(ensure_watcher=ensure_watcher, drain_to_composer=lambda agent_info: "", deliver=deliver)
+        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
     )
     try:
         assert manager.restart_agents_on_account("acct-anthropic") == 2
     finally:
         manager.stop()
     assert "start Chat-1 --restart --no-resume" in argv_log.read_text().splitlines()
-    assert (read_transcripts, attempted) == ([settled_id], [(settled_id, "hi")])
+    assert (set(landing.read_agent_ids), attempted) == ({settled_id}, [(settled_id, "hi")])
 
 
 def test_a_sign_in_resends_nothing_to_an_agent_its_chat_moved_on_from_during_the_restart(
@@ -6081,19 +6149,15 @@ def test_a_sign_in_resends_nothing_to_an_agent_its_chat_moved_on_from_during_the
     # Restarted after Chat-1, so once its resend runs, Chat-1's has been started too.
     settled_id = f"agent-{uuid4().hex}"
     seed_agent_state(manager, settled_id, name="Settled-Chat", labels={"account": "acct-1"})
-    read_transcripts: list[str] = []
     attempted: list[str] = []
-
-    def ensure_watcher(agent_info: AgentInfo) -> TranscriptReader:
-        read_transcripts.append(agent_info.id)
-        return _FixedTranscriptReader([_typed_turn("hi"), _agent_reply(is_auth_error=True)])
+    landing = _ResendTranscripts(lambda agent_id: [_typed_turn("hi"), _agent_reply(is_auth_error=True)])
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         attempted.append(agent_info.id)
-        return SendOutcome.OK
+        return landing.land(agent_info, text)
 
     manager.set_handoff_capabilities(
-        HandoffCapabilities(ensure_watcher=ensure_watcher, drain_to_composer=lambda agent_info: "", deliver=deliver)
+        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
     )
     try:
         manager.restart_agents_on_account_in_background("acct-1")
@@ -6107,7 +6171,7 @@ def test_a_sign_in_resends_nothing_to_an_agent_its_chat_moved_on_from_during_the
     finally:
         manager.stop()
     assert argv_log.read_text().splitlines()[0] == "start Chat-1 --restart --no-resume"
-    assert (read_transcripts, attempted) == ([settled_id], [settled_id])
+    assert (set(landing.read_agent_ids), attempted) == ({settled_id}, [settled_id])
 
 
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(
