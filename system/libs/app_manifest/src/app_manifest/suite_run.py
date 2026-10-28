@@ -119,6 +119,21 @@ class _ProcessResult(FrozenModel):
 
 
 @pure
+def _summary_line_test_id(entry: str) -> str:
+    """The node id at the start of a short-summary entry, ``<node id> - <message>`` or the id
+    alone; a parameter in brackets may itself hold the separator."""
+    separator_index = entry.find(_FAILURE_MESSAGE_SEPARATOR)
+    bracket_index = entry.find("[")
+    if bracket_index != -1 and (separator_index == -1 or bracket_index < separator_index):
+        parameter_end = entry.find("]" + _FAILURE_MESSAGE_SEPARATOR, bracket_index)
+        if parameter_end != -1:
+            return entry[: parameter_end + 1].strip()
+        if entry.rstrip().endswith("]"):
+            return entry.strip()
+    return entry.split(_FAILURE_MESSAGE_SEPARATOR, 1)[0].strip()
+
+
+@pure
 def parse_failed_test_ids(pytest_output: str) -> tuple[str, ...]:
     """The node ids pytest's short test summary lists as failed or errored, in order."""
     lines = pytest_output.splitlines()
@@ -130,7 +145,7 @@ def parse_failed_test_ids(pytest_output: str) -> tuple[str, ...]:
         prefix = next((prefix for prefix in _FAILURE_LINE_PREFIXES if line.startswith(prefix)), None)
         if prefix is None:
             continue
-        test_id = line[len(prefix) :].split(_FAILURE_MESSAGE_SEPARATOR, 1)[0].strip()
+        test_id = _summary_line_test_id(line[len(prefix) :])
         if test_id and test_id not in test_ids:
             test_ids.append(test_id)
     return tuple(test_ids)
