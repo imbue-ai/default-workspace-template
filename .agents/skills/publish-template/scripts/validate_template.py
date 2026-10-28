@@ -6,14 +6,17 @@ Checks, in one command:
   - `template.toml` parses and satisfies the schema;
   - `template.md` and `template.toml` agree (front matter, and the
     activation half of the requirements);
-  - the thumbnail exists and is not still the generated placeholder;
+  - the thumbnail exists, is not still the generated placeholder, and has no
+    script, embedded HTML or event-handler attributes;
   - no `<!-- FILL-IN (publishing agent)` block was left unreplaced anywhere;
   - every declared env.d unit is well-named and actually ships in the snapshot;
   - every declared apt package resolves in the mirrored universe at the
     publisher's pinned snapshot timestamp.
 
 That last check is the reason unmirrorable third-party packages are rejected
-here rather than at some adopter's first boot.
+here rather than at some adopter's first boot. `--pre-push` adds the one check
+that only holds once the repo exists: the README's repo-URL placeholder has
+been replaced.
 
 Run from the repo root being validated:
 
@@ -45,6 +48,9 @@ _IN_REPO_SCHEMA_PATH = Path(
     "system/services/env_converge/src/env_converge/template_manifest.py"
 )
 _APT_RESOLVE_TIMEOUT_SECONDS = 120.0
+# Written by build_template.sh into the README's Open in Imbue Studio link and its
+# copyable fallback; replaced with <owner>/<repo> once the repo exists.
+REPO_URL_PLACEHOLDER = "MINDS_TEMPLATE_REPO_URL"
 
 
 class ValidateTemplateError(Exception):
@@ -101,7 +107,7 @@ def _schema_module_candidates(script_path: Path) -> tuple[Path, ...]:
     return tuple(candidates)
 
 
-def _load_schema_module(script_path: Path) -> ModuleType:
+def load_schema_module(script_path: Path) -> ModuleType:
     """Load the shared schema module from the snapshot dir or this script's repo."""
     candidates = _schema_module_candidates(script_path)
     for candidate in candidates:
@@ -171,10 +177,15 @@ def main(argv: list[str] | None = None) -> int:
             "never for the worker's or the lead's pre-push run."
         ),
     )
+    parser.add_argument(
+        "--pre-push",
+        action="store_true",
+        help="Also require the README's repo-URL placeholder to be replaced (the check before a push)",
+    )
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo_root).resolve()
-    schema = _load_schema_module(Path(__file__).resolve())
+    schema = load_schema_module(Path(__file__).resolve())
 
     manifest_path = repo_root / schema.MANIFEST_TOML_NAME
     if not manifest_path.is_file():
@@ -193,6 +204,15 @@ def main(argv: list[str] | None = None) -> int:
     except schema.TemplateManifestError as e:
         print(f"validate_template: {e}", file=sys.stderr)
         return 1
+
+    if args.pre_push:
+        readme_path = repo_root / "README.md"
+        if readme_path.is_file() and REPO_URL_PLACEHOLDER in readme_path.read_text(
+            encoding="utf-8", errors="replace"
+        ):
+            problems.append(
+                f"README.md still carries {REPO_URL_PLACEHOLDER}; replace it with <owner>/<repo> before the push"
+            )
 
     if not args.skip_apt_check:
         manifest = schema.load_template_manifest(manifest_path)

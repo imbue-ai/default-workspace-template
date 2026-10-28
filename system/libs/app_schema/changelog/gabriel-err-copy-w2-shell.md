@@ -1,0 +1,1 @@
+`ErrorResponse` carries an optional `kind` beside `detail`, naming the refusal for a frontend that words it itself (the workspace shell's refusals say whether an app, a window or a desktop has gone, or a change could not be saved); `error_response` takes it. Like `user_facing_message` and `reportable`, it is left out of the JSON when unset.

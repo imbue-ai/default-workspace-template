@@ -3,11 +3,9 @@ from pathlib import Path
 
 import pytest
 
-from share_gateway.runner import (
-    POLL_INTERVAL_SECONDS,
-    _try_setup_inotify,
-    _wait_for_change_inotify,
-)
+from share_gateway.runner import POLL_INTERVAL_SECONDS
+from share_gateway.runner import _try_setup_inotify
+from share_gateway.runner import _wait_for_change_inotify
 
 
 @pytest.mark.skipif(sys.platform != "linux", reason="inotify is a Linux facility")

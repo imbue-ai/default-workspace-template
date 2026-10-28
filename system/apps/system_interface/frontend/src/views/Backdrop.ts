@@ -164,6 +164,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
                   onToggleMaximize: () => store.toggleMaximized(window.id),
                   onClose: () => void store.closeOrMinimizeWindow(window.id),
+                  chrome: store.shownChrome(),
                 }),
               ];
             }),

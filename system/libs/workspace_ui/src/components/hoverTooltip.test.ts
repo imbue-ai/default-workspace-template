@@ -164,6 +164,15 @@ describe("hoverTooltipAttrs", () => {
     expect(hoverTooltipText(button)).toBe("Start");
   });
 
+  it("shows its bubble as the contract's tooltip part", () => {
+    vi.useFakeTimers();
+    const button = renderButton("Start");
+    hoverTooltip(button);
+
+    expect(document.querySelector<HTMLElement>(".hover-tooltip")?.dataset.part).toBe("tooltip");
+    unhoverTooltip(button);
+  });
+
   it("answers a hover over anything inside the trigger", () => {
     vi.useFakeTimers();
     const button = renderButton("Start");
@@ -189,6 +198,43 @@ describe("hoverTooltipAttrs", () => {
 
     // Leaving and coming back does bring it back.
     expect(hoverTooltipText(button)).toBe("Start");
+  });
+
+  it("shows an optional second line under the first, in its own quieter text", () => {
+    vi.useFakeTimers();
+    m.render(
+      root,
+      m("button", { ...hoverTooltipAttrs("Up to date", "below", { detail: "Synced at 9:30 AM" }) }, "Go"),
+    );
+    const button = root.firstElementChild as HTMLElement;
+    hoverTooltip(button);
+    const bubble = document.querySelector<HTMLElement>(".hover-tooltip")!;
+    expect(bubble.style.flexDirection).toBe("column");
+    expect(bubble.querySelector(".hover-tooltip-detail")?.textContent).toBe("Synced at 9:30 AM");
+    expect(bubble.firstElementChild?.textContent).toBe("Up to date");
+    unhoverTooltip(button);
+
+    // The next tooltip with one line is one line again.
+    const single = renderButton("Start");
+    hoverTooltip(single);
+    expect(bubble.style.flexDirection).toBe("");
+    expect(bubble.querySelector(".hover-tooltip-detail")).toBeNull();
+    expect(shownTooltipText()).toBe("Start");
+    unhoverTooltip(single);
+  });
+
+  it("follows a change to the second line alone while the bubble is up", async () => {
+    vi.useFakeTimers();
+    const render = (detail: string): HTMLElement => {
+      m.render(root, m("button", { ...hoverTooltipAttrs("Syncing", "below", { detail }) }, "Go"));
+      return root.firstElementChild as HTMLElement;
+    };
+    const button = render("10% done");
+    hoverTooltip(button);
+    expect(render("40% done")).toBe(button);
+    await Promise.resolve();
+    expect(document.querySelector(".hover-tooltip-detail")?.textContent).toBe("40% done");
+    unhoverTooltip(button);
   });
 
   it("follows a text change on its trigger while the bubble is up", async () => {
@@ -276,6 +322,22 @@ describe("hoverTooltipAttrs", () => {
     hoverTooltip(belowTrigger);
     expect(bubble.style.top).toBe("326px");
     unhoverTooltip(belowTrigger);
+  });
+
+  it("wraps at the width a trigger asks for, and at the shared one otherwise", () => {
+    vi.useFakeTimers();
+    m.render(root, m("button", { ...hoverTooltipAttrs("A longer explanation", "right", { maxWidth: 220 }) }));
+    const narrow = root.firstElementChild as HTMLElement;
+    hoverTooltip(narrow);
+    const bubble = document.querySelector<HTMLElement>(".hover-tooltip")!;
+    expect(bubble.style.maxWidth).toBe("220px");
+    unhoverTooltip(narrow);
+
+    m.render(root, m("button", { ...hoverTooltipAttrs("Plan") }));
+    const plain = root.firstElementChild as HTMLElement;
+    hoverTooltip(plain);
+    expect(bubble.style.maxWidth).toBe("");
+    unhoverTooltip(plain);
   });
 
   it("stops offering a tooltip an imperative caller takes back", () => {

@@ -57,8 +57,9 @@ jobs:
   # The mngr pin must name the public mirror before a branch merges: a private
   # pin builds only with a credential, which no user's machine and no CI here
   # holds (docs/system/workspace-internals.md). Its own job so main's branch
-  # protection can require exactly this check; the same script also refuses a
-  # tree whose BuildKit lines disagree with the pin.
+  # protection can require exactly "the tree agrees with its pin": the pin
+  # writer also refuses BuildKit lines that disagree with the pin, and the
+  # vendored skill must be the one at the pinned commit.
   pin-is-public:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -67,6 +68,9 @@ jobs:
 
       - name: The mngr pin names the public mirror and the tree agrees with it
         run: python3 system/scripts/set_mngr_pin.py --require-public
+
+      - name: The vendored imbue-studio skill matches the pinned mngr commit
+        run: python3 system/scripts/vendor_mngr_skill.py --check
 
   test:
     runs-on: ubuntu-latest
@@ -97,9 +101,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
         with:
-          version: "latest"
+          # UV_VERSION in system/scripts/setup_system.sh: another uv writes uv.lock differently.
+          version: "0.13.4"
 
       # A branch iterating on a paired mngr change may pin mngr from the private
       # mngr-internal repo (see docs/system/workspace-internals.md). This repo's CI
@@ -111,9 +116,8 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v6
         with:
-          # 22+, not 20: the frontend tests exercise code that reads the global
-          # `navigator` (added to Node in 21), and Node 20 is past end-of-life.
-          node-version: '22'
+          # NODE_VERSION in system/scripts/setup_system.sh, the Node workspaces run.
+          node-version: '24.22.1'
           cache: 'npm'
           cache-dependency-path: system/package-lock.json
 
@@ -127,6 +131,18 @@ jobs:
 
       - name: Install Python dependencies
         run: uv sync --all-packages
+
+      # Opt-in through the ENFORCE_RUFF repository variable, like check-changelog:
+      # workspace repos made from the template inherit this workflow, and their
+      # own apps were never held to the template's lint. The root config excludes
+      # the chat app and the shell, so each is checked from its own directory
+      # under its own config.
+      - name: Lint Python (ruff check)
+        if: vars.ENFORCE_RUFF == 'true'
+        run: |
+          uv run --no-sync ruff check .
+          (cd system/apps/chat && uv run --no-sync ruff check .)
+          (cd system/apps/system_interface && uv run --no-sync ruff check .)
 
       - name: Install Playwright browsers
         if: steps.python_suites.outputs.on_runner == 'true'
@@ -159,6 +175,18 @@ jobs:
             exit 1
           fi
           rm /tmp/exec-probe
+
+      # An agent runs the suites with its own identity in the environment, which
+      # pytest-workspace-env clears before any test code runs. Fake values here
+      # mean a pytest root that fails to load the plugin fails here, not in an agent.
+      - name: Set an agent's environment, as an agent's test run has it
+        if: steps.python_suites.outputs.on_runner == 'true'
+        run: |
+          {
+            echo "MNGR_AGENT_ID=agent-c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1"
+            echo "MNGR_AGENT_NAME=ci-not-an-agent"
+            echo "MINDS_CHAT_ID=agent-c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2"
+          } >> "$GITHUB_ENV"
 
       - name: Run root tests
         if: steps.python_suites.outputs.on_runner == 'true'
@@ -200,7 +228,7 @@ jobs:
       # The runner's offload and the one built into the image (OFFLOAD_VERSION in
       # system/scripts/offload_sandbox_init.sh) talk to each other, so they stay
       # in lockstep; system/test_offload_configs.py checks that.
-      OFFLOAD_VERSION: "0.9.14"
+      OFFLOAD_VERSION: "0.10.0"
     steps:
       - name: Fetch the Modal token from Vault
         uses: imbue-ai/use-vault-secrets@main
@@ -226,9 +254,10 @@ jobs:
           python-version: '3.12'
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
         with:
-          version: "latest"
+          # UV_VERSION in system/scripts/setup_system.sh: another uv writes uv.lock differently.
+          version: "0.13.4"
 
       - name: Refuse a private mngr pin (this CI has no credential for it, by design)
         run: python3 system/scripts/set_mngr_pin.py --require-public

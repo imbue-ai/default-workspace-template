@@ -1,0 +1,1 @@
+`SERVICE_BANDS` gains `system-monitor` at 85, just above Getting Started's 80: the new Memory & disk app is one polling page that stores nothing, so a shed costs a reload and it becomes the most expendable built-in service. The built-in gets a band of its own because `test_app_manifests.py` refuses a built-in app in the `user` band.

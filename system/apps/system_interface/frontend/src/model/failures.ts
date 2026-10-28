@@ -7,7 +7,7 @@
 import { REPORT_A_BUG_LABEL } from "@imbue/workspace-ui/src/models/failure";
 import type { Failure, FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import type { AppRecord } from "./records";
-import type { ToastAction } from "./Toasts";
+import type { ToastAction } from "@imbue/workspace-ui/src/models/toasts";
 
 /** A failure as a desktop surface shows it. */
 export interface FailureNotice {

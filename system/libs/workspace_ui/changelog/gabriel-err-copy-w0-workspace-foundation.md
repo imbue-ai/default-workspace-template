@@ -13,3 +13,7 @@ A failed request inside a workspace is now told the same way everywhere: a sente
 - "Ask an agent to fix this": `askAgentToFix(connection, {whatFailed, details})` in the app contract starts a chat whose first message says what failed, quotes the details as they are, and asks the agent to fix it and say what it changed, through the shell's `shell:start-with-text`. Plain-HTML pages use it from `/_static/app_contract.js`.
 
 - New pieces for the screens that adopt them: `SeeDetails` (also drawn by `NoticeDialog` from its new `details`), the `AskAgentToFixButton` and `ReportBugButton` components (each renders nothing where it could not work), and `report-bug.ts`, which the shell's own toasts open the bug report with.
+
+- The toast stack (`components/toasts.ts`) draws lasting toasts: a toast that stays until dismissed, with a close control, a collapsed "See details", and its buttons ("Try again", "Report a bug"), which the queue (`models/toasts.ts`) holds at most three of. A plain toast takes no press unless the page sets `closesPlainToasts`, which gives it a close button.
+
+- `requestJson`, `getJson` and `postJson` throw the same `HttpError` for a refusal and for a request nothing answered, a GET read as a read and any other method as a change.

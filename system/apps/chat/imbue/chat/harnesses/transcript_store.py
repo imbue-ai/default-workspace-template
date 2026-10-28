@@ -558,6 +558,10 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
         """Push side-channel state that must precede the event broadcast (queue snapshots:
         the A3b depart-before-arrive ordering). Called outside the lock. No-op default."""
 
+    def _after_broadcast(self) -> None:
+        """Push side-channel state that must follow the event broadcast. Called outside the lock.
+        No-op default."""
+
     # -- lifecycle ------------------------------------------------------------------------
 
     def start(self) -> None:
@@ -600,6 +604,7 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
         self._before_broadcast()
         if to_send:
             self._on_events(self._agent_id, to_send)
+        self._after_broadcast()
 
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         return True

@@ -20,12 +20,13 @@ Manifests
 ---------
 An app with a directory ships ``system/apps/<package>/app.toml`` (see
 ``system/libs/app_manifest`` for the schema). ``--manifest <path>`` reads it
-and copies its static fields onto the row: ``display_name``, ``critical``,
+and copies its static fields onto the row: ``display_name``, ``description``, ``api_schema_path``, ``critical``,
 ``stop_when_no_windows``, ``priority``, ``program`` (default: the name), ``internal``, ``system``, ``launcher_rank``,
 ``default_shortcut`` (launch and mode), ``launch_paths`` (id, label, path,
 the names of the params, and ``method``, ``presets``, ``text_param``, and
 ``draft_param`` when given), ``pin`` (path, and style, scope, and
-default_mode when given), ``window_closed_path``, and ``message_handlers`` (type, and path or show and showing);
+default_mode when given), ``window_closed_path``, ``message_handlers`` (type, and path or show and showing), and
+``theming_mode`` (the ``[theming]`` table's mode, when the manifest has one);
 the icon is read from the file the manifest names, relative to the manifest. Every manifest
 field is authoritative on every call, so a re-registration with a changed manifest updates the row.
 Only what is copied from files is checked here (the name rule, the icon markup,
@@ -89,6 +90,14 @@ ENV_APPS_FILE = "MINDS_APPS_FILE"
 # which no longer routes. The random suffix is the one hostname component CT
 # never sees. Minted once per service and persisted (stable across re-share so
 # bookmarks/layouts keep working); see blueprint/random-service-labels/.
+#
+# A label is a strict RFC 1123 hostname label: a name's underscores become
+# hyphens. Browsers tolerate an underscore in a hostname, but ``java.net.URI``
+# (so every JDK-based HTTP client) refuses to parse it as a host, and Python's
+# ``ssl`` will not match a wildcard certificate against it. Labels minted
+# before this rule keep their underscore (a label never changes once
+# persisted), so readers map a label back to its name through the registry,
+# never by transforming the label.
 _LABEL_RANDOM_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
 _LABEL_RANDOM_LENGTH = 8
 
@@ -105,15 +114,16 @@ MAX_DISPLAY_NAME_LENGTH = 64
 
 # Service-name rule: lowercase alphanumeric/underscore runs separated by
 # single hyphens (no uppercase, no leading/trailing/consecutive hyphens).
-# The registered name becomes the leading label of the service's origin
-# hostname (http://<name>.host-<hex>.localhost:8421/ locally; share
-# hostnames follow the same prefix rule on a longer base), so it must work
-# as a hostname label. Underscores are tolerated for legacy names --
-# ``system_interface`` predates this scheme and underscore labels resolve
-# fine in browsers -- but new apps should stick to kebab-case (the build-app
-# scaffold enforces the stricter rule; a drift test in forward_port_test.py
-# keeps that rule a subset of this one, and keeps the app_manifest library's
-# copy of this rule identical).
+# The registered name seeds the leading label of the service's origin
+# hostname: ``mint_service_label`` derives ``<name>-<rand>`` from it, served
+# at http://<name>-<rand>.host-<hex>.localhost:8421/ locally (share hostnames
+# follow the same prefix rule on a longer base), so the name must work as a
+# hostname label. Underscores are tolerated for legacy names --
+# ``system_interface`` predates this scheme; ``mint_service_label`` turns
+# them into hyphens in the origin label -- but new apps should stick to
+# kebab-case (the build-app scaffold enforces the stricter rule; a drift test
+# in forward_port_test.py keeps that rule a subset of this one, and keeps the
+# app_manifest library's copy of this rule identical).
 NAME_PATTERN = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 
 # Workspace hostnames carry their coordinate as a ``host-<hex>`` label (and
@@ -160,7 +170,14 @@ _ALLOWED_CONTROL_CHARACTERS = frozenset({"\t", "\n", "\r"})
 # structured keys (``default_shortcut``, ``launch_paths``, ``pin``,
 # ``message_handlers``) are handled on their own. ``program`` defaults to the
 # name when the manifest omits it.
-_MANIFEST_STRING_KEYS = ("display_name", "priority", "program", "window_closed_path")
+_MANIFEST_STRING_KEYS = (
+    "display_name",
+    "description",
+    "api_schema_path",
+    "priority",
+    "program",
+    "window_closed_path",
+)
 _MANIFEST_BOOL_KEYS = ("critical", "internal", "system", "stop_when_no_windows")
 _MANIFEST_INT_KEYS = ("launcher_rank",)
 # A per-entry copier for one manifest array of tables: ``(copied, None)`` or ``(None, error)``.
@@ -175,6 +192,8 @@ _TableCopier = Callable[[Any, Path], tuple[dict[str, object] | None, str | None]
 # workspace has re-registered its apps under this release.
 _MANIFEST_OWNED_KEYS = (
     "display_name",
+    "description",
+    "api_schema_path",
     "instances",
     "instances_url",
     "critical",
@@ -190,6 +209,7 @@ _MANIFEST_OWNED_KEYS = (
     "pin",
     "window_closed_path",
     "message_handlers",
+    "theming_mode",
 )
 
 # The optional keys of a manifest's ``[pin]`` table, each a string when present; ``path`` is
@@ -323,11 +343,15 @@ def read_icon_file(path: Path) -> tuple[str | None, str | None]:
 
 
 def mint_service_label(name: str) -> str:
-    """Mint an unguessable ``<name>-<rand>`` origin label for a freshly-registered service."""
+    """Mint an unguessable ``<name>-<rand>`` origin label for a freshly-registered service.
+
+    The name's underscores become hyphens so the label is a valid hostname
+    label everywhere (``system_interface`` -> ``system-interface-<rand>``).
+    """
     suffix = "".join(
         secrets.choice(_LABEL_RANDOM_ALPHABET) for _ in range(_LABEL_RANDOM_LENGTH)
     )
-    return f"{name}-{suffix}"
+    return f"{name.replace('_', '-')}-{suffix}"
 
 
 def validate_display_name(value: str) -> str | None:
@@ -587,6 +611,13 @@ def _read_manifest(
             return {}, None, pin_error
         fields["pin"] = copied_pin
 
+    theming = raw.get("theming")
+    if theming is not None:
+        mode = theming.get("mode", "tokens") if isinstance(theming, dict) else None
+        if not isinstance(mode, str):
+            return {}, None, f"manifest {str(path)!r}: theming must be a table whose mode is a string"
+        fields["theming_mode"] = mode
+
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
         entries = raw.get(key)
         if entries is not None:
@@ -762,6 +793,7 @@ def _upsert(
     program: str | None = None,
     display_name: str | None = None,
     manifest_fields: dict[str, object] | None = None,
+    theming_mode: str | None = None,
 ) -> None:
     """Register ``name`` at ``url``, optionally setting its icon markup.
 
@@ -783,6 +815,8 @@ def _upsert(
 
     ``display_name`` is what users read instead of the raw service name, for a
     row with no manifest to carry one, and is authoritative the same way.
+    ``theming_mode`` is the ``[theming]`` mode of the app such a row serves (a
+    preview of it), authoritative the same way.
 
     ``manifest_fields`` (a ``--manifest`` registration) is authoritative for
     every manifest-owned key the same way: each is set to the manifest's value
@@ -790,7 +824,11 @@ def _upsert(
     """
     apps = _load_apps(path)
     manifest_owned = _manifest_owned_values(
-        manifest_fields, internal=internal, program=program, display_name=display_name
+        manifest_fields,
+        internal=internal,
+        program=program,
+        display_name=display_name,
+        theming_mode=theming_mode,
     )
 
     # Update an existing entry's URL in place, minting a label only if one was
@@ -834,6 +872,7 @@ def _manifest_owned_values(
     internal: bool,
     program: str | None,
     display_name: str | None,
+    theming_mode: str | None = None,
 ) -> dict[str, object]:
     """The manifest-owned keys a registration sets, from the manifest or from the plain flags."""
     if manifest_fields is not None:
@@ -853,6 +892,8 @@ def _manifest_owned_values(
         values["program"] = program
     if display_name is not None:
         values["display_name"] = display_name
+    if theming_mode is not None:
+        values["theming_mode"] = theming_mode
     return values
 
 
@@ -933,6 +974,13 @@ def main() -> None:
             "behind it would otherwise open blank."
         ),
     )
+    parser.add_argument(
+        "--theming-mode",
+        help=(
+            "The [theming] mode of the app this registration serves, for a row with "
+            "no manifest to carry one (a preview of the app). Authoritative per call."
+        ),
+    )
     args = parser.parse_args()
 
     if args.manifest is None and args.name is None:
@@ -960,10 +1008,11 @@ def main() -> None:
         or args.program is not None
         or args.internal
         or args.display_name is not None
+        or args.theming_mode is not None
     ):
         parser.error(
             "--manifest cannot be combined with --remove, --icon-file, --no-icon, --program, "
-            "--display-name, or --internal"
+            "--display-name, --theming-mode, or --internal"
         )
 
     if args.program is not None and not args.program.strip():
@@ -1036,6 +1085,7 @@ def main() -> None:
                     program=args.program.strip() if args.program is not None else None,
                     display_name=args.display_name,
                     manifest_fields=manifest_fields,
+                    theming_mode=args.theming_mode,
                 )
         finally:
             fcntl.flock(lock_file, fcntl.LOCK_UN)

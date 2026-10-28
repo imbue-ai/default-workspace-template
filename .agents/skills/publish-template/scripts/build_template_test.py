@@ -275,7 +275,7 @@ def test_the_readme_is_regenerated_to_describe_this_template(
     assert "# Demo" in readme
     assert "# base" not in readme
     # The repo does not exist yet, so the call-to-action carries a placeholder
-    # the lead substitutes before the push; §8 blocks a push that still has it.
+    # creating the repo fills in; the pre-push gate refuses a push that still has it.
     assert "MINDS_TEMPLATE_REPO_URL" in readme
 
 

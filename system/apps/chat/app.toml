@@ -2,6 +2,8 @@
 # by the ``chat`` program at its own port (docs/system/blueprint/workspace-app-model/).
 name = "chat"
 display_name = "Chat"
+description = "The chats with the workspace's agents: one page per chat, where messages are sent and an agent's work is followed."
+api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = true
 priority = "chat"
@@ -36,6 +38,16 @@ path = "/"
 # in the composer unsent.
 
 # The launcher's primary free-text row: what is typed into the desktop's field becomes a new chat's first message.
+# The launcher's Enter: a text typed into the desktop goes to the main chat.
+[[launch_paths]]
+id = "main"
+label = "Send to main chat"
+path = "/api/chats/intake"
+method = "POST"
+params = [{name = "message", label = "Message to send", required = false}]
+presets = {target = "main_chat"}
+text_param = "message"
+
 [[launch_paths]]
 id = "new"
 label = "New Chat"
@@ -59,8 +71,9 @@ params = [{name = "message", label = "Message to send", required = false}]
 presets = {target = "chat_selector"}
 text_param = "message"
 
-# A draft lands in the composer of the chat on screen (else the most recent, else a new one), unsent: what the
-# desktop's "Design your own..." hands the pinned chat window.
+# A draft lands in the composer of the chat on screen (else the main chat, else the most recent, else a new one),
+# unsent: what the desktop hands the pinned chat window. Its "Design your own..." sends no page, so that draft goes
+# to the main chat.
 [[launch_paths]]
 id = "draft"
 label = "Draft into chat"
@@ -69,6 +82,16 @@ method = "POST"
 params = [{name = "message", label = "Draft message", required = false}]
 presets = {target = "current_chat", is_draft = "true"}
 draft_param = "message"
+
+# The chat's own look beyond the shared components: themes may style these elements in their apps/chat.css
+# (docs/system/blueprint/workspace-themes/, section 7). Renaming one breaks the themes that style it.
+[theming]
+mode = "parts"
+parts = [
+    {name = "user-message", description = "A message the user sent, in its bubble"},
+    {name = "composer", description = "The box a message is typed in, with its buttons"},
+    {name = "tool-call", description = "A block showing a tool the agent called and what came back"},
+]
 
 # A chat's launch stacks on the ``chat`` create template the committed mngr settings hold, and the
 # chat's create defaults resolve beside that file, so a change to it can break chat creation.
@@ -79,6 +102,10 @@ note = "Holds the chat create template every chat launch stacks on"
 [[references]]
 path = ".agents/skills/connect-external-service"
 note = "request_secret.py files secret requests through /api/secret-requests"
+
+[[references]]
+path = ".agents/skills/update-self/scripts/update_resume_note.py"
+note = "Writes the resume note whose tag and outcomes harnesses/message_display.py shows as a notice"
 
 # The Imbue Studio app's ask to show a chat (its chat notifications): the shell posts it here, and this app asks the
 # shell's ``show`` op for the window (desktop-interface contracts.md section 8).

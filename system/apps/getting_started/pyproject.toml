@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
+    "app-schema",
     "click>=8.1",
     "flask>=3.0",
     "httpx>=0.27",
@@ -14,11 +15,13 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.13.1",
     "werkzeug>=3.0",
-    "workspace-layout",
+    # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
+    "workspace-themes",
 ]
 
 [dependency-groups]
 dev = [
+    "app-schema[testing]",
     "pytest>=9.0",
     "pytest-cov>=7.0.0",
     "pytest-timeout>=2.3.0",
@@ -46,6 +49,9 @@ packages = ["src/getting_started"]
 
 [tool.pytest.ini_options]
 timeout_func_only = true
+# Same tmp_path retention as the root config, which says why.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
     "browser: marks tests that drive a browser",
@@ -108,7 +114,7 @@ known-first-party = [
     "getting_started",
     "imbue",
     "app_manifest",
-    "workspace_layout",
+    "app_schema",
 ]
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.

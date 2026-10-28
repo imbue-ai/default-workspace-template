@@ -5,7 +5,9 @@ A parked port is a listening socket on the app's registered host and port. Its f
 the listener (so the app can bind), asks for the app to be woken, and is answered with a loading page that
 reloads itself until the app answers, so neither ``mngr forward`` nor the share gateway learns anything about
 starting apps: they see a backend that answers. It reads the request only far enough to answer sensibly, never
-proxies anything, and answers every method and path the same way.
+proxies anything, and answers every method and path the same way. The page goes out under a
+``Content-Security-Policy`` admitting its inline stylesheet and its own inline script and nothing else, like the share
+gateway's own loading page.
 """
 
 import errno
@@ -19,6 +21,8 @@ from typing import Final
 from typing import assert_never
 from urllib.parse import urlsplit
 
+from app_manifest.content_security_policy import inline_script_hashes
+from app_manifest.content_security_policy import inline_source
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
@@ -70,14 +74,18 @@ def parking_target_of(url: str) -> ParkingTarget | None:
     return ParkingTarget(host=parsed.hostname, port=parsed.port)
 
 
+_PAGE_STYLE: Final[str] = (
+    "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;\n"
+    "height:100vh;margin:0;color:#334155}div{text-align:center;max-width:32rem}code{font-size:0.9em}\n"
+    "button{font:inherit;padding:0.4rem 1rem;border:1px solid #cbd5e1;border-radius:6px;background:#fff;"
+    "color:inherit;\ncursor:pointer}button:hover{background:#f1f5f9}details{margin-top:1.5rem;font-size:0.85em;"
+    "color:#64748b}\nsummary{cursor:pointer}"
+)
+
 _PAGE_TEMPLATE: Final[str] = """<!DOCTYPE html>
 <html><head><meta charset="utf-8">{refresh}
 <title>{title}</title>
-<style>body{{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-height:100vh;margin:0;color:#334155}}div{{text-align:center;max-width:32rem}}code{{font-size:0.9em}}
-button{{font:inherit;padding:0.4rem 1rem;border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:inherit;
-cursor:pointer}}button:hover{{background:#f1f5f9}}details{{margin-top:1.5rem;font-size:0.85em;color:#64748b}}
-summary{{cursor:pointer}}</style></head>
+<style>{style}</style></head>
 <body><div><h1>{heading}</h1>{body}</div></body></html>
 """
 
@@ -90,11 +98,12 @@ SHELL_START_WITH_TEXT_TYPE: Final[str] = "shell:start-with-text"
 # a shell that frames the page has greeted it, since only a shell can start one), and the log's command for whoever
 # wants it.
 _FAILED_BODY_TEMPLATE: Final[str] = (
-    '{sentence}<p><button type="button" onclick="location.reload()">Try again</button> '
+    '{sentence}<p><button type="button" id="try-again">Try again</button> '
     '<button type="button" id="ask-agent" hidden>Ask an agent to look at it</button></p>'
     "<details><summary>See details</summary><p>The program's log may say why: "
     "<code>supervisorctl tail {program} stderr</code></p></details>"
     "<script>(function () {"
+    'document.getElementById("try-again").addEventListener("click", function () { location.reload(); });'
     'var ask = document.getElementById("ask-agent");'
     "if (window.parent === window) return;"
     'window.addEventListener("message", function (event) {'
@@ -149,6 +158,7 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
     match kind:
         case ParkedPageKind.STARTING:
             return _PAGE_TEMPLATE.format(
+                style=_PAGE_STYLE,
                 refresh=f'<meta http-equiv="refresh" content="{parked_refresh_seconds(kind)}">',
                 title=f"Starting {name}",
                 heading=f"Starting {name}&hellip;",
@@ -156,6 +166,7 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
             )
         case ParkedPageKind.FAILED:
             return _PAGE_TEMPLATE.format(
+                style=_PAGE_STYLE,
                 refresh="",
                 title=f"{name} couldn't start",
                 heading=f"{name} couldn't start.",
@@ -163,6 +174,7 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
             )
         case ParkedPageKind.BUDGET_SPENT:
             return _PAGE_TEMPLATE.format(
+                style=_PAGE_STYLE,
                 refresh="",
                 title=f"{name} couldn't start",
                 heading=f"{name} couldn't start.",
@@ -177,6 +189,18 @@ def parked_page_html(kind: ParkedPageKind, display_name: str, program: str) -> s
 
 
 @pure
+@pure
+def _page_content_security_policy(page: str) -> str:
+    """The policy a parked page goes out under: its own stylesheet and its own inline script (the could-not-start
+    page's buttons), each admitted by hash, and nothing else."""
+    script_sources = inline_script_hashes(page)
+    script_directive = f"; script-src {' '.join(script_sources)}" if script_sources else ""
+    return (
+        f"default-src 'none'; style-src {inline_source(_PAGE_STYLE)}{script_directive}; base-uri 'none'; "
+        "form-action 'none'"
+    )
+
+
 def parked_response_bytes(kind: ParkedPageKind, page: str) -> bytes:
     """One complete HTTP/1.1 503 answer carrying ``page``, asking for the kind's own retry and closing the
     connection so nothing is pooled against the parker."""
@@ -186,6 +210,7 @@ def parked_response_bytes(kind: ParkedPageKind, page: str) -> bytes:
         f"Retry-After: {parked_refresh_seconds(kind)}\r\n"
         "Cache-Control: no-store\r\n"
         "Content-Type: text/html; charset=utf-8\r\n"
+        f"Content-Security-Policy: {_page_content_security_policy(page)}\r\n"
         f"Content-Length: {len(body)}\r\n"
         "Connection: close\r\n"
         "\r\n"

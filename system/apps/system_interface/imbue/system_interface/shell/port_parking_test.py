@@ -1,5 +1,7 @@
 """Tests for port parking: the held port, the handoff on the first connection, and the pages."""
 
+import base64
+import hashlib
 import re
 from collections.abc import Callable
 from collections.abc import Iterator
@@ -84,7 +86,8 @@ def test_a_wake_that_fails_is_told_so_and_waits_for_the_persons_try_again(closed
 
     head, _, body = answer.partition(b"\r\n\r\n")
     assert b"<h1>Docs couldn't start.</h1>" in body
-    assert b'onclick="location.reload()">Try again</button>' in body
+    assert b'id="try-again">Try again</button>' in body
+    assert b'getElementById("try-again").addEventListener("click", function () { location.reload(); })' in body
     assert b"<summary>See details</summary>" in body and b"supervisorctl tail docs stderr" in body
     # A reload is a wake, which spends the budget, so the page never reloads itself; a fetch is told to wait.
     assert b"http-equiv" not in body
@@ -174,3 +177,26 @@ def test_the_could_not_start_pages_wire_types_are_the_app_contracts() -> None:
     ):
         declared = re.search(rf'export const {name} = "([^"]+)";', app_contract_ts)
         assert declared is not None and declared.group(1) == value
+
+
+def _sha256_source(text: str) -> str:
+    return f"'sha256-{base64.b64encode(hashlib.sha256(text.encode()).digest()).decode()}'"
+
+
+def test_the_response_bytes_carry_a_policy_admitting_exactly_the_pages_stylesheet_and_script() -> None:
+    page = parked_page_html(ParkedPageKind.FAILED, "Docs", "docs")
+    head, _, _ = parked_response_bytes(ParkedPageKind.FAILED, page).partition(b"\r\n\r\n")
+    style = page.split("<style>", 1)[1].split("</style>", 1)[0]
+    script = page.split("<script>", 1)[1].split("</script>", 1)[0]
+    policy = (
+        f"default-src 'none'; style-src {_sha256_source(style)}; script-src {_sha256_source(script)}; "
+        "base-uri 'none'; form-action 'none'"
+    )
+    assert f"Content-Security-Policy: {policy}".encode() in head
+    # The page's own buttons run from that script alone: no inline handler, which no hash admits.
+    assert "onclick=" not in page
+
+    starting = parked_page_html(ParkedPageKind.STARTING, "Docs", "docs")
+    starting_head, _, _ = parked_response_bytes(ParkedPageKind.STARTING, starting).partition(b"\r\n\r\n")
+    starting_policy = f"default-src 'none'; style-src {_sha256_source(style)}; base-uri 'none'; form-action 'none'"
+    assert f"Content-Security-Policy: {starting_policy}".encode() in starting_head

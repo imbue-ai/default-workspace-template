@@ -11,6 +11,7 @@
  */
 
 import m from "mithril";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { isMessageText } from "../reducers/launcherRows";
@@ -85,6 +86,7 @@ export function LauncherField(): m.Component<LauncherFieldAttrs> {
         "div",
         {
           "data-launcher-field": "",
+          ...partAttrs("launcher-field"),
           class:
             // Fully round, and padded so its mark lands under the mark of the menu row above it: a
             // card row's glyph sits 14px inside the card's border, so the field's mark wants 14 too.

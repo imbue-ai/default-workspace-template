@@ -19,6 +19,7 @@ import {
   retryTemplateCatalog,
 } from "./models/TemplateCatalog";
 import { GettingStartedPage } from "./views/GettingStartedPage";
+import { wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 export const PAGE_PATH = "/";
 export const PAGE_TITLE = "Getting Started";
@@ -26,6 +27,7 @@ export const PAGE_TITLE = "Getting Started";
 function bootstrap(): void {
   let handshake: ShellHandshake | null = null;
   const connection = connectToShell({
+    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onHandshake: (received) => {
       handshake = received;
       connection.location(PAGE_PATH, PAGE_TITLE);

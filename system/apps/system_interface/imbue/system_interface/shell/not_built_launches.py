@@ -33,6 +33,14 @@ class NotBuiltLaunchRequest(FrozenModel):
     purpose: NotBuiltLaunchPurpose = Field(description="A terminal session, or an agent asked to repair the interface")
 
 
+class NotBuiltLaunchAnswer(FrozenModel):
+    """What ``POST /api/not-built/launch`` answers: where the launch's page is."""
+
+    label: str = Field(description="The app's origin label")
+    path: str = Field(description="The page the launch opened")
+    display_name: str = Field(description="The app's name")
+
+
 class NotBuiltLaunch(FrozenModel):
     """A launch the placeholder runs: the app, its launch path, and the params it is run with."""
 

@@ -7,8 +7,11 @@ container's cgroup OOM killer acts at the workspace's cap. The cgroup v2 memory
 controller the container runs in is what it sees at ``/sys/fs/cgroup`` (a
 cgroup namespace), and from it the container can compute for itself what a
 gen-2 slice VM publishes from outside under gVisor: the limit as ``MemTotal``
-and, as ``MemAvailable``, the limit minus the usage plus what the kernel can
-reclaim (page cache and reclaimable slab). The formula mirrors the gen-2
+and, as ``MemAvailable``, the limit minus the usage plus the inactive file
+cache, the kubelet's eviction signal. Active file cache and reclaimable slab
+are not counted: near the limit they are what the kernel thrashes rather
+than frees, so counting them can hold the figure above earlyoom's SIGKILL
+threshold while the cgroup runs out. The formula mirrors the gen-2
 publisher in mngr (``mngr_imbue_cloud/slices/gen2_scripts/guest.py``); keep the
 two in step.
 
@@ -39,10 +42,8 @@ CGROUP_DIR: Final[Path] = Path("/sys/fs/cgroup")
 # Well inside the 5 s staleness earlyoom tolerates, and what the gen-2 VM uses.
 PUBLISH_INTERVAL_SECONDS: Final[float] = 0.25
 
-# What the kernel can give back under pressure before the OOM killer runs.
-_RECLAIMABLE_STAT_KEYS: Final[frozenset[str]] = frozenset(
-    {"active_file", "inactive_file", "slab_reclaimable"}
-)
+# The memory.stat field counted as available on top of the free part.
+_AVAILABLE_FILE_CACHE_KEY: Final[str] = "inactive_file"
 _UNCAPPED_LIMIT: Final[str] = "max"
 
 
@@ -69,23 +70,22 @@ def _read_first_line(path: Path) -> str | None:
     return text.partition("\n")[0].strip()
 
 
-def _read_reclaimable_bytes(stat_path: Path) -> int | None:
+def _read_available_file_cache_bytes(stat_path: Path) -> int | None:
     try:
         lines = stat_path.read_text().splitlines()
     except OSError:
         return None
-    reclaimable = 0
     for line in lines:
         key, _, value = line.partition(" ")
-        if key in _RECLAIMABLE_STAT_KEYS and value.strip().isdigit():
-            reclaimable += int(value)
-    return reclaimable
+        if key == _AVAILABLE_FILE_CACHE_KEY and value.strip().isdigit():
+            return int(value)
+    return 0
 
 
 def read_cgroup_memory_headroom(cgroup_dir: Path) -> tuple[int, int] | PublishOutcome:
     """``(limit_bytes, available_bytes)`` for a capped cgroup, else the outcome that stops the round.
 
-    Available is the limit minus the usage plus the reclaimable memory, clamped
+    Available is the limit minus the usage plus the inactive file cache, clamped
     to ``[0, limit]``. The outcomes: ``PublishOutcome.NO_CONTROLLER`` when there is no
     ``memory.max`` to read, ``PublishOutcome.UNCAPPED`` when it reads ``max``, and
     ``PublishOutcome.UNREADABLE`` when ``memory.max`` or ``memory.current`` is not a
@@ -99,11 +99,11 @@ def read_cgroup_memory_headroom(cgroup_dir: Path) -> tuple[int, int] | PublishOu
     usage_text = _read_first_line(cgroup_dir / "memory.current")
     if not limit_text.isdigit() or usage_text is None or not usage_text.isdigit():
         return PublishOutcome.UNREADABLE
-    reclaimable = _read_reclaimable_bytes(cgroup_dir / "memory.stat")
-    if reclaimable is None:
+    available_file_cache = _read_available_file_cache_bytes(cgroup_dir / "memory.stat")
+    if available_file_cache is None:
         return PublishOutcome.UNREADABLE
     limit = int(limit_text)
-    available = max(0, min(limit, limit - int(usage_text) + reclaimable))
+    available = max(0, min(limit, limit - int(usage_text) + available_file_cache))
     return limit, available
 
 
@@ -119,7 +119,7 @@ def render_host_meminfo(
 
 
 def write_replacing(target_path: Path, content: str) -> None:
-    """Replace the file by rename, since earlyoom rereads it on every poll."""
+    """Replace the file by rename, so a reader (earlyoom on every poll, the system monitor) never sees a half-written one."""
     target_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = target_path.with_name(f"{target_path.name}.{os.getpid()}.tmp")
     temp_path.write_text(content)

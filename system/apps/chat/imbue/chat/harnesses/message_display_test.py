@@ -18,6 +18,9 @@ from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import SecretResolutionVerdict
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_NOTE_TAG
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_LANDED
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_NOT_LANDED
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
@@ -337,14 +340,18 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
     assert display.request_id == "evt-9"
 
 
-def _load_system_script(filename: str) -> Any:
-    """A standard-library-only script from ``system/scripts/``, which this package cannot import."""
-    script = Path(__file__).resolve().parents[5] / "scripts" / filename
+def _load_repo_script(relative_path: str) -> Any:
+    """A standard-library-only script at ``relative_path`` from the repo root, which this package cannot import."""
+    script = Path(__file__).resolve().parents[6] / relative_path
     spec = importlib.util.spec_from_file_location(f"{script.stem}_for_tag_pin", script)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def _load_system_script(filename: str) -> Any:
+    return _load_repo_script(f"system/scripts/{filename}")
 
 
 def test_the_messaging_scripts_browser_fleet_tag_is_the_one_this_classifier_strips() -> None:
@@ -377,6 +384,54 @@ def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None
     assert decision.display_label == "Background task"
     assert decision.display_body == "Wait for the background agent (finished)"
     assert is_non_turn_tail(report) is False
+
+
+@pytest.mark.parametrize(
+    ("landed_ref", "label", "summary"),
+    [
+        (
+            "minds-v0.9.0",
+            "Workspace updated",
+            "This chat was paused while the workspace updated to v0.9.0, and is carrying on now.",
+        ),
+        (
+            None,
+            "Workspace update not applied",
+            "This chat was paused for a workspace update that did not go through, and is carrying on now.",
+        ),
+    ],
+)
+def test_a_resumed_chats_workspace_update_note_is_a_notice_showing_only_its_summary(
+    landed_ref: str | None, label: str, summary: str
+) -> None:
+    """``run-status resume-chats`` sends a paused chat a note composed by the update-self skill, which is
+    standard-library only and cannot import this package, so its copy of the tag is pinned here by classifying
+    a note it composed."""
+    module = _load_repo_script(".agents/skills/update-self/scripts/update_resume_note.py")
+    note = module.compose_resume_note(
+        landed_ref=landed_ref,
+        is_chat_paused=True,
+        wip_commit="0123abc",
+        interrupted_tasks=["Run the test suite"],
+        restarted_workers=["fix-login"],
+    )
+
+    assert module.WORKSPACE_UPDATE_NOTE_TAG == WORKSPACE_UPDATE_NOTE_TAG
+    assert (module.OUTCOME_LANDED, module.OUTCOME_NOT_LANDED) == (
+        WORKSPACE_UPDATE_OUTCOME_LANDED,
+        WORKSPACE_UPDATE_OUTCOME_NOT_LANDED,
+    )
+    decision = classify_user_message(note)
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == label
+    assert decision.display_body == summary
+    assert is_non_turn_tail(note) is False
+
+
+def test_text_that_merely_quotes_the_workspace_update_note_is_a_human_turn() -> None:
+    quoting = f'why did the <{WORKSPACE_UPDATE_NOTE_TAG} outcome="landed"><summary>x</summary> note show up?'
+    assert classify_user_message(quoting) is None
 
 
 def _compose_report(description: str, command: Sequence[str] = ("make",), output: str = "built\n") -> str:

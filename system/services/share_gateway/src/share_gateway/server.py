@@ -3,7 +3,10 @@
 Every request to a shared origin passes through ``/_auth/verify`` (session
 cookie verified, identity re-checked against the grants file, Origin policy
 enforced, session cookie stripped from what the service sees, the verified
-identity handed on as ``X-Imbue-Identity``). Visitors without a session are
+identity handed on as ``X-Imbue-Identity``). A visiting agent presents a bearer
+admission token instead of a cookie; ``admit_agent`` resolves it against the
+agent grants and the agent's scope, and the identity handed on names the agent
+rather than an account. Visitors without a session are
 bounced to the accounts broker and land back on ``/_auth/callback``, which
 verifies the broker's handoff token and sets the workspace session cookie. A
 callback whose nonce or token no longer verifies (a reopened link, a slow
@@ -12,6 +15,8 @@ anyone else is sent through the broker once more; only a second failure shows
 the "Sign-in link expired" page.
 """
 
+import base64
+import hashlib
 import json
 import secrets
 import threading
@@ -39,8 +44,11 @@ from share_gateway.handoff import JwksCache
 from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.handoff import verify_handoff_token
 from share_gateway.hostnames import service_for_host
+from share_gateway.identity import AgentIdentity
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
+from share_gateway.identity import bearer_token_from_headers
+from share_gateway.identity import render_agent_identity_header
 from share_gateway.identity import render_identity_header
 from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
@@ -61,39 +69,56 @@ _SYSTEM_INTERFACE_SERVICE_NAME = "system_interface"
 # routes).
 _SHELL_SERVICE_NAME = "system_interface"
 
-_LOADING_PAGE = """<!DOCTYPE html>
+# The stylesheet the gateway's own pages inline; the page policy admits it by hash.
+_PAGE_STYLE = (
+    "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;\n"
+    "height:100vh;margin:0;color:#334155}div{text-align:center}"
+)
+_PAGE_STYLE_HASH = base64.b64encode(hashlib.sha256(_PAGE_STYLE.encode("utf-8")).digest()).decode("ascii")
+
+# The gateway's own pages load nothing but their inline stylesheet. Stated in
+# full here because the frame-ancestors policy caddy adds governs embedding
+# only; the two headers compose by intersection.
+PAGE_CONTENT_SECURITY_POLICY = (
+    f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; form-action 'none'"
+)
+
+_LOADING_PAGE = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3">
 <title>Loading...</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<style>{_PAGE_STYLE}</style></head>
 <body><div><h1>Starting up&hellip;</h1>
 <p>This service is not ready yet. The page retries automatically.</p></div></body></html>
 """
 
-_FORBIDDEN_PAGE = """<!DOCTYPE html>
+_FORBIDDEN_PAGE = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Not shared with you</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<style>{_PAGE_STYLE}</style></head>
 <body><div><h1>Not shared with you</h1>
 <p>This workspace exists, but your account has not been granted access to this page.</p></div></body></html>
 """
 
-_EXPIRED_LOGIN_PAGE = """<!DOCTYPE html>
+_EXPIRED_LOGIN_PAGE = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Sign-in link expired</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<style>{_PAGE_STYLE}</style></head>
 <body><div><h1>Sign-in link expired</h1>
 <p>This sign-in link was already used or has expired. Open the workspace link again.</p></div></body></html>
 """
 
-_MISCONFIGURED_PAGE = """<!DOCTYPE html>
+_MISCONFIGURED_PAGE = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Sharing is misconfigured</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;
-height:100vh;margin:0;color:#334155}div{text-align:center}</style></head>
+<style>{_PAGE_STYLE}</style></head>
 <body><div><h1>Sharing is misconfigured</h1>
 <p>This workspace's sharing settings could not be read, so nobody can be let in right now.
 The workspace owner needs to fix the workspace's sharing settings.</p></div></body></html>
 """
+
+
+def _html_page(page: str, status: int) -> Response:
+    """One of the gateway's own pages, under the policy that admits exactly its contents."""
+    return Response(
+        page, status=status, mimetype="text/html", headers={"Content-Security-Policy": PAGE_CONTENT_SECURITY_POLICY}
+    )
 
 
 class PendingLogin:
@@ -168,6 +193,10 @@ def build_gateway_app(
     # service registered while shared is recognized without rebuilding the app.
     # Grants are keyed by service name, not label.
     get_registered_apps: Callable[[], Sequence[RegisteredApp]],
+    # Resolves a bearer admission token to the visiting agent's identity when
+    # its scope admits the named service; None answers 403. Absent (older
+    # callers, tests of the human path), every bearer request is refused.
+    admit_agent: Callable[[str, str | None], AgentIdentity | None] | None = None,
 ) -> Flask:
     app = Flask(__name__)
     workspace_domain = materials.workspace_domain
@@ -177,13 +206,13 @@ def build_gateway_app(
     auth_host = f"{auth_label}.{workspace_domain}"
 
     def _forbidden() -> Response:
-        return Response(_FORBIDDEN_PAGE, status=403, mimetype="text/html")
+        return _html_page(_FORBIDDEN_PAGE, status=403)
 
     def _expired_login() -> Response:
-        return Response(_EXPIRED_LOGIN_PAGE, status=403, mimetype="text/html")
+        return _html_page(_EXPIRED_LOGIN_PAGE, status=403)
 
     def _misconfigured() -> Response:
-        return Response(_MISCONFIGURED_PAGE, status=503, mimetype="text/html")
+        return _html_page(_MISCONFIGURED_PAGE, status=503)
 
     def _apply_health_cors(response: Response) -> Response:
         """Echo the hosted-chrome origin so it can probe /_health with credentials.
@@ -242,7 +271,7 @@ def build_gateway_app(
 
     @app.get("/_auth/loading")
     def loading() -> Response:
-        return Response(_LOADING_PAGE, status=503, mimetype="text/html")
+        return _html_page(_LOADING_PAGE, status=503)
 
     @app.get("/_auth/verify")
     def verify() -> Response:
@@ -261,7 +290,8 @@ def build_gateway_app(
         is_websocket_upgrade = request.headers.get("X-Forwarded-Upgrade", "").lower() == "websocket"
 
         origin_header = request.headers.get("Origin")
-        if not is_request_origin_allowed(
+        bearer_token = bearer_token_from_headers(request.headers.get("Authorization"))
+        if bearer_token is None and not is_request_origin_allowed(
             method,
             origin_header,
             is_websocket_upgrade,
@@ -282,6 +312,28 @@ def build_gateway_app(
             return Response(status=200)
 
         cookie_header = request.headers.get("Cookie", "")
+
+        # A visiting agent presents its admission token as a bearer header. It
+        # is never ambient, so the Origin policy above is moot for it (the
+        # policy guards browsers' automatically attached cookies); the token
+        # alone is checked, against the agent grants rather than the human
+        # ones, and the agent's scope decides which origins it may reach.
+        if bearer_token is not None:
+            if admit_agent is None:
+                _log_denied("bearer token presented but agent access is not configured", host)
+                return Response("authentication required", status=401, mimetype="text/plain")
+            agent_identity = admit_agent(bearer_token, service_name)
+            if agent_identity is None:
+                _log_denied("bearer token is not a valid admission token for this origin", host)
+                return Response("forbidden", status=403, mimetype="text/plain")
+            return Response(
+                status=200,
+                headers={
+                    "X-Share-Filtered-Cookie": strip_session_cookie(cookie_header),
+                    IDENTITY_HEADER: render_agent_identity_header(agent_identity),
+                },
+            )
+
         identity = verify_session_from_cookies(signing_secret, request.cookies, workspace_domain)
         if identity is None:
             accept_header = request.headers.get("Accept", "")
