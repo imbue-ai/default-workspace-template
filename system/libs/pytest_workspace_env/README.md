@@ -52,8 +52,9 @@ level) is outside its reach, so skip per test rather than per module.
 ## Which browser a test launches
 
 A workspace installs two Chromium builds (env-converge's background pass
-after boot), and Playwright's own browser-cache lookup finds neither, so a
-test names the binary it launches. `pytest_workspace_env.browsers` holds that choice for
+after boot). The test shell lives outside Playwright's default browser cache,
+and Fortress is linked into it only best-effort, so a test names the binary it
+launches. `pytest_workspace_env.browsers` holds that choice for
 every suite (the root pass and the `chat` and `system_interface` passes):
 
 - `pick_e2e_browser_executable(is_headed)` returns Playwright's headless

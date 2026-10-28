@@ -3,7 +3,8 @@
 env-converge installs both, in the background after boot: Playwright's headless shell, for the
 tests alone (system/scripts/env.d/1010-playwright-test-headless-shell.sh), and Fortress, the
 workspace's stealth-patched Chromium fork (system/scripts/env.d/1000-playwright-fortress.sh).
-Playwright's own browser-cache lookup finds neither, so a launch names the binary explicitly.
+The shell lives outside Playwright's default cache, and Fortress is linked into it only
+best-effort, so a launch names the binary explicitly.
 """
 
 import os
