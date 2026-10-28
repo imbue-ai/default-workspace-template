@@ -9,8 +9,10 @@
  * partway, the messages it did not get to. Once a copy of a refused message is in
  * the chat, the original and the failure are hidden, so the message shows once.
  *
- * Which messages a failure refused is decided as the chat app decides it
- * (``user_turns_refused_for_sign_in``), so the page and the backend never disagree.
+ * Which messages a failure refused follows the chat app's rule (``user_turns_refused_for_sign_in``):
+ * the user's messages after the agent's last real reply, sent no later than the last failure, by
+ * timestamp. The page counts only the user's own messages; the chat app also sends a successor's
+ * handoff prompt again, which the page never offers.
  */
 
 import m from "mithril";
