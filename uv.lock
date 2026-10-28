@@ -49,6 +49,7 @@ members = [
     "terminal-app",
     "tk-command-parsing",
     "workspace-layout",
+    "workspace-profile",
     "workspace-themes",
 ]
 
@@ -424,7 +425,6 @@ version = "0.1.0"
 source = { editable = "system/libs/bootstrap" }
 dependencies = [
     { name = "loguru" },
-    { name = "tenacity" },
 ]
 
 [package.dev-dependencies]
@@ -435,7 +435,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "loguru", specifier = ">=0.7.0" },
-    { name = "tenacity", specifier = ">=8.0" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
 ]
 
@@ -4474,6 +4473,31 @@ requires-dist = [
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=6550c2b506f74cbffe4be6475bbe84ac26f97833" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.12" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.85" }]
+
+[[package]]
+name = "workspace-profile"
+version = "0.1.0"
+source = { editable = "system/libs/workspace_profile" }
+dependencies = [
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=6550c2b506f74cbffe4be6475bbe84ac26f97833" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [package.metadata.requires-dev]

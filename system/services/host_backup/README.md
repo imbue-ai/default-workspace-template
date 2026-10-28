@@ -133,6 +133,10 @@ is rewritten out of history by its path pattern.
     naming what the snapshot does hold.
   - `direct`: no snapshot; restic reads `/home/user/.mngr/` directly (plain docker;
     intended for testing).
+- `backup.toml` also carries `verification_disabled` (default `false`): the
+  Imbue Studio app's per-workspace switch for its own exec-based verification of
+  this service. The app writes and reads it; the service itself ignores it and
+  keeps backing up either way.
 - Restic is run with `--exclude` for each entry in `backup.toml`'s
   `excludes` list (default: `**/.venv`, `**/node_modules`, etc) followed by
   its `extra_excludes` list (default empty; for adding patterns without

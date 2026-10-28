@@ -133,6 +133,16 @@ def test_extra_excludes_add_to_user_replaced_excludes(tmp_path: Path) -> None:
     assert config.effective_excludes == ("**/only-this", "**/and-this")
 
 
+def test_load_backup_config_reads_the_verification_disabled_flag(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "backup.toml"
+    path.write_text("verification_disabled = true\n")
+    config = load_backup_config(path)
+    assert config.verification_disabled is True
+    assert load_backup_config(tmp_path / "absent.toml").verification_disabled is False
+
+
 def test_load_backup_config_applies_restore_marker_max_age(tmp_path: Path) -> None:
     path = tmp_path / "backup.toml"
     path.write_text("[retention]\nrestore_marker_max_age_days = 3\n")
