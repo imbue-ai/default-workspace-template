@@ -93,7 +93,8 @@ class CommandRun(FrozenModel):
     finished_at: datetime = Field(description="When it, and the rerun of its failed tests, finished")
     log_path: Path = Field(description="Its output, stdout and stderr together")
     failed_test_ids: tuple[str, ...] = Field(
-        description="The tests that failed: after the rerun for a failed run, the ones that passed on it for a flaky one"
+        description="The tests that failed: after the rerun for a failed run, the ones that passed on it for a flaky "
+        "one, the ones the rerun was for when it was shed, and none when only the coverage floor failed the run"
     )
     rerun_log_path: Path | None = Field(description="The rerun's output, when its failed tests were rerun")
     rerun: SuiteCommand | None = Field(
