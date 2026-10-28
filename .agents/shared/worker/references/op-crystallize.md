@@ -77,7 +77,9 @@ reports (non-blocking)". Name it for what is true at that commit, and make its
 `## Tested` section list exactly what you ran here and what you have not. The
 lead may merge that commit and let the user start using the hardened build
 while you work through the rest of the pass, so do not stop your turn: push it
-and go straight on to Stage 4. 
+and go straight on. The first work after it is the phone and sharing checks
+(`type-app.md`, "Phone and sharing checks"), so the user gets the hardened
+core first; then Stage 4.
 
 **Reconstruct shape:** do not declare a milestone yet. The user has
 approved only an outline. As an example, a skill whose scenarios have never run is not
@@ -139,6 +141,8 @@ Committed on branch `<branch-name>`. Ready to merge.
 - Outside footprint: <none, or one path per line with why it changed>
 - Undeclared couplings: <none, or each built-in suite select-tests missed, and the path it observes>
 - Flaky tests: <none, or each test that failed in the gate and passed when rerun alone>
+- Phone: <what you fixed for a phone, or "nothing needed">
+- Sharing: <routes made owner-only; each route that lets a visitor change, delete or spend, left as it was for the user to decide; the access log, or "none, visitors can only read">
 ```
 
 ## If you need to give up
