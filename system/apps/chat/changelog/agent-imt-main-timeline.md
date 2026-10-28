@@ -1,6 +1,6 @@
 A message sent to a chat whose agent is busy gets its own step, written about two seconds after sending once a small model has read the message, so the user sees the request taken in without waiting for the agent.
 
-- The model sees the chat's open steps, the agent's own and the ones made for messages, each listed with whether it is in progress or not started, and decides what the message does: a new step; the same as an open step; a change to one, which gets its own step for the updated request; calling one off; or not a task. It follows the agent's own rules for step titles. A failed call is tried again, up to three attempts with a 10 s limit each.
+- The model sees the chat's open steps, the agent's own and the ones made for messages, each listed with whether it is in progress or not started, and decides what the message does: a new step; the same as an open step; a change to one, which gets its own step for the updated request; calling one off; or not a task. It follows the agent's own rules for step titles, and its rule for which turns need no steps: chitchat, acknowledgements and quick questions are not a task, and a question gets a step only when it clearly asks for real investigation work. A failed call is tried again, up to three attempts with a 10 s limit each.
 
 - The chat app writes only through tk: `tk create --id` for the message's own step (refused when a ticket already exists there) and `tk cancel` for a step called off or replaced. A cancel holds until the agent starts the step again.
 
