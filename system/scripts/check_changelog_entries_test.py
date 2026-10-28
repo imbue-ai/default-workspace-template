@@ -64,9 +64,11 @@ def _add_entry(repo: Path, project_dir: str, branch: str) -> None:
 
 def test_project_for_path_maps_libs_services_apps_and_dev(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
-    assert gate.project_for_path("system/libs/alpha/foo.py", repo) == "alpha"
-    assert gate.project_for_path("system/apps/beta/bar.py", repo) == "beta"
-    assert gate.project_for_path("system/services/gamma/baz.py", repo) == "gamma"
+    assert gate.project_for_path("system/libs/alpha/foo.py", repo) == "libs/alpha"
+    assert gate.project_for_path("system/apps/beta/bar.py", repo) == "apps/beta"
+    assert (
+        gate.project_for_path("system/services/gamma/baz.py", repo) == "services/gamma"
+    )
     # A system/libs/ dir without a pyproject.toml is not a real project -> dev.
     assert gate.project_for_path("system/libs/nope/x.py", repo) == "dev"
     # Anything under .agents/ -> the synthetic agents bucket.
@@ -110,9 +112,34 @@ def test_gate_fails_when_touched_project_missing_entry(tmp_path: Path) -> None:
     base = gate.resolve_diff_base(repo)
     changed = gate.changed_files_against_base(base, repo)
     touched = gate.projects_requiring_entry(changed, repo)
-    assert touched == {"alpha"}
+    assert touched == {"libs/alpha"}
     assert gate.find_missing_entries("feat/x", touched, repo) == [
         "system/libs/alpha/changelog/feat-x.md"
+    ]
+
+
+def test_a_library_and_an_app_of_the_same_name_each_owe_their_own_entry(
+    tmp_path: Path,
+) -> None:
+    repo = _init_repo(tmp_path)
+    (repo / "system/apps/alpha").mkdir(parents=True)
+    (repo / "system/apps/alpha/pyproject.toml").write_text("[project]\nname='x'\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "an app named like the library")
+    _git(repo, "checkout", "-q", "-b", "feat/z")
+    (repo / "system/libs/alpha/new.py").write_text("print(1)\n")
+    (repo / "system/apps/alpha/new.py").write_text("print(2)\n")
+    _add_entry(repo, "system/libs/alpha", "feat/z")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "touch both")
+
+    base = gate.resolve_diff_base(repo)
+    changed = gate.changed_files_against_base(base, repo)
+    touched = gate.projects_requiring_entry(changed, repo)
+    assert touched == {"libs/alpha", "apps/alpha"}
+    # The library's entry does not stand in for the app's.
+    assert gate.find_missing_entries("feat/z", touched, repo) == [
+        "system/apps/alpha/changelog/feat-z.md"
     ]
 
 
@@ -127,7 +154,7 @@ def test_gate_passes_when_entry_present(tmp_path: Path) -> None:
     base = gate.resolve_diff_base(repo)
     changed = gate.changed_files_against_base(base, repo)
     touched = gate.projects_requiring_entry(changed, repo)
-    assert touched == {"beta"}
+    assert touched == {"apps/beta"}
     assert gate.find_missing_entries("feat/y", touched, repo) == []
 
 

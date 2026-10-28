@@ -30,12 +30,15 @@ from imbue.mngr.main import cli
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SKILL_MD_ROOTS = (_REPO_ROOT / ".agents" / "skills", _REPO_ROOT / ".agents" / "shared")
 
-# Subcommands provided by mngr plugins (mngr_file, mngr_wait, ...). These are
-# registered at runtime via the register_cli_commands pluggy hook and are not
-# part of the base CLI that the test venv installs, so we cannot resolve them
-# against ``cli`` -- but they are still valid things for a skill to reference.
-# Keep this list to commands actually mentioned in skill prose.
-_KNOWN_PLUGIN_SUBCOMMANDS = frozenset({"file", "wait"})
+# Subcommands provided by mngr plugins (mngr_file, mngr_wait, mngr_imbue_cloud,
+# mngr_latchkey, ...). These are registered at runtime via the
+# register_cli_commands pluggy hook and are not part of the base CLI that the
+# test venv installs, so we cannot resolve them against ``cli`` -- but they are
+# still valid things for a skill to reference. Keep this list to commands
+# actually mentioned in skill prose. The vendored imbue-studio skill's commands
+# are held to the live CLI, plugins included, by the mngr repository's own
+# drift test.
+_KNOWN_PLUGIN_SUBCOMMANDS = frozenset({"file", "wait", "imbue_cloud", "latchkey"})
 
 _INLINE_CODE = re.compile(r"`([^`\n]+)`")
 _FENCED_CODE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)

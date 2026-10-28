@@ -125,7 +125,7 @@ def _shell_messages(page: Page, message_type: str) -> list[dict[str, Any]]:
 
 # A failed install as the daemon's Start route answers it (runner._install_refusal_body).
 _INSTALL_FAILED_REFUSAL: Final[dict[str, Any]] = {
-    "error": "Chromium could not be installed in this workspace: exit code 100\nE: dpkg was interrupted",
+    "detail": "Chromium could not be installed in this workspace: exit code 100\nE: dpkg was interrupted",
     "user_facing_message": "The browser couldn't be set up in this workspace. Ask an agent to fix it.",
     "ask_agent": {
         "what_failed": "The browser couldn't be set up in this workspace",
@@ -192,7 +192,7 @@ def test_a_refused_start_from_the_crash_cover_is_told_there_and_a_cleared_crash_
         page,
         409,
         {
-            "error": "1/1 browsers open -- close one first.",
+            "detail": "1/1 browsers open -- close one first.",
             "user_facing_message": "Another browser is already running, and only one can run at a time.",
         },
     )
@@ -224,7 +224,7 @@ def test_a_start_nothing_answers_says_the_browser_did_not_respond(desktop_contex
 
 def test_a_start_refused_with_no_sentence_of_the_daemons_asks_for_a_bug_report(desktop_context: BrowserContext) -> None:
     page, _sockets = _open_viewer(desktop_context, "stopped")
-    _answer_start(page, 404, {"error": "No browser browser-1"})
+    _answer_start(page, 404, {"detail": "No browser browser-1"})
     cover = page.locator("#stoppedoverlay")
 
     cover.get_by_role("button", name="Start browser").click()
@@ -298,7 +298,7 @@ def test_a_start_that_asks_for_a_bug_report_offers_report_a_bug_only_where_the_s
 ) -> None:
     page, viewer, sockets = _open_framed_viewer(desktop_context, "running", can_report_bug=can_report_bug)
     sockets.casts[0].send(json.dumps({"type": "crashed", "browser_id": "browser-1", "reason": "exited"}))
-    _answer_start(page, 500, {"error": "Internal Server Error"})
+    _answer_start(page, 500, {"detail": "Internal Server Error"})
     cover = viewer.locator("#crashoverlay")
 
     cover.get_by_role("button", name="Start browser").click()

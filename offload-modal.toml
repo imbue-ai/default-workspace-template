@@ -37,7 +37,6 @@ build_inputs = [
     "system/scripts/install_secret_scanners.sh",
     "system/scripts/agy_install-1.1.22.sh",
     "system/scripts/install_owner_exec.sh",
-    "system/scripts/install_dufs.sh",
     "system/scripts/install_earlyoom.sh",
     "system/scripts/install_agent_plugins.sh",
     "system/scripts/install_dependencies.sh",
@@ -64,7 +63,8 @@ command = "uv run pytest"
 # there (OFFLOAD-18).
 discovery_args = "--assert=plain"
 # Inside the image every workspace-only test can run, so a skip is a missing install (pytest-workspace-env).
-env = { DWT_REQUIRE_WORKSPACE_ENV = "1" }
+# The fake agent identity is cleared by the same plugin, so a batch that fails to load it fails.
+env = { DWT_REQUIRE_WORKSPACE_ENV = "1", MNGR_AGENT_ID = "agent-c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1", MNGR_AGENT_NAME = "ci-not-an-agent", MINDS_CHAT_ID = "agent-c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2c2" }
 
 [groups.all]
 retry_count = 0

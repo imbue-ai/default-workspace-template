@@ -8,7 +8,7 @@ from browser.install_gate import (
     missing_install_gate,
     unit_failure_since,
 )
-from browser.runner import _install_refusal_body
+from browser.runner import _install_refusal
 
 _BOOT = datetime(2026, 10, 14, 9, 0, tzinfo=timezone.utc)
 
@@ -69,9 +69,9 @@ def test_a_missing_engine_tells_installing_from_failed() -> None:
 def test_a_failed_install_asks_an_agent_with_the_failed_unit_and_what_it_wrote() -> None:
     failed = missing_install_gate("Chromium", failure=UnitFailure(exit_code=100, stderr_tail="E: dpkg was interrupted"))
 
-    body = _install_refusal_body(failed)
+    body = _install_refusal(failed).model_dump(mode="json")
 
-    assert body["error"] == failed.reason
+    assert body["detail"] == failed.reason
     ask_agent = body["ask_agent"]
     assert isinstance(ask_agent, dict)
     assert ask_agent["what_failed"] == "The browser couldn't be set up in this workspace"
@@ -82,6 +82,6 @@ def test_a_failed_install_asks_an_agent_with_the_failed_unit_and_what_it_wrote()
 
 
 def test_a_browser_still_installing_offers_no_agent() -> None:
-    body = _install_refusal_body(missing_install_gate("Chromium", failure=None))
+    body = _install_refusal(missing_install_gate("Chromium", failure=None)).model_dump(mode="json")
 
     assert "ask_agent" not in body

@@ -63,7 +63,7 @@ function keys(rows: readonly { key: string }[]): string[] {
 describe("the launcher's rows", () => {
   it("with no query lists the launch-path rows (less the free-text ones) and the primary text row, no windows", () => {
     const menu = launcherRowsOf(state(), "");
-    expect(keys(menu.rows)).toEqual(["launch:chatty:root", "launch:terminal:new", "text:chatty:new"]);
+    expect(keys(menu.rows)).toEqual(["launch:chatty:root", "launch:terminal:new", "tour", "text:chatty:new"]);
     expect(menu.launchRows[1].caption).toBe("Terminal");
     expect(menu.launchRows[0].caption).toBeNull();
     // Nothing typed: the primary runs the bare launch path; the secondary has nothing to send, so it is not offered.
@@ -135,11 +135,11 @@ describe("the launcher's rows", () => {
 
   it("moves the highlight through the enabled rows, wrapping, from the default when nothing was moved", () => {
     const { rows } = launcherRowsOf(state(), "");
-    expect(rows.map(isRowEnabled)).toEqual([true, true, true]);
+    expect(rows.map(isRowEnabled)).toEqual([true, true, true, true]);
     expect(moveHighlight(rows, -1, 1)).toBe(1);
     expect(moveHighlight(rows, 1, 1)).toBe(2);
-    expect(moveHighlight(rows, 2, 1)).toBe(0);
-    expect(moveHighlight(rows, 0, -1)).toBe(2);
+    expect(moveHighlight(rows, 3, 1)).toBe(0);
+    expect(moveHighlight(rows, 0, -1)).toBe(3);
   });
 
   it("lists nothing but a note when no app is registered", () => {
@@ -147,5 +147,26 @@ describe("the launcher's rows", () => {
     const menu = launcherRowsOf(empty, "");
     expect(menu.rows).toEqual([]);
     expect(defaultHighlightIndex(menu.rows)).toBe(-1);
+  });
+});
+
+describe("the tour row", () => {
+  it("closes the launch-path rows with Show me around, with no query and for its words, and never for a message", () => {
+    const withNoQuery = launcherRowsOf(state(), "");
+    expect(withNoQuery.tourRows).toEqual([{ kind: "tour", key: "tour", label: "Show me around" }]);
+    expect(keys(withNoQuery.rows).indexOf("tour")).toBe(withNoQuery.launchRows.length);
+    expect(keys(launcherRowsOf(state(), "tour").rows)).toContain("tour");
+    expect(launcherRowsOf(state(), "tour").isNoMatch).toBe(false);
+    expect(keys(launcherRowsOf(state(), "show me").tourRows)).toEqual(["tour"]);
+    expect(launcherRowsOf(state(), "terminal").tourRows).toEqual([]);
+    expect(launcherRowsOf(state(), "tour\n").tourRows).toEqual([]);
+    expect(isRowEnabled(withNoQuery.tourRows[0])).toBe(true);
+  });
+
+  it("is left out where the tour is not offered, and its words then match nothing", () => {
+    const withoutTour = launcherRowsOf(state(), "", { isTourOffered: false });
+    expect(withoutTour.tourRows).toEqual([]);
+    expect(keys(withoutTour.rows)).toEqual(["launch:chatty:root", "launch:terminal:new", "text:chatty:new"]);
+    expect(launcherRowsOf(state(), "tour", { isTourOffered: false }).isNoMatch).toBe(true);
   });
 });

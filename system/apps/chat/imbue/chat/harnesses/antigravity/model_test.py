@@ -1,8 +1,8 @@
 """Unit tests for antigravity's read-only model bar."""
 
 import json
-from collections.abc import Callable
 from pathlib import Path
+from typing import NoReturn
 
 from imbue.chat.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
 from imbue.chat.harnesses.antigravity.model import AntigravityModelResolver
@@ -65,7 +65,9 @@ def test_derived_option_reconstructs_a_gemini_style_name() -> None:
 
 
 def _session(model_state_path: Path) -> AntigravityHarnessSession:
-    unused: Callable[..., object] = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unused"))
+    def unused(*args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError("unused")
+
     return AntigravityHarnessSession.build(
         SessionDeps(
             harness=HarnessType.ANTIGRAVITY,

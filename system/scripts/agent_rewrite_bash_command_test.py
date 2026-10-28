@@ -143,6 +143,29 @@ def test_identity_prefix_quotes_names_with_spaces() -> None:
     assert prefix.startswith("export ") and prefix.endswith("; ")
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "npm run dev -- --port 3000; echo 'done; really'",
+        "export GIT_AUTHOR_NAME=me; git commit -m x",
+        "",
+    ],
+)
+@pytest.mark.parametrize("identity", [None, ("O'Brien; the build chat", "agent-1@host-2")])
+def test_the_original_command_comes_back_from_a_rewrite_with_any_identity(
+    command: str, identity: tuple[str, str] | None
+) -> None:
+    """Whatever name the prefix carried, and whatever the command itself starts with, only the
+    prefix comes off."""
+    identity_prefix = (
+        hook.build_commit_identity_prefix(*identity) if identity is not None else ""
+    )
+    rewritten = identity_prefix + hook.build_oom_tag_prefix() + command
+
+    assert hook.original_command(rewritten) == command
+    assert hook.original_command(command) == command
+
+
 def test_claude_output_omits_permission_decision() -> None:
     # The default (claude) output rewrites the command but emits NO
     # permissionDecision -- in claude "allow" would auto-approve the tool.

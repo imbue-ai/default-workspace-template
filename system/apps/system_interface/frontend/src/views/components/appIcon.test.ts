@@ -66,6 +66,16 @@ describe("sanitizeIconMarkup", () => {
     expect(sanitizeIconMarkup('<svg><circle cx="4" cy="4" r="2"/></svg>', 16)).toBeNull();
   });
 
+  it("names the SVG namespace an author left out, so the markup decodes as an image on its own", () => {
+    const paintsItself = '<svg viewBox="0 0 24 24"><rect width="24" height="24" fill="#2f6b4f"/></svg>';
+    const glyphOnly = '<svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/></svg>';
+    for (const markup of [paintsItself, glyphOnly]) {
+      const standalone = new DOMParser().parseFromString(sanitizeIconMarkup(markup, 32)!, "image/svg+xml");
+      expect(standalone.querySelector("parsererror")).toBeNull();
+      expect(standalone.documentElement.namespaceURI).toBe("http://www.w3.org/2000/svg");
+    }
+  });
+
   it("is decorative and unfocusable, like the built-in glyphs", () => {
     const root = parsed(sanitizeIconMarkup('<svg viewBox="0 0 24 24"><path d="M0 0h4v4H0z"/></svg>', 16)!);
     expect(root.getAttribute("aria-hidden")).toBe("true");

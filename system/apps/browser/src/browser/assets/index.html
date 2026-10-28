@@ -509,7 +509,7 @@
     let body = null;
     try { text = await response.text(); body = JSON.parse(text); } catch (_) {}
     const userFacing = body !== null && typeof body.user_facing_message === "string" ? body.user_facing_message : "";
-    const reason = body !== null && typeof body.error === "string" ? body.error : text.slice(0, 2000);
+    const reason = body !== null && typeof body.detail === "string" ? body.detail : text.slice(0, 2000);
     const isNotAnswered = response.status >= 502 && response.status <= 504;
     const askAgent = body !== null && typeof body.ask_agent === "object" ? body.ask_agent : null;
     return {
@@ -1302,7 +1302,7 @@ registerProcessor('pb', PB);`;
       .then(async (response) => {
         if (response.ok) return;
         let reason = "";
-        try { reason = (await response.json()).error || ""; } catch (_) {}
+        try { reason = (await response.json()).detail || ""; } catch (_) {}
         console.warn("[browser] close-tab refused (" + response.status + ")", reason);
       })
       .catch((error) => console.warn("[browser] close-tab request failed", error));

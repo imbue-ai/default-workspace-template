@@ -37,8 +37,8 @@ even when everything looks up.
 ## Step 2: Scan the logs for errors
 
 Run one broad search across every log first -- stdout and stderr both, since
-apps log errors to either, and a scheduled job's own log (under the same
-directory) is where its failures live:
+apps log errors to either (a routine's run output is not here; step 2b reads
+it with `routines log`):
 
 ```bash
 grep -nE 'Traceback|ERROR|Exception|CRITICAL|Fatal' /var/log/supervisor/*.log
@@ -81,19 +81,20 @@ When a grep hit lands inside a Python traceback, read a window around it (e.g.
 `tail`, or open the file at the reported line) -- the final line of the traceback
 names the actual exception, and the lines above it show where it came from.
 
-## Step 2b: Reconcile the scheduled jobs
+## Step 2b: Reconcile the routines
 
-Scheduled jobs are not supervised programs, so `supervisorctl status` says
-nothing about them, and a job that has failed on every run still shows a tidy
-cron entry. For each entry under the system cron directory (`/etc/cron.d`),
-find the log it writes (the redirect at the end of its command line, or the
-`manage-scheduled-tasks` skill's convention) and check that its **most recent
-run succeeded** -- a last line describing the work done, not an error, and a
-timestamp consistent with the schedule.
+Routines are not supervised programs, so `supervisorctl status` says nothing
+about them. `uv run --no-sync routines list` shows each one's health; for any
+that is failing, overdue or broken, `uv run --no-sync routines log <id>` is its
+latest run's log (the `manage-routines` skill has the rest), and the check is
+that its **most recent run succeeded** -- a last line describing the work done,
+not an error, and a timestamp consistent with the schedule. The tick that
+starts runs logs to `/var/log/supervisor/routines-tick.log`; a routine that
+never starts at all is a tick problem, and that log says why.
 
-A job whose log's first line is already a failure has never worked; report it
-as such rather than as "logging errors". The common cause is the job's
-environment -- a binary the wrapper's `PATH` cannot see, an env var the job
+A routine whose first run already failed has never worked; report it as such
+rather than as "logging errors". The common cause is the run's environment --
+a binary the wrapper's `PATH` cannot see, an env var the command
 inherited from an older workspace -- so name the failing command verbatim.
 
 ## Step 3: Summarize
@@ -101,7 +102,7 @@ inherited from an older workspace -- so name the failing command verbatim.
 Report concisely:
 
 - Which services are unhealthy (not `RUNNING`, or `RUNNING` but logging errors),
-  which scheduled jobs are not actually succeeding, and which of both are fine.
+  which routines are not actually succeeding, and which of both are fine.
 - For each problem: the error (e.g. the exception type and message), the log file
   and line where it appears, and the likely cause if it is clear from the trace.
 - Where you did **not** find anything, so the reader knows the survey was
@@ -117,5 +118,6 @@ rather than a re-scan.
   them as transient: capture anything you need to keep elsewhere.
 - Logs rotate (`<name>-stderr.log.1`, `.2`, ...). If a recent error is not in the
   live file, check the rotated backups.
-- To restart a crashed service after a fix, see the `update-service` skill
-  (`supervisorctl restart <name>`).
+- To restart a crashed service after a fix, see step 2 of the `update-app` skill:
+  `python3 system/scripts/verify_app.py <name> --restart ...` for an app,
+  `supervisorctl restart <name>` for a daemon with no port.

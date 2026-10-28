@@ -193,8 +193,9 @@ Flow-specific substitutions when reading `lead-proxy.md`:
   it does not interact reliably with stop hooks or worker-spawned
   sub-agents. The report file is the contract.
 - If a task fails (stuck report, or 30m poll timeout with no report and
-  the worker is dead), see `references/worker-failure.md` -- do not
-  silently retry.
+  the worker wedged, or dead and not brought back by
+  `references/dead-worker-recovery.md`), see `references/worker-failure.md`
+  -- do not silently retry.
 - If a worker is `STOPPED` with uncommitted work and its `archived_at` label
   is absent or empty, message it to continue with `create_worker.py reply`,
   which restarts it -- the worktree is preserved across the restart. One

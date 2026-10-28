@@ -1,4 +1,4 @@
-"""The datalib pieces outside this directory agree with each other: one pinned version, and no program until first use."""
+"""The datalib pieces outside this directory agree with each other: one pinned version, one data root, and no program until first use."""
 
 import configparser
 import re
@@ -6,12 +6,17 @@ import subprocess
 from pathlib import Path
 from typing import Final
 
+from datalib_launcher_testing import launcher
+
 # system/apps/datalib/test_datalib_pin.py -> the repository root.
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
 _INSTALL_SCRIPT: Final[Path] = (
     _REPO_ROOT / ".agents/skills/datalib/scripts/install_datalib.sh"
 )
 _SKILL: Final[Path] = _REPO_ROOT / ".agents/skills/datalib/SKILL.md"
+_SYNC_REQUEST: Final[Path] = (
+    _REPO_ROOT / ".agents/skills/datalib/scripts/sync_request.py"
+)
 _PROGRAM_CONF: Final[Path] = _REPO_ROOT / "system/apps/datalib/datalib.conf"
 _INSTALLED_PROGRAM: Final[str] = "system/supervisord.conf.d/datalib.conf"
 
@@ -19,6 +24,13 @@ _PINNED_VERSION: Final[re.Pattern[str]] = re.compile(
     r'^readonly PINNED_VERSION="(v[0-9.]+)"$', re.MULTILINE
 )
 _ANY_VERSION: Final[re.Pattern[str]] = re.compile(r"\bv\d+\.\d+\.\d+\b")
+# The skill's shell preamble names the data root under the workspace root.
+_SKILL_DATA_ROOT: Final[re.Pattern[str]] = re.compile(
+    r'^DATA_ROOT="\$HOME/workspace/([^"]+)"', re.MULTILINE
+)
+_SYNC_REQUEST_DATA_ROOT: Final[re.Pattern[str]] = re.compile(
+    r'^DEFAULT_DATA_ROOT = Path\("([^"]+)"\)$', re.MULTILINE
+)
 
 
 def test_skill_names_only_the_version_the_install_script_installs() -> None:
@@ -26,6 +38,16 @@ def test_skill_names_only_the_version_the_install_script_installs() -> None:
     pinned = _PINNED_VERSION.search(_INSTALL_SCRIPT.read_text())
     assert pinned is not None, f"{_INSTALL_SCRIPT} declares no PINNED_VERSION"
     assert set(_ANY_VERSION.findall(_SKILL.read_text())) == {pinned.group(1)}
+
+
+def test_the_skill_and_its_script_name_the_data_root_the_app_serves() -> None:
+    """The skill writes the config, and its script reads the token, in the library the app serves."""
+    skill_root = _SKILL_DATA_ROOT.search(_SKILL.read_text())
+    assert skill_root is not None, f"{_SKILL} sets no DATA_ROOT under the workspace"
+    script_root = _SYNC_REQUEST_DATA_ROOT.search(_SYNC_REQUEST.read_text())
+    assert script_root is not None, f"{_SYNC_REQUEST} declares no DEFAULT_DATA_ROOT"
+    assert Path(skill_root.group(1)) == launcher.DATA_ROOT
+    assert Path(script_root.group(1)) == launcher.DATA_ROOT
 
 
 def test_nothing_installs_datalib_at_boot() -> None:

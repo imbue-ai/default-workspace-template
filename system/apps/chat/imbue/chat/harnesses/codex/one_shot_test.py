@@ -110,3 +110,13 @@ def test_complete_raises_when_codex_writes_no_answer(tmp_path: Path, monkeypatch
 
     with pytest.raises(OneShotCompletionError, match="no answer"):
         CodexOneShotCompletion().complete(account_dir, "Name this chat.", "Plan Rome")
+
+
+def test_complete_raises_with_both_models_failures_when_neither_answers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    account_dir = _account_offering(tmp_path, _model("gpt-6-luna"))
+    put_stand_in_cli_on_path(tmp_path, "codex", 'cat > /dev/null; echo "401 Unauthorized" >&2; exit 1', monkeypatch)
+
+    with pytest.raises(OneShotCompletionError, match="gpt-6-luna: .*401.*default model: .*401"):
+        CodexOneShotCompletion().complete(account_dir, "Name this chat.", "Plan Rome")
