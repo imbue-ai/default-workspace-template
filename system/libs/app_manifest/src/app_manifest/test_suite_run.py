@@ -104,7 +104,7 @@ def _run(project: Path, ledger: Path | None, *commands: SuiteCommand) -> SuiteRu
     return run_selection(selection, project, project / "run-output", ledger, lambda index, command: None)
 
 
-# Five pytest processes start here, each loading every workspace plugin.
+# Several pytest processes start here, each loading every workspace plugin.
 @pytest.mark.timeout(30)
 def test_each_command_ends_as_passed_flaky_or_failed_by_what_its_tests_did_on_the_rerun(tmp_path: Path) -> None:
     project = _project(tmp_path)
@@ -158,7 +158,7 @@ def test_a_command_killed_while_the_guard_recorded_a_shed_is_a_shed_and_otherwis
     assert killed.shed_records == ()
 
 
-# Two pytest processes start here, and the shed is recorded a moment after the rerun dies.
+# A run and its rerun start here, and the shed is recorded a moment after the rerun dies.
 @pytest.mark.timeout(30)
 def test_a_run_whose_rerun_is_shed_is_a_shed_that_keeps_its_failed_tests(tmp_path: Path) -> None:
     project = _project(tmp_path)
@@ -176,7 +176,7 @@ def test_a_run_whose_rerun_is_shed_is_a_shed_that_keeps_its_failed_tests(tmp_pat
     assert not report.is_passing
 
 
-# Two pytest processes start here, the first under coverage.
+# A run under coverage and its rerun start here.
 @pytest.mark.timeout(30)
 def test_a_run_that_missed_its_coverage_floor_fails_even_when_its_failed_tests_pass_on_the_rerun(
     tmp_path: Path,
