@@ -26,14 +26,13 @@ from pydantic import ValidationError
 from pydantic import computed_field
 
 from app_manifest.selection import SuiteCommand
-from app_manifest.selection import SuiteKind
 from app_manifest.selection import SuiteSelection
 from app_manifest.selection import render_command_line
+from app_manifest.selection import rerun_command
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 
-_PYTEST_KINDS: Final[frozenset[SuiteKind]] = frozenset({SuiteKind.ALWAYS_RUN, SuiteKind.FULL_ROOT, SuiteKind.PYTEST})
 # Exit statuses of a command killed by SIGKILL or SIGTERM: negative when it was the child itself,
 # 128 plus the signal when a wrapper (uv run) reported its child's death.
 _SIGNAL_EXIT_CODES: Final[frozenset[int]] = frozenset(
@@ -85,6 +84,9 @@ class CommandRun(FrozenModel):
         description="The tests that failed: after the rerun for a failed run, the ones that passed on it for a flaky one"
     )
     rerun_log_path: Path | None = Field(description="The rerun's output, when its failed tests were rerun")
+    rerun: SuiteCommand | None = Field(
+        description="The command that reruns the tests in failed_test_ids on their own, for a pytest run that had any"
+    )
     shed_records: tuple[ShedRecord, ...] = Field(
         description="What the memory guard killed while it ran, which may surface as test errors"
     )
@@ -126,18 +128,6 @@ def parse_failed_test_ids(pytest_output: str) -> tuple[str, ...]:
         if test_id and test_id not in test_ids:
             test_ids.append(test_id)
     return tuple(test_ids)
-
-
-@pure
-def rerun_argv(command: SuiteCommand, test_ids: Sequence[str], is_coverage_measured: bool) -> tuple[str, ...] | None:
-    """The command that reruns only ``test_ids`` the way ``command`` ran them, or None when
-    ``command`` is not a pytest run. Every marker is included, so a test its marker would
-    deselect still runs, and a suite with a coverage floor skips it."""
-    if "pytest" not in command.argv:
-        return None
-    runner = command.argv[: command.argv.index("pytest") + 1]
-    coverage = ("--no-cov",) if is_coverage_measured else ()
-    return (*runner, *coverage, "-m", "", *test_ids)
 
 
 def _run_to_log(argv: Sequence[str], working_directory: Path, log_path: Path) -> _ProcessResult:
@@ -193,11 +183,11 @@ def _run_command(
     result = _run_to_log(command.argv, working_directory, log_path)
     failed_test_ids = (
         parse_failed_test_ids(log_path.read_text(errors="replace"))
-        if command.kind in _PYTEST_KINDS and result.exit_code == _PYTEST_TESTS_FAILED_EXIT_CODE
+        if result.exit_code == _PYTEST_TESTS_FAILED_EXIT_CODE
         else ()
     )
-    rerun = rerun_argv(command, failed_test_ids, is_coverage_measured) if failed_test_ids else None
-    rerun_result = _run_to_log(rerun, working_directory, rerun_log_path) if rerun is not None else None
+    rerun = rerun_command(command, failed_test_ids, is_coverage_measured) if failed_test_ids else None
+    rerun_result = _run_to_log(rerun.argv, working_directory, rerun_log_path) if rerun is not None else None
     finished_at = rerun_result.finished_at if rerun_result is not None else result.finished_at
     shed_records = read_shed_records(shed_ledger_path, result.started_at, finished_at)
     outcome, final_failed_test_ids = _classify(
@@ -212,6 +202,7 @@ def _run_command(
         log_path=log_path,
         failed_test_ids=final_failed_test_ids,
         rerun_log_path=rerun_log_path if rerun_result is not None else None,
+        rerun=rerun_command(command, final_failed_test_ids, is_coverage_measured) if final_failed_test_ids else None,
         shed_records=shed_records,
     )
 
@@ -254,6 +245,14 @@ def run_selection(
     """Run every command of ``selection`` in order from ``repo_root``, keeping each one's output
     under ``output_directory`` and rewriting the summary there after each command."""
     output_directory.mkdir(parents=True, exist_ok=True)
+    notes = (
+        selection.notes
+        if shed_ledger_path.is_file()
+        else (
+            *selection.notes,
+            f"no shed ledger at {shed_ledger_path}, so a command the memory guard killed reads as failed",
+        )
+    )
     runs: list[CommandRun] = []
     for index, command in enumerate(selection.commands, start=1):
         on_command_started(index, command)
@@ -268,8 +267,8 @@ def run_selection(
                 command.working_directory in selection.coverage_measured_roots,
             )
         )
-        write_report(SuiteRunReport(runs=tuple(runs), notes=selection.notes), output_directory)
-    report = SuiteRunReport(runs=tuple(runs), notes=selection.notes)
+        write_report(SuiteRunReport(runs=tuple(runs), notes=notes), output_directory)
+    report = SuiteRunReport(runs=tuple(runs), notes=notes)
     write_report(report, output_directory)
     return report
 
@@ -291,6 +290,8 @@ def render_report(report: SuiteRunReport, summary_path: Path) -> str:
         lines.append(f"    output: {run.log_path}")
         if run.rerun_log_path is not None:
             lines.append(f"    rerun output: {run.rerun_log_path}")
+        if run.exit_code is None:
+            lines.append(f"    timed out after {_COMMAND_TIMEOUT_SECONDS / 3600:g} hours")
         match run.outcome:
             case CommandOutcome.FAILED:
                 lines.extend(_render_test_ids("failed", run.failed_test_ids))
@@ -300,6 +301,8 @@ def render_report(report: SuiteRunReport, summary_path: Path) -> str:
                 pass
             case _ as unreachable:
                 assert_never(unreachable)
+        if run.rerun is not None:
+            lines.append(f"    rerun these: {render_command_line(run.rerun)}")
         lines.extend(
             f"    memory guard killed {record.comm or 'a process'} (pid {record.pid}) at {record.timestamp.isoformat()}"
             for record in run.shed_records

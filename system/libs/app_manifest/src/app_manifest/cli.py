@@ -40,7 +40,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
 
 RUN_TESTS_OUTPUT_ROOT: Final[str] = "data/.tasks/run-tests"
-_RUN_DIRECTORY_FORMAT: Final[str] = "%Y%m%dT%H%M%SZ"
+_RUN_DIRECTORY_FORMAT: Final[str] = "%Y%m%dT%H%M%S%fZ"
 
 
 class ReferenceLookupRow(FrozenModel):

@@ -378,18 +378,16 @@ Each command ends one of four ways:
   the outcome lists. That is memory pressure, never a failure to fix in the
   code ("A shed command" below).
 
-A failed command that lists memory-guard kills may be a shed that surfaced
-as ordinary test errors (a browser that vanished mid-test): when its
-failures look unrelated to your change, handle it as a shed.
+A failed or flaky command that lists memory-guard kills may be a shed that
+surfaced as ordinary test errors (a browser that vanished mid-test). Neither
+fix it nor report it as flaky yet: rerun it as a shed command ("A shed
+command" below) once memory has settled. A real failure fails again.
 
 **A failing test you would change.** Before editing a test that failed, run
 it on the tree before your change: with everything committed, `git checkout
---detach "$DIFF_BASE"`, rerun its node id from the directory its command ran
-in, with `uv run --no-sync pytest` (your branch's venv stays), then check your
-branch back out. Add `--no-cov` in the chat app's, the shell's and Getting
-Started's suites, which measure coverage, and in the chat app's or the
-shell's add `-m ''` too, or a browser test named in it is deselected
-(AGENTS.md). Say in your report whether your change caused the failure or it
+--detach "$DIFF_BASE"`, run the `rerun these` command `run-tests` printed for
+its command, with `uv run --no-sync` in place of `uv run` (your branch's venv
+stays), then check your branch back out. Say in your report whether your change caused the failure or it
 was already there; a fix to a test that already failed is reported as a fix
 to a pre-existing failure, not as part of your gate.
 

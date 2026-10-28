@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from inline_snapshot import snapshot
 
 from app_manifest.cli import app_manifest_cli
 from app_manifest.primitives import RepoRelativePath
@@ -12,6 +13,9 @@ from app_manifest.selection import SelectionReason
 from app_manifest.selection import SuiteCommand
 from app_manifest.selection import SuiteKind
 from app_manifest.selection import SuiteSelection
+from app_manifest.selection import render_command_line
+from app_manifest.selection import rerun_command
+from app_manifest.selection import select_tests_for_paths
 from app_manifest.suite_run import CommandOutcome
 from app_manifest.suite_run import SUMMARY_FILE_NAME
 from app_manifest.suite_run import SuiteRunReport
@@ -113,6 +117,8 @@ def test_each_command_ends_as_passed_flaky_or_failed_by_what_its_tests_did_on_th
     assert failed.failed_test_ids == ("suite/test_cases.py::test_fails_every_time_48213",)
     assert failed.rerun_log_path is not None
     assert "1 failed" in failed.rerun_log_path.read_text()
+    assert failed.rerun is not None
+    assert failed.rerun.argv == (sys.executable, "-m", "pytest", "-m", "", *failed.failed_test_ids)
     assert not report.is_passing
 
 
@@ -145,7 +151,9 @@ def test_a_failing_command_that_is_not_pytest_fails_without_a_rerun(tmp_path: Pa
     )
 
     (run,) = report.runs
-    assert (run.outcome, run.exit_code, run.rerun_log_path) == (CommandOutcome.FAILED, 3, None)
+    assert (run.outcome, run.exit_code, run.rerun_log_path, run.rerun) == (CommandOutcome.FAILED, 3, None, None)
+    # No ledger exists here, so the report says a shed could not have been told from a failure.
+    assert any("no shed ledger" in note for note in report.notes)
 
 
 def test_the_summary_on_disk_matches_the_report_and_every_command_keeps_its_output(tmp_path: Path) -> None:
@@ -211,3 +219,22 @@ def test_run_tests_with_nothing_selected_passes_and_still_writes_the_summary(tmp
     assert "0 commands" in nothing.output
     summary = json.loads((output_directory / SUMMARY_FILE_NAME).read_text())
     assert summary["runs"] == [] and summary["is_passing"] is True
+
+
+def test_a_rerun_of_some_tests_of_a_suite_with_a_coverage_floor_skips_it_and_includes_every_marker(
+    tmp_path: Path,
+) -> None:
+    build_selection_workspace(tmp_path)
+    selection = select_tests_for_paths(tmp_path, ["system/apps/chat/frontend/src/main.ts"], None)
+    (marker_run,) = [command for command in selection.commands if command.working_directory == "system/apps/chat"]
+
+    rerun = rerun_command(
+        marker_run,
+        ["imbue/chat/test_page.py::test_renders"],
+        marker_run.working_directory in selection.coverage_measured_roots,
+    )
+
+    assert rerun is not None
+    assert render_command_line(rerun) == snapshot(
+        "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_page.py::test_renders)"
+    )
