@@ -6084,6 +6084,24 @@ def test_a_sign_in_whose_restart_thread_cannot_start_ends_every_resend(
     assert not any(is_chat_resending_after_sign_in(manager, agent_id) for agent_id in agent_ids)
 
 
+def test_a_chat_reports_its_resend_until_the_later_of_two_overlapping_sign_ins_settles(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Twice-Signed-In-Chat", labels={"account": "acct-1"})
+    try:
+        manager._begin_resends_after_sign_in("acct-1")
+        manager._begin_resends_after_sign_in("acct-1")
+        manager._end_resend_after_sign_in(agent_id)
+        assert is_chat_resending_after_sign_in(manager, agent_id)
+        manager._end_resend_after_sign_in(agent_id)
+        assert not is_chat_resending_after_sign_in(manager, agent_id)
+    finally:
+        manager.stop()
+
+
 def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

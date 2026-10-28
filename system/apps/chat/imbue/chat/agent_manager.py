@@ -1287,8 +1287,9 @@ class AgentManager:
     # The send-time ids Stop took back while they waited for their agent, until their send ends.
     _withdrawn_message_ids: set[str]
     # The agents a sign-in is restarting, until the message their sign-in failure refused, if any, is
-    # sent again or given up on: the snapshot's ``is_resending_after_sign_in``.
-    _resending_after_sign_in_agent_ids: set[str]
+    # sent again or given up on: the snapshot's ``is_resending_after_sign_in``. Counted per agent, since
+    # two sign-ins of one account can overlap and the agent is resending until the later one settles.
+    _pending_resends_after_sign_in_by_agent: dict[str, int]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1458,7 +1459,7 @@ class AgentManager:
         manager._withdrawable_sends_by_agent = {}
         manager._abandoned_creates = set()
         manager._withdrawn_message_ids = set()
-        manager._resending_after_sign_in_agent_ids = set()
+        manager._pending_resends_after_sign_in_by_agent = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
@@ -1845,7 +1846,7 @@ class AgentManager:
                 agent.id: bool(self._pending_permission_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
             connecting_by_agent = {agent.id: self._is_connecting_locked(agent.id) for agent, _chat in listed}
-            resending = set(self._resending_after_sign_in_agent_ids)
+            resending = set(self._pending_resends_after_sign_in_by_agent)
             tasks_by_chat = dict(self._background_tasks_by_chat)
             compaction_cause_by_agent = {
                 agent.id: self._compaction_cause_by_agent.get(agent.id) for agent, _chat in listed
@@ -1883,7 +1884,7 @@ class AgentManager:
             agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
             is_connecting = agent is not None and self._is_connecting_locked(agent.id)
-            is_resending = agent is not None and agent.id in self._resending_after_sign_in_agent_ids
+            is_resending = agent is not None and agent.id in self._pending_resends_after_sign_in_by_agent
             background_tasks = () if chat is None else self._background_tasks_by_chat.get(chat.chat_id, ())
             compaction_cause = None if agent is None else self._compaction_cause_by_agent.get(agent.id)
         if chat is None or agent is None or is_primary_agent(agent):
@@ -2071,23 +2072,29 @@ class AgentManager:
                 and not self._is_archived_member_locked(agent.id)
                 and not is_lifecycle_dead(agent.state)
             ]
-            self._resending_after_sign_in_agent_ids.update(agent_id for agent_id, _name in agents)
+            for agent_id, _name in agents:
+                pending = self._pending_resends_after_sign_in_by_agent
+                pending[agent_id] = pending.get(agent_id, 0) + 1
         if agents:
             self._broadcast_chats_updated()
         return agents
 
     def _end_resend_after_sign_in(self, agent_id: str) -> None:
+        """Settle one of the agent's resends; called exactly once for each agent a begin returned."""
         with self._lock:
-            was_resending = agent_id in self._resending_after_sign_in_agent_ids
-            self._resending_after_sign_in_agent_ids.discard(agent_id)
-        if was_resending:
+            remaining = self._pending_resends_after_sign_in_by_agent.get(agent_id, 0) - 1
+            if remaining > 0:
+                self._pending_resends_after_sign_in_by_agent[agent_id] = remaining
+            else:
+                self._pending_resends_after_sign_in_by_agent.pop(agent_id, None)
+        if remaining == 0:
             self._broadcast_chats_updated()
 
     def _restart_agents_after_sign_in(self, agents: list[tuple[str, str]]) -> int:
         restarted = 0
-        # The agents whose resend thread now owns ending their resend; the rest end it here, even when
-        # a restart raises, so no chat is left saying its message is on its way.
-        handed_to_resend: set[str] = set()
+        # The agents whose resend has been ended here or handed to a resend thread that ends it; the rest
+        # end it here, even when a restart raises, so no chat is left saying its message is on its way.
+        settled: set[str] = set()
         try:
             for agent_id, name in agents:
                 result = run_local_command_modern_version(
@@ -2104,13 +2111,14 @@ class AgentManager:
                         name=f"reauth-resend-{name[:14]}",
                         is_checked=False,
                     )
-                    handed_to_resend.add(agent_id)
+                    settled.add(agent_id)
                 else:
                     _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
+                    settled.add(agent_id)
                     self._end_resend_after_sign_in(agent_id)
         finally:
             for agent_id, _name in agents:
-                if agent_id not in handed_to_resend:
+                if agent_id not in settled:
                     self._end_resend_after_sign_in(agent_id)
         return restarted
 
