@@ -55,6 +55,24 @@ if sys.argv[1]:
 os.kill(os.getpid(), signal.SIGKILL)
 """
 
+# A test that fails on its first run and, on the rerun of its failed tests, is shed: it kills the
+# pytest process running it, leaving behind a process that records the kill in the ledger named
+# beside it.
+_SHED_ON_THE_RERUN = f"""
+import os, signal, subprocess, sys
+from pathlib import Path
+
+
+def test_fails_then_is_shed_on_the_rerun_48213() -> None:
+    marker = Path(__file__).parent / "failed-once-48213"
+    if not marker.exists():
+        marker.write_text("")
+        assert False, "fails the first time on purpose"
+    ledger = (Path(__file__).parent / "ledger-path-48213").read_text()
+    subprocess.Popen([sys.executable, "-c", {_RECORD_SHED_LATER!r}, ledger, str(os.getpid())], start_new_session=True)
+    os.kill(os.getpid(), signal.SIGKILL)
+"""
+
 
 def _project(tmp_path: Path) -> Path:
     project = tmp_path / "project"
@@ -129,6 +147,24 @@ def test_a_command_killed_while_the_guard_recorded_a_shed_is_a_shed_and_otherwis
     # The second command died the same way, but the guard recorded nothing while it ran.
     assert killed.outcome == CommandOutcome.FAILED
     assert killed.shed_records == ()
+
+
+# Two pytest processes start here, and the shed is recorded a moment after the rerun dies.
+@pytest.mark.timeout(30)
+def test_a_run_whose_rerun_is_shed_is_a_shed_that_keeps_its_failed_tests(tmp_path: Path) -> None:
+    project = _project(tmp_path)
+    ledger = tmp_path / "shed.jsonl"
+    (project / "suite" / "test_shed_on_the_rerun.py").write_text(_SHED_ON_THE_RERUN)
+    (project / "suite" / "ledger-path-48213").write_text(str(ledger))
+
+    report = _run(project, ledger, _pytest_command("suite/test_shed_on_the_rerun.py"))
+
+    (run,) = report.runs
+    assert run.outcome == CommandOutcome.SHED
+    assert run.failed_test_ids == ("suite/test_shed_on_the_rerun.py::test_fails_then_is_shed_on_the_rerun_48213",)
+    assert run.rerun is not None
+    assert [record.comm for record in run.shed_records] == ["pytest"]
+    assert not report.is_passing
 
 
 def test_a_run_that_missed_its_coverage_floor_fails_even_when_its_failed_tests_pass_on_the_rerun(
