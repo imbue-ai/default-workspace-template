@@ -2077,24 +2077,33 @@ class AgentManager:
 
     def _restart_agents_after_sign_in(self, agents: list[tuple[str, str]]) -> int:
         restarted = 0
-        for agent_id, name in agents:
-            result = run_local_command_modern_version(
-                command=[self._mngr_binary, "start", name, "--restart", "--no-resume"],
-                cwd=None,
-                is_checked=False,
-                timeout=60.0,
-            )
-            if result.returncode == 0:
-                restarted += 1
-                self._creation_cg.start_new_thread(
-                    target=self._resend_turn_refused_for_sign_in,
-                    args=(agent_id,),
-                    name=f"reauth-resend-{name[:14]}",
+        # The agents whose resend thread now owns ending their resend; the rest end it here, even when
+        # a restart raises, so no chat is left saying its message is on its way.
+        handed_to_resend: set[str] = set()
+        try:
+            for agent_id, name in agents:
+                result = run_local_command_modern_version(
+                    command=[self._mngr_binary, "start", name, "--restart", "--no-resume"],
+                    cwd=None,
                     is_checked=False,
+                    timeout=60.0,
                 )
-            else:
-                _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
-                self._end_resend_after_sign_in(agent_id)
+                if result.returncode == 0:
+                    restarted += 1
+                    self._creation_cg.start_new_thread(
+                        target=self._resend_turn_refused_for_sign_in,
+                        args=(agent_id,),
+                        name=f"reauth-resend-{name[:14]}",
+                        is_checked=False,
+                    )
+                    handed_to_resend.add(agent_id)
+                else:
+                    _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
+                    self._end_resend_after_sign_in(agent_id)
+        finally:
+            for agent_id, _name in agents:
+                if agent_id not in handed_to_resend:
+                    self._end_resend_after_sign_in(agent_id)
         return restarted
 
     def _resend_turn_refused_for_sign_in(self, agent_id: str) -> None:

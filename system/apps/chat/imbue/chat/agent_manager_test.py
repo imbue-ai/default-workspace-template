@@ -151,6 +151,7 @@ from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import append_observe_event
@@ -6037,6 +6038,21 @@ def test_a_restart_that_fails_after_a_sign_in_ends_its_resend(
     try:
         assert manager.restart_agents_on_account("acct-1") == 0
         assert not is_chat_resending_after_sign_in(manager, agent_id)
+    finally:
+        manager.stop()
+
+
+def test_a_restart_that_cannot_run_after_a_sign_in_ends_every_resend(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager = AgentManager.build(broadcaster, mngr_binary=str(tmp_path / "no-such-mngr"))
+    agent_ids = [f"agent-{uuid4().hex}" for _ in range(2)]
+    for index, agent_id in enumerate(agent_ids):
+        seed_agent_state(manager, agent_id, name=f"Unstartable-Chat-{index}", labels={"account": "acct-1"})
+    try:
+        with pytest.raises(ProcessSetupError):
+            manager.restart_agents_on_account("acct-1")
+        assert not any(is_chat_resending_after_sign_in(manager, agent_id) for agent_id in agent_ids)
     finally:
         manager.stop()
 
