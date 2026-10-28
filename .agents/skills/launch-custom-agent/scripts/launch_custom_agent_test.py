@@ -100,24 +100,30 @@ def _git_repo(tmp_path: Path) -> Path:
     return repo
 
 
+def _launch(source_path: Path, mode: str, runner: _RecordingRunner | None = None, **overrides: Any) -> int:
+    """Call ``launch()`` with innocuous defaults, so each test states only what it varies."""
+    kwargs: dict[str, Any] = {
+        "name": "my-task",
+        "account_id": "",
+        "harness_name": "",
+        "branch": "",
+        "display_name": "",
+        "message": "",
+    }
+    kwargs.update(overrides)
+    return launch_custom_agent.launch(
+        source_path=source_path,
+        mode=mode,
+        runner=runner if runner is not None else _RecordingRunner(),
+        **kwargs,
+    )
+
+
 def test_launch_builds_a_valid_mngr_create_for_worktree_mode(workspace_root: Path) -> None:
     repo = _git_repo(workspace_root)
     runner = _RecordingRunner()
 
-    assert (
-        launch_custom_agent.launch(
-            name="my-task",
-            source_path=repo,
-            mode="worktree",
-            account_id="",
-            harness_name="",
-            branch="main",
-            display_name="My task",
-            message="do the thing",
-            runner=runner,
-        )
-        == 0
-    )
+    assert _launch(repo, "worktree", runner, branch="main", display_name="My task", message="do the thing") == 0
 
     (create,) = runner.create_calls()
     assert_mngr_argv_valid(create.argv)
@@ -153,17 +159,7 @@ def test_in_place_mode_runs_in_the_directory_itself(workspace_root: Path) -> Non
     source.mkdir()
     runner = _RecordingRunner()
 
-    launch_custom_agent.launch(
-        name="my-task",
-        source_path=source,
-        mode="in-place",
-        account_id="",
-        harness_name="",
-        branch="",
-        display_name="",
-        message="",
-        runner=runner,
-    )
+    _launch(source, "in-place", runner)
 
     (create,) = runner.create_calls()
     assert_mngr_argv_valid(create.argv)
@@ -180,17 +176,7 @@ def test_worktree_mode_refuses_a_non_git_directory(workspace_root: Path) -> None
     source.mkdir()
 
     with pytest.raises(SystemExit):
-        launch_custom_agent.launch(
-            name="my-task",
-            source_path=source,
-            mode="worktree",
-            account_id="",
-            harness_name="",
-            branch="",
-            display_name="",
-            message="",
-            runner=_RecordingRunner(),
-        )
+        _launch(source, "worktree")
 
 
 def test_a_branch_in_in_place_mode_is_refused(workspace_root: Path) -> None:
@@ -201,17 +187,7 @@ def test_a_branch_in_in_place_mode_is_refused(workspace_root: Path) -> None:
     runner = _RecordingRunner()
 
     with pytest.raises(SystemExit):
-        launch_custom_agent.launch(
-            name="my-task",
-            source_path=source,
-            mode="in-place",
-            account_id="",
-            harness_name="",
-            branch="main",
-            display_name="",
-            message="",
-            runner=runner,
-        )
+        _launch(source, "in-place", runner, branch="main")
     assert runner.create_calls() == []
 
 
@@ -220,17 +196,7 @@ def test_a_taken_agent_name_is_refused_before_the_create(workspace_root: Path) -
     runner = _RecordingRunner(listing_records=[{"id": _AGENT_ID, "name": "my-task"}])
 
     with pytest.raises(SystemExit):
-        launch_custom_agent.launch(
-            name="my-task",
-            source_path=repo,
-            mode="worktree",
-            account_id="",
-            harness_name="",
-            branch="",
-            display_name="",
-            message="",
-            runner=runner,
-        )
+        _launch(repo, "worktree", runner)
     assert runner.create_calls() == []
 
 
@@ -249,17 +215,7 @@ def test_an_explicit_harness_picks_an_account_on_that_harness(workspace_root: Pa
     repo = _git_repo(workspace_root)
     runner = _RecordingRunner()
 
-    launch_custom_agent.launch(
-        name="my-task",
-        source_path=repo,
-        mode="worktree",
-        account_id="",
-        harness_name="codex",
-        branch="",
-        display_name="",
-        message="",
-        runner=runner,
-    )
+    _launch(repo, "worktree", runner, harness_name="codex")
 
     (create,) = runner.create_calls()
     assert create.argv[create.argv.index("--type") + 1] == "codex"
@@ -272,17 +228,7 @@ def test_a_conflicting_account_and_harness_pair_is_refused(workspace_root: Path)
     repo = _git_repo(workspace_root)
 
     with pytest.raises(SystemExit):
-        launch_custom_agent.launch(
-            name="my-task",
-            source_path=repo,
-            mode="worktree",
-            account_id="acct-claude",
-            harness_name="codex",
-            branch="",
-            display_name="",
-            message="",
-            runner=_RecordingRunner(),
-        )
+        _launch(repo, "worktree", account_id="acct-claude", harness_name="codex")
 
 
 def test_no_signed_in_account_is_refused_with_the_sign_in_message(
@@ -292,15 +238,5 @@ def test_no_signed_in_account_is_refused_with_the_sign_in_message(
     repo = _git_repo(workspace_root)
 
     with pytest.raises(SystemExit):
-        launch_custom_agent.launch(
-            name="my-task",
-            source_path=repo,
-            mode="worktree",
-            account_id="",
-            harness_name="",
-            branch="",
-            display_name="",
-            message="",
-            runner=_RecordingRunner(),
-        )
+        _launch(repo, "worktree")
     assert "No provider account is signed in" in capsys.readouterr().err
