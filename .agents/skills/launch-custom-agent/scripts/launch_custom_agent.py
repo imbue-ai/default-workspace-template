@@ -196,6 +196,12 @@ def build_create_argv(
         "jsonl",
         *binding_args,
     ]
+    if mode == "worktree":
+        # Explicit, not inferred: the workspace's `[commands.create] ensure_clean = false`
+        # default flips mngr's inferred include-unclean to true, which would rsync the
+        # source repo's modified and untracked files into the fresh worktree -- the
+        # opposite of what this mode promises the user.
+        argv += ["--exclude-unclean"]
     if branch:
         argv += ["--branch", branch]
     if message:

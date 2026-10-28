@@ -123,6 +123,9 @@ def test_launch_builds_a_valid_mngr_create_for_worktree_mode(workspace_root: Pat
     assert_mngr_argv_valid(create.argv)
     assert create.argv[create.argv.index("--from") + 1] == f":{repo}"
     assert create.argv[create.argv.index("--transfer") + 1] == "git-worktree"
+    # The workspace's create defaults set ensure_clean=false, which would otherwise copy
+    # the source repo's uncommitted files into the worktree against this mode's promise.
+    assert "--exclude-unclean" in create.argv
     assert create.argv[create.argv.index("--type") + 1] == "claude"
     assert "custom" in create.argv
     assert "user_created=true" in create.argv
@@ -165,6 +168,7 @@ def test_in_place_mode_runs_in_the_directory_itself(workspace_root: Path) -> Non
     (create,) = runner.create_calls()
     assert_mngr_argv_valid(create.argv)
     assert create.argv[create.argv.index("--transfer") + 1] == "none"
+    assert "--exclude-unclean" not in create.argv
     assert "--branch" not in create.argv
     assert "--message" not in create.argv
     # The display name falls back to the agent name.
