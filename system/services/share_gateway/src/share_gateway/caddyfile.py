@@ -5,7 +5,8 @@ relay bytes into its local HTTPS port), asks the gateway's ``/_auth/verify``
 about every request (forward_auth), and routes by Host: each registered
 service's unguessable ``<label>.<domain>`` origin to that service's local
 backend, the dedicated ``auth-<rand>.<domain>`` label to the gateway's public
-``/_auth/*`` surface (the login callback), and unknown-but-plausible service
+``/_auth/*`` surface (the login callback) and the ``/_agent/*`` surface
+(visiting agents), and unknown-but-plausible service
 origins to the gateway's auto-retrying loading page. A registered service caddy
 cannot reach gets the gateway's not-responding page instead, which retries for
 about a minute and then says the app is not answering (it covers the moment
@@ -18,6 +19,12 @@ Certificate Transparency reach nothing.
 The certificate covers ``<domain>`` and ``*.<domain>`` only, so service
 origins are one label deep on a share (deeper sub-origins are a deferred
 follow-up, gated on wildcard-of-wildcard SANs).
+
+Every response caddy sends for the share, a proxied service's or its own,
+also carries the browser hardening headers (``Strict-Transport-Security``,
+``X-Content-Type-Options``) and no ``Server`` header: the relay is SNI
+passthrough and never sees a response, so caddy is the one place they can be
+set for every service alike.
 """
 
 import tomllib
@@ -39,8 +46,10 @@ class RegisteredApp:
         backend_host: str,
         backend_port: int,
         is_grantable: bool,
-        program: str,
-        is_critical: bool,
+        program: str = "",
+        is_critical: bool = False,
+        description: str = "",
+        api_schema_path: str = "",
     ) -> None:
         self.name = name
         self.label = label
@@ -51,6 +60,10 @@ class RegisteredApp:
         self.is_grantable = is_grantable
         self.program = program
         self.is_critical = is_critical
+        # What the app's manifest says it is for, and where on its origin it
+        # describes its API (contracts.md section 2); both empty when undeclared.
+        self.description = description
+        self.api_schema_path = api_schema_path
 
 
 def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
@@ -76,6 +89,8 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
         # A missing key or a literal ``false`` is grantable; any other value reads as internal.
         is_grantable = entry.get("internal", False) is False
         program = entry.get("program")
+        description = entry.get("description", "")
+        api_schema_path = entry.get("api_schema_path", "")
         apps.append(
             RegisteredApp(
                 name=name,
@@ -85,6 +100,8 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
                 is_grantable=is_grantable,
                 program=program if isinstance(program, str) else "",
                 is_critical=entry.get("critical", False) is True,
+                description=description if isinstance(description, str) else "",
+                api_schema_path=api_schema_path if isinstance(api_schema_path, str) else "",
             )
         )
     return apps
@@ -115,6 +132,9 @@ def build_grantable_service_names(apps: Sequence[RegisteredApp]) -> frozenset[st
     return frozenset(app.name for app in apps if app.is_grantable)
 
 
+APPS_TOML_PATH = Path("data/.state/apps.toml")
+
+
 def read_registered_apps(apps_toml_path: Path) -> list[RegisteredApp]:
     if not apps_toml_path.exists():
         return []
@@ -138,6 +158,30 @@ def build_frame_ancestors_policy(workspace_domain: str, chrome_origin: str) -> s
     return " ".join(sources)
 
 
+# One year, the value scanners (and the browser preload lists) expect.
+_HSTS_MAX_AGE_SECONDS = 31_536_000
+
+
+def _render_hardening_headers(indent: str) -> str:
+    """The ``header`` block stamping the hardening headers on every response of one route list.
+
+    Rendered once per route list: ``handle_errors`` runs a handler chain of
+    its own, so the site-level block never reaches the 502 loading page.
+    """
+    lines = [
+        "# Deferred so it runs after the backend's response headers are copied",
+        "# in: the backend's Server header is removed rather than re-added, and",
+        "# one Strict-Transport-Security value is sent rather than two.",
+        "header {",
+        f'    Strict-Transport-Security "max-age={_HSTS_MAX_AGE_SECONDS}; includeSubDomains"',
+        "    X-Content-Type-Options nosniff",
+        "    -Server",
+        "    defer",
+        "}",
+    ]
+    return "\n".join(f"{indent}{line}" for line in lines)
+
+
 def render_caddyfile(
     workspace_domain: str,
     apps: list[RegisteredApp],
@@ -151,6 +195,8 @@ def render_caddyfile(
     """Render the full Caddyfile for one shared workspace."""
     gateway_backend = f"127.0.0.1:{gateway_port}"
     frame_ancestors = build_frame_ancestors_policy(workspace_domain, chrome_origin)
+    site_hardening_headers = _render_hardening_headers(indent="    ")
+    error_hardening_headers = _render_hardening_headers(indent="        ")
 
     # One matcher per registered service, keyed on its unguessable label host.
     # The matcher id is derived from the (unique) service name; the Host it
@@ -162,7 +208,14 @@ def render_caddyfile(
             f"""\
     @{matcher} host {app.label}.{workspace_domain}
     handle @{matcher} {{
-        reverse_proxy {app.backend_host}:{app.backend_port}
+        reverse_proxy {app.backend_host}:{app.backend_port} {{
+            # A visiting agent's admission token rides the Authorization header
+            # for the gateway alone; the service never sees it, as it never
+            # sees the session cookie. No app reads an inbound Authorization
+            # header over the share, and owner-exec's signature headers are
+            # separate and untouched.
+            header_up -Authorization
+        }}
     }}
 """
         )
@@ -212,6 +265,8 @@ https://*.{workspace_domain}:{https_port} {{
     # applies (multiple CSP headers compose by intersection).
     header Content-Security-Policy "frame-ancestors {frame_ancestors}"
 
+{site_hardening_headers}
+
     # Health probe, reachable at EVERY workspace origin (not just the auth
     # label) and never auth-gated, so the chrome can probe a workspace it has
     # any origin for. The gateway applies CORS for the chrome origin itself.
@@ -226,6 +281,7 @@ https://*.{workspace_domain}:{https_port} {{
     # own 503 is a backend answer, not a caddy error, and passes through as it
     # does locally.
     handle_errors 502 {{
+{error_hardening_headers}
         rewrite * /_auth/unresponsive
         reverse_proxy {gateway_backend}
     }}
@@ -238,6 +294,12 @@ https://*.{workspace_domain}:{https_port} {{
     @auth host {auth_label}.{workspace_domain}
     handle @auth {{
         handle /_auth/* {{
+            reverse_proxy {gateway_backend}
+        }}
+        # The visiting-agent surface (join, orientation, invites, the grant
+        # list): the gateway authenticates each request itself, by session
+        # cookie or bearer admission token.
+        handle /_agent/* {{
             reverse_proxy {gateway_backend}
         }}
         handle {{

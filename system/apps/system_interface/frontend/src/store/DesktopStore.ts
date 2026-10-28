@@ -13,6 +13,8 @@ import type {
   LaunchOutcome,
   LaunchRequest,
   LaunchTarget,
+  PageShowOutcome,
+  PageShowRequest,
   PlacementsSaveRequest,
   WindowOpenOutcome,
   WindowOpenRequest,
@@ -22,6 +24,7 @@ import {
   OPEN_URL_MESSAGE,
   classifyLink,
   externalLinkMessageType,
+  isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
 import { DEFAULT_WHAT_FAILED, REPORT_A_BUG_LABEL, failureSentence } from "@imbue/workspace-ui/src/models/failure";
@@ -38,7 +41,7 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { applyPresence } from "../model/Presence";
-import { labelForApp, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
+import { labelForApp, pinPageOfLink, shareDomainOf, windowAtBackendUrl, windowAtLocalAppHost } from "../model/pageUrl";
 import type {
   AppRecord,
   AvatarCatalog,
@@ -66,7 +69,7 @@ import type {
   WindowState,
 } from "../model/records";
 import { isSameCell, isSameWindowPaths, shortcutKey } from "../model/records";
-import { ToastQueue } from "../model/Toasts";
+import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 import { OwnIdMinter, PAGE_ID_PREFIX, REPORT_ID_PREFIX, SAVE_ID_PREFIX, mintHex } from "../model/ownIds";
 import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
@@ -92,6 +95,14 @@ import {
   placedShortcutKey,
   withRoomMadeFor,
 } from "../geometry/grid";
+import {
+  chromeOf,
+  EMPTY_THEME_CATALOG,
+  resolveDesktopTheme,
+  type ThemeCatalog,
+  type ThemeChrome,
+  type ThemeRecord,
+} from "../model/themes";
 import type { GridDimensions, PlacedShortcut } from "../geometry/grid";
 import { placementOf } from "../geometry/stack";
 import {
@@ -131,6 +142,7 @@ import {
   resolveLaunchRun,
 } from "../reducers/shortcuts";
 import type { ThemeMetrics, RenderModes } from "../theme/metrics";
+import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type {
   ActiveDesktopChangedEvent,
   ClientEntriesChangedEvent,
@@ -159,6 +171,12 @@ export interface DesktopApi {
   createDesktop(name: string, color: string, glyph: number): Promise<Desktop>;
   updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop>;
   setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop>;
+  setDesktopTheme(desktopId: string, theme: string | null): Promise<Desktop>;
+  /** The workspace's themes and its default (workspace-themes plan section 5.2). */
+  fetchThemes(): Promise<ThemeCatalog>;
+  setDefaultTheme(theme: string | null): Promise<void>;
+  /** Turn a themeable app's theming on or off (workspace-themes plan section 7.1). */
+  setAppTheming(app: string, isOn: boolean): Promise<void>;
   deleteDesktop(desktopId: string): Promise<string>;
   setDesktopShortcut(desktopId: string, shortcut: DesktopShortcut): Promise<Desktop>;
   moveDesktopShortcut(desktopId: string, app: string, launch: string, cell: GridCell): Promise<Desktop>;
@@ -166,6 +184,8 @@ export interface DesktopApi {
   openWindow(desktopId: string, request: WindowOpenRequest): Promise<WindowOpenOutcome>;
   /** Run a launch path (post-launch-paths plan section 5.3): the shell resolves the page and opens or navigates. */
   launch(desktopId: string, request: LaunchRequest): Promise<LaunchOutcome>;
+  /** The ``show`` op for this client (contracts.md section 5.3): the shell chooses the window. */
+  showPage(clientId: string, request: PageShowRequest): Promise<PageShowOutcome>;
   closeWindow(desktopId: string, windowId: string): Promise<void>;
   reportWindowLocation(
     desktopId: string,
@@ -211,6 +231,8 @@ export interface PageDriver {
   reload(windowId: string): void;
   /** Reload every page of an app. */
   reloadApp(appName: string): void;
+  /** Send every page of an app the theme it wears again (its theming was turned on or off). */
+  resendTheme(appName: string): void;
   /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
@@ -258,15 +280,32 @@ const NULL_POP_OUT_BRIDGE: PopOutBridge = {
 };
 
 /** Where an external link no app of the workspace takes opens: through the Imbue Studio chrome
- *  (``minds:open-external``), or in the user's own browser when no chrome can. */
+ *  (``minds:open-external``), or in the user's own browser when no chrome can, a custom-scheme link in the app of the
+ *  user's system it belongs to. */
 export interface OutsideLinkOpener {
   openInEmbedder(url: string): void;
   openInBrowser(url: string): void;
+  /** Launch a custom-scheme link by navigating this page to it, which opens no window and leaves the page where it
+   *  is: an Imbue Studio that does not take custom-scheme links shows a popup of one as an empty window. */
+  launchInSystemApp(url: string): void;
 }
+
+/** Which external links the embedder opens outside the workspace for it (``minds:embedder-capabilities``): any, and
+ *  custom-scheme ones among them. */
+export interface OutsideLinkCapabilities {
+  readonly opensExternalLinks: boolean;
+  readonly opensCustomSchemeLinks: boolean;
+}
+
+const NO_OUTSIDE_LINK_CAPABILITIES: OutsideLinkCapabilities = {
+  opensExternalLinks: false,
+  opensCustomSchemeLinks: false,
+};
 
 const NULL_OUTSIDE_LINK_OPENER: OutsideLinkOpener = {
   openInEmbedder: () => undefined,
   openInBrowser: () => undefined,
+  launchInSystemApp: () => undefined,
 };
 
 // The layout verbs that edit a placement, which two shells never apply. A solo shell (the pull-out-window spec,
@@ -382,6 +421,14 @@ interface ReleasedWatchedDrag {
 
 type Listener = () => void;
 
+/** The theme this client wears, and whether it is a choice Desktop settings shows without having saved it. */
+export interface ShownTheme {
+  readonly record: ThemeRecord;
+  readonly isPreview: boolean;
+}
+
+type ShownThemeListener = (shown: ShownTheme) => void;
+
 export class DesktopStore {
   private state: DesktopState;
   private metrics: ThemeMetrics;
@@ -391,6 +438,18 @@ export class DesktopStore {
   private isLauncherOpenNow = false;
   // Set when the shell had to seed a fresh desktop for this user at arrival; the notice shows once.
   private replacedDesktop: ReplacedDesktop | null = null;
+  /** A theme picked in a desktop's settings and not yet saved: shown while that desktop is on screen. */
+  private themePreview: { readonly desktopId: string; readonly choice: string | null } | null = null;
+  /** The workspace's themes as the shell last answered or pushed them. */
+  private themeCatalog: ThemeCatalog = EMPTY_THEME_CATALOG;
+  private hasThemeCatalog = false;
+  /** Until the first catalog arrives the client cannot know its theme, so a failed read is retried, further apart
+   *  each time. */
+  private readonly themeReadBackoff = new ReconnectBackoff();
+  private themeReadRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly shownThemeListeners = new Set<ShownThemeListener>();
+  /** The shown theme the listeners last heard. */
+  private lastShownTheme: ShownTheme | null = null;
   private readonly listeners = new Set<Listener>();
   private readonly saveIds = new OwnIdMinter(SAVE_ID_PREFIX);
   private readonly reportIds = new OwnIdMinter(REPORT_ID_PREFIX);
@@ -417,6 +476,9 @@ export class DesktopStore {
   // push answers older than the push, and must not overwrite it.
   private avatarSelectionPushes = 0;
   private entryPushes = 0;
+  // Bumped by every pushed theme catalog, by this client's own change of the default, and by every read of the
+  // catalog as the read starts: a read answers only if none of them came since.
+  private themeCatalogChanges = 0;
   // Resolved by the first app list to land: the bootstrap's inventory read, or the socket's ``apps_updated`` when
   // the socket is quicker; a deep link's open or launch waits for it.
   private readonly appsLoaded: Promise<void>;
@@ -427,8 +489,10 @@ export class DesktopStore {
   private readonly soloWindowId: string | null;
   /** Whether the embedder can pull a window out; off until it says so (an older chrome, a plain browser). */
   private canPopOut = false;
-  /** Whether the embedder opens external links outside the workspace for it; off until it says so. */
-  private canOpenLinksOutside = false;
+  /** Which external links the embedder opens outside the workspace for it; none until it says so. */
+  private outsideLinkCapabilities = NO_OUTSIDE_LINK_CAPABILITIES;
+  /** Whether the embedder opens its settings for the files shared from the user's computer; off until it says so. */
+  private opensLocalFiles = false;
   /** Whether the embedder opens its bug report (its ``opensHelp``); off until it says so. */
   private canReportBug = false;
   /** The detached set as last reported to the embedder, serialized, so a redraw reports nothing new. */
@@ -505,9 +569,21 @@ export class DesktopStore {
     this.notifyListeners();
   }
 
-  /** The embedder said whether it opens external links for the workspace (``minds:embedder-capabilities``). */
-  setCanOpenLinksOutside(canOpenLinksOutside: boolean): void {
-    this.canOpenLinksOutside = canOpenLinksOutside;
+  /** The embedder said which external links it opens for the workspace (``minds:embedder-capabilities``). */
+  setOutsideLinkCapabilities(capabilities: OutsideLinkCapabilities): void {
+    this.outsideLinkCapabilities = capabilities;
+  }
+
+  /** Whether the embedder opens its settings for the files shared from the user's computer, which each page is told
+   *  in its handshake. */
+  getOpensLocalFiles(): boolean {
+    return this.opensLocalFiles;
+  }
+
+  /** The embedder said whether it opens its settings for shared files (``minds:embedder-capabilities``). Pages
+   *  already greeted hear it as the shell's rebroadcast of that message. */
+  setOpensLocalFiles(opensLocalFiles: boolean): void {
+    this.opensLocalFiles = opensLocalFiles;
   }
 
   /** Whether "Report a bug" can work: the embedder opens its bug report. The pages learn it from their handshake. */
@@ -812,9 +888,15 @@ export class DesktopStore {
     if (own !== undefined) this.takeShownHistory(own.shown_history);
   }
 
+  /** Schedule a redraw, telling the shown-theme listeners first when the shown theme changed. */
+  private redraw(): void {
+    this.noteShownTheme();
+    this.deps.redraw();
+  }
+
   private notifyListeners(): void {
     for (const listener of this.listeners) listener();
-    this.deps.redraw();
+    this.redraw();
     this.reportDetachedWindows();
   }
 
@@ -873,10 +955,15 @@ export class DesktopStore {
       },
       onUpdateNoticeChanged: (wire) =>
         this.dispatch({ type: "update_notice_changed", notice: wire === null ? null : noticeFromWire(wire) }),
+      onThemesChanged: (catalog) => {
+        this.themeCatalogChanges += 1;
+        this.takeThemeCatalog(catalog);
+      },
       onLayoutOp: (event) => this.handleLayoutOp(event),
       onPresenceUpdated: (users) => this.takePresence(users),
     });
     void this.loadAvatarSelection();
+    void this.loadThemes();
     const entryPushesBefore = this.entryPushes;
     // The arrival comes first: it may seed a desktop for this user, which the inventory read then includes.
     let arrival: ClientArrival | null;
@@ -952,9 +1039,9 @@ export class DesktopStore {
    *  already names it. News heard on the new socket while the record was being read, or while the pending save is
    *  awaited, is newer than what this window had: the window follows it and only registers its connection here,
    *  since its desktop may still be the one the news moved the client off.
-   *  The layout is read again either way, for the ``placements_updated`` missed, and the record's entries and the
-   *  workspace's selection too, for the ``client_entries_changed`` and ``avatar_selection_changed`` missed (the
-   *  server resends the rest). */
+   *  The layout is read again either way, for the ``placements_updated`` missed, and the record's entries, the
+   *  workspace's selection, and the theme catalog too, for the ``client_entries_changed``,
+   *  ``avatar_selection_changed``, and ``themes_changed`` missed (the server resends the rest). */
   private async resyncAfterReconnect(): Promise<void> {
     let recorded: string | null = null;
     let isRecordedNewer = false;
@@ -978,6 +1065,7 @@ export class DesktopStore {
     }
     const heardAfterRead = this.desktopRevisionHeard;
     void this.loadAvatarSelection();
+    void this.loadThemes();
     // The desktop shown is read after the save: a follow of news heard meanwhile waits on it to move the window.
     await this.flushPendingSave();
     // News is counted from the record when it set what this window has heard, newer or reset.
@@ -1005,13 +1093,24 @@ export class DesktopStore {
   }
 
   private takeApps(apps: readonly AppRecord[]): void {
+    const themingBefore = new Map(this.state.apps.map((app) => [app.name, app.theming]));
     this.dispatch({ type: "apps_updated", apps });
     this.markAppsLoaded();
+    for (const app of apps) {
+      const before = themingBefore.get(app.name);
+      if (before !== undefined && before !== app.theming) this.pageDriver?.resendTheme(app.name);
+    }
+  }
+
+  /** Turn a themeable app's theming on or off; every client sends its pages the theme again when the app list says
+   *  so. */
+  async setAppTheming(app: string, isOn: boolean): Promise<void> {
+    await this.deps.api.setAppTheming(app, isOn);
   }
 
   private takePresence(users: PresentUser[]): void {
     applyPresence(users);
-    this.deps.redraw();
+    this.redraw();
   }
 
   private async applyDeepLink(link: DeepLink): Promise<void> {
@@ -1142,15 +1241,17 @@ export class DesktopStore {
   /** Hand ``text`` to the pinned window that takes a draft (plan section 4.7): its app's draft launch path runs
    *  into this client's view of that window with the text as the draft param, and the window is restored and
    *  raised; the app drafts the text into a composer and the page reports where it landed. False when no pinned
-   *  app on this desktop takes one, or the launch was refused. */
-  async draftIntoPinnedWindow(text: string): Promise<boolean> {
+   *  app on this desktop takes one, or the launch was refused. A text that is not about the window's page
+   *  (``isAboutPage`` false) is sent without it, so the app drafts it where such a text goes (the chat app: its
+   *  main chat) rather than into what the window shows. */
+  async draftIntoPinnedWindow(text: string, isAboutPage = true): Promise<boolean> {
     const target = draftTargetOf(this.state);
     if (target === null) return false;
     const launched = await this.launchAt(
       target.window.app,
       target.launchPath.id,
       freeTextParams(target.launchPath, text),
-      { kind: "window", windowId: target.window.id },
+      { kind: "window", windowId: target.window.id, sendsWindowPath: isAboutPage },
     );
     this.restoreWindow(target.window.id);
     return launched !== null;
@@ -1194,11 +1295,11 @@ export class DesktopStore {
     return true;
   }
 
-  /** Open a link where it belongs in this workspace: a file in the File Viewer (``open:file``), a local URL on an
+  /** Open a link where it belongs in this workspace: a file in Files (``open:file``), a local URL on an
    *  app's ``<label>.localhost`` (or ``<name>.localhost``) host, or else at its registered backend port, as that app's
    *  window at its path, any other local URL in the workspace's browser
    *  (``open:url``), one of this workspace's app addresses (on its share domain too) as that app's window at its
-   *  path, an external link in the app registered for its kind (``open:web``, ``open:mailto``, ``open:tel``) or else
+   *  path, an external link in the app registered for its kind (``open:web``, ``open:mailto``, ``open:<scheme>``) or else
    *  outside the workspace. Another workspace's address is refused with a notice.
    *  ``workspaceHost`` is this page's own host, which says which workspace it is; ``senderApp`` is the app whose page
    *  asked, or null for the Imbue Studio chrome, and names the message it sends. */
@@ -1212,7 +1313,7 @@ export class DesktopStore {
         const apps = openableApps(this.state);
         const appWindow = windowAtLocalAppHost(apps, target.url) ?? windowAtBackendUrl(apps, target.url);
         if (appWindow !== null) {
-          await this.focusOrOpenWindowAt(appWindow.app.name, appWindow.path);
+          await this.openAppLink(appWindow.app, appWindow.path);
           return;
         }
         await this.deliverMessage({ type: OPEN_URL_MESSAGE, url: target.url }, senderApp ?? EMBEDDER_SENDER);
@@ -1224,7 +1325,7 @@ export class DesktopStore {
           this.toast(`Nothing in this workspace is at ${target.url}`);
           return;
         }
-        await this.focusOrOpenWindowAt(app.name, target.path);
+        await this.openAppLink(app, target.path);
         return;
       }
       case "other-workspace":
@@ -1240,18 +1341,46 @@ export class DesktopStore {
   }
 
   /** An external link goes to the app registered for its kind; with none, it opens outside the workspace at once,
-   *  still inside the click that asked for it (a browser opens a new tab only then). One the Imbue Studio chrome
-   *  handed over (``senderApp`` null) goes back to it however early: a chrome that hands external links over opens
-   *  them too, and opening it here as a popup would only send it back again. */
+   *  still inside the click that asked for it (a browser opens a new tab only then): through the Imbue Studio chrome
+   *  when it said it opens that kind of link, else as a popup; a custom-scheme link facing an older chrome, which
+   *  shows that popup as an empty window, opens from this page instead. One the
+   *  chrome handed over (``senderApp`` null) goes back to it however early: a chrome that hands a link over opens it
+   *  too, and opening it here would only send it back again. */
   private async openExternalLink(url: string, senderApp: string | null): Promise<void> {
     const type = externalLinkMessageType(url);
+    const capabilities = this.outsideLinkCapabilities;
+    const isCustomScheme = isCustomSchemeLink(url);
+    const doesEmbedderOpen =
+      capabilities.opensExternalLinks && (capabilities.opensCustomSchemeLinks || !isCustomScheme);
     if (isEmbedderMessageHandled(this.state, type)) {
       await this.deliverMessage({ type, url }, senderApp ?? EMBEDDER_SENDER);
-    } else if (this.canOpenLinksOutside || senderApp === null) {
+    } else if (doesEmbedderOpen || senderApp === null) {
       this.outsideLinks.openInEmbedder(url);
+    } else if (isCustomScheme && capabilities.opensExternalLinks) {
+      this.outsideLinks.launchInSystemApp(url);
     } else {
       this.outsideLinks.openInBrowser(url);
     }
+  }
+
+  /** A link to a page of ``app``. One at the app's pin page in a state of its own (a chat at ``/?chat=<id>``) goes
+   *  through the shell's ``show``, which raises a window already there, or points the app's window on that page or
+   *  its pinned window at it, rather than opening another; any other page is focused or opened. */
+  private async openAppLink(app: AppRecord, path: string): Promise<void> {
+    const pinPage = pinPageOfLink(app, path);
+    if (pinPage === null) {
+      await this.focusOrOpenWindowAt(app.name, path);
+      return;
+    }
+    await this.flushPendingSave();
+    let outcome: PageShowOutcome;
+    try {
+      outcome = await this.deps.api.showPage(this.deps.clientId, { app: app.name, path, repoint: [pinPage] });
+    } catch (error) {
+      this.toast(`Could not open ${app.name}: ${(error as Error).message}`);
+      return;
+    }
+    if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);
   }
 
   /** Open a window of ``app`` at ``path``, raising one already there. A window there that this client has popped out
@@ -1461,11 +1590,119 @@ export class DesktopStore {
 
   dismissReplacedDesktopNotice(): void {
     this.replacedDesktop = null;
-    this.deps.redraw();
+    this.redraw();
   }
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<void> {
     this.takeDesktop(await this.deps.api.setDesktopWallpaper(desktopId, wallpaper));
+  }
+
+  /** The theme a desktop wears by its own choice; null wears the workspace's default. */
+  async setDesktopTheme(desktopId: string, theme: string | null): Promise<void> {
+    this.takeDesktop(await this.deps.api.setDesktopTheme(desktopId, theme));
+  }
+
+  /** The workspace's default theme; null wears the standard one. Every window hears the new catalog over the
+   *  socket; this one takes the new default at once, so it shows even while the socket is down. With no catalog
+   *  read yet there is nothing to put the default in, so the catalog is read again. */
+  async setDefaultTheme(theme: string | null): Promise<void> {
+    await this.deps.api.setDefaultTheme(theme);
+    if (!this.hasThemeCatalog) {
+      await this.loadThemes();
+      return;
+    }
+    this.themeCatalogChanges += 1;
+    this.takeThemeCatalog({ ...this.themeCatalog, default: theme });
+  }
+
+  /** Read the workspace's themes again. */
+  async loadThemes(): Promise<void> {
+    if (this.themeReadRetryTimer !== null) clearTimeout(this.themeReadRetryTimer);
+    this.themeReadRetryTimer = null;
+    const change = ++this.themeCatalogChanges;
+    try {
+      const catalog = await this.deps.api.fetchThemes();
+      this.themeReadBackoff.reset();
+      if (change === this.themeCatalogChanges) this.takeThemeCatalog(catalog);
+    } catch (error) {
+      console.warn("[si] could not read the themes", error);
+      if (!this.hasThemeCatalog && change === this.themeCatalogChanges) {
+        this.themeReadRetryTimer = setTimeout(() => {
+          this.themeReadRetryTimer = null;
+          if (!this.hasThemeCatalog) void this.loadThemes();
+        }, this.themeReadBackoff.nextDelay());
+      }
+    }
+  }
+
+  private takeThemeCatalog(catalog: ThemeCatalog): void {
+    this.themeCatalog = catalog;
+    this.hasThemeCatalog = true;
+    this.redraw();
+  }
+
+  /** Whether `shownTheme()` names the theme this client should wear: the catalog has arrived and a desktop is on
+   *  screen. Before then it answers the standard look or the default, which is not yet known to be right. */
+  isShownThemeKnown(): boolean {
+    return this.hasThemeCatalog && activeDesktop(this.state) !== null;
+  }
+
+  /** Whether the workspace's themes have been read; until then `getThemeCatalog()` answers an empty catalog. */
+  isThemeCatalogKnown(): boolean {
+    return this.hasThemeCatalog;
+  }
+
+  getThemeCatalog(): ThemeCatalog {
+    return this.themeCatalog;
+  }
+
+  /** Show a theme choice on a desktop before it is saved: a theme id, or null for the workspace's default. */
+  previewDesktopTheme(desktopId: string, choice: string | null): void {
+    this.themePreview = { desktopId, choice };
+    this.redraw();
+  }
+
+  /** Go back to the desktop's saved theme. */
+  clearThemePreview(): void {
+    if (this.themePreview === null) return;
+    this.themePreview = null;
+    this.redraw();
+  }
+
+  /** The theme this client wears: the active desktop's (or the one previewed on it), resolved through the
+   *  workspace's default to an available theme, or the standard look. */
+  shownTheme(): ThemeRecord {
+    const desktop = activeDesktop(this.state);
+    const isPreviewed = desktop !== null && this.themePreview?.desktopId === desktop.id;
+    const choice = isPreviewed ? (this.themePreview?.choice ?? null) : (desktop?.theme ?? null);
+    return resolveDesktopTheme(this.themeCatalog, choice);
+  }
+
+  /** Hear the shown theme whenever it changes: another theme or revision, or a preview put on or taken off; and the
+   *  same theme again from each catalog that arrives, so a page whose stylesheet failed can put it back. A listener
+   *  hears the current one at once when it is known. */
+  onShownThemeChanged(listener: ShownThemeListener): () => void {
+    this.shownThemeListeners.add(listener);
+    if (this.lastShownTheme !== null) listener(this.lastShownTheme);
+    return () => void this.shownThemeListeners.delete(listener);
+  }
+
+  private noteShownTheme(): void {
+    if (!this.isShownThemeKnown()) return;
+    const desktop = activeDesktop(this.state);
+    const shown: ShownTheme = {
+      record: this.shownTheme(),
+      isPreview: desktop !== null && this.themePreview?.desktopId === desktop.id,
+    };
+    const last = this.lastShownTheme;
+    if (last !== null && last.record === shown.record && last.isPreview === shown.isPreview) return;
+    this.lastShownTheme = shown;
+    for (const listener of this.shownThemeListeners) listener(shown);
+  }
+
+  /** The title bar the shown theme draws (workspace-themes plan section 4.3). */
+  shownChrome(): ThemeChrome {
+    return chromeOf(this.shownTheme());
   }
 
   /** Delete a desktop; the shell moves this client to the fallback and says so over the socket. */

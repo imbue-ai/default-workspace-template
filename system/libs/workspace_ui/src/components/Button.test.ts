@@ -27,14 +27,14 @@ describe("Button readonly option", () => {
     const element = renderButton({ readonly: true });
     expect(element.classList.contains("cursor-default")).toBe(true);
     expect(element.classList.contains("cursor-pointer")).toBe(false);
-    expect(element.classList.contains("aria-disabled:opacity-50")).toBe(false);
+    expect(element.classList.contains("aria-disabled:opacity-40")).toBe(false);
   });
 
   it("an interactive button keeps the pointer cursor and the aria-disabled dim", () => {
     const element = renderButton({});
     expect(element.getAttribute("aria-disabled")).toBeNull();
     expect(element.classList.contains("cursor-pointer")).toBe(true);
-    expect(element.classList.contains("aria-disabled:opacity-50")).toBe(true);
+    expect(element.classList.contains("aria-disabled:opacity-40")).toBe(true);
   });
 
   it("stays a real enabled <button> (not disabled), so hover/focus events still fire", () => {
@@ -91,5 +91,19 @@ describe("Button selected option", () => {
     const element = renderButton({ variant: "ghost", selected: true, onclick });
     element.dispatchEvent(new MouseEvent("click"));
     expect(onclick).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("Button theme part", () => {
+  it("marks the button as the contract's button part, with its variant and shape", () => {
+    const text = renderButton({ variant: "primary" });
+    const iconOnly = renderButton({ variant: "ghost", icon: true });
+
+    expect([text.dataset.part, text.dataset.variant, text.dataset.shape]).toEqual(["button", "primary", "text"]);
+    expect([iconOnly.dataset.part, iconOnly.dataset.variant, iconOnly.dataset.shape]).toEqual([
+      "button",
+      "ghost",
+      "icon",
+    ]);
   });
 });

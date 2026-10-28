@@ -1,15 +1,20 @@
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Final, Self
+from typing import Any
+from typing import Final
+from typing import Self
 from urllib.parse import quote
 
+from pydantic import GetCoreSchemaHandler
+from pydantic_core import CoreSchema
+from pydantic_core import core_schema
+
+from app_manifest.errors import InvalidManifestValueError
+from app_manifest.errors import PageTemplateFieldError
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
-from pydantic import GetCoreSchemaHandler
-from pydantic_core import CoreSchema, core_schema
-
-from app_manifest.errors import InvalidManifestValueError, PageTemplateFieldError
 
 # The app-name rule is the registration script's rule (system/scripts/forward_port.py,
 # ``validate_service_name``): the name becomes the leading label of the app's origin
@@ -30,6 +35,7 @@ RESERVED_APP_NAMES: Final[frozenset[str]] = frozenset(
 RESERVED_APP_NAME_PREFIXES: Final[tuple[str, ...]] = ("host-", "agent-")
 
 MAX_DISPLAY_NAME_LENGTH: Final[int] = 64
+MAX_APP_DESCRIPTION_LENGTH: Final[int] = 200
 
 LAUNCH_PATH_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,31}$")
 
@@ -110,6 +116,30 @@ class AppName(str):
         problem = describe_app_name_problem(value)
         if problem is not None:
             raise InvalidManifestValueError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
+# An app part's name, as a theme selects it: ``data-part="<app>.<part>"`` (the workspace-themes plan, section 7).
+APP_PART_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
+
+
+class AppPartName(str):
+    """The name of an element an app lets themes style, unique within the app."""
+
+    def __new__(cls, value: str) -> Self:
+        if APP_PART_NAME_PATTERN.fullmatch(value) is None:
+            raise InvalidManifestValueError(
+                f"app part name {value!r} must be lowercase letters, digits, and dashes, starting with a letter, "
+                "at most 48 characters"
+            )
         return super().__new__(cls, value)
 
     @classmethod
@@ -211,6 +241,36 @@ def _describe_launch_path_problem(value: str) -> str | None:
     if quote(value, safe=_LAUNCH_PATH_SAFE_CHARACTERS) != value:
         return f"invalid launch path {value!r}: nothing a URL would escape (no whitespace, quotes, or non-ASCII)"
     return None
+
+
+@pure
+def _describe_one_line_problem(value: str, field_name: str, max_length: int) -> str | None:
+    """Why ``value`` cannot be one non-empty line of at most ``max_length`` characters, or None when it can."""
+    if not value.strip():
+        return f"{field_name} must not be empty"
+    if "\n" in value or "\r" in value:
+        return f"invalid {field_name} {value!r}: a {field_name} is a single line"
+    if len(value) > max_length:
+        return f"{field_name} must be at most {max_length} characters, got {len(value)}"
+    return None
+
+
+class AppDescription(str):
+    """One line saying what an app is for, in the person's terms: non-empty, at most 200 characters."""
+
+    def __new__(cls, value: str) -> Self:
+        problem = _describe_one_line_problem(value, "description", MAX_APP_DESCRIPTION_LENGTH)
+        if problem is not None:
+            raise InvalidManifestValueError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
 
 
 class LaunchPathValue(str):
@@ -552,16 +612,9 @@ class ReferenceNote(str):
     """One line saying why a referenced artifact belongs to an app and which surface it uses."""
 
     def __new__(cls, value: str) -> Self:
-        if not value.strip():
-            raise InvalidManifestValueError("a reference note must not be empty")
-        if "\n" in value or "\r" in value:
-            raise InvalidManifestValueError(
-                f"invalid reference note {value!r}: a note is a single line"
-            )
-        if len(value) > _MAX_REFERENCE_NOTE_LENGTH:
-            raise InvalidManifestValueError(
-                f"a reference note must be at most {_MAX_REFERENCE_NOTE_LENGTH} characters, got {len(value)}"
-            )
+        problem = _describe_one_line_problem(value, "reference note", _MAX_REFERENCE_NOTE_LENGTH)
+        if problem is not None:
+            raise InvalidManifestValueError(problem)
         return super().__new__(cls, value)
 
     @classmethod

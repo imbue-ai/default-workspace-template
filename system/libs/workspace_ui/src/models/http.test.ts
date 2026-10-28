@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HttpError, getJson, postJson } from "./http";
+import { HttpError, getJson, postJson, requestJson } from "./http";
 
 function answering(status: number, body: unknown, contentType = "application/json"): void {
   const text = body === undefined ? null : typeof body === "string" ? body : JSON.stringify(body);
@@ -96,5 +96,23 @@ describe("getJson", () => {
       cause: "not_answered",
       requestKind: "read",
     });
+  });
+});
+
+describe("requestJson", () => {
+  it("sends the method with a body only when one is given, and never from the cache", async () => {
+    answering(200, { rows: [] });
+    expect(await requestJson<{ rows: [] }>("GET", "/api/x")).toEqual({ rows: [] });
+    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    expect(init).toMatchObject({ method: "GET", cache: "no-store" });
+    expect(init.body).toBeUndefined();
+    expect(init.headers).toBeUndefined();
+
+    answering(204, undefined);
+    expect(await requestJson<void>("DELETE", "/api/x")).toBeUndefined();
+    answering(200, { ok: true });
+    await requestJson("PUT", "/api/x", { a: 1 });
+    const [, withBody] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
+    expect(withBody).toMatchObject({ method: "PUT", body: JSON.stringify({ a: 1 }) });
   });
 });

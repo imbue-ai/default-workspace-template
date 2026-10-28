@@ -6,17 +6,15 @@ from typing import Any
 from typing import Final
 from typing import Self
 
-from imbue.imbue_common.enums import LowerCaseStrEnum
-from imbue.imbue_common.enums import UpperCaseStrEnum
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.primitives import NonEmptyStr
 from pydantic import Field
 from pydantic import ValidationError
 from pydantic import model_validator
 
 from app_manifest.errors import InvalidManifestValueError
 from app_manifest.errors import ManifestLoadError
+from app_manifest.primitives import AppDescription
 from app_manifest.primitives import AppName
+from app_manifest.primitives import AppPartName
 from app_manifest.primitives import DisplayName
 from app_manifest.primitives import EnvVarName
 from app_manifest.primitives import ExcludeGlob
@@ -33,6 +31,10 @@ from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import SecretFileName
 from app_manifest.primitives import is_path_covered_by
+from imbue.imbue_common.enums import LowerCaseStrEnum
+from imbue.imbue_common.enums import UpperCaseStrEnum
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.primitives import NonEmptyStr
 
 MANIFEST_FILENAME: Final[str] = "app.toml"
 
@@ -258,6 +260,49 @@ class SecretDeclaration(FrozenModel):
         return self
 
 
+class ThemingMode(LowerCaseStrEnum):
+    """How far an app takes part in workspace themes (the workspace-themes plan, section 7)."""
+
+    # Built only from the shared components and the design tokens: every theme styles it.
+    TOKENS = auto()
+    # Also marks elements with a look of its own as declared parts, which a theme may style.
+    PARTS = auto()
+    # Shows content whose look is not the workspace's; only the window around it is themed.
+    NONE = auto()
+    # Has a look of its own, written on the design tokens with that look as their fallbacks, and loads the page kit; the
+    # user turns its theming on and off from its window menu (docs/system/themeable-apps.md).
+    OUTSIDE = auto()
+
+
+class AppPart(FrozenModel):
+    """An element of the app a theme may style, marked ``data-part="<app>.<name>"`` in its pages."""
+
+    name: AppPartName = Field(description="The part's name within the app")
+    description: NonEmptyStr = Field(description="One line: what the element is")
+
+    @model_validator(mode="after")
+    def _check_description_is_one_line(self) -> Self:
+        if len(self.description.splitlines()) > 1:
+            raise InvalidManifestValueError(f"theming part {str(self.name)!r} must be described in one line")
+        return self
+
+
+class AppTheming(FrozenModel):
+    """The manifest's ``[theming]`` table."""
+
+    mode: ThemingMode = Field(default=ThemingMode.TOKENS, description="How far the app takes part in themes")
+    parts: tuple[AppPart, ...] = Field(default=(), description="The elements a theme may style, for mode parts")
+
+    @model_validator(mode="after")
+    def _check_parts_match_mode(self) -> Self:
+        names = [part.name for part in self.parts]
+        if len(set(names)) != len(names):
+            raise InvalidManifestValueError(f"theming part names must be unique, got {names}")
+        if self.parts and self.mode != ThemingMode.PARTS:
+            raise InvalidManifestValueError(f"theming parts are declared only with mode = \"parts\", not {str(self.mode)!r}")
+        return self
+
+
 class DefaultShortcut(FrozenModel):
     """The shortcut a new desktop is seeded with for this app."""
 
@@ -361,6 +406,15 @@ class AppManifest(FrozenModel):
 
     name: AppName = Field(description="The registered app name")
     display_name: DisplayName = Field(description="What users see")
+    description: AppDescription | None = Field(
+        default=None,
+        description="One line saying what the app is for, shown wherever the app is described to an agent",
+    )
+    api_schema_path: LaunchPathValue | None = Field(
+        default=None,
+        description="The path under the app's origin that answers an OpenAPI document describing its HTTP API; "
+        "absent when the app describes none",
+    )
     icon: IconPath | None = Field(default=None, description="The icon file, relative to the manifest; required unless internal")
     critical: bool = Field(
         default=False,
@@ -412,6 +466,9 @@ class AppManifest(FrozenModel):
     secrets: tuple[SecretDeclaration, ...] = Field(
         default=(), description="The secret files the app runs under, for publish-template to aggregate"
     )
+    theming: AppTheming = Field(
+        default_factory=AppTheming, description="How far the app takes part in workspace themes"
+    )
     preview: PreviewSpec = Field(description="How a throwaway instance boots for a preview (the scaffold convention by default)")
 
     @model_validator(mode="before")
@@ -438,6 +495,10 @@ class AppManifest(FrozenModel):
             raise InvalidManifestValueError("icon is required unless internal = true")
         if self.critical and self.stop_when_no_windows:
             raise InvalidManifestValueError("a critical app cannot declare stop_when_no_windows = true")
+        if self.api_schema_path is not None and self.description is None:
+            raise InvalidManifestValueError(
+                "an app that declares api_schema_path also declares description: the API document carries it"
+            )
         reference_paths = [reference.path for reference in self.references]
         if len(set(reference_paths)) != len(reference_paths):
             raise InvalidManifestValueError(
@@ -568,7 +629,7 @@ def load_manifest(path: Path, *, repo_root: Path | None = None) -> AppManifest:
     """
     try:
         raw_text = path.read_text(encoding="utf-8")
-    except OSError as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise ManifestLoadError(f"cannot read manifest {path}: {e}") from e
     try:
         data = tomllib.loads(raw_text)

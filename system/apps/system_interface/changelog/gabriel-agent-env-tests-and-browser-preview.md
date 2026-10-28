@@ -1,0 +1,1 @@
+The pytest configuration requires the pytest-workspace-env plugin (`required_plugins`), so a test run that cannot load it, and would let a test see the environment of the agent running it, stops before collecting anything.

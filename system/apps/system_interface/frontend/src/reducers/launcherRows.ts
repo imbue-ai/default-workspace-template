@@ -17,6 +17,7 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
+import { TOUR_LAUNCHER_LABEL, TOUR_LAUNCHER_SEARCH_WORDS } from "../model/tourCards";
 import { activePlacements, appByName, effectiveWindowTitle, isWindowMinimized, openableApps } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
@@ -46,6 +47,16 @@ export interface WindowRow {
   readonly isOnActiveDesktop: boolean;
 }
 
+/** The row that runs the show-around tour from its first card (the new-onboarding spec, section 2.6): the last of
+ *  the launch-path rows, offered with no query and for a query matching its words. */
+export interface TourRow {
+  readonly kind: "tour";
+  readonly key: typeof TOUR_ROW_KEY;
+  readonly label: string;
+}
+
+export const TOUR_ROW_KEY = "tour";
+
 /** The first two free-text rows: Enter's fallthrough, and Ctrl+Enter's target. */
 export type TextAction = "primary" | "secondary";
 
@@ -63,11 +74,13 @@ export interface TextRow {
   readonly disabledReason: string | null;
 }
 
-export type LauncherRow = LaunchRow | WindowRow | TextRow;
+export type LauncherRow = LaunchRow | WindowRow | TextRow | TourRow;
 
 /** The menu's rows by section, and flat in the order the menu draws them. */
 export interface LauncherMenuRows {
   readonly launchRows: readonly LaunchRow[];
+  /** The tour's row, drawn after the launch-path rows; empty when the query rules it out. */
+  readonly tourRows: readonly TourRow[];
   readonly windowRows: readonly WindowRow[];
   readonly textRows: readonly TextRow[];
   readonly rows: readonly LauncherRow[];
@@ -83,6 +96,13 @@ export function launchRowKey(kind: "launch" | "text", app: string, launch: strin
 /** The ``data-launcher-row`` spelling of a window row. */
 export function windowRowKey(windowId: string): string {
   return `window:${windowId}`;
+}
+
+/** The tour's row: offered once the workspace has apps to show around, with no query and for its words. */
+function tourRowsOf(apps: readonly AppRecord[], query: string): TourRow[] {
+  if (apps.length === 0) return [];
+  if (!matchesQuery(query, TOUR_LAUNCHER_LABEL, ...TOUR_LAUNCHER_SEARCH_WORDS)) return [];
+  return [{ kind: "tour", key: TOUR_ROW_KEY, label: TOUR_LAUNCHER_LABEL }];
 }
 
 function launchRowsOf(apps: readonly AppRecord[], query: string): LaunchRow[] {
@@ -156,22 +176,35 @@ export function isMessageText(text: string): boolean {
   return text.includes("\n");
 }
 
+export interface LauncherRowsOptions {
+  /** Whether the tour's row is offered (true unless said otherwise); the phone layout, where the tour never draws,
+   *  leaves it out. */
+  readonly isTourOffered?: boolean;
+}
+
 /** The menu for the field's ``query`` (plan section 3.5): window rows appear only while typing; the free-text rows
  *  stand alone for a text with a line break. The line break is read off the field's text as typed, as the field
  *  reads it for the arrows, so a break just typed already makes a message; the rows send the trimmed text. */
-export function launcherRowsOf(state: DesktopState, query: string): LauncherMenuRows {
+export function launcherRowsOf(
+  state: DesktopState,
+  query: string,
+  options: LauncherRowsOptions = {},
+): LauncherMenuRows {
   const text = query.trim();
   const apps = openableApps(state);
   const isMessage = isMessageText(query);
   const launchRows = isMessage ? [] : launchRowsOf(apps, text);
+  const tourRows = isMessage || options.isTourOffered === false ? [] : tourRowsOf(apps, text);
   const windowRows = text === "" || isMessage ? [] : windowRowsOf(state, text);
   const textRows = textRowsOf(apps, text);
   return {
     launchRows,
+    tourRows,
     windowRows,
     textRows,
-    rows: [...launchRows, ...windowRows, ...textRows],
-    isNoMatch: text !== "" && !isMessage && launchRows.length === 0 && windowRows.length === 0,
+    rows: [...launchRows, ...tourRows, ...windowRows, ...textRows],
+    isNoMatch:
+      text !== "" && !isMessage && launchRows.length === 0 && tourRows.length === 0 && windowRows.length === 0,
   };
 }
 

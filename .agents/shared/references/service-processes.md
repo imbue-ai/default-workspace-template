@@ -81,7 +81,10 @@ Key fields:
   **built-in services** keep `startretries=1000000`, deliberately: the workspace
   is unusable without them, so retrying forever beats giving up. Note that a
   program with `startsecs=30` sits in `STARTING` for its first 30 seconds, and
-  `supervisorctl start`/`restart` block for that long; only `BACKOFF` or `FATAL`
+  `supervisorctl start`/`restart` block for that long although the app answers
+  within a second; bounce an app with `python3 system/scripts/verify_app.py
+  <name> --restart ...` instead, which starts it through supervisord's RPC
+  without waiting and reads readiness from the port. Only `BACKOFF` or `FATAL`
   means it failed.
 - `stopasgroup=true` / `killasgroup=true` -- signal the whole `bash -c` process
   group on stop, so a wrapped command shuts down cleanly.
@@ -161,7 +164,9 @@ environment with `uv tool uninstall <name>`; for a scaffolded web lib,
 1. Change the program's `command` (or other fields) in its `system/supervisord.conf.d/<name>.conf`.
 2. `supervisorctl reread && supervisorctl update` applies the change (it
    restarts the program when its definition changed). To bounce a program
-   without editing its config, use `supervisorctl restart <name>`.
+   without editing its config, use `python3 system/scripts/verify_app.py
+   <name> --restart` for an app (no 30 s wait) or `supervisorctl restart <name>`
+   for a daemon.
 
 ## Inspecting services
 

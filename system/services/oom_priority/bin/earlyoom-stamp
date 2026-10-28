@@ -1,0 +1,15 @@
+#!/usr/bin/perl
+# Prefixes each line on stdin with its UTC arrival time, to the millisecond, and
+# flushes every line, so earlyoom's log says when each decision was made. Its
+# process name is in earlyoom's --avoid list: earlyoom's output goes through it,
+# so shedding it would take earlyoom down with it.
+use strict;
+use warnings;
+use POSIX qw(strftime);
+use Time::HiRes qw(time);
+
+$| = 1;
+while (my $line = <STDIN>) {
+    my $now = time;
+    printf "%s.%03dZ %s", strftime("%Y-%m-%dT%H:%M:%S", gmtime $now), int(($now - int $now) * 1000), $line;
+}

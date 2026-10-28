@@ -1,0 +1,1 @@
+Wheeling up right after a long chat opens no longer makes the transcript jump dozens of turns. While the older history was still being measured, the browser's own scroll adjustment during a redraw was read as the user scrolling and added on top of the reading position; now only movement from before the redraw counts as the user's.

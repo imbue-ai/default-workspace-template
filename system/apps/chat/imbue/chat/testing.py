@@ -50,6 +50,8 @@ import httpx
 import pexpect
 import pytest
 import simple_websocket
+from chat_background_tasks import markers
+from chat_background_tasks.markers import TaskSource
 from flask import Flask
 from flask import request
 from pydantic import Field
@@ -64,6 +66,7 @@ from imbue.chat.agent_discovery import MngrMessenger
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatAgentEntry
 from imbue.chat.chat_records import ChatHandoffRecord
@@ -408,6 +411,33 @@ CONTINUE_CHAT_TEMPLATE_PATH: Final[Path] = (
 )
 
 
+def write_background_task_marker(
+    reader: BackgroundTaskReader,
+    chat_id: str,
+    task_id: str,
+    pid: int,
+    description: str = "Rebuild the worker image",
+    started_at: str = "2026-10-08T12:00:00+00:00",
+    harness: str = "",
+) -> None:
+    """Write a marker into the chat's directory with the library's own writer: ``run_in_background``'s, or the
+    named harness's."""
+    task = markers.BackgroundTask(
+        source=TaskSource.HARNESS if harness else TaskSource.RUN_IN_BACKGROUND,
+        id=task_id,
+        description=description,
+        started_at=started_at,
+        pid=pid,
+        harness=harness,
+    )
+    markers.write_marker(reader.root, chat_id, task)
+
+
+def remove_background_task_marker(reader: BackgroundTaskReader, chat_id: str, task_id: str) -> None:
+    """Remove a ``run_in_background`` marker, as the runner does once its report is delivered."""
+    markers.remove_marker(reader.root, chat_id, TaskSource.RUN_IN_BACKGROUND, task_id)
+
+
 def write_summary_for_request(text: str) -> None:
     """What a fake ``deliver`` does with a handoff summary request: write a stub summary at the path it names.
 
@@ -520,6 +550,21 @@ def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
     return str(script), log_path
 
 
+def write_gated_mngr_binary(tmp_path: Path) -> tuple[str, Path, Path]:
+    """A stand-in ``mngr`` that logs each argv on one line, then waits for a gate file before it succeeds.
+
+    Returns its path, the log's, and the gate's: a test holds a call open until it creates the gate.
+    """
+    log_path = tmp_path / "mngr-argv.log"
+    gate_path = tmp_path / "mngr-gate"
+    script = tmp_path / "gated-mngr"
+    script.write_text(
+        f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "{log_path}"\nwhile [ ! -e "{gate_path}" ]; do sleep 0.05; done\n'
+    )
+    script.chmod(0o755)
+    return str(script), log_path, gate_path
+
+
 def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Put a shell script named ``name`` first on PATH that logs its argv, then runs ``body``; returns the log.
 
@@ -533,6 +578,27 @@ def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: 
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     return log_path
+
+
+def put_stand_in_pi_on_path(
+    tmp_path: Path, provider: str, model_ids: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Put a ``pi`` first on PATH whose bundled catalog and ``--list-models`` offer ``model_ids`` on ``provider``.
+
+    The catalog sits where ``find_provider_data_dir`` looks from the binary; every model reasons, so each offers
+    pi's default thinking levels.
+    """
+    bin_dir = tmp_path / "stand-in-pi" / "bin"
+    data_dir = bin_dir / "node_modules" / "@earendil-works" / "pi-ai" / "dist" / "providers" / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / f"{provider}.json").write_text(
+        json.dumps({"openai-completions": {model_id: {"reasoning": True} for model_id in model_ids}})
+    )
+    listing = "".join(f"{provider} {model_id}\\n" for model_id in model_ids)
+    script = bin_dir / "pi"
+    script.write_text(f"#!/bin/sh\nprintf 'provider model\\n{listing}'\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
 class InlineExecutor(Executor):
@@ -872,9 +938,23 @@ def serve_app(app: Flask) -> Generator[ServedApp, None, None]:
         thread.join(timeout=5.0)
 
 
+class HandshakeDrainingWebSocketClient(simple_websocket.Client):
+    """A ``simple_websocket`` client that also delivers frames read together with the handshake response.
+
+    ``simple_websocket.Client.handshake`` (1.1.0) stops at the first protocol event, the accept. Frames the
+    server sent right after accepting that arrive in the same socket read stay buffered in the protocol
+    state, and the reader thread only processes buffered events once more bytes arrive, so a server that
+    then goes quiet leaves them unread until ``receive`` times out.
+    """
+
+    def handshake(self) -> None:
+        super().handshake()
+        self.connected = self._handle_events()
+
+
 def open_ws(served: ServedApp, path: str, subprotocols: list[str] | None = None) -> simple_websocket.Client:
     """Open a WebSocket client against a ``ServedApp`` at ``path``."""
-    return simple_websocket.Client(f"{served.ws_url}{path}", subprotocols=subprotocols)
+    return HandshakeDrainingWebSocketClient(f"{served.ws_url}{path}", subprotocols=subprotocols)
 
 
 def close_ws(ws: simple_websocket.Client) -> None:
@@ -990,6 +1070,8 @@ def make_agent_fixture(
     # the fixture transcript never loads.
     (agent_state_dir / "claude_session_id_history").write_text(f"{FIXTURE_SESSION_ID}\n")
     (agent_state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
+    # A running claude has finished starting: its SessionStart hook wrote this, so a send does not wait for it.
+    (agent_state_dir / "session_started").touch()
     session_file = make_session_file(
         projects_dir, FIXTURE_SESSION_ID, session_events if session_events is not None else _FIXTURE_SESSION_EVENTS
     )
@@ -1044,6 +1126,8 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
             queued_messages=(),
             shoulder_tap_available=False,
             is_connecting=False,
+            is_busy=False,
+            background_tasks=(),
         ),
         last_messaged_at=last_messaged_at,
     )
@@ -1125,6 +1209,7 @@ def running_workspace(
     is_account_signed_in: bool = True,
     additional_accounts: Sequence[tuple[str, str]] = (),
     messenger: MngrMessenger | None = None,
+    background_tasks_root: Path | None = None,
     # Further registry rows beside the chat's, for apps a test serves itself.
     extra_rows: Sequence[str] = (),
 ) -> Generator[RunningWorkspace, None, None]:
@@ -1138,7 +1223,9 @@ def running_workspace(
     root offers the provider chooser instead. ``additional_accounts`` sign further
     accounts in (a chat switches harness to one of them); ``messenger`` replaces the recording
     messenger the manager sends through. The chat's layout client is the served shell, so a route that asks the
-    shell for a window lands it there.
+    shell for a window lands it there. ``background_tasks_root`` is where the chat reads its chats'
+    background-task markers, and the agents' runner and hooks write them (``CHAT_BACKGROUND_TASKS_DIR``);
+    without it the chat reads none.
     """
     shell_url = f"http://127.0.0.1:{shell_port}"
     chat_url = f"http://127.0.0.1:{chat_port}"
@@ -1149,6 +1236,7 @@ def running_workspace(
     for extra_id, extra_name in additional_agents:
         extra_state_dir = tmp_path / "agents" / extra_id
         extra_state_dir.mkdir(parents=True, exist_ok=True)
+        (extra_state_dir / "session_started").touch()
         extra_infos.append(
             AgentInfo(
                 id=extra_id,
@@ -1163,7 +1251,7 @@ def running_workspace(
 
     registry_path = tmp_path / "registry" / "apps.toml"
     # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
-    # the three POST launch paths onto the intake route (post-launch-paths plan section 7.1).
+    # the four POST launch paths onto the intake route (post-launch-paths plan section 7.1).
     write_registry(
         registry_path,
         registry_row_toml(
@@ -1174,15 +1262,22 @@ def running_workspace(
             display_name="Chat",
             launch_paths=(
                 ("root", "Chat", "/"),
+                ("main", "Send to main chat", "/api/chats/intake"),
                 ("new", "New Chat", "/api/chats/intake"),
                 ("send", "Send to chat...", "/api/chats/intake"),
                 ("draft", "Draft into chat", "/api/chats/intake"),
             ),
-            launch_params={"new": ("account_id", "message"), "send": ("message",), "draft": ("message",)},
-            launch_text_params={"new": "message", "send": "message"},
+            launch_params={
+                "main": ("message",),
+                "new": ("account_id", "message"),
+                "send": ("message",),
+                "draft": ("message",),
+            },
+            launch_text_params={"main": "message", "new": "message", "send": "message"},
             launch_draft_params={"draft": "message"},
-            launch_methods={"new": "POST", "send": "POST", "draft": "POST"},
+            launch_methods={"main": "POST", "new": "POST", "send": "POST", "draft": "POST"},
             launch_presets={
+                "main": {"target": "main_chat"},
                 "new": {"target": "new_chat"},
                 "send": {"target": "chat_selector"},
                 "draft": {"target": "current_chat", "is_draft": "true"},
@@ -1206,6 +1301,7 @@ def running_workspace(
                 "MNGR_PROJECT_CONFIG_DIR": str(tmp_path / "project-config"),
                 "MINDS_APPS_FILE": str(registry_path),
                 "MINDS_WORKSPACE_SERVER_URL": shell_url,
+                **({} if background_tasks_root is None else {"CHAT_BACKGROUND_TASKS_DIR": str(background_tasks_root)}),
             },
         ),
         patch("imbue.chat.server.discover_agents", return_value=agents),
@@ -1229,6 +1325,9 @@ def running_workspace(
             # The successor's prompt template is cwd-relative in production (the repo root); the
             # suite runs from the chat package, so it is named outright.
             prompt_template_path=CONTINUE_CHAT_TEMPLATE_PATH,
+            background_tasks=None
+            if background_tasks_root is None
+            else BackgroundTaskReader(root=background_tasks_root),
         )
         # The agents carry the signed-in account's label, as a chat the app created would, so the
         # page's provider row names it.

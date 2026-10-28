@@ -11,11 +11,10 @@ from __future__ import annotations
 import json
 from typing import Final
 
+from app_schema.routes import error_response
 from flask import Response
 from flask import request
 from loguru import logger
-
-from imbue.chat.models import ErrorResponse
 
 IDENTITY_HEADER: Final = "X-Imbue-Identity"
 OWNER_ONLY_DETAIL: Final = "Only the owner of this workspace can connect an AI account."
@@ -41,5 +40,4 @@ def forbid_unless_owner() -> Response | None:
     if is_owner_identity(request.headers.get(IDENTITY_HEADER)):
         return None
     logger.warning("Refused a visitor's request to {}", request.path)
-    body = json.dumps(ErrorResponse(detail=OWNER_ONLY_DETAIL).model_dump(), separators=(",", ":"))
-    return Response(body, status=403, mimetype="application/json")
+    return error_response(OWNER_ONLY_DETAIL, 403)

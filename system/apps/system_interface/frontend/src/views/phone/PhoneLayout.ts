@@ -26,7 +26,7 @@ import {
 } from "../../reducers/phone";
 import type { ShownMountPolicy } from "../../pages/livePages";
 import type { DesktopStore } from "../../store/DesktopStore";
-import { Toasts } from "../Toast";
+import { Toasts } from "@imbue/workspace-ui/src/components/toasts";
 import { UpdateNoticeBanner } from "../UpdateNoticeBanner";
 import { UpdateStalenessBanner } from "../UpdateStalenessBanner";
 import { stoppedPlaceholder } from "../Window";

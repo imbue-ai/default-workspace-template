@@ -33,7 +33,7 @@ when the CONTRACT changes.
 **Connecting — a sub-state of Sending.** A send that has to wait for the agent to come up
 before it can be delivered (the agent was stopped and the send starts it, or its harness has
 launched but not yet reported it accepts input) is **Connecting**: the placeholder stays as it
-is, and "Connecting…" with a pulsing dot shows beside the model bar until the send resolves. The
+is, and "Connecting…" with a pulsing dot shows on the status row under it until the send resolves. The
 backend decides it (``active_agent.is_connecting`` on the chat's snapshot), from the agent's
 lifecycle and the harness's own signal that it accepts input; the frontend only renders it. A
 message sent to a chat still being created is waiting on the same thing and reads the same way:
@@ -119,6 +119,27 @@ the send path does fail catastrophically.
 
 Keep both sides as simple as possible; push every decision down.
 
+### A2a. One status row says where the turn is, from send to done
+The page has one status row at the live end of the transcript, where the reply will appear. It is
+how the user knows something is moving at every moment between pressing Enter and the turn ending:
+- **A send not yet in a turn.** While a "Sending…" placeholder stands, the row sits under it and
+  shows a pulsing dot at once, captioned with where the send is going only if it is still on its way
+  after a moment, or "Connecting…" while the backend reports the send waiting on the agent (A1). This
+  is the Sending state drawn on the agent's side, not a further optimism: it lives exactly as long as
+  the placeholder, and the backend's report of the real state ends it.
+- **A turn starting.** Its message is in the transcript but the backend has not yet reported the agent
+  working on it: the row keeps its dot.
+- **A turn in flight.** The row sits under the latest turn and carries the activity of A6, with the
+  turn's running time once it has run a while: from the user's send when this page made it, so the
+  count runs on unbroken from the send's, else from the transcript's record of the message that opened
+  the turn (never from a turn the page has already seen end).
+- **Done.** Once the backend reports the agent's turn over (its activity idle), the row gives way to a
+  mark under the reply saying the turn is finished, even while its harness still closes it (Claude's
+  Stop hooks, A6a): the reply is in, so the user's wait is over. A hook that sends the agent back to
+  work brings the row back with the activity it reports. When this page saw both the send and the
+  reply land, the mark says how long the user waited, on this page's clock.
+The frontend decides none of these transitions; each follows the backend's report or the transcript.
+
 ### A3. Queue fidelity — the UI queue IS the harness's own queue
 The set of Queued messages equals the harness's real internal queue exactly (codex: its
 pending steers; claude: its parked send queue; pi: its inbox) — no parallel UI queue, no
@@ -199,6 +220,31 @@ Both are artificial lag/ordering bugs, not inherent latency — unacceptable. Th
 the mechanism that makes codex exact here; the codex plan must adopt them for activity, not the
 rollout-poll.
 
+### A6a. Busy is not activity — a pending background task is shown as a wait, not a turn
+An agent that started a background task and ended its turn is idle by A6: no turn is in flight,
+and the activity dot is cleared. But it will resume on its own when the task's report arrives, so
+its chat is **busy**, and the chat's status says so: **`background`**, distinct from both
+`working` and `idle`.
+- **Busy = a turn in flight, or a pending background task.** A pending task is a live marker in
+  the chat's directory (a task whose writer's process is alive). A permission request is not
+  busy (the chat waits on the user, not on itself), and neither is a process that will never
+  wake the agent.
+- **Precedence:** stopped, attention, working, background, idle. A turn in flight is `working`
+  even with tasks pending; the strip shows the wait and, beneath it, the activity line. So is a
+  turn still closing: its final message is in the transcript but its harness has not closed it
+  (Claude's Stop hooks, one of which records the tasks it is left waiting on, run before
+  `active` is cleared). It is busy and shows no activity.
+- **The backend decides it** (`active_agent.is_busy` and `active_agent.background_tasks` on the
+  snapshot); the frontend renders the wait it is given and decides nothing.
+- **A wait ends exactly:** when the task's marker goes (its report delivered or given up; for a
+  Claude task, the next Stop that no longer lists it, or, in a chat whose transcript the app is
+  tailing, its end in the transcript's `<task-notification>`) or its writer's process dies, the
+  chat returns to `idle` within one poll of the background-task poller.
+- **The wait belongs to the chat, not the agent:** a switch stops the retiring agent, which ends
+  its tasks. A runner still reports how its command ended to the chat, and that report's turn
+  runs on the successor; the harness's own tasks end unreported. The successor is told which
+  was which.
+
 ---
 
 ---
@@ -207,7 +253,7 @@ rollout-poll.
 
 ### Send
 On POST the frontend shows "Sending…" (the placeholder, drawn as a sent message) immediately
-(the one permitted optimism, A2), and "Connecting…" beside the model bar while the backend
+(the one permitted optimism, A2), and "Connecting…" on the status row under it while the backend
 reports the send waiting on the agent (A1). A
 successful POST means the harness ACCEPTED the message; within a bounded time it then resolves
 to exactly one of Delivered (agent was idle: the message starts and commits a turn) / Queued

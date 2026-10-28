@@ -1,0 +1,1 @@
+Getting Started describes its own API: `GET /api/schema` answers an OpenAPI document built from its routes, every route's view carries a docstring the document shows as the operation's summary, and its manifest carries a one-line `description` and the `api_schema_path`, which the visiting-agent primer links.

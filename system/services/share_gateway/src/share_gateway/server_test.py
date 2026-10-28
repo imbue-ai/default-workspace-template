@@ -1,3 +1,8 @@
+import base64
+import hashlib
+import html
+import json
+import re
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -5,14 +10,12 @@ from pathlib import Path
 from urllib.parse import parse_qs
 from urllib.parse import urlsplit
 
-import html
-import json
-import re
-
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from flask import Flask
 from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
 
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_label_to_name
@@ -22,6 +25,7 @@ from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.identity import IDENTITY_HEADER
 from share_gateway.identity import RequesterIdentity
 from share_gateway.materials import ShareMaterials
+from share_gateway.server import PAGE_CONTENT_SECURITY_POLICY
 from share_gateway.server import PendingLoginRegistry
 from share_gateway.server import UnansweredAddressWaits
 from share_gateway.server import build_gateway_app
@@ -30,8 +34,6 @@ from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.testing import set_cookies_by_name
-
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 _BROKER_URL = "https://accounts.example.com"
@@ -144,9 +146,8 @@ def _session_cookie_for(email: str, is_owner: bool = False, user_id: str = _BOB_
     return mint_session_cookie_value(_SIGNING_SECRET, identity, _DOMAIN)
 
 
-def _identity_header(response: object) -> dict[str, object]:
-    headers = getattr(response, "headers")
-    return json.loads(headers[IDENTITY_HEADER])
+def _identity_header(response: TestResponse) -> dict[str, object]:
+    return json.loads(response.headers[IDENTITY_HEADER])
 
 
 def _install_session(client: FlaskClient, email: str, extra_cookies: dict[str, str] | None = None) -> None:
@@ -494,9 +495,8 @@ def _switch_account_link(page: str) -> str:
     return html.unescape(match.group(1))
 
 
-def _broker_query(response: object) -> dict[str, list[str]]:
-    headers = getattr(response, "headers")
-    location = headers["Location"]
+def _broker_query(response: TestResponse) -> dict[str, list[str]]:
+    location = response.headers["Location"]
     assert location.startswith(f"{_BROKER_URL}/share/authorize?")
     return parse_qs(location.removeprefix(f"{_BROKER_URL}/share/authorize?"), keep_blank_values=True)
 
@@ -647,6 +647,30 @@ def test_loading_and_healthz_endpoints(tmp_path: Path) -> None:
     loading = harness.client.get("/_auth/loading")
     assert loading.status_code == 503
     assert "refresh" in loading.get_data(as_text=True)
+
+
+def _inline_style_hash(html: str) -> str:
+    style = html.split("<style>", 1)[1].split("</style>", 1)[0]
+    return base64.b64encode(hashlib.sha256(style.encode("utf-8")).digest()).decode("ascii")
+
+
+def test_gateway_pages_carry_a_policy_admitting_exactly_their_stylesheet(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "bob@example.com")
+
+    loading = harness.client.get("/_auth/loading")
+    forbidden = harness.client.get("/_auth/verify", headers=_verify_headers(host=f"unknown-00000000.{_DOMAIN}"))
+
+    assert forbidden.status_code == 403
+    for page in (loading, forbidden):
+        policy = page.headers["Content-Security-Policy"]
+        assert policy == PAGE_CONTENT_SECURITY_POLICY
+        # The hash is the page's actual stylesheet, so a browser enforcing the
+        # policy still renders the page as styled.
+        assert f"'sha256-{_inline_style_hash(page.get_data(as_text=True))}'" in policy
+        assert "default-src 'none'" in policy
+        assert "'unsafe-inline'" not in policy
+    assert "Content-Security-Policy" not in harness.client.get("/_health").headers
 
 
 def test_verify_hands_the_owner_the_identity_record(tmp_path: Path) -> None:
