@@ -10,7 +10,12 @@ like every Python app with a manifest):
   pty origin, reports its path and the session's title to the shell through the app
   contract (the shell's built module, served from this origin at
   `/_static/app_contract.js`), re-points the frame on `shell:navigate`,
-  and passes the shell's `ttyd-focus` grant on to ttyd. On a phone-sized page (the shell's rule: at most 500px one way and 1000px the other),
+  and passes the shell's `ttyd-focus` grant on to ttyd. On `shell:theme` it loads that theme's
+  bundle (served from this origin at `/_static/themes/<path>`, `workspace_themes.flask_routes`) into an unseen frame,
+  reads the theme's `--term-*` tokens there, and posts `{type: "terminal:theme", theme}` (xterm's color keys) into
+  the pty frame, again on every load of that frame; `theme` is null under the standard theme, for a bundle that
+  fails to load, or for a theme that sets no terminal tokens, which leaves xterm its own colors (the terminal is
+  `[theming] mode = "none"`, so nothing else of it is themed). On a phone-sized page (the shell's rule: at most 500px one way and 1000px the other),
   with a coarse pointer (a phone; never a mouse-driven desktop window), it shows a key strip under the frame (Esc, Tab, a one-shot Ctrl, the arrows) that
   posts `{type: "terminal:key", key, ctrl}` and `{type: "terminal:ctrl", armed}` into
   the frame, followed by a `ttyd-focus`; the pty page posts
@@ -20,7 +25,9 @@ like every Python app with a manifest):
   `new` launch path, posted by the shell with an optional `workdir`) allocates the
   lowest free `terminal-N`, creates its tmux session, and answers `{"path"}`, the
   page the shell then opens a window at (`docs/system/blueprint/post-launch-paths/`);
-  `/api/sessions/<name>` is what the page refreshes from, `/api/health` the probe, and
+  `/api/sessions/<name>` is what the page refreshes from, `/api/health` the probe,
+  `GET /api/schema` the OpenAPI document of these routes (the manifest's
+  `api_schema_path`, built by `system/libs/app_schema`), and
   `POST /api/window-closed` (the manifest's `window_closed_path`) where the shell
   posts a closed window of the terminal so the window sweep below runs at once.
   It appends the `server_registered` discovery event to
@@ -44,7 +51,8 @@ like every Python app with a manifest):
   body tag; then it registers its manifest and port, and execs
   `ttyd -p 7683 -a -t disableLeaveAlert=true [-I index.html] -W bash -c <dispatch>`.
   The script feeds the wrapper's strip keys to xterm (`window.term`, which the
-  patched client exposes) with the sequences xterm sends for them, applies an armed
+  patched client exposes) with the sequences xterm sends for them, sets the wrapper's
+  `terminal:theme` palette on xterm once `window.term` exists (null puts xterm's own colors back), applies an armed
   Ctrl to the next typed key by wrapping xterm's internal `triggerDataEvent`, and
   focuses xterm when the terminal is tapped (iOS raises the soft keyboard only for a
   focus made in a tap on the focused frame itself).
@@ -139,4 +147,5 @@ the real source and tmux client over a fake `tmux` on `PATH`
 (`testing.py`); `test_terminal_app.py` runs `terminal-app` and `terminal-pty`
 as processes, the latter around a fake `ttyd`; `test_phone_keys.py` (marked
 `browser`) drives the wrapper page's key strip in Chromium against a recording
-frame, a stub `window.term`, and the real patched ttyd client with the script added.
+frame, a stub `window.term`, and the real patched ttyd client with the script added;
+`test_terminal_theme.py` (also `browser`) checks that a theme the shell sends reaches xterm as its palette.

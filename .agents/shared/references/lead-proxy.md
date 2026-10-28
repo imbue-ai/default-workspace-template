@@ -47,9 +47,10 @@ liveness" below.
 Once the poll is armed, **end your turn**: its message wakes you with the
 report in seconds, while a `sleep N` is a guess at someone else's finishing time
 and every second between the report landing and the sleep expiring is dead time
-on the critical path. Ending your turn is safe -- a worker with a live
-sub-worker of its own never counts as idle, so the liveness check below will not
-mistake you for a wedged one.
+on the critical path. Ending your turn is safe -- while the poll runs, your
+chat is busy (the chat shows it waiting on a background task, not done), and a
+worker that is busy, or has a live sub-worker of its own, never counts as idle,
+so the liveness check below will not mistake you for a wedged one.
 
 **A worker's report is never polled.** Sleeping on a `find` over its reports
 directory, on `mngr list`, or on `tmux capture-pane` against its pane is the
@@ -59,12 +60,6 @@ only sanctioned wait on a sibling.
 With several workers out, arm one poll per worker before ending the turn. Each
 poll's message wakes you separately, so you act on whichever reports first and
 merge it while the others are still running.
-
-Your own backgrounded commands are the one exception. Nothing else holds your
-turn open there, so a worker that ends its turn waiting on its own command is
-declared wedged after three idle polls -- about fifteen seconds. Wait on those
-with `sleep 60`, repeated until the output lands: it stays clear of that
-threshold and bounds the overshoot.
 
 `await` also returns **milestone** reports: any file under
 `<REPORTS_DIR>/milestones/` with no same-named entry in `<REPORTS_DIR>/consumed/`.
@@ -99,18 +94,31 @@ tmux capture-pane -t minds-<WORKER_NAME>:claude -p -S -100 | tail -40
 
 If the output shows ongoing tool use, an active spinner / "Running…" line,
 or recent timestamps within the last few minutes, the worker is alive --
-re-arm the poll with a longer timeout (e.g. `60m`) and continue. Only
-invoke the failure flow (`.agents/skills/launch-task/references/worker-failure.md`)
-if the session is dead, the agent is wedged on the same operation for an
+re-arm the poll with a longer timeout (e.g. `60m`) and continue. A session
+that is dead is a crash: recover the worker
+(`.agents/skills/launch-task/references/dead-worker-recovery.md`) and re-arm
+the poll. Only invoke the failure flow
+(`.agents/skills/launch-task/references/worker-failure.md`) if that recovery
+does not bring it back, the agent is wedged on the same operation for an
 extended period, or output has been static.
 
 `await` makes the same call for you in the clearest case: exit code **76** means
-it watched the worker's agent end its turn on several consecutive polls with no
-report -- finished or wedged without reporting, worth surfacing immediately
-rather than waiting out the timeout. That check never fires while the worker has
-a live sub-worker of its own: an agent labelled `lead_agent=<worker>` in state
-RUNNING or WAITING with no pending shed counts as the worker being busy, so an
-intermediate lead waiting on its own child is never mistaken for a dead one.
+it watched the worker's agent end its turn (or stop) on several consecutive
+polls with no report and no longer busy -- finished, dead or wedged without
+reporting, worth acting on immediately rather than waiting out the timeout, by
+the diagnosis above: a dead worker is recovered before anything is surfaced.
+That check never fires while the worker is waiting on something that will wake
+it:
+
+- **A live sub-worker of its own.** An agent labelled `lead_agent=<worker>` in
+  state RUNNING or WAITING with no pending shed counts as the worker being
+  busy, so an intermediate lead waiting on its own child is never mistaken for
+  a dead one.
+- **A background command of its own.** A command the worker started through
+  `run_in_background.py`, or a background task of Claude's own, marks the
+  worker's chat busy until its report reaches the worker, so a worker that
+  ended its turn to wait on its tests is not idle. A worker needs no `sleep` to
+  stay clear of the check.
 
 ## Do not interrupt more recent user work
 
@@ -218,25 +226,28 @@ are still coming.
 
 ```bash
 git revert -m 1 <provisional-merge-commit>
+git rev-parse HEAD
 ```
 
 A revert is a **rejection of that milestone**: message the worker with why, as a
 de facto "no with notes" (the merge commit's subject names the worker and
-milestone, so the target is easy to find).
+milestone, so the target is easy to find), and hand it the revert, the commit
+the second command printed:
 
 ```bash
 uv run .agents/skills/launch-task/scripts/create_worker.py reply \
-    --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice>"
+    --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice> I reverted it as <the revert commit>: bring it back on your branch per 'A milestone the lead reverted' in worker-reporting.md, then fix it."
 ```
 
-The reverted commits remain ancestors of HEAD, so any later merge from that
-branch -- `done` included -- would **silently omit** them. First reinstate:
+The reverted commits remain ancestors of your `HEAD`, so a later merge from
+that branch would **silently omit** them. The worker brings them back on its
+own branch, as a revert of your revert, so they reach yours again only with
+its next merged report, fixed. Never reinstate them on your branch yourself:
+that puts the work the user rejected back in front of them.
 
-```bash
-git revert <revert-commit>
-```
-
-or supersede the pass per `.agents/shared/references/harden-contention.md`.
+A pass is superseded instead only once its worker is gone, and its new task
+then names the revert (`.agents/shared/references/harden-contention.md`,
+"Superseding a pass whose worker is gone").
 
 ## Terminal status: act and stop polling
 
@@ -280,8 +291,9 @@ On `type: status`:
   On a conflict, recovery depends on the calling skill: if it defines
   a staleness rule (the harden flows do -- see
   `.agents/shared/references/harden-contention.md`), abort the merge and
-  follow that rule rather than hand-resolving; otherwise resolve the conflict
-  manually.
+  follow that rule -- the worker catches its branch up and resolves the
+  conflict there -- rather than resolving it yourself; otherwise resolve the
+  conflict manually.
 
 - `name: stuck`, or the 30m timeout tripped without a report arriving -- follow
   `.agents/skills/launch-task/references/worker-failure.md`: surface the report
@@ -291,7 +303,8 @@ On `type: status`:
   uv run .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
   ```
   Its branch, worktree, and transcript stay for inspection. A timeout is
-  the same once the liveness diagnosis says the worker is dead or wedged.
+  the same once the liveness diagnosis says the worker is wedged, or dead
+  with a recovery that did not bring it back.
 
 - `name: no-update-needed` (or other skill-specific benign no-op terminals) --
   the worker decided there was nothing to do. Close any tracking ticket and

@@ -10,7 +10,7 @@ parses; this resolver never reads it.
 
 Claude Code exposes no stable programmatic model list, so the catalog is
 maintained by hand to match the aliases ``claude --model`` accepts. Read out of the
-pinned 2.1.293 binary, the full alias set is ``sonnet``, ``opus``, ``haiku``, ``fable``,
+pinned 2.1.307 binary, the full alias set is ``sonnet``, ``opus``, ``haiku``, ``fable``,
 ``best``, ``sonnet[1m]``, ``opus[1m]``, ``fable[1m]``, ``opusplan``; the catalog offers
 four of them, leaving ``best``, ``opusplan`` and the redundant bare variants out on
 purpose (``best`` and ``opusplan`` name a policy rather than a model, so neither can carry
@@ -27,7 +27,7 @@ of the model, and this is a property of the harness. Haiku has no ``[1m]`` varia
 
 The switch alias and the reported id are different strings, and the suffix shows up in
 both: an agent launched as ``opus[1m]`` reports ``claude-opus-5-5[1m]``. Fast mode is an
-Opus-only capability (in 2.1.293 the ``fast_mode`` capability is carried by Opus 5.5, Opus 5
+Opus-only capability (in 2.1.307 the ``fast_mode`` capability is carried by Opus 5.5, Opus 5
 and Opus 4.8, and by nothing else) -- notably NOT a property of the most capable model, so
 do not infer it from rank.
 
@@ -128,12 +128,12 @@ _OFFERED_MODELS: tuple[ModelOption, ...] = (
 
 # Everything the four offered models do NOT match, so the catalog is complete against
 # what the harness can report: Mythos (approved orgs only) and every previous-generation
-# model 2.1.293 still carries. These are not offered, but they are not decoration either
+# model 2.1.307 still carries. These are not offered, but they are not decoration either
 # -- they exist so the catalog describes the whole model surface, and each one should say
 # what its model actually does.
 #
 # supports_fast therefore follows the binary rather than being set permissively. In
-# 2.1.293's baked-in model catalog the fast_mode capability is carried by Opus 5.5, Opus 5
+# 2.1.307's baked-in model catalog the fast_mode capability is carried by Opus 5.5, Opus 5
 # and Opus 4.8 and by nothing else, so of the hidden entries only Opus 5 and Opus 4.8
 # declare it -- 4.7 and 4.6 had fast removed, which is also why their legacy
 # claude-opus-4-*-fast ids are dead and cannot arrive with fast on. The field is not

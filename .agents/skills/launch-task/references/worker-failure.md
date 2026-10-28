@@ -8,6 +8,10 @@ is not where worker bugs get fixed.
 
 ## What counts as a failure
 
+A worker that crashed (`STOPPED` with no `archived_at` label, or an empty one)
+is recovered first, per `dead-worker-recovery.md`. Its crash counts as a
+failure below only once that recovery has not brought it back.
+
 - Worker state is `STOPPED` without reaching a normal completion.
 - Worker state is `DONE` but its final message says it gave up, could not
   diagnose, or could not produce a result.
@@ -18,9 +22,11 @@ is not where worker bugs get fixed.
 - The worker's delivered report -- at its `finish_report_path`, e.g.
   `data/.tasks/harden/<slug>/reports/report.md` for a harden worker -- has
   frontmatter `type: status, name: stuck`, or the 30m poll timeout tripped
-  without any report arriving. The first case is the worker explicitly giving
-  up (the report body names a reason); the second means the worker
-  died without following its contract.
+  without any report arriving and the liveness diagnosis
+  (`.agents/shared/references/lead-proxy.md`) finds the worker wedged, or
+  dead with a recovery that did not bring it back. The first case is the
+  worker explicitly giving up (the report body names a reason); the second
+  means it stopped without following its contract.
 
 ## What to do
 

@@ -51,7 +51,7 @@ const BTN_BASE =
   `${TEXT_BODY_SIZE} leading-none whitespace-nowrap border ` +
   "transition-[color,background-color,border-color] duration-(--dur-base) ease-[ease] " +
   "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent " +
-  "disabled:opacity-50 disabled:cursor-not-allowed " +
+  "disabled:opacity-40 disabled:cursor-not-allowed " +
   "not-disabled:not-aria-disabled:active:translate-y-px";
 
 // Cursor and the aria-disabled treatment, resolved in the builder: an
@@ -60,7 +60,7 @@ const BTN_BASE =
 // deliberately and explained by a tooltip, not a fault to grey out. The
 // variants' hover tints are guarded off aria-disabled below, so marking the
 // element silences them at runtime either way.
-const BTN_INTERACTIVE = "cursor-pointer aria-disabled:opacity-50 aria-disabled:cursor-not-allowed";
+const BTN_INTERACTIVE = "cursor-pointer aria-disabled:opacity-40 aria-disabled:cursor-not-allowed";
 const BTN_READONLY = "cursor-default";
 
 const BTN_VARIANTS: Record<ButtonVariant, string> = {
@@ -137,6 +137,15 @@ export function buttonClass(variant: ButtonVariant = "secondary", options: Butto
   return parts.join(" ");
 }
 
+/** The contract part a button is (docs/system/blueprint/workspace-themes/, section 4.2), for an element that
+ *  takes `buttonClass()` without being a `Button`. */
+export function buttonPartAttrs(
+  variant: ButtonVariant,
+  isIcon: boolean,
+): { readonly "data-part": "button"; readonly "data-variant": ButtonVariant; readonly "data-shape": "icon" | "text" } {
+  return { "data-part": "button", "data-variant": variant, "data-shape": isIcon ? "icon" : "text" };
+}
+
 interface ButtonAttrs extends m.Attributes, ButtonOptions {
   variant?: ButtonVariant;
 }
@@ -155,6 +164,7 @@ export function Button(): m.Component<ButtonAttrs> {
         {
           type: "button",
           class: buttonClass(variant, { sm, xs, icon, round, selected, readonly, quiet, block, extra }),
+          ...buttonPartAttrs(variant, icon === true),
           ...(readonly === true ? { "aria-disabled": "true" } : null),
           ...splitAttrs(vnode.attrs, OWN_KEYS),
         },

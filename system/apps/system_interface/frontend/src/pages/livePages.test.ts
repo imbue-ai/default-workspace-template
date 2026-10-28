@@ -23,9 +23,11 @@ import {
   SHELL_OPEN_LINK,
   SHELL_REPORT_BUG,
   SHELL_SHOWN,
+  SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
+import { resetThemeClientForTests, wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
 import type { Placement } from "../model/records";
 import { activeFocusedWindowId, activePlacements } from "../reducers/desktopState";
 import { DesktopStore } from "../store/DesktopStore";
@@ -183,6 +185,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   resetEmbedderRelayForTesting();
+  resetThemeClientForTests();
   backdrop.remove();
 });
 
@@ -338,6 +341,36 @@ describe("creating and positioning", () => {
 });
 
 describe("the contract", () => {
+  it("tells every greeted page a theme the shell wears, from the newest layer only", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    spy.mockClear();
+    void wearTheme({ id: "mac-classic", revision: "r1" });
+    expect(spy.mock.calls.map((call) => call[0])).toEqual([
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: false },
+    ]);
+
+    spy.mockClear();
+    new LivePagesLayer(document.createElement("div"), store, { host: "127.0.0.1:8000", protocol: "http:" }).start();
+    void wearTheme({ id: "windows-2000", revision: "r2" });
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("tells the pages a previewed theme is a preview, on a change and in the greeting, and when it is saved", () => {
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    spy.mockClear();
+    void wearTheme({ id: "mac-classic", revision: "r1" }, document, { isRemembered: false });
+    load("win-1");
+    void wearTheme({ id: "mac-classic", revision: "r1" });
+    const themeMessages = spy.mock.calls.map((call) => call[0]).filter((message) => message.type === SHELL_THEME);
+    expect(themeMessages).toEqual([
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: true },
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: true },
+      { type: SHELL_THEME, theme: "mac-classic", revision: "r1", isPreview: false },
+    ]);
+  });
+
   it("greets a page after every load with the window, desktop, and path, then says shown", () => {
     const spy = spyOnFrame("win-1");
     load("win-1");
@@ -350,7 +383,10 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         canReportBug: false,
+        opensLocalFiles: false,
       },
+      // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
+      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
       { type: SHELL_SHOWN },
     ]);
     store.minimizeWindow("win-1");
@@ -367,7 +403,9 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         canReportBug: false,
+        opensLocalFiles: false,
       },
+      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
       { type: SHELL_HIDDEN },
     ]);
   });
@@ -387,7 +425,9 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         canReportBug: false,
+        opensLocalFiles: false,
       },
+      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
       { type: SHELL_SHOWN },
     ]);
   });
@@ -407,12 +447,14 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         canReportBug: true,
+        opensLocalFiles: false,
       },
+      { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
     ]);
     store.setCanReportBug(true);
-    expect(spy).toHaveBeenCalledTimes(1);
+    expect(spy).toHaveBeenCalledTimes(2);
     store.setCanReportBug(false);
-    expect(spy.mock.calls[1][0]).toMatchObject({ type: SHELL_HANDSHAKE, windowId: "win-1", canReportBug: false });
+    expect(spy.mock.calls[2][0]).toMatchObject({ type: SHELL_HANDSHAKE, windowId: "win-1", canReportBug: false });
   });
 
   it("greets a page that loads after the embedder spoke with its word on Report a bug, and none before it loads", () => {
@@ -429,6 +471,13 @@ describe("the contract", () => {
     store.setCanReportBug(true);
     messageFromPage("win-1", { type: SHELL_REPORT_BUG });
     expect(bugReportsOpened).toBe(1);
+  });
+
+  it("tells a page in its handshake whether the embedder opens its settings for the files shared from the computer", () => {
+    store.setOpensLocalFiles(true);
+    const spy = spyOnFrame("win-1");
+    load("win-1");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, opensLocalFiles: true });
   });
 
   it("greets a page reloaded while hidden with its own desktop, not the active one", async () => {

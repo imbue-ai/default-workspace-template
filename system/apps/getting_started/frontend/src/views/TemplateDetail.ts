@@ -60,7 +60,7 @@ export function adoptTemplateMessage(template: CatalogTemplate): string {
 export function createMachineFromTemplateMessage(template: CatalogTemplate): string {
   return (
     `Please create a new Imbue Studio workspace for me from the template at ${template.repository_url} ` +
-    "(the minds-api skill can create one). Walk me through anything it needs from me, like permissions " +
+    "(the imbue-studio skill can create one). Walk me through anything it needs from me, like permissions " +
     "or accounts, and tell me when it is ready."
   );
 }

@@ -5,7 +5,10 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const providers = vi.hoisted(() => ({ loadAccounts: vi.fn(async () => undefined) }));
+
 vi.mock("mithril", () => ({ default: { redraw: vi.fn(), request: vi.fn() } }));
+vi.mock("./Providers", () => ({ loadAccounts: providers.loadAccounts }));
 vi.mock("@imbue/workspace-ui/src/base-path", () => ({
   apiUrl: (path: string) => path,
   wsUrl: (path: string) => `ws://test${path}`,
@@ -48,7 +51,16 @@ function open(): void {
 const chat = chatSnapshotFixture;
 
 function proto(chatId: string, phase: ProvisionalChat["phase"], error: string | null = null): ProvisionalChat {
-  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error, is_seeded: false };
+  return {
+    chat_id: chatId,
+    name: "Chat 1",
+    account_id: "acct-1",
+    phase,
+    error,
+    is_seeded: false,
+    held_sends: [],
+    model_pick: null,
+  };
 }
 
 /** Whether a promise has settled yet, without waiting on it: the hold must be observable. A
@@ -115,6 +127,15 @@ describe("the provisional chats over the socket", () => {
       chats: [chat("agent-1", { active_agent: { agent_id: "agent-2" } }), chat("agent-9")],
     });
     expect(changes).toHaveLength(1);
+  });
+
+  it("takes the main chat from the list, even when only the main chat changed", () => {
+    push({ type: "chats_updated", chats: [chat("agent-1"), chat("agent-2")], main_chat_id: "agent-1" });
+    expect(manager.getMainChatId()).toBe("agent-1");
+
+    push({ type: "chats_updated", chats: [chat("agent-1"), chat("agent-2")], main_chat_id: "agent-2" });
+
+    expect(manager.getMainChatId()).toBe("agent-2");
   });
 
   it("resolves at once for a chat the app already lists", async () => {
@@ -226,5 +247,38 @@ describe("the provisional chats over the socket", () => {
 
     await expect(registered).rejects.toThrow("the real reason");
     expect(manager.getProvisionalChat("agent-1")?.phase).toBe("failed");
+  });
+});
+
+describe("the account list over the socket", () => {
+  let manager: ChatsModule;
+
+  beforeEach(async () => {
+    vi.resetModules();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    providers.loadAccounts.mockClear();
+    manager = await import("./Chats");
+    manager.initChats();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    FakeSocket.latest = null;
+  });
+
+  it("reads the account list again when the app says it changed", () => {
+    open();
+    expect(providers.loadAccounts).not.toHaveBeenCalled();
+
+    push({ type: "accounts_updated" });
+
+    expect(providers.loadAccounts).toHaveBeenCalledOnce();
+  });
+
+  it("reads the account list again on a reconnect, since a change while it was down reached no one", () => {
+    open();
+    open();
+
+    expect(providers.loadAccounts).toHaveBeenCalledOnce();
   });
 });

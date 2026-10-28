@@ -2,6 +2,16 @@
 import m from "mithril";
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("../models/Providers", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/Providers")>()),
+  accountForAgent: (id: string | undefined) => (id === undefined ? null : (accounts.get(id) ?? null)),
+  accountForFirstSend: (id: string | undefined) => (id === undefined ? null : (accounts.get(id) ?? null)),
+}));
+vi.mock("../models/ModelSettings", () => ({
+  effectiveChoice: (_chatId: string, live: { matched: { label: string } | null } | null) =>
+    live === null ? null : { matched: live.matched },
+}));
+
 vi.mock("../models/Chats", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Chats")>()),
   getChatById: (id: string) => chats.get(id),
@@ -11,9 +21,11 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 import type { ChatSnapshot, ProvisionalChat, ProvisionalChatPhase } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
 import { addOutgoing } from "../models/OutgoingMessages";
-import { ConnectingIndicator, isChatConnecting } from "./ConnectingIndicator";
+import { ActivityIndicator } from "./ActivityIndicator";
+import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
 
 const chats = new Map<string, ChatSnapshot>();
+const accounts = new Map<string, { provider: string }>([["acct-1", { provider: "Anthropic" }]]);
 const provisionalChats = new Map<string, ProvisionalChat>();
 
 function uniqueChatId(): string {
@@ -21,24 +33,37 @@ function uniqueChatId(): string {
 }
 
 function provisionalChat(chatId: string, phase: ProvisionalChatPhase): ProvisionalChat {
-  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error: null, is_seeded: false };
+  return {
+    chat_id: chatId,
+    name: "Chat 1",
+    account_id: "acct-1",
+    phase,
+    error: null,
+    is_seeded: false,
+    held_sends: [],
+    model_pick: null,
+  };
 }
 
-function renderIndicator(chatId: string): HTMLElement {
+// The status row at the end of the transcript, as it reads for a chat with nothing in its transcript yet.
+function renderStatusRow(chatId: string): HTMLElement {
   const root = document.createElement("div");
-  m.render(root, m(ConnectingIndicator, { chatId }));
+  m.render(root, m(ActivityIndicator, { chatId, events: [] }));
   return root;
 }
 
-describe("the Connecting indicator beside the model bar", () => {
+const CONNECTING_ROW = '.agent-activity-indicator[data-state="CONNECTING"]';
+
+describe("Connecting, on the status row at the end of the transcript", () => {
   it("shows a pulsing warning dot and 'Connecting…' while the backend reports a send waiting on the agent", () => {
     const chatId = uniqueChatId();
     chats.set(chatId, chatSnapshotFixture(chatId, { active_agent: { is_connecting: true } }));
 
-    const root = renderIndicator(chatId);
+    const root = renderStatusRow(chatId);
 
-    expect(root.querySelector(".connecting-indicator__label")?.textContent).toBe("Connecting…");
-    const dotClass = root.querySelector(".connecting-indicator__dot")?.getAttribute("class") ?? "";
+    expect(root.querySelector(`${CONNECTING_ROW} .agent-activity-indicator__label`)?.textContent).toBe("Connecting…");
+    const dotClass =
+      root.querySelector(`${CONNECTING_ROW} .agent-activity-indicator__dot`)?.getAttribute("class") ?? "";
     expect(dotClass).toContain("bg-warning");
     expect(dotClass).toContain("agent-activity-pulse");
   });
@@ -48,7 +73,7 @@ describe("the Connecting indicator beside the model bar", () => {
     chats.set(chatId, chatSnapshotFixture(chatId, { active_agent: { is_connecting: false } }));
 
     expect(isChatConnecting(chatId)).toBe(false);
-    expect(renderIndicator(chatId).querySelector(".connecting-indicator")).toBeNull();
+    expect(renderStatusRow(chatId).querySelector(CONNECTING_ROW)).toBeNull();
   });
 
   it("leaves a switching chat to the handoff's own progress text", () => {
@@ -69,7 +94,9 @@ describe("the Connecting indicator beside the model bar", () => {
     addOutgoing(chatId, "hello");
 
     expect(isChatConnecting(chatId)).toBe(true);
-    expect(renderIndicator(chatId).querySelector(".connecting-indicator__label")?.textContent).toBe("Connecting…");
+    expect(
+      renderStatusRow(chatId).querySelector(`${CONNECTING_ROW} .agent-activity-indicator__label`)?.textContent,
+    ).toBe("Connecting to Anthropic…");
   });
 
   it("does not read a chat that has not started creating, or whose create failed, as connecting", () => {
@@ -83,5 +110,34 @@ describe("the Connecting indicator beside the model bar", () => {
     expect(isChatConnecting(awaiting)).toBe(false);
     expect(isChatConnecting(failed)).toBe(false);
     expect(isChatConnecting(uniqueChatId())).toBe(false);
+  });
+
+  it("names the model and the provider the message waits for, as far as the chat knows them", () => {
+    const chatId = uniqueChatId();
+    chats.set(
+      chatId,
+      chatSnapshotFixture(chatId, {
+        active_agent: {
+          is_connecting: true,
+          account_id: "acct-1",
+          model_choice: { matched: { label: "Opus 5.5" } } as never,
+        },
+      }),
+    );
+    expect(connectingLabel(chatId)).toBe("Connecting to Opus 5.5 on Anthropic…");
+
+    const starting = uniqueChatId();
+    provisionalChats.set(starting, { ...provisionalChat(starting, "creating"), held_sends: [] });
+    expect(connectingLabel(starting)).toBe("Connecting to Anthropic…");
+  });
+
+  it("reads a chat still being created that holds a message from another page as connecting", () => {
+    const chatId = uniqueChatId();
+    provisionalChats.set(chatId, {
+      ...provisionalChat(chatId, "creating"),
+      held_sends: [{ message_id: "m-1", text: "hello" }],
+    });
+
+    expect(isChatConnecting(chatId)).toBe(true);
   });
 });

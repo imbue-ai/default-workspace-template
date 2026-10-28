@@ -31,8 +31,9 @@ sys.path.insert(
 
 from tk_command_parsing.parser import CommandSegment, parse_command
 
-# The wrapper's trigger: a pipe (`|` or `|&`, not `||`) into head or tail.
-_PIPE_INTO_TRUNCATOR = re.compile(r"(?<!\|)\|&?\s*(tail|head)(\s|$)")
+# The wrapper's trigger: a pipe (`|` or `|&`, not `||`) into head or tail, possibly across a
+# line continuation.
+_PIPE_INTO_TRUNCATOR = re.compile(r"(?<!\|)\|&?[\s\\]*(tail|head)(\s|$)")
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_]\w*=")
 _LEADING_KEYWORDS = frozenset(
     {"do", "then", "else", "if", "while", "until", "time", "!"}

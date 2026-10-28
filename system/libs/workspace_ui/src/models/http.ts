@@ -43,21 +43,34 @@ export async function fetchOrNotAnswered(url: string, init: RequestInit, request
   }
 }
 
-/** GET ``url`` and answer the parsed JSON reply, throwing an ``HttpError`` on a refusal or no answer. */
-export async function getJson<T>(url: string): Promise<T> {
-  const response = await fetchOrNotAnswered(url, {}, "read");
-  if (!response.ok) throw await readResponseFailure(response, "read");
+/**
+ * A JSON API call: the method, a JSON body when one is given, and the parsed JSON reply (nothing for a 204),
+ * throwing an ``HttpError`` on a refusal or no answer. A GET is a read, any other method a change. Never served from
+ * the browser's cache: an API answer is read for what the server says now.
+ */
+export async function requestJson<T>(method: string, url: string, body?: unknown): Promise<T> {
+  const requestKind: RequestKind = method === "GET" ? "read" : "change";
+  const response = await fetchOrNotAnswered(
+    url,
+    {
+      method,
+      headers: body === undefined ? undefined : { "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      cache: "no-store",
+    },
+    requestKind,
+  );
+  if (!response.ok) throw await readResponseFailure(response, requestKind);
+  if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
 }
 
+/** GET ``url`` and answer the parsed JSON reply, throwing an ``HttpError`` on a refusal or no answer. */
+export function getJson<T>(url: string): Promise<T> {
+  return requestJson<T>("GET", url);
+}
+
 /** POST a JSON body and answer the parsed JSON reply, throwing an ``HttpError`` on a refusal or no answer. */
-export async function postJson<T>(url: string, body: unknown): Promise<T> {
-  const response = await fetchOrNotAnswered(
-    url,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) },
-    "change",
-  );
-  if (!response.ok) throw await readResponseFailure(response, "change");
-  if (response.status === 204) return undefined as T;
-  return (await response.json()) as T;
+export function postJson<T>(url: string, body: unknown): Promise<T> {
+  return requestJson<T>("POST", url, body);
 }
