@@ -688,7 +688,7 @@ function appendEventParts(
         ]),
       );
     } else {
-      // The agent speaking: one bubble per paragraph, the run's first group headed by its face and name.
+      // The agent speaking: the reply as one bubble, the run's first group headed by its face and name.
       const bubbles = machineBubbles({
         text: textContent,
         timestamp: event.timestamp,

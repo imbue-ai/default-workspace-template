@@ -962,7 +962,7 @@ participant key, and `GET /api/participants` relays the shell's roster
 workspace agent's picture rewritten to `GET /api/participants/workspace-agent/picture`,
 which the chat app proxies from the shell so the page needs no second origin.
 The agent's prose is drawn as bubbles under that picture and the workspace's name,
-one per paragraph.
+one per reply (tool chips and cards sit between them, outside the bubbles).
 
 ## Rooms and mentions
 
