@@ -111,31 +111,28 @@ function colorSample(color: ColorToken): m.Vnode {
       {
         ...sample,
         // Text meant for a colored surface ("on-accent") is shown on one.
-        class: `flex h-6 w-16 items-center justify-center rounded-md border border-subtle type-helper font-semibold ${
-          color.name.startsWith("on-") ? "bg-accent" : "bg-page"
+        class: `flex h-6 w-12 items-center justify-center rounded-md type-label ${
+          color.name.startsWith("on-") ? "bg-accent" : ""
         }`,
       },
       m("span", { style: { color: paint } }, "Aa"),
     );
   }
-  if (color.role === "border") {
-    return m("div", { ...sample, class: "h-6 w-16 rounded-md border-2 bg-surface", style: { borderColor: paint } });
-  }
-  // The strong edge, so a fill the same as the page (a theme's surfaces often are) still shows as a box.
-  return m("div", { ...sample, class: "h-6 w-16 rounded-md border border-strong", style: { backgroundColor: paint } });
+  // A border color is shown as a chip of that color: an outline would itself be a border.
+  return m("div", { ...sample, class: "h-6 w-12 rounded-md", style: { backgroundColor: paint } });
 }
 
-/** One row of the color table: the utility and its value variable, the value the page wears, and the sample. */
+/** One row of the color table: the sample, the utility and its value variable, and the value the page wears. */
 function colorRow(color: ColorToken): m.Vnode {
   return m("tr", { id: `color-${color.name}`, class: "color-swatch border-t border-subtle" }, [
+    m("td", { class: "py-1 pr-4 align-middle" }, colorSample(color)),
     m("td", { class: "py-1 pr-6 align-middle whitespace-nowrap" }, [
       m("code", { class: "font-mono type-helper text-primary select-all" }, color.utility ?? `--${color.variable}`),
       color.utility === null
         ? null
         : m("code", { class: "ml-2 font-mono type-helper text-faint select-all" }, `--${color.variable}`),
     ]),
-    m("td", { class: "w-full py-1 pr-4 align-middle" }, inlineValue(color.variable, color.value)),
-    m("td", { class: "py-1 align-middle" }, colorSample(color)),
+    m("td", { class: "w-full py-1 align-middle" }, inlineValue(color.variable, color.value)),
   ]);
 }
 
@@ -183,9 +180,9 @@ function colorsSection(tokens: DesignTokens): CatalogSection {
         m(
           "thead",
           m("tr", [
-            m("th", { class: "pb-1 pr-4 type-section text-faint font-normal" }, "Name"),
-            m("th", { class: "pb-1 pr-4 type-section text-faint font-normal" }, "Value"),
-            m("th", { class: "pb-1 type-section text-faint font-normal" }, "Swatch"),
+            m("th", { class: "pb-1 pr-4 type-section text-faint font-normal" }, "Swatch"),
+            m("th", { class: "pb-1 pr-6 type-section text-faint font-normal" }, "Name"),
+            m("th", { class: "pb-1 type-section text-faint font-normal" }, "Value"),
           ]),
         ),
         tokens.colorGroups.map((group) =>

@@ -5,8 +5,8 @@ library every frontend draws with (`system/libs/workspace_ui`). It is the
 workspace's counterpart of Imbue Studio's own styleguide page: a sticky
 contents list beside the catalog, in three groups.
 
-- **Foundations**: every color token, in one table of name (its utility and
-  `--c-*` value), value and swatch, grouped as `base.css` groups them; the type
+- **Foundations**: every color token, in one table of swatch, name (its utility
+  and `--c-*` value) and value, grouped as `base.css` groups them; the type
   roles and font stacks, spacing, corner radius, elevation, motion, the
   stacking layers and widths, and the whole icon set.
 - **Components**: the Button in every variant, size and state, the text

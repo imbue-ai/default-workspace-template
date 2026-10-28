@@ -8,4 +8,4 @@ The contents column is wider and scrolls with a thin bar in a gutter of its own,
 
 The app stays off the desktop (`desktop_shortcut = false`): it is in the launcher, and a shortcut of it can be added by hand.
 
-The colors are one compact table, a row per color: its name (the utility and its `--c-*` value), the value the page wears, and a swatch with a strong edge so a fill the same as the page still shows. The page says "color" throughout.
+The colors are one compact table, a row per color: a swatch with no frame (a text color as "Aa" in it, any other as a chip of it), its name (the utility and its `--c-*` value), and the value the page wears. The page says "color" throughout.
