@@ -568,6 +568,10 @@ class RunStatus:
       the update is in place while the run finishes its own checks, which the
       app says instead of "preparing". Cleared by the next run's ``start``.
 
+    ``chat_id`` is the lead's chat id (``MINDS_CHAT_ID``, else ``MNGR_AGENT_ID``),
+    which finds the lead once a rename has left ``chat_agent_name`` stale; ``""``
+    when the start could not read it.
+
     ``started_by`` is how the run was started (``STARTED_BY_VALUES``), or
     ``None`` when nothing recorded it, and is then left out of the file.
     ``stopped_agents`` is what ``run-status stop-chats`` paused, for
@@ -578,6 +582,7 @@ class RunStatus:
     chat_agent_name: str
     started_at: float
     updated_at: float
+    chat_id: str = ""
     worker_agent_name: str | None = None
     is_holding: bool = False
     hold_detail: str = ""
@@ -596,6 +601,7 @@ class RunStatus:
     def to_json(self) -> str:
         payload: dict[str, object] = {
             "chat_agent_name": self.chat_agent_name,
+            "chat_id": self.chat_id,
             "started_at": self.started_at,
             "updated_at": self.updated_at,
             "worker_agent_name": self.worker_agent_name,
@@ -642,6 +648,7 @@ class RunStatus:
             chat_agent_name=str(raw.get("chat_agent_name", "")),
             started_at=float(raw.get("started_at", 0.0)),
             updated_at=float(raw.get("updated_at", 0.0)),
+            chat_id=str(raw.get("chat_id") or ""),
             worker_agent_name=str(worker_agent_name)
             if worker_agent_name is not None
             else None,

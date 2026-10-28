@@ -787,6 +787,7 @@ def _cmd_run_status_start(args: argparse.Namespace) -> int:
             chat_agent_name=chat_agent_name,
             started_at=now(),
             updated_at=0.0,
+            chat_id=lead.chat_id,
             started_by=args.started_by
             or dispatched_started_by(repo_root, chat_agent_name, lead.chat_id),
             stopped_agents=still_paused,

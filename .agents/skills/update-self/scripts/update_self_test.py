@@ -7954,14 +7954,25 @@ def test_recovering_an_interrupted_update_records_the_release_it_rolled_back(
 def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
     # The whole app-facing contract: `start` records who is running, `verdict`
     # lands the outcome on the same record, and the run's start survives the
-    # verdict write (the app tells runs apart by their start).
+    # verdict write (the app tells runs apart by their start). The chat id rides
+    # along so a renamed chat is still found as the run's lead.
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-abc123")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-lead")
+    monkeypatch.setenv("MINDS_CHAT_ID", "agent-chat")
     assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
     status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.chat_agent_name == "update-abc123"
+    assert status.chat_id == "agent-chat"
     assert status.verdict is None
     started_at = status.started_at
+
+    assert (
+        update_self.main(
+            ["run-status", "delegate", "update-self", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
 
     assert (
         update_self.main(
@@ -7986,6 +7997,7 @@ def test_run_status_start_and_verdict_round_trip(tmp_path, monkeypatch) -> None:
     assert status.detail == "Landed; one rebuild item left."
     assert status.verdict_at is not None
     assert status.started_at == started_at
+    assert status.chat_id == "agent-chat"
 
 
 def test_run_status_start_supersedes_the_previous_runs_verdict(
