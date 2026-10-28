@@ -2218,7 +2218,9 @@ class AgentManager:
         """Whether the agent's harness queue holds ``text``."""
         with self._lock:
             agent = self._agents.get(agent_id)
-            return agent is not None and any(queued.content.strip() == text.strip() for queued in agent.queued_messages)
+            return agent is not None and any(
+                queued.content.strip() == text.strip() for queued in agent.queued_messages
+            )
 
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
         """Record one chat page's presence report: re-tags the chats, and marks the chat read in the Imbue
