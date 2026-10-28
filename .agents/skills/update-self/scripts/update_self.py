@@ -850,6 +850,7 @@ def _run_status_for_recorder(
             chat_agent_name=recorder,
             started_at=now(),
             updated_at=0.0,
+            chat_id=lead_chat_id,
         )
     return status
 

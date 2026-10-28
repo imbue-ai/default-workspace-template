@@ -8057,6 +8057,7 @@ def test_run_status_verdict_is_recorded_under_the_agent_recording_it(
     status = update_apply_contract.read_run_status(tmp_path)
     assert status is not None
     assert status.chat_agent_name == "update-real"
+    assert status.chat_id == "agent-real"
     assert status.verdict == "UPDATED"
     assert "records update-aborted, not update-real" in capsys.readouterr().err
 
