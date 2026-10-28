@@ -1435,13 +1435,11 @@ describe("pinned entries", () => {
 
   it("writes one field of the presentation over the entry's current look", async () => {
     const store = await pinnedStore();
-    await store.setEntryStyle("buddy", "avatar");
-    expect(last(api.calls)).toBe("setEntryPresentation:client-1:buddy:floating:avatar:-");
     await store.setEntryMode("buddy", "bar");
-    expect(last(api.calls)).toBe("setEntryPresentation:client-1:buddy:bar:avatar:-");
+    expect(last(api.calls)).toBe("setEntryPresentation:client-1:buddy:bar:plain:-");
     expect(store.getState().entries.buddy).toEqual({
       mode: "bar",
-      style: "avatar",
+      style: "plain",
       position: null,
       is_window_shown: true,
     });

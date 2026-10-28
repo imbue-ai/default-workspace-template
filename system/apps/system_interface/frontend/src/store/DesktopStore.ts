@@ -68,7 +68,6 @@ import type {
   LaunchPath,
   Layout,
   MessageRelay,
-  PinStyle,
   Placement,
   PresentUser,
   RosterParticipant,
@@ -1820,11 +1819,6 @@ export class DesktopStore {
   setEntryMode(app: string, mode: EntryMode): Promise<void> {
     const current = this.presentationOf(app);
     return current === null ? Promise.resolve() : this.setEntryPresentation(app, { ...current, mode });
-  }
-
-  setEntryStyle(app: string, style: PinStyle): Promise<void> {
-    const current = this.presentationOf(app);
-    return current === null ? Promise.resolve() : this.setEntryPresentation(app, { ...current, style });
   }
 
   /** Where a floating entry's box is right now, in backdrop pixels: the drag's rectangle while one moves it,
