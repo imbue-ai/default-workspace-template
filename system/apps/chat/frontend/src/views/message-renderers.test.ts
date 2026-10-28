@@ -911,6 +911,16 @@ describe("the auth-error note's switch link", () => {
       expect(findButton(children, "Sign in again")).not.toBeNull();
       expect(allText(children)).not.toContain("Signed in again.");
     });
+
+    it("leaves a failure of an agent the chat switched away from as it was, offering no send", () => {
+      const predecessorFailure = { ...authErrorEvent(), agent_id: "agent-before-the-switch" };
+      transcript.events = [{ ...PROMPT, agent_id: "agent-before-the-switch" }, predecessorFailure];
+      const children = renderAssistantMessageChildren(predecessorFailure, new Map(), "chat-1");
+
+      expect(allText(children)).not.toContain("Signed in again.");
+      expect(findButton(children, "Send your message again")).toBeNull();
+      expect(findButton(children, "Sign in again")).not.toBeNull();
+    });
   });
 
   it("is not offered until the chat itself is known", () => {

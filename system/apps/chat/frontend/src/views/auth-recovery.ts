@@ -25,9 +25,16 @@ import { mintMessageId, sendMessage } from "../models/Response";
 import type { AssistantMessageEvent, TranscriptEvent, UserMessageEvent } from "../models/Response";
 import { classifyUserMessage, isTurnUserMessage } from "./message-classification";
 
-/** Whether the chat's account finished a sign-in after `event` failed on it. */
-export function isSignedInSince(event: Pick<AssistantMessageEvent, "timestamp">, chatId: string): boolean {
-  const account = accountForAgent(getChatById(chatId)?.active_agent.account_id ?? undefined);
+/** Whether the chat's account finished a sign-in after `event` failed on it. Only a failure of the
+ *  chat's current agent counts: one an earlier agent of the chat wrote failed on that agent's account,
+ *  and the message it refused went on with the switch. */
+export function isSignedInSince(
+  event: Pick<AssistantMessageEvent, "timestamp" | "agent_id">,
+  chatId: string,
+): boolean {
+  const activeAgent = getChatById(chatId)?.active_agent;
+  if (event.agent_id !== undefined && event.agent_id !== activeAgent?.agent_id) return false;
+  const account = accountForAgent(activeAgent?.account_id ?? undefined);
   if (account === null || account.signed_in_at === null) return false;
   return Date.parse(account.signed_in_at) > Date.parse(event.timestamp);
 }

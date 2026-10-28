@@ -45,7 +45,8 @@ observe`, its own supervised service) writes, and serves:
   offers "Choose a provider" in place of Retry. Each account carries when it
   last finished a sign-in (`signed_in_at`, kept in its own folder), so a turn
   that failed on the chat's sign-in before then reads "Signed in again." in
-  every open chat. While the chat app is sending the refused message again
+  every open chat (a turn of the chat's current agent only: an earlier agent's
+  failure was on that agent's account). While the chat app is sending the refused message again
   itself (its agent's snapshot reports `is_resending_after_sign_in`), the turn
   says so; otherwise it offers to send the message again while it is still the
   chat's newest turn, and after a resend that stopped partway, the messages it
