@@ -277,6 +277,7 @@ manifest it writes) and by every reader of the registry.
     app-manifest select-tests --diff-base REF [--diff-ref REF] [--repo-root DIR] [--format text|json]
     app-manifest select-tests --path P [--path P ...] [--diff-base REF] [--repo-root DIR] [--format text|json]
     app-manifest select-tests --scope-file FILE [--repo-root DIR] [--format text|json]
+    app-manifest select-tests --all [--repo-root DIR] [--format text|json]
 
 `select-tests` prints the commands that can observe a change, one per line, in
 the order to run them, each under a comment saying which changed paths called
@@ -288,7 +289,9 @@ against. With `--scope-file`, a harden pass's file from `pass-scope
 --diff-base REF --lead-ref REF`, the change is every file of its diff except
 `others`: what the pass's footprints account for and the pass's own changes,
 but not the other work that landed in the window. A changed `uv.lock`
-is then compared against the file's `lockfile_base`. Each `incoming` file also
+is then compared against the file's `lockfile_base`. With `--all` the change is
+every tracked file, so every suite runs: the frontend checks, the full root
+suite, and each own-root suite with all its markers. Each `incoming` file also
 selects whatever it would of the pass's creations' own suites and npm
 packages, and nothing else: no suite has yet run those creations against that
 work and the pass's together, while the rest of what it reaches was tested
@@ -399,4 +402,32 @@ A coupling nothing declares (a script run as a subprocess, a service called
 over HTTP, a file one component writes and another reads) is invisible to the
 selection. When the consumer is an app, declaring the path in its manifest's
 `[[references]]` is what makes a change to the path select it.
+
+## Running tests
+
+    app-manifest run-tests (--diff-base REF [--diff-ref REF] | --path P ... | --scope-file FILE | --all)
+        [--repo-root DIR] [--output-dir DIR] [--shed-ledger FILE]
+
+`run-tests` takes a change the way `select-tests` does and runs what it selects,
+in order, each command from its own directory. Each command's output goes to a
+file of its own under the output directory (by default a new one under
+`data/.tasks/run-tests/` in the repo root), and `summary.json` there is
+rewritten as each command ends, so a run in the background can be read while
+it goes. Each command ends one of four ways:
+
+- **passed**: it exited 0.
+- **failed**: it did not, and was not shed. A pytest run that failed reruns
+  only the tests pytest's short summary lists, once, with every marker
+  (`-m ''`) and, in a suite with a coverage floor, `--no-cov`; the tests that
+  failed again are the ones reported.
+- **flaky**: a pytest run whose failed tests all passed on that rerun.
+- **shed**: it, or its rerun, was killed by SIGKILL or SIGTERM while the
+  memory guard's shed ledger (`oom_priority`'s, unless `--shed-ledger` names
+  another) recorded a kill. Rerunning it is the caller's call, made from how
+  memory is doing, so `run-tests` does not.
+
+Every command also carries the memory guard's kills while it ran, since a shed
+child can surface as ordinary test errors. The run exits non-zero when any
+command failed or was shed. `app_manifest.suite_run` holds the runner and the
+report's models.
 

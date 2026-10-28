@@ -80,7 +80,7 @@ belongs to the app itself is that app's own pass.
   ```
 
   The gate is `harden-creation.md`'s "The test gate": when the reverse lookup
-  above found an app that claims this skill, `select-tests` runs that app's
+  above found an app that claims this skill, `run-tests` runs that app's
   suite too, since it exercises the surface the skill calls.
 - Validate with `uv run .agents/shared/scripts/validate_skill.py
   .agents/skills/<name>` -- it must print `ok` (see `spec-summary.md` for what it

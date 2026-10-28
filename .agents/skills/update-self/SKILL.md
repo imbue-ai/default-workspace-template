@@ -466,8 +466,8 @@ report, re-arm the poll. The last ends the pass, as below.
    question about whether its impact analysis runs, whether a validation item
    runs, or whether and at what scope the review gates run. Answer it by the
    rule it names as written; where the rule is silent, the fallback is more
-   coverage, never less. A `select-tests` output is not silence: what it
-   printed for a commit is that commit's whole gate. Escalate only if it
+   coverage, never less. A `run-tests` selection is not silence: what it
+   ran for a commit is that commit's whole gate. Escalate only if it
    contains a real question of user intent.
 3. **Its gate was shed for memory**, and it is asking for room to rerun. Free
    it yourself per `references/freeing-memory-for-an-update.md`, which says
