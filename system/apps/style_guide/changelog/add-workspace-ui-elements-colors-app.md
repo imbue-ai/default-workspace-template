@@ -4,7 +4,7 @@ It wears the workspace's theme (`[theming] mode = "tokens"`), opening in it with
 
 The Tooltips section shows the tooltip's quieter second line (the `detail` option). A Plain pages section frames a page built as plain HTML on the page kit, which the app serves from its own origin (`/page-kit-sample`, and the kit's `/_static/workspace_theme.css` and `.js` from the shell's build); the page hands the theme the shell names on to it, previews included. The parts list names each section by its contents label, and links the tile and list-row parts to that frame.
 
-The contents column is wider and scrolls with a thin bar in a gutter of its own, so on a system that always shows scrollbars the bar no longer sits against the labels.
+The contents column runs the full height of the window beside the page, scrolling on its own with a thin bar in a gutter of its own, so on a system that always shows scrollbars the bar never sits against the labels. A long color value (a `color-mix()`) wraps at its spaces in a column of its own width.
 
 The app stays off the desktop (`desktop_shortcut = false`): it is in the launcher, and a shortcut of it can be added by hand.
 

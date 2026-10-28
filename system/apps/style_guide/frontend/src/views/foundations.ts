@@ -134,7 +134,7 @@ function colorRow(color: ColorToken): m.Vnode {
         ? null
         : m("code", { class: "ml-2 font-mono type-helper text-faint select-all" }, `--${color.variable}`),
     ]),
-    m("td", { class: "w-full py-1 align-middle" }, inlineValue(color.variable, color.value)),
+    m("td", { class: "w-full min-w-48 py-1 align-middle" }, inlineValue(color.variable, color.value)),
   ]);
 }
 
@@ -142,7 +142,7 @@ function colorRow(color: ColorToken): m.Vnode {
 function inlineValue(name: string, declared: string): m.Children {
   const themed = themeValue(name);
   const value = (text: string, extra: string): m.Vnode =>
-    m("code", { class: `font-mono type-helper break-all ${extra}` }, text);
+    m("code", { class: `font-mono type-helper wrap-break-word ${extra}` }, text);
   return themed === null || themed === declared
     ? value(declared, "text-secondary")
     : [value(themed, "text-secondary"), " ", value(declared, "text-faint line-through")];

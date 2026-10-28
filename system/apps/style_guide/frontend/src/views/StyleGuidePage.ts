@@ -114,72 +114,70 @@ export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
       // The page kit is the Theming group's own section, so it is named here rather than looked up.
       labels.set("page-kit", "Plain pages");
       const groups: readonly CatalogGroup[] = [...catalog, themingGroup((id) => labels.get(id) ?? id)];
-      return m("div", { class: "style-guide h-screen bg-surface" }, [
+      return m("div", { class: "style-guide flex h-screen bg-surface" }, [
         m(
-          "div",
-          { id: SCROLL_ID, class: "h-full overflow-y-auto" },
-          m("div", { class: "mx-auto flex max-w-6xl items-start gap-10 px-8 py-10" }, [
-            m(
-              "nav",
-              {
-                "aria-label": "Style guide sections",
-                // Its own scroller in a short window: a thin bar, in a gutter of its own with room before it, so a
-                // system that always shows scrollbars never lays one over the labels.
-                class:
-                  "toc sticky top-10 hidden max-h-[calc(100vh-5rem)] w-52 shrink-0 overflow-y-auto pr-3 " +
-                  "[scrollbar-gutter:stable] [scrollbar-width:thin] md:block",
-              },
-              groups.map((group) =>
-                m("div", { class: "mb-5" }, [
-                  tocLink(group.id, group.label, "type-section py-1 text-faint", activeId === group.id),
+          "nav",
+          {
+            "aria-label": "Style guide sections",
+            // A full-height column of its own, scrolling on its own in a short window: a thin bar, in a gutter of its
+            // own with room before it, so a system that always shows scrollbars never lays one over the labels.
+            class:
+              "toc hidden h-full w-60 shrink-0 overflow-y-auto py-10 pr-3 pl-8 " +
+              "[scrollbar-gutter:stable] [scrollbar-width:thin] md:block",
+          },
+          groups.map((group) =>
+            m("div", { class: "mb-5" }, [
+              tocLink(group.id, group.label, "type-section py-1 text-faint", activeId === group.id),
+              m(
+                "ul",
+                { class: "mt-1 flex flex-col gap-px" },
+                group.sections.map((section) =>
                   m(
-                    "ul",
-                    { class: "mt-1 flex flex-col gap-px" },
-                    group.sections.map((section) =>
-                      m(
-                        "li",
-                        tocLink(
-                          section.id,
-                          section.toc,
-                          "py-1 text-(length:--font-size-row) text-secondary",
-                          activeId === section.id,
-                        ),
-                      ),
+                    "li",
+                    tocLink(
+                      section.id,
+                      section.toc,
+                      "py-1 text-(length:--font-size-row) text-secondary",
+                      activeId === section.id,
                     ),
                   ),
-                ]),
-              ),
-            ),
-            m("main", { class: "min-w-0 flex-1" }, [
-              m("header", { class: "mb-10" }, [
-                m("h1", { class: "type-heading-lg text-primary" }, "Workspace Style Guide"),
-                m("p", { class: "type-body mt-1 max-w-[640px] text-secondary" }, [
-                  "The design system every workspace app draws with. Tokens live in ",
-                  m("code", { class: "font-mono text-primary" }, "system/libs/workspace_ui/src/base.css"),
-                  ", components in ",
-                  m("code", { class: "font-mono text-primary" }, "system/libs/workspace_ui/src/components/"),
-                  ". A convention for the default look, not a rule: a restyle to your own taste is always welcome.",
-                ]),
-                m("p", { id: "worn-theme", class: "type-helper mt-2 text-secondary" }, [
-                  "Showing the ",
-                  m("code", { class: "font-mono text-primary" }, wornThemeId()),
-                  " theme, the one this desktop wears; values a theme changed show the standard one struck through.",
-                ]),
-              ]),
-              groups.map((group, index) => [
-                m(
-                  "div",
-                  {
-                    id: group.id,
-                    class: `catalog-group mb-8 scroll-mt-8 ${index === 0 ? "" : "mt-16 border-t border-default pt-12"}`,
-                  },
-                  [
-                    m("h2", { class: "type-heading-lg text-primary" }, group.label),
-                    m("p", { class: "type-body mt-1 text-secondary" }, group.description),
-                  ],
                 ),
-                group.sections.map(renderSection),
+              ),
+            ]),
+          ),
+        ),
+        m(
+          "div",
+          { id: SCROLL_ID, class: "h-full min-w-0 flex-1 overflow-y-auto" },
+          m("main", { class: "mx-auto max-w-5xl px-8 py-10" }, [
+            m("header", { class: "mb-10" }, [
+              m("h1", { class: "type-heading-lg text-primary" }, "Workspace Style Guide"),
+              m("p", { class: "type-body mt-1 max-w-[640px] text-secondary" }, [
+                "The design system every workspace app draws with. Tokens live in ",
+                m("code", { class: "font-mono text-primary" }, "system/libs/workspace_ui/src/base.css"),
+                ", components in ",
+                m("code", { class: "font-mono text-primary" }, "system/libs/workspace_ui/src/components/"),
+                ". A convention for the default look, not a rule: a restyle to your own taste is always welcome.",
               ]),
+              m("p", { id: "worn-theme", class: "type-helper mt-2 text-secondary" }, [
+                "Showing the ",
+                m("code", { class: "font-mono text-primary" }, wornThemeId()),
+                " theme, the one this desktop wears; values a theme changed show the standard one struck through.",
+              ]),
+            ]),
+            groups.map((group, index) => [
+              m(
+                "div",
+                {
+                  id: group.id,
+                  class: `catalog-group mb-8 scroll-mt-8 ${index === 0 ? "" : "mt-16 border-t border-default pt-12"}`,
+                },
+                [
+                  m("h2", { class: "type-heading-lg text-primary" }, group.label),
+                  m("p", { class: "type-body mt-1 text-secondary" }, group.description),
+                ],
+              ),
+              group.sections.map(renderSection),
             ]),
           ]),
         ),
