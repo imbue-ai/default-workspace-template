@@ -9,10 +9,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from imbue.chat.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.harnesses.antigravity.model import AntigravityModelResolver
+from imbue.chat.harnesses.antigravity.queue_tracker import MAX_DELIVERY_ATTEMPTS
 from imbue.chat.harnesses.antigravity.queue_tracker import drop_tracker
 from imbue.chat.harnesses.antigravity.testing import append_step
+from imbue.chat.harnesses.antigravity.testing import build_agent_info
 from imbue.chat.harnesses.antigravity.testing import build_metadata
 from imbue.chat.harnesses.antigravity.testing import build_step_payload
 from imbue.chat.harnesses.antigravity.testing import build_steps_db
@@ -20,10 +26,13 @@ from imbue.chat.harnesses.antigravity.testing import build_tool_body
 from imbue.chat.harnesses.antigravity.testing import build_tool_metadata
 from imbue.chat.harnesses.antigravity.testing import encode_varint
 from imbue.chat.harnesses.antigravity.testing import len_field
+from imbue.chat.harnesses.antigravity.testing import refuse_to_type
 from imbue.chat.harnesses.antigravity.testing import set_step_status
 from imbue.chat.harnesses.antigravity.testing import str_field
 from imbue.chat.harnesses.antigravity.turn_state import drop_turn_state
 from imbue.chat.harnesses.antigravity.watcher import AntigravitySessionWatcher
+from imbue.chat.harnesses.model import ModelAxis
+from imbue.chat.harnesses.model import ModelIdentity
 
 _STATUS_RUNNING = 2
 _STATUS_DONE = 3
@@ -53,18 +62,9 @@ def _make_watcher(tmp_path: Path, conv_ids: list[str]) -> AntigravitySessionWatc
     (tmp_path / "plugin" / "antigravity" / "home" / ".gemini" / "antigravity-cli" / "conversations").mkdir(
         parents=True, exist_ok=True
     )
-    # Unique per test: the tracker and turn-state registries are keyed by agent id and live
-    # for the agent's life, so a shared id leaks one test's queue into the next.
-    agent_id = f"agent-{tmp_path.name}"
-    drop_tracker(agent_id)
-    drop_turn_state(agent_id)
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="agy-test",
-        state="RUNNING",
-        agent_state_dir=tmp_path,
-        claude_config_dir=tmp_path,
-    )
+    agent_info = build_agent_info(tmp_path)
+    drop_tracker(agent_info.id)
+    drop_turn_state(agent_info.id)
     return AntigravitySessionWatcher.build(agent_info, lambda _agent_id, _events: None)
 
 
@@ -205,23 +205,35 @@ def _tag(field: int, wire: int) -> bytes:
     return encode_varint((field << 3) | wire)
 
 
-# --- the flush worker: the only typist ----------------------------------------------------
+# The flush worker: the only typist
 #
 # This code path had NO tests, which is why an ungated flush -- one that typed the held queue
 # into a live turn every 5 seconds -- shipped green.
 
 
-def _flushing_watcher(tmp_path: Path, conv: str, sent: list[str], *, is_alive: bool = True, does_commit: bool = True):
-    """A watcher whose send records the text and, like agy, commits it as a user turn.
+def _flushing_watcher(
+    tmp_path: Path,
+    conv: str,
+    sent: list[str],
+    *,
+    is_alive: bool = True,
+    does_commit: bool = True,
+    is_slash_command_delivered: bool = True,
+) -> AntigravitySessionWatcher:
+    """A watcher whose send records the text and, like agy, commits a message as a user turn.
 
     ``does_commit=False`` is the parked case: mngr reports the send accepted (its probe is the
-    busy marker's mtime, which advances either way) but agy wrote no user row.
+    busy marker's mtime, which advances either way) but agy wrote no user row. agy runs a slash
+    command such as ``/model`` without opening a turn, so one writes no row either way, and its
+    send returns ``is_slash_command_delivered``.
     """
     watcher = _make_watcher(tmp_path, [conv])
     next_idx = [100]
 
     def _send(text: str) -> bool:
         sent.append(text)
+        if text.startswith("/"):
+            return is_slash_command_delivered
         if does_commit:
             append_step(_conv_db_path(tmp_path, conv), (next_idx[0], _TYPE_USER, _STATUS_DONE, _user_payload(text)))
             next_idx[0] += 1
@@ -616,3 +628,197 @@ def test_a_loader_reads_a_settled_conversation_with_no_thread_and_releases_what_
     assert loader._connections != {}
     loader.close()
     assert loader._connections == {}
+
+
+# Model switches: typed by the same worker, alone, between turns
+
+
+def _pick(tmp_path: Path, model_id: str, effort: str | None) -> None:
+    """Make a pick the way the model bar's route does: through the agent's resolver."""
+    result = AntigravityModelResolver.build(build_agent_info(tmp_path)).switch(
+        ModelIdentity(model_id=model_id, effort=effort, fast=False),
+        frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
+        refuse_to_type,
+    )
+    assert result.ok
+
+
+def _repick_while_typing(tmp_path: Path, watcher: AntigravitySessionWatcher) -> None:
+    """Make the user pick `gemini-3.8-flash` at `low` while the worker is typing `/model claude-sonnet-4-6`."""
+    send = watcher._flush_send
+    assert send is not None
+
+    def _send_while_the_user_picks_again(text: str) -> bool:
+        if text == "/model claude-sonnet-4-6":
+            _pick(tmp_path, "gemini-3.8-flash", "low")
+        return send(text)
+
+    watcher.set_flush_hooks(_send_while_the_user_picks_again, lambda: True)
+
+
+def _raise_on_slash_commands(watcher: AntigravitySessionWatcher, sent: list[str]) -> None:
+    """Make the watcher's send record and then raise for a slash command, as when the agent cannot be found."""
+    send = watcher._flush_send
+    assert send is not None
+
+    def _send_raising_for_slash_commands(text: str) -> bool:
+        if text.startswith("/"):
+            sent.append(text)
+            raise SendFailedError("the agent could not be found")
+        return send(text)
+
+    watcher.set_flush_hooks(_send_raising_for_slash_commands, lambda: True)
+
+
+def _close_turn(tmp_path: Path, conv: str, watcher: AntigravitySessionWatcher) -> None:
+    append_step(_conv_db_path(tmp_path, conv), (2, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("done")))
+    (tmp_path / ACTIVE_MARKER_FILENAME).unlink(missing_ok=True)
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+
+
+def _idle_flushing_watcher(
+    tmp_path: Path, conv: str, sent: list[str], *, is_slash_command_delivered: bool = True
+) -> AntigravitySessionWatcher:
+    """A ``_flushing_watcher`` whose agent has just finished a turn, so nothing holds the flush."""
+    watcher = _flushing_watcher(tmp_path, conv, sent, is_slash_command_delivered=is_slash_command_delivered)
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [(0, _TYPE_USER, _STATUS_DONE, _user_payload("go")), (1, _TYPE_PLANNER, _STATUS_DONE, _planner_payload("ok"))],
+    )
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    return watcher
+
+
+def test_a_model_switch_waits_for_the_turn_to_close(tmp_path: Path) -> None:
+    """A pick made mid-turn is not typed into it: agy may be showing a dialog the keys would answer."""
+    conv = "conv-switch-open"
+    sent: list[str] = []
+    watcher = _flushing_watcher(tmp_path, conv, sent)
+    build_steps_db(
+        _conv_db_path(tmp_path, conv),
+        [(0, _TYPE_USER, _STATUS_DONE, _user_payload("go")), (1, _TYPE_RUN_COMMAND, _STATUS_DONE, _tool_payload())],
+    )
+    (tmp_path / ACTIVE_MARKER_FILENAME).write_text("")
+    watcher._collect_new_events()
+    watcher._publish_turn_state()
+    _pick(tmp_path, "gemini-3.8-flash", "low")
+
+    watcher._attempt_flush()
+    assert sent == []
+
+    _close_turn(tmp_path, conv, watcher)
+    watcher._attempt_flush()
+    assert sent == ["/model gemini-3.8-flash-low"]
+
+    watcher._attempt_flush()
+    assert sent == ["/model gemini-3.8-flash-low"], "a delivered switch is typed once"
+
+
+def test_a_model_switch_is_typed_alone_ahead_of_held_messages(tmp_path: Path) -> None:
+    """The command never rides in the block: agy would read it as part of the message."""
+    sent: list[str] = []
+    watcher = _idle_flushing_watcher(tmp_path, "conv-switch-block", sent)
+    watcher._queue.enqueue("next thing", "t0")
+    watcher._queue.enqueue("and another", "t1")
+    _pick(tmp_path, "claude-opus-4-6-thinking", None)
+
+    watcher._attempt_flush()
+
+    assert sent == ["/model claude-opus-4-6-thinking", "next thing\nand another"]
+    assert watcher.get_queued_messages() == []
+
+
+def test_only_the_newest_model_pick_is_typed(tmp_path: Path) -> None:
+    sent: list[str] = []
+    watcher = _idle_flushing_watcher(tmp_path, "conv-switch-newest", sent)
+    _pick(tmp_path, "claude-sonnet-4-6", None)
+    _pick(tmp_path, "gemini-3.8-flash", "medium")
+
+    watcher._attempt_flush()
+
+    assert sent == ["/model gemini-3.8-flash-medium"]
+
+
+def test_an_undelivered_model_switch_is_retried_then_dropped(tmp_path: Path) -> None:
+    """A failed send is retried on later passes, but not forever, and held messages wait behind it."""
+    sent: list[str] = []
+    watcher = _idle_flushing_watcher(tmp_path, "conv-switch-retry", sent, is_slash_command_delivered=False)
+    watcher._queue.enqueue("next thing", "t0")
+    _pick(tmp_path, "gemini-3.8-flash", "high")
+
+    for _ in range(MAX_DELIVERY_ATTEMPTS + 2):
+        watcher._attempt_flush()
+
+    assert sent == ["/model gemini-3.8-flash-high"] * MAX_DELIVERY_ATTEMPTS + ["next thing"]
+
+
+def test_a_model_switch_whose_send_raises_is_still_dropped_after_its_attempts(tmp_path: Path) -> None:
+    """A send that raises counts as an attempt, so the held messages are not stuck behind the switch."""
+    sent: list[str] = []
+    watcher = _idle_flushing_watcher(tmp_path, "conv-switch-raises", sent)
+    _raise_on_slash_commands(watcher, sent)
+    watcher._queue.enqueue("next thing", "t0")
+    _pick(tmp_path, "gemini-3.8-flash", "high")
+
+    for _ in range(MAX_DELIVERY_ATTEMPTS):
+        with pytest.raises(SendFailedError):
+            watcher._attempt_flush()
+    watcher._attempt_flush()
+
+    assert sent == ["/model gemini-3.8-flash-high"] * MAX_DELIVERY_ATTEMPTS + ["next thing"]
+    assert watcher.get_queued_messages() == []
+
+
+@pytest.mark.parametrize("does_send_raise", [False, True])
+def test_a_message_waiting_behind_a_failed_model_switch_reads_as_queued(tmp_path: Path, does_send_raise: bool) -> None:
+    """Accepted against an idle agy, a message reads Sending; once the switch ahead of it fails, it is waiting."""
+    sent: list[str] = []
+    watcher = _idle_flushing_watcher(tmp_path, "conv-switch-demote", sent, is_slash_command_delivered=False)
+    if does_send_raise:
+        _raise_on_slash_commands(watcher, sent)
+    watcher._queue.enqueue("next thing", "t0", is_turn_open=False)
+    _pick(tmp_path, "gemini-3.8-flash", "low")
+    assert [entry["is_sending"] for entry in watcher.get_queued_messages()] == [True]
+
+    if does_send_raise:
+        with pytest.raises(SendFailedError):
+            watcher._attempt_flush()
+    else:
+        watcher._attempt_flush()
+
+    assert sent == ["/model gemini-3.8-flash-low"]
+    assert [entry["is_sending"] for entry in watcher.get_queued_messages()] == [False]
+
+
+def test_a_message_behind_a_failed_switch_a_newer_pick_replaced_still_reads_sending(tmp_path: Path) -> None:
+    """The newer pick is typed on the very next pass, so the message is still on its way."""
+    sent: list[str] = []
+    watcher = _idle_flushing_watcher(tmp_path, "conv-switch-failed-superseded", sent, is_slash_command_delivered=False)
+    _repick_while_typing(tmp_path, watcher)
+    watcher._queue.enqueue("next thing", "t0", is_turn_open=False)
+    _pick(tmp_path, "claude-sonnet-4-6", None)
+
+    watcher._attempt_flush()
+
+    assert sent == ["/model claude-sonnet-4-6"]
+    assert [entry["is_sending"] for entry in watcher.get_queued_messages()] == [True]
+
+
+def test_a_pick_made_while_a_switch_is_typed_goes_next_and_the_block_runs_on_it(tmp_path: Path) -> None:
+    sent: list[str] = []
+    watcher = _idle_flushing_watcher(tmp_path, "conv-switch-superseded", sent)
+    _repick_while_typing(tmp_path, watcher)
+    watcher._queue.enqueue("next thing", "t0")
+    _pick(tmp_path, "claude-sonnet-4-6", None)
+
+    watcher._attempt_flush()
+
+    assert sent == ["/model claude-sonnet-4-6"]
+    assert [entry["content"] for entry in watcher.get_queued_messages()] == ["next thing"]
+
+    watcher._attempt_flush()
+
+    assert sent == ["/model claude-sonnet-4-6", "/model gemini-3.8-flash-low", "next thing"]
+    assert watcher.get_queued_messages() == []

@@ -106,7 +106,6 @@ const OTHER_CLAUDE = {
   lane: "anthropic",
   label: "Anthropic 2 (Claude Code)",
 };
-// agy's model bar is read-only: its model is changed from the agent's terminal, not from the chat.
 const GOOGLE = { id: "acct-google", harness: "antigravity", lane: "google", label: "Google (Antigravity CLI)" };
 const OTHER_GOOGLE = { ...GOOGLE, id: "acct-google-2", label: "Google 2 (Antigravity CLI)" };
 const ASTRA = {
@@ -559,9 +558,7 @@ describe("the switch dialog", () => {
     ]);
   });
 
-  it("starts a rebind's new chat with no pick on a harness whose model the chat app cannot switch", async () => {
-    // agy's model is changed from the agent's terminal: carrying the chat's model over would be a pick the
-    // new chat could never apply.
+  it("starts a rebind's new chat on the antigravity model the chat runs on", async () => {
     state.accounts = [GOOGLE, OTHER_GOOGLE];
     state.options = [];
     state.chat = chatSnapshotFixture("agent-1", {
@@ -569,8 +566,19 @@ describe("the switch dialog", () => {
         harness: "antigravity",
         account_id: GOOGLE.id,
         model_choice: {
-          identity: { model_id: "gemini-3-pro", effort: null, fast: false },
-          matched: { ...ASTRA, id: "gemini-3-pro", label: "Gemini 3 Pro", efforts: [], supports_fast: false },
+          identity: { model_id: "Gemini 3.8 Flash", effort: "medium", fast: false },
+          matched: {
+            ...ASTRA,
+            id: "gemini-3.8-flash",
+            label: "Gemini 3.8 Flash",
+            efforts: [
+              { level: "low", in_picker: true },
+              { level: "medium", in_picker: true },
+              { level: "high", in_picker: true },
+            ],
+            supports_fast: false,
+            default_effort: "high",
+          },
         },
       },
     });
@@ -582,23 +590,9 @@ describe("the switch dialog", () => {
     expect(ROOT().textContent).toContain("Switch to Google 2 (Antigravity CLI)?");
     pressButton("Start a new chat");
     await flush();
-    expect(state.started).toEqual([["acct-google-2", "a fresh start", null]]);
-  });
-
-  it("points a harness the chat app cannot switch at its terminal rather than at the model bar", async () => {
-    state.accounts = [GOOGLE, OTHER_GOOGLE];
-    state.options = [];
-    state.chat = chatSnapshotFixture("agent-1", {
-      active_agent: { harness: "antigravity", account_id: GOOGLE.id },
-    });
-    openSwitchDialog("agent-1", OTHER_GOOGLE as ProviderAccount);
-    render();
-    await flush();
-    render();
-    expect(ROOT().querySelector("select")).toBeNull();
-    expect(ROOT().textContent).toContain(
-      "Antigravity CLI keeps its current model, which is changed from the agent's terminal, not from the chat.",
-    );
+    expect(state.started).toEqual([
+      ["acct-google-2", "a fresh start", { model_id: "gemini-3.8-flash", effort: "medium", fast: false }],
+    ]);
   });
 
   it("says a rebind keeps its model when the account has none to offer", async () => {
