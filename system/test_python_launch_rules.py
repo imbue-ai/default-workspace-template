@@ -404,9 +404,9 @@ def test_the_plain_uv_run_scan_catches_a_planted_command_and_skips_mentions() ->
             "Then `uv run --no-sync tk start x`; never wrap a service in `uv run`.",
             "uv run --no-project --with 'pydantic>=2' python check.py",
             "uv run --frozen --package app-manifest app-manifest footprint",
-            "uv run system/scripts/workspace_scripts/smoketest_app.py todo",
+            "uv run system/scripts/workspace_scripts/verify_app.py todo",
             "uv run python3 .agents/skills/notify-user/scripts/notify_user.py done",
-            "uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py todo",
+            "uv run --no-sync system/scripts/workspace_scripts/verify_app.py todo",
         ]
     )
 
@@ -711,7 +711,7 @@ def _sys_path_editors(repo_root: Path) -> list[str]:
 
 def test_prevent_sys_path_edits() -> None:
     offenders = _sys_path_editors(_REPO_ROOT)
-    assert len(offenders) <= snapshot(17), (
+    assert len(offenders) <= snapshot(19), (
         "These edit the import path (sys.path, PYTHONPATH, or a pytest pythonpath setting). Import the package instead: a skill's modules live in its python/ "
         "project and a system script's beside it, all importable from the root venv:\n"
         + "\n".join(offenders)

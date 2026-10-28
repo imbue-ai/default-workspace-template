@@ -100,7 +100,7 @@ def test_no_catalog_key_shadows_another_in_the_prefix_pass() -> None:
 
 
 def test_fast_mode_follows_the_binary_not_model_rank() -> None:
-    # Claude 2.1.293's baked-in catalog gives fast_mode to Opus 5.5, Opus 5 and Opus 4.8:
+    # Claude 2.1.307's baked-in catalog gives fast_mode to Opus 5.5, Opus 5 and Opus 4.8:
     # 4.7 and 4.6 had it removed, and Fable does not have it at all despite outranking Opus
     # in capability. resolve_model_choice drops a live read's fast flag on a model that does
     # not declare it, so a missing flag here shows fast off on a session that is running --
@@ -125,7 +125,7 @@ def test_every_option_declares_the_full_effort_set() -> None:
 # and metadata" -- so the display name, the fast-mode capability and the alias targets do not
 # have to be inferred from release notes. The fixture beside this file is the id / family /
 # display_name / capabilities of every entry in it plus the alias table, lifted from the pinned
-# 2.1.293 executable. The table sits on a single JS line, found by:
+# 2.1.307 executable. The table sits on a single JS line, found by:
 #
 #     strings -n 4 claude | grep "Hand-maintained baked-in model catalog"
 #
@@ -135,7 +135,7 @@ def test_every_option_declares_the_full_effort_set() -> None:
 # Regenerate it whenever CLAUDE_CODE_VERSION moves. Everything below reads it rather than
 # restating it: the warning above CLAUDE_CATALOG in model.py about never hand-copying the
 # catalog applies to this file too.
-_BAKED_CATALOG_FIXTURE = Path(__file__).parent / "baked_model_catalog_v2_1_293.json"
+_BAKED_CATALOG_FIXTURE = Path(__file__).parent / "baked_model_catalog_v2_1_307.json"
 
 
 def _baked_catalog() -> dict[str, Any]:
@@ -186,7 +186,7 @@ def test_supports_fast_is_the_binarys_fast_mode_capability() -> None:
         assert option.supports_fast == ("fast_mode" in entry["capabilities"]), entry["id"]
 
 
-# Every claude model id the pinned 2.1.293 binary carries, extracted from its strings
+# Every claude model id the pinned 2.1.307 binary carries, extracted from its strings
 # rather than transcribed from docs:
 #
 #     strings -n 8 claude | grep -oE "claude-(opus|sonnet|haiku|fable|mythos)[a-z0-9._-]*(\\[[12]m\\])?"

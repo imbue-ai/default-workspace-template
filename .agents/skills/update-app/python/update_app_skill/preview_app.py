@@ -113,6 +113,7 @@ class InstanceSpec:
     preview_service_name: str
     preview_title: str
     inner_path: str
+    theming_mode: str | None
 
 
 class Instances:
@@ -132,6 +133,7 @@ class Instances:
             preview_service_name=spec.preview_service_name,
             preview_title=spec.preview_title,
             inner_path=spec.inner_path,
+            theming_mode=spec.theming_mode,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
             http=serve_isolated_instance.HttpClient(),
@@ -302,6 +304,20 @@ def _under_declared_secrets(
     return launch
 
 
+def _declared_theming_mode(worktree: Path, manifest: AppManifest) -> str | None:
+    """The ``[theming]`` mode the worktree's own app.toml declares, or None when it declares no ``[theming]``."""
+    manifest_path, _ = find_manifest(worktree, str(manifest.name))
+    try:
+        raw = tomllib.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return None
+    theming = raw.get("theming")
+    if not isinstance(theming, dict):
+        return None
+    mode = theming.get("mode", "tokens")
+    return mode if isinstance(mode, str) else None
+
+
 def build_instance_spec(
     manifest: AppManifest,
     worktree: Path,
@@ -338,6 +354,7 @@ def build_instance_spec(
         preview_service_name=instance_name(manifest.name),
         preview_title=title,
         inner_path=inner_path,
+        theming_mode=_declared_theming_mode(worktree, manifest),
     )
 
 

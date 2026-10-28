@@ -41,6 +41,7 @@ path = sys.argv[1]
 sys.path.insert(0, path.rsplit("/", 1)[0])
 spec = importlib.util.spec_from_file_location("_entry_point_probe", path)
 module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 print(json.dumps(sorted({name.split(".")[0] for name in sys.modules})))
 """

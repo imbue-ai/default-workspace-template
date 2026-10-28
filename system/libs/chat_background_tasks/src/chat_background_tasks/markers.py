@@ -251,14 +251,19 @@ def process_start_time(pid: int) -> str:
     return fields[19] if len(fields) > 19 else ""
 
 
-def is_task_live(task: BackgroundTask) -> bool:
-    """Whether the task's process still runs: its pid is alive and, when the marker recorded a
+def is_process_live(pid: int, pid_start: str) -> bool:
+    """Whether the process a record named still runs: its pid is alive and, when the record kept a
     start time and ``/proc`` reports one, it is the same process, not a later one given its pid."""
-    if not is_pid_alive(task.pid):
+    if not is_pid_alive(pid):
         return False
-    if not task.pid_start:
+    if not pid_start:
         return True
-    return process_start_time(task.pid) in ("", task.pid_start)
+    return process_start_time(pid) in ("", pid_start)
+
+
+def is_task_live(task: BackgroundTask) -> bool:
+    """Whether the task's process still runs, by the pid and start time its marker recorded."""
+    return is_process_live(task.pid, task.pid_start)
 
 
 def read_markers(directory: Path) -> list[BackgroundTask]:

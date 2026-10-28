@@ -6,7 +6,7 @@
 # runbook in the mngr monorepo (apps/minds/docs/deploy/ops/app-release.md, step
 # 0) and its release test check that the pair still agrees. Resolve a tag's
 # current index digest with `docker buildx imagetools inspect python:3.12-slim-trixie`.
-FROM python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+FROM python:3.12-slim-trixie@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
 
 # /root/.local/bin holds uv + claude (installed by system/scripts/setup_system.sh); put
 # it on PATH for every build layer and at runtime.
@@ -80,6 +80,8 @@ COPY system/apps/system_interface/pyproject.toml /home/user/workspace/system/app
 COPY system/apps/chat/pyproject.toml /home/user/workspace/system/apps/chat/pyproject.toml
 COPY system/apps/getting_started/pyproject.toml /home/user/workspace/system/apps/getting_started/pyproject.toml
 COPY system/apps/files/pyproject.toml /home/user/workspace/system/apps/files/pyproject.toml
+COPY system/libs/routines/pyproject.toml /home/user/workspace/system/libs/routines/pyproject.toml
+COPY system/apps/routines/pyproject.toml /home/user/workspace/system/apps/routines/pyproject.toml
 
 # Frontend npm manifests (the workspace root's lockfile + package.json, and each member's
 # package.json) -- install needs only these.
@@ -89,6 +91,7 @@ COPY system/apps/system_interface/frontend/package.json /home/user/workspace/sys
 COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/chat/frontend/
 COPY system/apps/getting_started/frontend/package.json /home/user/workspace/system/apps/getting_started/frontend/
 COPY system/apps/files/frontend/package.json /home/user/workspace/system/apps/files/frontend/
+COPY system/apps/routines/frontend/package.json /home/user/workspace/system/apps/routines/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
 # Copied with its sibling _mngr_git_auth.sh (which it sources via `dirname "$0"`).
@@ -107,7 +110,6 @@ RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && d
 
 # End pre-COPY manifest layer. Source-changing layers begin below.
 
-# copy in all of our code:
 COPY . /home/user/workspace/
 
 # Build the workspace from full source. Shared verbatim with the Lima provider.

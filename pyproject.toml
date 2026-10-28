@@ -22,6 +22,13 @@ dependencies = [
     # Agents run `uv run --no-sync workspace-layout` from the repo root, so its console script
     # must survive a sync of the root closure.
     "workspace-layout",
+    # Agents run `uv run --no-sync workspace-themes` from the repo root (the create-theme, make-theme-icon, and build-app
+    # skills), so its console script must survive a sync of the root closure too.
+    "workspace-themes",
+    # The cron tick, the boot migration, the Caretaker's check and the skills run
+    # `uv run --no-sync routines ...` from the repo root, so its console script must
+    # survive a sync of the root closure too.
+    "routines",
     "imbue-common",
     "tomlkit>=0.12",
     "playwright==1.58.0",
@@ -126,14 +133,17 @@ tk-command-parsing = { workspace = true }
 chat-background-tasks = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
+workspace-themes = { workspace = true }
 app-schema = { workspace = true }
 workspace-layout = { workspace = true }
+routines = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }
-# The workspace's own scripts, which skill scripts import.
+# The workspace's own scripts, and the skill packages other projects import.
 workspace-scripts = { workspace = true }
 agents-shared = { workspace = true }
+update-self-skill = { workspace = true }
 imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/imbue_common" }
 imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/mngr" }
 imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/mngr_claude" }
@@ -178,7 +188,15 @@ norecursedirs = [
     "venv",
     "{arch}",
 ]
+# Without it a test sees the environment of the agent running the suite; the chat and system interface pyprojects,
+# the other pytest roots, require it too.
+required_plugins = ["pytest-workspace-env"]
 timeout_func_only = true
+# Delete a passing test's tmp_path as soon as it finishes and keep only the latest
+# session's leftovers. /tmp is a tmpfs, and under gVisor every file or directory there
+# also holds sandbox memory until it is deleted.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 # Each app's pyproject declares the same markers for its own run.
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",

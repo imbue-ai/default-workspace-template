@@ -36,6 +36,8 @@ from workspace_layout.records import EntryPresentation
 from workspace_layout.records import StoredWindowPath
 from workspace_layout.records import Window
 from workspace_layout.records import WindowView
+from workspace_themes.catalog import CachingThemeCatalogLoader
+from workspace_themes.interfaces import ThemeCatalogLoaderInterface
 
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -52,6 +54,7 @@ from imbue.system_interface.shell.app_lifecycle import AppLifecycleManager
 from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.app_lifecycle import build_app_lifecycle_manager
+from imbue.system_interface.shell.app_theming import AppThemingStore
 from imbue.system_interface.shell.client_activity import ClientActivityLog
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.clients import ClientStore
@@ -116,6 +119,9 @@ from imbue.system_interface.shell.primitives import mint_window_id
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
+from imbue.system_interface.shell.theme_watch import ThemeCatalogWatch
+from imbue.system_interface.shell.theme_wire import theme_catalog_wire_json
+from imbue.system_interface.shell.tour import TourStore
 from imbue.system_interface.shell.update_notice import UpdateNoticeWatch
 from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.shell.wallpapers import DEFAULT_WALLPAPER_FILES_DIRECTORY
@@ -142,6 +148,9 @@ class ShellState(MutableModel):
         frozen=True, description="Parks, wakes, starts, and stops the stoppable apps (the stop-when-no-windows spec)"
     )
     desktops: DesktopStore = Field(frozen=True, description="desktops.json and default_shortcuts_offered.json")
+    app_theming: AppThemingStore = Field(
+        frozen=True, description="app_theming.json: the themeable apps whose theming the user turned off"
+    )
     placements: PlacementStore = Field(frozen=True, description="The per-client layouts of each desktop")
     window_paths: WindowPathStore = Field(
         frozen=True, description="The per-client paths and titles of independent windows"
@@ -160,12 +169,17 @@ class ShellState(MutableModel):
         frozen=True, description="The avatar designs registered in the workspace"
     )
     avatar_selection: AvatarSelectionStore = Field(frozen=True, description="avatar_selection.json")
+    tour: TourStore = Field(frozen=True, description="tour.json: whether the show-around tour has run")
     avatar_status: AvatarStatusReader = Field(
         frozen=True, description="The avatar's mood, read from mngr's event file"
     )
     update_notice: UpdateNoticeWatch = Field(
         frozen=True, description="The kept rollback point of the last careful-flow apply, watched for the windows"
     )
+    themes: ThemeCatalogLoaderInterface = Field(
+        frozen=True, description="The workspace's themes (docs/system/blueprint/workspace-themes/)"
+    )
+    repo_root: Path = Field(frozen=True, description="The workspace's repo root, whose theme folders are watched")
     client_prune_interval_seconds: float = Field(
         default=CLIENT_PRUNE_INTERVAL_SECONDS, frozen=True, description="How often stale clients are pruned"
     )
@@ -181,6 +195,7 @@ class ShellState(MutableModel):
     )
 
     _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _theme_watch: ThemeCatalogWatch | None = PrivateAttr(default=None)
     _prune_thread: threading.Thread | None = PrivateAttr(default=None)
 
     @field_validator("wallpaper_files_directory")
@@ -192,8 +207,8 @@ class ShellState(MutableModel):
         return value
 
     def start(self) -> None:
-        """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness)
-        and the avatar status reader (the event file watch)."""
+        """Prune stale clients (now, and daily from here on), then start the inventory (registry watch, liveness),
+        the avatar status reader (the event file watch), and the theme watch (the theme folders and app manifests)."""
         self.prune_unseen_clients()
         thread = threading.Thread(target=self._run_client_prune, daemon=True, name="shell-client-prune")
         self._prune_thread = thread
@@ -202,6 +217,11 @@ class ShellState(MutableModel):
         self.lifecycle.start()
         self.update_notice.start()
         self.avatar_status.start()
+        theme_watch = ThemeCatalogWatch(
+            repo_root=self.repo_root, loader=self.themes, on_catalog_changed=self.broadcast_themes_changed
+        )
+        theme_watch.start()
+        self._theme_watch = theme_watch
 
     def stop(self) -> None:
         self.update_notice.stop()
@@ -212,6 +232,9 @@ class ShellState(MutableModel):
         self.lifecycle.stop()
         self.inventory.stop()
         self.avatar_status.stop()
+        if self._theme_watch is not None:
+            self._theme_watch.stop()
+            self._theme_watch = None
 
     def prune_unseen_clients(self) -> None:
         """Drop every client unseen for the retention period, together with the layouts it owns (desktop contracts.md section 4.3)."""
@@ -362,8 +385,9 @@ class ShellState(MutableModel):
                         f"Window {str(window.id)} shows {str(window.app)!r}, not {str(request.app)!r}"
                     )
                 seen = effective_window(window, self.read_window_paths(desktop, request.client_id).get(window.id))
+                window_path = seen.path if request.target.sends_window_path else None
                 path = self.launch_destination(
-                    entry, launch_path, request.params, request.client_id, desktop.id, seen.path
+                    entry, launch_path, request.params, request.client_id, desktop.id, window_path
                 )
                 navigated = self.report_window_location(desktop.id, window.id, request.client_id, path, seen.title)
                 return LaunchOutcome(window=navigated, path=path, is_new=False)
@@ -379,6 +403,12 @@ class ShellState(MutableModel):
     def broadcast_desktops_updated(self) -> None:
         self.broadcaster.broadcast_desktops_updated(self.desktop_views(self.list_desktops()))
 
+    def broadcast_themes_changed(self) -> None:
+        """Send every window the theme catalog and the workspace's default, after either changed."""
+        self.broadcaster.broadcast_themes_changed(
+            theme_catalog_wire_json(self.themes.load(), self.desktops.read_theme_choices())
+        )
+
     def desktop_views(self, desktops: Sequence[Desktop]) -> list[DesktopView]:
         """The ``desktops`` of a listing or a ``desktops_updated``: every client's stored path for each independent
         window rides on the window, read once for the whole list."""
@@ -387,7 +417,8 @@ class ShellState(MutableModel):
         for client_id, paths in by_client.items():
             for window_id, stored in paths.items():
                 by_window.setdefault(window_id, {})[client_id] = stored.path
-        return [desktop_view(desktop, by_window) for desktop in desktops]
+        theme_by_desktop_id = self.desktops.read_theme_choices().theme_by_desktop_id
+        return [desktop_view(desktop, by_window, theme_by_desktop_id.get(desktop.id)) for desktop in desktops]
 
     def desktop_view(self, desktop: Desktop) -> DesktopView:
         (view,) = self.desktop_views((desktop,))
@@ -821,20 +852,23 @@ def build_shell_state(
     event writer), and either way the shell's desktop reconcile listens to its registry changes;
     ``agent_events_path`` (the mngr observer's file the avatar's mood is read from) and ``background_tasks_root``
     (the chats' background task markers, which keep the mood working while a chat is busy) default to the ones the
-    environment names; ``repo_root`` (the workspace the update notice's record and script, and the
-    share materials the lifecycle manager reads the per-app grants from, live under) is the served tree by
-    default; ``profiles`` (the resolver the composition root shares with presence) defaults to one that can reach
+    environment names; ``repo_root`` (the workspace the update notice's record and script, the share materials the
+    lifecycle manager reads the per-app grants from, and the theme folders the catalog is read from and watched in,
+    live under) is the served tree by default; ``profiles`` (the resolver the composition root shares with presence)
+    defaults to one that can reach
     no connector, so a shell built without one names visitors by email; ``launch_poster`` (how a POST launch path
     is asked for its page) defaults to the loopback POST; ``is_lifecycle_enabled`` is whether the lifecycle
     manager owns the live workspace's apps, sweeping them and waking one for a POST launch (the production shell's
     yes; a preview's and a test's no, so neither starts a live app or parks a port by accident), and the two
     timings are the manager's grace period and idle sweep interval, which a test shortens."""
+    app_theming = AppThemingStore(state_directory=state_directory)
     resolved_inventory = (
         inventory
         if inventory is not None
         else AppInventory(
             registry_path=registry_path,
             broadcaster=broadcaster,
+            theming_off=app_theming.read,
             on_registry_read=on_registry_read,
             share_domain_path=_under_repo_root(DEFAULT_SHARE_DOMAIN_PATH, repo_root),
         )
@@ -856,6 +890,7 @@ def build_shell_state(
             idle_sweep_interval_seconds=idle_sweep_interval_seconds,
         ),
         desktops=desktops,
+        app_theming=app_theming,
         placements=PlacementStore(state_directory=state_directory),
         window_paths=WindowPathStore(state_directory=state_directory),
         wallpaper_files_directory=_under_repo_root(wallpaper_files_directory, repo_root),
@@ -870,6 +905,7 @@ def build_shell_state(
         broadcaster=broadcaster,
         avatar_catalog=AvatarCatalogStore(directory=_under_repo_root(avatar_catalog_directory, repo_root)),
         avatar_selection=AvatarSelectionStore(state_directory=state_directory),
+        tour=TourStore(state_directory=state_directory),
         avatar_status=AvatarStatusReader(
             events_path=agent_events_path if agent_events_path is not None else agent_events_path_from_environment(),
             background_tasks_root=background_tasks_root
@@ -878,6 +914,8 @@ def build_shell_state(
             broadcaster=broadcaster,
         ),
         update_notice=UpdateNoticeWatch(repo_root=repo_root, broadcaster=broadcaster),
+        themes=CachingThemeCatalogLoader(repo_root=repo_root.resolve()),
+        repo_root=repo_root.resolve(),
         launch_poster=launch_poster if launch_poster is not None else post_launch,
     )
     resolved_inventory.add_registry_change_listener(shell.reconcile_desktops_with_registry)

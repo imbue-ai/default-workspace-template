@@ -7,7 +7,7 @@ Each skill's Python now lives in its own uv project, `.agents/skills/<name>/pyth
 - **What existing workspaces need:** a workspace's own skills with Python need the same layout. The update worker converts them by following the new `update-self/references/python-packaging-migration.md`, which also covers a skill test that loads its module from a file: it imports the module from the package instead. `migrate-workspace` converts the skills it brings over from an older workspace the same way.
 
 - **Commands that changed:**
-  - `notify_user.py`, `request_secret.py`, `serve_isolated_instance.py`, `refresh_workspace_view.py` and `smoketest_app.py` are now run with `uv run --no-sync` instead of `python3`, and `preview_app.py` with `uv run --no-sync` instead of `uv run python3`.
+  - `notify_user.py`, `request_secret.py`, `serve_isolated_instance.py`, `refresh_workspace_view.py` and `verify_app.py` (now `system/scripts/workspace_scripts/verify_app.py`) are now run with `uv run --no-sync` instead of `python3`, and `preview_app.py` with `uv run --no-sync` instead of `uv run python3`.
   - `claude_p.py` lives at `python/use_ai_integration_skill/claude_p.py`.
   - update-self's apply refreshes the open views with `uv run --no-sync`.
   - These run from their modules: `.agents/shared/scripts/agents_shared/validate_skill.py`, `.agents/shared/scripts/agents_shared/resolve_template_base.py`, `.agents/skills/build-app/python/build_app_skill/scaffold_flask_lib.py` and `.agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py`.
@@ -26,3 +26,5 @@ Each skill's Python now lives in its own uv project, `.agents/skills/<name>/pyth
 - **Going live with a merged skill:** a skill with a `python/` project runs from the workspace venv, so `lead-proxy.md`'s provisional go-live and the crystallize, heal and update go-live steps run `uv sync --all-packages --frozen` after the merge.
 
 - **Idle and shed checks on workers:** launch-task imports `chat_background_tasks` (whether a worker is parked on a background task) and `oom_priority` (whether the OOM daemon shed it) as package dependencies of `launch-task-skill`, instead of putting their `src` dirs on `sys.path` from the launcher's checkout. It no longer passes its own checkout when it looks up the marker directory, so `chat_background_tasks` finds it from the checkout the library is installed from.
+
+- **publish-template's GitHub and publish tools:** `github_access.py`, `github_repo.py`, `push_snapshot.py` and `record_publish.py` live in `python/publish_template_skill/` and run in the live workspace's environment, `uv run --no-sync --project /home/user/workspace "$PTM/<tool>.py"`, so they work from the worker's worktree, whose venv the assembly's clean removes. `record_publish.py` imports update-self's ledger helpers from `update_self_skill` instead of putting update-self's scripts on `sys.path`.

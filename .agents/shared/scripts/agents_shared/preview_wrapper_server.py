@@ -123,7 +123,22 @@ def build_wrapper_html(inner_service: str, title: str, inner_path: str = "/") ->
     var host = location.host;
     var innerHost = previewService + host.slice(host.indexOf("."));
     var previewTarget = location.protocol + "//" + innerHost + previewPath;
-    document.getElementById("preview-frame").setAttribute("src", previewTarget);
+    var previewFrame = document.getElementById("preview-frame");
+    // The shell tells this page, not the one it frames, which theme to wear (shell:theme). Hand the last one on to
+    // the framed page whenever it arrives and whenever that page loads, so the preview follows the workspace's theme.
+    var lastTheme = null;
+    function handOnTheme() {{
+      if (lastTheme !== null && previewFrame.contentWindow) {{
+        previewFrame.contentWindow.postMessage(lastTheme, location.protocol + "//" + innerHost);
+      }}
+    }}
+    window.addEventListener("message", function (event) {{
+      if (event.source !== window.parent || !event.data || event.data.type !== "shell:theme") return;
+      lastTheme = event.data;
+      handOnTheme();
+    }});
+    previewFrame.addEventListener("load", handOnTheme);
+    previewFrame.setAttribute("src", previewTarget);
   </script>
 </body>
 </html>"""

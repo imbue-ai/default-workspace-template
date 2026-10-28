@@ -9,7 +9,9 @@
  * section 4.4). Defined once so both menus render the identical list off the identical rule.
  */
 
-import type { MenuRow } from "@imbue/workspace-ui/src/components/menu";
+import m from "mithril";
+import { icon } from "@imbue/workspace-ui/src/components/icons";
+import type { MenuRow, SubmenuChildRow } from "@imbue/workspace-ui/src/components/menu";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { windowSizeSubmenuRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
@@ -19,6 +21,62 @@ import type { EntryLook } from "../reducers/desktopState";
 /** The width the shell's menus, the desktop's and the phone's, never go under, so a menu of two-word verbs is still
  *  a card. */
 export const MENU_MIN_WIDTH = 176;
+
+/** What the window menu's Theming submenu offers (docs/system/themeable-apps.md): On and Off once the app is
+ *  themeable, and Enable theming until it is. */
+export interface WindowThemeActions {
+  /** Whether the app is written to wear the theme over its own look; until it is, On and Off are greyed. */
+  readonly isThemeable: boolean;
+  /** Whether the app's pages wear the workspace's theme now. */
+  readonly isOn: boolean;
+  readonly setOn: (isOn: boolean) => void;
+  /** Draft the request that makes the app themeable into the main chat; null with no chat to draft into. */
+  readonly enable: (() => void) | null;
+}
+
+/** The chat request "Enable theming" drafts: the app made themeable, following the workspace's guide. */
+export function enableThemingPrompt(appName: string): string {
+  return (
+    `Make the ${appName} app themeable, following docs/system/themeable-apps.md, and keep how it works. ` +
+    "Show me before keeping the change."
+  );
+}
+
+function themeSubmenuRow(actions: WindowThemeActions): MenuRow {
+  const check = (isChosen: boolean): m.Children =>
+    actions.isThemeable && isChosen ? m.trust(icon("check", { size: 13, strokeWidth: 2.5 })) : undefined;
+  const rows: SubmenuChildRow[] = [
+    {
+      kind: "action",
+      key: "theme-on",
+      label: "On",
+      isDisabled: !actions.isThemeable,
+      trailing: check(actions.isOn),
+      onSelect: () => actions.setOn(true),
+    },
+    {
+      kind: "action",
+      key: "theme-off",
+      label: "Off",
+      isDisabled: !actions.isThemeable,
+      trailing: check(!actions.isOn),
+      onSelect: () => actions.setOn(false),
+    },
+  ];
+  if (!actions.isThemeable && actions.enable !== null) {
+    rows.push(
+      { kind: "divider" },
+      { kind: "action", key: "theme-enable", label: "Enable theming", onSelect: actions.enable },
+    );
+  }
+  return {
+    kind: "submenu",
+    key: "theme",
+    label: "Theming",
+    value: actions.isThemeable && actions.isOn ? "On" : "Off",
+    rows: () => rows,
+  };
+}
 
 export interface WindowMenuActions {
   /** The zone grid's actions, or null where there is nothing to place (a window since closed). */
@@ -34,6 +92,8 @@ export interface WindowMenuActions {
   readonly popOut: (() => void) | null;
   /** Close the window for everyone; for a pinned window, which is never closed, this minimizes it instead. */
   readonly close: () => void;
+  /** Null for an app that wears the theme itself, or declares that it is not themed. */
+  readonly theme: WindowThemeActions | null;
 }
 
 /** Ask the Imbue Studio chrome to open its share settings for ``app``; the embed contract names the app by the
@@ -69,6 +129,7 @@ function shareAndQuitRows(
 export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuActions): MenuRow[] {
   const rows: MenuRow[] = [];
   if (actions.size !== null) rows.push(windowSizeSubmenuRow(actions.size, actions.onSized), { kind: "divider" });
+  if (actions.theme !== null) rows.push(themeSubmenuRow(actions.theme), { kind: "divider" });
   if (actions.popOut !== null) {
     rows.push({
       kind: "action",

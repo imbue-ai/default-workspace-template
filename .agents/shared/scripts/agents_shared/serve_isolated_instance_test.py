@@ -105,6 +105,7 @@ class _RecordingRegistry(mod.Registry):
         *,
         internal: bool,
         display_name: str | None,
+        theming_mode: str | None = None,
     ) -> None:
         if service_name in self.refused:
             raise forward_port.RegistrationError(f"refusing {service_name}")

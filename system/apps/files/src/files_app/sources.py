@@ -33,6 +33,9 @@ class EntryRecord(FrozenModel):
 class FolderData(FrozenModel):
     kind: Literal["folder"] = "folder"
     entries: tuple[EntryRecord, ...]
+    # The folder's stamp (see ``FolderStamps``) as it was just before it was read, so a page that asks for it again
+    # knows whether what it shows is still current; None where there is none to take, as on a computer.
+    stamp: str | None = None
 
 
 class FileData(FrozenModel):
@@ -42,6 +45,13 @@ class FileData(FrozenModel):
 
 
 PageData = FolderData | FileData
+
+
+class FolderStamps(FrozenModel):
+    """Where each asked-for folder stands, keyed by the path asked: a stamp that moves when anything in it is added,
+    removed or renamed, or None for a path that is not a folder."""
+
+    stamps: dict[str, str | None]
 
 
 class FileSource(Protocol):

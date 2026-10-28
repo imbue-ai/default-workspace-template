@@ -1,13 +1,15 @@
 [project]
 name = "system-monitor"
 version = "0.1.0"
-description = "The Memory & disk app: how much memory and disk the workspace is using, what is holding the memory, and what the memory guard stopped"
+description = "The System Monitor app: how much CPU, memory and disk the workspace is using, what is using them, what the memory guard stopped, and the state of the backups"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "app-manifest",
     "app-schema",
     "flask>=3.0",
+    "host-backup",
+    "httpx>=0.27",
     "imbue-common",
     "oom-priority",
     "pydantic>=2.0",

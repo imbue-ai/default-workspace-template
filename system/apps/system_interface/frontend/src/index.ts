@@ -4,6 +4,7 @@ import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
   EMBEDDER_CAPABILITIES,
+  HIGHLIGHT_CHROME,
   OPEN_EXTERNAL,
   OPEN_LINK,
   POP_OUT_WINDOW,
@@ -27,13 +28,20 @@ import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
 import type { OutsideLinkOpener, PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
-import { startPresenceHeartbeat } from "./model/Presence";
-import { initEmbedderRelay } from "./relay";
+import { getOwnIdentity, startPresenceHeartbeat } from "./model/Presence";
+import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour";
+import type { TourAction } from "./model/tourCards";
+import { avatarPinnedWindow } from "./reducers/desktopState";
+import { initEmbedderRelay, setEmbedderAppMessageHandler } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
 import { ShellSocket } from "./store/socket";
-import { followRenderModes } from "./theme/metrics";
+import { wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
+import { currentRenderModes, followRenderModes, readThemeMetrics } from "./theme/metrics";
+import { afterPageLoad } from "./theme/pageLoad";
 import { App, BACKDROP_AREA_ATTRIBUTE } from "./views/App";
+import { followShownTheme } from "./views/shownTheme";
+import { setIconTheme } from "./views/themeIcons";
 
 /** Rewrite the page's URL with its query string put through ``strip``, leaving the path, the hash, and the
  *  history entry as they are: how a boot-time parameter is removed once it has been read. */
@@ -78,10 +86,14 @@ const popOutBridge: PopOutBridge = {
   reportDetachedWindows: (windows) => sendToEmbedder(DETACHED_WINDOWS, { windows: [...windows] }),
 };
 
-/** Where an external link no app takes opens: through the chrome, or in a new tab of the browser this shell is in. */
+/** Where an external link no app takes opens: through the chrome, or in a new tab of the browser this shell is in,
+ *  or, for a custom-scheme link facing an older chrome, in its app of the user's system by navigating this page
+ *  itself, which Electron hands to the app without leaving the page (the page's own ``frame-src`` admits no custom
+ *  scheme, so a hidden frame of it could not launch one). */
 const outsideLinks: OutsideLinkOpener = {
   openInEmbedder: (url) => sendToEmbedder(OPEN_EXTERNAL, { url }),
   openInBrowser: (url) => void window.open(url, "_blank", "noopener,noreferrer"),
+  launchInSystemApp: (url) => window.location.assign(url),
 };
 
 function bootstrap(): void {
@@ -117,6 +129,16 @@ function bootstrap(): void {
   );
   if (store === null) throw new Error("the render modes never reported");
   const desktopStore: DesktopStore = store;
+  followShownTheme(desktopStore, {
+    wear: (theme, isRemembered) => wearTheme(theme, document, { isRemembered }),
+    // A theme the boot script put on is already worn, and the page's load event is what waits for its stylesheet.
+    afterLoad: afterPageLoad,
+    takeMetrics: () => {
+      desktopStore.setThemeMetrics(readThemeMetrics(readStyle(root)), currentRenderModes(root));
+      m.redraw();
+    },
+    setIconTheme,
+  });
   const gestures = new PointerGestureSource();
   // Say this window is here (and learn who it is) for as long as it stays visible.
   startPresenceHeartbeat();
@@ -131,12 +153,18 @@ function bootstrap(): void {
   document.addEventListener("visibilitychange", () =>
     desktopStore.onVisibilityChange(document.visibilityState === "visible"),
   );
-  // Every message the chrome sends also goes to the apps registered for its type.
+  // Every message the chrome sends also goes to the apps registered for its type: the contract's own
+  // types through the endpoint's observer, any other (a notification's destination) through the relay.
   setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message, null));
+  setEmbedderAppMessageHandler((message) => void desktopStore.relayEmbedderMessage(message, null));
   // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     desktopStore.setCanPopOut(message.canPopOut === true);
-    desktopStore.setCanOpenLinksOutside(message.opensExternalLinks === true);
+    desktopStore.setOutsideLinkCapabilities({
+      opensExternalLinks: message.opensExternalLinks === true,
+      opensCustomSchemeLinks: message.opensCustomSchemeLinks === true,
+    });
+    desktopStore.setOpensLocalFiles(message.opensLocalFiles === true);
   });
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;
@@ -159,6 +187,32 @@ function bootstrap(): void {
     if (phase !== "out" && phase !== "in" && phase !== "released") return;
     desktopStore.setTearOut(windowId, phase);
   });
+  // The show-around tour: by itself the first time the agent goes to work on a fresh workspace, for the owner
+  // looking at the whole desktop, resumed the same way after the agent's reply interrupted it; from the launcher's
+  // row any time. A card about a chrome control asks the chrome to ring it; the chat card's Next snaps the avatar's
+  // window aside.
+  const runTourAction = (action: TourAction): void => {
+    switch (action) {
+      case "snap-avatar-window-right": {
+        const window = avatarPinnedWindow(desktopStore.getState());
+        if (window !== null) desktopStore.setWindowState(window.id, "SNAPPED_RIGHT");
+        return;
+      }
+    }
+  };
+  const tour = new TourController({
+    api: TOUR_API,
+    highlightChrome: (anchor) => sendToEmbedder(HIGHLIGHT_CHROME, { anchor }),
+    isAutoStartAllowed: () =>
+      !desktopStore.isPhoneLayout() &&
+      desktopStore.getSoloWindowId() === null &&
+      !isPreviewShell() &&
+      (getOwnIdentity()?.owner ?? true),
+    performAction: runTourAction,
+    startAfterWorkingMs: tourStartDelayFromSearch(window.location.search),
+    redraw: () => m.redraw(),
+  });
+  desktopStore.subscribe(() => tour.noteAgentWorking(desktopStore.getState().avatar.status.mood === "working"));
   const rootElement = document.getElementById("app");
   if (rootElement) {
     m.mount(rootElement, {
@@ -166,16 +220,19 @@ function bootstrap(): void {
         m(App, {
           store: desktopStore,
           gestures,
+          tour,
           host: window.location.host,
           protocol: window.location.protocol,
         }),
     });
   }
   const started = desktopStore.start(takeDeepLinkFromLocation());
+  const loaded = Promise.all([started, desktopStore.whenAppsLoaded()]);
+  void loaded.then(() => tour.load());
   // Announced once the page can act on what the embedder held, not merely once a handler is
   // registered: relaying a message needs the apps (which of them take it), and the embedder sends
   // what it held the moment this lands.
-  void Promise.all([started, desktopStore.whenAppsLoaded()]).then(() => announceReadyToEmbedder({ opensLinks: true }));
+  void loaded.then(() => announceReadyToEmbedder({ opensLinks: true, opensCustomSchemeLinks: true }));
 }
 
 window.addEventListener("load", bootstrap);

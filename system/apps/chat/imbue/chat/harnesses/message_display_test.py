@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from update_self_skill import update_resume_note
 from workspace_bare_scripts import message_chat
 from workspace_bare_scripts import run_in_background
 
@@ -18,6 +19,9 @@ from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import SecretResolutionVerdict
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_NOTE_TAG
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_LANDED
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_NOT_LANDED
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
@@ -364,6 +368,53 @@ def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None
     assert decision.display_label == "Background task"
     assert decision.display_body == "Wait for the background agent (finished)"
     assert is_non_turn_tail(report) is False
+
+
+@pytest.mark.parametrize(
+    ("landed_ref", "label", "summary"),
+    [
+        (
+            "minds-v0.9.0",
+            "Workspace updated",
+            "This chat was paused while the workspace updated to v0.9.0, and is carrying on now.",
+        ),
+        (
+            None,
+            "Workspace update not applied",
+            "This chat was paused for a workspace update that did not go through, and is carrying on now.",
+        ),
+    ],
+)
+def test_a_resumed_chats_workspace_update_note_is_a_notice_showing_only_its_summary(
+    landed_ref: str | None, label: str, summary: str
+) -> None:
+    """``run-status resume-chats`` sends a paused chat a note composed by the update-self skill, which is
+    standard-library only and cannot import this package, so its copy of the tag is pinned here by classifying
+    a note it composed."""
+    note = update_resume_note.compose_resume_note(
+        landed_ref=landed_ref,
+        is_chat_paused=True,
+        wip_commit="0123abc",
+        interrupted_tasks=["Run the test suite"],
+        restarted_workers=["fix-login"],
+    )
+
+    assert update_resume_note.WORKSPACE_UPDATE_NOTE_TAG == WORKSPACE_UPDATE_NOTE_TAG
+    assert (update_resume_note.OUTCOME_LANDED, update_resume_note.OUTCOME_NOT_LANDED) == (
+        WORKSPACE_UPDATE_OUTCOME_LANDED,
+        WORKSPACE_UPDATE_OUTCOME_NOT_LANDED,
+    )
+    decision = classify_user_message(note)
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == label
+    assert decision.display_body == summary
+    assert is_non_turn_tail(note) is False
+
+
+def test_text_that_merely_quotes_the_workspace_update_note_is_a_human_turn() -> None:
+    quoting = f'why did the <{WORKSPACE_UPDATE_NOTE_TAG} outcome="landed"><summary>x</summary> note show up?'
+    assert classify_user_message(quoting) is None
 
 
 def _compose_report(description: str, command: Sequence[str] = ("make",), output: str = "built\n") -> str:

@@ -9,7 +9,10 @@
  *   shell, so an app page cannot reach it. Any `minds:` message from a child frame in the
  *   workspace origin family is forwarded up to `window.parent`
  *   unchanged, and any message from `window.parent` is rebroadcast to every child frame the
- *   shell created. No payload is inspected.
+ *   shell created. A chrome message of a type the embed contract does not define (an app
+ *   message, such as a notification's destination) is also handed to the app-message handler,
+ *   since the contract's endpoint in `embed.ts` drops it before its observer; a contract type
+ *   reaches that observer instead, so neither is relayed twice. No payload is inspected.
  * - The shell side of the app contract. `shell:` messages from a child frame are dispatched
  *   to the handler registered for their type, with the frame that posted them; the shell's
  *   own messages to a frame (`shell:handshake`, `shell:shown`, ...) are sent through
@@ -23,13 +26,17 @@
  */
 
 import { workspaceHostCoordinate } from "@imbue/workspace-ui/src/app_contract";
+import { isContractEmbedderMessageType } from "@imbue/workspace-ui/src/embed";
 
 export type ChildFrameMessageHandler = (frame: HTMLIFrameElement, payload: Record<string, unknown>) => void;
+/** Takes a chrome message of a type the embed contract does not define: its type beside its fields. */
+export type EmbedderAppMessageHandler = (message: { type: string } & Record<string, unknown>) => void;
 
 const MINDS_TYPE_PREFIX = "minds:";
 const SHELL_TYPE_PREFIX = "shell:";
 
 const handlerByType: Partial<Record<string, ChildFrameMessageHandler>> = {};
+let embedderAppMessageHandler: EmbedderAppMessageHandler | null = null;
 let isInitialized = false;
 
 /** Whether an origin belongs to this workspace's origin family: the same coordinate as the shell's own host. */
@@ -74,6 +81,7 @@ function handleMessage(event: MessageEvent): void {
     for (const frame of childFrames()) {
       frame.contentWindow?.postMessage(data, "*");
     }
+    if (!isContractEmbedderMessageType(type)) embedderAppMessageHandler?.({ ...message, type });
     return;
   }
 
@@ -102,6 +110,12 @@ export function setChildFrameMessageHandler(type: string, handler: ChildFrameMes
   handlerByType[type] = handler;
 }
 
+/** Register the handler for the chrome's messages of types the embed contract does not define
+ * (replaces any prior one). */
+export function setEmbedderAppMessageHandler(handler: EmbedderAppMessageHandler): void {
+  embedderAppMessageHandler = handler;
+}
+
 /** Send one contract message to a frame the shell created. */
 export function sendToChildFrame(frame: HTMLIFrameElement, type: string, payload: Record<string, unknown> = {}): void {
   frame.contentWindow?.postMessage({ type, ...payload }, "*");
@@ -114,4 +128,5 @@ export function resetEmbedderRelayForTesting(): void {
     isInitialized = false;
   }
   for (const type of Object.keys(handlerByType)) delete handlerByType[type];
+  embedderAppMessageHandler = null;
 }

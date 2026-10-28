@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     # docs_viewer renders the shell's docs.
     "markdown>=3",
-    # smoketest_app drives the app it checks.
+    # verify_app drives the app it checks.
     "playwright==1.58.0",
 ]
 
