@@ -130,6 +130,7 @@ def error_response(
     status: int,
     user_facing_message: str | None = None,
     reportable: bool | None = None,
+    kind: str | None = None,
 ) -> Response:
     """A refusal or a failure as the ``ErrorResponse`` every route answers them with."""
     return model_response(
@@ -137,6 +138,7 @@ def error_response(
             detail=detail,
             user_facing_message=user_facing_message,
             reportable=reportable,
+            kind=kind,
         ),
         status,
     )
