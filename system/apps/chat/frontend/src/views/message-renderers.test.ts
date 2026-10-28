@@ -836,6 +836,25 @@ describe("the auth-error note's switch link", () => {
       await vi.waitFor(() => expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore));
     });
 
+    it("sends none of the remaining messages once Stop took one back", async () => {
+      const second = { ...PROMPT, event_id: "prompt-2", content: "And the release notes" };
+      transcript.events = [PROMPT, second, authErrorEvent()];
+      transcript.sendMessage.mockResolvedValueOnce("withdrawn");
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      findButton(children, "Send your message again")!.attrs.onclick();
+      await vi.waitFor(() =>
+        expect(allText(renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"))).not.toContain(
+          "Send your message again",
+        ),
+      );
+      expect(transcript.sendMessage).toHaveBeenCalledExactlyOnceWith(
+        "chat-1",
+        "Summarize the deploy thread",
+        expect.any(String),
+      );
+    });
+
     it("says the resend didn't go and offers it again when the send fails", async () => {
       transcript.events = [PROMPT, authErrorEvent()];
       transcript.sendMessage.mockRejectedValueOnce(new Error("offline"));

@@ -221,6 +221,8 @@ export async function sendAgain(chatId: string, failedEventId: string, prompts: 
     try {
       const status = await sendMessage(chatId, prompt.content, messageId);
       dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
+      // Stop took it back while the agent came up: the user stopped the resend, so the rest stay unsent.
+      if (status === "withdrawn") break;
     } catch (err) {
       console.error(`Failed to send the message again to chat ${chatId}: ${describeRequestError(err)}`);
       dropOutgoing(chatId, outgoingId);
