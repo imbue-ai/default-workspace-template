@@ -2015,6 +2015,7 @@ class AgentManager:
         to send it a second time.
         """
         agents = self._begin_resends_after_sign_in(account_id)
+        is_started = False
         try:
             self._creation_cg.start_new_thread(
                 target=self._restart_agents_after_sign_in,
@@ -2022,10 +2023,11 @@ class AgentManager:
                 name=f"reauth-restart-{account_id[:8]}",
                 is_checked=False,
             )
-        except BaseException:
-            for agent_id, _name in agents:
-                self._end_resend_after_sign_in(agent_id)
-            raise
+            is_started = True
+        finally:
+            if not is_started:
+                for agent_id, _name in agents:
+                    self._end_resend_after_sign_in(agent_id)
 
     def restart_agents_on_account(self, account_id: str) -> int:
         """Restart every live agent bound to `account_id`. Returns how many were restarted.
