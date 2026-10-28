@@ -197,17 +197,58 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
               },
               recentDoneTitles(doneSteps),
             ),
+        // The same wrapper a step's revealed work sits in (renderStepNode, renderExpandedStepBody): flush under the
+        // label, no second column of bullets.
         isExpanded
           ? m(
               "div",
               { class: "pv-tl-expanded mt-1.5" },
               m(
-                "div.pv-timeline-nodes",
-                doneSteps.map((step, idx) => renderStepNode(step, idx === doneSteps.length - 1, toolResults, chatId)),
+                "div",
+                { class: "pv-expanded mt-2.5 text-(length:--font-size-body)" },
+                doneSteps.map((step, idx) => renderDoneItem(step, idx === 0, toolResults, chatId)),
               ),
             )
           : null,
       ]),
+    ]);
+  }
+
+  /** One done step under the Done row: its title (pressing it shows its work, as on a step row) and its summary.
+   *  The first sits at the wrapper's own offset; each later one is set off by the reply's gap (mt-4), so the label
+   *  to the first title and each summary to the next title read as the same distance. */
+  function renderDoneItem(
+    step: StepNode,
+    isFirst: boolean,
+    toolResults: Map<string, ToolResultEvent>,
+    chatId: string,
+  ): m.Vnode {
+    const canExpand = step.events.length > 0;
+    const isExpanded = isBlockExpanded(stepKey(step.ticket_id));
+    return m("div", { class: `pv-done-item ${isFirst ? "" : "mt-4"}`, key: `done-${step.ticket_id}` }, [
+      m(
+        "button",
+        {
+          type: "button",
+          class: timelineTitleClass("done"),
+          disabled: !canExpand,
+          onclick: canExpand ? () => toggleBlockExpanded(stepKey(step.ticket_id)) : undefined,
+        },
+        [
+          step.title,
+          canExpand
+            ? m(
+                "span",
+                { class: `${TIMELINE_CHEVRON_CLASS} ${timelineChevronStateClass(isExpanded)}` },
+                m.trust("&rsaquo;"),
+              )
+            : null,
+        ],
+      ),
+      renderStepCaption(step, isExpanded),
+      isExpanded
+        ? m("div", { class: "pv-tl-expanded mt-1.5" }, renderExpandedStepBody(step, toolResults, chatId))
+        : null,
     ]);
   }
 

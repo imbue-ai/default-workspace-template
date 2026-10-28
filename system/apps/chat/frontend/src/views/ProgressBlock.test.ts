@@ -22,7 +22,7 @@ function mount(items: TimelineItem[], id: string): void {
 }
 
 function rowTitles(): string[] {
-  return [...root.querySelectorAll(".pv-tl-node button")].map((button) =>
+  return [...root.querySelectorAll(".pv-tl-node > div > button, .pv-done-item > button")].map((button) =>
     (button.textContent ?? "").replace("›", "").trim(),
   );
 }
@@ -80,10 +80,12 @@ describe("the Done row", () => {
     m.redraw.sync();
 
     const inside = root.querySelector(".pv-tl-node--done-group .pv-tl-expanded");
-    expect([...(inside?.querySelectorAll(".pv-tl-node button") ?? [])].map((b) => b.textContent?.trim())).toEqual([
+    expect([...(inside?.querySelectorAll(".pv-done-item button") ?? [])].map((b) => b.textContent?.trim())).toEqual([
       "Read the paper",
       "Write the summary",
     ]);
+    // No second column of bullets: the done steps are not timeline nodes of their own.
+    expect(inside?.querySelector(".pv-tl-node")).toBeNull();
   });
 
   it("is absent from a timeline with no done step", () => {
