@@ -98,6 +98,7 @@ from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
 from imbue.system_interface.shell.data_types import ClientDesktopView
 from imbue.system_interface.shell.data_types import LaunchRequest
+from imbue.system_interface.shell.data_types import PageShowRequest
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
@@ -334,6 +335,17 @@ def launch(desktop_id: str) -> ResponseReturnValue:
     )
 
 
+def show_page(client_id: str) -> ResponseReturnValue:
+    """``POST /api/clients/<client_id>/show``: the ``show`` op (section 8) for a client's own page, which cannot reach
+    the loopback op route, answered as the op answers it."""
+    body = parse_request_body(PageShowRequest)
+    shell = _shell()
+    arguments = ShowArgs(
+        app=body.app, path=body.path, showing=body.showing, repoint=body.repoint, client=ClientId(client_id)
+    )
+    return _show(shell, arguments, _resolve_target(shell, arguments, None), None)
+
+
 # Section 5.4: placements
 
 
@@ -511,6 +523,9 @@ def register_desktop_routes(application: Flask) -> None:
     )
     application.add_url_rule(
         "/api/desktops/<desktop_id>/launch", view_func=launch, methods=["POST"], endpoint="launch"
+    )
+    application.add_url_rule(
+        "/api/clients/<client_id>/show", view_func=show_page, methods=["POST"], endpoint="show_page"
     )
     application.add_url_rule(
         "/api/desktops/<desktop_id>/windows/<window_id>/close",

@@ -19,7 +19,7 @@ set -euo pipefail
 
 # The skill (../SKILL.md) names the same version;
 # system/apps/datalib/test_datalib_pin.py fails when the two disagree.
-readonly PINNED_VERSION="v0.45.0"
+readonly PINNED_VERSION="v0.46.0"
 
 readonly INSTALL_ROOT="${DATALIB_INSTALL_ROOT:-$HOME/.local/share/datalib}"
 readonly BIN_DIR="${DATALIB_BIN_DIR:-$HOME/.local/bin}"

@@ -595,6 +595,7 @@ export class LivePagesLayer implements PageDriver {
       desktopId,
       app: page.app,
       path,
+      opensLocalFiles: this.store.getOpensLocalFiles(),
     });
     page.greetedDesktopId = desktopId;
     sendToChildFrame(page.frame, SHELL_THEME, this.themeMessageFor(page, currentTheme(), isCurrentThemeRemembered()));

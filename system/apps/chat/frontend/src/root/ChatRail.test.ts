@@ -119,7 +119,7 @@ describe("ChatRail main chat", () => {
     expect(keysOf(other)).toContain("stop");
   });
 
-  it("gives a chat waiting for its first send its verbs, and a chat being created none", () => {
+  it("gives a chat waiting for its first send its verbs, and a chat being created its rename and delete too", () => {
     const waiting = chatRowFixture("agent-waiting", { isProvisional: true, status: "idle" });
     const creating = chatRowFixture("agent-creating", { isProvisional: true, status: "working" });
     const context = chatRailAttrsFixture({ rows: [waiting, creating] });
@@ -130,7 +130,12 @@ describe("ChatRail main chat", () => {
         menuRow.kind === "action" && menuRow.key !== undefined ? [menuRow.key] : [],
       ),
     ).toEqual(["rename", "make-main", "delete"]);
+    expect(
+      rowMenuRows(context, creating).flatMap((menuRow) =>
+        menuRow.kind === "action" && menuRow.key !== undefined ? [menuRow.key] : [],
+      ),
+    ).toEqual(["rename", "make-main", "delete"]);
     expect(rail.querySelector('[data-chat-id="agent-waiting"] .chat-rail-rename')).not.toBeNull();
-    expect(rail.querySelector('[data-chat-id="agent-creating"] .chat-rail-rename')).toBeNull();
+    expect(rail.querySelector('[data-chat-id="agent-creating"] .chat-rail-rename')).not.toBeNull();
   });
 });

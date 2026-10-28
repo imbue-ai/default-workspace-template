@@ -58,9 +58,16 @@ function bootstrap(): void {
   }
 
   let handshake: ShellHandshake | null = null;
+  // The handshake comes as a message, so after the window below exists.
+  let filesApp: FilesController | null = null;
   const connection = connectToShell({
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
-    onHandshake: (received) => (handshake = received),
+    onHandshake: (received) => {
+      handshake = received;
+      filesApp?.setOpensLocalFiles(received.opensLocalFiles);
+    },
+    onShown: () => filesApp?.setShownByShell(true),
+    onHidden: () => filesApp?.setShownByShell(false),
   });
   window.addEventListener("focus", () => connection.focused());
   const opener = createContextMenuOpener();
@@ -85,8 +92,11 @@ function bootstrap(): void {
   // A `?path=` folder is fetched rather than taken from the page, which lists the folder the launch landed on.
   const folder = requested ?? (isFolderPath(path) ? path : `${path}/`);
   const initial =
-    requested === null ? { exists: true, entries: data.entries.map((record) => entryOf(folder, record)) } : undefined;
+    requested === null
+      ? { exists: true, entries: data.entries.map((record) => entryOf(folder, record)), stamp: data.stamp ?? null }
+      : undefined;
   const app = new FilesController(folder, initial, connection);
+  filesApp = app;
 
   installElementContextMenu({
     connection,

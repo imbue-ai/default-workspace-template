@@ -21,7 +21,9 @@ service.
 2. **Workspace main branch** - on first boot only (gated by
    `data/.state/workspace_main_branch_initialized`), commits the rsynced workspace
    onto a clean `main` branch. It creates no chat: the chat app creates chats on
-   demand.
+   demand. The same first boot writes `data/.state/system_interface/offer_tour`,
+   which tells the system interface the workspace is new, so its show-around tour
+   may start by itself; a workspace that already existed never gets it.
 3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.

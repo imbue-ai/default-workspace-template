@@ -41,7 +41,9 @@ def propfind_body(folder: str, children: list[tuple[str, bool, int]]) -> bytes:
 class FakeComputer:
     """The user's computer as the gateway reaches it: the permissions it granted, the folders it holds, and every
     request it was sent. It grants per device when a permission names it, and then serves its files under its id
-    alone; otherwise with no id alone, as the gateway refuses a path no grant matches."""
+    alone; otherwise with no id alone, as the gateway refuses a path no grant matches. Its Imbue Studio reports
+    ``syncs`` when given them, and is one that predates reporting them when not. Asleep, it answers nothing, as the
+    gateway then says it cannot reach it."""
 
     def __init__(
         self,
@@ -49,26 +51,36 @@ class FakeComputer:
         folders: dict[str, list[tuple[str, bool, int]]],
         is_awake: bool = True,
         is_writable: bool = True,
+        syncs: list[dict[str, Any]] | None = None,
     ):
         self.permissions = permissions
         self.folders = folders
         self.files: dict[str, bytes] = {}
         self.is_awake = is_awake
         self.is_writable = is_writable
+        self.syncs = syncs
         self.requests: list[httpx.Request] = []
+
+    def asked(self, path: str) -> list[httpx.Request]:
+        """The requests sent to it whose path ends in ``path``."""
+        return [request for request in self.requests if request.url.path.endswith(path)]
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         path = request.url.path
         if path == "/devices":
             return httpx.Response(200, json={"devices": [{"device_id": DEVICE, "hostname": "Kims-Mac.local"}]})
+        if not self.is_awake:
+            return httpx.Response(502, text="device unreachable")
         if path == "/permissions/self":
             return httpx.Response(200, json={"rules": [{"latchkey-self": list(self.permissions)}]})
+        if path.startswith("/minds-api-proxy/api/v1/agents/") and path.endswith("/folder-syncs"):
+            if self.syncs is None:
+                return httpx.Response(404)
+            return httpx.Response(200, json={"device_id": DEVICE, "syncs": self.syncs})
         prefix = "/minds-api-proxy/api/v1/files"
         if not path.startswith(prefix):
             return httpx.Response(404)
-        if not self.is_awake:
-            return httpx.Response(502, text="device unreachable")
         rest = path[len(prefix) :]
         is_by_id = rest.startswith(f"/{DEVICE}/")
         if is_by_id != any(f"-{DEVICE}:" in permission for permission in self.permissions):

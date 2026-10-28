@@ -11,11 +11,6 @@ from typing import Final
 from typing import assert_never
 
 import pathspec
-from imbue.imbue_common.enums import LowerCaseStrEnum
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.model_update import to_update
-from imbue.imbue_common.primitives import NonEmptyStr
-from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
@@ -23,9 +18,9 @@ from pydantic import ValidationError
 from app_manifest.errors import ManifestLoadError
 from app_manifest.errors import ScopeComputationError
 from app_manifest.manifest import APPS_DIRECTORY_PARTS
-from app_manifest.manifest import MANIFEST_FILENAME
 from app_manifest.manifest import AppManifest
 from app_manifest.manifest import AppReference
+from app_manifest.manifest import MANIFEST_FILENAME
 from app_manifest.manifest import app_package_directory
 from app_manifest.manifest import load_manifest
 from app_manifest.primitives import ExcludeGlob
@@ -33,6 +28,11 @@ from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.primitives import is_path_covered_by
+from imbue.imbue_common.enums import LowerCaseStrEnum
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
+from imbue.imbue_common.primitives import NonEmptyStr
+from imbue.imbue_common.pure import pure
 
 # The shared wiring files where supervised apps have their blocks: the main config and
 # the drop-in directory its ``[include]`` glob names. The template declares its programs

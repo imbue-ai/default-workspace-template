@@ -2,8 +2,6 @@ import json
 from pathlib import Path
 
 import click
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.primitives import NonEmptyStr
 from pydantic import Field
 
 from app_manifest.errors import AppManifestError
@@ -27,6 +25,8 @@ from app_manifest.selection import render_selection_json
 from app_manifest.selection import select_tests_for_diff
 from app_manifest.selection import select_tests_for_pass_scope
 from app_manifest.selection import select_tests_for_paths
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.primitives import NonEmptyStr
 
 
 class ReferenceLookupRow(FrozenModel):

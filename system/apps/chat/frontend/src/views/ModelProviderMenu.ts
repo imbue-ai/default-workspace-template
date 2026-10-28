@@ -8,7 +8,7 @@
  * chat's live `model_choice` pushed onto the chats store, and its account id resolved
  * against the account list. Which rows show is decided by the matched catalog option (effort
  * iff the model declares more than one; fast iff it supports it); the switch mode decides
- * whether they are interactive.
+ * whether a pick shows before the harness confirms it.
  *
  * The provider row is the one that always renders. A provider is a property of the ACCOUNT,
  * not of the model, so it survives all three of the states in which there is no model to show.
@@ -33,7 +33,8 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getChatById, getProvisionalChat } from "../models/Chats";
+import { getChatById, getProvisionalChat, setLaunchChoice } from "../models/Chats";
+import type { ProvisionalChat } from "../models/Chats";
 import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
 import { effortInEffect, ensureHarnessCatalogs, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
@@ -103,10 +104,6 @@ import * as css from "./modelProviderMenuStyles";
 import { createSlidingMenuTrack } from "./slidingMenuTrack";
 import { FIELD_PART, MENU_ITEM_PART, MENU_SEPARATOR_PART } from "@imbue/workspace-ui/src/themes/parts";
 
-/** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
- *  scriptable form, so the menu cannot drive it -- and says where the user can. */
-const READ_ONLY_TOOLTIP = "To change the model or effort, run /model or /effort in the agent terminal.";
-
 /** The effort to carry when switching to `option`: keep the current one if the new model declares
  *  it, else the effort the model starts at. */
 function clampEffort(option: CatalogModelOption, currentEffort: string | null): string | null {
@@ -161,8 +158,7 @@ function loadingChip(): m.Vnode {
   return m("span", { class: `model-selector-loading ${css.PROVISIONAL_CHIP}` }, "Loading…");
 }
 
-/** The chip for a chat with no agent yet: the account it starts on. With no agent there is no
- *  model to name or change. */
+/** The chip for a chat with no agent yet that cannot take a choice: the account it starts on. */
 function provisionalChip(chatId: string): m.Vnode {
   const provisional = getProvisionalChat(chatId);
   if (provisional === undefined || !areAccountsLoaded()) return loadingChip();
@@ -195,8 +191,6 @@ export interface ModelProviderMenuAttrs {
 interface EffortControlOptions {
   efforts: readonly { level: string; in_picker: boolean }[];
   current: string | null;
-  interactive: boolean;
-  tooltip: string | null;
   onPick: (level: string) => void;
 }
 
@@ -367,7 +361,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     // -- see 2 above); mid-drag from the position, which indexes `shown` by construction
     // because the input's own min/max are its bounds.
     const level = draggingEffortIndex === null ? (opts.current ?? shown[committed].level) : shown[position].level;
-    return m("div", { class: css.ROW_STATIC, ...hoverTooltipAttrs(opts.tooltip, "above") }, [
+    return m("div", { class: css.ROW_STATIC }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m("span", { class: css.ROW_VALUE_STATIC }, [
         m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
@@ -399,7 +393,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
             min: 0,
             max: shown.length - 1,
             step: 1,
-            disabled: !opts.interactive,
             value: position,
             style:
               `background: linear-gradient(to right, ${effortFillColor(pct / 100)} ${pct}%, ` +
@@ -424,7 +417,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
   function effortSegments(opts: EffortControlOptions): m.Children {
     const shown = opts.efforts.filter((effort) => effort.in_picker);
     if (shown.length < 2) return null;
-    return m("div", { class: css.EFFORT_SEGMENTS_ROW, ...hoverTooltipAttrs(opts.tooltip, "above") }, [
+    return m("div", { class: css.EFFORT_SEGMENTS_ROW }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m(
         "div",
@@ -440,7 +433,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               "aria-checked": isCurrent ? "true" : "false",
               "data-effort-level": effort.level,
               class: isCurrent ? css.EFFORT_SEGMENT_ON : css.EFFORT_SEGMENT,
-              disabled: !opts.interactive,
               onclick: () => {
                 if (!isCurrent) opts.onPick(effort.level);
               },
@@ -844,6 +836,74 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     ];
   }
 
+  /** The menu of a chat with no agent yet: the provider and model it starts on, which take effect as it
+   *  launches, or as its create lands. A failed create, or one with no account to run on, keeps the plain chip. */
+  function provisionalMenu(chatId: string, provisional: ProvisionalChat): m.Children {
+    const account = areAccountsLoaded() ? accountForFirstSend(provisional.account_id) : null;
+    if (provisional.phase === "failed" || account === null) return provisionalChip(chatId);
+    const options = (getHarnessCatalog(account.harness)?.options ?? []).filter((option) => option.in_picker);
+    const picked = options.find((option) => option.id === provisional.model_pick?.model_id) ?? null;
+    const choose = (accountId: string, pick: ModelIdentity | null): void => {
+      menu.close();
+      setLaunchChoice(chatId, accountId, pick).catch((err: unknown) =>
+        console.error(`Could not choose how chat ${chatId} starts: ${String(err)}`),
+      );
+    };
+    const trigger = m(
+      "button",
+      {
+        type: "button",
+        class: `model-selector-trigger model-selector-provisional ${css.TRIGGER}`,
+        ...menu.triggerAttrs(),
+        ...hoverTooltipAttrs(`This chat starts on ${account.label}. Change model or provider`, "above"),
+      },
+      m("span", picked?.label ?? account.provider),
+    );
+    if (!menu.isOpen()) return trigger;
+    const rows: MenuRow[] = [
+      {
+        kind: "submenu",
+        key: "providers",
+        label: "Provider",
+        value: account.provider,
+        sub: account.harness_label,
+        content: () =>
+          m(
+            "div",
+            { class: css.SUBMENU_SCROLL },
+            getAccounts().map((row) =>
+              accountRow({
+                row,
+                isCurrent: row.id === account.id,
+                isDefault: row.id === getDefaultAccountId(),
+                rowClass: row.id === account.id ? css.ACCOUNT_ROW_SELECTED : css.ACCOUNT_ROW,
+                onSelect: () => (row.id === account.id ? closeSubmenu() : choose(row.id, null)),
+                state: rowState,
+              }),
+            ),
+          ),
+      },
+      { kind: "divider" },
+      {
+        kind: "submenu",
+        key: "model",
+        label: "Model",
+        value: picked?.label ?? "Default",
+        truncateValue: "start",
+        maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
+        rows: () =>
+          options.map((option) => ({
+            kind: "action" as const,
+            key: `model-${option.id}`,
+            label: option.label,
+            trailing: option.id === picked?.id ? m.trust(icon("check", { size: 14 })) : undefined,
+            onSelect: () => choose(account.id, { model_id: option.id, effort: startingEffort(option), fast: false }),
+          })),
+      },
+    ];
+    return [trigger, menu.view(rows)];
+  }
+
   /** The Model row's submenu: the models this account can actually use. */
   function modelSubmenu(
     chatId: string,
@@ -949,7 +1009,10 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       // loaded; the live choice may not have resolved (every harness passes through this
       // before its first model read, and opencode never leaves it); or the live model may
       // match no catalog option. Only the Model/Effort/Fast rows are suppressed.
-      if (chat === undefined) return provisionalChip(chatId);
+      if (chat === undefined) {
+        const provisional = getProvisionalChat(chatId);
+        return provisional === undefined ? loadingChip() : provisionalMenu(chatId, provisional);
+      }
       // A chat whose account was signed out runs on nothing until a provider is chosen for it, and
       // the composer's notice in its place says so and offers the choice: the model it last ran
       // stays out of the row rather than reading as current. A phone keeps its settings button.
@@ -975,10 +1038,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         }
       }
 
-      // opencode ships an empty catalog and a resolver that fails, so its every pick would
-      // 500. Read-only is the honest render -- a picker there offers a switch that cannot work.
-      const readOnly = catalog === null || catalog.switch_mode === "read_only";
-      const interactive = !readOnly && matched !== null;
       const optimistic = catalog?.switch_mode === "eager_then_reconcile";
       // What the agent recorded, which a switch diffs against; null while it runs at the default.
       const recordedEffort = choice?.identity.effort ?? null;
@@ -986,7 +1045,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       const currentEffort = effortInEffect(recordedEffort, matched);
       const currentFast = choice?.identity.fast ?? false;
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
-      const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
       const searchable = catalog?.picker_mode === "search";
       const dynamic = catalog?.picker_mode === "dynamic";
       viewedChatId = chatId;
@@ -1118,32 +1176,19 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         });
         rows.push({ kind: "divider" });
         if (matched !== null) {
-          // A read-only harness gets a row that states the model and nothing more: no chevron,
-          // no list.
-          rows.push(
-            interactive
-              ? {
-                  kind: "submenu",
-                  key: "model",
-                  label: "Model",
-                  value: matched.label,
-                  truncateValue: "start",
-                  maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
-                  onOpen: () => {
-                    if (searchable || dynamic) warmOfferedModels(chatId);
-                  },
-                  content: () =>
-                    modelSubmenu(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),
-                }
-              : {
-                  kind: "value",
-                  key: "model",
-                  label: "Model",
-                  value: matched.label,
-                  truncateValue: "start",
-                  tooltip: readOnlyTooltip ?? undefined,
-                },
-          );
+          rows.push({
+            kind: "submenu",
+            key: "model",
+            label: "Model",
+            value: matched.label,
+            truncateValue: "start",
+            maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
+            onOpen: () => {
+              if (searchable || dynamic) warmOfferedModels(chatId);
+            },
+            content: () =>
+              modelSubmenu(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),
+          });
           rows.push({
             kind: "custom",
             key: "effort",
@@ -1151,8 +1196,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               (isCompact ? effortSegments : effortRow)({
                 efforts: matched.efforts,
                 current: currentEffort,
-                interactive,
-                tooltip: readOnlyTooltip,
                 onPick: (level) => {
                   const next: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
                   setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
@@ -1160,38 +1203,24 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               }),
           });
           if (matched.supports_fast) {
-            rows.push(
-              interactive
-                ? {
-                    kind: "submenu",
-                    key: "fast",
-                    label: "Fast mode",
-                    value: fastModeValue(chatId),
-                    tooltip: FAST_MODE_EXPLANATION,
-                    content: () => fastModeSubmenu(chatId),
-                  }
-                : {
-                    kind: "value",
-                    key: "fast",
-                    label: "Fast mode",
-                    value: fastModeValue(chatId),
-                    tooltip: readOnlyTooltip ?? FAST_MODE_EXPLANATION,
-                  },
-            );
+            rows.push({
+              kind: "submenu",
+              key: "fast",
+              label: "Fast mode",
+              value: fastModeValue(chatId),
+              tooltip: FAST_MODE_EXPLANATION,
+              content: () => fastModeSubmenu(chatId),
+            });
           }
         }
         if (catalog?.supports_compaction === true) {
-          rows.push(
-            readOnly
-              ? { kind: "value", key: "autocompact", label: "Auto-compact", value: autocompactValue(chatId) }
-              : {
-                  kind: "submenu",
-                  key: "autocompact",
-                  label: "Auto-compact",
-                  value: autocompactValue(chatId),
-                  content: () => autocompactSubmenu(chatId),
-                },
-          );
+          rows.push({
+            kind: "submenu",
+            key: "autocompact",
+            label: "Auto-compact",
+            value: autocompactValue(chatId),
+            content: () => autocompactSubmenu(chatId),
+          });
         }
       }
       if (isCompact && sourceView !== null) {

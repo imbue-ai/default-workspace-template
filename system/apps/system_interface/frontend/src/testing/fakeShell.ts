@@ -8,6 +8,8 @@ import type { DesktopApi } from "../store/DesktopStore";
 import type {
   LaunchOutcome,
   LaunchRequest,
+  PageShowOutcome,
+  PageShowRequest,
   PlacementsSaveRequest,
   WindowOpenOutcome,
   WindowOpenRequest,
@@ -358,6 +360,13 @@ export class FakeDesktopApi implements DesktopApi {
       isMinimized: request.isMinimized,
     });
     return { window: opened.window, path, isNew: opened.isNew };
+  }
+
+  /** Records the ask; which window the shell chooses is the shell's own tests' to check. */
+  async showPage(clientId: string, request: PageShowRequest): Promise<PageShowOutcome> {
+    this.calls.push(`showPage:${clientId}:${request.app}:${request.path}:${request.repoint.join(",")}`);
+    this.refuse();
+    return { hasNoDesktopWindow: this.hasNoDesktopWindow };
   }
 
   async closeWindow(desktopId: string, windowId: string): Promise<void> {

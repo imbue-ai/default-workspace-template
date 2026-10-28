@@ -141,7 +141,7 @@ def test_a_theme_s_rules_leave_the_wrapper_page_as_it_is(
     shell.evaluate("stopSending()")
 
     assert unthemed == {
-        "background": "rgb(0, 0, 0)",
+        "background": "rgb(43, 43, 43)",
         "color": "rgb(221, 221, 221)",
         "font": "system-ui, sans-serif",
     }

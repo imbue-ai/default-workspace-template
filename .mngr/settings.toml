@@ -434,7 +434,7 @@ append_system_prompt__extend = ["""Do not use any built-in tools related to memo
 # claude/codex. Its own base type (registered by the imbue-mngr-antigravity
 # plugin, installed with the mngr tool by system/scripts/build_workspace.sh), so no parent_type.
 # The agy binary is baked into the image (system/scripts/setup_system.sh, which runs the
-# version-locked system/scripts/agy_install-1.1.22.sh), so check_installation is off.
+# version-locked system/scripts/agy_install.sh), so check_installation is off.
 # auto_allow_permissions + auto_dismiss_dialogs_at_startup run the container agent unattended,
 # matching agent_types.codex (auto_allow adds agy's --dangerously-skip-permissions;
 # auto_dismiss silently trusts the source repo). update_policy = NEVER freezes the baked
@@ -1732,7 +1732,7 @@ setting__extend = [
 [create_templates.automation]
 transfer = "none"
 env__extend = ["MNGR_AGENT_ROLE=automation"]
-append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the window does not pop up empty), silently surface your own chat window by running: uv run --no-sync workspace-layout open chat --path \"/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" (with no --desktop it lands on the desktop the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
+append_system_prompt__extend = ["You are an automation agent for this workspace. You are woken on a schedule and sent a slash-command naming the skill to run; follow that skill's instructions in .agents/skills/<name>/SKILL.md exactly. Right after sending your first chat message of each run (never before it, so the window does not pop up empty), silently surface your own chat window by running: uv run --no-sync workspace-layout show chat --path \"/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" --showing \"/${MINDS_CHAT_ID:-$MNGR_AGENT_ID}\" --repoint / (with no --desktop it lands on the desktop the user is looking at; best-effort -- continue if it fails). Speak to the user in plain, non-technical, user-experience terms, and do your work via tool calls rather than narrating it."]
 
 # Worker: general purpose sub-agent for doing tasks reliably (and ensuring they
 # are verified), landing in its own git worktree so its work is isolated from

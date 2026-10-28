@@ -133,7 +133,8 @@ verdict and record the Imbue Studio app, bootstrap and the system interface read
 ``update_environment``, ``update_probes``, ``update_ledger``,
 ``update_history_bridge``, ``update_apply`` (the apply and recover
 orchestration), ``update_chat_pause`` (``run-status stop-chats`` /
-``resume-chats``) and ``update_resume_note`` (the note a resumed chat is
+``resume-chats``), ``update_app_pause`` (``run-status stop-apps`` /
+``resume-apps``) and ``update_resume_note`` (the note a resumed chat is
 sent).
 """
 
@@ -151,6 +152,7 @@ import time
 from pathlib import Path
 from typing import Callable, Sequence
 
+from update_app_pause import start_programs, stop_programs
 from update_apply import (
     UpdateRollbackHistory,
     apply_update,
@@ -767,14 +769,28 @@ def _cmd_run_status_start(args: argparse.Namespace) -> int:
             f"Carried over {len(still_paused)} chat(s) or agent(s) {earlier.chat_agent_name} paused and "
             "did not bring back; this run's resume-chats brings them back."
         )
+    # Apps an earlier start stopped and did not bring back carry over for the same reason the
+    # chats do, and more sharply: nothing else ever starts them.
+    still_stopped = list(earlier.stopped_programs) if earlier is not None else []
+    if (
+        still_stopped
+        and earlier is not None
+        and earlier.chat_agent_name != chat_agent_name
+    ):
+        print(
+            f"Carried over {len(still_stopped)} app(s) {earlier.chat_agent_name} stopped and did "
+            "not start again; this run's resume-apps starts them."
+        )
+    lead = LeadIdentity.from_environ(os.environ)
     write_run_status(
         RunStatus(
             chat_agent_name=chat_agent_name,
             started_at=now(),
             updated_at=0.0,
             started_by=args.started_by
-            or dispatched_started_by(repo_root, chat_agent_name),
+            or dispatched_started_by(repo_root, chat_agent_name, lead.chat_id),
             stopped_agents=still_paused,
+            stopped_programs=still_stopped,
         ),
         repo_root,
         now,
@@ -903,6 +919,65 @@ def _cmd_run_status_stop_chats(args: argparse.Namespace) -> int:
         write_run_status(status, repo_root, now)
 
     problems = pause(targets, run_command, stop_runner, record)
+    for problem in problems:
+        print(f"error: {problem}", file=sys.stderr)
+    return 1 if problems else 0
+
+
+def _cmd_run_status_started_by(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    lead = LeadIdentity.from_environ(os.environ)
+    print(
+        dispatched_started_by(
+            repo_root,
+            args.chat or lead.agent_name,
+            args.chat_id or lead.chat_id,
+        )
+        or "unknown"
+    )
+    return 0
+
+
+def _cmd_run_status_stop_apps(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    status = _run_status_for_recorder(repo_root, recorder, now)
+
+    def record(program: str, is_stopped: bool) -> None:
+        if program not in status.stopped_programs:
+            status.stopped_programs.append(program)
+        write_run_status(status, repo_root, now)
+        if is_stopped:
+            print(f"Stopped {program}.")
+        else:
+            print(
+                f"Recorded {program} as this run's to start again; its stop never answered, "
+                "so whether it is down is unknown."
+            )
+
+    problems = stop_programs(args.program, record)
+    for problem in problems:
+        print(f"error: {problem}", file=sys.stderr)
+    return 1 if problems else 0
+
+
+def _cmd_run_status_resume_apps(args: argparse.Namespace) -> int:
+    repo_root = _repo_root(args).resolve()
+    now = time.time
+    recorder = args.chat or os.environ.get(ENV_DRI_AGENT, "")
+    status = _run_status_for_recorder(repo_root, recorder, now)
+    if not status.stopped_programs:
+        print("Nothing to start: this run's record names no app it stopped.")
+        return 0
+
+    def forget(program: str, is_started: bool) -> None:
+        status.stopped_programs.remove(program)
+        write_run_status(status, repo_root, now)
+        if is_started:
+            print(f"Started {program}.")
+
+    problems = start_programs(list(status.stopped_programs), forget)
     for problem in problems:
         print(f"error: {problem}", file=sys.stderr)
     return 1 if problems else 0
@@ -1336,6 +1411,53 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
     )
     resume_chats_parser.set_defaults(func=_cmd_run_status_resume_chats)
+    started_by_parser = run_status_sub.add_parser(
+        "started-by",
+        help="Print how the app started this run: scheduled, immediate, or unknown.",
+        parents=[common],
+    )
+    started_by_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    started_by_parser.add_argument(
+        "--chat-id",
+        default="",
+        help="This run's chat id (default: $MINDS_CHAT_ID, else $MNGR_AGENT_ID). "
+        "Either identifier matching the dispatch settles it, since a rename makes "
+        "the name stale under a live chat.",
+    )
+    started_by_parser.set_defaults(func=_cmd_run_status_started_by)
+    stop_apps_parser = run_status_sub.add_parser(
+        "stop-apps",
+        help="Stop these apps' supervisord programs to free memory, recording each so "
+        "resume-apps starts it again.",
+        parents=[common],
+    )
+    stop_apps_parser.add_argument(
+        "program",
+        nargs="+",
+        help="The supervisord program of an app the candidates command lists.",
+    )
+    stop_apps_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    stop_apps_parser.set_defaults(func=_cmd_run_status_stop_apps)
+    resume_apps_parser = run_status_sub.add_parser(
+        "resume-apps",
+        help="Start every app stop-apps stopped; safe to re-run, and a no-op when none "
+        "was stopped.",
+        parents=[common],
+    )
+    resume_apps_parser.add_argument(
+        "--chat",
+        default="",
+        help=f"This run's chat agent name (default: ${ENV_DRI_AGENT}).",
+    )
+    resume_apps_parser.set_defaults(func=_cmd_run_status_resume_apps)
     return parser
 
 

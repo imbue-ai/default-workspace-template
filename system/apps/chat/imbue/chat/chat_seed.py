@@ -1,11 +1,13 @@
-"""The seed segment: a chat's opening turns written by the Imbue Studio app rather than by a harness.
+"""The seed segment: a chat's opening turns written before any agent joined it, rather than by a harness.
 
 The Imbue Studio app's onboarding is a conversation (the "what is honest software" exchange, the
 questions about where to run the workspace, the setup and ready lines). Once the workspace
 exists that conversation continues inside it as the workspace's first chat, so the app hands
 the turns over and the chat app keeps them as the chat's first segment: a file of events in
 the wire shape the harness parsers emit, under the chat's folder beside its record, read
-through the ``seed`` harness's loader like any archived segment.
+through the ``seed`` harness's loader like any archived segment. The chat app seeds one chat
+of its own the same way: the main chat it opens for a workspace that had chats before there was
+a main chat (``main_chat.py``).
 
 The seed's pseudo-agent id is the chat's id (a chat's id is its first agent's), so a seeded
 chat's record is well-formed before it has any real agent; the first real agent joins the
@@ -166,7 +168,7 @@ def read_seed_events(chat_dir: Path) -> list[dict[str, Any]]:
 def seed_transcript(events: list[dict[str, Any]]) -> str:
     """The seed segment's turns as the conversation they were: one tagged block per turn, in order.
 
-    The turns are markdown the Imbue Studio app wrote, so they are quoted whole rather than summarised.
+    The turns are markdown written before any agent joined the chat, so they are quoted whole rather than summarised.
     A closing context tag inside a turn is broken up, so the block the page strips always ends
     where this builder put its end.
     """
@@ -218,8 +220,8 @@ def seed_context_message(chat_dir: Path, message: str) -> str:
         conversation = f"<conversation>\n{transcript}\n</conversation>"
     return (
         f"<{SEED_CONTEXT_TAG}>\n"
-        "This chat did not begin here. Before this workspace existed the user had the "
-        "conversation this block carries, and the chat shows it above your first turn; you are "
+        "This chat did not begin with you. It opened on the conversation this block carries, "
+        "written before any agent joined it, and the chat shows it above your first turn; you are "
         "the first agent to join it. Treat it as the conversation so far: what follows this block is the "
         "user's next turn in it and may lean on it entirely (a bare number, for instance, picks "
         "one of the options the last turn offered). Answer that turn, not this block.\n\n"

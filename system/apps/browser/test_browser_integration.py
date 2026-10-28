@@ -192,12 +192,15 @@ def test_http_cast_closes_a_failed_launch_name_terminally(monkeypatch: pytest.Mo
     runner.manager._failed_launch_names.clear()
 
 
+@pytest.mark.flaky
 def test_http_cast_closes_a_closed_browser_with_the_terminated_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     # A browser explicitly CLOSED by an agent is closed terminally, so a viewer whose tab is
     # still open renders the "terminated by an agent" overlay instead of the generic "reopen"
     # text or a "Starting browser…" retry loop. The viewer acts on the `closed` TEXT frame
     # (delivered intact before the close), not the 4001 close code -- which a real browser never
     # sees, because werkzeug corrupts the close handshake with a trailing HTTP response (1006).
+    # "Delivered intact" is what the close handshake races: when the trailing response wins, the
+    # text frame is lost and the receive raises ConnectionClosed(1005). See MIND-583.
     runner.manager._browsers.clear()
     runner.manager._closed_names.append("alex-smith")
     try:

@@ -179,8 +179,8 @@ waits for the turn the notice starts and goes out with it, so the chat goes from
 `background` to `working` without reading idle in between; a notice that starts
 no turn (a task stopped from Claude's `/tasks`) ends the wait three poller passes
 later. A busy chat with no turn in flight
-is `background`: the rail draws a dashed ring that turns slowly, and the strip
-above the composer adds a line, "Waiting on N background tasks", that opens
+is `background`: the rail draws a dashed ring that turns slowly, and the status
+row at the end of the transcript adds a line, "Waiting on N background tasks", that opens
 into one row per task. Each snapshot's `active_agent` carries `is_busy` and
 `background_tasks`; `GET /api/agents` carries each agent's `chat_id`,
 `is_busy` and its chat's `background_tasks` (the active agent's only), which is
@@ -337,7 +337,7 @@ bubble), one handoff node in the transcript shows the switch's
 progress ("Handing off to Codex...", then "Handed off from Claude Code to Codex",
 expandable to the summary turn and the handoff prompt, with a rule under it
 once the switch has landed; a fresh start, which asked for no summary and sent
-no prompt, leaves no node once it has landed), the activity strip and the placeholder say
+no prompt, leaves no node once it has landed), the status row and the placeholder say
 what is happening, and for a handoff the Stop button is "Cancel switch" until
 the old agent is stopped; a failed start or a model pick the successor cannot
 take shows its reason over the composer with a retry (on any signed-in account
@@ -353,9 +353,10 @@ while since `mngr start` does not wait for the harness to come up. A new chat
 created with a pick (`POST /api/chats/create` takes `model` too) is set up the
 same way. `GET /api/accounts/<account-id>/model-options` is where the dialog
 gets the target account's models, for a handoff's successor and a rebound agent
-alike: the catalog for a static harness, for codex the options an agent of the
-account was last offered, and nothing for antigravity, whose model is changed
-from the agent's terminal.
+alike: the catalog for a static harness, and for codex the options an agent of
+the account was last offered. An antigravity pick is typed into the agent as
+`/model <slug>` by the same worker that delivers its held messages, once no turn
+is open, so a pick made mid-turn takes effect when that turn ends.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
@@ -462,6 +463,16 @@ The workspace has one **main chat**, where a text with no chat of its own goes
 crash, or a relaunch leaves it where it is. The seeded chat takes it first, named
 "Main" (`MAIN_CHAT_NAME`) whatever title the Mind app sent, and a chat's "Make main chat" menu row (`POST
 /api/chats/<chat-id>/make-main`, 409 for a helper another agent started) moves it there.
+A workspace that had chats before there was a main chat (one updated from an earlier
+version) gets a new one instead: when the app first reads the agent list and finds chats
+but no `main_chat.json`, it opens a seeded chat named "Main" on a short introduction to the
+main chat (`MAIN_CHAT_INTRODUCTION`) and makes it the main chat, ahead of the chat messaged
+last (often the one that ran the update) and of an older app's "Welcome" chat. It writes the
+chat before `main_chat.json`, so a "Main" chat left by an opening the app was stopped in the
+middle of is made the main chat on the next start rather than opened again. The seeded
+welcome chat goes the other way round: it is recorded in `main_chat.json` before its own files
+are written. Both happen in the same step that makes the agent list known, before the seed
+route answers anything but 503, so the two never race.
 When the chat it names is deleted, another takes it at once: the chat
 messaged most recently, never a helper another agent started; with no chat left, the
 chat the list opens (one awaiting its first send) takes it. Every `chats_updated` push
@@ -544,6 +555,17 @@ nor retries past the limit. A harness with no `OneShotCompletion` (Pi,
 Antigravity, OpenCode) keeps the minted name, and a secondary chat names
 nothing.
 
+A name a person or an agent gives wins over the automatic one. While their
+rename runs, the chat no longer counts as wearing a placeholder name, so no
+automatic name is shown or made for it; and renames of one chat run one at a
+time (`_rename_lock_for`), so an automatic rename that started first finishes
+before theirs, which lands last. The observe stream can deliver a snapshot it
+read before a rename after the rename returned; the manager keeps the new name
+over such a snapshot (`_RecentRename`) until the stream reports the rename, so
+the list never flips back to the old name. The rail shows a typed name at once
+(`root/pendingRenames.ts`) and keeps it until the chat app answers: an automatic
+name shown meanwhile does not replace it, and a refusal brings the old name back.
+
 ## Compaction
 
 Compaction replaces a chat's conversation context with a summary the agent
@@ -578,8 +600,8 @@ their model menu has no Auto-compact row.
 **The Auto-compact setting.** Each chat is On or Off, chosen in the model menu's
 Auto-compact submenu, which ends with a "New chats start with" row whose On /
 Off segments show and set the workspace default, independent of the chat's own
-choice; a read-only menu shows the value alone. The setting is kept in the
-chat's folder as `autocompact.json` (`chat_autocompact.py`,
+choice. The setting is kept in the chat's folder as `autocompact.json`
+(`chat_autocompact.py`,
 `GET`/`PUT /api/chats/<chat-id>/autocompact` with `{"is_enabled": true}`). A
 new chat copies the workspace default (`autocompact_default` in
 `GET`/`PUT /api/settings`, stored at `data/.apps/chat/settings.json`; on unless
@@ -634,7 +656,7 @@ turn that starts after the chat's request ends the request: pi runs no turn
 while it compacts, so its compaction is over or it refused it. A stopped agent
 still reads idle. It counts as working: the chat list shows the chat as working, and the
 composer stays open, with a message sent meanwhile queued behind the
-compaction. The activity strip above the composer names who started it, from
+compaction. The status row at the end of the transcript names who started it, from
 the snapshot's `active_agent.compaction_cause` (set only while the state is
 `COMPACTING`; the cause rules are under "Why a chat was compacted"): "Compacting
 as requested…" (`manual`), "Compacting while idle…" (`idle`), "Compacting to
@@ -681,7 +703,7 @@ timeout or the stop button clears it.
 
 **The compaction chips.** Each "Context was compacted" event shows as two chips
 in the same chip rows the agent's tool calls use (`compaction-chips.ts`): one for
-the start (lucide `package-open`), named as the activity strip names the running
+the start (lucide `package-open`), named as the status row names the running
 compaction, and one for the finish (lucide `package`), reading "Compacted".
 Where they land depends on who started it:
 

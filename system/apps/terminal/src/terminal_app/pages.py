@@ -37,7 +37,10 @@ from loguru import logger
 from pydantic import ConfigDict, Field, field_validator
 from workspace_layout.windows import WindowClosedHint, window_query_value
 from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
-from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE, register_workspace_theme_route
+from workspace_themes.flask_routes import (
+    THEME_STATIC_ROUTE_TABLE,
+    register_workspace_theme_route,
+)
 from workspace_themes.primitives import THEME_ID_PATTERN
 from workspace_themes.serving import THEME_STATIC_ROUTE_PREFIX
 
@@ -123,7 +126,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <title>__TITLE__</title>
 <style>
   html { height: 100%; }
-  body { display: flex; flex-direction: column; height: 100%; height: 100dvh; margin: 0; background: #000; color: #ddd; font-family: system-ui, sans-serif; }
+  /* ttyd's own default background, so the moment before it draws its terminal reads as the terminal. */
+  body { display: flex; flex-direction: column; height: 100%; height: 100dvh; margin: 0; background: #2b2b2b; color: #ddd; font-family: system-ui, sans-serif; }
   iframe { display: block; flex: 1 1 0; min-height: 0; width: 100%; border: 0; }
   #empty { display: flex; flex: 1 1 0; align-items: center; justify-content: center; font-size: 14px; color: #888; }
   /* The phone's key strip: the keys a soft keyboard lacks, under the terminal and so above the keyboard. */

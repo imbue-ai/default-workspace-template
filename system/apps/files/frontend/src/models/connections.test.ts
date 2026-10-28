@@ -1,15 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   type Connections,
+  type FolderSync,
   type Share,
   describeShare,
   deviceNameOf,
   isLiveShared,
-  fetchConnections,
+  shareBadgeOf,
+  isAnySyncMoving,
+  syncNoticeOf,
 } from "./connections";
 
 const MAC = "Kims-Mac";
+const COPY = "/home/user/synced_folders/host-mac/Users/kim/notes/";
 
 function share(overrides: Partial<Share>): Share {
   return {
@@ -19,28 +23,102 @@ function share(overrides: Partial<Share>): Share {
     kind: "folder",
     is_reachable: true,
     synced_copy: null,
-    sync_state: null,
+    sync: null,
     ...overrides,
   };
 }
 
+function sync(overrides: Partial<FolderSync>): FolderSync {
+  return {
+    state: "SYNCED",
+    message: null,
+    bytes_done: null,
+    bytes_total: null,
+    ...overrides,
+  };
+}
+
+function synced(overrides: Partial<FolderSync>, shareOverrides: Partial<Share> = {}): Share {
+  return share({ synced_copy: COPY, sync: sync(overrides), ...shareOverrides });
+}
+
 describe("describeShare", () => {
-  it("says how a share reaches the workspace and how it stands, never its name", () => {
-    const copy = "/home/user/synced_folders/host-mac/Users/kim/notes/";
-    expect(describeShare(share({ synced_copy: copy, sync_state: "current" }), MAC)).toBe(
-      "Synced with Kims-Mac. Up to date.",
+  const tip = (text: string, detail: string | null = null) => ({ text, detail });
+
+  it("names the computer and how the share stands, never the share's name or which way it syncs", () => {
+    expect(describeShare(synced({}), MAC)).toEqual(tip("Up to date with Kims-Mac"));
+    // A one-way sync reads the same: its read-only badge says the rest.
+    expect(describeShare(synced({}, { access: "read" }), MAC)).toEqual(tip("Up to date with Kims-Mac"));
+    expect(describeShare(share({ synced_copy: COPY, is_reachable: false }), MAC)).toEqual(
+      tip("Kims-Mac isn't answering"),
     );
-    expect(describeShare(share({ access: "read", synced_copy: copy, sync_state: "behind" }), MAC)).toBe(
-      "Synced from Kims-Mac. Read-only. Hasn't caught up yet.",
+    expect(describeShare(share({}), MAC)).toEqual(tip("On Kims-Mac"));
+    expect(describeShare(share({ access: "read", is_reachable: false }), MAC)).toEqual(
+      tip("Kims-Mac isn't answering"),
     );
-    expect(describeShare(share({ synced_copy: copy, sync_state: "unknown", is_reachable: false }), MAC)).toBe(
-      "Synced with Kims-Mac. Can't check: not answering right now.",
+    expect(JSON.stringify(describeShare(share({}), MAC))).not.toContain("notes");
+  });
+
+  it("puts the number or the reason behind a sync's state on a quieter second line", () => {
+    expect(describeShare(synced({ state: "SYNCING", bytes_done: 10_000_000, bytes_total: 40_000_000 }), MAC)).toEqual(
+      tip("Syncing with Kims-Mac", "25% done"),
     );
-    expect(describeShare(share({}), MAC)).toBe("On Kims-Mac.");
-    expect(describeShare(share({ access: "read", is_reachable: false }), MAC)).toBe(
-      "On Kims-Mac. Read-only. Not answering right now.",
+    // A sync on its way up is syncing, with no number until a transfer is counted.
+    expect(describeShare(synced({ state: "STARTING" }), MAC)).toEqual(tip("Syncing with Kims-Mac"));
+    // A pass that has moved every byte is still syncing until it settles, so it never claims 100%.
+    expect(describeShare(synced({ state: "SYNCING", bytes_done: 40, bytes_total: 40 }), MAC).detail).toBe("99% done");
+    expect(describeShare(synced({ state: "FAILED", message: "Unison exited with code 3." }), MAC)).toEqual(
+      tip("Sync with Kims-Mac stopped", "Unison exited with code 3"),
     );
-    expect(describeShare(share({}), MAC)).not.toContain("notes");
+    expect(describeShare(synced({ state: "FAILED" }), MAC)).toEqual(tip("Sync with Kims-Mac stopped"));
+    // Studio has it switched on, yet nothing runs: said plainly, as it mostly passes in a moment.
+    expect(describeShare(synced({ state: "STOPPED" }), MAC)).toEqual(tip("Not syncing with Kims-Mac right now"));
+    expect(describeShare(synced({ state: "UNKNOWN" }), MAC)).toEqual(tip("Not syncing with Kims-Mac right now"));
+  });
+});
+
+describe("shareBadgeOf", () => {
+  it("chains a live share, and turns a synced one's arrows only while its copy is moving", () => {
+    expect(shareBadgeOf(share({}))).toBe("linked");
+    expect(shareBadgeOf(synced({}))).toBe("synced");
+    expect(shareBadgeOf(synced({ state: "SYNCING" }))).toBe("syncing");
+    expect(shareBadgeOf(synced({ state: "STARTING" }))).toBe("syncing");
+    expect(shareBadgeOf(synced({ state: "FAILED" }))).toBe("synced");
+    expect(shareBadgeOf(share({ synced_copy: COPY }))).toBe("synced");
+  });
+});
+
+describe("syncNoticeOf", () => {
+  const listed = (only: Share): Connections => ({
+    devices: [{ id: "host-mac", name: "Kims-Mac.local" }],
+    shares: [only],
+  });
+
+  it("says inside a copy that its sync stopped, and why, wherever in it you are", () => {
+    const notice = syncNoticeOf(listed(synced({ state: "FAILED", message: "Disk full." })), `${COPY}drafts/`);
+    expect(notice).toEqual({
+      tone: "warning",
+      title: "Sync with Kims-Mac stopped",
+      detail: "Disk full. Retry it in Imbue Studio on your computer.",
+      isOnlyWhenEmpty: false,
+    });
+  });
+
+  it("stands in for an empty copy while it syncs, and only while it is empty", () => {
+    const moving = synced({ state: "SYNCING", bytes_done: 2_000, bytes_total: 5_000 });
+    expect(syncNoticeOf(listed(moving), COPY)).toEqual({
+      tone: "progress",
+      title: "Syncing from Kims-Mac",
+      detail: "40% done",
+      isOnlyWhenEmpty: true,
+    });
+    expect(syncNoticeOf(listed(synced({ state: "STARTING" })), COPY)?.detail).toBe("Files appear here as they arrive");
+  });
+
+  it("has nothing to say about a copy that is up to date, not syncing for now, or one whose computer didn't say", () => {
+    expect(syncNoticeOf(listed(synced({})), COPY)).toBeNull();
+    expect(syncNoticeOf(listed(synced({ state: "STOPPED" })), COPY)).toBeNull();
+    expect(syncNoticeOf(listed(share({ synced_copy: COPY })), COPY)).toBeNull();
   });
 });
 
@@ -59,26 +137,13 @@ describe("deviceNameOf", () => {
   });
 });
 
-describe("fetchConnections", () => {
-  it("quotes the server's refusal, from its {detail} body or its text", async () => {
-    const refusals = [
-      new Response(JSON.stringify({ detail: "Couldn't read your shares: the gateway answered 500" }), {
-        status: 502,
-        headers: { "Content-Type": "application/json" },
-      }),
-      new Response("Not Found", { status: 404, headers: { "Content-Type": "text/plain" } }),
-      new Response("", { status: 503 }),
-    ];
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => refusals.shift()),
-    );
-    try {
-      await expect(fetchConnections()).rejects.toThrow("Couldn't read your shares: the gateway answered 500");
-      await expect(fetchConnections()).rejects.toThrow("Not Found");
-      await expect(fetchConnections()).rejects.toThrow("Couldn't read your connections (503)");
-    } finally {
-      vi.unstubAllGlobals();
-    }
+describe("isAnySyncMoving", () => {
+  const listed = (...shares: Share[]): Connections => ({ devices: [], shares });
+
+  it("is true while a copy is carrying something across, and not for one that is settled, stopped or silent", () => {
+    expect(isAnySyncMoving(listed(synced({}), synced({ state: "SYNCING" })))).toBe(true);
+    expect(isAnySyncMoving(listed(synced({ state: "STARTING" })))).toBe(true);
+    expect(isAnySyncMoving(listed(synced({}), synced({ state: "FAILED" }), share({ synced_copy: COPY })))).toBe(false);
+    expect(isAnySyncMoving(null)).toBe(false);
   });
 });

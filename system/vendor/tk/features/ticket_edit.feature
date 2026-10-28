@@ -22,3 +22,8 @@ Feature: Ticket Edit
     When I run "ticket edit 0001" in non-TTY mode
     Then the command should succeed
     And the output should contain "edit-0001.md"
+
+  Scenario: Edit with empty ID
+    When I run "ticket edit ''" in non-TTY mode
+    Then the command should fail
+    And the output should contain "Error: empty ticket ID"
