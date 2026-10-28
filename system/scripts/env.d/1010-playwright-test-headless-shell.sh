@@ -1,19 +1,16 @@
 #!/usr/bin/env bash
-# env.d unit: Playwright's headless shell, for the test suites' browser fixtures only
-# (pytest_workspace_env.browsers picks it). It is a separate build (about 110 MB) from
-# Fortress, kept for tests because it is lighter: a chat or shell browser suite ran
-# about a third faster in about a third less memory on it than on Fortress, with every
-# test passing on both. It lives in its own directory, outside Playwright's default
-# cache, so nothing reaches it by default: a bare launch keeps using Fortress, whose
-# stealth the browser service and agents' own browsing rely on. The fixtures launch it
-# through the stable link and fall back to Fortress when it is missing; a failed
-# install still fails the unit, so env-converge records it. Ordered after
-# 1000-playwright-fortress.sh, whose `playwright install-deps` puts in the system
-# libs this build needs too.
+# env.d unit: Playwright's headless shell (about 110 MB), for the test suites' browser
+# fixtures only (pytest_workspace_env.browsers picks it), since browser suites run
+# faster and in less memory on it than on Fortress. It lives outside Playwright's
+# default cache, so a bare launch keeps using Fortress, whose stealth the browser
+# service and agents' own browsing rely on. The fixtures fall back to Fortress while
+# it is missing; a failed install still fails the unit, so env-converge records it.
+# Ordered after 1000-playwright-fortress.sh, whose `playwright install-deps` puts in
+# the system libs this build needs too.
 #
 # env.d contract: idempotent with a fast satisfied-check -- NO marker files of our
-# own. The installed build follows the locked Playwright, so a Playwright upgrade
-# brings the matching build on the next converge.
+# own. The build follows the locked Playwright, so an upgrade brings the matching
+# build on the next converge.
 set -euo pipefail
 
 readonly REPO_ROOT="${ENV_CONVERGE_WORKSPACE_DIR:-/home/user/workspace}"

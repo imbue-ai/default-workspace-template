@@ -12,7 +12,6 @@ import sys
 from pathlib import Path
 from typing import Final
 
-# A browser suite runs about a third faster in about a third less memory on the shell than on Fortress.
 TEST_HEADLESS_SHELL_PATH: Final[Path] = Path(
     "/opt/playwright-test-browsers/headless-shell"
 )
