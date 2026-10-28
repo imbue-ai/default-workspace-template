@@ -54,6 +54,7 @@ def _command_run(
     outcome: CommandOutcome,
     exit_code: int | None,
     failed_test_ids: tuple[str, ...] = (),
+    flaky_test_ids: tuple[str, ...] = (),
     rerun: SuiteCommand | None = None,
     shed_records: tuple[ShedRecord, ...] = (),
 ) -> CommandRun:
@@ -65,7 +66,8 @@ def _command_run(
         finished_at=_MOMENT,
         log_path=Path("out") / f"{command.kind}.log",
         failed_test_ids=failed_test_ids,
-        rerun_log_path=Path("out") / f"{command.kind}-rerun.log" if failed_test_ids else None,
+        flaky_test_ids=flaky_test_ids,
+        rerun_log_path=Path("out") / f"{command.kind}-rerun.log" if failed_test_ids or flaky_test_ids else None,
         rerun=rerun,
         shed_records=shed_records,
         is_coverage_floor_missed=False,
@@ -82,6 +84,7 @@ def test_the_report_names_each_commands_outcome_and_what_to_do_about_it() -> Non
                 CommandOutcome.FAILED,
                 1,
                 failed_ids,
+                ("imbue/chat/test_page.py::test_cleared",),
                 suite_command(
                     SuiteKind.PYTEST, "system/apps/chat", ("uv", "run", "pytest", "--no-cov", "-m", "", "rerun")
                 ),
@@ -90,7 +93,7 @@ def test_the_report_names_each_commands_outcome_and_what_to_do_about_it() -> Non
                 suite_command(SuiteKind.FULL_ROOT, ".", ("uv", "run", "pytest")),
                 CommandOutcome.FLAKY,
                 1,
-                ("system/libs/x/test_x.py::test_once",),
+                flaky_test_ids=("system/libs/x/test_x.py::test_once",),
             ),
             _command_run(
                 suite_command(SuiteKind.FRONTEND_BUILD, "system", ("npm", "run", "build")), CommandOutcome.FAILED, None
@@ -120,6 +123,7 @@ failed: (cd system/apps/chat && uv run pytest -m '')
     failed: imbue/chat/test_page.py::test_8
     failed: imbue/chat/test_page.py::test_9
     and 2 more
+    passed on rerun: imbue/chat/test_page.py::test_cleared
     rerun these: (cd system/apps/chat && uv run pytest --no-cov -m '' rerun)
 flaky: uv run pytest
     output: out/full_root.log

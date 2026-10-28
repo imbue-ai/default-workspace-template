@@ -93,8 +93,12 @@ class CommandRun(FrozenModel):
     finished_at: datetime = Field(description="When it, and the rerun of its failed tests, finished")
     log_path: Path = Field(description="Its output, stdout and stderr together")
     failed_test_ids: tuple[str, ...] = Field(
-        description="The tests that failed: after the rerun for a failed run, the ones that passed on it for a flaky "
-        "one, the ones the rerun was for when it was shed, and none when only the coverage floor failed the run"
+        description="The tests that failed: the ones still failing after the rerun for a failed run, the ones the "
+        "rerun was for when it was shed, and none otherwise"
+    )
+    flaky_test_ids: tuple[str, ...] = Field(
+        description="The tests that failed and then passed on the rerun: every one for a flaky run, and those the "
+        "rerun cleared for a failed one"
     )
     rerun_log_path: Path | None = Field(description="The rerun's output, when its failed tests were rerun")
     rerun: SuiteCommand | None = Field(
@@ -241,7 +245,7 @@ def _run_command(
         if shed_ledger_path is not None
         else ()
     )
-    outcome, final_failed_test_ids = _classify(
+    outcome, final_failed_test_ids, flaky_test_ids = _classify(
         result.exit_code, failed_test_ids, rerun_result, rerun_log_path, shed_records, is_coverage_floor_missed
     )
     return CommandRun(
@@ -252,6 +256,7 @@ def _run_command(
         finished_at=finished_at,
         log_path=log_path,
         failed_test_ids=final_failed_test_ids,
+        flaky_test_ids=flaky_test_ids,
         rerun_log_path=rerun_log_path if rerun_result is not None else None,
         rerun=rerun_command(command, final_failed_test_ids, is_coverage_measured) if final_failed_test_ids else None,
         shed_records=shed_records,
@@ -266,21 +271,27 @@ def _classify(
     rerun_log_path: Path,
     shed_records: tuple[ShedRecord, ...],
     is_coverage_floor_missed: bool,
-) -> tuple[CommandOutcome, tuple[str, ...]]:
+) -> tuple[CommandOutcome, tuple[str, ...], tuple[str, ...]]:
+    """The outcome, the tests that failed, and the tests that passed on the rerun."""
     if exit_code == 0:
-        return CommandOutcome.PASSED, ()
+        return CommandOutcome.PASSED, (), ()
     elif exit_code in _SIGNAL_EXIT_CODES and shed_records:
-        return CommandOutcome.SHED, ()
+        return CommandOutcome.SHED, (), ()
     elif rerun_result is None:
-        return CommandOutcome.FAILED, failed_test_ids
+        return CommandOutcome.FAILED, failed_test_ids, ()
     elif rerun_result.exit_code == 0:
         # Its failed tests pass now, so what still fails it is the coverage floor alone.
-        return (CommandOutcome.FAILED, ()) if is_coverage_floor_missed else (CommandOutcome.FLAKY, failed_test_ids)
+        outcome = CommandOutcome.FAILED if is_coverage_floor_missed else CommandOutcome.FLAKY
+        return outcome, (), failed_test_ids
     elif rerun_result.exit_code in _SIGNAL_EXIT_CODES and shed_records:
-        return CommandOutcome.SHED, failed_test_ids
+        return CommandOutcome.SHED, failed_test_ids, ()
     else:
         still_failing = parse_failed_test_ids(rerun_log_path.read_text(errors="replace"))
-        return CommandOutcome.FAILED, still_failing or failed_test_ids
+        if rerun_result.exit_code != _PYTEST_TESTS_FAILED_EXIT_CODE or not still_failing:
+            return CommandOutcome.FAILED, still_failing or failed_test_ids, ()
+        # The rerun's tests ran and these failed, so the rest of the ones it named passed.
+        cleared = tuple(test_id for test_id in failed_test_ids if test_id not in still_failing)
+        return CommandOutcome.FAILED, still_failing, cleared
 
 
 def _write_report(report: SuiteRunReport, output_directory: Path) -> Path:
@@ -353,12 +364,11 @@ def render_report(report: SuiteRunReport, summary_path: Path) -> str:
         match run.outcome:
             case CommandOutcome.FAILED:
                 lines.extend(_render_test_ids("failed", run.failed_test_ids))
-            case CommandOutcome.FLAKY:
-                lines.extend(_render_test_ids("passed on rerun", run.failed_test_ids))
-            case CommandOutcome.PASSED | CommandOutcome.SHED:
+            case CommandOutcome.PASSED | CommandOutcome.FLAKY | CommandOutcome.SHED:
                 pass
             case _ as unreachable:
                 assert_never(unreachable)
+        lines.extend(_render_test_ids("passed on rerun", run.flaky_test_ids))
         if run.rerun is not None:
             lines.append(f"    rerun these: {render_command_line(run.rerun)}")
         lines.extend(

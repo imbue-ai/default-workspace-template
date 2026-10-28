@@ -15,7 +15,7 @@ from app_manifest.suite_run import run_selection
 from app_manifest.testing import suite_command
 
 # One test of each kind: always passing, always failing, and failing only on its first run
-# (it leaves a marker behind, so the rerun of the failed tests passes).
+# (each of the last two leaves a marker behind, so the rerun of the failed tests passes).
 _TEST_CASES = """
 from pathlib import Path
 
@@ -30,6 +30,14 @@ def test_fails_every_time_48213() -> None:
 
 def test_fails_only_the_first_time_48213() -> None:
     marker = Path(__file__).parent / "ran-once-48213"
+    if marker.exists():
+        return
+    marker.write_text("")
+    assert False, "fails the first time on purpose"
+
+
+def test_fails_only_the_first_time_too_48213() -> None:
+    marker = Path(__file__).parent / "ran-once-too-48213"
     if marker.exists():
         return
     marker.write_text("")
@@ -114,13 +122,14 @@ def test_each_command_ends_as_passed_flaky_or_failed_by_what_its_tests_did_on_th
 
     passed, flaky, failed = report.runs
     assert (passed.outcome, passed.failed_test_ids, passed.rerun_log_path) == (CommandOutcome.PASSED, (), None)
-    assert flaky.outcome == CommandOutcome.FLAKY
-    assert flaky.failed_test_ids == ("suite/test_cases.py::test_fails_only_the_first_time_48213",)
-    # The marker is already there by the third run, so only the always-failing test is left.
+    assert (flaky.outcome, flaky.failed_test_ids, flaky.rerun) == (CommandOutcome.FLAKY, (), None)
+    assert flaky.flaky_test_ids == ("suite/test_cases.py::test_fails_only_the_first_time_48213",)
+    # The first fails-once test passes by the third run; the other fails once more, and passes on the rerun.
     assert failed.outcome == CommandOutcome.FAILED
     assert failed.failed_test_ids == ("suite/test_cases.py::test_fails_every_time_48213",)
+    assert failed.flaky_test_ids == ("suite/test_cases.py::test_fails_only_the_first_time_too_48213",)
     assert failed.rerun_log_path is not None
-    assert "1 failed" in failed.rerun_log_path.read_text()
+    assert "1 failed, 1 passed" in failed.rerun_log_path.read_text()
     assert failed.rerun is not None
     assert failed.rerun.argv == (sys.executable, "-m", "pytest", "-m", "", *failed.failed_test_ids)
     assert not report.is_passing
@@ -185,6 +194,7 @@ def test_a_run_that_missed_its_coverage_floor_fails_even_when_its_failed_tests_p
 
     (run,) = report.runs
     assert (run.outcome, run.is_coverage_floor_missed, run.failed_test_ids) == (CommandOutcome.FAILED, True, ())
+    assert run.flaky_test_ids == ("suite/test_cases.py::test_fails_only_the_first_time_48213",)
     assert run.rerun_log_path is not None
     assert "1 passed" in run.rerun_log_path.read_text()
     assert "    coverage floor not reached" in render_report(report, project / SUMMARY_FILE_NAME).splitlines()
