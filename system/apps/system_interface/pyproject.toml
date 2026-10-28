@@ -46,7 +46,7 @@ dev = [
     # command to the CLI it names (test_chat_system.py, the one module that may import the
     # chat package's command builder beside it).
     "mngr-cli-contract",
-    # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
+    # Stops a session whose tmp_path could not run a stub executable (a noexec mount).
     "pytest-executable-tmp",
     # Fails a test that skips where the environment is meant to be complete
     # (the CI job that runs the suites inside the workspace image).
