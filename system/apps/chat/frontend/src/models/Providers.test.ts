@@ -128,14 +128,6 @@ describe("loadLanesAndAccountsWithRetry", () => {
     expect(lanesRequestCount()).toBe(5);
     expect(providers.areLanesLoaded()).toBe(false);
   });
-
-  it("does not ask again after a failure that is the server's answer rather than a dropped connection", async () => {
-    mockRequest.mockRejectedValue(requestFailure(404));
-
-    await expect(providers.loadLanesAndAccountsWithRetry()).rejects.toMatchObject({ code: 404 });
-
-    expect(lanesRequestCount()).toBe(1);
-  });
 });
 
 describe("whenAccountsReadyToChoose", () => {

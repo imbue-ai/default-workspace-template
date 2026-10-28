@@ -191,55 +191,47 @@ export async function loadAccounts(): Promise<void> {
   markAccountsLoaded();
 }
 
+/** Run `load` until it succeeds, waiting out a backoff delay after each failure. With
+ *  `maxAttempts` it gives up after that many tries and rejects with the last failure; without
+ *  it, it never rejects. */
+async function retryWithBackoff(load: () => Promise<void>, maxAttempts?: number): Promise<void> {
+  const backoff = new ReconnectBackoff();
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await load();
+      return;
+    } catch (error) {
+      if (maxAttempts !== undefined && attempt >= maxAttempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, backoff.nextDelay()));
+    }
+  }
+}
+
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
  *
  * The boot-time caller races the backend coming up: the page can be served before the API
  * answers, and a decision made off one silently failed fetch (whether the composer asks for a
  * provider) would be wrong for the whole page load. Never rejects.
  */
-export async function loadAccountsWithRetry(): Promise<void> {
-  const backoff = new ReconnectBackoff();
-  let isLoaded = false;
-  while (!isLoaded) {
-    try {
-      await loadAccounts();
-      isLoaded = true;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, backoff.nextDelay()));
-    }
-  }
+export function loadAccountsWithRetry(): Promise<void> {
+  return retryWithBackoff(loadAccounts);
 }
 
 /** Enough attempts to outlast the desktop app remaking its connection to the workspace, so that
  *  only a failure that persists reaches the user. */
 const LANES_AND_ACCOUNTS_ATTEMPTS = 5;
 
-/** No answer at all, or the server's own failure: what the desktop app answers while its
- *  connection to the workspace is down. Any other status is the backend's answer, and asking
- *  again would only get it again. */
-function isTransientRequestFailure(error: unknown): boolean {
-  const code = (error as { code?: number }).code;
-  return code === 0 || (code !== undefined && code >= 500);
-}
-
-/** Load the lanes and the accounts the chooser lists, asking again after a transient failure.
+/** Load the lanes and the accounts the chooser lists, retrying a failure with backoff.
  *
  * The chooser opens the moment a fresh workspace's welcome chat finds no account, which is also
  * when the desktop app's connection to the workspace is youngest. Rejects with the last failure
- * once the attempts run out, or at once on a failure that is not transient.
+ * once the attempts run out.
  */
-export async function loadLanesAndAccountsWithRetry(): Promise<void> {
-  const backoff = new ReconnectBackoff();
-  for (let attempt = 1; ; attempt += 1) {
-    try {
-      await loadLanes();
-      await loadAccounts();
-      return;
-    } catch (error) {
-      if (attempt >= LANES_AND_ACCOUNTS_ATTEMPTS || !isTransientRequestFailure(error)) throw error;
-      await new Promise((resolve) => setTimeout(resolve, backoff.nextDelay()));
-    }
-  }
+export function loadLanesAndAccountsWithRetry(): Promise<void> {
+  return retryWithBackoff(async () => {
+    await loadLanes();
+    await loadAccounts();
+  }, LANES_AND_ACCOUNTS_ATTEMPTS);
 }
 
 /** Name an account, or pass "" to go back to the provider's own name.
