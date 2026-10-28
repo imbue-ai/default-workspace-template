@@ -1863,6 +1863,23 @@ describe("links Imbue Studio hands over", () => {
     expect(api.calls.filter((call) => call.startsWith("openWindow:"))).toEqual([]);
   });
 
+  it("names the app by its display name when the shell's show refuses a link, the reason in the log", async () => {
+    const store = await startedStore();
+    socket
+      .deliver()
+      .onAppsUpdated([appRecord("docs"), chatLikeAppRecord("chat", { label: "chat-ab12cd34", display_name: "Chats" })]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.refusal = "No chat agent-1";
+
+    await store.openLink("http://chat-ab12cd34.localhost/?chat=agent-1", SHELL_HOST, "notes");
+
+    expect(store.toasts.current()).toMatchObject([
+      { message: "Could not open Chats.", details: null, actions: [], isLasting: false },
+    ]);
+    expect(warn).toHaveBeenCalledWith("[si] Could not open Chats.", "HTTP 400\nNo chat agent-1");
+    warn.mockRestore();
+  });
+
   it("focuses or opens a link to an app's pin page itself, or to its other pages, as any other page", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), chatLikeAppRecord("chat", { label: "chat-ab12cd34" })]);
