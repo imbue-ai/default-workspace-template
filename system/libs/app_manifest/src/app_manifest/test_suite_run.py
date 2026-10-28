@@ -167,6 +167,8 @@ def test_a_run_whose_rerun_is_shed_is_a_shed_that_keeps_its_failed_tests(tmp_pat
     assert not report.is_passing
 
 
+# Two pytest processes start here, the first under coverage.
+@pytest.mark.timeout(30)
 def test_a_run_that_missed_its_coverage_floor_fails_even_when_its_failed_tests_pass_on_the_rerun(
     tmp_path: Path,
 ) -> None:
