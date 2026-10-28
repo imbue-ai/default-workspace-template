@@ -11,7 +11,11 @@ SKILL.md Step 4 cycle, not a new pass.
    --verify --quiet refs/heads/mngr/update-self` prints nothing, a later
    update has started since and set this one aside (its SKILL.md Step 3b archives the
    branch): tell the user so, and that the newer update's own chat is where
-   it stands. Do nothing else.
+   it stands. Do nothing else. Tell the record's chat by its `chat_id`, which is
+   this chat's when it equals `$MINDS_CHAT_ID` (else `$MNGR_AGENT_ID`); its
+   `chat_agent_name` is the name the chat had when the pass started, and a
+   chat that was renamed since runs under another. Only a record with no
+   `chat_id` is matched by that name.
 2. If they choose to skip the update, record `run-status verdict REFUSED
    --detail "<what the update could not keep, and that they chose to keep
    it>"` with the staged script and end; the worker stays stopped, and the
