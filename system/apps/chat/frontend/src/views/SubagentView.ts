@@ -20,6 +20,7 @@ import {
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
 import { TranscriptScrollbar } from "./TranscriptScrollbar";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
+import { BADGE_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 interface SubagentViewAttrs {
   chatId: string;
@@ -218,7 +219,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
         { class: "app-header flex shrink-0 items-baseline gap-3 border-b border-default bg-page px-8 py-3.5" },
         [
           m("h1", { class: "app-header-title type-heading text-primary" }, title),
-          agentType ? m("span", { class: badgeClass("neutral", { mono: true }) }, agentType) : null,
+          agentType ? m("span", { class: badgeClass("neutral", { mono: true }), ...BADGE_PART }, agentType) : null,
         ],
       );
 
@@ -248,7 +249,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
           m(
             "main",
             {
-              class: "app-content transcript-scroll flex-1 overflow-y-auto bg-chat px-8 py-6",
+              class: "app-content transcript-scroll flex-1 overflow-y-auto bg-chat px-6 py-6",
               tabindex: 0,
               oncreate: (mainVnode: m.VnodeDOM) => {
                 engine.afterRender(mainVnode.dom as HTMLElement);

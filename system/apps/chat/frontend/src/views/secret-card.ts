@@ -30,6 +30,7 @@ import type { FailureLines } from "./failure-lines";
 import { raiseFailureNotice } from "./MessageInput";
 import type { SecretResolution } from "./message-classification";
 import { isSecretRequestCall } from "./message-classification";
+import { FIELD_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The fields the request script echoes, parsed off the backend's structured
  *  `secret_request` field. */
@@ -299,6 +300,7 @@ function renderInputs(details: SecretRequestDetails, state: SecretCardState, han
         m("div", { class: "flex items-center gap-1.5" }, [
           m("input", {
             class: inputClass({ mono: true }),
+            ...FIELD_PART,
             // Masked unless the user asks to check what they typed.
             type: isRevealed ? "text" : "password",
             value: state.valueByVariable[variable] ?? "",
@@ -332,6 +334,7 @@ function renderDeclineForm(state: SecretCardState, handlers: SecretCardHandlers)
   return m("div", { class: "secret-request-decline mt-2.5 flex flex-col gap-2" }, [
     m("input", {
       class: inputClass(),
+      ...FIELD_PART,
       type: "text",
       value: state.note,
       maxlength: MAX_DECLINE_NOTE_LENGTH,

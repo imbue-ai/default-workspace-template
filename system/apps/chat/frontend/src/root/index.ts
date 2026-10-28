@@ -6,7 +6,9 @@
  * The root owns the shell connection: it reports ``/?chat=<id>`` and the selected chat's
  * title as its location, handles ``shell:navigate`` by changing the selection, applies the
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
- * chat through the picker, or a first message that launches a chat) exactly once and then reports the selection alone, and drives its inner pages
+ * chat through the picker, or a first message that launches a chat) exactly once and then
+ * reports the selection alone, opens the provider chooser once when its URL carries
+ * ``open=providers`` (the Imbue Studio app's sign-in button), and drives its inner pages
  * directly (they share an origin) with its shown and hidden states, so each page's presence
  * reports key on the chat it shows. The shell's handshake goes down to the inner pages, and their
  * messages for the shell and the minds chrome go up, through ``relay.ts``, which says which
@@ -18,6 +20,7 @@ import "../style.css";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/contextMenuOpener";
+import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 import { scopeOfHandshake } from "@imbue/workspace-ui/src/element_reference";
@@ -29,11 +32,11 @@ import {
   addChatsUpdatedListener,
   applyPendingIntake,
   awaitingChatForEmptyList,
-  createChat,
   discardPendingIntake,
   fetchPendingIntake,
   getChatById,
   getChats,
+  getMainChatId,
   getProvisionalChats,
   hasReceivedChatList,
   initChats,
@@ -43,10 +46,13 @@ import {
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
 import {
   accountForFirstSend,
-  getSelectedAccount,
+  closeProviderChooser,
+  isProviderChooserOpen,
   loadAccountsWithRetry,
+  openProviderChooser,
   whenAccountsReadyToChoose,
 } from "../models/Providers";
+import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
@@ -56,16 +62,25 @@ import type { ChatRailAttrs } from "./ChatRail";
 import { SendPicker } from "./SendPicker";
 import { initChatUnread, markRead, noteStatuses } from "./chatUnread";
 import { initRailWidth } from "./railWidth";
+import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
+import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
-import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } from "./selection";
+import {
+  intakeTokenFromSearch,
+  isProviderChooserRequested,
+  rootPathFor,
+  selectionFromSearch,
+  slotFill,
+} from "./selection";
 import type { SlotFill } from "./selection";
 import { prependToComposer } from "../views/MessageInput";
 import { plainFailureLines } from "../views/failure-lines";
 import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { RootNoticeView, describeIntakeApplyFailure, raiseRootNotice } from "./rootNotice";
+import { wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 const ROOT_TITLE = "Chats";
 
@@ -94,7 +109,8 @@ let isDrawerOpen = false;
 
 function selectedTitle(): string {
   if (selectedChatId === null) return "";
-  return getChatById(selectedChatId)?.title ?? "";
+  const title = getChatById(selectedChatId)?.title;
+  return title === undefined ? "" : titleWithPendingRename(selectedChatId, title);
 }
 
 interface ReportedLocation {
@@ -121,9 +137,12 @@ let isOpeningChatForEmptyList = false;
 // empty after that brings no push to ask again on (an unchanged list is not passed on).
 const emptyListChatBackoff = new ReconnectBackoff();
 
-/** The rail's rows in display order, most recent first. */
+/** The rail's rows in display order: the main chat first, then the most recent. */
 function railRows(): ChatRow[] {
-  return groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats()), startedHere);
+  return groupedRows(
+    withPendingTitles(rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId())),
+    startedHere,
+  );
 }
 
 function slotFillFor(chatId: string | null): SlotFill {
@@ -138,7 +157,7 @@ function slotFillFor(chatId: string | null): SlotFill {
 }
 
 /** Show ``chatId``: the URL, the frame, the shell's location, and the unread mark follow. Asked to show nothing, the
- *  root shows the most recent chat instead, or with no chats one awaiting its first send (``slotFill``). */
+ *  root shows the main chat instead (else the most recent), or with no chats one awaiting its first send (``slotFill``). */
 function select(chatId: string | null): void {
   const fill = slotFillFor(chatId);
   const shown = fill.kind === "select" ? fill.chatId : chatId;
@@ -176,37 +195,22 @@ function openChatForEmptyList(): void {
     });
 }
 
-async function createOnAccountAndSelect(accountId: string): Promise<void> {
-  const created = await createChat("", accountId);
-  startedHere.add(created.chatId);
-  awaitingListing.add(created.chatId);
-  select(created.chatId);
-}
+// Why the last click on New chat started nothing, shown as a notice until dismissed; null otherwise.
+let newChatRefusal: string | null = null;
+const newChatRefusalNotice = makeNoticeDialog();
 
-/** The New chat button: a chat on the selected account, or with nothing signed in the chat awaiting its first
- *  send, whose page asks for a provider. */
-async function startNewChat(): Promise<void> {
-  await whenAccountsReadyToChoose();
-  const account = getSelectedAccount();
-  if (account !== null) {
-    try {
-      await createOnAccountAndSelect(account.id);
-      return;
-    } catch (error) {
-      // An account the chat app no longer has: the chat awaiting its first send shows what is needed instead.
-      console.warn(
-        "[chat-root] could not create a chat on the selected account; opening one awaiting a provider",
-        error,
-      );
-    }
+/** The New chat button: a chat on the account the chat app picks, or with nothing signed in the chat awaiting its
+ *  first send, whose page asks for a provider. A create the chat app refuses says why rather than opening a chat. */
+async function openNewChat(): Promise<void> {
+  const outcome = await startNewChat();
+  if (outcome.kind === "refused") {
+    newChatRefusal = outcome.detail;
+    m.redraw();
+    return;
   }
-  try {
-    const chatId = await awaitingChatForEmptyList();
-    awaitingListing.add(chatId);
-    select(chatId);
-  } catch (error) {
-    alert(`Failed to create chat: ${(error as Error).message}`);
-  }
+  if (outcome.kind === "created") startedHere.add(outcome.chatId);
+  awaitingListing.add(outcome.chatId);
+  select(outcome.chatId);
 }
 
 /** Show ``chatId`` once the pending intake is applied or given up, reporting the selection even when it is the one
@@ -328,6 +332,17 @@ async function takeIntake(token: string): Promise<void> {
   await applyIntake(token, null, intake);
 }
 
+/** Open the provider chooser a URL asked for, once the accounts have loaded (the chooser lists them). The
+ *  root's own URL drops the request first, and so does the location the shell holds for this window (reported
+ *  even when the selection is the one reported before), so neither a reload nor the next layout load opens it
+ *  again. */
+function openRequestedProviderChooser(accountsLoaded: Promise<void>): void {
+  if (pendingToken === null) history.replaceState(null, "", `${getBasePath()}${rootPathFor(selectedChatId)}`);
+  reportedLocation = null;
+  reportLocation();
+  void accountsLoaded.then(() => openProviderChooser());
+}
+
 function pickFor(chatId: string): void {
   const pick = pendingPick;
   pendingPick = null;
@@ -343,7 +358,8 @@ function dismissPick(): void {
 }
 
 function onChatsUpdated(): void {
-  const rows = rowsFromSnapshots(getChats(), getProvisionalChats());
+  settleAcceptedRenames();
+  const rows = rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId());
   noteStatuses(new Map(rows.map((row) => [row.chatId, row.status])), isRootShown ? selectedChatId : null);
   // A chat that has messaged is no longer new; a deleted chat's frame goes with it.
   for (const chatId of startedHere) {
@@ -427,6 +443,16 @@ const ChatRoot: m.Component = {
               },
             })
           : null,
+        newChatRefusal === null
+          ? null
+          : m(newChatRefusalNotice, {
+              title: "Couldn't start a new chat",
+              body: [newChatRefusal],
+              dismissLabel: "OK",
+              onDismiss: () => {
+                newChatRefusal = null;
+              },
+            }),
         pendingPick === null
           ? null
           : m(SendPicker, {
@@ -437,6 +463,8 @@ const ChatRoot: m.Component = {
               onDismiss: dismissPick,
             }),
         m(RootNoticeView, { connection }),
+        // Opened over the whole root when its URL asks for it; a chat page opens its own from its composer.
+        isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
       ],
     );
   },
@@ -449,7 +477,7 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     isInDrawer: isCompact,
     isTouch: isCompact && touchQuery.matches,
     onPick: (chatId: string) => select(chatId),
-    onNew: () => void startNewChat(),
+    onNew: () => void openNewChat(),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
     isReferenceDraftAvailable: isReferenceDraftAvailable(),
@@ -469,6 +497,7 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
 function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
   const shell = connectToShell({
     capabilities: { navigation: true, closeChord: false },
+    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onHandshake: (received) => {
       handshake = received;
       adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
@@ -494,6 +523,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       const target = new URL(path, window.location.origin);
       const token = intakeTokenFromSearch(target.search);
       const requested = selectionFromSearch(target.search);
+      if (isProviderChooserRequested(target.search)) openRequestedProviderChooser(accountsLoaded);
       if (token !== null) {
         // The window is at the chat's path already; a picker path names none and leaves the shown chat standing.
         pendingToken = token;
@@ -550,6 +580,7 @@ function bootstrap(): void {
   reportLocation();
   const token = pendingToken;
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));
+  if (isProviderChooserRequested(window.location.search)) openRequestedProviderChooser(accountsLoaded);
 }
 
 window.addEventListener("load", bootstrap);

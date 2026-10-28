@@ -14,6 +14,7 @@ import type { CompactionCause, UserMessageEvent } from "./Response";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 import { fetchOrNotAnswered, postJson, readResponseFailure } from "@imbue/workspace-ui/src/models/http";
 import type { RequestKind } from "@imbue/workspace-ui/src/models/failure";
+import { loadAccounts } from "./Providers";
 
 /** The agent-level facts about a chat's active agent that the pages render (the backend's
  *  ``ActiveAgentSnapshot``). */
@@ -43,8 +44,32 @@ export interface ActiveAgent {
   // flight.
   shoulder_tap_available: boolean;
   // A send is in flight and waiting for the agent to come up: the Connecting sub-state of
-  // Sending, shown beside the model bar.
+  // Sending, shown on the status row at the end of the transcript.
   is_connecting: boolean;
+  // The agent will resume on its own: a turn is in flight, or a background task is pending.
+  is_busy: boolean;
+  // The background tasks the chat waits on, oldest first. Rendered as given.
+  background_tasks: BackgroundTask[];
+}
+
+/** Who recorded a background task: the workspace's runner (``run_in_background.py``), which outlives the agent and
+ *  reports how its command ended to the chat, or the harness's own task list, whose tasks end with the agent's
+ *  process, unreported. */
+export type BackgroundTaskSource = "run_in_background" | "harness";
+
+/** One background task a chat waits on (the backend's ``BackgroundTaskSnapshot``): a command the agent
+ *  started whose completion will start its next turn. */
+export interface BackgroundTask {
+  id: string;
+  source: BackgroundTaskSource;
+  // The harness that recorded a "harness" task ("claude", ...); empty for the runner's.
+  harness: string;
+  // The harness's type for a "harness" task; empty for the runner's.
+  kind: string;
+  description: string;
+  // When it started (ISO 8601, UTC); for a "harness" task, when its turn-end hook first recorded it, at the
+  // end of the turn that started it.
+  started_at: string;
 }
 
 /** A handoff runs draining, summarizing, switching; a rebind runs draining, restarting; both can end failed. */
@@ -53,9 +78,21 @@ export type HandoffPhase = "draining" | "summarizing" | "switching" | "restartin
 /** What a converging chat is doing: moving to another harness on a new agent, or changing account in place. */
 export type TransitionKind = "handoff" | "rebind";
 
-/** One message the chat app holds while the chat switches (the backend's ``HeldSendSnapshot``).
- *  Rendered from the snapshot until it lands in the transcript. */
-export interface HeldSend {
+/** The render decision a not-yet-delivered message's text would get in the transcript (a
+ *  user_message's fields of the same names; the backend's ``DisplayDecisionFields``); null for a
+ *  plain message. */
+export interface DisplayDecision {
+  display?: UserMessageEvent["display"] | null;
+  display_label?: string | null;
+  display_body?: string | null;
+  resolution?: UserMessageEvent["resolution"] | null;
+  display_details?: string | null;
+}
+
+/** One message the chat app holds while the chat switches or is still being created (the backend's
+ *  ``HeldSendSnapshot``, or a provisional chat's ``HeldSend``). Rendered from the backend's record until it
+ *  lands in the transcript. */
+export interface HeldSend extends DisplayDecision {
   // The send-time message_id (contract A4); the page's own bubble for the same send carries it too.
   message_id: string;
   text: string;
@@ -84,6 +121,8 @@ export interface HandoffState {
   error: string | null;
   // Which step failed, in the failed phase: the agent's start, or the model picked for it.
   failed_step: "start" | "model" | null;
+  // Whether the chat had no user turn to carry over, so the switch only starts it on the target: no handoff to show.
+  is_fresh_start: boolean;
 }
 
 /** Whether the switch can still be called off: a handoff only until the old agent is stopped (spec 5.6);
@@ -119,7 +158,7 @@ export interface ChatSnapshot {
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
  *  ``QueuedMessageState``). The frontend keys the bubble on ``queued_id`` and never derives or
  *  reconciles these. */
-export interface QueuedMessage {
+export interface QueuedMessage extends DisplayDecision {
   queued_id: string;
   content: string;
   timestamp: string;
@@ -127,13 +166,6 @@ export interface QueuedMessage {
   // interrupt+resend, or a Claude message still queued when the reply landed): it renders as an
   // ordinary send's bubble rather than as a plain queued chip.
   is_sending?: boolean;
-  // The render decision the content would get in the transcript (a user_message's fields of
-  // the same names); null for a plain message.
-  display?: UserMessageEvent["display"] | null;
-  display_label?: string | null;
-  display_body?: string | null;
-  resolution?: UserMessageEvent["resolution"] | null;
-  display_details?: string | null;
 }
 
 /** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
@@ -148,16 +180,22 @@ export interface ProvisionalChat {
   phase: ProvisionalChatPhase;
   // Why the create failed, in the failed phase.
   error: string | null;
-  // Whether the chat has a seed segment to show while it is created: the conversation the
-  // Imbue Studio app had before the workspace existed. Its page keeps the transcript and the composer up
-  // through the create rather than the provisional screens.
+  // Whether the chat has a seed segment to show while it is created: turns written before any agent
+  // joined it (the Imbue Studio app's onboarding, or the main chat the app opens on an update). Its page
+  // keeps the transcript and the composer up through the create rather than the provisional screens.
   is_seeded: boolean;
+  // The messages sent while it is created, in order, which the chat app delivers once the agent lands
+  // (and a failed create's retry delivers then).
+  held_sends: HeldSend[];
+  // The model chosen for it; null for its harness's default.
+  model_pick: ModelIdentity | null;
 }
 
 type WsEvent =
-  | { type: "chats_updated"; chats: ChatSnapshot[] }
+  | { type: "chats_updated"; chats: ChatSnapshot[]; main_chat_id: string | null }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
-  | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null };
+  | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
+  | { type: "accounts_updated" };
 
 export type ChatsUpdatedListener = (chats: ChatSnapshot[]) => void;
 /**
@@ -173,6 +211,9 @@ export type ChatActivityListener = (chatId: string, previous: string | null, cur
 export type ChatActiveAgentListener = (chatId: string, previousAgentId: string, currentAgentId: string) => void;
 
 let chats: ChatSnapshot[] = [];
+// The workspace's main chat (the backend's ``main_chat.py``): listed first, and where a text with no chat of its
+// own goes. It can be a chat that is still provisional. Null while the workspace has no chat to take it.
+let mainChatId: string | null = null;
 // The JSON of the last chats_updated payload, to skip redundant identical pushes.
 let lastChatsSerialized = "";
 let provisionalChats: ProvisionalChat[] = [];
@@ -185,10 +226,16 @@ let replayedProvisionalIds: Set<string> | null = null;
 // Who is waiting for a provisional chat to become an agent (a send typed while it was being
 // created), settled by the push that registers it or the one that fails it.
 const registrationWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
+// The chats whose launch this page posted and has not yet seen move past awaiting its first send: the backend
+// refuses a second launch of a chat it is already creating, so a send typed in the meantime waits for the chat
+// to land and goes to it then, as a send into any creating chat does.
+const launchesInFlight = new Set<string>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 let ws: WebSocket | null = null;
+// Whether the socket has opened before, so an open is a reconnect.
+let hasConnectedBefore = false;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let connected = false;
 
@@ -204,6 +251,9 @@ function connect(): void {
     connected = true;
     console.info("[chat-ws] connected");
     reconnectBackoff.reset();
+    // A change to the account list while the socket was down was pushed to no one.
+    if (hasConnectedBefore) rereadAccounts();
+    hasConnectedBefore = true;
     // The app replays what it holds (its provisional chats, then its chat list) on every
     // connection; the list ends the replay and must be handled even when nothing changed.
     replayedProvisionalIds = new Set();
@@ -244,15 +294,28 @@ function scheduleReconnect(): void {
   }, delayMs);
 }
 
+/** Read the account list again because it changed outside this page (a sign-in or a removal in another chat or
+ *  window), so a chat whose account was removed shows it at once; a failed read keeps the list read before. */
+function rereadAccounts(): void {
+  loadAccounts().then(
+    () => m.redraw(),
+    (error: unknown) => console.warn("[chat-ws] could not re-read the account list", error),
+  );
+}
+
 function handleEvent(event: WsEvent): void {
   switch (event.type) {
+    case "accounts_updated":
+      rereadAccounts();
+      break;
     case "chats_updated": {
       isChatListReceived = true;
       // The backend can broadcast the same snapshot many times during a turn (transcript
       // churn), and a redraw on each identical push makes the model bar visibly flicker.
-      const serialized = JSON.stringify(event.chats);
+      const serialized = JSON.stringify([event.chats, event.main_chat_id]);
       if (serialized === lastChatsSerialized) break;
       lastChatsSerialized = serialized;
+      mainChatId = event.main_chat_id;
       // Diff against the outgoing snapshot (still in `chats` here) so per-chat activity
       // transitions can be reported before replacing it.
       const previousActivityById = new Map(chats.map((c) => [c.chat_id, c.active_agent.activity_state]));
@@ -301,12 +364,14 @@ function handleEvent(event: WsEvent): void {
       const { type: _type, ...provisional } = event;
       provisionalChats = [...provisionalChats.filter((p) => p.chat_id !== provisional.chat_id), provisional];
       replayedProvisionalIds?.add(provisional.chat_id);
+      if (provisional.phase !== "awaiting_first_send") launchesInFlight.delete(provisional.chat_id);
       if (provisional.phase === "failed") {
         settleRegistration(provisional.chat_id, new Error(provisional.error ?? "The chat could not be started"));
       }
       break;
     }
     case "provisional_chat_completed":
+      launchesInFlight.delete(event.chat_id);
       if (event.success) {
         // The chat itself arrives on the chats_updated push, which is what settles waiters.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
@@ -347,6 +412,18 @@ function settleRegistration(chatId: string, error: Error | null): void {
  * send itself reports the backend's refusal. A held send is released the same way when a
  * reconnect's replay turns out not to carry the chat's record any more.
  */
+/**
+ * Refuse a send to a chat whose create has failed, with the reason its page shows: it takes no sends until
+ * its Try again starts it again. Any other chat's send goes to the send route, which holds one for a chat
+ * still being created until the agent lands, so the message is the chat app's to keep from then on.
+ */
+export function refuseSendToFailedChat(chatId: string): void {
+  const provisional = getProvisionalChat(chatId);
+  if (getChatById(chatId) === undefined && provisional?.phase === "failed") {
+    throw new Error(provisional.error ?? "The chat could not be started");
+  }
+}
+
 export function whenChatRegistered(chatId: string): Promise<void> {
   const provisional = getProvisionalChat(chatId);
   if (getChatById(chatId) !== undefined || provisional === undefined) return Promise.resolve();
@@ -377,6 +454,10 @@ export function hasReceivedChatList(): boolean {
  *  out of the snapshots it pushes, so nothing here needs filtering. */
 export function getChats(): ChatSnapshot[] {
   return chats;
+}
+
+export function getMainChatId(): string | null {
+  return mainChatId;
 }
 
 export function getChatById(chatId: string): ChatSnapshot | undefined {
@@ -459,7 +540,7 @@ export interface CreatedChat {
  * shows up as provisional until mngr registers it). The display name is minted server-side.
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
- * Throws with the server's detail on rejection.
+ * Throws an ``HttpError`` on a refusal (its ``failure.kind`` says when the account is the reason) or no answer.
  */
 export function createChat(
   projectId: string,
@@ -482,12 +563,37 @@ export async function awaitingChatForEmptyList(): Promise<string> {
  * Launch a chat minted earlier (a seeded one awaiting its first send, or one whose create
  * failed) on ``accountId``: it keeps its id and name, so the window showing it becomes the chat.
  */
-export function launchChat(chatId: string, accountId: string, message = ""): Promise<CreatedChat> {
-  // A seeded chat's launch brings the user's first message; a failed create's retry has none
-  // to bring, so the field is left out then.
-  return postCreateChat(
-    message === "" ? { chat_id: chatId, account_id: accountId } : { chat_id: chatId, account_id: accountId, message },
-  );
+/** Choose the account and model a chat with no agent yet runs on: it launches on them, or takes them as its
+ *  create lands. The provisional record the chat app pushes back carries the choice. */
+export async function setLaunchChoice(chatId: string, accountId: string, pick: ModelIdentity | null): Promise<void> {
+  await postJson<unknown>(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/launch-choice`), {
+    account_id: accountId,
+    model: pick,
+  });
+}
+
+export async function launchChat(chatId: string, accountId: string, message = ""): Promise<CreatedChat> {
+  launchesInFlight.add(chatId);
+  try {
+    // A seeded chat's launch brings the user's first message; a failed create's retry has none
+    // to bring, so the field is left out then.
+    return await postCreateChat(
+      message === ""
+        ? { chat_id: chatId, account_id: accountId }
+        : { chat_id: chatId, account_id: accountId, message },
+    );
+  } catch (error) {
+    // The launch did not take: the next send may launch the chat, and a send that waited on this
+    // one gets the refusal back rather than waiting for a chat that is not coming.
+    launchesInFlight.delete(chatId);
+    settleRegistration(chatId, error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  }
+}
+
+/** Whether this page has posted a launch of ``chatId`` that the backend has not yet reported as creating. */
+export function isLaunchInFlight(chatId: string): boolean {
+  return launchesInFlight.has(chatId);
 }
 
 async function postCreateChat(body: Record<string, string | ModelIdentity | null>): Promise<CreatedChat> {

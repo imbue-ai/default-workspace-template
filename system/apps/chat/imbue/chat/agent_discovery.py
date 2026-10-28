@@ -59,6 +59,11 @@ def get_host_dir() -> Path:
     return Path(os.environ.get("MNGR_HOST_DIR", str(Path.home() / ".mngr")))
 
 
+def agent_tmux_session_name(agent_name: str) -> str:
+    """The tmux session an agent runs in: mngr's ``prefix`` (``MNGR_PREFIX``, ``mngr-`` unset) and its name."""
+    return f"{os.environ.get('MNGR_PREFIX', 'mngr-')}{agent_name}"
+
+
 class AgentInfo(FrozenModel):
     """Lightweight agent info for the web UI."""
 

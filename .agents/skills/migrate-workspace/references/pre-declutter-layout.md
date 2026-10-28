@@ -195,15 +195,17 @@ Worth telling the user about once the migration lands -- these are things their 
 workspace simply could not do, and some of them are better homes for what they
 built.
 
-- **Scheduled tasks.** Recurring jobs run through cron drop-ins with a
-  catch-up-and-retry runner (`system/scripts/run_job.sh`), and a **schedule agent**
-  can run any skill on a cadence in its own chat. See the
-  `manage-scheduled-tasks` skill. If the old workspace faked a schedule with a
-  long-running loop in a supervisord program, this is where it should go instead.
+- **Routines.** Anything that runs on a schedule is a routine: one definition
+  file under `system/routines/<id>.toml`, a command or a skill run in a chat of
+  its own, with catch-up after downtime and retry of failed runs, shown to the
+  user by the Routines app. See the `manage-routines` skill. If the old
+  workspace faked a schedule with a long-running loop in a supervisord program
+  or a hand-written cron line, this is where it should go instead.
 - **The Caretaker.** A weekly maintenance agent, **off by default**, woken only
   when a deterministic check finds something (services in FATAL/BACKOFF, fresh
-  errors in the supervisor logs, disk at 85 percent, new OOM shedding). See
-  `enable-caretaker` / `disable-caretaker`.
+  errors in the supervisor logs, disk at 85 percent, new OOM shedding, routines
+  that are failing). It is the `caretaker` routine, turned on from the Routines
+  app or with `uv run --no-sync routines enable caretaker`.
 - **Templates.** A publishable, bootable snapshot of what an agent has built, so
   another agent can be created from it or adopt it. See `publish-template`,
   `use-template`, `update-installed-template`.

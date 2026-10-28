@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 
 // Capture mithril's request so the test drives the backend without a real network
 // call and asserts the POST body/order. redraw is a no-op; apiUrl is identity so
@@ -9,6 +10,7 @@ vi.mock("@imbue/workspace-ui/src/base-path", () => ({ apiUrl: (path: string) => 
 vi.mock("./Chats", () => ({ getChatById: mockGetChatById }));
 
 import {
+  addModelChoiceFailureListener,
   changedAxes,
   effectiveChoice,
   forgetPendingChoice,
@@ -250,6 +252,25 @@ describe("effectiveChoice", () => {
       fast: false,
       axes: ["effort"],
     });
+  });
+
+  it("tells the refusal's reason in words and puts the bar back on the live choice", async () => {
+    // Mithril rejects with `new Error(body)`, so a JSON body's message reads "[object Object]"; the words are in it.
+    const detail = "This chat is switching to Claude 2 (Claude Code); wait for the switch to finish, then try again.";
+    mockRequest.mockRejectedValueOnce(
+      Object.assign(new Error("[object Object]"), { code: 409, response: { detail, phase: "summarizing" } }),
+    );
+    const failures: Array<[string, string]> = [];
+    addModelChoiceFailureListener((chatId, error) => failures.push([chatId, describeRequestError(error)]));
+
+    setModelChoice("a10", { model_id: "sonnet", effort: "medium", fast: false }, SONNET, ["model"]);
+    expect(effectiveChoice("a10", live("claude-opus-4-8", "high", false, OPUS))?.isPending).toBe(true);
+    await flush();
+
+    expect(failures).toEqual([["a10", detail]]);
+    const shown = effectiveChoice("a10", live("claude-opus-4-8", "high", false, OPUS));
+    expect(shown?.matched?.id).toBe("opus[1m]");
+    expect(shown?.isPending).toBe(false);
   });
 
   it("applies rapid picks in click order", async () => {

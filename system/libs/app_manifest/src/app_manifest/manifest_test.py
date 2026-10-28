@@ -5,19 +5,18 @@ import pytest
 from pydantic import ValidationError
 
 from app_manifest.errors import ManifestLoadError
-from app_manifest.manifest import (
-    RESERVED_LAUNCH_PARAM_NAMES,
-    AppManifest,
-    EntryMode,
-    LaunchPathMethod,
-    LocationScope,
-    PinStyle,
-    PreviewSpec,
-    ShortcutMode,
-    load_manifest,
-    manifest_icon_path,
-    scaffold_preview_spec,
-)
+from app_manifest.manifest import AppManifest
+from app_manifest.manifest import EntryMode
+from app_manifest.manifest import LaunchPathMethod
+from app_manifest.manifest import LocationScope
+from app_manifest.manifest import PinStyle
+from app_manifest.manifest import PreviewSpec
+from app_manifest.manifest import RESERVED_LAUNCH_PARAM_NAMES
+from app_manifest.manifest import ShortcutMode
+from app_manifest.manifest import ThemingMode
+from app_manifest.manifest import load_manifest
+from app_manifest.manifest import manifest_icon_path
+from app_manifest.manifest import scaffold_preview_spec
 from app_manifest.primitives import AppName
 from app_manifest.testing import APP_ICON_MARKUP
 from app_manifest.testing import write_app_manifest
@@ -31,7 +30,7 @@ def _launch_path_params() -> list[dict[str, object]]:
 def _launch_path_data() -> dict[str, object]:
     return {
         "id": "new",
-        "label": "New File Viewer",
+        "label": "Files",
         "path": "/",
         "params": _launch_path_params(),
         "text_param": "path",
@@ -41,7 +40,7 @@ def _launch_path_data() -> dict[str, object]:
 def _full_manifest_data() -> dict[str, object]:
     return {
         "name": "files",
-        "display_name": "File Viewer",
+        "display_name": "Files",
         "icon": "icon.svg",
         "critical": False,
         "stop_when_no_windows": True,
@@ -60,7 +59,7 @@ def test_full_manifest_round_trips_every_field() -> None:
     manifest = AppManifest.model_validate(_full_manifest_data())
 
     assert manifest.name == "files"
-    assert manifest.display_name == "File Viewer"
+    assert manifest.display_name == "Files"
     assert manifest.icon == "icon.svg"
     assert manifest.priority == "files"
     assert manifest.program == "files"
@@ -117,6 +116,36 @@ def test_a_pin_takes_the_plain_linked_bar_defaults_and_needs_only_a_path() -> No
 def test_a_pin_follows_the_launch_path_rule_and_the_three_vocabularies(pin: dict[str, object], field: str) -> None:
     with pytest.raises(ValidationError, match=field):
         AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg", "pin": pin})
+
+
+@pytest.mark.parametrize("description", ["", "   ", "two\nlines", "x" * 201])
+def test_a_description_is_one_non_empty_line_of_at_most_200_characters(
+    description: str,
+) -> None:
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate(
+            {**_full_manifest_data(), "description": description}
+        )
+
+
+def test_a_manifest_reads_its_description_and_api_schema_path() -> None:
+    manifest = AppManifest.model_validate(
+        {
+            **_full_manifest_data(),
+            "description": "Keeps notes.",
+            "api_schema_path": "/api/schema",
+        }
+    )
+    assert manifest.description == "Keeps notes."
+    assert manifest.api_schema_path == "/api/schema"
+    assert AppManifest.model_validate(_full_manifest_data()).description is None
+    assert AppManifest.model_validate(_full_manifest_data()).api_schema_path is None
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate(
+            {**_full_manifest_data(), "api_schema_path": "api/schema?x=1"}
+        )
+    with pytest.raises(ValidationError, match="also declares description"):
+        AppManifest.model_validate({**_full_manifest_data(), "api_schema_path": "/api/schema"})
 
 
 def test_window_closed_path_follows_the_launch_path_rule() -> None:
@@ -591,6 +620,14 @@ def test_load_manifest_reports_a_missing_file(tmp_path: Path) -> None:
         load_manifest(tmp_path / "nope.toml")
 
 
+def test_load_manifest_reports_a_file_that_is_not_utf8(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "app.toml"
+    manifest_path.write_bytes(b'name = "news"\ndisplay_name = "\xff"\n')
+
+    with pytest.raises(ManifestLoadError, match="cannot read"):
+        load_manifest(manifest_path)
+
+
 def _manifest_with_preview(preview: dict[str, object]) -> AppManifest:
     return AppManifest.model_validate(
         {
@@ -1000,3 +1037,46 @@ def test_secret_declarations_round_trip_and_reject_a_repeated_file_or_an_empty_v
     ):
         with pytest.raises(ValidationError):
             AppManifest.model_validate({**_full_manifest_data(), "secrets": bad})
+
+
+def test_theming_defaults_to_tokens_with_no_parts() -> None:
+    manifest = AppManifest.model_validate(_full_manifest_data())
+
+    assert manifest.theming.mode == ThemingMode.TOKENS
+    assert manifest.theming.parts == ()
+
+
+def test_theming_parts_declare_the_elements_a_theme_may_style() -> None:
+    data = {
+        **_full_manifest_data(),
+        "theming": {
+            "mode": "parts",
+            "parts": [
+                {"name": "user-message", "description": "A message the user sent"},
+                {"name": "composer", "description": "The box a message is typed in"},
+            ],
+        },
+    }
+
+    manifest = AppManifest.model_validate(data)
+
+    assert manifest.theming.mode == ThemingMode.PARTS
+    assert [str(part.name) for part in manifest.theming.parts] == ["user-message", "composer"]
+
+
+@pytest.mark.parametrize(
+    ("theming", "match"),
+    [
+        ({"mode": "tokens", "parts": [{"name": "row", "description": "A row"}]}, "only with mode"),
+        ({"mode": "parts", "parts": [{"name": "Row", "description": "A row"}]}, "lowercase"),
+        (
+            {"mode": "parts", "parts": [{"name": "row", "description": "A"}, {"name": "row", "description": "B"}]},
+            "unique",
+        ),
+        ({"mode": "parts", "parts": [{"name": "row", "description": "A row\nof the list"}]}, "one line"),
+        ({"mode": "skins"}, "mode"),
+    ],
+)
+def test_theming_refuses_misdeclared_parts_and_unknown_modes(theming: dict[str, object], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        AppManifest.model_validate({**_full_manifest_data(), "theming": theming})

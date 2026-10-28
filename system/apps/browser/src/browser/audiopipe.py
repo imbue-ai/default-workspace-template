@@ -29,7 +29,6 @@ import os
 import threading
 from collections import deque
 from types import ModuleType
-from typing import Any
 
 from loguru import logger
 

@@ -30,6 +30,8 @@ export function chatSnapshotFixture(
       queued_messages: [],
       shoulder_tap_available: false,
       is_connecting: false,
+      is_busy: false,
+      background_tasks: [],
       ...agentOverrides,
     },
   };
@@ -50,6 +52,7 @@ export function handoffStateFixture(overrides: Partial<HandoffState> = {}): Hand
     model_pick: null,
     error: null,
     failed_step: null,
+    is_fresh_start: false,
     ...overrides,
   };
 }
@@ -69,6 +72,7 @@ export function rebindStateFixture(overrides: Partial<HandoffState> = {}): Hando
     model_pick: null,
     error: null,
     failed_step: null,
+    is_fresh_start: false,
     ...overrides,
   };
 }

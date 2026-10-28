@@ -13,6 +13,8 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from flask import Flask
 from flask.testing import FlaskClient
 from workspace_layout.primitives import ClientId
@@ -21,10 +23,13 @@ from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.primitives import DesignId
 from imbue.system_interface.avatar.testing import png_size
 from imbue.system_interface.config import Config
+from imbue.system_interface.documents import BASE_PATH_META_NAME
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.documents import THEME_GALLERY_ROUTE
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.server import THEME_GALLERY_FILENAME
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
@@ -35,6 +40,7 @@ from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.testing import TEST_PAGE_ID
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
+from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
@@ -265,6 +271,34 @@ def test_an_unknown_path_falls_through_to_the_shell_document(tmp_path: Path) -> 
     assert "the shell" in response.text
 
 
+def test_the_built_page_and_the_placeholder_are_served_under_the_document_policy(tmp_path: Path) -> None:
+    """The desktop (a built document with no inline script) and the placeholder (one inline script) both carry a
+    policy a browser would run them under; the shell's frames of other apps and its socket stay admitted."""
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    state = build_test_state()
+    state.static_directory = static_dir
+    test_client = create_application(state).test_client()
+
+    placeholder = test_client.get("/")
+    (static_dir / "index.html").write_text(
+        '<html><head><script src="/assets/index.js"></script></head><body></body></html>'
+    )
+    desktop = test_client.get("/")
+
+    assert placeholder.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert desktop.headers[FRONTEND_BUILT_HEADER] == "true"
+    for page in (placeholder, desktop):
+        assert_document_policy_admits_page(page)
+        policy = page.headers["Content-Security-Policy"]
+        assert "frame-src http: https:" in policy
+        # The tour's pictures are hosted, so the page admits images from their origin.
+        assert "img-src 'self' data: blob: https://onboarding-media.imbueminds.com" in policy
+        assert "connect-src" not in policy
+        assert "frame-ancestors" not in policy
+    assert "Content-Security-Policy" not in test_client.get("/api/health").headers
+
+
 def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) -> None:
     """The placeholder and the real app are both HTTP 200 HTML.
 
@@ -286,6 +320,22 @@ def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) ->
     # that returns an open tab to the interface once something else restores it
     # -- nothing on the page can produce one, and nothing notifies it.
     assert FRONTEND_BUILT_HEADER in response.text
+
+
+def test_the_theme_gallery_serves_its_own_page_and_the_placeholder_until_it_is_built(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text(_BUILT_INDEX)
+    client = create_application(build_test_state(static_directory=static_dir)).test_client()
+
+    unbuilt = client.get(THEME_GALLERY_ROUTE)
+    (static_dir / THEME_GALLERY_FILENAME).write_text("<html><head><title>Theme gallery</title></head></html>")
+    built = client.get(THEME_GALLERY_ROUTE, base_url="http://localhost/shell")
+
+    assert unbuilt.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert built.headers[FRONTEND_BUILT_HEADER] == "true"
+    assert "<title>Theme gallery</title>" in built.text
+    assert f'<meta name="{BASE_PATH_META_NAME}" content="/shell">' in built.text
 
 
 def test_not_built_placeholder_polls_rather_than_refreshing_the_whole_page(tmp_path: Path) -> None:
@@ -828,6 +878,24 @@ def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
     )
 
 
+@pytest.mark.frontend
+def test_the_tours_pictures_are_hosted_at_the_origin_the_page_policy_admits() -> None:
+    """The shell page admits images from ``ONBOARDING_MEDIA_ORIGIN`` alone beyond its own origin, and the tour's
+    cards hold their pictures' origin as a constant of their own, since the bundle cannot read ``tour.py``; a
+    change to one and not the other would block the pictures with nothing but a blank card to show for it."""
+    tour_cards_ts = Path(__file__).parents[2] / "frontend" / "src" / "model" / "tourCards.ts"
+    source = tour_cards_ts.read_text()
+    declared = re.search(r'const ONBOARDING_MEDIA_BASE_URL = "([^"]+)";', source)
+    assert declared is not None, f"the pictures' origin is no longer declared in {tour_cards_ts}"
+    assert declared.group(1) == ONBOARDING_MEDIA_ORIGIN, (
+        f"the tour's picture origin in {tour_cards_ts} has drifted from tour.py: "
+        f"{declared.group(1)!r} against {ONBOARDING_MEDIA_ORIGIN!r}"
+    )
+    picture_urls = re.findall(r"url: `([^`]+)`", source)
+    assert picture_urls, f"no picture URLs found in {tour_cards_ts}"
+    assert all(url.startswith("${ONBOARDING_MEDIA_BASE_URL}/") for url in picture_urls), picture_urls
+
+
 def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> None:
     """The poll reads a header, so HEAD must still carry it -- and nothing else.
 
@@ -1039,3 +1107,7 @@ def test_a_move_reported_before_its_page_heard_an_ops_move_is_not_recorded_and_i
     finally:
         shell.broadcaster.unregister(client_queue)
         shell.broadcaster.unregister(other_queue)
+
+
+def test_the_shell_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
+    assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")

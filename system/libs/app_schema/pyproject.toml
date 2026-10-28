@@ -1,0 +1,37 @@
+[project]
+name = "app-schema"
+version = "0.1.0"
+description = "An app's self-description: the OpenAPI document for its HTTP API, built from its Flask routes"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    # The test helper reads the app's manifest to learn the schema path, title and description.
+    "app-manifest",
+    "flask>=3.0",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+# What assert_api_schema_describes_app validates a served document with; an app's test suite
+# depends on app-schema[testing], its runtime on app-schema alone.
+testing = ["openapi-spec-validator>=0.7"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/app_schema"]
+
+[dependency-groups]
+dev = [
+    # The library's own tests validate the documents they build.
+    "app-schema[testing]",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.85",
+]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

@@ -438,7 +438,7 @@
       .then(async (response) => {
         if (response.ok) return;
         let reason = "";
-        try { reason = (await response.json()).error || ""; } catch (_) {}
+        try { reason = (await response.json()).detail || ""; } catch (_) {}
         showStartRefused(reason || ("the browser service answered " + response.status));
       })
       .catch(() => showStartRefused("the browser service did not answer"));
@@ -1203,7 +1203,7 @@ registerProcessor('pb', PB);`;
             .then(async (response) => {
               if (response.ok) return;
               let reason = "";
-              try { reason = (await response.json()).error || ""; } catch (_) {}
+              try { reason = (await response.json()).detail || ""; } catch (_) {}
               console.warn("[browser] close-tab refused (" + response.status + ")", reason);
             })
             .catch((error) => console.warn("[browser] close-tab request failed", error));

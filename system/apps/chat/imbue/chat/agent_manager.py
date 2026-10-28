@@ -13,8 +13,10 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 from typing import Self
+from typing import TypeVar
 from uuid import uuid4
 
+from chat_background_tasks.markers import TaskSource
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import lookup_pid_by_agent_id
@@ -23,9 +25,12 @@ from workspace_layout.client import DisconnectedShell
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
+from imbue.chat.accounts import AccountSignedOutError
+from imbue.chat.accounts import NoAccountsError
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import account_label_for
 from imbue.chat.accounts import harness_for
+from imbue.chat.accounts import index_path
 from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
@@ -45,6 +50,8 @@ from imbue.chat.agent_discovery import read_claude_config_dir_from_env_file
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.background_tasks import BackgroundTask
+from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_autocompact import read_autocompact_state
 from imbue.chat.chat_autocompact import write_autocompact_state
@@ -80,6 +87,7 @@ from imbue.chat.chat_records import DEFAULT_CHAT_RECORDS_ROOT
 from imbue.chat.chat_records import InMemoryChatRecordStore
 from imbue.chat.chat_records import is_seed_entry
 from imbue.chat.chat_seed import SeedTurn
+from imbue.chat.chat_seed import is_slash_command
 from imbue.chat.chat_seed import seed_agent_info
 from imbue.chat.chat_seed import seed_context_message
 from imbue.chat.chat_seed import seed_events
@@ -134,6 +142,11 @@ from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.chat.imbue_studio_notifications import ImbueStudioNotificationsClient
 from imbue.chat.latchkey_gateway import GatewayAccess
+from imbue.chat.main_chat import MAIN_CHAT_INTRODUCTION
+from imbue.chat.main_chat import MAIN_CHAT_NAME
+from imbue.chat.main_chat import MainChatCandidate
+from imbue.chat.main_chat import MainChatStore
+from imbue.chat.main_chat import resolved_main_chat_id
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
@@ -143,6 +156,7 @@ from imbue.chat.models import AgentNameConflictError
 from imbue.chat.models import AgentRenameError
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import AgentStopError
+from imbue.chat.models import BackgroundTaskSnapshot
 from imbue.chat.models import ChatAccountBinding
 from imbue.chat.models import ChatConvergingError
 from imbue.chat.models import ChatCreationOutcome
@@ -150,6 +164,7 @@ from imbue.chat.models import ChatPartlyDestroyedError
 from imbue.chat.models import ChatSegmentInfo
 from imbue.chat.models import ChatSnapshot
 from imbue.chat.models import CreatedChat
+from imbue.chat.models import DisplayDecisionFields
 from imbue.chat.models import HandoffError
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HandoffState
@@ -159,9 +174,11 @@ from imbue.chat.models import HeldSendSnapshot
 from imbue.chat.models import ModelApplyError
 from imbue.chat.models import ModelPick
 from imbue.chat.models import ModelPickRejectedError
+from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
+from imbue.chat.models import SignedOutAccountError
 from imbue.chat.models import TransitionKind
 from imbue.chat.naming import AUTO_NAME_WORD
 from imbue.chat.naming import canonical_agent_name
@@ -236,11 +253,22 @@ _DEFAULT_MESSENGER: Final[MngrMessenger] = MngrMessenger()
 # rate, which costs ~3x under gVisor.
 _SESSION_SWEEP_INTERVAL_SECONDS: Final[float] = 10.0
 
+# How long after starting the main chat's stopped agent another start is not tried, so one that fails (or that
+# the observe stream has not caught up with yet) is not retried on every chat-list push.
+MAIN_CHAT_WAKE_RETRY_SECONDS: Final[float] = 60.0
+# How long one ``mngr start`` of the main chat's agent may take.
+_MAIN_CHAT_WAKE_TIMEOUT_SECONDS: Final[float] = 60.0
+
 # How long one ``mngr rename`` / ``mngr label`` may take. Both edit the
 # provider's persisted agent data (rename also moves the tmux session on a live
 # host), so they are short local operations -- but they run inside a request the
 # user is waiting on, so they are bounded rather than left to hang.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
+
+# A finished harness task's notice normally starts a turn at once; the marker of one whose notice
+# starts none (a task the user stopped from the harness's own task list) goes after this many
+# background-task poller passes instead.
+_FINISHED_TASK_TURN_GRACE_PASSES: Final[int] = 3
 
 # Cap on the ``uv sync --all-packages`` a failed chat create runs before it retries; a sync
 # with nothing to do takes well under a second.
@@ -310,7 +338,7 @@ def seeded_provisional_chats(record_by_chat_id: Mapping[ChatId, ChatRecord]) -> 
     return {
         chat_id: ProvisionalChat(
             chat_id=chat_id,
-            name=record.seed_title or "",
+            name=record.chosen_name or record.seed_title or "",
             phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
             is_seeded=True,
         )
@@ -523,19 +551,28 @@ def _build_chat_display_label_command(mngr_binary: str, agent_id: str, name: str
     ]
 
 
+_DecidedT = TypeVar("_DecidedT", bound=DisplayDecisionFields)
+
+
+@pure
+def _with_display_decision(message: _DecidedT, text: str) -> _DecidedT:
+    """``message`` carrying the render decision ``text`` would get in the transcript."""
+    decision = classify_user_message(text)
+    if decision is None:
+        return message
+    return message.model_copy_update(
+        to_update(message.field_ref().display, decision.display),
+        to_update(message.field_ref().display_label, decision.display_label),
+        to_update(message.field_ref().display_body, decision.display_body),
+        to_update(message.field_ref().resolution, decision.resolution),
+        to_update(message.field_ref().display_details, decision.display_details),
+    )
+
+
 def _queued_message_state(entry: Mapping[str, Any]) -> QueuedMessageState:
     """One harness's queued entry on the wire, carrying the render decision its content would get in the transcript."""
     queued = QueuedMessageState.model_validate(entry)
-    decision = classify_user_message(queued.content)
-    if decision is None:
-        return queued
-    return queued.model_copy_update(
-        to_update(queued.field_ref().display, decision.display),
-        to_update(queued.field_ref().display_label, decision.display_label),
-        to_update(queued.field_ref().display_body, decision.display_body),
-        to_update(queued.field_ref().resolution, decision.resolution),
-        to_update(queued.field_ref().display_details, decision.display_details),
-    )
+    return _with_display_decision(queued, queued.content)
 
 
 # AgentMatch requires a host_name, but the send path never reads it -- it groups
@@ -561,17 +598,61 @@ def _build_agent_match(agent: AgentDetails) -> AgentMatch:
 
 
 @pure
+def is_turn_in_flight(activity_state: ActivityState | None) -> bool:
+    return activity_state in (ActivityState.THINKING, ActivityState.TOOL_RUNNING)
+
+
+@pure
 def chat_status_for_agent(
-    lifecycle_state: str, activity_state: ActivityState | None, is_permission_pending: bool
+    lifecycle_state: str,
+    activity_state: ActivityState | None,
+    is_permission_pending: bool,
+    is_busy: bool,
+    is_turn_closing: bool,
 ) -> ChatStatus:
-    """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn or compaction."""
+    """The chat row's status rule: a dead lifecycle wins, then a pending permission, then a live turn, a compaction or
+    a turn still closing, then a busy chat (one a pending background task will wake)."""
     if is_lifecycle_dead(lifecycle_state):
         return ChatStatus.STOPPED
     if is_permission_pending:
         return ChatStatus.ATTENTION
-    if activity_state is not None and is_working_activity_state(activity_state):
+    if (activity_state is not None and is_working_activity_state(activity_state)) or is_turn_closing:
         return ChatStatus.WORKING
+    if is_busy:
+        return ChatStatus.BACKGROUND
     return ChatStatus.IDLE
+
+
+@pure
+def background_task_snapshot(task: BackgroundTask) -> BackgroundTaskSnapshot:
+    return BackgroundTaskSnapshot(
+        id=task.id,
+        source=task.source,
+        harness=task.harness,
+        kind=task.kind,
+        description=task.description,
+        started_at=task.started_at,
+    )
+
+
+class AgentBusyState(FrozenModel):
+    """Whether one agent will resume on its own, as the agent listing reports it."""
+
+    chat_id: ChatId = Field(description="The chat the agent belongs to")
+    is_busy: bool = Field(description="A turn is in flight, or the agent runs a chat with a pending background task")
+    background_tasks: tuple[BackgroundTask, ...] = Field(
+        description="The chat's pending tasks, oldest first; empty unless the agent is the chat's active agent"
+    )
+
+
+class _FinishedTasksAwaitingTurn(FrozenModel):
+    """Harness tasks the transcript reported over while no turn was in flight, held for the turn their notice starts."""
+
+    harness: HarnessType = Field(description="The harness whose markers they are")
+    task_ids: tuple[str, ...] = Field(description="The finished tasks, in the order the transcript reported them")
+    passes_left: int = Field(
+        description="Background-task poller passes still to wait for that turn before removing them anyway"
+    )
 
 
 def _monotonic_to_epoch(monotonic_at: float, now: float) -> float:
@@ -731,7 +812,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # (a fresh start picked from the provider menu) has no confirming message to show.
     others = transition.held_sends_after_trigger()
     trigger = (
-        (HeldSendSnapshot(message_id=transition.trigger_message_id, text=transition.trigger_text),)
+        (_held_send_snapshot(transition.trigger_message_id, transition.trigger_text),)
         if transition.trigger_text
         else ()
     )
@@ -743,11 +824,18 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         target_account_id=transition.target_account_id,
         target_harness=transition.target_harness,
         target_label=_target_label_of(transition),
-        held_sends=(*trigger, *(HeldSendSnapshot(message_id=held.message_id, text=held.text) for held in others)),
+        held_sends=(*trigger, *(_held_send_snapshot(held.message_id, held.text) for held in others)),
         model_pick=transition.model_pick,
         error=transition.error,
         failed_step=transition.failed_step,
+        is_fresh_start=isinstance(transition, ChatHandoffRecord) and transition.is_fresh_start,
     )
+
+
+@pure
+def _held_send_snapshot(message_id: str, text: str) -> HeldSendSnapshot:
+    """One held send on the wire, carrying the render decision its text would get in the transcript."""
+    return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=text), text)
 
 
 @pure
@@ -805,6 +893,7 @@ def chat_snapshot_for_active_agent(
     shoulder_tap_available: bool,
     is_connecting: bool,
     last_messaged_at: float | None,
+    background_tasks: tuple[BackgroundTask, ...],
     compaction_cause: CompactionCause | None,
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
@@ -818,6 +907,7 @@ def chat_snapshot_for_active_agent(
     """
     handoff = chat.handoff
     transition = chat.transition
+    is_busy = is_turn_in_flight(agent.activity_state) or agent.is_turn_closing or bool(background_tasks)
     return ChatSnapshot(
         chat_id=chat.chat_id,
         title=handoff.chat_title if handoff is not None else (agent.labels.get("display_name") or agent.name),
@@ -825,7 +915,9 @@ def chat_snapshot_for_active_agent(
         project=agent.labels.get("project"),
         status=_converging_status(transition.phase)
         if transition is not None
-        else chat_status_for_agent(agent.state, agent.activity_state, is_permission_pending),
+        else chat_status_for_agent(
+            agent.state, agent.activity_state, is_permission_pending, is_busy, agent.is_turn_closing
+        ),
         labels=agent.labels,
         agent_ids=chat.member_agent_ids,
         handoff=_transition_state_of(chat.record),
@@ -843,6 +935,8 @@ def chat_snapshot_for_active_agent(
             queued_messages=agent.queued_messages,
             shoulder_tap_available=shoulder_tap_available,
             is_connecting=is_connecting,
+            is_busy=is_busy,
+            background_tasks=tuple(background_task_snapshot(task) for task in background_tasks),
         ),
         last_messaged_at=last_messaged_at,
     )
@@ -868,6 +962,37 @@ class _CreatedAgentAwaitingObserve(FrozenModel):
     @pure
     def after_a_snapshot_without_it(self) -> "_CreatedAgentAwaitingObserve":
         return self.model_copy_update(to_update(self.field_ref().snapshots_without_it, self.snapshots_without_it + 1))
+
+
+class _RecentRename(FrozenModel):
+    """Renames this server made of one agent that the observe stream has not reported yet.
+
+    The stream can deliver a snapshot it read before a rename after the rename has returned, which would put the
+    old name back for seconds.
+    """
+
+    stale_names: tuple[tuple[str, str | None], ...] = Field(
+        frozen=True, description="The (true name, display_name label) pairs the agent had before, oldest first"
+    )
+    new_name: str = Field(frozen=True, description="The true name the latest rename gave it")
+    new_display_name: str = Field(frozen=True, description="The display_name label the latest rename gave it")
+
+
+@pure
+def _observed_with_recent_rename(observed: AgentStateItem, rename: _RecentRename) -> tuple[AgentStateItem, bool]:
+    """The agent as the chat app shows it after ``observed`` arrives, and whether the rename is still unreported.
+
+    A snapshot carrying a name the agent had before the rename predates it and gets the new name; one carrying the
+    new name reports the rename; one carrying any other name was renamed since, by someone else, and stands.
+    """
+    observed_names = (observed.name, observed.labels.get("display_name"))
+    if observed_names == (rename.new_name, rename.new_display_name) or observed_names not in rename.stale_names:
+        return observed, False
+    renamed = observed.model_copy_update(
+        to_update(observed.field_ref().name, rename.new_name),
+        to_update(observed.field_ref().labels, {**observed.labels, "display_name": rename.new_display_name}),
+    )
+    return renamed, True
 
 
 class HandoffCapabilities(FrozenModel):
@@ -947,9 +1072,20 @@ class AgentManager:
     _match_by_agent_id: dict[str, AgentMatch]
     # The chats minted here whose first agent mngr does not know yet, by chat id.
     _provisional_chats: dict[ChatId, ProvisionalChat]
+    # The chats whose pending seed a send is carrying right now (``carry_pending_seed``): the
+    # delivery runs outside the lock, and a second send overlapping it must go as typed rather
+    # than carry the conversation again.
+    _seed_carries_in_flight: set[ChatId]
     # A name shown for a chat before its rename lands: the automatic name, from the moment the
     # model answers until ``mngr rename`` (seconds of CLI startup) has carried it.
     _title_override_by_chat: dict[ChatId, str]
+    # Renames made here that the observe stream has not reported yet, by agent id.
+    _recent_rename_by_agent_id: dict[str, _RecentRename]
+    # The chats whose rename by a person or an agent is running, counted, so no automatic name is shown or made
+    # for them meanwhile.
+    _chosen_renames_running_by_chat: dict[ChatId, int]
+    # One lock per chat, held while a rename of it runs: two renames of one chat run one after the other.
+    _rename_lock_by_chat: dict[ChatId, threading.Lock]
     # The records of the chats that have run on more than one agent, read from the store at
     # build (and on ``refresh_chat_records``); a chat with no record is its one agent.
     _chat_record_store: ChatRecordStore
@@ -980,6 +1116,9 @@ class AgentManager:
     # the chat, so what is held is bounded by the chats the workspace has rather than by
     # every chat it has ever created (nothing waits on most of them).
     _creation_settled_by_chat: dict[ChatId, threading.Event]
+    # The chats deleted while their create ran. They are listed nowhere, and the agent the create
+    # makes is destroyed as it lands.
+    _abandoned_creates: set[ChatId]
     _mngr_binary: str
     _host_dir: Path
     _activity_tracked_agents: set[str]
@@ -1037,9 +1176,35 @@ class AgentManager:
     # Per agent, when (monotonic) its latest compacted event was stamped, so a sweep request reported
     # after its compaction already finished is not shown as a compaction still running.
     _compaction_finished_at_by_agent: dict[str, float]
+    # The poller over each chat's background-task marker directory (watched beside its active agent):
+    # re-reads a chat's tasks whenever its directory's entries change, and after every pass rechecks
+    # the pids of every chat with markers, since a marker going stale touches no file.
+    _background_tasks_poller: AgentFilePoller
+    # The poller over the account index, whichever process writes it: every page is told the account list changed, so
+    # a chat whose account was removed elsewhere shows it at once rather than on its next send.
+    _accounts_index_poller: AgentFilePoller
+    # Reads each chat's background-task markers; None (tests that need none) reads no tasks.
+    _background_tasks: BackgroundTaskReader | None
+    # Per chat, its live background tasks as the poller last read them; a chat with none has no
+    # entry. A non-empty entry makes the chat busy.
+    _background_tasks_by_chat: dict[ChatId, tuple[BackgroundTask, ...]]
+    # Held across one marker read and the store of what it read, so a slow read cannot overwrite
+    # a newer one; separate from ``_lock`` so the file reads never hold up the rest of the manager.
+    _background_tasks_read_lock: threading.Lock
+    # Per agent, the finished harness tasks whose markers wait for the turn their notice starts, so
+    # the chat goes from background to working in one update rather than reading idle in between.
+    _finished_tasks_awaiting_turn_by_agent: dict[str, _FinishedTasksAwaitingTurn]
+    # The chats whose agent the observe stream last reported in a running lifecycle state.
+    _running_chat_ids: frozenset[ChatId]
     # When each chat was last messaged from the UI, kept on disk so a restart seeds the OOM
     # prioritizer's recency ranking from real history.
     _message_stamps: MessageStampStore
+    # Which chat is the workspace's main chat (``main_chat.py``), kept on disk so a restart keeps it.
+    _main_chat: MainChatStore
+    # Whether the main chat's agent is started again whenever it is found stopped (the live chat app's).
+    _keeps_main_chat_awake: bool
+    # When this manager last started each main-chat agent it found stopped, monotonic seconds.
+    _main_chat_wake_started_at: dict[str, float]
     # Re-tags chat agents' OOM ``oom_score_adj`` from live activity: page presence and
     # messages (via ``record_presence`` and ``record_message_sent``, from the chat app's
     # presence and send routes),
@@ -1073,8 +1238,14 @@ class AgentManager:
     # ``attention`` status.
     _pending_permission_ids_by_agent: dict[str, set[str]]
     # Per agent, the send-time ids of its in-flight sends that are waiting for it to come up. A
-    # non-empty set is the snapshot's ``is_connecting``.
+    # non-empty set, less the withdrawn ones, is the snapshot's ``is_connecting``; the whole set
+    # keeps the chat reading as revived while a send's start is still running.
     _connecting_message_ids_by_agent: dict[str, set[str]]
+    # Per agent, the connecting sends that have not been handed to it yet, by send-time id, in
+    # the order they were sent: the ones Stop can still take back.
+    _withdrawable_sends_by_agent: dict[str, dict[str, str]]
+    # The send-time ids Stop took back while they waited for their agent, until their send ends.
+    _withdrawn_message_ids: set[str]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1106,6 +1277,8 @@ class AgentManager:
         messenger: MngrMessenger = _DEFAULT_MESSENGER,
         mngr_binary: str = _DEFAULT_MNGR_BINARY,
         message_stamps: MessageStampStore | None = None,
+        main_chat: MainChatStore | None = None,
+        keeps_main_chat_awake: bool = False,
         auto_open: AutoOpenReactor | None = None,
         chat_record_store: ChatRecordStore | None = None,
         chat_files_root: Path = DEFAULT_CHAT_RECORDS_ROOT,
@@ -1114,6 +1287,7 @@ class AgentManager:
         autocompactor: ChatAutoCompactor | None = None,
         is_secondary: bool = False,
         imbue_studio_gateway: GatewayAccess | None = None,
+        background_tasks: BackgroundTaskReader | None = None,
     ) -> Self:
         """Build an AgentManager with the given broadcaster.
 
@@ -1123,7 +1297,10 @@ class AgentManager:
         mngr executable used for the agent-creation, rename, stop, and destroy
         commands. ``message_stamps`` remembers when each chat was
         last messaged; the default keeps that in memory only, so a real server
-        passes one backed by the chat app's data directory. ``auto_open``
+        passes one backed by the chat app's data directory, as it does ``main_chat``, which
+        holds the workspace's main chat (``main_chat.py``). ``keeps_main_chat_awake`` starts the main chat's agent
+        again whenever it is found stopped; the live chat app sets it, and a test that does not ask for it never
+        runs ``mngr start``. ``auto_open``
         surfaces labeled chats' windows; the default remembers nothing and reaches
         no shell, so a real server passes one backed by the ledger and the shell.
         ``chat_record_store`` holds the records of the chats that have run on several
@@ -1137,7 +1314,8 @@ class AgentManager:
         resumption of unfinished switches, all of which belong to the live chat alone, and
         refuses every switch (a handoff or a rebind), since its chat records are a scratch copy.
         ``imbue_studio_gateway`` is how the Imbue Studio app is reached to mark a chat read when the user
-        starts watching it; the default reaches nobody.
+        starts watching it; the default reaches nobody. ``background_tasks`` reads each chat's
+        background-task markers; the default reads none, so no chat is ever busy on a task.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -1153,7 +1331,11 @@ class AgentManager:
         manager._chat_record_store = chat_record_store if chat_record_store is not None else InMemoryChatRecordStore()
         manager._chat_record_by_id = manager._chat_record_store.read_all()
         manager._provisional_chats = seeded_provisional_chats(manager._chat_record_by_id)
+        manager._seed_carries_in_flight = set()
         manager._title_override_by_chat = {}
+        manager._recent_rename_by_agent_id = {}
+        manager._chosen_renames_running_by_chat = {}
+        manager._rename_lock_by_chat = {}
         manager._chat_settings = chat_settings if chat_settings is not None else ChatSettingsStore(path=None)
         manager._chat_files_root = chat_files_root
         manager._prompt_template_path = prompt_template_path
@@ -1177,6 +1359,22 @@ class AgentManager:
         manager._queue_busy_handler_by_agent = {}
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
+        manager._background_tasks = background_tasks
+        manager._background_tasks_by_chat = {}
+        manager._background_tasks_read_lock = threading.Lock()
+        manager._finished_tasks_awaiting_turn_by_agent = {}
+        manager._running_chat_ids = frozenset()
+        manager._background_tasks_poller = AgentFilePoller.build(
+            list_paths=manager._list_background_task_dirs,
+            on_file_changed=manager._on_background_tasks_dir_changed,
+            thread_name="background-tasks-poll",
+            on_pass_complete=manager._recheck_busy_chats,
+        )
+        manager._accounts_index_poller = AgentFilePoller.build(
+            list_paths=lambda: {"accounts": index_path()},
+            on_file_changed=lambda _key: manager._broadcaster.broadcast_accounts_updated(),
+            thread_name="accounts-index-poll",
+        )
         manager._model_state_poller = AgentFilePoller.build(
             list_paths=manager._list_model_state_paths,
             on_file_changed=manager._on_model_state_changed,
@@ -1194,6 +1392,9 @@ class AgentManager:
         manager._sweep_started_at_by_agent = {}
         manager._compaction_finished_at_by_agent = {}
         manager._message_stamps = message_stamps if message_stamps is not None else MessageStampStore(path=None)
+        manager._main_chat = main_chat if main_chat is not None else MainChatStore(path=None)
+        manager._keeps_main_chat_awake = keeps_main_chat_awake
+        manager._main_chat_wake_started_at = {}
         manager._transcript_broadcaster = None
         manager._watcher_eviction_callback = None
         manager._unviewed_transcript_release = None
@@ -1212,6 +1413,9 @@ class AgentManager:
         manager._has_initial_discovery_failed = False
         manager._pending_permission_ids_by_agent = {}
         manager._connecting_message_ids_by_agent = {}
+        manager._withdrawable_sends_by_agent = {}
+        manager._abandoned_creates = set()
+        manager._withdrawn_message_ids = set()
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
@@ -1271,9 +1475,13 @@ class AgentManager:
         rather than treating a restart as "nothing has ever been messaged".
         """
         self._initial_discover()
+        if self._background_tasks is not None:
+            self._background_tasks.create_root()
         self._auto_open.start()
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
+        self._background_tasks_poller.start()
+        self._accounts_index_poller.start()
         self._model_state_poller.start()
         self._compacting_marker_poller.start()
         if not self._is_secondary:
@@ -1294,6 +1502,8 @@ class AgentManager:
         self._imbue_studio_notifications.shutdown()
         self._autocompactor.stop()
         self._auto_open.stop()
+        self._background_tasks_poller.stop()
+        self._accounts_index_poller.stop()
         self._model_state_poller.stop()
         self._compacting_marker_poller.stop()
 
@@ -1357,8 +1567,54 @@ class AgentManager:
             self._is_agent_list_known = True
 
     def _broadcast_chats_updated(self) -> None:
-        """Push every chat's snapshot to every WebSocket client."""
-        self._broadcaster.broadcast_chats_updated(self.get_chat_snapshots())
+        """Push every chat's snapshot, and which is the main chat, to every WebSocket client; and wake the main
+        chat if the list now shows it stopped."""
+        self._broadcaster.broadcast_chats_updated(self.get_chat_snapshots(), self.get_main_chat_id())
+        self._wake_main_chat_if_stopped()
+
+    def _wake_main_chat_if_stopped(self) -> None:
+        """Start the main chat's agent, on a thread of its own, when it is stopped: the main chat never sleeps.
+
+        Whatever stopped it (a stop from a menu, a routine, the memory guard shedding it), the next chat-list push
+        finds it dead and starts it again. A chat switching agents is left to its switch, and a start is not tried
+        again for ``MAIN_CHAT_WAKE_RETRY_SECONDS``. Only a manager built with ``keeps_main_chat_awake`` does this.
+        """
+        if not self._keeps_main_chat_awake:
+            return
+        main_chat_id = self.get_main_chat_id()
+        if main_chat_id is None:
+            return
+        with self._lock:
+            chat = self._resolve_chat_locked(main_chat_id)
+            agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
+            if chat is None or agent is None or chat.transition is not None or not is_lifecycle_dead(agent.state):
+                return
+            now = time.monotonic()
+            last_started_at = self._main_chat_wake_started_at.get(agent.id)
+            if last_started_at is not None and now - last_started_at < MAIN_CHAT_WAKE_RETRY_SECONDS:
+                return
+            self._main_chat_wake_started_at[agent.id] = now
+        self._creation_cg.start_new_thread(
+            target=self._wake_agent,
+            args=(agent.id, agent.name),
+            name=f"wake-main-chat-{agent.id[-8:]}",
+            is_checked=False,
+        )
+
+    def _wake_agent(self, agent_id: str, agent_name: str) -> None:
+        """``mngr start`` a stopped agent, without a resume prompt, and reflect it as alive at once."""
+        result = run_local_command_modern_version(
+            command=[self._mngr_binary, "start", agent_name, "--no-resume"],
+            cwd=None,
+            is_checked=False,
+            timeout=_MAIN_CHAT_WAKE_TIMEOUT_SECONDS,
+        )
+        if result.returncode != 0:
+            _loguru_logger.warning(
+                "Could not wake the main chat's agent {}: {}", agent_name, result.stderr.strip()[:300]
+            )
+            return
+        self.note_agent_alive(agent_id)
 
     def _broadcast_provisional(self, provisional: ProvisionalChat) -> None:
         """Push a provisional chat to every client, under the name it is shown by."""
@@ -1371,6 +1627,52 @@ class AgentManager:
             return provisional
         return provisional.model_copy_update(to_update(provisional.field_ref().name, title))
 
+    def get_main_chat_id(self) -> ChatId | None:
+        """The workspace's main chat (``main_chat.py``), or None while it has no chat to take it.
+
+        The chat it names is kept while it is listed; when it is gone another takes it at once and
+        is kept from then on. Until the agent list is read nothing is chosen, so a restart never
+        moves the main chat off a chat that simply has not been listed yet.
+        """
+        with self._lock:
+            stored = self._main_chat.read()
+            if not self._is_agent_list_known:
+                return stored
+            resolved = resolved_main_chat_id(stored, self._main_chat_candidates_locked())
+            self._main_chat.write(resolved)
+        return resolved
+
+    def make_main_chat(self, chat_id: ChatId) -> bool:
+        """Star ``chat_id`` as the workspace's main chat, and push the list that shows it; False when the chat
+        cannot be the main chat (a helper another agent started, or no chat this app lists)."""
+        with self._lock:
+            if not any(candidate.chat_id == chat_id for candidate in self._main_chat_candidates_locked()):
+                return False
+            self._main_chat.write(chat_id)
+        self._broadcast_chats_updated()
+        return True
+
+    def _main_chat_candidates_locked(self) -> list[MainChatCandidate]:
+        """The chats that can be the main chat: every listed chat a user started, and every chat still provisional.
+        Lock held."""
+        last_messaged = self._message_stamps.read()
+        candidate_ids = [
+            chat.chat_id for agent, chat in self._listed_chats_locked() if agent.labels.get("agent_created") != "true"
+        ]
+        candidate_ids.extend(chat_id for chat_id in self._provisional_chats if chat_id not in candidate_ids)
+        return [
+            MainChatCandidate(
+                chat_id=chat_id,
+                seeded_at=self._seeded_at_locked(chat_id),
+                last_messaged_at=last_messaged.get(chat_id),
+            )
+            for chat_id in candidate_ids
+        ]
+
+    def _seeded_at_locked(self, chat_id: ChatId) -> datetime | None:
+        record = self._chat_record_by_id.get(chat_id)
+        return record.agents[0].started_at if record is not None and record.is_seeded else None
+
     def _snapshot_as_shown(self, snapshot: ChatSnapshot) -> ChatSnapshot:
         with self._lock:
             title = self._title_override_by_chat.get(snapshot.chat_id)
@@ -1379,8 +1681,11 @@ class AgentManager:
         return snapshot.model_copy_update(to_update(snapshot.field_ref().title, title))
 
     def show_automatic_title(self, chat_id: ChatId, title: str) -> None:
-        """Show ``title`` for the chat at once, ahead of the rename that will make it its name."""
+        """Show ``title`` for the chat at once, ahead of the rename that will make it its name; nothing while a rename
+        a person or an agent chose is running for it."""
         with self._lock:
+            if chat_id in self._chosen_renames_running_by_chat:
+                return
             self._title_override_by_chat[chat_id] = title
             provisional = self._provisional_chats.get(chat_id)
         if provisional is not None:
@@ -1479,7 +1784,10 @@ class AgentManager:
         for agent in self._agents.values():
             if is_primary_agent(agent) or self._is_archived_member_locked(agent.id):
                 continue
-            chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent.id))
+            chat_id = self._chat_id_of_agent_locked(agent.id)
+            if chat_id in self._abandoned_creates:
+                continue
+            chat = self._resolve_chat_locked(chat_id)
             if chat is not None and chat.active_agent_id == agent.id:
                 listed.append((agent, chat))
         return listed
@@ -1502,9 +1810,8 @@ class AgentManager:
             pending_by_agent = {
                 agent.id: bool(self._pending_permission_ids_by_agent.get(agent.id)) for agent, _chat in listed
             }
-            connecting_by_agent = {
-                agent.id: bool(self._connecting_message_ids_by_agent.get(agent.id)) for agent, _chat in listed
-            }
+            connecting_by_agent = {agent.id: self._is_connecting_locked(agent.id) for agent, _chat in listed}
+            tasks_by_chat = dict(self._background_tasks_by_chat)
             compaction_cause_by_agent = {
                 agent.id: self._compaction_cause_by_agent.get(agent.id) for agent, _chat in listed
             }
@@ -1518,6 +1825,7 @@ class AgentManager:
                     self._shoulder_tap_available(agent),
                     connecting_by_agent[agent.id],
                     last_messaged.get(chat.chat_id),
+                    tasks_by_chat.get(chat.chat_id, ()),
                     compaction_cause_by_agent[agent.id],
                 )
             )
@@ -1538,7 +1846,8 @@ class AgentManager:
             chat = self._resolve_chat_locked(parsed)
             agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
             is_pending = agent is not None and bool(self._pending_permission_ids_by_agent.get(agent.id))
-            is_connecting = agent is not None and bool(self._connecting_message_ids_by_agent.get(agent.id))
+            is_connecting = agent is not None and self._is_connecting_locked(agent.id)
+            background_tasks = () if chat is None else self._background_tasks_by_chat.get(chat.chat_id, ())
             compaction_cause = None if agent is None else self._compaction_cause_by_agent.get(agent.id)
         if chat is None or agent is None or is_primary_agent(agent):
             return None
@@ -1549,6 +1858,7 @@ class AgentManager:
             self._shoulder_tap_available(agent),
             is_connecting,
             self._message_stamps.read().get(chat.chat_id),
+            background_tasks,
             compaction_cause,
         )
 
@@ -1669,7 +1979,7 @@ class AgentManager:
         )
 
     def restart_agents_on_account(self, account_id: str) -> int:
-        """Restart every agent bound to `account_id`. Returns how many were restarted.
+        """Restart every live agent bound to `account_id`. Returns how many were restarted.
 
         Re-authenticating is only worth doing if the chats on that account come back, and they
         do not on their own -- claude reads its settings env at process start, and nothing
@@ -1681,6 +1991,11 @@ class AgentManager:
         Every agent bound to the account carries the label, not only the chats this app
         created: a worker, an automation, or a chat the Imbue Studio app started on the workspace's
         default account gets it from the create defaults (`create_defaults`), so they restart too.
+
+        Only agents not known to be stopped are restarted (an unobserved one counts as live). A
+        stopped one reads the new credentials whenever it next starts, and starting every old chat
+        on the account at once (an account can carry dozens, which earlyoom may have shed to make
+        room) can push the workspace past its memory limit.
 
         `--no-resume` for the same reason the queue actions use it: the agent's transcript is
         preserved by the harness itself, and a resume prompt would tell an agent that has not
@@ -1698,6 +2013,7 @@ class AgentManager:
                 if agent.labels.get("account") == account_id
                 and agent.labels.get("is_primary") != "true"
                 and not self._is_archived_member_locked(agent.id)
+                and not is_lifecycle_dead(agent.state)
             ]
         restarted = 0
         for name in names:
@@ -2017,8 +2333,8 @@ class AgentManager:
         now: datetime,
         model_pick: ModelPick | None,
     ) -> ChatRebindRecord:
-        """Write the chat's rebind entry in the draining phase, with the trigger message as its first held
-        send; a chat that is still its one agent gets its record here. Lock held."""
+        """Write the chat's rebind entry in the draining phase, with the trigger message (when there is one) as its
+        first held send; a chat that is still its one agent gets its record here. Lock held."""
         existing = self._chat_record_by_id.get(chat_id)
         record = existing if existing is not None else self._first_record_locked(chat_id, agent_state, now)
         previous_account_id = agent_state.labels.get("account", "")
@@ -2035,7 +2351,9 @@ class AgentManager:
             previous_lane=_lane_of_account_label(previous_account_id),
             trigger_message_id=message_id,
             trigger_text=message,
-            held_sends=(HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),),
+            held_sends=(
+                (HeldSend(message_id=message_id, text=message, origin=origin, received_at=now),) if message else ()
+            ),
             model_pick=model_pick,
         )
         self._write_record_locked(record.with_converging(rebind))
@@ -2288,6 +2606,44 @@ class AgentManager:
                 )
             return transition.phase
 
+    def hold_send_for_chat_being_created(
+        self, chat_id: ChatId, message_id: str, text: str, origin: HeldSendOrigin
+    ) -> bool:
+        """Hold a send to a chat whose create is running, for the agent it lands as; False when it is not being created.
+
+        Idempotent on ``message_id``. Atomic with the create's completion under the manager's lock: a send
+        held here is one the completion hands to the new agent, and one that comes after it finds the agent.
+        Every page hears the held list through the provisional record, so one that was closed meanwhile
+        shows the message on its return.
+        """
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if provisional is None or provisional.phase is not ProvisionalChatPhase.CREATING:
+                return False
+            if any(held.message_id == message_id for held in provisional.held_sends):
+                return True
+            held = HeldSend(message_id=message_id, text=text, origin=origin, received_at=datetime.now(timezone.utc))
+            provisional = provisional.model_copy_update(
+                to_update(provisional.field_ref().held_sends, (*provisional.held_sends, held))
+            )
+            self._provisional_chats[chat_id] = provisional
+        self._broadcast_provisional(provisional)
+        return True
+
+    def withdraw_sends_held_for_chat_being_created(self, chat_id: ChatId) -> tuple[str, ...] | None:
+        """Take back the sends held for a chat whose create is running, for Stop to return to the composer; None
+        when the chat is not being created. The create goes on, and its agent lands with nothing to deliver."""
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if provisional is None or provisional.phase is not ProvisionalChatPhase.CREATING:
+                return None
+            withdrawn = tuple(held.text for held in provisional.held_sends)
+            provisional = provisional.model_copy_update(to_update(provisional.field_ref().held_sends, ()))
+            self._provisional_chats[chat_id] = provisional
+        if withdrawn:
+            self._broadcast_provisional(provisional)
+        return withdrawn
+
     def _handoff_runner(self) -> HandoffRunner:
         capabilities = self._require_switch_capabilities()
         deps = HandoffDeps(
@@ -2307,6 +2663,7 @@ class AgentManager:
             apply_model=self.apply_model_pick,
             drain_to_composer=capabilities.drain_to_composer,
             ensure_watcher=capabilities.ensure_watcher,
+            get_background_tasks=self._background_tasks_of_chat,
             stop_agent=self.stop_agent_process,
             destroy_agent=self.destroy_agent_process,
             note_agent_renamed=self._note_agent_renamed,
@@ -2420,13 +2777,14 @@ class AgentManager:
         self._chat_record_by_id.pop(chat_id, None)
 
     def _name_seeded_member_locked(
-        self, seed_record: ChatRecord, account: Account, harness: HarnessType
+        self, seed_record: ChatRecord, account: Account, harness: HarnessType, is_seed_carried_by_first_send: bool
     ) -> ChatAgentEntry:
         """Mint a seeded chat's first agent and name it on the record ahead of its ``mngr create``. Lock held.
 
         Named before the create, as a handoff names its successor: the observe stream lists an
         agent as soon as mngr provisions it, well before the create returns, and an agent no
-        record names would be listed as a chat of its own until then.
+        record names would be listed as a chat of its own until then. A launch with no message
+        marks the seed as pending, for the first send to carry.
         """
         entry = ChatAgentEntry(
             seq=len(seed_record.agents) + 1,
@@ -2437,9 +2795,55 @@ class AgentManager:
             started_at=datetime.now(timezone.utc),
         )
         self._write_record_locked(
-            seed_record.model_copy_update(to_update(seed_record.field_ref().agents, (*seed_record.agents, entry)))
+            seed_record.model_copy_update(
+                to_update(seed_record.field_ref().agents, (*seed_record.agents, entry)),
+                to_update(seed_record.field_ref().is_seed_pending, is_seed_carried_by_first_send),
+            )
         )
         return entry
+
+    def carry_pending_seed(self, chat_id: ChatId, message: str, deliver: Callable[[str], SendOutcome]) -> SendOutcome:
+        """Deliver ``message`` to ``chat_id`` through ``deliver``, with the seeded conversation ahead of it when
+        the chat's agent was launched without it (``create_chat`` with no message) and this is the first send
+        since, else as given. The seed is marked delivered only once ``deliver`` says the message went through:
+        a send the harness refused or could not take yet (its daemon still starting, as it may be right after
+        the launch) leaves the conversation for the next send rather than losing it. A slash command is
+        delivered as typed and leaves the seed pending, since a block ahead of it would turn the command into
+        prose. One send carries the seed at a time: a send that overlaps a carrying one (the route serializes
+        nothing, and two clients can post at once) goes as typed, and the seed stays pending for the next send
+        if the carrying one was refused."""
+        with self._lock:
+            record = self._chat_record_by_id.get(chat_id)
+            is_seed_carried = (
+                record is not None
+                and record.is_seed_pending
+                and chat_id not in self._seed_carries_in_flight
+                and not is_slash_command(message)
+            )
+            if is_seed_carried:
+                self._seed_carries_in_flight.add(chat_id)
+        text = seed_context_message(self._chat_files_root / chat_id, message) if is_seed_carried else message
+        is_delivered = False
+        try:
+            outcome = deliver(text)
+            is_delivered = outcome is SendOutcome.OK
+        finally:
+            if is_seed_carried:
+                self._end_seed_carry(chat_id, is_delivered=is_delivered)
+        return outcome
+
+    def _end_seed_carry(self, chat_id: ChatId, is_delivered: bool) -> None:
+        """Free ``chat_id`` for the next send's carry, marking the seed delivered in the same locked step when
+        this carry went through: a send arriving between the two would otherwise find the seed still pending
+        with no carry in flight, and carry it again."""
+        with self._lock:
+            self._seed_carries_in_flight.discard(chat_id)
+            if not is_delivered:
+                return
+            record = self._chat_record_by_id.get(chat_id)
+            if record is None or not record.is_seed_pending:
+                return
+            self._write_record_locked(record.model_copy_update(to_update(record.field_ref().is_seed_pending, False)))
 
     def _withdraw_seeded_member_locked(self, chat_id: ChatId, record_entry: ChatAgentEntry) -> str | None:
         """Take a seeded chat's agent back off its record when its create failed: the chat is seed-only
@@ -2454,7 +2858,13 @@ class AgentManager:
         record = self._chat_record_by_id.get(chat_id)
         if record is not None and record.entry_for(record_entry.agent_id) is not None:
             remaining = tuple(entry for entry in record.agents if entry.agent_id != record_entry.agent_id)
-            self._write_record_locked(record.model_copy_update(to_update(record.field_ref().agents, remaining)))
+            # A seed pending for the withdrawn member is pending for nobody: the next launch decides again.
+            self._write_record_locked(
+                record.model_copy_update(
+                    to_update(record.field_ref().agents, remaining),
+                    to_update(record.field_ref().is_seed_pending, False),
+                )
+            )
         if record_entry.agent_id not in self._agents:
             return None
         del self._agents[record_entry.agent_id]
@@ -2766,25 +3176,79 @@ class AgentManager:
         self._broadcast_chats_updated()
 
     @contextmanager
-    def track_connecting_send(self, agent_id: str, message_id: str) -> Generator[Callable[[], None], None, None]:
+    def track_connecting_send(
+        self, agent_id: str, message_id: str, text: str
+    ) -> Generator[Callable[[], None], None, None]:
         """Scope one send's delivery. The yielded callable marks the send as waiting for the agent to
-        come up (the snapshot's ``is_connecting``); leaving the scope clears the mark."""
+        come up (the snapshot's ``is_connecting``), which also lets Stop take it back
+        (``withdraw_connecting_sends``) until ``claim_send_for_delivery``; leaving the scope clears both."""
         try:
-            yield lambda: self._set_send_connecting(agent_id, message_id, is_connecting=True)
+            yield lambda: self._set_send_connecting(agent_id, message_id, text)
         finally:
-            self._set_send_connecting(agent_id, message_id, is_connecting=False)
+            self._end_connecting_send(agent_id, message_id)
 
-    def _set_send_connecting(self, agent_id: str, message_id: str, *, is_connecting: bool) -> None:
+    def _is_connecting_locked(self, agent_id: str) -> bool:
+        return bool(self._connecting_message_ids_by_agent.get(agent_id, set()) - self._withdrawn_message_ids)
+
+    def _set_send_connecting(self, agent_id: str, message_id: str, text: str) -> None:
         with self._lock:
-            message_ids = self._connecting_message_ids_by_agent.get(agent_id, set())
-            was_connecting = bool(message_ids)
-            updated_message_ids = (message_ids | {message_id}) if is_connecting else (message_ids - {message_id})
-            if updated_message_ids:
-                self._connecting_message_ids_by_agent[agent_id] = updated_message_ids
+            if message_id in self._withdrawn_message_ids:
+                return
+            was_connecting = self._is_connecting_locked(agent_id)
+            self._connecting_message_ids_by_agent.setdefault(agent_id, set()).add(message_id)
+            self._withdrawable_sends_by_agent.setdefault(agent_id, {})[message_id] = text
+        if not was_connecting:
+            self._broadcast_chats_updated()
+
+    def _end_connecting_send(self, agent_id: str, message_id: str) -> None:
+        with self._lock:
+            was_connecting = self._is_connecting_locked(agent_id)
+            message_ids = self._connecting_message_ids_by_agent.get(agent_id, set()) - {message_id}
+            if message_ids:
+                self._connecting_message_ids_by_agent[agent_id] = message_ids
             else:
                 self._connecting_message_ids_by_agent.pop(agent_id, None)
-        if bool(updated_message_ids) != was_connecting:
+            self._release_withdrawable_locked(agent_id, message_id)
+            self._withdrawn_message_ids.discard(message_id)
+            is_connecting = self._is_connecting_locked(agent_id)
+        if is_connecting != was_connecting:
             self._broadcast_chats_updated()
+
+    def _release_withdrawable_locked(self, agent_id: str, message_id: str) -> None:
+        withdrawable = self._withdrawable_sends_by_agent.get(agent_id)
+        if withdrawable is None:
+            return
+        withdrawable.pop(message_id, None)
+        if not withdrawable:
+            del self._withdrawable_sends_by_agent[agent_id]
+
+    def claim_send_for_delivery(self, agent_id: str, message_id: str) -> bool:
+        """Take a connecting send out of Stop's reach just before it is handed to the agent; False when Stop
+        already took it back, and it must not be delivered. A send never marked connecting is always claimed."""
+        with self._lock:
+            if message_id in self._withdrawn_message_ids:
+                return False
+            self._release_withdrawable_locked(agent_id, message_id)
+            return True
+
+    def is_send_withdrawn(self, message_id: str) -> bool:
+        """Whether Stop took this connecting send back."""
+        with self._lock:
+            return message_id in self._withdrawn_message_ids
+
+    def withdraw_connecting_sends(self, agent_id: str) -> tuple[str, ...]:
+        """Take back every send still waiting for ``agent_id`` to come up, for Stop to return to the composer.
+
+        Their sends stop waiting and deliver nothing (``claim_send_for_delivery`` refuses them). The
+        agent's start, if one is running, is left to finish: it is the message that is withdrawn, not
+        the agent. Empty when nothing is waiting.
+        """
+        with self._lock:
+            withdrawable = self._withdrawable_sends_by_agent.pop(agent_id, {})
+            self._withdrawn_message_ids.update(withdrawable)
+        if withdrawable:
+            self._broadcast_chats_updated()
+        return tuple(withdrawable.values())
 
     def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
         """Send a message to the agent with ``agent_id``, using the live location cache.
@@ -2838,7 +3302,48 @@ class AgentManager:
         self._broadcast_chats_updated()
 
     def rename_chat(self, chat_ref: str, display_name: str) -> None:
-        """Give a chat the name the user just typed, keeping its active agent's name pair matched.
+        """Give a chat the name a person (or an agent) chose, as ``_rename_chat_now`` does, ahead of any automatic name.
+
+        While it runs the chat no longer counts as wearing a placeholder name, so the namer
+        (``chat_naming.py``) neither shows nor makes its own name for it, and a rename the namer
+        already started finishes first, so this one lands last.
+        """
+        chat_key = parse_chat_ref(chat_ref)
+        if chat_key is None:
+            self._rename_chat_now(chat_ref, display_name)
+            return
+        with self._lock:
+            self._chosen_renames_running_by_chat[chat_key] = self._chosen_renames_running_by_chat.get(chat_key, 0) + 1
+        try:
+            with self._rename_lock_for(chat_key):
+                self._rename_chat_now(chat_ref, display_name)
+        finally:
+            with self._lock:
+                remaining = self._chosen_renames_running_by_chat.pop(chat_key) - 1
+                if remaining > 0:
+                    self._chosen_renames_running_by_chat[chat_key] = remaining
+
+    def _rename_lock_for(self, chat_id: ChatId) -> threading.Lock:
+        with self._lock:
+            return self._rename_lock_by_chat.setdefault(chat_id, threading.Lock())
+
+    def _with_recent_renames_locked(self, observed_agents: dict[str, AgentStateItem]) -> dict[str, AgentStateItem]:
+        """``observed_agents`` with the renames made here that they predate; a rename they report is let go."""
+        shown_agents = dict(observed_agents)
+        still_unreported: dict[str, _RecentRename] = {}
+        for agent_id, rename in self._recent_rename_by_agent_id.items():
+            observed = observed_agents.get(agent_id)
+            if observed is None:
+                continue
+            shown, is_unreported = _observed_with_recent_rename(observed, rename)
+            shown_agents[agent_id] = shown
+            if is_unreported:
+                still_unreported[agent_id] = rename
+        self._recent_rename_by_agent_id = still_unreported
+        return shown_agents
+
+    def _rename_chat_now(self, chat_ref: str, display_name: str) -> None:
+        """Give a chat a new name, keeping its active agent's name pair matched.
 
         ``chat_ref`` is a chat id (what the chat app's rename route carries) or an agent name,
         so both are resolved here. The display name's canonical form becomes the
@@ -2855,11 +3360,10 @@ class AgentManager:
         another agent's (by canonical form; the caller answers 409 so the user
         can retry with a different name).
 
-        An id this manager does not track is not an mngr agent it can rename:
-        an agent still being created already carries the typed name on its
-        ``mngr create`` (and renaming it to something *else* mid-create would
-        race that create, so it is refused), and an id belonging to no agent at
-        all has no name to diverge from. Both return without running anything.
+        A chat with no agent yet (``rename_provisional_chat``) takes the name on
+        its provisional record, and one still being created has its agent renamed
+        as the create lands. An id belonging to no agent at all has no name to
+        diverge from, and returns without running anything.
         """
         if not canonical_agent_name(display_name):
             raise AgentRenameError(f"Chat name '{display_name}' contains no usable characters")
@@ -2883,11 +3387,9 @@ class AgentManager:
         if chat is not None and chat.transition is not None:
             raise ChatConvergingError(_converging_detail_of(chat.transition))
         if agent_state is None:
-            if provisional is not None and provisional.name != display_name:
-                raise AgentRenameError(
-                    f"Chat '{chat_ref}' is still being created; it cannot be renamed to '{display_name}' yet"
-                )
-            if provisional is None:
+            if provisional is not None:
+                self._rename_provisional_chat(provisional.chat_id, display_name)
+            else:
                 _loguru_logger.warning("No tracked agent for chat ref {}; leaving mngr alone", chat_ref)
             return
 
@@ -2929,14 +3431,47 @@ class AgentManager:
                     to_update(renamed.field_ref().name, new_canonical_name),
                     to_update(renamed.field_ref().labels, {**renamed.labels, "display_name": display_name}),
                 )
+                earlier = self._recent_rename_by_agent_id.get(agent_state.id)
+                self._recent_rename_by_agent_id[agent_state.id] = _RecentRename(
+                    stale_names=(
+                        *(() if earlier is None else earlier.stale_names),
+                        (agent_state.name, agent_state.labels.get("display_name")),
+                    ),
+                    new_name=new_canonical_name,
+                    new_display_name=display_name,
+                )
             if chat is not None:
                 self._title_override_by_chat.pop(chat.chat_id, None)
         self._broadcast_chats_updated()
 
-    def has_placeholder_name(self, chat_id: ChatId) -> bool:
-        """Whether a chat still wears a name nobody chose for it: a minted "Chat N", or the title it was seeded with
-        (the Mind app's "Welcome"). A chat still being created counts by the name it was minted with."""
+    def _rename_provisional_chat(self, chat_id: ChatId, display_name: str) -> None:
+        """Give a chat with no agent yet the name on its record, which pages show at once and a create
+        launched later takes; one being created now is renamed through mngr as it lands (``_run_creation``).
+        A seeded chat keeps the name on its record (``chosen_name``), so a restart of this app before its
+        first send keeps it. Raises ``AgentNameConflictError`` for a name another chat has."""
         with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if provisional is None or provisional.name == display_name:
+                return
+            if is_name_conflict(display_name, self._taken_names_locked(exclude_agent_id=str(chat_id))):
+                raise AgentNameConflictError(f"A chat named '{display_name}' already exists; pick another name")
+            provisional = provisional.model_copy_update(to_update(provisional.field_ref().name, display_name))
+            self._provisional_chats[chat_id] = provisional
+            self._title_override_by_chat.pop(chat_id, None)
+            record = self._chat_record_by_id.get(chat_id)
+            if record is not None and record.is_seed_only:
+                self._write_record_locked(
+                    record.model_copy_update(to_update(record.field_ref().chosen_name, display_name))
+                )
+        self._broadcast_provisional(provisional)
+
+    def has_placeholder_name(self, chat_id: ChatId) -> bool:
+        """Whether a chat still wears a name nobody chose for it: a minted "Chat N", or a title it was seeded with
+        other than ``MAIN_CHAT_NAME`` (an older Mind app's "Welcome"). A chat still being created counts by the
+        name it was minted with; one whose rename by a person or an agent is running does not count."""
+        with self._lock:
+            if chat_id in self._chosen_renames_running_by_chat:
+                return False
             provisional = self._provisional_chats.get(chat_id)
             record = self._chat_record_by_id.get(chat_id)
         if provisional is not None:
@@ -2946,7 +3481,7 @@ class AgentManager:
             if snapshot is None:
                 return False
             title = snapshot.title
-        is_seed_title = record is not None and record.seed_title == title
+        is_seed_title = record is not None and record.seed_title == title and title != MAIN_CHAT_NAME
         return is_minted_chat_name(title) or is_seed_title
 
     def resolve_chat_account_binding(self, chat_id: ChatId) -> ChatAccountBinding | None:
@@ -2984,9 +3519,10 @@ class AgentManager:
         """Rename a chat that still wears a placeholder name, as ``rename_chat`` would; False, running nothing,
         when it has any other name, so an automatic name never replaces one a person or agent chose.
         Raises what ``rename_chat`` raises."""
-        if not self.has_placeholder_name(chat_id):
-            return False
-        self.rename_chat(chat_id, display_name)
+        with self._rename_lock_for(chat_id):
+            if not self.has_placeholder_name(chat_id):
+                return False
+            self._rename_chat_now(chat_id, display_name)
         return True
 
     def _start_session_sweep(self) -> None:
@@ -3135,9 +3671,10 @@ class AgentManager:
         The Imbue Studio app's onboarding continues here as the workspace's first chat: the turns become
         the chat's seed segment on disk, its record names the seed as its first member, and the
         chat is listed as a provisional chat awaiting the user's first message, with the
-        transcript on its page and a composer under it. That first send launches the chat's first
-        agent on the signed-in account through ``create_chat`` (with nothing signed in, the page
-        asks for a provider in the composer's place). The
+        transcript on its page and a composer under it. Its first agent is launched through
+        ``create_chat``: by that first send, on the signed-in account, or, with nothing signed in
+        (the page asks for a provider in the composer's place), by the sign-in itself with no
+        message, the first send then carrying the seeded conversation (``carry_pending_seed``). The
         seed survives a restart of this app because the record does; the window is opened through
         the shell like a labeled chat's, held until a client is connected.
 
@@ -3147,39 +3684,89 @@ class AgentManager:
         empty title mints the first free "Chat N".
         """
         explicit_title = explicit_chat_name(title)
+        with self._lock:
+            provisional = self._seed_chat_locked(
+                explicit_title, turns, is_recorded_as_main_first=self._main_chat.read() is None
+            )
+        self._publish_seeded_chat(provisional)
+        return CreatedChat(
+            chat_id=provisional.chat_id, name=canonical_agent_name(provisional.name), display_name=provisional.name
+        )
+
+    def _seed_chat_locked(
+        self, explicit_title: str, turns: tuple[SeedTurn, ...], is_recorded_as_main_first: bool
+    ) -> ProvisionalChat:
+        """Write a seeded chat's seed and record and list it as provisional, for ``_publish_seeded_chat`` to announce.
+        ``is_recorded_as_main_first`` makes it the main chat before any of its files are written. Raises
+        ``AgentNameConflictError`` for a title already in use. Lock held."""
         chat_id = ChatId(str(AgentId()))
         now = datetime.now(timezone.utc)
         events = seed_events(chat_id, turns, now)
-        with self._lock:
-            display_name = self._mint_display_name_locked(explicit_title)
-            record = ChatRecord(
-                chat_id=chat_id,
-                agents=(
-                    ChatAgentEntry(
-                        seq=1,
-                        agent_id=str(chat_id),
-                        lane="",
-                        account_id="",
-                        harness=HarnessType.SEED,
-                        started_at=now,
-                        ended_at=now,
-                        final_event_count=len(events),
-                    ),
+        display_name = self._mint_display_name_locked(explicit_title)
+        if is_recorded_as_main_first:
+            self._main_chat.write(chat_id)
+        record = ChatRecord(
+            chat_id=chat_id,
+            agents=(
+                ChatAgentEntry(
+                    seq=1,
+                    agent_id=str(chat_id),
+                    lane="",
+                    account_id="",
+                    harness=HarnessType.SEED,
+                    started_at=now,
+                    ended_at=now,
+                    final_event_count=len(events),
                 ),
-                seed_title=display_name,
-            )
-            write_seed_file(self._chat_files_root / chat_id, events)
-            self._write_record_locked(record)
-            provisional = ProvisionalChat(
-                chat_id=chat_id,
-                name=display_name,
-                phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
-                is_seeded=True,
-            )
-            self._provisional_chats[chat_id] = provisional
+            ),
+            seed_title=display_name,
+        )
+        write_seed_file(self._chat_files_root / chat_id, events)
+        self._write_record_locked(record)
+        provisional = ProvisionalChat(
+            chat_id=chat_id,
+            name=display_name,
+            phase=ProvisionalChatPhase.AWAITING_FIRST_SEND,
+            is_seeded=True,
+        )
+        self._provisional_chats[chat_id] = provisional
+        return provisional
+
+    def _publish_seeded_chat(self, provisional: ProvisionalChat) -> None:
+        """Push a newly seeded chat and the list that holds it to every client, and have its window opened."""
         self._broadcast_provisional(provisional)
-        self._auto_open.request_open(chat_id)
-        return CreatedChat(chat_id=chat_id, name=canonical_agent_name(display_name), display_name=display_name)
+        self._broadcast_chats_updated()
+        self._auto_open.request_open(provisional.chat_id)
+
+    # CLEANUP: drop the upgrade main chat (this method, ``MainChatStore.is_file_never_written``, and
+    # ``MAIN_CHAT_INTRODUCTION``) once no workspace from before minds-v0.9.0 is left to update.
+    def _open_main_chat_on_upgrade_locked(self) -> ProvisionalChat | None:
+        """On the first read of the agent list, give a workspace that had chats before there was a main chat
+        (``main_chat.py``) a main chat of its own: a "Main" chat an interrupted opening left, else a new one; the
+        new chat to publish, or None. Its callers run it only as the agent list becomes known, so it runs before
+        any seed route can. Lock held."""
+        if self._is_secondary or not self._is_agent_list_known or not self._main_chat.is_file_never_written():
+            return None
+        candidate_ids = {candidate.chat_id for candidate in self._main_chat_candidates_locked()}
+        if not candidate_ids:
+            return None
+        left_by_an_interrupted_opening = sorted(
+            chat_id
+            for chat_id, record in self._chat_record_by_id.items()
+            if chat_id in candidate_ids and record.is_seeded and record.seed_title == MAIN_CHAT_NAME
+        )
+        if left_by_an_interrupted_opening:
+            self._main_chat.write(left_by_an_interrupted_opening[0])
+            return None
+        try:
+            provisional = self._seed_chat_locked(
+                MAIN_CHAT_NAME, MAIN_CHAT_INTRODUCTION, is_recorded_as_main_first=False
+            )
+        except (AgentNameConflictError, OSError) as e:
+            _loguru_logger.warning("Did not open a new main chat: {}", e)
+            return None
+        self._main_chat.write(provisional.chat_id)
+        return provisional
 
     def mint_awaiting_chat(self, account_id: str) -> ProvisionalChat:
         """Mint a chat with no seed that waits for its first send (post-launch-paths plan section 3.7).
@@ -3194,6 +3781,7 @@ class AgentManager:
         with self._lock:
             provisional = self._mint_awaiting_chat_locked(account_id)
         self._broadcast_provisional(provisional)
+        self._broadcast_chats_updated()
         return provisional
 
     def awaiting_chat_for_empty_list(self) -> ProvisionalChat:
@@ -3208,6 +3796,7 @@ class AgentManager:
                     return provisional
             minted = self._mint_awaiting_chat_locked("")
         self._broadcast_provisional(minted)
+        self._broadcast_chats_updated()
         return minted
 
     def _mint_awaiting_chat_locked(self, account_id: str) -> ProvisionalChat:
@@ -3301,24 +3890,28 @@ class AgentManager:
         return state
 
     def discard_provisional_chat(self, chat_id: str) -> bool:
-        """Drop a provisional chat that is not being created: one awaiting its first send (its seed
-        goes with it), or one whose create failed. Returns whether anything was dropped; a create in
-        flight cannot be taken back and is left alone."""
+        """Drop a provisional chat: one awaiting its first send (its seed goes with it), one whose create
+        failed, or one being created, which is gone from every page at once and whose agent is destroyed
+        as its create lands (``_run_creation``). Returns whether anything was dropped."""
         parsed = parse_chat_ref(chat_id)
         if parsed is None:
             return False
         with self._lock:
             provisional = self._provisional_chats.get(parsed)
-            if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
+            if provisional is None:
                 return False
             del self._provisional_chats[parsed]
-            self._creation_settled_by_chat.pop(parsed, None)
-            record = self._chat_record_by_id.get(parsed)
-            # A failed create has already written the chat's fast mode into its folder.
-            if record is None or record.is_seed_only:
-                self._delete_record_locked(parsed)
+            if provisional.phase is ProvisionalChatPhase.CREATING:
+                self._abandoned_creates.add(parsed)
+            else:
+                self._creation_settled_by_chat.pop(parsed, None)
+                record = self._chat_record_by_id.get(parsed)
+                # A failed create has already written the chat's fast mode into its folder.
+                if record is None or record.is_seed_only:
+                    self._delete_record_locked(parsed)
         self._auto_open.forget(parsed)
         self._broadcaster.broadcast_provisional_chat_completed(chat_id=parsed, success=False, error=None)
+        self._broadcast_chats_updated()
         return True
 
     def create_chat(
@@ -3360,15 +3953,18 @@ class AgentManager:
         collision mngr itself would reject).
 
         ``account_id`` binds the chat to one signed-in account; empty picks the most recently
-        used one. With no accounts at all the create is refused (the chat root offers the
-        provider chooser before it creates).
+        used one. With no accounts at all the create is refused with ``NoProviderAccountError``
+        (the chat root offers the provider chooser before it creates), and one naming an account
+        that has since been signed out with ``SignedOutAccountError``.
 
         ``message`` is the first message the chat sends once it runs, delivered by ``mngr
         create --message`` after the harness signals readiness; a chat that starts with no
         message sends none and waits for the user. A chat minted
         earlier keeps the message it was minted with, so a launch that names one beside
         ``chat_id`` is refused like a name; the exception is a seeded chat awaiting its first send, whose
-        message is exactly what the launch brings.
+        message is exactly what the launch brings: the user's first words, or nothing when the sign-in
+        that made an account launches it ahead of them, in which case the first send carries the seeded
+        conversation (``carry_pending_seed``).
 
         ``labels`` ride the create as extra ``--label``s, for a caller outside the workspace
         that wants the chat's window surfaced (``auto_open``); one that restates a label the app
@@ -3385,6 +3981,12 @@ class AgentManager:
         extra_labels = dict(labels or {})
         try:
             account = resolve_binding(account_id)
+        except NoAccountsError as e:
+            raise NoProviderAccountError("Connect an AI provider to start chatting.") from e
+        except AccountSignedOutError as e:
+            raise SignedOutAccountError(
+                "The account this chat was going to start on was signed out. Choose a provider to start it on."
+            ) from e
         except (AccountError, BindingError) as e:
             raise AgentCreationError(str(e), e.user_facing_message) from e
         harness = harness_for(account)
@@ -3410,6 +4012,8 @@ class AgentManager:
             primary_labels = dict(primary.labels) if primary else {}
 
             seed_record: ChatRecord | None = None
+            # The sends a failed create kept, which its retry delivers like the first attempt would have.
+            carried_held_sends: tuple[HeldSend, ...] = ()
             if chat_id:
                 provisional = self._provisional_chats.get(ChatId(chat_id))
                 if provisional is None or provisional.phase is ProvisionalChatPhase.CREATING:
@@ -3421,16 +4025,11 @@ class AgentManager:
                     seed_record = self._chat_record_by_id.get(provisional.chat_id)
                     if seed_record is None or not seed_record.is_seed_only:
                         raise AgentCreationError(f"Chat {chat_id} has no seed to continue from")
-                    if provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
-                        if not message:
+                    if provisional.phase is not ProvisionalChatPhase.AWAITING_FIRST_SEND:
+                        if message:
                             raise AgentCreationError(
-                                f"Chat {chat_id} is launched by its first message; none was given"
+                                f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
                             )
-                    elif message:
-                        raise AgentCreationError(
-                            f"Chat {chat_id} keeps the first message it was minted with; a launch cannot reseed it"
-                        )
-                    else:
                         message = provisional.message
                 elif provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND:
                     # An unseeded chat awaiting its first send (an intake that could not launch at once,
@@ -3444,6 +4043,9 @@ class AgentManager:
                 else:
                     message = provisional.message
                 launched_chat_id = provisional.chat_id
+                carried_held_sends = provisional.held_sends
+                if model_pick is None:
+                    model_pick = provisional.model_pick
                 display_name = provisional.name
                 project_id = provisional.project_id
                 extra_labels = dict(provisional.labels)
@@ -3457,7 +4059,11 @@ class AgentManager:
             # record before the provisional record changes phase, so a record that cannot be
             # written refuses the launch and leaves the chat as it was.
             record_entry = (
-                None if seed_record is None else self._name_seeded_member_locked(seed_record, account, harness)
+                None
+                if seed_record is None
+                else self._name_seeded_member_locked(
+                    seed_record, account, harness, is_seed_carried_by_first_send=not message
+                )
             )
             provisional = ProvisionalChat(
                 chat_id=launched_chat_id,
@@ -3469,6 +4075,8 @@ class AgentManager:
                 is_installation_check_skipped=is_installation_check_skipped,
                 phase=ProvisionalChatPhase.CREATING,
                 is_seeded=seed_record is not None,
+                held_sends=carried_held_sends,
+                model_pick=model_pick,
             )
             self._provisional_chats[launched_chat_id] = provisional
             fast_mode = self._fast_mode_for_launch_locked(launched_chat_id)
@@ -3495,9 +4103,12 @@ class AgentManager:
         # A seeded chat's first agent joins a conversation it cannot see: the seed is a segment
         # this app renders from a file, which no harness transcript holds, so its launch carries
         # that conversation ahead of the user's own words. The provisional record keeps the words
-        # alone, so a retry after a failed create wraps them once.
+        # alone, so a retry after a failed create wraps them once. A launch with no words (the
+        # sign-in's) leaves the conversation for the first send to carry.
         launch_message = (
-            message if seed_record is None else seed_context_message(self._chat_files_root / launched_chat_id, message)
+            message
+            if seed_record is None or not message
+            else seed_context_message(self._chat_files_root / launched_chat_id, message)
         )
 
         # With a pick the message follows the create rather than riding it: the model has to be
@@ -3647,10 +4258,16 @@ class AgentManager:
         """
         success = False
         error: str | None = None
+        held_sends: tuple[HeldSend, ...] = ()
         output_tail = CreationOutputTail()
         # A seeded chat's agent that mngr provisioned before its create failed: destroyed below,
         # once the lock is released, since the withdrawn record no longer names it.
         half_made_agent_id: str | None = None
+        is_abandoned = False
+        # The name the chat was given while its create ran, which its agent takes once it exists.
+        renamed_while_created: str | None = None
+        # Another account chosen for the chat while its create ran, which the chat moves to once it exists.
+        account_chosen_while_created: str | None = None
 
         try:
             success, error = self._run_create_command(agent_id, cmd, work_dir, output_tail)
@@ -3664,18 +4281,28 @@ class AgentManager:
                 success, error = self._run_create_command(agent_id, cmd, work_dir, output_tail)
 
             with self._lock:
+                is_abandoned = chat_id in self._abandoned_creates
                 if success:
-                    self._provisional_chats.pop(chat_id, None)
-                    self._track_created_agent_locked(
-                        AgentStateItem(
-                            id=agent_id,
-                            name=agent_name,
-                            state="RUNNING",
-                            labels=labels,
-                            work_dir=str(work_dir),
-                            harness=harness,
+                    if not is_abandoned:
+                        settled_provisional = self._provisional_chats.pop(chat_id, None)
+                        if settled_provisional is not None:
+                            held_sends = settled_provisional.held_sends
+                            if settled_provisional.name != labels.get("display_name"):
+                                renamed_while_created = settled_provisional.name
+                            # The account and model chosen while it was created, which the chat runs on.
+                            model_pick = settled_provisional.model_pick
+                            if settled_provisional.account_id not in ("", labels.get("account")):
+                                account_chosen_while_created = settled_provisional.account_id
+                        self._track_created_agent_locked(
+                            AgentStateItem(
+                                id=agent_id,
+                                name=agent_name,
+                                state="RUNNING",
+                                labels=labels,
+                                work_dir=str(work_dir),
+                                harness=harness,
+                            )
                         )
-                    )
                 else:
                     self._mark_creation_failed_locked(chat_id, failure_notice(error, output_tail.text()))
                     if record_entry is not None:
@@ -3694,6 +4321,7 @@ class AgentManager:
             _loguru_logger.opt(exception=e).error("Unexpected error creating agent {}", agent_id)
             try:
                 with self._lock:
+                    is_abandoned = chat_id in self._abandoned_creates
                     self._mark_creation_failed_locked(chat_id, error)
                     if record_entry is not None:
                         half_made_agent_id = self._withdraw_seeded_member_locked(chat_id, record_entry)
@@ -3702,13 +4330,23 @@ class AgentManager:
 
         if half_made_agent_id is not None:
             self._discard_successor(chat_id, half_made_agent_id)
+        if is_abandoned:
+            self._finish_abandoned_create(chat_id, agent_id if success else None)
+            success, error = False, None
 
         try:
             if success:
                 self._ensure_activity_tracking(agent_id)
                 self._ensure_model_tracking(agent_id)
                 self._broadcast_chats_updated()
-                self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message)
+                if renamed_while_created is not None:
+                    self._rename_created_chat(chat_id, renamed_while_created)
+                if account_chosen_while_created is None:
+                    self._settle_new_chat(chat_id, agent_id, model_pick, deferred_message, held_sends)
+                else:
+                    self._move_created_chat(
+                        chat_id, agent_id, account_chosen_while_created, model_pick, deferred_message, held_sends
+                    )
             else:
                 # The pages show what the record holds: the reason and the output behind it.
                 failed = self.get_provisional_chat(chat_id)
@@ -3720,6 +4358,96 @@ class AgentManager:
             if settled is not None:
                 settled.set()
             self._broadcaster.broadcast_provisional_chat_completed(chat_id=chat_id, success=success, error=error)
+
+    def _move_created_chat(
+        self,
+        chat_id: ChatId,
+        agent_id: str,
+        account_id: str,
+        model_pick: ModelPick | None,
+        message: str,
+        held_sends: tuple[HeldSend, ...],
+    ) -> None:
+        """Move a just-created chat to the account chosen for it while it was created, carrying its messages: the
+        first is the switch's own, and the rest are held for the agent it lands on. A switch that cannot start
+        leaves the chat where it is, and its messages go to the agent it has, as if nothing had been chosen."""
+        sends = (
+            *(
+                (
+                    HeldSend(
+                        message_id=uuid4().hex,
+                        text=message,
+                        origin=HeldSendOrigin.CLIENT,
+                        received_at=datetime.now(timezone.utc),
+                    ),
+                )
+                if message
+                else ()
+            ),
+            *held_sends,
+        )
+        trigger = sends[0] if sends else None
+        try:
+            self.begin_switch(
+                chat_id,
+                account_id,
+                trigger.text if trigger is not None else "",
+                trigger.message_id if trigger is not None else uuid4().hex,
+                trigger.origin if trigger is not None else HeldSendOrigin.CLIENT,
+                model_pick,
+            )
+        except (HandoffError, ChatConvergingError) as e:
+            _loguru_logger.warning("Chat {}: could not move it to account {} as it landed: {}", chat_id, account_id, e)
+            self._settle_new_chat(chat_id, agent_id, None, "", sends)
+            return
+        for held in sends[1:]:
+            self.hold_send(chat_id, held.message_id, held.text, held.origin)
+
+    def set_launch_choice(self, chat_id: ChatId, account_id: str, model_pick: ModelPick | None) -> None:
+        """Choose the account and model a chat with no agent yet runs on.
+
+        Shown on the provisional record at once. A chat awaiting its launch is launched on them; one being
+        created takes the model as it lands, and moves to another account then, as a switch would. Raises
+        ``AgentCreationError`` for an account that cannot be bound, or a chat that has an agent already.
+        """
+        try:
+            resolve_binding(account_id)
+        except (AccountError, BindingError) as e:
+            raise AgentCreationError(str(e)) from e
+        with self._lock:
+            provisional = self._provisional_chats.get(chat_id)
+            if provisional is None:
+                raise AgentCreationError(f"Chat {chat_id} has an agent already, or none is being made for it")
+            provisional = provisional.model_copy_update(
+                to_update(provisional.field_ref().account_id, account_id),
+                to_update(provisional.field_ref().model_pick, model_pick),
+            )
+            self._provisional_chats[chat_id] = provisional
+        self._broadcast_provisional(provisional)
+
+    def _rename_created_chat(self, chat_id: ChatId, display_name: str) -> None:
+        """Give a just-created agent the name its chat was renamed to while the create ran. Logged rather than
+        raised, like the rest of a landed create's settling: the chat runs either way."""
+        with self._lock:
+            self._title_override_by_chat[chat_id] = display_name
+        try:
+            self.rename_chat(chat_id, display_name)
+        except AgentRenameError as e:
+            _loguru_logger.warning("Chat {}: could not give its new agent the name {}: {}", chat_id, display_name, e)
+            self.clear_automatic_title(chat_id)
+
+    def _finish_abandoned_create(self, chat_id: ChatId, created_agent_id: str | None) -> None:
+        """Tidy up after a create whose chat was deleted while it ran: destroy the agent it made, if it made
+        one, and drop the chat's folder. Logged rather than raised: the chat is already gone from every page."""
+        _loguru_logger.info("Chat {} was deleted while it was created; removing what the create made", chat_id)
+        if created_agent_id is not None:
+            self._discard_successor(chat_id, created_agent_id)
+        with self._lock:
+            self._abandoned_creates.discard(chat_id)
+            try:
+                self._delete_record_locked(chat_id)
+            except ChatRecordError as e:
+                _loguru_logger.warning("Chat {}: could not remove the folder of the deleted chat: {}", chat_id, e)
 
     def _run_create_command(
         self, agent_id: str, cmd: list[str], work_dir: Path, output_tail: CreationOutputTail
@@ -3772,21 +4500,29 @@ class AgentManager:
         except AgentDestroyError as e:
             _loguru_logger.debug("Chat {}: no half-made agent {} to destroy: {}", chat_id, agent_id, e)
 
-    def _settle_new_chat(self, chat_id: ChatId, agent_id: str, model_pick: ModelPick | None, message: str) -> None:
-        """Put a just-created chat on its pick and hand it the message its create left out.
+    def _settle_new_chat(
+        self,
+        chat_id: ChatId,
+        agent_id: str,
+        model_pick: ModelPick | None,
+        message: str,
+        held_sends: tuple[HeldSend, ...] = (),
+    ) -> None:
+        """Put a just-created chat on its pick and hand it the message its create left out, then the sends held
+        while it was created, in order.
 
         A pick the agent refuses is logged and the chat stays on its harness's default: a new
         chat has nothing to lose to a wrong model, unlike a handoff's successor, whose pick is
-        what the user chose the switch by. The message goes through the send path a held send
+        what the user chose the switch by. The messages go through the send path a held send
         takes; a refusal is logged the same way.
         """
-        if model_pick is None and not message:
+        if model_pick is None and not message and not held_sends:
             return
         agent_info = self.get_agent_info_by_id(agent_id)
         capabilities = self._handoff_capabilities
         if agent_info is None or capabilities is None:
             _loguru_logger.warning(
-                "Chat {}: agent {} is untracked, so its model pick and first message are dropped", chat_id, agent_id
+                "Chat {}: agent {} is untracked, so its model pick and messages are dropped", chat_id, agent_id
             )
             return
         if model_pick is not None:
@@ -3806,6 +4542,8 @@ class AgentManager:
                 ),
                 chat_id,
             )
+        for held in held_sends:
+            deliver_held_send(capabilities.deliver, agent_info, held, chat_id)
 
     def _mark_creation_failed_locked(self, chat_id: ChatId, error: str) -> None:
         """Keep the provisional chat, in the failed phase: its page shows the reason and can
@@ -3826,37 +4564,45 @@ class AgentManager:
         self._auto_open.forget(chat_id)
         with self._lock:
             self._creation_settled_by_chat.pop(chat_id, None)
+            self._background_tasks_by_chat.pop(chat_id, None)
 
     def _initial_discover(self) -> None:
         """Perform initial agent discovery and start per-agent tracking."""
         try:
-            agents = discover_agents()
-            with self._lock:
-                for agent_info in agents:
-                    agent_state = AgentStateItem(
-                        id=agent_info.id,
-                        name=agent_info.name,
-                        state=agent_info.state,
-                        labels=agent_info.labels,
-                        work_dir=agent_info.work_dir,
-                        harness=agent_info.harness,
-                    )
-                    self._agents[agent_info.id] = agent_state
-                self._is_agent_list_known = True
-                labels_by_chat_id = {
-                    self._chat_id_of_agent_locked(agent_info.id): agent_info.labels
-                    for agent_info in agents
-                    if not self._is_archived_member_locked(agent_info.id)
-                }
-            self._auto_open.seed_at_startup(labels_by_chat_id)
-
-            for agent_info in agents:
-                self._ensure_activity_tracking(agent_info.id)
-                self._ensure_model_tracking(agent_info.id)
+            self._adopt_initial_listing(discover_agents())
         except (OSError, ValueError, RuntimeError, MngrError) as e:
             _loguru_logger.opt(exception=e).error("Initial agent discovery failed")
             with self._lock:
                 self._has_initial_discovery_failed = True
+
+    def _adopt_initial_listing(self, agents: Sequence[AgentInfo]) -> None:
+        """Install the agents initial discovery found as the known agent list, open the upgrade main chat it may
+        owe (``_open_main_chat_on_upgrade_locked``), and start per-agent tracking."""
+        with self._lock:
+            for agent_info in agents:
+                agent_state = AgentStateItem(
+                    id=agent_info.id,
+                    name=agent_info.name,
+                    state=agent_info.state,
+                    labels=agent_info.labels,
+                    work_dir=agent_info.work_dir,
+                    harness=agent_info.harness,
+                )
+                self._agents[agent_info.id] = agent_state
+            self._is_agent_list_known = True
+            opened_main_chat = self._open_main_chat_on_upgrade_locked()
+            labels_by_chat_id = {
+                self._chat_id_of_agent_locked(agent_info.id): agent_info.labels
+                for agent_info in agents
+                if not self._is_archived_member_locked(agent_info.id)
+            }
+        self._auto_open.seed_at_startup(labels_by_chat_id)
+        if opened_main_chat is not None:
+            self._publish_seeded_chat(opened_main_chat)
+
+        for agent_info in agents:
+            self._ensure_activity_tracking(agent_info.id)
+            self._ensure_model_tracking(agent_info.id)
 
     def _refresh_agents(self) -> None:
         """Re-discover all agents and broadcast updates."""
@@ -3876,7 +4622,7 @@ class AgentManager:
             with self._lock:
                 old_ids = set(self._agents.keys())
                 new_ids = set(new_agents.keys())
-                self._agents = new_agents
+                self._agents = self._with_recent_renames_locked(new_agents)
 
             for agent_id in new_ids:
                 self._ensure_activity_tracking(agent_id)
@@ -3969,7 +4715,6 @@ class AgentManager:
             match event:
                 case FullAgentStateEvent():
                     self._agent_details_by_id = {str(agent.id): agent for agent in event.agents}
-                    self._is_agent_list_known = True
                 case AgentStateEvent():
                     self._agent_details_by_id[str(event.agent.id)] = event.agent
                 case AgentRemovedEvent():
@@ -4021,6 +4766,9 @@ class AgentManager:
                 cached_state = self._activity_state_by_agent.get(agent_id)
                 if cached_state is not None:
                     updates.append(to_update(agent_state.field_ref().activity_state, cached_state))
+                previous_agent_state = self._agents.get(agent_id)
+                if previous_agent_state is not None and previous_agent_state.is_turn_closing:
+                    updates.append(to_update(agent_state.field_ref().is_turn_closing, True))
                 cached_choice = self._model_choice_by_agent.get(agent_id)
                 if cached_choice is not None:
                     updates.append(to_update(agent_state.field_ref().model_choice, cached_choice))
@@ -4042,8 +4790,14 @@ class AgentManager:
             self._created_unobserved_by_id = still_awaited
             for agent_id, created in self._created_unobserved_by_id.items():
                 new_agents[agent_id] = self._agents.get(agent_id, created.agent)
+            new_agents = self._with_recent_renames_locked(new_agents)
             self._agents = new_agents
             self._match_by_agent_id = new_matches
+            # Known only once the listing it came with is installed, so nothing reads the list as known while
+            # it is still the one before.
+            if is_full_snapshot:
+                self._is_agent_list_known = True
+            opened_main_chat = None if was_agent_list_known else self._open_main_chat_on_upgrade_locked()
 
         for agent_id in added_agent_ids:
             added_agent_state = new_agents.get(agent_id)
@@ -4083,6 +4837,8 @@ class AgentManager:
             self._auto_open.seed_at_startup(
                 {chat_id: dict(details_by_id[agent_id].labels) for agent_id, chat_id in chat_id_by_agent_id.items()}
             )
+            if opened_main_chat is not None:
+                self._publish_seeded_chat(opened_main_chat)
         else:
             for agent_id in added_agent_ids:
                 added = details_by_id.get(agent_id)
@@ -4121,13 +4877,26 @@ class AgentManager:
         # and it keeps a chat exempt from its staleness climb for the turn's
         # duration. After the broadcast because it writes to /proc, which the UI
         # update should not wait on.
-        self._oom_prioritizer.record_running_chats(
-            [
+        with self._lock:
+            self._running_chat_ids = frozenset(
                 chat_id_by_agent_id[agent_id]
                 for agent_id, agent in new_agents.items()
                 if agent.state in RUNNING_LIFECYCLE_STATES and agent_id in chat_id_by_agent_id
-            ]
-        )
+            )
+        self._report_mid_turn_chats()
+
+    def _report_mid_turn_chats(self) -> None:
+        """Tell the OOM prioritizer which chats are mid-turn: those running a turn, and those waiting on one of the
+        harness's own background tasks, which a shed of the agent's process would end unreported. A chat waiting only
+        on ``run_in_background`` commands ages as an idle one does: the command outlives a shed, and its report
+        revives the chat."""
+        with self._lock:
+            mid_turn_ids = self._running_chat_ids | {
+                chat_id
+                for chat_id, tasks in self._background_tasks_by_chat.items()
+                if any(task.source is TaskSource.HARNESS for task in tasks)
+            }
+        self._oom_prioritizer.record_running_chats(mid_turn_ids)
 
     def _evict_removed_agent(self, agent_id: str) -> None:
         """Drop what a removed agent held resident: the whole chat's transcripts when it was the
@@ -4478,6 +5247,164 @@ class AgentManager:
         """
         self._recompute_model_choice(agent_id, broadcast_on_change=True)
 
+    def _list_background_task_dirs(self) -> dict[str, Path]:
+        """Each chat's background-task marker directory, keyed by the agent the chat runs on, from current ground truth.
+
+        A handoff's successor is watched for its chat's markers from the pass that finds it the
+        chat's active agent, and its first sighting reads them.
+        """
+        reader = self._background_tasks
+        if reader is None:
+            return {}
+        with self._lock:
+            dirs_by_agent: dict[str, Path] = {}
+            for agent_id in self._agents:
+                chat_id = self._chat_id_of_agent_if_active_locked(agent_id)
+                if chat_id is not None:
+                    dirs_by_agent[agent_id] = reader.chat_dir(chat_id)
+            return dirs_by_agent
+
+    def _chat_id_of_agent_if_active_locked(self, agent_id: str) -> ChatId | None:
+        """The chat ``agent_id`` is the active agent of (the stand-in while it converges), or None. Lock held."""
+        chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent_id))
+        if chat is None or chat.active_agent_id != agent_id:
+            return None
+        return chat.chat_id
+
+    def _on_background_tasks_dir_changed(self, agent_id: str) -> None:
+        """The marker directory of the chat ``agent_id`` runs changed: re-read its tasks and broadcast on change."""
+        with self._lock:
+            chat_id = self._chat_id_of_agent_if_active_locked(agent_id)
+        if chat_id is not None:
+            self._recompute_background_tasks(chat_id)
+
+    def _recheck_busy_chats(self) -> None:
+        """After each background-task poller pass, recheck what no file stamp shows.
+
+        Counts the pass against every held finished-task removal and applies the ones no turn
+        claimed. Re-reads every busy chat's markers: a marker goes stale when its process dies,
+        which changes no file (a runner the memory shedder killed leaves its marker behind), and
+        this is what returns such a chat to idle within a poll interval. Re-derives every closing
+        turn, which its harness ends by removing a marker that nothing else re-reads.
+        """
+        with self._lock:
+            busy_chat_ids = list(self._background_tasks_by_chat)
+            closing_agent_ids = [agent_id for agent_id, agent in self._agents.items() if agent.is_turn_closing]
+            unclaimed = self._age_finished_tasks_awaiting_turn_locked()
+        for agent_id, held in unclaimed:
+            self._remove_finished_tasks(agent_id, held.harness, held.task_ids, broadcast_on_change=True)
+        for chat_id in busy_chat_ids:
+            self._recompute_background_tasks(chat_id)
+        # A turn's harness closes it by removing a marker, which nothing else re-reads unless an event follows.
+        for agent_id in closing_agent_ids:
+            self._recompute_activity_state(agent_id, broadcast_on_change=True)
+
+    def _age_finished_tasks_awaiting_turn_locked(self) -> list[tuple[str, _FinishedTasksAwaitingTurn]]:
+        """Count one pass against every held removal, and take out the ones no turn claimed in time."""
+        unclaimed: list[tuple[str, _FinishedTasksAwaitingTurn]] = []
+        for agent_id, held in list(self._finished_tasks_awaiting_turn_by_agent.items()):
+            if held.passes_left <= 1:
+                del self._finished_tasks_awaiting_turn_by_agent[agent_id]
+                unclaimed.append((agent_id, held))
+            else:
+                self._finished_tasks_awaiting_turn_by_agent[agent_id] = held.model_copy_update(
+                    to_update(held.field_ref().passes_left, held.passes_left - 1)
+                )
+        return unclaimed
+
+    def _recompute_background_tasks(self, chat_id: ChatId, *, broadcast_on_change: bool = True) -> None:
+        """Re-read a chat's live background tasks, and push the chats and the mid-turn set when they changed."""
+        reader = self._background_tasks
+        if reader is None:
+            return
+        with self._background_tasks_read_lock:
+            tasks = reader.live_tasks(chat_id)
+            with self._lock:
+                if self._background_tasks_by_chat.get(chat_id, ()) == tasks:
+                    return
+                if tasks:
+                    self._background_tasks_by_chat[chat_id] = tasks
+                else:
+                    self._background_tasks_by_chat.pop(chat_id, None)
+        if broadcast_on_change:
+            self._broadcast_chats_updated()
+        self._report_mid_turn_chats()
+
+    def forget_finished_tasks(self, agent_id: str, harness: HarnessType, task_ids: tuple[str, ...]) -> None:
+        """Drop the markers of an agent's harness-native tasks its transcript reports as over.
+
+        A harness's turn-end hook only copies the tasks still listed when a turn ends normally, so
+        a turn the user interrupts, or one that fails, would leave a finished task's marker live
+        until the next turn end, or the harness's exit. The transcript records every task's end,
+        whatever the turn then does.
+
+        The notice lands a moment before the turn it starts reads as in flight, so with no turn in
+        flight the removal waits for that turn's start and goes out with it: the chat goes from
+        background to working, never through idle (which would flash the chat list's done check).
+        """
+        if self._background_tasks is None:
+            return
+        with self._lock:
+            if not is_turn_in_flight(self._activity_state_by_agent.get(agent_id)):
+                earlier = self._finished_tasks_awaiting_turn_by_agent.get(agent_id)
+                earlier_ids = earlier.task_ids if earlier is not None else ()
+                self._finished_tasks_awaiting_turn_by_agent[agent_id] = _FinishedTasksAwaitingTurn(
+                    harness=harness,
+                    task_ids=tuple(dict.fromkeys(earlier_ids + task_ids)),
+                    passes_left=_FINISHED_TASK_TURN_GRACE_PASSES,
+                )
+                return
+        self._remove_finished_tasks(agent_id, harness, task_ids, broadcast_on_change=True)
+
+    def _remove_finished_tasks(
+        self, agent_id: str, harness: HarnessType, task_ids: tuple[str, ...], *, broadcast_on_change: bool
+    ) -> None:
+        reader = self._background_tasks
+        if reader is None:
+            return
+        with self._lock:
+            chat_id = self._chat_id_of_agent_locked(agent_id)
+        try:
+            reader.remove_harness_tasks(chat_id, harness, task_ids)
+        except OSError as e:
+            _loguru_logger.warning(
+                "Could not remove the finished background tasks {} of {}: {}", task_ids, agent_id, e
+            )
+            return
+        self._recompute_background_tasks(chat_id, broadcast_on_change=broadcast_on_change)
+
+    def claim_unreported_runner_ends(self, chat_id: ChatId) -> tuple[BackgroundTask, ...]:
+        """Take out the chat's ``run_in_background.py`` tasks whose runner died before it reported, for the caller to
+        tell the chat's agent of; none when this app reads no markers or the chat's cannot be read."""
+        reader = self._background_tasks
+        if reader is None:
+            return ()
+        try:
+            return reader.claim_unreported_runner_ends(chat_id)
+        except OSError as e:
+            _loguru_logger.warning("Could not read the unreported background tasks of chat {}: {}", chat_id, e)
+            return ()
+
+    def _background_tasks_of_chat(self, chat_id: ChatId) -> tuple[BackgroundTask, ...]:
+        with self._lock:
+            return self._background_tasks_by_chat.get(chat_id, ())
+
+    def busy_state_of_agent(self, agent_id: str, labels: Mapping[str, str]) -> AgentBusyState:
+        """Whether an agent will resume on its own, the chat it belongs to, and that chat's pending tasks.
+
+        The chat is the one a record names the agent in, else its ``chat_id`` label, else the
+        agent itself. Only the agent a chat runs on carries the chat's tasks; any agent with a
+        turn in flight is busy.
+        """
+        with self._lock:
+            agent = self._agents.get(agent_id)
+            record = self._record_naming_locked(agent_id)
+            chat_id = record.chat_id if record is not None else ChatId(labels.get("chat_id") or agent_id)
+            active_chat_id = self._chat_id_of_agent_if_active_locked(agent_id)
+            tasks = () if active_chat_id is None else self._background_tasks_by_chat.get(active_chat_id, ())
+        is_turn_running = agent is not None and (is_turn_in_flight(agent.activity_state) or agent.is_turn_closing)
+        return AgentBusyState(chat_id=chat_id, is_busy=is_turn_running or bool(tasks), background_tasks=tasks)
+
     def _list_compacting_marker_paths(self) -> dict[str, Path]:
         with self._lock:
             filename_by_agent = {
@@ -4549,7 +5476,9 @@ class AgentManager:
             time.monotonic() - RELAXED_CONFIRMATION_TIMEOUT_SECONDS if sweep_started_at is None else sweep_started_at
         )
         if finished_at is not None and finished_at >= requested_at:
-            _loguru_logger.debug("Skipped the compaction status of agent {}: its compaction already finished", agent_id)
+            _loguru_logger.debug(
+                "Skipped the compaction status of agent {}: its compaction already finished", agent_id
+            )
             return
         self.note_compaction_requested(agent_id, CompactionCause.IDLE, requested_at)
 
@@ -4607,8 +5536,7 @@ class AgentManager:
             cause_seen_at = self._compaction_cause_seen_at_by_agent.get(agent_id)
             remembered_cause = (
                 self._compaction_cause_by_agent.get(agent_id)
-                if cause_seen_at is not None
-                and time.monotonic() - cause_seen_at < PENDING_COMPACTION_TIMEOUT_SECONDS
+                if cause_seen_at is not None and time.monotonic() - cause_seen_at < PENDING_COMPACTION_TIMEOUT_SECONDS
                 else None
             )
         pending_requested_at = None if pending is None else _monotonic_to_epoch(pending[0], now)
@@ -4686,7 +5614,8 @@ class AgentManager:
             if is_marker_fresh:
                 requested_cause = self._sweep_cause_of(agent_id) if pending_cause is None else pending_cause
                 return _LiveCompaction(
-                    marker_cause=cause_of_compacting_marker(marker.trigger, requested_cause), pending_cause=pending_cause
+                    marker_cause=cause_of_compacting_marker(marker.trigger, requested_cause),
+                    pending_cause=pending_cause,
                 )
             self._log_stale_compacting_marker_once(agent_id, marker, marker_age_seconds)
             return _LiveCompaction(marker_cause=None, pending_cause=pending_cause)
@@ -4902,6 +5831,16 @@ class AgentManager:
                 self._compaction_cause_by_agent[agent_id] = compaction_cause
                 self._compaction_cause_seen_at_by_agent[agent_id] = time.monotonic()
             old_state = self._activity_state_by_agent.get(agent_id)
+            was_turn_closing = agent_state.is_turn_closing
+            # The transcript can end a turn before the harness closes it: Claude writes its final message, then runs
+            # its Stop hooks, one of which records the background tasks the chat is left waiting on, and only then
+            # clears the ``active`` marker. Until then the turn reads closing, so the chat never reads idle (done)
+            # before its wait is known.
+            is_turn_closing = (
+                is_active_marker_present
+                and new_state == ActivityState.IDLE
+                and not is_lifecycle_dead(agent_state.state)
+            )
             # The queued-message backstop is LEVEL-triggered, not edge-triggered: an
             # IDLE agent's harness queue is about to drain, so a queued survivor while
             # idle is either on its way in (Claude dequeues only after its end-of-turn
@@ -4920,13 +5859,15 @@ class AgentManager:
                 and agent_state.activity_state == new_state.value
                 and not has_idle_queue
                 and not is_cause_changed
+                and was_turn_closing == is_turn_closing
             ):
                 return
             self._activity_state_by_agent[agent_id] = new_state
-            # Update just this slot so any cached ``model_choice`` stays intact --
+            # Update just these slots so any cached ``model_choice`` stays intact --
             # each derived field updates its own field without knowing the others'.
             self._agents[agent_id] = agent_state.model_copy_update(
-                to_update(agent_state.field_ref().activity_state, new_state)
+                to_update(agent_state.field_ref().activity_state, new_state),
+                to_update(agent_state.field_ref().is_turn_closing, is_turn_closing),
             )
             # An idle reading can predate the fold of the turn a leave just opened (the watcher
             # pushes the queue snapshot ahead of that turn's events), so the backstop may have
@@ -4947,6 +5888,23 @@ class AgentManager:
         # state below. Runs regardless of ``broadcast_on_change`` (it is a state
         # mutation); only the broadcast itself is gated.
         handled_snapshot = queue_handler() if queue_handler is not None else None
+        # A turn that just ended may have ended to wait on a background task, whose markers are
+        # down before the turn reads as ended (mngr's Stop hook clears the ``active`` marker only
+        # after the sibling hooks that write them). Reading them now, not on the poller's next
+        # pass, publishes the end with its wait, so the chat never reads idle (done) in between.
+        was_turn_open = is_turn_in_flight(old_state) or was_turn_closing
+        if was_turn_open and not (is_turn_in_flight(new_state) or is_turn_closing):
+            with self._lock:
+                ended_chat_id = self._chat_id_of_agent_if_active_locked(agent_id)
+            if ended_chat_id is not None:
+                self._recompute_background_tasks(ended_chat_id, broadcast_on_change=False)
+        # The turn a finished task's notice started: its markers go now, in the broadcast that
+        # shows the turn.
+        if not is_turn_in_flight(old_state) and is_turn_in_flight(new_state):
+            with self._lock:
+                claimed = self._finished_tasks_awaiting_turn_by_agent.pop(agent_id, None)
+            if claimed is not None:
+                self._remove_finished_tasks(agent_id, claimed.harness, claimed.task_ids, broadcast_on_change=False)
         if handled_snapshot is not None:
             handled_queue = tuple(_queued_message_state(entry) for entry in handled_snapshot)
             with self._lock:

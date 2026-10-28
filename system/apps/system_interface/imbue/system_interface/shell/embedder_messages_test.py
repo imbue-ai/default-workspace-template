@@ -30,6 +30,11 @@ def _relay(client: FlaskClient, body: dict[str, Any]) -> Any:
     return client.post("/api/embedder-messages", json=body)
 
 
+def _delivered(app: str, status: int) -> dict[str, object]:
+    """A posted message's delivery as the relay answers it: taken, with no page shown."""
+    return {"app": app, "status": status, "detail": "", "shown": None, "has_no_desktop_window": None, "window_id": None}
+
+
 def test_a_message_is_posted_to_every_app_that_registered_its_type_with_the_client_and_the_payload(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
@@ -49,7 +54,11 @@ def test_a_message_is_posted_to_every_app_that_registered_its_type_with_the_clie
         relayed = _relay(client, {"type": _FOCUS_CHAT, "client_id": "c1", "payload": {"chatId": "agent-1"}})
 
     assert relayed.status_code == 200
-    assert relayed.get_json() == {"type": _FOCUS_CHAT, "deliveries": [{"app": "buddy", "status": 200, "detail": ""}]}
+    assert relayed.get_json() == {
+        "type": _FOCUS_CHAT,
+        "deliveries": [_delivered("buddy", 200)],
+        "detail": None,
+    }
     assert focus_received == [{"type": _FOCUS_CHAT, "client_id": "c1", "chatId": "agent-1"}]
     assert other_received == []
 
@@ -174,6 +183,7 @@ def test_a_show_handler_opens_the_page_it_builds_from_the_message_and_raises_it_
                 "window_id": window["id"],
             }
         ],
+        "detail": None,
     }
     assert second.get_json()["deliveries"][0]["shown"] == "raised"
     assert second.get_json()["deliveries"][0]["window_id"] == window["id"]
@@ -228,7 +238,7 @@ def test_a_payload_that_cannot_fill_a_show_handler_is_that_handlers_refusal_and_
 
     assert relayed.status_code == 502
     deliveries = {delivery["app"]: delivery for delivery in relayed.get_json()["deliveries"]}
-    assert deliveries["logger"] == {"app": "logger", "status": 200, "detail": ""}
+    assert deliveries["logger"] == _delivered("logger", 200)
     assert deliveries[_VIEWER_ROW_NAME]["status"] is None
     assert "'path' field is missing" in deliveries[_VIEWER_ROW_NAME]["detail"]
     assert f"{_VIEWER_ROW_NAME} did not take it" in relayed.get_json()["detail"]
@@ -276,6 +286,13 @@ def test_an_app_that_refuses_with_a_json_detail_is_reported_in_its_own_words(
 
     assert relayed.status_code == 502
     assert relayed.get_json()["deliveries"] == [
-        {"app": "browser", "status": 503, "detail": "Chromium is not installed yet"}
+        {
+            "app": "browser",
+            "status": 503,
+            "detail": "Chromium is not installed yet",
+            "shown": None,
+            "has_no_desktop_window": None,
+            "window_id": None,
+        }
     ]
     assert relayed.get_json()["detail"] == "browser did not take it: Chromium is not installed yet"

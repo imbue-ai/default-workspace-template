@@ -23,11 +23,12 @@
 import m from "mithril";
 
 import { addChatsUpdatedListener, isHandoffCancellable } from "./Chats";
-import type { HandoffState } from "./Chats";
+import type { DisplayDecision, HandoffState } from "./Chats";
 
 export interface OutgoingMessage {
   id: string;
-  /** The text the user typed (shown verbatim), not the attachment-expanded form. */
+  /** The text the user typed (shown verbatim unless ``displayDecision`` makes it a notice), not
+   *  the attachment-expanded form. */
   content: string;
   /** The send-time message_id (contract A4) when the caller minted one. A backend record that
    *  carries the same id (a message held while the chat switches harness) replaces this bubble
@@ -35,6 +36,23 @@ export interface OutgoingMessage {
   messageId?: string;
   /** The backend accepted the send long enough ago that its arrival should have come, and none has. */
   isUnconfirmed?: boolean;
+  /** When the bubble was painted (epoch ms): how long the send has been waiting on the agent. */
+  sentAt: number;
+  /** The backend's render decision, for a held send that comes back as a bubble when its switch ends. */
+  displayDecision?: DisplayDecision;
+}
+
+/** Just the render decision a backend record carries, or undefined for a plain message. */
+function displayDecisionOf(record: DisplayDecision): DisplayDecision | undefined {
+  return record.display
+    ? {
+        display: record.display,
+        display_label: record.display_label,
+        display_body: record.display_body,
+        resolution: record.resolution,
+        display_details: record.display_details,
+      }
+    : undefined;
 }
 
 /** How long after the backend accepted a send its arrival may take before the bubble stops reading as delivered.
@@ -50,13 +68,28 @@ const seenArrivalIds: Record<string, Set<string>> = {};
 // only when the switch ends, so these arrivals consume them then, oldest first, as they would
 // have had the bubbles been standing when they landed.
 const successorArrivalsByChat = new Map<string, number>();
+// When the user sent each message that has reached the backend, by the id of the real item that
+// replaced its bubble: where the turn that message opened starts, as the user lived it.
+const sentAtByArrivalId = new Map<string, number>();
 let nextId = 0;
 
 /** Record a just-sent message as an optimistic "Sending…" bubble; returns its id
  *  so the caller can drop it on failure. */
-export function addOutgoing(chatId: string, content: string, messageId?: string): string {
+export function addOutgoing(
+  chatId: string,
+  content: string,
+  messageId?: string,
+  displayDecision?: DisplayDecision,
+): string {
   const id = `outgoing-${nextId++}`;
-  (byChat[chatId] ??= []).push(messageId === undefined ? { id, content } : { id, content, messageId });
+  const sentAt = Date.now();
+  (byChat[chatId] ??= []).push({
+    id,
+    content,
+    sentAt,
+    ...(messageId === undefined ? {} : { messageId }),
+    ...(displayDecision === undefined ? {} : { displayDecision }),
+  });
   m.redraw();
   return id;
 }
@@ -97,6 +130,12 @@ export function dropOutgoingByMessageId(chatId: string, messageIds: readonly str
 
 export function getOutgoingMessages(chatId: string): OutgoingMessage[] {
   return byChat[chatId] ?? [];
+}
+
+/** When the user sent the message the backend item `arrivalId` stands for, or null when this page did
+ *  not send it (another page, a reload since, or a message the agent wrote itself). */
+export function sentAtOfArrival(arrivalId: string): number | null {
+  return sentAtByArrivalId.get(arrivalId) ?? null;
 }
 
 /** Remove a specific set of bubbles by id. Used by the interrupt path: it snapshots
@@ -154,6 +193,10 @@ export function noteBackendArrivals(chatId: string, ids: readonly string[]): voi
     const successorArrivals = successorArrivalsByChat.get(chatId);
     if (successorArrivals !== undefined) {
       successorArrivalsByChat.set(chatId, successorArrivals + 1);
+    }
+    const oldest = byChat[chatId]?.[0];
+    if (oldest !== undefined) {
+      sentAtByArrivalId.set(id, oldest.sentAt);
     }
     removeOldest(chatId);
   }
@@ -218,7 +261,7 @@ export function trackBackendArrivals(
         const returning = previous.handoff.held_sends;
         for (const held of isCancelled ? returning.slice(1) : returning) {
           if (isCarriedBySwitch(chat.chat_id, held.message_id)) continue;
-          addOutgoing(chat.chat_id, held.text, held.message_id);
+          addOutgoing(chat.chat_id, held.text, held.message_id, displayDecisionOf(held));
         }
         for (let i = 0; i < consumedBySuccessor; i++) {
           removeOldest(chat.chat_id);

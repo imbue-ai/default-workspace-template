@@ -17,8 +17,10 @@ import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
 import type { UserMessageEvent } from "../models/Response";
 import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
+import type { UserMessageClass } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
+import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The user rail's shared recipes, owned here and composed by the queued and
  *  outgoing variants (QueuedMessageView / OutgoingMessageView). `message`,
@@ -27,6 +29,9 @@ import { renderToolBlock } from "./ToolCallBlock";
  *  them. The row recipe carries no bottom margin: each caller sets its own
  *  rhythm. */
 export const USER_MESSAGE_ROW_CLASS = "message message-user flex flex-col items-end";
+
+/** The bubble is the chat's declared `user-message` part (its app.toml `[theming]`), which themes may style. */
+export const USER_MESSAGE_PART = appPartAttrs("chat", "user-message");
 
 /** wrap-break-word: long unbreakable tokens (API keys, URLs) wrap inside the
  *  bubble instead of overflowing past its edge. Code inside a bubble is
@@ -44,7 +49,7 @@ function renderSystemChip(label: string, body: string, expansionKey: string): m.
 }
 
 /** A notice's lead when the backend's decision names none. */
-export const NOTICE_FALLBACK_LABEL = "Background task completed";
+const NOTICE_FALLBACK_LABEL = "Background task completed";
 
 /** The space below a notice's transcript row. */
 export const NOTICE_ROW_SPACING_CLASS = "mb-2";
@@ -86,6 +91,16 @@ export function renderNotice(
   ]);
 }
 
+/** A notice that is not on the transcript yet, as a row of its own. */
+export function renderNoticeRow(
+  key: string,
+  rowClass: string,
+  cls: UserMessageClass,
+  outcome?: NoticeOutcome,
+): m.Vnode {
+  return m("div", { class: rowClass, key }, [renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body, outcome)]);
+}
+
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   let renderedEventId: string | null = null;
   return {
@@ -101,7 +116,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       //
       // The trailing "See attachment here: <markdown>" block is delivered to the
       // agent and kept visible in the bubble, where it renders as markdown so its
-      // images show inline and other files as links that open in the File Viewer. The backend classifier
+      // images show inline and other files as links that open in Files. The backend classifier
       // strips the block before its detectors run (harnesses/message_display.py),
       // so an appended attachment never changes the kind here either, and puts it back on the
       // body it hands a prompt, so splitting it off here still finds it.
@@ -121,7 +136,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (attachmentBlock !== null) {
         bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock, requestedAt: event.timestamp }));
       }
-      return m("div", { class: USER_BUBBLE_CLASS }, bubbleChildren);
+      return m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, bubbleChildren);
     },
   };
 }

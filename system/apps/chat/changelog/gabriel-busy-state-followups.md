@@ -1,0 +1,1 @@
+A background task's report that arrives while a chat is switching account or harness now shows as its one-line notice from the start. It used to appear as a raw message bubble until it reached the transcript.

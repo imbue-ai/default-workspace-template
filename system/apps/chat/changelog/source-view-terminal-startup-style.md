@@ -1,0 +1,3 @@
+Turning a chat over to its terminal no longer says "Starting agent..." when the agent is already running, and no longer turns over onto a blank white face while the terminal loads. Until the terminal is on screen the back face shows a line in the terminal's own colors, font and padding, so the terminal that replaces it looks like the same surface: "Starting the agent..." while a stopped agent starts, then "Opening the terminal..." while the terminal loads. The line stays under the terminal once it has loaded, so the moment before the terminal draws never flashes the white card behind it.
+
+When starting a stopped agent fails, the error on its terminal face now wraps to the width of the explanation above it instead of running the full width of the pane.

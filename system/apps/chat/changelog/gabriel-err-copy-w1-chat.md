@@ -10,4 +10,4 @@ Chat's failures read as sentences for people, with the server's text, command ou
 
 - Sign-in and providers: the provider list and sign-in failures say what happened instead of "[object Object]" or "null"; a provider tool's own failure line goes behind See details under "{Provider} didn't accept that sign-in."; sign-in start failures say Imbue Studio couldn't start the sign-in; the chip with no provider reads "Add a provider".
 
-- Smaller copy: account lookups, create refusals, the switch's phase and retry refusals, Force's failed restart, the stopped terminal face, the model list that won't load, the declined slash command and the declined /compact, the /login notice, and the secret card's refusals (with a 2000-character limit on the decline note).
+- Smaller copy: account lookups, create refusals, the switch's phase and retry refusals, Force's failed restart, a model pick the chat app refused, the stopped terminal face, the model list that won't load, the declined slash command and the declined /compact, the /login notice, and the secret card's refusals (with a 2000-character limit on the decline note).

@@ -1,7 +1,7 @@
 [project]
 name = "pytest-workspace-env"
 version = "0.1.0"
-description = "Test-only pytest plugin that fails, rather than skips, any test where the environment is meant to be complete"
+description = "Test-only pytest plugin that clears the mngr agent environment and fails, rather than skips, any test where the environment is meant to be complete"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

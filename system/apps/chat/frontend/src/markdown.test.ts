@@ -33,6 +33,32 @@ describe("requestedAtUrl", () => {
   });
 });
 
+describe("renderMarkdown embeds", () => {
+  it("keeps a cross-origin image, video and audio embed, which the page policy admits from anywhere", () => {
+    // The chat page's Content-Security-Policy opens img-src and media-src to every origin because the
+    // sanitizer renders these three tags; a tag added here needs the policy's matching directive opened too
+    // (server.py's attach_document_policy), and a tag the policy does not admit is better stripped here.
+    const html = renderMarkdown(
+      '<img src="https://cdn.example.com/a.png">\n' +
+        '<video src="https://cdn.example.com/a.mp4" controls></video>\n' +
+        '<audio src="https://cdn.example.com/a.mp3" controls></audio>',
+    );
+    expect(html).toContain('<img src="https://cdn.example.com/a.png">');
+    expect(html).toContain('<video src="https://cdn.example.com/a.mp4" controls="">');
+    expect(html).toContain('<audio src="https://cdn.example.com/a.mp3" controls="">');
+  });
+
+  it("strips the embeds the policy would block: frames, plugins and scripts", () => {
+    const html = renderMarkdown(
+      '<iframe src="https://evil.example.com/"></iframe>' +
+        '<object data="https://evil.example.com/x.swf"></object>' +
+        '<embed src="https://evil.example.com/x.swf">' +
+        '<script src="https://evil.example.com/x.js"></script>',
+    );
+    expect(html).not.toMatch(/<(iframe|object|embed|script)/);
+  });
+});
+
 describe("renderMarkdown links", () => {
   function render(source: string): HTMLElement {
     const container = document.createElement("div");
@@ -42,18 +68,31 @@ describe("renderMarkdown links", () => {
 
   it("opens every web link in a new browsing context, with no opener or referrer, should nothing route it", () => {
     const anchors = render(
-      "[Docs](https://example.com/docs), [mail](mailto:a@example.com), [call](tel:+15551234), [app](http://localhost:3000/) and [api](http://127.0.0.1:8080/x)",
+      "[Docs](https://example.com/docs), [mail](mailto:a@example.com), [call](tel:+15551234), [local call](tel:5551234), [app](http://localhost:3000/) and [api](http://127.0.0.1:8080/x)",
     ).querySelectorAll("a");
     expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
       "https://example.com/docs",
       "mailto:a@example.com",
       "tel:+15551234",
+      "tel:5551234",
       "http://localhost:3000/",
       "http://127.0.0.1:8080/x",
     ]);
     expect(Array.from(anchors, (a) => [a.getAttribute("target"), a.getAttribute("rel")])).toEqual(
-      Array(5).fill(["_blank", "noopener noreferrer"]),
+      Array(6).fill(["_blank", "noopener noreferrer"]),
     );
+  });
+
+  it("keeps a custom-scheme link, which an app of the workspace or of the user's system opens", () => {
+    const anchors = render(
+      "[channel](slack://channel?team=T1&id=C1), [text me](sms:+15551234) and [settings](x-apple.systempreferences:com.apple.preference.security)",
+    ).querySelectorAll("a");
+    expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
+      "slack://channel?team=T1&id=C1",
+      "sms:+15551234",
+      "x-apple.systempreferences:com.apple.preference.security",
+    ]);
+    expect(Array.from(anchors, (a) => a.getAttribute("target"))).toEqual(Array(3).fill("_blank"));
   });
 
   it("names a file by its file URL, whether written as an absolute path or as a file URL", () => {
@@ -76,9 +115,14 @@ describe("renderMarkdown links", () => {
     "[the skill](.agents/skills/assist/SKILL.md)",
     "[guide](docs/guide.md:12)",
     "[report](q4.md:12)",
+    "[build](Makefile:3:1)",
+    "[code](app.ts:12-20)",
+    "[app](localhost:3000/dashboard)",
+    "[api](example.com:8080/x?q=1)",
+    "[run](javascript:alert(1))",
+    "[page](data:text/html,<p>hi</p>)",
     "[section](#usage)",
     "[remote file](file://server.example/share/notes.md)",
-    "[text me](sms:+15551234)",
     "[cdn](//cdn.example.com/lib.js)",
     "[broken](/home/user/%zz)",
   ])("renders %s as its label text with no link", (source) => {

@@ -95,7 +95,7 @@ class AccountError(RuntimeError):
 
 
 class NoAccountsError(AccountError):
-    """Nothing is signed in at all."""
+    """No provider account is signed in, so there is nothing to bind an agent to."""
 
     user_facing_message = "No providers are signed in yet. Sign in to start this chat."
 

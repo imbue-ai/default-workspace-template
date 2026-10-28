@@ -44,6 +44,7 @@ const ROW: ChatRow = {
   agentIds: ["agent-1"],
   lastActiveMs: null,
   isProvisional: false,
+  isMain: false,
 };
 
 function select(key: string): void {

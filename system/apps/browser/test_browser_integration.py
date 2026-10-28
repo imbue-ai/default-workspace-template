@@ -137,7 +137,7 @@ def test_http_new_browser_blocked_until_chromium_installed(monkeypatch: pytest.M
     monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
     monkeypatch.setattr(bsession, "_FORTRESS_EXECUTABLE", "/nonexistent/tilion")
     client = runner.application.test_client()
-    resp = client.post("/browsers")
+    resp = client.post("/browsers", json={})
     assert resp.status_code == 503
 
 
@@ -192,12 +192,15 @@ def test_http_cast_closes_a_failed_launch_name_terminally(monkeypatch: pytest.Mo
     runner.manager._failed_launch_names.clear()
 
 
+@pytest.mark.flaky
 def test_http_cast_closes_a_closed_browser_with_the_terminated_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     # A browser explicitly CLOSED by an agent is closed terminally, so a viewer whose tab is
     # still open renders the "terminated by an agent" overlay instead of the generic "reopen"
     # text or a "Starting browser…" retry loop. The viewer acts on the `closed` TEXT frame
     # (delivered intact before the close), not the 4001 close code -- which a real browser never
     # sees, because werkzeug corrupts the close handshake with a trailing HTTP response (1006).
+    # "Delivered intact" is what the close handshake races: when the trailing response wins, the
+    # text frame is lost and the receive raises ConnectionClosed(1005). See MIND-583.
     runner.manager._browsers.clear()
     runner.manager._closed_names.append("alex-smith")
     try:
@@ -245,9 +248,10 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
         with _BootedServer() as server:
             ws = simple_websocket.Client(f"ws://127.0.0.1:{server.port}/browsers/alex-smith/cast")
             try:
-                # Drain a handful of seed/early messages; none may be `initializing`.
-                seen: list[dict[str, Any]] = []
-                for _ in range(5):
+                # Drain a handful of seed/early messages; none may be `initializing`. The seed is awaited
+                # with the room a loaded machine needs; only the drain after it uses the short timeout.
+                seen: list[dict[str, Any]] = [_ws_recv_json(ws, timeout=10)]
+                for _ in range(4):
                     try:
                         seen.append(_ws_recv_json(ws, timeout=1))
                     except (AssertionError, OSError):
@@ -261,7 +265,7 @@ def test_http_cast_does_not_tell_a_running_browser_viewer_it_is_initializing(mon
 
 
 def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pytest.MonkeyPatch) -> None:
-    # While the fleet is still restoring, taking ownership returns 503 "initializing", but
+    # While the fleet is still restoring, taking ownership returns a 503 saying so, but
     # read-only routes (ls/health) AND create stay open -- the locked "init must not block
     # create" decision (a create queues behind the serialized restore on the manager lock).
     _install_fake_browser(monkeypatch)
@@ -270,7 +274,7 @@ def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pyt
     # Acquiring an existing browser is gated during init. This is the FIRST thing an agent
     # does, so it is where the retryable state has to surface.
     acq = client.post("/browsers/alex-smith/acquire", json={}, headers={"X-Mngr-Agent-Id": "A"})
-    assert acq.status_code == 503 and acq.get_json()["status"] == "initializing"
+    assert acq.status_code == 503 and "restoring" in acq.get_json()["detail"]
     # Read-only routes stay open.
     assert client.get("/browsers").status_code == 200
     assert client.get("/health").get_json()["initializing"] is True
@@ -289,7 +293,7 @@ def test_init_gate_blocks_ownership_but_not_read_only_or_create(monkeypatch: pyt
     monkeypatch.setattr(bsession.BrowserSessionManager, "create", fake_create)
     create = client.post("/browsers", json={"name": "morgan-lee"})
     assert create.status_code == 200 and create.get_json()["name"] == "morgan-lee"
-    existing = client.post("/browsers")
+    existing = client.post("/browsers", json={})
     assert existing.status_code == 200 and existing.get_json()["name"] == "alex-smith"
     # conftest re-sets _init_done on teardown.
 
@@ -833,7 +837,9 @@ def test_every_paste_lands_and_leaves_no_key_held_real_chromium() -> None:
                     return asyncio.run_coroutine_threadsafe(coro, loop).result(timeout=30)
 
                 def paste(text: str) -> int:
-                    with runner.application.test_request_context():
+                    # The paste view answers through the route table, which is keyed by the matched route.
+                    paste_path = f"/browsers/{browser.browser_id}/clipboard/paste"
+                    with runner.application.test_request_context(paste_path, method="POST"):
                         returned = mediastream.clipboard_paste(
                             browser.browser_id, browser, text.encode(), "text/plain", run_on_loop
                         )

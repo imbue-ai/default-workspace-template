@@ -4,8 +4,9 @@
  * Opening an agent terminal attaches to that agent's tmux session, which does
  * not exist while the agent is STOPPED -- the ttyd dispatch's `tmux attach`
  * fails immediately. So before mounting the terminal iframe this panel POSTs
- * to the agent's start endpoint and waits for it to resolve. The backend
- * no-ops for already-running agents, so this is cheap in the common case.
+ * to the agent's start endpoint and waits for it to resolve -- unless the chat
+ * already reports the agent alive, when the iframe mounts at once and no start
+ * is announced.
  */
 
 import m from "mithril";
@@ -17,7 +18,7 @@ import { getShellConnection } from "../shellConnection";
 import { plainFailureLines, plainFailureSentence } from "./failure-lines";
 import type { FailureLines } from "./failure-lines";
 import { getChatById } from "../models/Chats";
-import { isAgentProcessDead } from "./agentLiveness";
+import { isAgentProcessAlive, isAgentProcessDead } from "./agentLiveness";
 import { handoffPhaseText } from "./handoff-phase";
 import { TerminalFrame } from "./TerminalFrame";
 
@@ -53,16 +54,19 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
 
   return {
     oninit(vnode) {
-      ensureAgentStarted(vnode.attrs.chatId);
+      const chat = vnode.attrs.chatId === "" ? undefined : getChatById(vnode.attrs.chatId);
+      if (chat !== undefined && isAgentProcessAlive(chat.active_agent.state)) {
+        starting = false;
+        return;
+      }
+      void ensureAgentStarted(vnode.attrs.chatId);
     },
 
     view(vnode) {
       if (starting) {
-        return m(
-          "div",
-          { class: "agent-terminal-starting flex items-center justify-center h-full" },
-          m("p", { class: "text-secondary" }, "Starting agent..."),
-        );
+        // Drawn as the terminal's first line of output, in its colors and type, so the
+        // terminal that replaces it reads as the same surface.
+        return m("div", { class: "agent-terminal-starting terminal-placeholder" }, "Starting the agent...");
       }
 
       // A dead agent has no tmux session, so a mounted ttyd client reconnect-loops
@@ -98,26 +102,33 @@ export function AgentTerminalPanel(): m.Component<AgentTerminalPanelAttrs> {
         }
         return m(
           "div",
-          { class: "agent-terminal-stopped flex h-full w-full flex-col items-center justify-center gap-3 bg-surface" },
+          {
+            class:
+              "agent-terminal-stopped flex h-full w-full flex-col items-center justify-center gap-3 bg-surface px-6",
+          },
           [
             m("div", { class: "text-[15px] font-medium text-primary" }, chat.name),
-            m(
-              "div",
-              { class: "text-(length:--font-size-row) text-faint" },
-              "This agent isn't running, so there's nothing to show here yet.",
-            ),
-            // A failed start leaves the agent dead, which lands back on this face --
-            // without this line the Start button would appear to silently do nothing.
-            startError === null
-              ? null
-              : m("div", { class: "flex max-w-[80%] flex-col items-center gap-1 text-center" }, [
-                  m(
-                    "div",
-                    { class: "agent-terminal-start-error text-(length:--font-size-row) text-danger" },
-                    plainFailureSentence(startError),
-                  ),
-                  m("div", { class: "text-secondary" }, m(SeeDetails, { details: startError.details })),
-                ]),
+            // The explanation sets the column's width and the error wraps inside it (a zero
+            // width that grows to the column's), so a long error stays under the line it follows.
+            m("div", { class: "flex w-fit max-w-full flex-col items-center gap-3 text-center" }, [
+              m(
+                "div",
+                { class: "text-(length:--font-size-row) text-faint" },
+                "This agent isn't running, so there's nothing to show here yet.",
+              ),
+              // A failed start leaves the agent dead, which lands back on this face --
+              // without this line the Start button would appear to silently do nothing.
+              startError === null
+                ? null
+                : m("div", { class: "flex w-0 min-w-full flex-col items-center gap-1" }, [
+                    m(
+                      "div",
+                      { class: "agent-terminal-start-error text-(length:--font-size-row) text-danger" },
+                      plainFailureSentence(startError),
+                    ),
+                    m("div", { class: "text-secondary" }, m(SeeDetails, { details: startError.details })),
+                  ]),
+            ]),
             m(
               "button",
               {

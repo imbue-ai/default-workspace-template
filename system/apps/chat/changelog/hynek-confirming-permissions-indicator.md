@@ -1,0 +1,7 @@
+# The "Confirming permission changes…" strip is back after approving a permission request
+
+Approving a permission request in the Imbue Studio app flips the in-chat card at once, because the desktop app pushes the verdict into the workspace over the embed contract (`minds:permission-resolutions`) the moment the user clicks. Telling the agent is a slower, separate path (a retried `mngr message` delivery), and the activity strip above the composer reads "Confirming permission changes…" through that gap, for up to 20 seconds, so the chat does not look dead between the click and the agent resuming.
+
+Both had silently stopped working. Every chat page now renders inside the chat root (the chat list), which the shell frames; the shell rebroadcasts every message from the desktop app to the frames it created, but the root passed only one of them on to its inner chat pages (`minds:provider-sign-in-ack`) and dropped the rest, the verdict push included. The chat page's card and strip code never changed; it just never heard the verdict any more, so the card waited for the transcript's resolution notice and the strip never showed.
+
+The root now passes `minds:permission-resolutions` down too, as it does the sign-in answer: both are the desktop app's answers to an ask an inner page made. The page's own filtering is unchanged: the strip shows only for a request this chat filed, within 20 seconds of the verdict, and only until the resolution notice lands in the transcript, so a verdict re-pushed for a request the agent heard about long ago spins nothing.

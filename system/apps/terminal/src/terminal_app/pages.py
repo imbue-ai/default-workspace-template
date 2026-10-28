@@ -17,15 +17,32 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
+from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.primitives import AppName
 from app_manifest.registry import APP_CONTRACT_ROUTE, read_origin_label
-from flask import Blueprint, Response, jsonify, request, send_file
+from app_schema.api_schema import (
+    DEFAULT_API_SCHEMA_PATH,
+    RouteModels,
+    RouteTable,
+    SchemalessRoute,
+    flask_rule_to_openapi_path,
+    register_api_schema_route,
+)
+from app_schema.routes import error_response, model_response, parse_request_body
+from flask import Blueprint, Response, request, send_file
 from flask.typing import ResponseReturnValue
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from loguru import logger
-from pydantic import Field
-from workspace_layout.windows import parse_window_closed_hint, window_query_value
+from pydantic import ConfigDict, Field, field_validator
+from workspace_layout.windows import WindowClosedHint, window_query_value
+from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
+from workspace_themes.flask_routes import (
+    THEME_STATIC_ROUTE_TABLE,
+    register_workspace_theme_route,
+)
+from workspace_themes.primitives import THEME_ID_PATTERN
+from workspace_themes.serving import THEME_STATIC_ROUTE_PREFIX
 
 from terminal_app.errors import (
     InvalidTerminalValueError,
@@ -46,14 +63,12 @@ from terminal_app.sessions import TmuxSessionSource
 BLUEPRINT_NAME: Final[str] = "terminal_pages"
 NEW_PATH: Final[str] = "/new"
 HEALTH_PATH: Final[str] = "/api/health"
+APP_DISPLAY_NAME: Final[str] = "Terminal"
+APP_DESCRIPTION: Final[str] = "Web terminals inside the workspace, one per window."
 # Where the shell posts a closed window of the terminal (the manifest's ``window_closed_path``): a sweep runs at once.
 WINDOW_CLOSED_PATH: Final[str] = "/api/window-closed"
 HTTP_NO_CONTENT: Final[int] = 204
 SESSION_API_PATH: Final[str] = "/api/sessions/<name>"
-
-# The one parameter the ``new`` launch path takes (system/apps/terminal/app.toml); the shell posts it in a JSON
-# object beside its own envelope fields, which are ignored here.
-WORKDIR_PARAM: Final[str] = "workdir"
 
 HTTP_BAD_REQUEST: Final[int] = 400
 HTTP_NOT_FOUND: Final[int] = 404
@@ -68,7 +83,40 @@ _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 # The template's placeholders, filled in one pass so that a title or a config carrying a
 # placeholder's text is not itself filled.
-_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH)__")
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME)__")
+
+# xterm's theme keys for the contract's terminal tokens, in TERMINAL_TOKENS' order.
+_XTERM_THEME_KEYS: Final[tuple[str, ...]] = (
+    "background",
+    "foreground",
+    "cursor",
+    "selectionBackground",
+    "black",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "brightBlack",
+    "brightRed",
+    "brightGreen",
+    "brightYellow",
+    "brightBlue",
+    "brightMagenta",
+    "brightCyan",
+    "brightWhite",
+)
+# What the script needs to know of workspace themes, from the theme library rather than copied into the script.
+_THEME_SCRIPT_CONFIG: Final[str] = json.dumps(
+    {
+        "standard": STANDARD_THEME_ID,
+        "idPattern": THEME_ID_PATTERN.pattern,
+        "bundlePrefix": THEME_STATIC_ROUTE_PREFIX,
+        "paletteTokens": dict(zip(_XTERM_THEME_KEYS, TERMINAL_TOKENS, strict=True)),
+    }
+)
 
 _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <html lang="en">
@@ -78,7 +126,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <title>__TITLE__</title>
 <style>
   html { height: 100%; }
-  body { display: flex; flex-direction: column; height: 100%; height: 100dvh; margin: 0; background: #000; color: #ddd; font-family: system-ui, sans-serif; }
+  /* ttyd's own default background, so the moment before it draws its terminal reads as the terminal. */
+  body { display: flex; flex-direction: column; height: 100%; height: 100dvh; margin: 0; background: #2b2b2b; color: #ddd; font-family: system-ui, sans-serif; }
   iframe { display: block; flex: 1 1 0; min-height: 0; width: 100%; border: 0; }
   #empty { display: flex; flex: 1 1 0; align-items: center; justify-content: center; font-size: 14px; color: #888; }
   /* The phone's key strip: the keys a soft keyboard lacks, under the terminal and so above the keyboard. */
@@ -266,7 +315,76 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     if (button !== null) pressKey(button);
     focusPty();
   });
-  frame.addEventListener("load", () => setCtrlArmed(false));
+  frame.addEventListener("load", () => {
+    setCtrlArmed(false);
+    if (palette !== undefined) postToPty({ type: "terminal:theme", theme: palette });
+  });
+
+  // The workspace's theme reaches the terminal as a palette (docs/system/blueprint/workspace-themes/, section
+  // 4.1). The terminal takes no other part in themes ([theming] mode = "none"), so the theme's bundle is loaded
+  // into a blank frame of this origin that nobody sees, never into this page: the --term-* tokens are read there
+  // once it has loaded and handed to the pty page's xterm, and the theme's rules style nothing here. The standard
+  // theme sets none, which leaves xterm its own colors.
+  // The standard theme's id, the pattern a theme id matches, where a theme's bundle is served, and each xterm color's
+  // --term-* token.
+  const THEME = __THEME__;
+  const THEME_ID = new RegExp(THEME.idPattern);
+  let palette = undefined;
+  let paletteFrame = null;
+  // The theme and revision worn or loading, so a repeated shell:theme reloads nothing.
+  let wornTheme = null;
+
+  function readPalette(probe) {
+    const style = probe.contentWindow.getComputedStyle(probe.contentDocument.documentElement);
+    const read = {};
+    for (const [key, token] of Object.entries(THEME.paletteTokens)) {
+      const value = style.getPropertyValue(token).trim();
+      if (value !== "") read[key] = value;
+    }
+    return Object.keys(read).length === 0 ? null : read;
+  }
+
+  function wearTheme(theme, revision) {
+    if (!THEME_ID.test(theme)) return;
+    const key = `${theme}@${revision}`;
+    if (key === wornTheme) return;
+    wornTheme = key;
+    paletteFrame?.remove();
+    paletteFrame = null;
+    if (theme === THEME.standard) {
+      palette = null;
+      postToPty({ type: "terminal:theme", theme: null });
+      return;
+    }
+    // Laid out (not display: none), so every engine resolves the frame's styles, but with no size and unseen.
+    const probe = document.createElement("iframe");
+    probe.setAttribute("aria-hidden", "true");
+    probe.tabIndex = -1;
+    probe.style.cssText = "position: absolute; width: 0; height: 0; border: 0; visibility: hidden;";
+    document.body.appendChild(probe);
+    paletteFrame = probe;
+    const probeDocument = probe.contentDocument;
+    probeDocument.documentElement.dataset.uiTheme = theme;
+    const link = probeDocument.createElement("link");
+    link.rel = "stylesheet";
+    const bundlePath = `${THEME.bundlePrefix}${theme}/theme.css` + (revision ? `?v=${encodeURIComponent(revision)}` : "");
+    link.href = new URL(bundlePath, location.href).href;
+    link.addEventListener("load", () => {
+      if (paletteFrame !== probe) return;
+      palette = readPalette(probe);
+      postToPty({ type: "terminal:theme", theme: palette });
+    });
+    // A theme that cannot be loaded (gone, or unavailable) leaves xterm its own colors, not the last theme's.
+    link.addEventListener("error", () => {
+      if (paletteFrame !== probe) return;
+      probe.remove();
+      paletteFrame = null;
+      wornTheme = null;
+      palette = null;
+      postToPty({ type: "terminal:theme", theme: null });
+    });
+    probeDocument.head.appendChild(link);
+  }
 
   window.addEventListener("message", (event) => {
     const data = event.data;
@@ -290,6 +408,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
           capabilities: { navigation: true, closeChord: false },
           onNavigate: navigate,
           onShown: focusPty,
+          onTheme: wearTheme,
         });
         if (current !== null) connection.location(pathFor(current), document.title);
       })
@@ -319,17 +438,52 @@ class PageConfig(FrozenModel):
     page: SessionPage | None = Field(description="The session's page, when there is a session")
 
 
+class NewTerminalRequest(FrozenModel):
+    """What a ``new`` launch posts: the one parameter the launch path declares (system/apps/terminal/app.toml)."""
+
+    # The shell posts its envelope fields (client_id, desktop_id, window_path) beside the param; they are ignored here.
+    model_config = ConfigDict(extra="ignore")
+
+    workdir: Workdir | None = Field(
+        default=None, description="The directory the terminal's shell starts in; absent or \"\" for the default"
+    )
+
+    @field_validator("workdir", mode="before")
+    @classmethod
+    def _empty_means_default(cls, value: object) -> object:
+        return None if value == "" else value
+
+
+class NewTerminalResponse(FrozenModel):
+    """What a ``new`` launch answers: where the new terminal's page is."""
+
+    path: str = Field(description="The path of the new terminal's page on this origin, which a window shows")
+
+
+class HealthResponse(FrozenModel):
+    """What the health probe answers."""
+
+    status: str = Field(description="Always 'ok'")
+
+
+# What every route exchanges, which the app's API document publishes and every parse and answer is checked against.
+ROUTE_TABLE: RouteTable = {
+    ("GET", "/"): SchemalessRoute(reason="the page framing one terminal"),
+    ("POST", NEW_PATH): RouteModels(request_model=NewTerminalRequest, response_model=NewTerminalResponse),
+    ("GET", flask_rule_to_openapi_path(SESSION_API_PATH)): RouteModels(response_model=SessionPage),
+    ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
+    ("POST", WINDOW_CLOSED_PATH): RouteModels(request_model=WindowClosedHint, success_status=HTTP_NO_CONTENT),
+    ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the app contract module, a JavaScript file"),
+    **THEME_STATIC_ROUTE_TABLE,
+}
+
+
 @pure
-@pure
-def closed_window_terminal(hint_body: object) -> TmuxSessionName | None:
+def closed_window_terminal(hint: WindowClosedHint) -> TmuxSessionName | None:
     """The terminal a closed window showed, from the ``path`` of the shell's hint.
 
-    None for a path with no session (the root, or one naming something that is not a session name), or a body of
-    another shape than the shell posts.
+    None for a path with no session (the root, or one naming something that is not a session name).
     """
-    hint = parse_window_closed_hint(hint_body)
-    if hint is None:
-        return None
     raw_name = window_query_value(hint.path, SESSION_QUERY_KEY)
     if raw_name is None:
         return None
@@ -356,28 +510,9 @@ def render_page(config: PageConfig) -> str:
         "CONFIG_ID": _CONFIG_ELEMENT_ID,
         "CONFIG": encoded,
         "CONTRACT_PATH": APP_CONTRACT_ROUTE,
+        "THEME": _THEME_SCRIPT_CONFIG,
     }
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
-
-
-def _workdir(raw: object) -> Workdir | None:
-    """The ``workdir`` a ``new`` request's body names, or None for the default (absent or ""); a bad one is a 400."""
-    if raw is None or raw == "":
-        return None
-    if not isinstance(raw, str):
-        raise InvalidTerminalValueError(f"invalid {WORKDIR_PARAM!r}: must be a string")
-    try:
-        return Workdir(raw)
-    except InvalidTerminalValueError as e:
-        raise InvalidTerminalValueError(f"invalid {WORKDIR_PARAM!r}: {e}") from e
-
-
-def _launch_body() -> dict[str, object]:
-    """The JSON object a ``new`` launch posts; anything else is a 400."""
-    body = request.get_json(force=True, silent=True)
-    if not isinstance(body, dict):
-        raise InvalidTerminalValueError("the launch body must be a JSON object")
-    return body
 
 
 def build_pages_blueprint(
@@ -392,6 +527,15 @@ def build_pages_blueprint(
     the page refreshes from, the health probe, and
     the app contract module at ``contract_path`` (the shell's build output, served from this origin)."""
     blueprint = Blueprint(BLUEPRINT_NAME, __name__)
+    register_api_schema_route(
+        blueprint,
+        DEFAULT_API_SCHEMA_PATH,
+        title=APP_DISPLAY_NAME,
+        description=APP_DESCRIPTION,
+        route_table=ROUTE_TABLE,
+    )
+    register_workspace_theme_route(blueprint)
+    attach_document_policy(blueprint)
 
     def session_page(name: TmuxSessionName) -> SessionPage:
         listed = next((terminal for terminal in source.list_terminals() if terminal.name == name), None)
@@ -405,6 +549,7 @@ def build_pages_blueprint(
 
     @blueprint.get("/")
     def wrapper_page() -> ResponseReturnValue:
+        """The page framing one terminal (``?session=<name>``), or the bare page when no session is named."""
         raw_session = request.args.get(SESSION_QUERY_KEY, "")
         session = _session_name(raw_session) if raw_session != "" else None
         config = PageConfig(session=session, page=session_page(session) if session is not None else None)
@@ -414,46 +559,50 @@ def build_pages_blueprint(
 
     @blueprint.post(NEW_PATH)
     def new_terminal() -> ResponseReturnValue:
-        created = source.create_terminal(_workdir(_launch_body().get(WORKDIR_PARAM)))
-        return jsonify({"path": session_page_path(created.name)})
+        """Open a new terminal (its tmux session, in ``workdir`` when given) and answer the path of its page."""
+        created = source.create_terminal(parse_request_body(NewTerminalRequest).workdir)
+        return model_response(NewTerminalResponse(path=session_page_path(created.name)))
 
     @blueprint.get(SESSION_API_PATH)
     def session_json(name: str) -> ResponseReturnValue:
-        return jsonify(session_page(_session_name(name)).model_dump(mode="json"))
+        """One terminal as its page frames it: its title and where on the pty origin it attaches."""
+        return model_response(session_page(_session_name(name)))
 
     @blueprint.get(HEALTH_PATH)
     def health() -> ResponseReturnValue:
-        return jsonify({"status": "ok"})
+        """Whether the app is up."""
+        return model_response(HealthResponse(status="ok"))
 
     @blueprint.post(WINDOW_CLOSED_PATH)
     def window_closed() -> ResponseReturnValue:
+        """The shell says a terminal window closed; the terminals no window shows any more are swept now."""
         # The body says which window closed, which is proof a window showed its terminal; what is shown now
         # is still read from the shell.
-        on_window_closed(closed_window_terminal(request.get_json(silent=True)))
+        on_window_closed(closed_window_terminal(parse_request_body(WindowClosedHint)))
         return "", HTTP_NO_CONTENT
 
     @blueprint.get(APP_CONTRACT_ROUTE)
     def app_contract() -> ResponseReturnValue:
+        """The app contract module: how the page talks to the shell framing it."""
         if not contract_path.is_file():
-            return (
-                jsonify({"detail": f"the workspace shell's frontend is not built: {contract_path} is missing"}),
-                HTTP_NOT_FOUND,
+            return error_response(
+                f"the workspace shell's frontend is not built: {contract_path} is missing", HTTP_NOT_FOUND
             )
         # Flask resolves a relative path against the app's own directory, not the cwd the path names.
         return send_file(contract_path.absolute(), mimetype="text/javascript")
 
     @blueprint.errorhandler(UnknownSessionPageError)
     def answer_unknown_session(error: UnknownSessionPageError) -> ResponseReturnValue:
-        return jsonify({"detail": str(error)}), HTTP_NOT_FOUND
+        return error_response(str(error), HTTP_NOT_FOUND)
 
     @blueprint.errorhandler(InvalidTerminalValueError)
     def answer_invalid_value(error: InvalidTerminalValueError) -> ResponseReturnValue:
-        return jsonify({"detail": str(error)}), HTTP_BAD_REQUEST
+        return error_response(str(error), HTTP_BAD_REQUEST)
 
     @blueprint.errorhandler(TerminalAppError)
     def answer_terminal_error(error: TerminalAppError) -> ResponseReturnValue:
         # The app's own failures (tmux refusing, the store unreadable) answer a detail body rather than Flask's bare 500.
         logger.opt(exception=error).error("Failed to serve a terminal page request")
-        return jsonify({"detail": str(error)}), HTTP_INTERNAL_ERROR
+        return error_response(str(error), HTTP_INTERNAL_ERROR)
 
     return blueprint

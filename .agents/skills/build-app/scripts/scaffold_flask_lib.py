@@ -39,6 +39,7 @@ any failure (lib already exists, reserved name, sync failure, etc.).
 import argparse
 import functools
 import importlib.util
+import json
 import re
 import socket
 import subprocess
@@ -244,7 +245,7 @@ def _pick_port(
 
 
 def _format_dep_list(extras: Iterable[str]) -> str:
-    base = ['"flask>=3.0"', '"flask-sock>=0.7"', '"werkzeug>=3.0"']
+    base = ['"app-schema"', '"flask>=3.0"', '"flask-sock>=0.7"', '"imbue-common"', '"loguru>=0.7"', '"pydantic>=2.0"', '"werkzeug>=3.0"']
     extras_lines = [f'"{dep}"' for dep in extras]
     all_lines = base + extras_lines
     return ",\n    ".join(all_lines)
@@ -255,7 +256,7 @@ def _lib_pyproject(name: str, package: str, description: str, extras: list[str])
     return f"""[project]
 name = "{name}"
 version = "0.1.0"
-description = "{description}"
+description = {_toml_basic_string(description)}
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -274,6 +275,8 @@ packages = ["src/{package}"]
 
 [dependency-groups]
 dev = [
+    # What runner_test.py asserts the API document with.
+    "app-schema[testing]",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
     "ty==0.0.85",
 ]
@@ -283,9 +286,18 @@ dev = [
 """
 
 
-def _lib_runner(name: str, package: str, description: str, port: int) -> str:
+def _lib_runner(
+    name: str,
+    package: str,
+    description: str,
+    port: int,
+    display_name: str,
+) -> str:
     env_var = f"{package.upper()}_DATA_DIR"
     port_env_var = f"{package.upper()}_PORT"
+    # Python literals for the generated source: the document's title is the manifest's display name.
+    title_literal = repr(display_name)
+    description_literal = repr(description)
     return f'''"""{description}.
 
 Services run from /home/user/workspace (the repo root). Conventions:
@@ -317,10 +329,24 @@ unmodified -- nothing rewrites anything. Use ``flask_sock`` if you need
 WebSockets.
 """
 
+import base64
+import hashlib
 import os
 from pathlib import Path
 
-from flask import Flask, Response, abort, send_file
+from app_schema.api_schema import (
+    DEFAULT_API_SCHEMA_PATH,
+    RouteModels,
+    RouteTable,
+    SchemalessRoute,
+    register_api_schema_route,
+)
+from app_schema.routes import model_response
+from flask import Flask, Response, abort, request, send_file
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.logging import setup_logging
+from loguru import logger
+from pydantic import Field
 from werkzeug.serving import run_simple
 
 # Persistent state for this app lives under DATA_DIR. It defaults to
@@ -352,8 +378,7 @@ SHELL_STATIC_MODULE_NAMES = {SHELL_STATIC_MODULE_NAMES!r}
 # this app's window at the same place, and installs the element context menu.
 # A page visited outside the shell runs it harmlessly: nothing arrives, and the
 # menu's Explain and Modify rows grey out.
-SHELL_PAGE_SCRIPT = """\
-<script type="module">
+SHELL_PAGE_SCRIPT_BODY = """
   import {{ connectToShell }} from "/_static/app_contract.js";
   import {{ installElementContextMenu }} from "/_static/context_menu.js";
   let handshake = null;
@@ -364,13 +389,72 @@ SHELL_PAGE_SCRIPT = """\
     }},
   }});
   installElementContextMenu({{ connection, handshake: () => handshake }});
-</script>"""
+"""
+SHELL_PAGE_SCRIPT = f'<script type="module">{{SHELL_PAGE_SCRIPT_BODY}}</script>'
+
+
+def inline_script_source(body: str) -> str:
+    """The Content-Security-Policy source admitting one inline <script> whose body is exactly ``body``."""
+    return "'sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode() + "'"
+
+
+# Every HTML page is served under this policy (the app is reachable from the
+# internet once the workspace is shared): scripts only from this origin plus the
+# inline blocks listed here by hash, fetches, sockets and images only from this
+# origin, inline styles, frames of any http(s) page, no plugins. Anything else a
+# page pulls in (a CDN script, Google Fonts, an image hosted elsewhere, a
+# third-party API called from the browser) is blocked until its origin is added
+# to the matching directive; a new inline <script> needs its
+# ``inline_script_source`` added.
+# The browser posts every block to ``/_csp-report`` below, which logs it on
+# stderr (the supervisor log), so a blocked resource is never silent; the
+# ``'report-sample'`` makes the browser include where a blocked inline script
+# is and how it starts, since the report otherwise names it only as "inline".
+CONTENT_SECURITY_POLICY = (
+    "default-src 'self'; "
+    f"script-src 'self' 'report-sample' {{inline_script_source(SHELL_PAGE_SCRIPT_BODY)}}; "
+    "style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; frame-src http: https:; "
+    "object-src 'none'; base-uri 'self'; form-action 'self'; "
+    "report-uri /_csp-report"
+)
+BROWSER_EXTENSION_SCHEMES = ("chrome-extension:", "moz-extension:", "safari-web-extension:")
+
+
+class HealthResponse(FrozenModel):
+    """What the health probe answers."""
+
+    status: str = Field(description="Always 'ok'")
+
+
+# What every route exchanges, which the app's API document publishes and every parse and answer
+# is checked against (build-app skill, "The app describes its own API"): a route that reads or
+# answers JSON names its pydantic models here and uses ``parse_request_body`` and
+# ``model_response``; a page, a file or a stream is declared schemaless with the reason.
+ROUTE_TABLE: RouteTable = {{
+    ("GET", "/"): SchemalessRoute(reason="the app's page"),
+    ("GET", "/_static/{{basename}}"): SchemalessRoute(reason="a browser-side module the shell builds"),
+    ("GET", "/health"): RouteModels(response_model=HealthResponse),
+    ("POST", "/_csp-report"): SchemalessRoute(reason="the browser's report of what the page's policy blocked"),
+}}
 
 app = Flask("{package}", static_folder=None)
+# The app describes its own API: an OpenAPI document of every route below, served at the
+# manifest's api_schema_path.
+register_api_schema_route(
+    app, DEFAULT_API_SCHEMA_PATH, title={title_literal}, description={description_literal}, route_table=ROUTE_TABLE
+)
+
+
+@app.after_request
+def add_content_security_policy(response: Response) -> Response:
+    if response.mimetype == "text/html":
+        response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    return response
 
 
 @app.route("/")
 def index() -> Response:
+    """The app's page."""
     return Response(
         "<!doctype html><html><head><title>{name}</title></head><body>"
         "<h1>{name}</h1>"
@@ -381,8 +465,37 @@ def index() -> Response:
     )
 
 
+@app.route("/_csp-report", methods=["POST"])
+def content_security_policy_report() -> Response:
+    """Where the browser reports what the page's security policy blocked."""
+    body = request.get_json(force=True, silent=True)
+    report = body.get("csp-report") if isinstance(body, dict) else None
+    if not isinstance(report, dict):
+        return Response(status=204)
+    blocked, page, source, directive, line, sample = (
+        str(report.get(key, ""))[:500]
+        for key in ("blocked-uri", "document-uri", "source-file", "effective-directive", "line-number", "script-sample")
+    )
+    # A block caused by a browser extension is the policy doing its job and is not logged.
+    if blocked.startswith(BROWSER_EXTENSION_SCHEMES) or source.startswith(BROWSER_EXTENSION_SCHEMES):
+        return Response(status=204)
+    # An inline script or style is reported as "inline": say where it is and how it starts instead.
+    where = f" at {{source}}:{{line}}" if source and line else ""
+    starting = f" starting {{sample!r}}" if sample else ""
+    remedy = (
+        "add its inline_script_source to CONTENT_SECURITY_POLICY if the page needs it"
+        if blocked == "inline"
+        else "add its origin to CONTENT_SECURITY_POLICY if the page needs it"
+    )
+    logger.error(
+        "Content-Security-Policy blocked {{!r}} on {{!r}} ({{}}){{}}{{}}; {{}}", blocked, page, directive, where, starting, remedy
+    )
+    return Response(status=204)
+
+
 @app.route("/_static/<basename>")
 def shell_module(basename: str) -> Response:
+    """One of the two browser-side modules the workspace shell builds and every app serves from its own origin."""
     # The two shell-built modules and nothing else: a name that is not one of
     # them is a 404, so this route can never read outside that directory.
     if basename not in SHELL_STATIC_MODULE_NAMES:
@@ -396,10 +509,12 @@ def shell_module(basename: str) -> Response:
 
 @app.route("/health")
 def health() -> Response:
-    return Response('{{"status": "ok"}}', mimetype="application/json")
+    """Whether the app is up."""
+    return model_response(HealthResponse(status="ok"))
 
 
 def main() -> None:
+    setup_logging()
     run_simple(
         "127.0.0.1", PORT, app, threaded=True, use_reloader=False, use_debugger=False
     )
@@ -504,6 +619,28 @@ def _lib_readme(name: str, description: str) -> str:
 # This script runs in its own PEP 723 environment and cannot import the library;
 # a drift test in scaffold_flask_lib_test.py keeps the two equal.
 MAX_DISPLAY_NAME_LENGTH = 64
+MAX_APP_DESCRIPTION_LENGTH = 200
+
+
+def _toml_basic_string(value: str) -> str:
+    """``value`` as a TOML basic string: the manifest's and the pyproject's ``description``."""
+    # ensure_ascii=False: a TOML basic string takes raw non-ASCII, but refuses the surrogate
+    # escapes json.dumps would otherwise write for a character outside the basic plane.
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _check_description(description: str) -> str:
+    """The manifest's ``description``, refused before anything is written when the manifest would refuse it."""
+    if not description.strip():
+        sys.exit("error: --description must not be empty")
+    if "\n" in description or "\r" in description:
+        sys.exit("error: --description is a single line")
+    if len(description) > MAX_APP_DESCRIPTION_LENGTH:
+        sys.exit(
+            f"error: --description is over {MAX_APP_DESCRIPTION_LENGTH} characters ({len(description)}); "
+            "it is the one line an agent reads to know what the app is for"
+        )
+    return description
 
 
 def _display_name(description: str, explicit: str | None) -> str:
@@ -544,15 +681,35 @@ def _write_lib(
     )
     (lib_dir / "app.toml").write_text(
         _MANIFEST_TEMPLATE.format(
-            name=name, display_name=display_name, package_upper=package.upper()
+            name=name,
+            display_name=display_name,
+            description_toml=_toml_basic_string(description),
+            package_upper=package.upper(),
         )
     )
     (lib_dir / "README.md").write_text(_lib_readme(name, description))
     (lib_dir / "icon.svg").write_text(icon_markup.strip() + "\n")
     (lib_dir / f"test_{package}_ratchets.py").write_text(_lib_ratchets())
     (src_dir / "__init__.py").write_text("")
-    (src_dir / "runner.py").write_text(_lib_runner(name, package, description, port))
+    (src_dir / "runner.py").write_text(
+        _lib_runner(name, package, description, port, display_name)
+    )
+    (src_dir / "runner_test.py").write_text(_lib_runner_test(package))
     return lib_dir
+
+
+def _lib_runner_test(package: str) -> str:
+    """The one test every scaffolded app starts with: its API document says what its manifest says."""
+    return f"""from pathlib import Path
+
+from app_schema.testing import assert_api_schema_describes_app
+
+from {package}.runner import app
+
+
+def test_the_app_describes_its_api_the_way_its_manifest_says() -> None:
+    assert_api_schema_describes_app(app.test_client(), Path(__file__).resolve().parents[2] / "app.toml")
+"""
 
 
 # The manifest (system/apps/<package>/app.toml; see system/libs/app_manifest).
@@ -566,14 +723,20 @@ def _write_lib(
 _MANIFEST_TEMPLATE = """\
 name = "{name}"
 display_name = "{display_name}"
+# What the app is for, in the person's terms: what an agent reads to decide whether this app
+# does what it needs. The app's API document (served at api_schema_path) carries it too.
+description = {description_toml}
+api_schema_path = "/api/schema"
 icon = "icon.svg"
 priority = "user"
 program = "{name}"
 # The shell stops the app once no window shows it (a minute after the last one
 # closes) and starts it again on the next request; false keeps it running for
 # the life of the workspace. Set false if the app does work between requests
-# (a background thread, a poller, a scheduled refresh, a subscription to an
-# outside service, a job that outlives the window): a stop loses that work.
+# (a background thread, a poller, a subscription to an outside service, a job
+# that outlives the window): a stop loses that work. Periodic work (a refresh
+# every N minutes, a nightly sync) is a routine, not a loop in the service:
+# see the manage-routines skill.
 stop_when_no_windows = true
 
 # How update-app boots a throwaway preview of this app: on a free port, over a
@@ -715,7 +878,6 @@ def _run_uv_sync(repo_root: Path) -> None:
 def _start_and_wait(
     repo_root: Path, name: str, port: int, timeout: float = 10.0
 ) -> None:
-    # Reload supervisord to pick up the new program block
     _run_checked(["supervisorctl", "reread"], repo_root, "supervisorctl reread")
     _run_checked(["supervisorctl", "update"], repo_root, "supervisorctl update")
 
@@ -810,6 +972,7 @@ def main() -> None:
     package = _kebab_to_snake(args.name)
     port = _pick_port(repo_root, args.port, _is_port_bound)
     program_path = _reserve_supervisord_program_path(repo_root, args.name)
+    _check_description(args.description)
     display_name = _display_name(args.description, args.display_name)
 
     lib_dir = _write_lib(
@@ -844,7 +1007,7 @@ def main() -> None:
         f"{program_path.relative_to(repo_root)}; the window renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
-        f"references/verify.md (smoketest_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
+        f"references/verify.md (verify_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
     )
 
 

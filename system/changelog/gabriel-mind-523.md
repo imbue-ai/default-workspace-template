@@ -1,0 +1,1 @@
+`AGENTS.md`'s "Using crystallized skills" section gains a rule to describe the work rather than name the skill being followed, even when the harness says to announce which skills are in use; a skill's name is repeated only after the user has used it. It points at the new "Skills in particular" section of `.agents/shared/references/user-facing-language.md`.

@@ -3,16 +3,19 @@ workspace's selection; registration is loopback-only, for an agent inside the wo
 
 from typing import Final
 
+from app_schema.routes import model_response
+from app_schema.routes import parse_request_body
 from flask import Flask
 from flask import Response
-from flask import jsonify
 from flask import request
 from flask.typing import ResponseReturnValue
 from loguru import logger
 
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.avatar.api_models import AvatarRegistered
+from imbue.system_interface.avatar.api_models import AvatarSelected
+from imbue.system_interface.avatar.api_models import AvatarsListing
 from imbue.system_interface.avatar.catalog import DesignRegistration
-from imbue.system_interface.avatar.catalog import design_listing_wire_json
 from imbue.system_interface.avatar.designs import AvatarMood
 from imbue.system_interface.avatar.designs import DEFAULT_DESIGN_ID
 from imbue.system_interface.avatar.designs import MAX_SVG_BYTES
@@ -25,7 +28,6 @@ from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import detail_response
-from imbue.system_interface.shell.route_helpers import parse_request_body
 from imbue.system_interface.shell.route_helpers import require_loopback
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
@@ -44,24 +46,26 @@ def _shell() -> ShellState:
 
 
 def list_avatars() -> ResponseReturnValue:
+    """The avatar designs the workspace can show, which one is selected, and the default."""
     shell = _shell()
-    return jsonify(
-        {
-            "designs": [design_listing_wire_json(listing) for listing in shell.avatar_catalog.entries()],
-            "selected": str(shell.avatar_selection.read()),
-            "default": str(DEFAULT_DESIGN_ID),
-        }
+    return model_response(
+        AvatarsListing(
+            designs=tuple(shell.avatar_catalog.entries()),
+            selected=str(shell.avatar_selection.read()),
+            default=str(DEFAULT_DESIGN_ID),
+        )
     )
 
 
 def register_avatar() -> ResponseReturnValue:
+    """Add an avatar design (an SVG with its framing) to the catalog; loopback only, for an agent inside the workspace."""
     refusal = require_loopback()
     if refusal is not None:
         return refusal
     request.max_content_length = _MAX_REGISTRATION_BYTES
     registration = parse_request_body(DesignRegistration)
     _shell().avatar_catalog.register(registration)
-    return jsonify({"id": str(registration.id)}), HTTP_CREATED
+    return model_response(AvatarRegistered(id=str(registration.id)), HTTP_CREATED)
 
 
 def _mood_argument() -> AvatarMood:
@@ -120,6 +124,7 @@ def avatar_icon(design_id: str) -> ResponseReturnValue:
 
 
 def avatar_source(design_id: str) -> ResponseReturnValue:
+    """The design's original SVG, as a download."""
     source = _shell().avatar_catalog.source(design_id)
     if source is None:
         return detail_response(f"No avatar design {design_id!r}", HTTP_NOT_FOUND)
@@ -131,6 +136,7 @@ def avatar_source(design_id: str) -> ResponseReturnValue:
 
 
 def select_avatar() -> ResponseReturnValue:
+    """Make a design the workspace's avatar; every client is told."""
     selection = parse_request_body(AvatarSelection)
     shell = _shell()
     if shell.avatar_catalog.source(selection.design) is None:
@@ -140,7 +146,7 @@ def select_avatar() -> ResponseReturnValue:
         shell.avatar_selection.write(selection.design)
         shell.broadcaster.broadcast_avatar_selection_changed(str(selection.design))
     logger.info("Selected avatar design {}", selection.design)
-    return jsonify({"design": str(selection.design)})
+    return model_response(AvatarSelected(design=str(selection.design)))
 
 
 def register_avatar_routes(application: Flask) -> None:

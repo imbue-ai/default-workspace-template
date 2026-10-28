@@ -17,13 +17,22 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: ChatSnapshot | null; provisional: { account_id: string } | undefined } = {
+const agentState: {
+  agent: ChatSnapshot | null;
+  provisional: { account_id: string; phase?: string; model_pick?: unknown } | undefined;
+} = {
   agent: null,
   provisional: undefined,
 };
+// Every launch choice made for a chat with no agent yet, as (chat id, account id, pick).
+const launchChoices: [string, string, unknown][] = [];
 vi.mock("../models/Chats", () => ({
   getChatById: () => agentState.agent ?? undefined,
   getProvisionalChat: () => agentState.provisional,
+  setLaunchChoice: (chatId: string, accountId: string, pick: unknown) => {
+    launchChoices.push([chatId, accountId, pick]);
+    return Promise.resolve();
+  },
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
@@ -36,6 +45,7 @@ vi.mock("../models/HarnessCatalog", async (importOriginal) => ({
 const settingsState: { choice: unknown } = { choice: null };
 const picks: unknown[] = [];
 vi.mock("../models/ModelSettings", () => ({
+  addModelChoiceFailureListener: () => undefined,
   effectiveChoice: () => settingsState.choice,
   changedAxes: () => ["model"],
   setModelChoice: (...args: unknown[]) => picks.push(args),
@@ -317,9 +327,27 @@ describe("the combo card", () => {
     expect(ROOT().querySelector(".model-selector-loading")?.textContent).toBe("Loading…");
   });
 
-  it("names the account a chat with no agent yet starts on, with no menu to open", () => {
+  it("names the account a chat with no agent yet starts on, and lets its model be chosen before it runs", () => {
     agentState.agent = null;
-    agentState.provisional = { account_id: "" };
+    agentState.provisional = { account_id: "", phase: "creating", model_pick: null };
+    catalogState.catalog = catalogOf({
+      options: [OPUS, { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" }],
+    });
+    launchChoices.length = 0;
+    render();
+    expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
+
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+
+    // At the model's own starting effort: a harness refuses a model that has efforts picked without one.
+    expect(launchChoices).toEqual([["a1", "acct-1", { model_id: "sonnet", effort: "medium", fast: false }]]);
+  });
+
+  it("keeps the plain chip for a chat whose create failed", () => {
+    agentState.agent = null;
+    agentState.provisional = { account_id: "", phase: "failed", model_pick: null };
     render();
     expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
     expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
@@ -992,6 +1020,9 @@ describe("the combo card", () => {
     if (row === null) throw new Error("no fast row");
     expect(row.textContent).toContain("Fast mode");
     expect(row.textContent).toContain("Auto (off now)");
+    expect(row.getAttribute("data-hover-tooltip")).toBe(
+      "Fast mode makes the model reply faster. It's the same model, just as smart, only quicker. It costs more to run, so turn it on when speed matters and leave it off otherwise.",
+    );
     expect(document.querySelector(".fast-limit-input")).toBeNull();
 
     click('[data-menu-row="fast"]');
@@ -1186,6 +1217,8 @@ describe("the combo card", () => {
     expect(submenu.querySelector(".autocompact-help")?.textContent).toBe(
       "Saves ~50% by compacting right before the cache expires.",
     );
+    // The rule above "New chats start with" is the menu's own separator part, which themes dress.
+    expect(submenu.querySelector('[role="separator"]')?.getAttribute("data-part")).toBe("menu-separator");
 
     click('[data-autocompact="on"]');
     expect(autocompactWrites).toEqual([]);

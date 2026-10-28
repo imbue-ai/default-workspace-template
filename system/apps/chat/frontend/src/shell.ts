@@ -19,7 +19,8 @@ import { currentPresenceState, reportFocusChange, reportPresence, startPresenceR
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
-import { prependToComposer } from "./views/MessageInput";
+import { focusComposer, prependToComposer } from "./views/MessageInput";
+import { mirrorParentTheme, wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 /** The path of a sub-agent view: the chat, the agent whose session it is, and the session. */
 export function subagentViewPath(key: string): string {
@@ -87,8 +88,16 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     if (isPresenceReported) reportPresence("hidden");
     m.redraw();
   };
-  const connection = connectToShell({ onHandshake, onShown, onHidden });
+  // A chat page wears its desktop's theme: told by the shell when it frames the page itself, read off the chat
+  // root when the root frames it (the shell never messages those).
+  const connection = connectToShell({
+    onHandshake,
+    onShown,
+    onHidden,
+    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
+  });
   setShellConnection(connection);
+  mirrorParentTheme();
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in
     // rather than by messaging (of the shell's messages, only the handshake comes down as one);
@@ -100,6 +109,9 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
       setCompact: (isCompact) => {
         setCompactFromRoot(isCompact);
         m.redraw();
+      },
+      focus: () => {
+        if (!focusComposer()) window.focus();
       },
     };
     window.chatPageEmbed = embedApi;
