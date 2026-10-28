@@ -15,7 +15,7 @@ _INSTALL_SCRIPT: Final[Path] = (
 )
 _SKILL: Final[Path] = _REPO_ROOT / ".agents/skills/datalib/SKILL.md"
 _SYNC_REQUEST: Final[Path] = (
-    _REPO_ROOT / ".agents/skills/datalib/scripts/sync_request.py"
+    _REPO_ROOT / ".agents/skills/datalib/python/datalib_skill/sync_request.py"
 )
 _PROGRAM_CONF: Final[Path] = _REPO_ROOT / "system/apps/datalib/datalib.conf"
 _INSTALLED_PROGRAM: Final[str] = "system/supervisord.conf.d/datalib.conf"
