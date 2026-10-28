@@ -73,8 +73,8 @@ TITLE_CALL_RETRY_COUNT: Final[int] = 2
 # Comfortably above how long a title call normally takes (a few seconds). A call past it is left to finish on its own,
 # and its answer is dropped.
 TITLE_CALL_TIMEOUT_SECONDS: Final[float] = 10.0
-# The longest title (or call-off reason) the model may give; the prompt states this same limit as a hard rule.
-_MAX_GENERATED_TITLE_CHARACTERS: Final[int] = 80
+# Far above any real title or call-off reason (the prompt asks for one short line): it only catches a broken answer.
+_MAX_GENERATED_TITLE_CHARACTERS: Final[int] = 200
 _NOT_A_TASK_ANSWER: Final[str] = "NONE"
 # The keywords that open the model's other four answers (see MESSAGE_STEP_TITLE_SYSTEM_PROMPT).
 _NEW_KEYWORD: Final[str] = "NEW"
@@ -110,8 +110,7 @@ Reply with exactly one line, in one of these five forms and nothing else:
 task stays as it is.
 - {_MODIFY_KEYWORD}: <id>: <title>
   The message changes what that open task asks for: it narrows, extends or corrects it ("no more than two levels", \
-"make it blue instead"). The task is replaced by a new one: write a short new title for the updated request, at \
-most {_MAX_GENERATED_TITLE_CHARACTERS} characters.
+"make it blue instead"). The task is replaced by a new one: write a short new title for the updated request.
 - {_CANCEL_KEYWORD}: <id>: <reason>
   The message calls off what that open task asks for ("never mind the quiz", "don't add the sidebar after all"). \
 Give a short reason in plain words, as the person would read it after "No longer needed:".
@@ -119,11 +118,12 @@ Give a short reason in plain words, as the person would read it after "No longer
   The message asks for work no open task covers: a new request, an answer or decision that sets new work going \
 ("yes, go with option A"), or a question the assistant has to look into to answer ("why is the page slow?").
 
-Use an id only exactly as it appears in the open tasks. A title starts with a verb, keeps the person's own words for \
-the things they name, names each thing briefly when the message asks for several, and is plain English for a \
-non-technical reader, with no quotes, markdown, emoji or trailing period.
+Use an id only exactly as it appears in the open tasks.
 
-Every title and every reason must be at most {_MAX_GENERATED_TITLE_CHARACTERS} characters. Longer answers are rejected.
+Every title is user-facing copy: plain English for a non-technical reader, no file names, no tool names, no jargon. \
+A title names the goal as the user would say it ("Set up the weekly report"), on one short line. It starts with a \
+verb, keeps the person's own words for the things they name, and names each thing briefly when the message asks for \
+several, with no quotes, markdown, emoji or trailing period. A reason follows the same rules.
 
 Examples:
 <open_tasks>
