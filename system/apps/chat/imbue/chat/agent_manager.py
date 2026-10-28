@@ -713,8 +713,19 @@ def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, .
 
 
 @pure
-def _count_user_turns_saying(events: list[dict[str, Any]], text: str) -> int:
-    return sum(1 for event in events if is_genuine_user_turn(event) and event.get("content") == text)
+def _ids_of_user_turns_saying(events: list[dict[str, Any]], text: str) -> frozenset[str | None]:
+    return frozenset(
+        event.get("event_id")
+        for event in events
+        if is_genuine_user_turn(event) and str(event.get("content") or "").strip() == text.strip()
+    )
+
+
+@pure
+def _has_new_user_turn_saying(events: list[dict[str, Any]], text: str, seen_ids: frozenset[str | None]) -> bool:
+    """Whether the events hold a user turn saying ``text`` that is not one of ``seen_ids``. Matched by id rather
+    than by count, so an earlier turn with the same text dropping out of a tail window does not hide a new one."""
+    return not _ids_of_user_turns_saying(events, text) <= seen_ids
 
 
 @pure
@@ -2167,7 +2178,7 @@ class AgentManager:
         reader = capabilities.ensure_watcher(agent_info)
         refused = user_turns_refused_for_sign_in(reader.get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS))
         for text in refused:
-            copies_before = _count_user_turns_saying(reader.get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS), text)
+            seen_turn_ids = _ids_of_user_turns_saying(reader.get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS), text)
             message_id = uuid4().hex
             try:
                 outcome = capabilities.deliver(agent_info, text, message_id)
@@ -2183,14 +2194,14 @@ class AgentManager:
                 )
                 return
             _loguru_logger.info("Resent {}'s message {} refused for want of a sign-in", agent_info.name, message_id)
-            self._wait_for_resent_turn(agent_info, reader, text, copies_before)
+            self._wait_for_resent_turn(agent_info, reader, text, seen_turn_ids)
 
     def _wait_for_resent_turn(
         self,
         agent_info: AgentInfo,
         reader: TranscriptReader,
         text: str,
-        copies_before: int,
+        seen_turn_ids: frozenset[str | None],
         timeout_seconds: float = _RESENT_TURN_LANDING_TIMEOUT_SECONDS,
     ) -> None:
         """Wait, briefly, for a delivered resend to reach the transcript: until it does, the chat's refused
@@ -2201,7 +2212,7 @@ class AgentManager:
         as long as the message is queued."""
         deadline = time.monotonic() + timeout_seconds
         while not self._shutdown_event.is_set():
-            if _count_user_turns_saying(reader.get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS), text) > copies_before:
+            if _has_new_user_turn_saying(reader.get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS), text, seen_turn_ids):
                 return
             if self._is_queued_for_agent(agent_info.id, text):
                 deadline = time.monotonic() + timeout_seconds

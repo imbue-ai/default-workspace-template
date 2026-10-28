@@ -44,6 +44,8 @@ from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
 from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _chat_project_label
+from imbue.chat.agent_manager import _has_new_user_turn_saying
+from imbue.chat.agent_manager import _ids_of_user_turns_saying
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
@@ -5835,6 +5837,7 @@ def test_a_sign_in_restarts_only_the_live_agents_on_the_account(
 def _typed_turn(text: str, display: str | None = None, at: str | None = None) -> dict[str, Any]:
     return {
         "type": "user_message",
+        "event_id": f"turn-{uuid4().hex}",
         "content": text,
         **({"display": display} if display is not None else {}),
         **({"timestamp": at} if at is not None else {}),
@@ -6232,6 +6235,14 @@ def test_a_sign_in_resends_nothing_to_a_chat_that_is_switching(
     assert (set(landing.read_agent_ids), attempted) == ({settled_id}, [(settled_id, "hi")])
 
 
+def test_a_resent_turn_lands_when_a_turn_with_its_text_is_new_even_once_the_original_left_the_tail() -> None:
+    original = _typed_turn("second")
+    seen = _ids_of_user_turns_saying([_typed_turn("first"), original, _agent_reply(is_auth_error=True)], "second")
+
+    assert not _has_new_user_turn_saying([original, _agent_reply()], "second", seen)
+    assert _has_new_user_turn_saying([_agent_reply(), _typed_turn("second\n")], "second", seen)
+
+
 def _set_queued_messages(manager: AgentManager, agent_id: str, *contents: str) -> None:
     with manager._lock:
         agent = manager._agents[agent_id]
@@ -6250,9 +6261,11 @@ def test_a_resend_waits_for_its_message_while_the_agent_holds_it_in_its_queue(
     seed_agent_state(manager, agent_id, name="Busy-Chat")
     agent_info = manager.get_agent_info_by_id(agent_id)
     assert agent_info is not None
-    reader = _FixedTranscriptReader([_typed_turn("first"), _typed_turn("second"), _agent_reply(is_auth_error=True)])
+    refused_second = _typed_turn("second")
+    reader = _FixedTranscriptReader([_typed_turn("first"), refused_second, _agent_reply(is_auth_error=True)])
     _set_queued_messages(manager, agent_id, "second")
-    wait = threading.Thread(target=manager._wait_for_resent_turn, args=(agent_info, reader, "second", 1, 0.1))
+    seen = frozenset({refused_second["event_id"]})
+    wait = threading.Thread(target=manager._wait_for_resent_turn, args=(agent_info, reader, "second", seen, 0.1))
     try:
         wait.start()
         # Well past its landing timeout, and still waiting, since the agent has the message queued.
@@ -6264,7 +6277,7 @@ def test_a_resend_waits_for_its_message_while_the_agent_holds_it_in_its_queue(
         assert not wait.is_alive()
         # Neither queued nor landed: the wait ends at its timeout.
         started = time.monotonic()
-        manager._wait_for_resent_turn(agent_info, reader, "never sent", 0, timeout_seconds=0.1)
+        manager._wait_for_resent_turn(agent_info, reader, "never sent", frozenset(), timeout_seconds=0.1)
         assert time.monotonic() - started < 5.0
     finally:
         manager.stop()
