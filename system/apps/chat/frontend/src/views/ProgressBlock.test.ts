@@ -72,6 +72,20 @@ describe("the Done row", () => {
     expect(summaries()).toEqual(["Read it", "Wrote it"]);
   });
 
+  // Like a step's chevron, which shows the step's work under its title inside its own row.
+  it("shows the done steps inside its own row, below its label", () => {
+    mount(MIXED, "progress-inside");
+
+    (root.querySelector(".pv-tl-node--done-group button") as HTMLButtonElement).click();
+    m.redraw.sync();
+
+    const inside = root.querySelector(".pv-tl-node--done-group .pv-tl-expanded");
+    expect([...(inside?.querySelectorAll(".pv-tl-node button") ?? [])].map((b) => b.textContent?.trim())).toEqual([
+      "Read the paper",
+      "Write the summary",
+    ]);
+  });
+
   it("is absent from a timeline with no done step", () => {
     mount([step("s3", "Build the page", "active")], "progress-none-done");
 

@@ -137,8 +137,15 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
     return `done:${blockKeyPrefix}`;
   }
 
-  /** The row the done steps fold into: a done badge, the label, and a chevron that shows or hides them. */
-  function renderDoneRow(is_last: boolean, isExpanded: boolean): m.Vnode {
+  /** The row the done steps fold into: a done badge, the label, and a chevron that shows or hides them below the
+   *  label, inside the row, as a step shows its work (see renderStepNode). */
+  function renderDoneRow(
+    doneSteps: StepNode[],
+    is_last: boolean,
+    toolResults: Map<string, ToolResultEvent>,
+    chatId: string,
+  ): m.Vnode {
+    const isExpanded = isBlockExpanded(doneRowKey());
     const nodeClasses = [
       "pv-tl-node",
       "pv-tl-node--done",
@@ -166,6 +173,16 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             ),
           ],
         ),
+        isExpanded
+          ? m(
+              "div",
+              { class: "pv-tl-expanded mt-1.5" },
+              m(
+                "div.pv-timeline-nodes",
+                doneSteps.map((step, idx) => renderStepNode(step, idx === doneSteps.length - 1, toolResults, chatId)),
+              ),
+            )
+          : null,
       ]),
     ]);
   }
@@ -224,10 +241,9 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
       const { items, trailing_reply, toolResults, chatId, id } = vnode.attrs;
       blockKeyPrefix = id ?? "";
 
-      // The done steps fold into one row, shown only while that row is expanded.
-      const hasDoneSteps = items.some(isDoneStep);
-      const isDoneExpanded = hasDoneSteps && isBlockExpanded(doneRowKey());
-      const shownItems = items.filter((item) => isDoneExpanded || !isDoneStep(item));
+      // The done steps fold into one row; the other items render after it.
+      const doneSteps = items.flatMap((item) => (item.kind === "step" && isDoneStep(item) ? [item.step] : []));
+      const shownItems = items.filter((item) => !isDoneStep(item));
 
       // Index of the last node on the thread (a step or a handoff), so only it gets the `--last` cap.
       let lastStepIdx = -1;
@@ -312,7 +328,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             }),
             m("div.pv-timeline-nodes", [
               // Spread rather than a null hole: the nodes are keyed, and mithril refuses a mix.
-              ...(hasDoneSteps ? [renderDoneRow(lastStepIdx === -1, isDoneExpanded)] : []),
+              ...(doneSteps.length > 0 ? [renderDoneRow(doneSteps, lastStepIdx === -1, toolResults, chatId)] : []),
               ...timelineNodes,
             ]),
           ]),
