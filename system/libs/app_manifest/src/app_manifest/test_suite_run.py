@@ -94,6 +94,8 @@ def _run(project: Path, ledger: Path | None, *commands: SuiteCommand) -> SuiteRu
     return run_selection(selection, project, project / "run-output", ledger, lambda index, command: None)
 
 
+# Five pytest processes start here, each loading every workspace plugin.
+@pytest.mark.timeout(30)
 def test_each_command_ends_as_passed_flaky_or_failed_by_what_its_tests_did_on_the_rerun(tmp_path: Path) -> None:
     project = _project(tmp_path)
 
