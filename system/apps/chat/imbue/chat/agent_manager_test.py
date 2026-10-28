@@ -6102,6 +6102,39 @@ def test_a_chat_reports_its_resend_until_the_later_of_two_overlapping_sign_ins_s
         manager.stop()
 
 
+def test_overlapping_sign_ins_resend_a_refused_message_once(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Twice-Signed-In-Chat", labels={"account": "acct-1"})
+    landing = _ResendTranscripts(lambda _agent_id: [_typed_turn("hi"), _agent_reply(is_auth_error=True)])
+    delivered: list[str] = []
+    second_resend = threading.Thread(target=manager._resend_turn_refused_for_sign_in, args=(agent_id,))
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        delivered.append(text)
+        if len(delivered) == 1:
+            # The second sign-in's resend starts while the first is still delivering, and waits for it.
+            second_resend.start()
+            second_resend.join(timeout=0.5)
+            assert second_resend.is_alive()
+        return landing.land(agent_info, text)
+
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
+    )
+    try:
+        manager._begin_resends_after_sign_in("acct-1")
+        manager._begin_resends_after_sign_in("acct-1")
+        manager._resend_turn_refused_for_sign_in(agent_id)
+        second_resend.join(timeout=10.0)
+        assert not second_resend.is_alive()
+        assert not is_chat_resending_after_sign_in(manager, agent_id)
+    finally:
+        manager.stop()
+    assert delivered == ["hi"]
+
+
 def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

@@ -1290,6 +1290,9 @@ class AgentManager:
     # sent again or given up on: the snapshot's ``is_resending_after_sign_in``. Counted per agent, since
     # two sign-ins of one account can overlap and the agent is resending until the later one settles.
     _pending_resends_after_sign_in_by_agent: dict[str, int]
+    # Held for the whole of one of the agent's re-auth resends, so the resend of a second, overlapping
+    # sign-in reads the transcript only once the first one's message has landed, and does not send it again.
+    _resend_locks_by_agent: dict[str, threading.Lock]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1460,6 +1463,7 @@ class AgentManager:
         manager._abandoned_creates = set()
         manager._withdrawn_message_ids = set()
         manager._pending_resends_after_sign_in_by_agent = {}
+        manager._resend_locks_by_agent = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
@@ -2125,8 +2129,11 @@ class AgentManager:
         return restarted
 
     def _resend_turn_refused_for_sign_in(self, agent_id: str) -> None:
+        with self._lock:
+            resend_lock = self._resend_locks_by_agent.setdefault(agent_id, threading.Lock())
         try:
-            self._resend_refused_turn(agent_id)
+            with resend_lock:
+                self._resend_refused_turn(agent_id)
         finally:
             self._end_resend_after_sign_in(agent_id)
 
