@@ -1,1 +1,0 @@
-`ErrorResponse` carries an optional `kind` beside `detail`: which case of refusal it is, for a frontend that offers different controls per case (a chat that is gone, a workspace still starting). Like `user_facing_message` and `reportable`, it is left out of the JSON when unset, and every route may send it without listing a richer failure model.

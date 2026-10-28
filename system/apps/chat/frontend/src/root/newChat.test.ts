@@ -29,7 +29,7 @@ import { startNewChat } from "./newChat";
 
 /** The chat app's refusal of a create, as ``postJson`` throws it. */
 function createRefusal(detail: string, kind: string | null): HttpError {
-  return new HttpError(readFailure({ status: 409, body: { detail, kind }, rawText: null, requestKind: "change" }));
+  return new HttpError(readFailure({ status: 400, body: { detail, kind }, rawText: null, requestKind: "change" }));
 }
 
 describe("startNewChat", () => {

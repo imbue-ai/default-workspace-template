@@ -1,1 +1,1 @@
-Files' notes keep their close button: the shared toast stack gives a plain note one only where the page asks with `closesPlainToasts`, which Files does.
+A note that says the same as one already on screen (the same failure twice, say from a second drag) replaces it rather than stacking a copy beside it.

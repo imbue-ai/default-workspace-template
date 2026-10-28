@@ -1377,7 +1377,7 @@ export class DesktopStore {
     try {
       outcome = await this.deps.api.showPage(this.deps.clientId, { app: app.name, path, repoint: [pinPage] });
     } catch (error) {
-      this.toast(`Could not open ${app.name}: ${(error as Error).message}`);
+      this.toastFailure(`Could not open ${app.display_name}`, error, { isLasting: false });
       return;
     }
     if (outcome.hasNoDesktopWindow) this.toast(SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE);

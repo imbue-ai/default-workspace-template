@@ -1,1 +1,1 @@
-A run's log that could not be read is told the way every other failed request in the workspace is, through the shared reader in `workspace_ui`, so a request nothing answered says so. Routines' notes keep their close button (`closesPlainToasts`).
+A run's log that could not be read is told the way every other failed request in the workspace is, through the shared reader in `workspace_ui`, so a request nothing answered says so. A note that says the same as one already on screen replaces it rather than stacking a copy beside it.

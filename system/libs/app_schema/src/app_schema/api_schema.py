@@ -62,7 +62,7 @@ _PARAGRAPH_BREAK_PATTERN: Final[re.Pattern[str]] = re.compile(r"\n[ \t]*\n")
 
 class ErrorResponse(FrozenModel):
     """What every route answers on a refusal or a failure: one line saying what went wrong, and, when the route wrote
-    one, the sentence a workspace frontend shows a person in its place."""
+    them, the sentence a workspace frontend shows a person in its place and the kind of refusal it was."""
 
     detail: str = Field(description="What went wrong, in words for the caller")
     user_facing_message: str | None = Field(
@@ -78,7 +78,7 @@ class ErrorResponse(FrozenModel):
     kind: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
-        description="Which case of refusal this is, for a frontend that offers different controls per case",
+        description="The refusal's kind, for a frontend that offers different controls per kind",
     )
 
 
