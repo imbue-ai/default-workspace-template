@@ -4,9 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from app_manifest.primitives import RepoRelativePath
-from app_manifest.selection import ChangedPathClass
-from app_manifest.selection import SelectionReason
 from app_manifest.selection import SuiteCommand
 from app_manifest.selection import SuiteKind
 from app_manifest.selection import SuiteSelection
@@ -15,13 +12,7 @@ from app_manifest.suite_run import SUMMARY_FILE_NAME
 from app_manifest.suite_run import SuiteRunReport
 from app_manifest.suite_run import render_report
 from app_manifest.suite_run import run_selection
-from imbue.imbue_common.primitives import NonEmptyStr
-
-_REASON = SelectionReason(
-    path=RepoRelativePath("suite/test_cases.py"),
-    path_class=ChangedPathClass.TEST_FILE,
-    detail=NonEmptyStr("own tests"),
-)
+from app_manifest.testing import suite_command
 
 # One test of each kind: always passing, always failing, and failing only on its first run
 # (it leaves a marker behind, so the rerun of the failed tests passes).
@@ -75,18 +66,11 @@ def _project(tmp_path: Path) -> Path:
 
 
 def _pytest_command(*arguments: str) -> SuiteCommand:
-    return SuiteCommand(
-        kind=SuiteKind.PYTEST,
-        working_directory=NonEmptyStr("."),
-        argv=(sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *arguments),
-        reasons=(_REASON,),
-    )
+    return suite_command(SuiteKind.PYTEST, ".", (sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *arguments))
 
 
 def _python_command(kind: SuiteKind, *arguments: str) -> SuiteCommand:
-    return SuiteCommand(
-        kind=kind, working_directory=NonEmptyStr("."), argv=(sys.executable, *arguments), reasons=(_REASON,)
-    )
+    return suite_command(kind, ".", (sys.executable, *arguments))
 
 
 def _run(project: Path, ledger: Path | None, *commands: SuiteCommand) -> SuiteRunReport:

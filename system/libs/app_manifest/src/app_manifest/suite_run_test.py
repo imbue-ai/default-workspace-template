@@ -4,9 +4,6 @@ from pathlib import Path
 
 from inline_snapshot import snapshot
 
-from app_manifest.primitives import RepoRelativePath
-from app_manifest.selection import ChangedPathClass
-from app_manifest.selection import SelectionReason
 from app_manifest.selection import SuiteCommand
 from app_manifest.selection import SuiteKind
 from app_manifest.suite_run import CommandOutcome
@@ -15,7 +12,7 @@ from app_manifest.suite_run import ShedRecord
 from app_manifest.suite_run import SuiteRunReport
 from app_manifest.suite_run import parse_failed_test_ids
 from app_manifest.suite_run import render_report
-from imbue.imbue_common.primitives import NonEmptyStr
+from app_manifest.testing import suite_command
 
 _MOMENT = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
 
@@ -52,15 +49,6 @@ def test_output_without_a_short_summary_names_no_failed_tests() -> None:
     assert parse_failed_test_ids("collected 0 items\n\nno tests ran in 0.01s\n") == ()
 
 
-def _command(kind: SuiteKind, working_directory: str, *argv: str) -> SuiteCommand:
-    reason = SelectionReason(
-        path=RepoRelativePath("system/apps/chat/imbue/chat/server.py"),
-        path_class=ChangedPathClass.PACKAGE,
-        detail=NonEmptyStr("own tests"),
-    )
-    return SuiteCommand(kind=kind, working_directory=NonEmptyStr(working_directory), argv=argv, reasons=(reason,))
-
-
 def _command_run(
     command: SuiteCommand,
     outcome: CommandOutcome,
@@ -85,7 +73,7 @@ def _command_run(
 
 
 def test_the_report_names_each_commands_outcome_and_what_to_do_about_it() -> None:
-    chat_run = _command(SuiteKind.PYTEST, "system/apps/chat", "uv", "run", "pytest", "-m", "")
+    chat_run = suite_command(SuiteKind.PYTEST, "system/apps/chat", ("uv", "run", "pytest", "-m", ""))
     failed_ids = tuple(f"imbue/chat/test_page.py::test_{index}" for index in range(12))
     report = SuiteRunReport(
         runs=(
@@ -94,19 +82,21 @@ def test_the_report_names_each_commands_outcome_and_what_to_do_about_it() -> Non
                 CommandOutcome.FAILED,
                 1,
                 failed_ids,
-                _command(SuiteKind.PYTEST, "system/apps/chat", "uv", "run", "pytest", "--no-cov", "-m", "", "rerun"),
+                suite_command(
+                    SuiteKind.PYTEST, "system/apps/chat", ("uv", "run", "pytest", "--no-cov", "-m", "", "rerun")
+                ),
             ),
             _command_run(
-                _command(SuiteKind.FULL_ROOT, ".", "uv", "run", "pytest"),
+                suite_command(SuiteKind.FULL_ROOT, ".", ("uv", "run", "pytest")),
                 CommandOutcome.FLAKY,
                 1,
                 ("system/libs/x/test_x.py::test_once",),
             ),
             _command_run(
-                _command(SuiteKind.FRONTEND_BUILD, "system", "npm", "run", "build"), CommandOutcome.FAILED, None
+                suite_command(SuiteKind.FRONTEND_BUILD, "system", ("npm", "run", "build")), CommandOutcome.FAILED, None
             ),
             _command_run(
-                _command(SuiteKind.PYTEST, ".", "uv", "run", "pytest", "system/libs/y"),
+                suite_command(SuiteKind.PYTEST, ".", ("uv", "run", "pytest", "system/libs/y")),
                 CommandOutcome.SHED,
                 -9,
                 shed_records=(ShedRecord(timestamp=_MOMENT, pid=4242, comm=None),),
