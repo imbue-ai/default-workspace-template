@@ -75,6 +75,9 @@ from imbue.chat.compaction_status import COMPACTION_REQUEST_FILENAME
 from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.create_defaults import create_defaults_path
+from imbue.chat.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
+from imbue.chat.harnesses.antigravity.queue_tracker import drop_tracker
+from imbue.chat.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
@@ -5297,16 +5300,17 @@ def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rej
         agent_manager.apply_model_pick(claude_info, ModelPick(model_id="gpt-5.6-terra", effort="high"))
 
 
-def test_a_pick_for_a_harness_whose_model_the_chat_cannot_switch_is_rejected_for_good(
-    agent_manager: AgentManager,
-) -> None:
-    """Antigravity's model is changed from its terminal, so a pick for one (from a stale page, or any other caller
-    of the switch route) fails at once rather than being tried again for a rebind's whole budget."""
+def test_a_pick_for_an_antigravity_agent_is_held_for_its_worker_to_type(agent_manager: AgentManager) -> None:
+    """A new antigravity chat's pick is applied like any other harness's, by the command its worker types."""
     _seed_agent(agent_manager, "agent-agy", harness=HarnessType.ANTIGRAVITY)
     agy_info = agent_manager.get_agent_info_by_id("agent-agy")
     assert agy_info is not None
-    with pytest.raises(ModelPickRejectedError, match="changed from the agent's terminal"):
-        agent_manager.apply_model_pick(agy_info, ModelPick(model_id="gemini-3.7-flash-high"))
+    drop_tracker(agy_info.id)
+
+    agent_manager.apply_model_pick(agy_info, ModelPick(model_id="gemini-3.8-flash", effort="low"))
+
+    tracker = get_tracker(agy_info.id, agy_info.agent_state_dir / OUTBOX_FILENAME, "")
+    assert tracker.model_command() == "/model gemini-3.8-flash-low"
 
 
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:

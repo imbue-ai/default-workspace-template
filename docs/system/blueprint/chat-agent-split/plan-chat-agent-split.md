@@ -443,7 +443,6 @@ As landed in phase 9, which lets a rebind take a model pick (section 6), revisin
 - The dialog opened from Change, for either kind of switch, starts from the pick already armed for that account, so confirming it again does not drop the pick. Picking the armed account again from the provider chooser ("switch to another provider" under an auth-failed turn, or "+ Add a provider") keeps the pick the same way: a rebind stays armed with it, and a handoff's dialog starts from it.
 - Armed, the strip names the pick ("Your next message switches this chat to Anthropic 2 (Claude Code), Haiku 4.5 · High"), and the chip and the Model row read the pick, else, for a rebind, the model the agent keeps.
 - The failed page names the step for a rebind as for a handoff: "Could not restart Claude Code" or "Could not set the model on Claude Code".
-- The dialog offers no picker for a harness whose model bar is read-only (antigravity, whose model is changed from the agent's terminal), for either kind of switch, and a new chat started from a rebind's dialog there does not carry the chat's model over: a pick made there could never be applied, and a rebind's retry would rerun it forever. The server holds the same line for any other caller: `GET /api/accounts/<account_id>/model-options` offers such a harness nothing, and a pick for one is rejected at the model step at once, without the retry a refused switch gets.
 
 ### 5.2 Trigger and preconditions
 

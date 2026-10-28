@@ -1,0 +1,1 @@
+`test_a_path_too_long_to_look_up_makes_only_its_theme_unavailable` no longer fails when pytest's temporary files are under `/var/tmp` in a gVisor workspace, as they were in an update's test run. There, the over-long file is reported as missing rather than unreadable; the test now accepts either problem, as long as it names the file.
