@@ -102,13 +102,19 @@ worker side:
     agent goes, the runtime dirs of the workers *it* dispatched are pulled out
     of its worktree into the caller's tree at the same repo-relative paths, so
     the task files and consumed reports of the whole subtree survive.
-    Unmerged commits and a dirty worktree are printed as a warning, never a
-    refusal. Worker branches (``mngr/<name>`` by default, or whatever
-    ``--branch`` resolved to) survive unless ``--delete-branches`` is passed,
-    which deletes only a branch mngr created; mngr preserves each destroyed agent's transcript under
+    Unmerged commits and a dirty worktree are printed as a warning. Worker
+    branches (``mngr/<name>`` by default, or whatever ``--branch`` resolved
+    to) survive unless ``--delete-branches`` is passed, which deletes only a
+    branch mngr created, and refuses (exit 2) before destroying anything
+    while any destroyed agent's branch holds commits that neither HEAD nor
+    any other local branch has -- a pre-existing branch mngr would keep
+    included, since the listing cannot tell the two apart
+    (``--discard-unmerged`` overrides it); mngr
+    preserves each destroyed agent's transcript under
     ``$MNGR_HOST_DIR/preserved/``. One outcome line per agent goes to stderr;
-    the exit code is non-zero if any agent failed. ``--no-recursive`` destroys
-    the one agent and names each descendant it leaves behind.
+    otherwise the exit code is non-zero if any agent failed.
+    ``--no-recursive`` destroys the one agent and names each descendant it
+    leaves behind.
 
 ``stop``
     Stops the worker agent and, by default, its whole subtree (children first)
@@ -672,8 +678,9 @@ _MNGR_LIFECYCLE_TIMEOUT_SECONDS = 300.0
 def _git_output(argv: Sequence[str], runner: Runner) -> str | None:
     """``argv``'s stdout, stripped -- or ``None`` when the command failed.
 
-    Every git probe here is advisory (a failure means "no evidence", never a
-    refusal), so the failure mode folds into the return value.
+    The failure mode folds into the return value and each caller decides what
+    it means: most probes are advisory (no evidence, never a refusal), while
+    ``_branch_deletion_refusal`` fails closed on it.
     """
     try:
         result = runner.run(
@@ -1917,8 +1924,8 @@ def _unmerged_work_warning(record: Mapping[str, object], runner: Runner) -> None
 
     Uncommitted changes are lost with the worktree (dead-worker-recovery.md's
     salvage flow is for that); commits on the worker's branch not in HEAD stay
-    on it. Never blocks: a lead destroys after it has merged, and a
-    superseded pass is meant to be dropped.
+    on it unless ``--delete-branches`` deletes it. Never blocks:
+    ``_branch_deletion_refusal`` guards the commits a branch deletion would lose.
     """
     name = _record_name(record)
     work_dir = _record_field(record, "work_dir")
@@ -1936,14 +1943,80 @@ def _unmerged_work_warning(record: Mapping[str, object], runner: Runner) -> None
         dirty_text = "worktree has UNCOMMITTED changes (lost with the worktree)"
     else:
         dirty_text = "worktree clean"
-    # A worker launched with ``--branch`` is on that branch, not the default one.
-    branch = _record_field(record, "initial_branch") or f"mngr/{name}"
+    branch = _record_branch(record)
     count = _git_output(["git", "rev-list", "--count", f"HEAD..{branch}"], runner)
     if count is None:
         commits_text = f"branch {branch} not found"
     else:
         commits_text = f"{count or '0'} commit(s) on {branch} not in HEAD"
     print(f"create_worker: {name}: {dirty_text}; {commits_text}", file=sys.stderr)
+
+
+def _record_branch(record: Mapping[str, object]) -> str:
+    # A worker launched with ``--branch`` is on that branch, not the default one.
+    return _record_field(record, "initial_branch") or f"mngr/{_record_name(record)}"
+
+
+def _branch_deletion_refusal(branches: Sequence[str], runner: Runner) -> str | None:
+    """Why deleting ``branches`` would lose work, or ``None`` when it would not.
+
+    A commit is lost when, with every one of ``branches`` gone, neither HEAD
+    nor any other local branch reaches it. A branch copied under another name
+    first therefore passes, and so does one whose pass has been merged. Unlike
+    the other git probes this one fails closed: a branch whose history git
+    cannot read is not deleted on a guess.
+
+    ``branches`` are checked in order, and a branch the message says to keep
+    counts as kept for the ones after it. Passed lead-first, a worker whose
+    commits are merged into its lead's branch therefore needs no keep of its
+    own.
+    """
+    listing = _git_output(
+        ["git", "for-each-ref", "--format=%(refname)", "refs/heads/"], runner
+    )
+    if listing is None:
+        return "git could not list the local branches, so nothing proves they are safe to delete."
+    existing = set(listing.splitlines())
+    doomed = [b for b in dict.fromkeys(branches) if f"refs/heads/{b}" in existing]
+    kept = sorted(existing - {f"refs/heads/{b}" for b in doomed})
+    taken = set(existing)
+    lines: list[str] = []
+    for branch in doomed:
+        count = _git_output(
+            [
+                "git",
+                "rev-list",
+                "--count",
+                f"refs/heads/{branch}",
+                "--not",
+                "HEAD",
+                *kept,
+            ],
+            runner,
+        )
+        if count is None:
+            return f"git could not count the commits on {branch}."
+        if int(count or "0") > 0:
+            stem = f"superseded/{branch.removeprefix('mngr/')}"
+            keep_as = stem
+            suffix = 2
+            while f"refs/heads/{keep_as}" in taken:
+                keep_as = f"{stem}-{suffix}"
+                suffix += 1
+            taken.add(f"refs/heads/{keep_as}")
+            kept.append(f"refs/heads/{branch}")
+            lines.append(
+                f"  {branch}: {count} commit(s) on no other branch; keep them with:\n"
+                f"    git branch {keep_as} {branch}"
+            )
+    if not lines:
+        return None
+    return (
+        "these branches hold commits that neither HEAD nor any other local "
+        "branch has:\n" + "\n".join(lines) + "\nKeep each one (the "
+        "commands above) and run the destroy again; or pass --discard-unmerged "
+        "if the user has said the work is not wanted."
+    )
 
 
 class _LifecycleOutcome(NamedTuple):
@@ -2008,6 +2081,7 @@ def destroy(
     runner: Runner | None = None,
     recursive: bool = True,
     delete_branches: bool = False,
+    discard_unmerged: bool = False,
 ) -> int:
     """Destroy the worker agent and (by default) every worker under it.
 
@@ -2015,7 +2089,9 @@ def destroy(
     the runtime dirs of the workers it dispatched are pulled out of it.
     RUNNING descendants are destroyed too -- a superseded pass's in-flight
     siblings are exactly what needs to go. Branches survive unless
-    ``delete_branches`` adds ``-b``. A worker's branch is ``mngr/<name>`` unless
+    ``delete_branches`` adds ``-b``, and then nothing is destroyed while a
+    destroyed agent's branch holds commits no other branch has, unless
+    ``discard_unmerged`` says to. A worker's branch is ``mngr/<name>`` unless
     ``launch`` was given a ``--branch`` spec; ``read_worker_branch`` reports
     whichever it is, but only while the agent still exists -- so read it before
     destroying. Every step is best-effort; one outcome line per agent, and ``0``
@@ -2027,17 +2103,24 @@ def destroy(
     toplevel = _repo_toplevel(runner)
     flags = ["--force", "-b"] if delete_branches else ["--force"]
     outcomes: list[_LifecycleOutcome] = []
+    doomed_subtree = subtree if recursive else ()
+    own = _record_named(records, name)
+    if delete_branches and not discard_unmerged:
+        branches = [f"mngr/{name}" if own is None else _record_branch(own)]
+        branches.extend(_record_branch(r) for r in reversed(doomed_subtree))
+        refusal = _branch_deletion_refusal(branches, runner)
+        if refusal is not None:
+            print(f"create_worker: not destroying {name}: {refusal}", file=sys.stderr)
+            return 2
     if not recursive:
         _orphan_warning(name, subtree, "destroyed")
-        subtree = ()
-    for record in subtree:
+    for record in doomed_subtree:
         _relocate_task_dirs(record, runner, toplevel)
         _unmerged_work_warning(record, runner)
         child = _record_name(record)
         outcomes.append(
             _mngr_lifecycle_call("destroy", child, flags, "destroyed", runner)
         )
-    own = _record_named(records, name)
     if own is not None:
         _relocate_task_dirs(own, runner, toplevel)
         _unmerged_work_warning(own, runner)
@@ -2474,6 +2557,7 @@ def _run_destroy(args: argparse.Namespace, runner: Runner | None) -> int:
         runner,
         recursive=not args.no_recursive,
         delete_branches=args.delete_branches,
+        discard_unmerged=args.discard_unmerged,
     )
 
 
@@ -2689,8 +2773,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--delete-branches",
         action="store_true",
         help="Also delete each destroyed agent's branch if mngr created it (a "
-        "pre-existing branch a worker was launched on is kept); for a superseded "
-        "or abandoned pass whose work is not wanted.",
+        "pre-existing branch a worker was launched on is kept). Refuses, before "
+        "destroying anything, while a branch holds commits that neither HEAD nor "
+        "any other local branch has, and prints the command that keeps each one.",
+    )
+    destroy_parser.add_argument(
+        "--discard-unmerged",
+        action="store_true",
+        help="With --delete-branches, delete branches even when that loses their "
+        "commits; only when the user has said that work is not wanted.",
     )
 
     stop_parser = subparsers.add_parser(

@@ -3,10 +3,11 @@
 The workspace frontends' shared JavaScript library: what the shell
 (`system/apps/system_interface/frontend`), the chat page
 (`system/apps/chat/frontend`), the Getting Started page
-(`system/apps/getting_started/frontend`), and Files
-(`system/apps/files/frontend`) have in common. Source only: there is
+(`system/apps/getting_started/frontend`), Files
+(`system/apps/files/frontend`), and Routines
+(`system/apps/routines/frontend`) have in common. Source only: there is
 no build here, each app's vite build compiles the modules it imports
-(`@imbue/workspace-ui/src/<module>`), and the five packages are one npm
+(`@imbue/workspace-ui/src/<module>`), and the six packages are one npm
 workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
 
 - `src/base.css`: the design system's token layer (colour and type tokens, the
@@ -41,16 +42,34 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   `src/embed-contract.d.ts`: the Imbue Studio embed contract (the vendored source is
   aliased by each app's vite config); `src/terminalFocus.ts`: the focus grant
   the shell sends a framed page.
+- `src/themes/`: a page's side of workspace themes
+  (`docs/system/blueprint/workspace-themes/`): `parts.ts`, the contract's part
+  names and the attributes that mark an element as one; `themeClient.ts`, which
+  wears the theme the shell names (`shell:theme`) and remembers it unless it is
+  a preview; and
+  `themeBoot.ts`, the Vite plugin whose inline script wears the remembered theme
+  before a page's first paint. The themes themselves are folders under
+  `system/themes/`, not part of this library.
+- `src/page/`: the page kit, built by the shell's frontend into
+  `/_static/workspace_theme.css` and `/_static/workspace_theme.js`, which a page
+  built as plain HTML loads to wear the workspace's theme.
 - `src/links.ts`: what a link means in the workspace
   (`blueprint/workspace-link-routing/` in the mngr repo): `classifyLink` calls a
   link external, a file (a `file:` URL on this machine), a local URL, one of
   this workspace's app addresses
   (an address on its share domain included), another workspace's, or
   unroutable, and `externalLinkMessageType` names the message an external link
-  becomes (`open:web`, `open:mailto`, `open:tel`). The shell classifies every
-  link handed to it with it, and the chat every link of a message it renders;
-  its test holds its external rule (the app contract's `isExternalUrl`) to the
-  desktop app's (the vendored `link-externality-vectors.json`).
+  becomes (`open:web`, or `open:<scheme>`: `open:mailto`, `open:tel`,
+  `open:slack` for a custom-scheme link). The shell classifies every link
+  handed to it with it, and the chat every link of a message it renders; its
+  test holds its external and custom-scheme rules (the app contract's
+  `isExternalUrl` and `isCustomSchemeUrl`) to the desktop app's (the vendored
+  `link-externality-vectors.json`).
+- `src/download.ts`: `startDownload`, how the workspace's own pages download a
+  file of their own origin: by loading it in a hidden frame rather than through
+  a `download` link, whose request the browser sends without the workspace's
+  session cookie when Imbue Studio frames the page, and reporting what the
+  server said instead when it answers with something other than a file.
 - `src/search.ts`: `matchesQuery`, the one text match of the workspace's
   typeaheads (every whitespace token of the query occurring in one of the given
   texts, case-insensitively), which the desktop's launcher, the Getting Started

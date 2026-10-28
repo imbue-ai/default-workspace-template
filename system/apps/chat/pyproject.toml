@@ -29,6 +29,8 @@ dependencies = [
     "tomlkit>=0.12",
     "watchdog>=4.0",
     "werkzeug>=3.0",
+    # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
+    "workspace-themes",
     "workspace-layout",
 ]
 license = {text = "FCL-1.0-MIT"}
@@ -76,7 +78,11 @@ artifacts = [
 packages = ["imbue"]
 
 [tool.pytest.ini_options]
+required_plugins = ["pytest-workspace-env"]
 timeout_func_only = true
+# Same tmp_path retention as the root config, which says why.
+tmp_path_retention_policy = "failed"
+tmp_path_retention_count = 1
 markers = [
     "acceptance: marks tests as requiring network access, Modal credentials, etc. These are required to pass in CI",
     "browser: marks tests that drive a browser",

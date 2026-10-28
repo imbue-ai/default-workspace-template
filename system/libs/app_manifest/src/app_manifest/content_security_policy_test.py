@@ -3,15 +3,16 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from flask import Blueprint, Flask, Response, send_file
+from flask import Blueprint
+from flask import Flask
+from flask import Response
+from flask import send_file
 
-from app_manifest.content_security_policy import (
-    attach_document_policy,
-    build_document_policy,
-    inline_script_hashes,
-    inline_source,
-    url_origin,
-)
+from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.content_security_policy import build_document_policy
+from app_manifest.content_security_policy import inline_script_hashes
+from app_manifest.content_security_policy import inline_source
+from app_manifest.content_security_policy import url_origin
 from app_manifest.errors import PolicySourceError
 from app_manifest.testing import assert_document_policy_admits_page
 

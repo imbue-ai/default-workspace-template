@@ -20,6 +20,9 @@
   /* The cast an entry's icon makes, quieter than the one a shortcut makes on the wallpaper: a row of
      these sits an inch apart on a plain surface, where the desktop's is one tile on a photograph. */
   --desk-taskbar-entry-shadow: 0 1px 4px 0 #00000026, 0 1px 1px 0 #00000014;
+  /* The workspace character's body, and the ink of the pool it casts (the avatar part). */
+  --desk-avatar-color: #f50d00;
+  --desk-avatar-shadow-color: #20100a;
   --desk-cell-width: 96px;
   --desk-cell-height: 112px;
   --desk-grid-inset: 16px;

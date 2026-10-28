@@ -97,6 +97,11 @@ class AntigravityQueueTracker:
     _attempts: dict[str, int]
     _publish: PublishCallback | None
     _wake: Callable[[], None] | None
+    # The model switch waiting for agy to be idle: the slash command the worker types ahead of
+    # the held block. One slot, because only the newest pick matters. Not journalled and not
+    # cleared by a session change: a pick the user made still applies to the agy that comes up.
+    _model_command: str | None
+    _model_command_attempts: int
 
     @classmethod
     def build(cls, outbox_path: Path, session_token: str) -> "AntigravityQueueTracker":
@@ -111,10 +116,12 @@ class AntigravityQueueTracker:
         self._attempts = {}
         self._publish = None
         self._wake = None
+        self._model_command = None
+        self._model_command_attempts = 0
         self._replay()
         return self
 
-    # --- wiring ----------------------------------------------------------------------
+    # Wiring
 
     def attach(self, *, publish: PublishCallback, wake: Callable[[], None]) -> None:
         """Bind the watcher's snapshot publisher and flush wake. Idempotent."""
@@ -128,7 +135,7 @@ class AntigravityQueueTracker:
             self._publish = None
             self._wake = None
 
-    # --- journal ---------------------------------------------------------------------
+    # Journal
 
     def _replay(self) -> None:
         """Restore entries written by THIS session; discard a dead session's.
@@ -194,15 +201,16 @@ class AntigravityQueueTracker:
             for entry in self._queued.snapshot()
         ]
 
-    # --- session identity ------------------------------------------------------------
+    # Session identity
 
     def set_session(self, token: str) -> bool:
-        """Adopt ``token``; on a CHANGE, discard everything. Returns True if it changed.
+        """Adopt ``token``; on a CHANGE, discard every held message. Returns True if it changed.
 
         Discard rather than carry over: keeping the entries and only swapping the token would
         deliver a dead session's queue into a fresh agy, which Part B forbids in as many words
         ("NEVER revived, NEVER auto-sent on resume"). Bumping the generation additionally
-        voids any flush the old session had claimed.
+        voids any flush the old session had claimed. A held model switch is kept: the pick
+        still applies to the agy that comes up.
         """
         with self._lock:
             if token == self._session_token:
@@ -220,7 +228,7 @@ class AntigravityQueueTracker:
             self._settled()
             return True
 
-    # --- mutations -------------------------------------------------------------------
+    # Mutations
 
     def enqueue(self, content: str, timestamp: str, *, is_turn_open: bool = True) -> str:
         """Hold ``content`` for the next flush; returns its queued id.
@@ -243,6 +251,39 @@ class AntigravityQueueTracker:
         if wake is not None:
             wake()
         return queued_id
+
+    def request_model_command(self, command: str) -> None:
+        """Hold ``command`` for the worker to type once agy is idle, replacing any older one."""
+        with self._lock:
+            self._model_command = command
+            self._model_command_attempts = 0
+            wake = self._wake
+        if wake is not None:
+            wake()
+
+    def model_command(self) -> str | None:
+        with self._lock:
+            return self._model_command
+
+    def settle_model_command(self, command: str, *, is_delivered: bool) -> None:
+        """Record the outcome of typing ``command``. A newer pick that arrived meanwhile is kept.
+
+        An undelivered command stays held for the next attempt until it has used
+        :data:`MAX_DELIVERY_ATTEMPTS`, then is dropped: the chip's optimistic pick then times out
+        back to the model agy actually reports.
+        """
+        with self._lock:
+            if self._model_command != command:
+                return
+            if is_delivered:
+                self._model_command = None
+                self._model_command_attempts = 0
+                return
+            self._model_command_attempts += 1
+            if self._model_command_attempts >= MAX_DELIVERY_ATTEMPTS:
+                logger.warning("antigravity: giving up on {!r} after {} attempts", command, MAX_DELIVERY_ATTEMPTS)
+                self._model_command = None
+                self._model_command_attempts = 0
 
     def begin_flush(self) -> tuple[str, tuple[str, ...], int]:
         """Claim the current queue for a flush: returns (block, claimed ids, generation).
@@ -364,8 +405,9 @@ class AntigravityQueueTracker:
     def demote_pending(self) -> bool:
         """Stop presenting the not-yet-claimed entries as Sending; they are parked after all.
 
-        Called when a turn turns out to be open, so the worker declined to take them. Returns
-        True when anything changed, so the caller can skip a pointless publish.
+        Called when the worker declines to take them after all: a turn turned out to be open,
+        or a failed model switch holds them back until its retry. Returns True when anything
+        changed, so the caller can skip a pointless publish.
         """
         with self._lock:
             pending = self._pending_send - self._sending_ids
@@ -396,7 +438,7 @@ class AntigravityQueueTracker:
         with self._lock:
             self._settled()
 
-    # --- reads -----------------------------------------------------------------------
+    # Reads
 
     def snapshot(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -468,6 +510,11 @@ def get_tracker(agent_id: str, outbox_path: Path, session_token: str) -> Antigra
         tracker = AntigravityQueueTracker.build(outbox_path, session_token)
         _TRACKERS[agent_id] = tracker
         return tracker
+
+
+def get_agent_tracker(agent_id: str, state_dir: Path) -> AntigravityQueueTracker:
+    """The tracker of the agent whose state dir is ``state_dir``, journalling beside its other agy files."""
+    return get_tracker(agent_id, state_dir / OUTBOX_FILENAME, session_token(state_dir))
 
 
 def drop_tracker(agent_id: str) -> None:

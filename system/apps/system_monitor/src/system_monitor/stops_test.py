@@ -47,6 +47,40 @@ def test_the_shed_log_yields_each_stop_with_its_name_and_full_command(
     assert stops.read_shed_log(tmp_path / "missing.log") == []
 
 
+def test_the_shed_log_reads_lines_earlyoom_stamp_timestamped_after_older_unstamped_ones(
+    tmp_path: Path,
+) -> None:
+    # earlyoom-stamp puts the time before every line it passes on, each line of a
+    # multi-line command included; lines from before it was in place stay until rotation.
+    log = tmp_path / "earlyoom-stderr.log"
+    log.write_text(
+        _SHED_LOG
+        + "".join(
+            f"2026-10-13T11:00:0{second}.123Z {line}\n"
+            for second, line in enumerate(
+                [
+                    "mem avail:    80 of  3922 MiB ( 2.04%), swap free:    0 of    0 MiB ( 0.00%)",
+                    'sending SIGTERM to process 70 uid 1000 "claude": oom_score 0, cmdline "claude',
+                    '--print"',
+                    "process 70 exited after 0.3 seconds",
+                    'sending SIGKILL to process 71 uid 1000 "rg": oom_score 0, cmdline "rg needle"',
+                ]
+            )
+        )
+    )
+
+    assert stops.read_shed_log(log) == [
+        {"pid": 60, "comm": "node", "command": "node old"},
+        {
+            "pid": 50,
+            "comm": "node",
+            "command": "node /opt/playwright/driver/cli.js\n--flag",
+        },
+        {"pid": 70, "comm": "claude", "command": "claude\n--print"},
+        {"pid": 71, "comm": "rg", "command": "rg needle"},
+    ]
+
+
 def _ledger_line(pid: int, age: timedelta, **fields: object) -> str:
     timestamp = (_NOW - age).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
     return json.dumps(

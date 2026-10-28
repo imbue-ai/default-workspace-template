@@ -112,7 +112,8 @@ away), and the fix is to re-request the grant and retry, not to give up.
 ## 3. Preconditions
 
 **Single-flight.** One migration at a time (the worker name, branch, and runtime
-dir are fixed). Check for a live one, and take over an abandoned one per
+dir are fixed). Check for a live one. One whose holder is gone you take over
+as its lead, or supersede once its worker is gone too, per
 `.agents/shared/references/harden-contention.md`:
 
 ```bash
@@ -387,11 +388,21 @@ effect on the next process start. Rebuild-only ones -- a `[create_templates.*]` 
 container cannot adopt -- are **reported as needing a workspace recreate**, never
 implied to be live.
 
-**Scheduled jobs.** `list-jobs` already rewrote each command's paths. Write the
-durable copy under `data/.state/cron.d/<job-name>`, install it live with
-`install -m 0644 ... /etc/cron.d/<job-name>`, and **verify each command actually
-resolves here** (the binary/script exists and runs) before reporting the job as
-scheduled. A rewritten path can still name a script that was never migrated.
+**Scheduled jobs.** `list-jobs` already rewrote each command's paths. Scheduled
+work here is a routine (the `manage-routines` skill), never a cron entry: the
+source's lines name `system/libs/automations/run_job.sh` and
+`run_automation.sh`, which no longer exist, so a line installed live under
+`/etc/cron.d` would fail every minute. Write each entry only as its durable copy
+under `data/.state/cron.d/<job-name>`, never into `/etc/cron.d`, then run
+`uv run --no-sync routines migrate-cron` at once: it turns every entry it can
+read into a `system/routines/<id>.toml` definition (a `run_job.sh` line, an
+automation, the Caretaker's switch, or a plain line in one of the shapes the
+library expresses) and leaves the rest in place with a warning in its output.
+For each left-over line, write the routine by hand with `routines add` and
+delete the entry. Then **verify each converted routine's command actually
+resolves here** (`uv run --no-sync routines show <id>`; the script or binary
+exists and runs) before reporting it as scheduled. A rewritten path can still
+name a script that was never migrated.
 
 **Agents.** Stage the session JSONLs off the source, then recreate every agent
 except the source's primary -- dormant, under its old name, with its original

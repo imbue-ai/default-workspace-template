@@ -23,15 +23,17 @@ both offer the verbs `sources.py` names. For either:
   with the path's page data filled in (base64 JSON in `#index-data`: a folder's
   entries, or whether the file is small and reads as text), and `?json` is that
   data alone;
-- a file's plain GET is its bytes (a `Range` honoured), and `?zip` a folder as a
-  zip, written as it is sent (linked folders are not followed, and what can't be
-  read is left out);
+- a file's plain GET is its bytes (a `Range` honoured), `?download` the same
+  bytes saved under the file's name, and `?zip` a folder as a zip, written as
+  it is sent (linked folders are not followed, and what can't be read is left
+  out);
 - PUT writes a file (creating the folders above it, writing through a symlink to
   its file, and keeping a written-over file's mode), swapped in whole so an upload
   cut short leaves the old file; MKCOL makes a folder; MOVE renames, never over
   something already there; DELETE removes;
 - a path that isn't there is answered with `404.html` when a page was asked for
-  (the request accepts `text/html`), and in plain words otherwise.
+  (the request accepts `text/html` and is not a `?json`, `?zip`, or `?download`),
+  and in plain words otherwise.
 
 A computer's file server has no MOVE, and a folder there is not offered as a zip,
 so those are refused, as is a MOVE from the workspace onto a computer. Each name
@@ -47,10 +49,35 @@ holds (`minds-file-server-read-<device id>:<path>`, and `-write-` beside it when
 changes are allowed; a computer whose Imbue Studio predates per-device grants
 names no device id); `connections.py` reads them per device, notes whether Imbue
 Studio keeps a synced copy at `~/synced_folders/<device id>/<path>` (two-way with
-write access, one-way with read), and, since the workspace learns nothing from
-the sync itself, compares the copy's names with the computer's to say when a copy
-has fallen behind. Files does not ask for new shares: the user makes them in
-Imbue Studio on their computer. A computer that grants per device serves its
+write access, one-way with read), and asks Imbue Studio on each computer how its
+syncs stand (`/minds-api-proxy/api/v1/agents/<MNGR_AGENT_ID>/folder-syncs`, which
+the workspace's per-agent baseline permission covers). Each share carries the
+part of Studio's record of its sync that Files shows (state, failure message,
+progress), checked as it arrives; a copy whose computer did not answer, or
+answered in a shape Files does not read, is listed with no record, which reads
+as "can't check". Because the server asks, not the viewer's browser, this works
+the same in Imbue Studio, a plain browser, a phone, or a share link.
+
+A page reads `/__files/api/connections` every 3 seconds while a sync is
+carrying something across and every 15 otherwise, only while the window is on
+screen, and again at once when it comes to the front or the shell shows it.
+Each time it also lists again the folders on screen (the open one, and each
+column's), so a file added to a live share on the computer shows without
+leaving the folder. Workspace folders on screen, a synced copy among them, are
+also checked every 2 seconds through `GET /__files/api/stamps?path=...`, one
+stat a folder answering a stamp that moves when anything in it is added,
+removed or renamed; a folder is listed again only when its stamp moved, so a
+file a sync brings in shows within a couple of seconds.
+The server's `connections_cache.py` answers every ask for 2 seconds after a
+read, so however many windows ask, the computers are asked at most that often,
+and with no window on screen they are not asked at all. A read asks each
+computer for its grants (`permissions/self`) and its syncs, both answered from
+memory on the computer, and probes only the shares it has not seen before
+(and, on a computer answering again after it did not, those that did not
+answer), so a quiet listing costs two short requests per computer. A computer
+that does not answer (asleep, Studio closed) has the shares it last granted
+listed as unreachable, and its copies' syncs as unknown, rather than failing
+the listing. A computer that grants per device serves its
 files under its id (`/minds-api-proxy/api/v1/files/<device id><path>`, which is
 what its grants match); one that predates that serves them with no id
 (`/minds-api-proxy/api/v1/files<path>`). Either way the device also goes in the
@@ -79,14 +106,26 @@ button, and the view options), and the folder. The sidebar lists Shortcuts
 and folder shared from the user's computers, each drawn with the folder views'
 own folder or page icon and a small badge over its corner for how it reaches
 the workspace (a chain: linked, read live from
-the computer; circular arrows: synced, a copy kept here), and its own entry
+the computer; circular arrows: synced, a copy kept here, turning while the
+copy is being made or a change carried across), and its own entry
 wears the same badge wherever a folder view lists it. After the label come
 marks only when there is something to say: a "Read-only" word badge, a filled
-orange disc when a synced copy has not caught up, and a struck-through laptop
-when its computer is not answering. The row's tooltip says, without repeating
+orange disc when Imbue Studio says a sync stopped. A sync Studio has switched
+on but isn't running (mostly for a moment, as Studio starts) gets no mark, and
+its tooltip says it isn't syncing right now. (A sync switched off in Studio is
+not listed as one: its folder shows as a live share.) A share whose computer is
+not answering is greyed out, icon and all. Inside a copy, a stopped sync says so above the
+entries (with Studio's reason), and an empty copy that is syncing says how far
+along it is. The row's tooltip says, without repeating
 the name, how it reaches the workspace and how it stands. A synced share opens
-at its copy, the others live. With nothing shared, the section says to share
-from Imbue Studio. Something dragged in from the computer onto a share's row
+at its copy, the others live. Where Imbue Studio frames the workspace (it says
+`opensLocalFiles` with `minds:embedder-capabilities`, which the shell passes on
+in each window's handshake), the list ends in "Manage connected files": it
+sends `minds:open-local-files`, and Studio opens its Permissions pane at Local
+files, where the user shares files and folders, stops sharing them, or turns
+syncing on; coming back to the window reads the list again. A plain browser, a
+phone or a share visit never shows it; with nothing shared, the section there
+says to share from Imbue Studio. Something dragged in from the computer onto a share's row
 uploads into that share, as onto any folder. The sidebar's width is dragged from
 its edge (double-click puts it back) and kept with the other preferences. Jumping to a sidebar row starts the
 column view afresh there; drilling down into a folder that happens to be a
@@ -108,6 +147,10 @@ shared by every window.
   ahead of the workspace's own element-menu rows; right-click on a folder's
   background offers New Folder, New File, Upload Files, and Upload Folder,
   which the + button offers too.
+- Download, here and on a file's page, loads the file's `?download` (a folder's
+  `?zip`) in a hidden frame (`workspace_ui`'s `startDownload`), so the request
+  carries the workspace's session inside Imbue Studio; what the server says
+  instead of sending the file shows as a toast.
 - Files dragged in from outside upload into the folder under the pointer (a
   folder's tile or row, a column, a shortcut, a path segment) or else the folder
   on show, folders included; entries dragged onto a folder move into it, except
@@ -116,10 +159,10 @@ shared by every window.
   show their progress in a panel at the bottom right, which goes away a moment
   after the last one lands and stays up when one failed.
 
-Under 700px of the frame's own width the window lays itself out for a phone:
-the sidebar floats over the folder from a button at the toolbar's start, there
-is no column view, one tap opens, and every
-entry carries a "..." button with its menu.
+Under 520px of the frame's own width the window lays itself out for a phone:
+the sidebar floats over the folder from a button at the toolbar's start, one
+tap opens, and every entry carries a "..." button with its menu. The column
+view needs more room beside the sidebar, and is offered only from 700px.
 
 ## Opening a folder or a file
 
@@ -165,7 +208,8 @@ opening another.
 `system/test_app_manifests.py` checks the manifest against the program line, and
 `system/test_supervisord_layout.py` the program block. `src/files_app/server_test.py`
 drives the Files server over a temporary folder and an in-memory gateway
-(`testing.py`'s `FakeComputer` answers as a computer's file server does). The
+(`testing.py`'s `FakeComputer` answers as a computer's file server does, and as
+its Studio does), and `connections_cache_test.py` the cache over it. The
 frontend's own vitest suites sit beside its sources (`npm test` at `system/`).
 `test_files_app.py` (marked `browser`) runs the Files server over a temporary
 folder (`conftest.py`, with the shares stubbed) and drives the app in Chromium:

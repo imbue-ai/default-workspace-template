@@ -1,15 +1,20 @@
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Final, Self
+from typing import Any
+from typing import Final
+from typing import Self
 from urllib.parse import quote
 
+from pydantic import GetCoreSchemaHandler
+from pydantic_core import CoreSchema
+from pydantic_core import core_schema
+
+from app_manifest.errors import InvalidManifestValueError
+from app_manifest.errors import PageTemplateFieldError
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
-from pydantic import GetCoreSchemaHandler
-from pydantic_core import CoreSchema, core_schema
-
-from app_manifest.errors import InvalidManifestValueError, PageTemplateFieldError
 
 # The app-name rule is the registration script's rule (system/scripts/forward_port.py,
 # ``validate_service_name``): the name becomes the leading label of the app's origin
@@ -111,6 +116,30 @@ class AppName(str):
         problem = describe_app_name_problem(value)
         if problem is not None:
             raise InvalidManifestValueError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(
+        cls, source_type: Any, handler: GetCoreSchemaHandler
+    ) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(
+            cls, core_schema.str_schema()
+        )
+
+
+# An app part's name, as a theme selects it: ``data-part="<app>.<part>"`` (the workspace-themes plan, section 7).
+APP_PART_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
+
+
+class AppPartName(str):
+    """The name of an element an app lets themes style, unique within the app."""
+
+    def __new__(cls, value: str) -> Self:
+        if APP_PART_NAME_PATTERN.fullmatch(value) is None:
+            raise InvalidManifestValueError(
+                f"app part name {value!r} must be lowercase letters, digits, and dashes, starting with a letter, "
+                "at most 48 characters"
+            )
         return super().__new__(cls, value)
 
     @classmethod

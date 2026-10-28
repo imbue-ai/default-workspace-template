@@ -8,7 +8,8 @@
     "apps/system_interface/frontend",
     "apps/chat/frontend",
     "apps/getting_started/frontend",
-    "apps/files/frontend"
+    "apps/files/frontend",
+    "apps/routines/frontend"
   ],
   "scripts": {
     "prebuild": "bash scripts/fetch_mngr_assets.sh",
@@ -23,6 +24,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "eslint": "^10.0.3",
+    "postcss": "^8.5.28",
     "prettier": "^3.8.1",
     "prettier-plugin-tailwindcss": "^0.7.2",
     "typescript": "^5.7.0",
