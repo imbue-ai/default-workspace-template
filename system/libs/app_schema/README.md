@@ -33,7 +33,12 @@ for every operation:
   document as the operation's `x-no-schema`.
 
 Every operation's `default` response is `ErrorResponse` (`{"detail": ...}`),
-the one shape every route answers a refusal or a failure with.
+the one shape every route answers a refusal or a failure with. Beside
+`detail` it may carry `user_facing_message` (a sentence written for the
+person using the workspace, which its frontends show as written),
+`reportable` (whether that sentence asks for a bug report) and `kind` (which
+case of refusal it was, for a frontend that offers different controls per
+case); each is left out of the JSON when unset.
 
 ## API
 
@@ -56,8 +61,8 @@ the one shape every route answers a refusal or a failure with.
   answer; the table must name that model and status for the route (as the
   primary or an alternate), or the request fails the same way. An
   `ErrorResponse` needs no entry.
-- `app_schema.routes.error_response(detail, status)`: a refusal or a failure
-  as the `ErrorResponse`.
+- `app_schema.routes.error_response(detail, status, user_facing_message=None, reportable=None, kind=None)`:
+  a refusal or a failure as the `ErrorResponse`.
 - `app_schema.api_schema.build_openapi_document(app, title, description, version, route_table, excluded_endpoints)`:
   the document itself, for a caller that wants it without the route.
 - `app_schema.testing.assert_api_schema_describes_app(client, manifest_path)` (an app's

@@ -14,6 +14,6 @@ A failed request inside a workspace is now told the same way everywhere: a sente
 
 - New pieces for the screens that adopt them: `SeeDetails` (also drawn by `NoticeDialog` from its new `details`), the `AskAgentToFixButton` and `ReportBugButton` components (each renders nothing where it could not work), and `report-bug.ts`, which the shell's own toasts open the bug report with.
 
-- The toast stack (`components/toasts.ts`) draws lasting toasts: a toast that stays until dismissed, with a close control, a collapsed "See details", and its buttons ("Try again", "Report a bug"), which the queue (`models/toasts.ts`) holds at most three of. A plain toast takes no press unless the page sets `closesPlainToasts`, which gives it a close button.
+- The toast stack (`components/toasts.ts`) draws lasting toasts: a toast that stays until dismissed, with a close control, a collapsed "See details", and its buttons ("Try again", "Report a bug"), which the queue (`models/toasts.ts`) holds at most three of. The queue replaces a toast that says the same as one already up (message and details) rather than stacking it. A plain toast takes no press unless the page sets `closesPlainToasts`, which gives it a close button.
 
 - `requestJson`, `getJson` and `postJson` throw the same `HttpError` for a refusal and for a request nothing answered, a GET read as a read and any other method as a change.
