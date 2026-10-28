@@ -8203,6 +8203,20 @@ def test_the_main_chat_is_not_switched_to_a_room(broadcaster: WebSocketBroadcast
         manager.stop()
 
 
+def test_the_main_chat_is_not_launched_as_a_room(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """A seeded chat recorded as the main chat refuses the room launch, as the switch refuses the conversion."""
+    manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
+    manager.note_agent_list_known()
+    try:
+        seeded = manager.seed_chat("Main", (SeedTurn(role=SeedRole.ASSISTANT, text="Welcome."),))
+        assert manager.make_main_chat(ChatId(seeded.chat_id))
+        with pytest.raises(AgentCreationError, match="main chat cannot become a room"):
+            manager.create_chat("", chat_id=seeded.chat_id, kind=ChatKind.ROOM)
+        assert manager.get_main_chat_id() == ChatId(seeded.chat_id)
+    finally:
+        manager.stop()
+
+
 def test_a_switch_off_a_room_takes_the_rooms_transcript_as_its_summary(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

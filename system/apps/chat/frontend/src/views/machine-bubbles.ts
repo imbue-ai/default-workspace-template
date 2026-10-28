@@ -12,12 +12,15 @@ import { participantPicture } from "./participant-picture";
 /** The width of a bubble's face, and the bubble group's header. */
 export const MACHINE_FACE_SIZE_PX = 24;
 
-/** Split markdown into paragraphs on blank lines, leaving fenced code blocks whole whatever they contain. */
+/** Split markdown into paragraphs on blank lines, leaving fenced code blocks and ``<details>`` blocks whole
+ *  whatever they contain: a toggle split from its body would open onto nothing. */
 export function splitParagraphs(text: string): string[] {
   const paragraphs: string[] = [];
   let current: string[] = [];
   // The marker of the open fence (``` or ~~~); a fence closes only on its own marker.
   let openFence: string | null = null;
+  // How many <details> blocks are open; blank lines inside one belong to it.
+  let openDetails = 0;
   const flush = (): void => {
     const joined = current.join("\n").trim();
     if (joined) paragraphs.push(joined);
@@ -27,7 +30,11 @@ export function splitParagraphs(text: string): string[] {
     const fence = /^\s*(```|~~~)/.exec(line)?.[1] ?? null;
     if (fence !== null && openFence === null) openFence = fence;
     else if (fence === openFence) openFence = null;
-    if (openFence === null && line.trim() === "") {
+    if (openFence === null) {
+      openDetails += (line.match(/<details(\s|>)/gi) ?? []).length;
+      openDetails = Math.max(0, openDetails - (line.match(/<\/details>/gi) ?? []).length);
+    }
+    if (openFence === null && openDetails === 0 && line.trim() === "") {
       flush();
       continue;
     }

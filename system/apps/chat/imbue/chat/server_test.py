@@ -89,6 +89,7 @@ from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
 from imbue.chat.harnesses.registry import build_shoulder_tap
+from imbue.chat.harnesses.room.transcript import transcript_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
@@ -1148,6 +1149,49 @@ def test_a_send_to_a_chat_launched_at_sign_in_carries_the_seeded_conversation_on
     assert plain == "2"
     delivered = manager._chat_record_store.read(chat_id)
     assert delivered is not None and delivered.is_seed_pending is False
+
+
+def test_a_rooms_send_never_carries_the_pending_seed(tmp_path: Path, signed_in_account: str) -> None:
+    """A seeded chat that became a room appends the words as typed: a room has no agent to need the seed
+    context, and its page shows the seeded conversation as earlier segments; the seed stays pending."""
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=messenger, mngr_binary=mngr_binary, chat_files_root=tmp_path
+    )
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    seeded = manager.seed_chat(
+        "Welcome", (SeedTurn(role=SeedRole.ASSISTANT, text="Your workspace is ready."),)
+    )
+    chat_id = ChatId(seeded.chat_id)
+    manager.create_chat("", chat_id=seeded.chat_id)
+    wait_until_true(
+        lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+    )
+    record = manager._chat_record_store.read(chat_id)
+    assert record is not None and record.is_seed_pending is True
+    member_id = record.agents[-1].agent_id
+    member = AgentInfo(
+        id=member_id,
+        name="Welcome",
+        state="RUNNING",
+        agent_state_dir=tmp_path / "member",
+        claude_config_dir=tmp_path / ".claude",
+        harness=HarnessType.ROOM,
+    )
+
+    with patch("imbue.chat.server._find_active_agent", return_value=member):
+        answer = client.post(f"/api/chats/{chat_id}/message", json={"message": "just say hi"})
+
+    assert answer.status_code == 200
+    # A room's send is appended to its transcript, as typed: no seed context block ahead of the words.
+    transcript = transcript_path(manager._get_agent_state_dir(member_id)).read_text()
+    assert '"just say hi"' in transcript
+    assert SEED_CONTEXT_TAG not in transcript
+    kept = manager._chat_record_store.read(chat_id)
+    assert kept is not None and kept.is_seed_pending is True
 
 
 def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(

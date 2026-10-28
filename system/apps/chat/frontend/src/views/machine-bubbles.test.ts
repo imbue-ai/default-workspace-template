@@ -34,6 +34,22 @@ describe("splitParagraphs", () => {
   it("yields nothing for whitespace", () => {
     expect(splitParagraphs(" \n\n ")).toEqual([]);
   });
+
+  it("keeps a details block whole, so a toggle is never split from its body", () => {
+    const text =
+      "**Honest Software:**\n\n<details><summary>is loyal</summary>\n\nIt answers to you.\n\n</details>\n\nafter";
+    expect(splitParagraphs(text)).toEqual([
+      "**Honest Software:**",
+      "<details><summary>is loyal</summary>\n\nIt answers to you.\n\n</details>",
+      "after",
+    ]);
+  });
+
+  it("keeps nested details blocks whole and tolerates a stray closer", () => {
+    const nested = "<details><summary>a</summary>\n<details><summary>b</summary>\n\ninner\n\n</details>\n\n</details>";
+    expect(splitParagraphs(`${nested}\n\nafter`)).toEqual([nested, "after"]);
+    expect(splitParagraphs("</details>\n\nafter")).toEqual(["</details>", "after"]);
+  });
 });
 
 describe("machineBubbles", () => {

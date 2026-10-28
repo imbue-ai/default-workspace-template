@@ -119,6 +119,7 @@ from imbue.chat.file_serving import try_serve_file
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.binding import resolve_binding
 from imbue.chat.harnesses.claude import auth_endpoints
+from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import restart_drain
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import split_background_task_reports
@@ -866,12 +867,17 @@ def _send_to_chat(
             )
         try:
             # A seeded chat whose agent was launched as the user signed in has its conversation to deliver
-            # ahead of the first words sent to it; the seed counts as delivered only with a send that went through.
-            outcome = agent_manager.carry_pending_seed(
-                chat_id,
-                delivered_text,
-                lambda text: _deliver_message(state, agent_info, text, message_id),
-            )
+            # ahead of the first words sent to it; the seed counts as delivered only with a send that went
+            # through. A room's send carries none: a room has no agent to need the context, and its page shows
+            # the seeded conversation as the chat's earlier segments already.
+            if agent_info.harness is HarnessType.ROOM:
+                outcome = _deliver_message(state, agent_info, delivered_text, message_id)
+            else:
+                outcome = agent_manager.carry_pending_seed(
+                    chat_id,
+                    delivered_text,
+                    lambda text: _deliver_message(state, agent_info, text, message_id),
+                )
         except AgentNotFoundError as e:
             # Destroyed while the send was in flight: the chat is gone, not refusing.
             logger.info("Agent {} was destroyed while a message to it was in flight: {}", agent_info.name, e)

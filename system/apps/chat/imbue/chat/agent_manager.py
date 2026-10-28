@@ -4081,6 +4081,10 @@ class AgentManager:
         owned_keys = sorted(APP_OWNED_LABEL_KEYS.intersection(extra_labels))
         if owned_keys:
             raise AgentCreationError(f"The chat app sets {', '.join(owned_keys)} itself; a create cannot restate them")
+        # The main chat is never a room (the multiplayer spec, S3), so launching it as one is refused the way
+        # a switch to a room is (``_refuse_room_for_main_chat``). Outside the lock, which get_main_chat_id takes.
+        if kind is ChatKind.ROOM and chat_id and ChatId(chat_id) == self.get_main_chat_id():
+            raise AgentCreationError("The main chat cannot become a room")
 
         # Name resolution and the provisional record's registration happen under one lock
         # hold, so a concurrent create sees this one's name as taken (and vice versa).
