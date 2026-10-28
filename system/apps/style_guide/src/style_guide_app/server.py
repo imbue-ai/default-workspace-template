@@ -77,7 +77,9 @@ ROUTE_TABLE: RouteTable = {
     ("GET", "/"): SchemalessRoute(reason="the style guide page"),
     ("GET", "/assets/{filename}"): SchemalessRoute(reason="one file of the page's built bundle"),
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
-    ("GET", PAGE_KIT_SAMPLE_PATH): SchemalessRoute(reason="a plain-HTML page wearing the page kit, which the catalog frames"),
+    ("GET", PAGE_KIT_SAMPLE_PATH): SchemalessRoute(
+        reason="a plain-HTML page wearing the page kit, which the catalog frames"
+    ),
     ("GET", "/_static/{filename}"): SchemalessRoute(reason="one file of the page kit the shell builds"),
     **THEME_STATIC_ROUTE_TABLE,
 }
@@ -118,7 +120,9 @@ def create_app(static_directory: Path, shell_static_directory: Path = SHELL_STAT
     def page_kit_sample() -> ResponseReturnValue:
         """A page built as plain HTML on the page kit, which the catalog frames to show what the kit gives one."""
         return Response(
-            PAGE_KIT_SAMPLE_FILE.read_text(encoding="utf-8"), mimetype="text/html", headers={"Cache-Control": "no-cache"}
+            PAGE_KIT_SAMPLE_FILE.read_text(encoding="utf-8"),
+            mimetype="text/html",
+            headers={"Cache-Control": "no-cache"},
         )
 
     @app.get("/_static/<filename>")

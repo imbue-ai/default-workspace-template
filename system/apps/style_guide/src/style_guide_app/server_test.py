@@ -95,6 +95,10 @@ def test_the_page_kit_files_are_served_from_the_shells_build_and_nothing_else_is
     assert script.get_data(as_text=True) == "/* kit */"
     assert client.get("/_static/workspace_theme.css").mimetype == "text/css"
     assert client.get("/_static/app_contract.js").status_code == 404
-    assert create_app(static_directory, shell_static_directory=tmp_path / "unbuilt").test_client().get(
-        "/_static/workspace_theme.js"
-    ).status_code == 404
+    assert (
+        create_app(static_directory, shell_static_directory=tmp_path / "unbuilt")
+        .test_client()
+        .get("/_static/workspace_theme.js")
+        .status_code
+        == 404
+    )
