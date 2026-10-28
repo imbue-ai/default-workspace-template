@@ -11,3 +11,5 @@ The app stays off the desktop (`desktop_shortcut = false`): it is in the launche
 The colors are one compact table, a row per color: a swatch (a text color as "Aa" in it, a border color as an outline of it, any other as a frameless chip of it), its name (the utility and its `--c-*` value), and the value the page wears. The page says "color" throughout.
 
 The contents column highlights the section the reader is in from the scroll position (a section jumped to is the highlighted one, not the one above it, and the last at the end of the page), and scrolls itself to keep that entry in view.
+
+The app does not start at boot: a one-shot `style_guide_register` program lists it in the launcher, and the shell starts it on the first request for its page.

@@ -37,3 +37,10 @@ The page is a build of `frontend/`, one of the npm workspace's frontends
 (`system/package.json`), into `src/style_guide_app/static/`; the Flask server
 in `src/style_guide_app/server.py` serves it at `/`, its bundle under
 `/assets/`, and `/api/health`, on port 8060. It stores nothing.
+
+It does not start at boot. A one-shot program, `style_guide_register`
+(`system/supervisord.conf.d/style_guide_register.conf`, declared in the
+manifest's `[wiring]`), registers it so it is in the launcher, then exits.
+The shell holds the app's port and starts the `style-guide` program on the
+first request for its page, then stops it a minute after its last window
+closes (`stop_when_no_windows`).
