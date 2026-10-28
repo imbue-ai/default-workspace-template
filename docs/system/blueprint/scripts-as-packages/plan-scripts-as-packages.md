@@ -255,7 +255,7 @@
 
 - `apps/minds_evals/imbue/minds_evals/testing.py:1783` `uv run .agents/skills/launch-task/scripts/create_worker.py` becomes `uv run --no-sync ...`.
 - Any minds_admin demo `uv run` call into template scripts gets the same change. The 23f0b3f3 work already converted `workspace-layout`.
-- minds' bare `python3 <path>` calls (`welcome_chat.py`, `chat_app.py`, `workspace_diagnostics.py`, `skill_chat.py`) are unchanged.
+- minds' bare `python3` calls (`welcome_chat.py`, `chat_app.py`, `workspace_diagnostics.py`, `skill_chat.py`) are unchanged. Its in-workspace `uv run` one-offs (`skill_chat.py`'s account probe, and the workspace programs' `mngr` and account-resolver calls) become `uv run --no-sync`.
 - Run minds_evals' and minds_admin's tests. CI's `build-minds-snapshot` uses the same-named template branch (PR 2).
 - mngr changelog entries.
 

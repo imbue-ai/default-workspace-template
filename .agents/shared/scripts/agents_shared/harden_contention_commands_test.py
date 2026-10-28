@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
+_REPO_ROOT = Path(__file__).resolve().parents[4]
 _DOC = _REPO_ROOT / ".agents" / "shared" / "references" / "harden-contention.md"
 _TK = _REPO_ROOT / "system" / "vendor" / "tk" / "ticket"
 _BASH_BLOCK = re.compile(r"```bash\n(.*?)```", re.DOTALL)
