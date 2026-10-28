@@ -442,13 +442,23 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // A send mngr typed into the agent but could not confirm: its text went back to the composer
   // like any failed send's, but the agent may still take it. Once its turn reaches the transcript
   // the copy comes back out and its notice closes, so the user does not send it a second time.
-  // Kept past Cancel, which leaves the copy in the composer just the same.
-  let unconfirmedSend: { recovery: SendRecovery; priorTurnIds: ReadonlySet<string> } | null = null;
+  // Kept past Cancel, which leaves the copy in the composer just the same. One per send, across
+  // every chat this composer serves.
+  let unconfirmedSends: { recovery: SendRecovery; priorTurnIds: ReadonlySet<string> }[] = [];
 
   function watchForUnconfirmedTurn(err: unknown, recovery: SendRecovery, priorTurnIds: ReadonlySet<string>): void {
-    if (describeRequestErrorKind(err) === "submission_unconfirmed") {
-      unconfirmedSend = { recovery, priorTurnIds };
+    // A Send again that is unconfirmed too keeps the first watch: the turns read before the
+    // first send let a landing of either one count.
+    if (
+      describeRequestErrorKind(err) === "submission_unconfirmed" &&
+      !unconfirmedSends.some((watched) => watched.recovery === recovery)
+    ) {
+      unconfirmedSends = [...unconfirmedSends, { recovery, priorTurnIds }];
     }
+  }
+
+  function stopWatchingUnconfirmedTurn(recovery: SendRecovery): void {
+    unconfirmedSends = unconfirmedSends.filter((watched) => watched.recovery !== recovery);
   }
   // Whether the chat app refused the send because the chat's account was signed out: sending again cannot help, so
   // the notice offers choosing a provider instead of Retry and Force.
@@ -656,15 +666,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       // After the hand-back above is adopted: the failed send's copy arrives through it.
-      const unconfirmed = unconfirmedSend;
-      if (
-        unconfirmed !== null &&
-        hasUserTurnLandedSince(unconfirmed.recovery.chatId, unconfirmed.recovery.sentText, unconfirmed.priorTurnIds)
-      ) {
-        unconfirmedSend = null;
-        clearRestoredMessage(unconfirmed.recovery.chatId, unconfirmed.recovery.text, unconfirmed.recovery.attachments);
+      for (const { recovery, priorTurnIds } of unconfirmedSends) {
+        if (!hasUserTurnLandedSince(recovery.chatId, recovery.sentText, priorTurnIds)) {
+          continue;
+        }
+        stopWatchingUnconfirmedTurn(recovery);
+        clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
         // Only its own notice, and not out from under a Send again already on its way.
-        if (actionFailureRecovery === unconfirmed.recovery && actionFailureInFlight === null) {
+        if (actionFailureRecovery === recovery && actionFailureInFlight === null) {
           clearActionFailureNotice();
         }
       }
@@ -1235,9 +1244,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           dropOutgoingNoTurnWillRetire(recovery.chatId, outgoingId, status);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
-          if (unconfirmedSend?.recovery === recovery) {
-            unconfirmedSend = null;
-          }
+          stopWatchingUnconfirmedTurn(recovery);
           clearActionFailureNotice();
           focusMessageTextarea();
         } catch (err) {

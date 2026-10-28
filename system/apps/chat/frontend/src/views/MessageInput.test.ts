@@ -1181,6 +1181,26 @@ describe("MessageInput send failure notice", () => {
     expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("hello");
   });
 
+  it("still takes an unconfirmed message out of its chat's composer after another chat's send was unconfirmed too", async () => {
+    const component = MessageInput();
+    const render = (chatId: string) => component.view!({ attrs: { chatId } } as never);
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    await typeAndSend(component, "agent-1", "hello");
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    await typeAndSend(component, "agent-2", "goodbye");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
+    expect(localStorage.getItem("message-text:agent-2")).toContain("goodbye");
+
+    mocks.hasUserTurnLandedSince.mockImplementation((chatId: string) => chatId === "agent-1");
+    try {
+      render("agent-2");
+    } finally {
+      mocks.hasUserTurnLandedSince.mockImplementation(() => false);
+    }
+    expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("hello");
+    expect(localStorage.getItem("message-text:agent-2")).toContain("goodbye");
+  });
+
   it("shows no notice for an unconfirmed message whose turn landed before the failure came back", async () => {
     mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
     mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
