@@ -76,6 +76,10 @@ def _lane_id_for(harness: HarnessType) -> str:
 def _write_account_index(accounts_root: Path, index: accounts.AccountIndex) -> None:
     accounts_root.mkdir(parents=True, exist_ok=True)
     (accounts_root / "index.json").write_text(json.dumps(index.model_dump()))
+    # A signed-in account always has its folder (sign-in creates it), and the
+    # launcher's claude trust seeding writes into it.
+    for account in index.accounts:
+        (accounts_root / account.id).mkdir(exist_ok=True)
 
 
 def _account(account_id: str, harness: HarnessType) -> accounts.Account:
@@ -153,6 +157,12 @@ def test_launch_builds_a_valid_mngr_create_for_worktree_mode(
     assert_mngr_argv_valid(create.argv)
     assert create.argv[create.argv.index("--from") + 1] == f":{repo}"
     assert create.argv[create.argv.index("--transfer") + 1] == "git-worktree"
+    # The worktree lands at an explicit path, known before the create (the trust
+    # seeding below needs it); mngr would otherwise generate one.
+    assert (
+        create.argv[create.argv.index("--target-path") + 1]
+        == "/home/user/worktrees/my-task"
+    )
     # The workspace's create defaults set ensure_clean=false, which would otherwise copy
     # the source repo's uncommitted files into the worktree against this mode's promise.
     assert "--exclude-unclean" in create.argv
@@ -172,6 +182,13 @@ def test_launch_builds_a_valid_mngr_create_for_worktree_mode(
     assert (
         create.kwargs["env"]["MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING"] == "true"
     )
+    # Claude's folder-trust dialog is pre-dismissed for the new work dir, the way the
+    # account seeding pre-trusts the workspace checkout; without it the create's
+    # first-message send refuses while the dialog is up.
+    trust_config = json.loads(
+        (workspace_root / "accounts" / "acct-claude" / ".claude.json").read_text()
+    )
+    assert "/home/user/worktrees/my-task" in trust_config.get("projects", {})
 
 
 def test_the_narrowing_env_var_is_accepted_by_mngrs_env_override_layer() -> None:
@@ -192,6 +209,7 @@ def test_in_place_mode_runs_in_the_directory_itself(workspace_root: Path) -> Non
     (create,) = runner.create_calls()
     assert_mngr_argv_valid(create.argv)
     assert create.argv[create.argv.index("--transfer") + 1] == "none"
+    assert "--target-path" not in create.argv
     assert "--exclude-unclean" not in create.argv
     assert "--branch" not in create.argv
     assert "--message" not in create.argv

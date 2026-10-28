@@ -38,8 +38,15 @@ from imbue.chat.agent_discovery import agent_state_dir, get_host_dir
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.mngr.primitives import AgentId
+from imbue.mngr_claude.claude_config import auto_dismiss_claude_dialogs
 
 _CUSTOM_TEMPLATE = "custom"
+
+# Where a custom agent's worktree lands: an explicit --target-path under the same base
+# the workspace's `worktree_base_folder` setting names, passed so the work dir is known
+# BEFORE the create (claude's folder-trust seeding below needs the path up front; an
+# mngr-generated worktree path is only knowable afterwards).
+_WORKTREE_BASE = Path("/home/user/worktrees")
 
 # The harnesses a custom agent can run on: every real harness, not the chat app's
 # pseudo-harness for pre-agent chat segments.
@@ -187,6 +194,7 @@ def build_create_argv(
     name: str,
     source_path: Path,
     mode: str,
+    work_dir: Path,
     harness: HarnessType,
     account_id: str,
     agent_id: str,
@@ -205,6 +213,7 @@ def build_create_argv(
         f":{source_path}",
         "--transfer",
         "git-worktree" if mode == "worktree" else "none",
+        *(["--target-path", str(work_dir)] if mode == "worktree" else []),
         "--type",
         str(harness),
         "--template",
@@ -235,18 +244,6 @@ def build_create_argv(
     return argv
 
 
-def _created_work_dir(runner: Runner, agent_id: str) -> str:
-    """Best-effort: the agent is already launched, so a failed or incomplete listing
-    here degrades to the fallback text rather than failing a successful launch."""
-    _, records = _list_agent_records(runner)
-    for record in records:
-        if record.get("id") == agent_id:
-            work_dir = record.get("work_dir")
-            if isinstance(work_dir, str):
-                return work_dir
-    return "(unknown; see `mngr list`)"
-
-
 def launch(
     name: str,
     source_path: Path,
@@ -272,18 +269,33 @@ def launch(
         "_resolve_account only returns accounts on a supported lane"
     )
 
+    # The agent's work dir is known before the create: the source itself in-place, or
+    # an explicit worktree target (mngr would otherwise generate the path, and claude's
+    # trust seeding below needs it up front).
+    work_dir = source_path if mode == "in-place" else _WORKTREE_BASE / name
+    if mode == "worktree" and work_dir.exists():
+        _fail(f"{work_dir} already exists; remove it or pick another --name")
+
     # Bind the agent to the account the way a chat is bound: claude rides an env
     # var; the other harnesses get a credential link provisioned over the new
     # agent's state dir, which is why the agent id is minted before the create.
     agent_id = str(AgentId())
+    account_dir = accounts.account_dir(account.id)
     binding_args = build_account_binding(harness).create_args(
-        accounts.account_dir(account.id), agent_state_dir(get_host_dir(), agent_id)
+        account_dir, agent_state_dir(get_host_dir(), agent_id)
     )
+
+    # Pre-trust the work dir for claude, the same way the account seeding trusts the
+    # workspace checkout: without it, claude opens its folder-trust dialog in the new
+    # directory and the create's first-message send refuses while it is up.
+    if harness is HarnessType.CLAUDE:
+        auto_dismiss_claude_dialogs(account_dir / ".claude.json", work_dir)
 
     argv = build_create_argv(
         name=name,
         source_path=source_path,
         mode=mode,
+        work_dir=work_dir,
         harness=harness,
         account_id=account.id,
         agent_id=agent_id,
@@ -300,7 +312,6 @@ def launch(
             f"If a half-created agent is left behind, `mngr destroy {name}` cleans it up."
         )
 
-    work_dir = _created_work_dir(runner, agent_id)
     print(
         f"Launched custom agent {name} ({agent_id}) on account {account.id} ({harness})."
     )

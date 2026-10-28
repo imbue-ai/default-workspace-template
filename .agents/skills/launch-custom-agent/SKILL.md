@@ -53,9 +53,14 @@ missing path, and worktree mode on a non-git directory.
 ## 3. Report back
 
 Tell the user the agent is running and where: its chat appears in the chat list
-under the display name, and its working directory is the printed work dir (the
-worktree lives under `/home/user/worktrees/`). Destroying the agent later (`mngr
-destroy <name>`) removes the agent but never deletes the user's source directory.
+under the display name, and its working directory is the printed work dir (a
+worktree lands at `/home/user/worktrees/<name>`). Destroying the agent later
+(`mngr destroy <name>`) removes the agent but never deletes the user's source
+directory.
+
+The create may print "WARNING: No API credentials detected for Claude Code" --
+that preflight only looks at the process env and `~/.claude`, while the agent's
+credential rides its account binding. The warning is expected and harmless here.
 
 ## Guidelines
 
@@ -70,3 +75,6 @@ destroy <name>`) removes the agent but never deletes the user's source directory
   (`MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING=true`): the `custom` template
   deliberately replaces the per-harness workspace prompt blocks and codex's
   provisioning command, which that guard would otherwise reject.
+- For claude, the launcher pre-trusts the agent's work dir in the account's
+  config (the same seeding that trusts the workspace checkout); without it,
+  claude's folder-trust dialog blocks the first message in a new directory.
