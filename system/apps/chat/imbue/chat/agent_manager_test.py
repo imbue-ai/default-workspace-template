@@ -150,6 +150,7 @@ from imbue.chat.testing import write_last_compaction_record
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.concurrency_group.errors import ConcurrencyGroupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.imbue_common.model_update import to_update
@@ -6066,6 +6067,21 @@ def test_a_restart_that_cannot_run_after_a_sign_in_ends_every_resend(
         assert not any(is_chat_resending_after_sign_in(manager, agent_id) for agent_id in agent_ids)
     finally:
         manager.stop()
+
+
+def test_a_sign_in_whose_restart_thread_cannot_start_ends_every_resend(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    agent_ids = [f"agent-{uuid4().hex}" for _ in range(2)]
+    for index, agent_id in enumerate(agent_ids):
+        seed_agent_state(manager, agent_id, name=f"Shutting-Down-Chat-{index}", labels={"account": "acct-1"})
+    # A stopped manager's thread group takes no new threads, as when a sign-in lands during shutdown.
+    manager.stop()
+    with pytest.raises(ConcurrencyGroupError):
+        manager.restart_agents_on_account_in_background("acct-1")
+    assert not any(is_chat_resending_after_sign_in(manager, agent_id) for agent_id in agent_ids)
 
 
 def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
