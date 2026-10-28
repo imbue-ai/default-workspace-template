@@ -26,9 +26,9 @@ describe("rowsFromSnapshots", () => {
       null,
     );
 
-    expect(rows.map((row) => [row.chatId, row.title, row.status, row.lastActiveMs, row.isProvisional])).toEqual([
-      ["agent-a", "Plan", "idle", 1_700_000_000_000, false],
-      ["agent-b", "New chat", "error", null, true],
+    expect(rows.map((row) => [row.chatId, row.title, row.status, row.lastActiveMs, row.kind])).toEqual([
+      ["agent-a", "Plan", "idle", 1_700_000_000_000, "agent"],
+      ["agent-b", "New chat", "error", null, "provisional"],
     ]);
   });
 });
@@ -135,5 +135,37 @@ describe("groupedRows", () => {
     const rows = rowsFromSnapshots([chatSnapshotFixture("agent-a"), chatSnapshotFixture("agent-b")], [], null);
 
     expect(startsWithMainChat(groupedRows(rows, NONE))).toBe(false);
+  });
+});
+
+describe("rowsFromSnapshots with rooms", () => {
+  const room = (id: string, title: string, awaiting: string[] = [], lastMessagedAt: number | null = null) =>
+    chatSnapshotFixture(id, { kind: "room", title, awaiting_chat_ids: awaiting, last_messaged_at: lastMessagedAt });
+
+  it("lists a room as a row of its kind, with the mention mark the viewer's unseen mentions give", () => {
+    const rows = rowsFromSnapshots(
+      [chatSnapshotFixture("agent-a", { title: "Plan" }), room("agent-lounge", "Lounge", [], 1_700_000_000)],
+      [provisional("agent-b", "awaiting_first_send")],
+      null,
+      new Set(["agent-lounge"]),
+    );
+
+    expect(rows.map((row) => [row.chatId, row.kind, row.title, row.lastActiveMs, row.hasMention])).toEqual([
+      ["agent-a", "agent", "Plan", null, false],
+      ["agent-lounge", "room", "Lounge", 1_700_000_000_000, true],
+      ["agent-b", "provisional", "New chat", null, false],
+    ]);
+  });
+
+  it("works while an agent chat the room asked is working, and is its own status otherwise", () => {
+    const working = chatSnapshotFixture("agent-a", { status: "working" });
+    const idle = chatSnapshotFixture("agent-b", { status: "idle" });
+    const asked = room("agent-lounge", "Lounge", ["agent-a"]);
+    const unasked = room("agent-hall", "Hall", ["agent-b"]);
+    const stopped = chatSnapshotFixture("agent-attic", { kind: "room", title: "Attic", status: "stopped" });
+
+    const statuses = rowsFromSnapshots([working, idle, asked, unasked, stopped], [], null).map((row) => row.status);
+
+    expect(statuses).toEqual(["working", "idle", "working", "idle", "stopped"]);
   });
 });

@@ -12,7 +12,7 @@
  * So this file MOUNTS the message (auto-redraw on, like the real app) and never renders by
  * hand.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const store = vi.hoisted(() => ({ chat: undefined as unknown }));
 vi.mock("../models/Chats", async (importOriginal) => ({
@@ -30,6 +30,7 @@ import m from "mithril";
 import type { AssistantMessageEvent, ToolResultEvent } from "../models/Response";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { closeProviderChooser, getUnpickableAccount } from "../models/Providers";
+import { setParticipantsForTesting } from "../models/Participants";
 import { StableAssistantMessage } from "./message-renderers";
 
 const ACCOUNT_ID = "acct-openai";
@@ -107,5 +108,49 @@ describe("the auth-error note without a hand-cranked render", () => {
     await settle();
 
     expect(getUnpickableAccount()).toEqual({ accountId: "acct-other", reason: "failing" });
+  });
+});
+
+describe("the machine-bubble header without a hand-cranked render", () => {
+  afterEach(() => {
+    setParticipantsForTesting(null, []);
+  });
+
+  it("wears the workspace agent's name and face once the roster lands", async () => {
+    // The transcript's first paint, before the roster has arrived: the same event object on
+    // every redraw, as the store hands it back for an untouched message.
+    const event: AssistantMessageEvent = {
+      ...authErrorEvent(),
+      is_auth_error: false,
+      is_api_error: false,
+      text: "words",
+    };
+    const toolResults = new Map<string, ToolResultEvent>();
+    m.mount(document.getElementById("root") as HTMLElement, {
+      view: () => m(StableAssistantMessage, { event, toolResults, chatId: "chat-1" }),
+    });
+    const header = (): HTMLElement | null => document.querySelector("[data-machine-header]");
+    expect(header()?.textContent).toBe("AAgent");
+
+    setParticipantsForTesting("owner", [
+      {
+        key: "workspace-agent",
+        kind: "workspace_agent",
+        display_name: "Atlas",
+        profile_picture_url: "/api/participants/workspace-agent/picture",
+        email: null,
+        handle: "agent",
+        color: "#000",
+        is_owner: false,
+        is_connected: true,
+        last_seen: null,
+        last_input_at: null,
+      },
+    ]);
+    m.redraw();
+    await settle();
+
+    expect(header()?.textContent).toBe("Atlas");
+    expect(header()?.querySelector("img")?.getAttribute("src")).toBe("/api/participants/workspace-agent/picture");
   });
 });

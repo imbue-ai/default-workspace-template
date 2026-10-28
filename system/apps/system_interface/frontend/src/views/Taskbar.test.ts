@@ -3,8 +3,15 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyPresence, resetPresenceForTesting } from "../model/Presence";
-import { appRecord, avatarStateRecord, desktopRecord, presentUserRecord, windowRecord } from "../testing/records";
+import { resetPresenceForTesting } from "../model/Presence";
+import {
+  appRecord,
+  avatarStateRecord,
+  desktopRecord,
+  rosterParticipantRecord,
+  windowRecord,
+} from "../testing/records";
+import type { SystemTrayAttrs } from "./SystemTray";
 import { Taskbar } from "./Taskbar";
 import type { TaskbarAttrs } from "./Taskbar";
 
@@ -12,6 +19,27 @@ afterEach(() => {
   unmountViews();
   resetPresenceForTesting();
 });
+
+/** A tray with an empty roster, no chrome, and the default avatar. */
+function trayAttrs(overrides: Partial<SystemTrayAttrs> = {}): SystemTrayAttrs {
+  return {
+    roster: [],
+    viewer: null,
+    now: new Date("2026-10-25T12:00:00Z"),
+    hopping: new Set(),
+    ringed: new Set(),
+    isShareOffered: false,
+    avatar: avatarStateRecord(),
+    workspaceName: "Atlas",
+    isAgentAttending: false,
+    onPersonClick: vi.fn(),
+    onAgentClick: vi.fn(),
+    onPersonHoverStart: vi.fn(),
+    onAgentHoverStart: vi.fn(),
+    onHoverEnd: vi.fn(),
+    ...overrides,
+  };
+}
 
 function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
   const docs = appRecord("docs");
@@ -61,14 +89,9 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
       onRunSecondary: vi.fn(),
       onRise: vi.fn(),
     },
-    tray: {
-      desktops: [desktopRecord("home"), desktopRecord("work")],
-      activeDesktopId: "home",
-      isDesktopsMenuOpen: false,
-      onSwitchDesktop: vi.fn(),
-      onOpenDesktopsMenu: vi.fn(),
-      onDesktopContextMenu: vi.fn(),
-    },
+    overview: { isOpen: false, onToggle: vi.fn() },
+    viewing: null,
+    tray: trayAttrs(),
     onEntryClick: vi.fn(),
     onEntryContextMenu: vi.fn(),
     ...overrides,
@@ -180,39 +203,62 @@ describe("Taskbar", () => {
     expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
   });
 
-  it("carries the launcher field and the Desktops widget with a glyph per desktop, and nothing else in the tray while nobody is recorded", () => {
-    const onSwitchDesktop = vi.fn();
-    const taskbar = render({
-      tray: {
-        desktops: [desktopRecord("home"), desktopRecord("work")],
-        activeDesktopId: "home",
-        isDesktopsMenuOpen: false,
-        onSwitchDesktop,
-        onOpenDesktopsMenu: vi.fn(),
-        onDesktopContextMenu: vi.fn(),
-      },
-    });
+  it("carries the launcher field, the overview button before the entries, and the tray with the agent and nobody else while the roster is empty", () => {
+    const onToggle = vi.fn();
+    const taskbar = render({ overview: { isOpen: false, onToggle } });
     expect(taskbar.querySelector("[data-launcher-field]")).not.toBeNull();
-    const switches = [...taskbar.querySelectorAll("[data-desktop-switch]")];
-    expect(switches.map((element) => element.getAttribute("data-desktop-switch"))).toEqual(["home", "work"]);
-    expect(switches.map((element) => element.getAttribute("data-active"))).toEqual(["true", "false"]);
-    (switches[1] as HTMLElement).click();
-    expect(onSwitchDesktop).toHaveBeenCalledWith("work");
-    expect(taskbar.querySelector('[data-tray-widget="desktops"]')).not.toBeNull();
+    expect(taskbar.querySelector("[data-tray-agent]")).not.toBeNull();
+    expect(taskbar.querySelector("[data-tray-widget='people']")).toBeNull();
+    expect(taskbar.querySelector("[data-tray-share]")).toBeNull();
+    const button = taskbar.querySelector('[data-tray-widget="overview"]') as HTMLElement;
+    expect(button.getAttribute("aria-label")).toBe("Manage Desktops");
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    expect(button.nextElementSibling?.getAttribute("data-taskbar-entries")).toBe("");
+    button.click();
+    expect(onToggle).toHaveBeenCalledTimes(1);
     expect(taskbar.querySelector("[data-system-tray]")?.children).toHaveLength(1);
   });
 
-  it("draws the Presence widget in front of Desktops once two users are connected", () => {
-    applyPresence([presentUserRecord("user-bob-4471"), presentUserRecord("user-owner-9c21", { owner: true })]);
-    const taskbar = render();
+  it("replaces the tray with the viewing chip and hides the overview button while viewing somebody else's desktop", () => {
+    const onStopViewing = vi.fn();
+    const alice = rosterParticipantRecord("user:user-alice-0001", { display_name: "Alice", color: "#3b5ba9" });
+    const taskbar = render({
+      viewing: {
+        desktop: desktopRecord("alice", { name: "Alice's desk", owner: alice.key }),
+        owner: alice,
+        color: alice.color,
+        onStopViewing,
+      },
+    });
+    expect(taskbar.querySelector('[data-tray-widget="overview"]')).toBeNull();
+    expect(taskbar.querySelector("[data-system-tray]")).toBeNull();
+    const chip = taskbar.querySelector('[data-tray-widget="viewing"]') as HTMLElement;
+    expect(chip.getAttribute("data-viewing-desktop")).toBe("alice");
+    expect(chip.textContent).toContain("Alice");
+    expect(chip.textContent).toContain("Alice's desk");
+    expect(chip.style.backgroundColor).toBe("rgb(59, 91, 169)");
+    (chip.querySelector("[data-stop-viewing]") as HTMLElement).click();
+    expect(onStopViewing).toHaveBeenCalledTimes(1);
+  });
+
+  it("draws the share button under a chrome, the people before the viewer, and the agent last", () => {
+    const roster = [
+      rosterParticipantRecord("user:user-josh-0001", { display_name: "Josh", is_owner: true }),
+      rosterParticipantRecord("user:user-bob-4471", { display_name: "Bob" }),
+      rosterParticipantRecord("workspace-agent", { kind: "workspace_agent", display_name: "Atlas" }),
+    ];
+    const onAgentClick = vi.fn();
+    const taskbar = render({
+      tray: trayAttrs({ roster, viewer: "user:user-josh-0001", isShareOffered: true, onAgentClick }),
+    });
     const tray = taskbar.querySelector("[data-system-tray]") as HTMLElement;
-    expect([...tray.children].map((widget) => widget.getAttribute("data-tray-widget"))).toEqual([
-      "presence",
-      "desktops",
-    ]);
-    expect(
-      [...tray.querySelectorAll("[data-presence-user]")].map((el) => el.getAttribute("data-presence-user")),
-    ).toEqual(["user-bob-4471", "user-owner-9c21"]);
+    const order = [...tray.querySelectorAll("[data-tray-share], [data-tray-person], [data-tray-agent]")].map(
+      (element) =>
+        element.getAttribute("data-tray-person") ?? (element.hasAttribute("data-tray-share") ? "share" : "agent"),
+    );
+    expect(order).toEqual(["share", "user:user-bob-4471", "user:user-josh-0001", "agent"]);
+    (tray.querySelector("[data-tray-agent]") as HTMLElement).click();
+    expect(onAgentClick).toHaveBeenCalledTimes(1);
   });
 
   it("the launcher field's Escape clears a typed query first, and keeps the key from the document", () => {

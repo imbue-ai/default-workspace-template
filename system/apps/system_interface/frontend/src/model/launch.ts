@@ -27,14 +27,46 @@ export const NO_TEXT_APP_REASON = "No app in this workspace can start a chat";
 /** Why a page's ``shell:draft-text`` went nowhere. */
 export const NO_DRAFT_APP_REASON = "No app in this workspace can take a draft";
 
-/** Every launch path of every openable app, in registry and manifest order. */
-export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {
+/** The launch paths of the openable apps that ``isWanted`` picks, in registry and manifest order. */
+function launchesWhere(apps: readonly AppRecord[], isWanted: (launchPath: LaunchPath) => boolean): AppLaunch[] {
   const launches: AppLaunch[] = [];
   for (const app of apps) {
     if (app.internal) continue;
-    for (const launchPath of app.launch_paths) launches.push({ app, launchPath });
+    for (const launchPath of app.launch_paths) {
+      if (isWanted(launchPath)) launches.push({ app, launchPath });
+    }
   }
   return launches;
+}
+
+/** Every launch path of every openable app, in registry and manifest order, but the ones that take a mention of a
+ *  person or are about an app: those are the tray's and the title bar's to run (the multiplayer spec, sections 7.5
+ *  and 9.2), never a row of anything. */
+export function appLaunchesOf(apps: readonly AppRecord[]): AppLaunch[] {
+  return launchesWhere(apps, (launchPath) => launchPath.mention_param === null && launchPath.app_params === null);
+}
+
+/** The launch path a window's "Chat about this app" button runs (the multiplayer spec, section 9.2): the first of
+ *  the machine that declares ``app_params``, in launcher order; null when no app declares one. */
+export function appChatLaunchOf(apps: readonly AppRecord[]): AppLaunch | null {
+  return orderAppLaunches(launchesWhere(apps, (launchPath) => launchPath.app_params !== null))[0] ?? null;
+}
+
+/** The params an app-chat launch runs with: the app's name and display name in the params the path declares. */
+export function appChatParams(launchPath: LaunchPath, about: AppRecord): Record<string, string> {
+  if (launchPath.app_params === null) return {};
+  return { [launchPath.app_params.name]: about.name, [launchPath.app_params.display_name]: about.display_name };
+}
+
+/** The launch paths that take a mention of a person, in launcher order: the first is what a click on a person's
+ *  tray entry runs, with ``@<handle> `` as the param. */
+export function mentionRowsOf(apps: readonly AppRecord[]): AppLaunch[] {
+  return orderAppLaunches(launchesWhere(apps, (launchPath) => launchPath.mention_param !== null));
+}
+
+/** The params a mention launch runs with: the mention as its mention param. */
+export function mentionParams(launchPath: LaunchPath, mention: string): Record<string, string> {
+  return launchPath.mention_param === null ? {} : { [launchPath.mention_param]: mention };
 }
 
 /** The launches in launcher order: the apps that declare a ``launcher_rank``, lowest first (registry
@@ -86,15 +118,19 @@ export function launchPathOf(app: AppRecord, launchId: string): LaunchPath | nul
 
 /** The app's one desktop shortcut, by the rule the shell seeds desktops with (desktop-interface plan section 3.6):
  *  its ``default_shortcut`` when that names a launch path it offers, whether or not that path takes text; else, for
- *  an app a program runs, its first launch path taking no text, or its first when every one takes text, focusing. An
- *  internal app has none, and so does a row with no program (a preview frame, an isolated test server) that declares
- *  none. */
+ *  an app a program runs, its first launch path taking no text, no mention, and no app, or its first when every one
+ *  takes one, focusing. An internal app has none, and so does a row with no program (a preview frame, an isolated
+ *  test server) that declares none. */
 export function appShortcutOf(app: AppRecord): DefaultShortcut | null {
   if (app.internal) return null;
   const declared = app.default_shortcut;
   if (declared !== null) return launchPathOf(app, declared.launch) === null ? null : declared;
   if (app.program === "") return null;
-  const first = app.launch_paths.find((launchPath) => fillParamOf(launchPath) === null) ?? app.launch_paths[0];
+  const first =
+    app.launch_paths.find(
+      (launchPath) =>
+        fillParamOf(launchPath) === null && launchPath.mention_param === null && launchPath.app_params === null,
+    ) ?? app.launch_paths[0];
   return first === undefined ? null : { launch: first.id, mode: "focus" };
 }
 

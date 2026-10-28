@@ -9,12 +9,14 @@ from typing import Any
 from typing import Final
 
 from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.manifest import describe_validation_error
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
 from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
 from app_schema.api_schema import register_api_schema_route
+from app_schema.errors import InvalidRequestBodyError
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from flask import Flask
@@ -28,7 +30,9 @@ from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.identity import participant_key_of
 
+from imbue.system_interface.api_models import HeartbeatRequest
 from imbue.system_interface.api_models import HeartbeatResponse
 from imbue.system_interface.api_models import PresenceListing
 from imbue.system_interface.api_models import PresentUserView
@@ -57,6 +61,7 @@ from imbue.system_interface.presence import utc_now
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.route_table import PRESENCE_HEARTBEAT_PATH
 from imbue.system_interface.route_table import PRESENCE_PATH
+from imbue.system_interface.route_table import ROSTER_ROUTE
 from imbue.system_interface.route_table import SHELL_ROUTE_TABLE
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import PopOutStateReport
@@ -485,27 +490,51 @@ def _presence_endpoint() -> Response:
     )
 
 
+def _roster_wire_json() -> dict[str, Any]:
+    return get_state().roster.document(utc_now()).model_dump(mode="json")
+
+
 def _broadcast_presence_if_changed(outcome: PresenceOutcome) -> None:
     if outcome.is_membership_changed:
         _shell().broadcaster.broadcast_presence_updated(_present_users_wire_json(outcome.users))
+        _shell().broadcaster.broadcast_roster_updated(_roster_wire_json())
+
+
+def _roster_endpoint() -> Response:
+    """Everyone who may be here, in roster order (the multiplayer spec, section 4.2)."""
+    return model_response(get_state().roster.document(utc_now()))
+
+
+def _parse_heartbeat() -> HeartbeatRequest:
+    """The heartbeat's body, read here rather than by ``parse_request_body`` because a page from before the body was
+    sent posts none at all, which is a heartbeat carrying nothing; anything else is refused as the helper refuses it."""
+    if not request.get_data():
+        return HeartbeatRequest()
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        raise InvalidRequestBodyError("the request body must be a JSON object")
+    try:
+        return HeartbeatRequest.model_validate(body)
+    except ValidationError as e:
+        raise InvalidRequestBodyError(describe_validation_error(e)) from e
 
 
 def _presence_heartbeat_endpoint() -> Response:
-    """One shell page's heartbeat (no body): record the requester's presence and answer their own identity record.
+    """One shell page's heartbeat: record the requester's presence (the owner of an unshared workspace under the
+    ``owner`` key) and the page's newest input time, and answer their own identity record and participant key.
 
-    Answers 204 and records nothing when the identity carries no user id (an unshared
-    workspace's owner, or a request that came through no current proxy): there is nobody
-    to name, and the page then shows no account.
+    Answers 204 and records nothing for a visiting agent, which never heartbeats: there is no file for one here.
     """
     identity = request_identity()
-    if identity.user_id is None:
+    heartbeat = _parse_heartbeat()
+    if identity.agent_id is not None:
         return Response(status=204)
     try:
-        outcome = get_state().presence.heartbeat(identity, utc_now())
+        outcome = get_state().presence.heartbeat(identity, utc_now(), heartbeat.last_input_at)
     except (InvalidShellValueError, InvalidLayoutValueError) as e:
         return error_response(str(e), 400)
     _broadcast_presence_if_changed(outcome)
-    return model_response(HeartbeatResponse(identity=identity))
+    return model_response(HeartbeatResponse(identity=identity, participant=participant_key_of(identity)))
 
 
 # The icon sizes the manifest offers: the touch icon's, and the two an installing browser asks a manifest for.
@@ -601,6 +630,7 @@ def _ws_endpoint(websocket: Any) -> None:
         websocket=websocket,
         shell=state.shell,
         initial_presence=_present_users_wire_json(state.presence.connected_users(utc_now())),
+        initial_roster=_roster_wire_json(),
     )
 
 
@@ -734,7 +764,9 @@ def _log_client_switches(
             _loguru_logger.opt(exception=e).warning("Could not log the desktop switch for {}", report.client_id)
 
 
-def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: list[dict[str, Any]]) -> None:
+def _run_ws_broadcast_loop(
+    websocket: Any, shell: ShellState, initial_presence: list[dict[str, Any]], initial_roster: dict[str, Any]
+) -> None:
     """Stream the shell broadcaster's messages to ``websocket`` until the client disconnects.
 
     Each WebSocket connection owns its own thread (flask-sock + the threaded WSGI server), so
@@ -742,9 +774,9 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: 
     closes a half-dead peer, surfacing as ``ConnectionClosed`` from ``send``; the broadcaster
     can also evict a hopelessly-behind client by pushing the shutdown sentinel (``None``).
 
-    The connect sends the inventory, the desktops, and the connected users
-    (``initial_presence``, read by the caller before the loop starts) so a window paints from
-    one snapshot; later changes arrive as broadcasts.
+    The connect sends the inventory, the desktops, the connected users, and the roster
+    (``initial_presence`` and ``initial_roster``, read by the caller before the loop starts) so a window paints
+    from one snapshot; later changes arrive as broadcasts.
 
     Incoming ``client_state`` registrations are drained non-blockingly on each loop iteration.
     """
@@ -776,6 +808,11 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: 
             json.dumps({"type": "update_notice_changed", "notice": notice.wire_json() if notice is not None else None})
         )
         websocket.send(json.dumps({"type": "presence_updated", "users": initial_presence}))
+        websocket.send(json.dumps({"type": "roster_updated", **initial_roster}))
+        # The chats' activity too, when the chat app has reported it: the agent's card lists it from the connect.
+        chats_activity = shell.chats_activity.current()
+        if chats_activity is not None:
+            websocket.send(json.dumps({"type": "chats_activity", **chats_activity.model_dump(mode="json")}))
 
         is_client_registered = False
         shutdown = False
@@ -846,6 +883,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(CONTEXT_MENU_ROUTE, view_func=_serve_context_menu, methods=["GET"])
     application.add_url_rule(PRESENCE_PATH, view_func=_presence_endpoint, methods=["GET"])
     application.add_url_rule(PRESENCE_HEARTBEAT_PATH, view_func=_presence_heartbeat_endpoint, methods=["POST"])
+    application.add_url_rule(ROSTER_ROUTE, view_func=_roster_endpoint, methods=["GET"])
     register_shell_routes(application)
     register_avatar_routes(application)
     sock.route("/api/ws")(_ws_endpoint)

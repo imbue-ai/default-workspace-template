@@ -41,12 +41,12 @@ The sections below define each one.
 
 ### 2.1 Desktop
 
-A desktop has an id (the slugified name, stable across renames), a name, a colour, a glyph, a **wallpaper**, a **theme** (its own choice, or none to wear the workspace's default), its **shortcuts**, and its **windows**.
+A desktop has an id (the slugified name, stable across renames), a name, a **wallpaper**, a **theme** (its own choice, or none to wear the workspace's default), its **shortcuts**, its **windows**, and an **owner** by convention (its record also keeps a colour and a glyph, which nothing draws any more).
 Everything on a desktop is shared truth: every client sees the same desktops with the same windows, shortcuts, and wallpaper.
 A workspace always has at least one desktop; deleting the last one is refused, and a fresh workspace starts with one default desktop.
 There is no unfiltered "Everything" desktop; the launcher is how you reach everything on the machine.
 
-Every desktop is shared. A private mode was considered and dropped: a window holds a resource for everyone, so nothing about a desktop is actually partitioned, and the concept bought nothing. A visiting user is kept off the owner's desktop by being given one of their own on arrival (the plan's section 3.10).
+Every desktop is shared. A private mode was considered and dropped: a window holds a resource for everyone, so nothing about a desktop is actually partitioned, and the concept bought nothing. A visiting user is kept off the owner's desktop by being given one of their own on arrival (the plan's section 3.10), written with their key as its owner (the multiplayer spec, section 8.1); the owner's desktops carry no key. Ownership is what the overview and the person cards list desktops by, and viewing someone else's desktop is switching the client there with the viewing chrome on (section 8.3); it is a convention, not a lock.
 
 ### 2.2 Window
 
@@ -99,8 +99,9 @@ A page that ends up somewhere else reports its real path, and the window follows
 
 ### 2.7 Title bar and window controls
 
-Left to right: the app icon, the title, the window menu (three dots, directly after the title), then at the right edge minimize, maximize (restore when maximized), close.
+Left to right: while the window is focused, the window menu (three dots), Refresh, and "Chat about this app" (a speech balloon, on every window of an app that is not internal; the multiplayer spec, section 9); the app icon and the title centred over the bar; then at the right edge minimize, maximize (restore when maximized), close.
 No status indicator.
+"Chat about this app" opens the chat about the app (the one labelled `app_chat` with the app's name, else the one titled "<App display name> Chat", made with both on the default provider when there is none; the chat app's own windows open "Chat Chat") through the chat app's `app-chat` launch path, and lays the two windows out side by side for this client, the chat on the half it was already nearer and on top (section 9.2 of the spec).
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.
 The window menu offers Refresh, Open in its own window (where the embedding chrome can pull windows out), Share, Quit the app (which closes every window of it and stops it; `docs/system/specs/stop-when-no-windows.md`), and Close.
 Close removes the window from the desktop for everyone; there is no separate "remove from desktop".
@@ -120,7 +121,7 @@ It is a menu, one per client, closed by a choice, a click outside, or Escape, an
 Opening something from it opens a window on the active desktop; the "Start something" intents and the template shelves the New Tab page showed are the Getting Started app's (launcher-and-getting-started plan section 3.6).
 
 The system tray holds the tray widgets, each a self-contained component with one popover.
-V1 ships two: **Presence** (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher.
+V1 shipped two: **Presence** (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and **Desktops** (one glyph per desktop, the active one marked; click switches; the menu offers new desktop, settings, delete). A Running apps widget (one icon per running app, listing its windows and launch paths) shipped first and was removed as duplicating the taskbar entries and the launcher. The multiplayer spec then made the tray the people and the agent (its section 6) and replaced the Desktops widget with the **overview button** between the launcher field and the window entries (its section 8.2): the overview it opens creates, switches, renames, reorders, and deletes desktops, and the wallpaper is set from the backdrop's context menu.
 
 ### 2.9 The word "dock"
 
@@ -152,7 +153,7 @@ Nothing branches on a stored device kind, and the client record no longer carrie
 flowchart TB
     subgraph shared["Shared truth (server, every client)"]
         App["App (registry row, manifest, launch paths)"]
-        Desktop["Desktop: name, colour, glyph, wallpaper"]
+        Desktop["Desktop: name, owner, wallpaper"]
         Window["Window: id, app, path, title"]
         Shortcut["Shortcut: app, launch path, mode, cell"]
     end
@@ -163,8 +164,8 @@ flowchart TB
     end
     subgraph rendered["Rendered (browser, not stored)"]
         Backdrop["Backdrop: wallpaper + shortcut grid"]
-        Taskbar["Taskbar: launcher field, entries, tray"]
-        Tray["Tray widgets: Desktops"]
+        Taskbar["Taskbar: launcher field, overview button, entries, tray"]
+        Tray["Tray: the people and the agent"]
         Page["Live page (one iframe per window)"]
     end
     Desktop -->|holds| Window
@@ -184,7 +185,7 @@ flowchart TB
 |---|---|
 | Which apps exist, their display name, icon, launch paths; whether an app runs; Stop, Start, and Quit | Manifest and registry; the shell via supervisord (unchanged) |
 | What is inside an app: its chats, sessions, folders, their names and status | The app, in its own pages (new) |
-| Desktops: name, colour, glyph, wallpaper, shortcuts and cells, windows | Shell, shared |
+| Desktops: name, owner, wallpaper, shortcuts and cells, windows, and their order | Shell, shared |
 | Open and close a window; a window's path and title | Shell, shared; the page reports path and title |
 | Frame, state, minimized, stacking order; the active desktop | Shell, per client |
 | Which taskbar entries show, which tray widgets exist | Derived in the browser from the layout and the inventory |
@@ -192,7 +193,7 @@ flowchart TB
 ## 4. Verbs
 
 Per window: open, raise, minimize, restore, maximize, snap left, snap right, move, resize, navigate, refresh, share, close.
-Per desktop: create, rename, recolour, set the glyph, set the wallpaper, delete, switch to, add, move, and remove shortcuts.
+Per desktop: create, rename, reorder, set the wallpaper, delete, switch to, view (someone else's), add, move, and remove shortcuts.
 Per app: stop, start.
 The agent-facing `workspace-layout` speaks the same verbs, targets exactly one client for the per-client ones, and applies every op to the stored files so no browser needs to be connected.
 
@@ -200,7 +201,7 @@ The agent-facing `workspace-layout` speaks the same verbs, targets exactly one c
 
 - dockview, its serialized document, the Python editor over it, tab groups, tiled splits, and the vendor CSS overrides.
 - The shell's instance layer: the instances API and the relay verbs, the inventory's instance lists and nudges, provisional and sub-agent instances, referenced-lifetime deletion, the tab rebind route, the `{tab}` placeholder, and the `app:<name>?instance=<key>` address grammar.
-- The left rail and its responsibilities, redistributed: view identity and switching to the Desktops widget; shortcut rows to the backdrop; the All-apps popover and search to the launcher; the tab list to the taskbar entries and the launcher's "On this desktop" section; the row menu to the window menu.
+- The left rail and its responsibilities, redistributed: view identity and switching to the Desktops widget (itself since replaced by the overview, section 2.8); shortcut rows to the backdrop; the All-apps popover and search to the launcher; the tab list to the taskbar entries and the launcher's "On this desktop" section; the row menu to the window menu.
 - The New Tab page as a panel: the "dock is never empty" rule and launcher retirement. An empty desktop is a backdrop with shortcuts.
 - The Everything view, the per-device seed files, and the stored device kind.
 - The boot-time layout migration; V1 is a hard cutover that ignores the old state files.

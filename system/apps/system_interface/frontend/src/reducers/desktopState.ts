@@ -583,3 +583,9 @@ export function barEntries(state: DesktopState): TaskbarEntry[] {
 export function floatingEntries(state: DesktopState): TaskbarEntry[] {
   return taskbarEntries(state).filter((entry) => isEntryFloating(entry));
 }
+
+/** The pinned entry drawn as the workspace's avatar (the chat's), whose window the agent attends to while it is
+ *  focused (the multiplayer spec, section 6.4); null when no pinned app declares the avatar style. */
+export function avatarPinnedEntryOf(state: DesktopState): TaskbarEntry | null {
+  return taskbarEntries(state).find((entry) => entry.isPinned && entry.look?.declaredStyle === "avatar") ?? null;
+}

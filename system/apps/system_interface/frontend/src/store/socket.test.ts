@@ -70,6 +70,9 @@ beforeEach(() => {
     onThemesChanged: vi.fn(),
     onLayoutOp: vi.fn(),
     onPresenceUpdated: vi.fn(),
+    onRosterUpdated: vi.fn(),
+    onChatsActivity: vi.fn(),
+    onBubble: vi.fn(),
     onConnected: vi.fn(),
   };
   socket = new ShellSocket("client-1");

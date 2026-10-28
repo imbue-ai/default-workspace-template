@@ -32,7 +32,14 @@ import type {
   Wallpaper,
   WindowRecord,
 } from "../model/records";
-import { withWindowMinimized, withWindowPlacedOnOpen, withWindowRaised, withoutPlacement } from "../geometry/stack";
+import {
+  placementOf,
+  withWindowMinimized,
+  withWindowPlacedOnOpen,
+  withWindowRaised,
+  withWindowState,
+  withoutPlacement,
+} from "../geometry/stack";
 import { SHOWN_HOME } from "../model/records";
 import { withShownRecorded } from "../reducers/desktopState";
 import type { ClientStateReport, DesktopSocket, SocketHandlers } from "../store/socket";
@@ -47,6 +54,9 @@ export class FakeDesktopApi implements DesktopApi {
   /** The apps the inventory answers; the socket's ``apps_updated`` is delivered by hand. */
   apps: AppRecord[] = [];
   clients: ClientRecord[] = [];
+  /** Whose desktops a create makes and the order route moves: the shell reads the requester's identity; the fake
+   *  is told (null for the workspace owner's). */
+  participant: string | null = null;
   workspaceName = "Test workspace";
   /** What the next arrival answers beyond the client's recorded desktop: a desktop seeded for the user (added to
    *  the desktops as the shell would), and the name of the one it replaced. */
@@ -170,27 +180,47 @@ export class FakeDesktopApi implements DesktopApi {
     };
   }
 
-  async createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {
+  async createDesktop(name: string): Promise<Desktop> {
     this.calls.push(`createDesktop:${name}`);
     this.refuse();
     const created: Desktop = {
       id: name.toLowerCase().replace(/[^a-z0-9]+/g, "-"),
       name,
-      color,
-      glyph,
+      color: "#2f6b4f",
+      glyph: 0,
       wallpaper: null,
       theme: null,
       shortcuts: [],
       windows: [],
+      owner: this.participant,
     };
     this.desktops = [...this.desktops, created];
     return created;
   }
 
-  async updateDesktopSettings(desktopId: string, name: string, color: string, glyph: number): Promise<Desktop> {
-    this.calls.push(`updateDesktopSettings:${desktopId}:${name}`);
+  async renameDesktop(desktopId: string, name: string): Promise<Desktop> {
+    this.calls.push(`renameDesktop:${desktopId}:${name}`);
     this.refuse();
-    return this.replace({ ...this.desktop(desktopId), name, color, glyph });
+    return this.replace({ ...this.desktop(desktopId), name });
+  }
+
+  /** As the shell does: the requester's own desktops take the order given in the places their desktops held;
+   *  an order that is not exactly their own is refused. */
+  async reorderDesktops(desktopIds: readonly string[]): Promise<Desktop[]> {
+    this.calls.push(`reorderDesktops:${desktopIds.join(",")}`);
+    this.refuse();
+    const own = this.desktops.filter((desktop) => desktop.owner === this.participant);
+    const ownIds = own.map((desktop) => desktop.id);
+    if (
+      [...desktopIds].sort().join() !== [...ownIds].sort().join() ||
+      new Set(desktopIds).size !== desktopIds.length
+    ) {
+      throw new Error(`The order must name each of your desktops once (${ownIds.join(", ")})`);
+    }
+    const ordered = desktopIds.map((desktopId) => this.desktop(desktopId));
+    let next = 0;
+    this.desktops = this.desktops.map((desktop) => (desktop.owner === this.participant ? ordered[next++] : desktop));
+    return [...this.desktops];
   }
 
   async setDesktopTheme(desktopId: string, theme: string | null): Promise<Desktop> {
@@ -322,7 +352,9 @@ export class FakeDesktopApi implements DesktopApi {
     const targetSpelling =
       request.target.kind === "window"
         ? `window:${request.target.windowId}` + (request.target.sendsWindowPath === false ? ":without-page" : "")
-        : request.target.kind;
+        : request.target.kind === "show" && request.target.besideWindowId !== undefined
+          ? `show:beside:${request.target.besideWindowId}`
+          : request.target.kind;
     this.calls.push(
       `launch:${desktopId}:${request.app}:${request.launch}:${JSON.stringify(request.params)}:${targetSpelling}` +
         (request.isMinimized ? ":minimized" : ""),
@@ -352,6 +384,7 @@ export class FakeDesktopApi implements DesktopApi {
       const navigated = await this.reportWindowLocation(desktopId, window.id, request.clientId, path, title);
       return { window: navigated, path, isNew: false };
     }
+    if (target.kind === "show") return this.showLaunched(desktopId, request, path, target.besideWindowId);
     const opened = await this.openWindow(desktopId, {
       app: request.app,
       path,
@@ -367,6 +400,59 @@ export class FakeDesktopApi implements DesktopApi {
     this.calls.push(`showPage:${clientId}:${request.app}:${request.path}:${request.repoint.join(",")}`);
     this.refuse();
     return { hasNoDesktopWindow: this.hasNoDesktopWindow };
+  }
+
+  /** The show rule as the shell's ``show`` launch target applies it: a window of the app already at the path is
+   *  raised, else the app's pinned window is pointed at it for this client, else a window is opened; then, beside a
+   *  window other than the shown one, neither of them pulled out, the two are snapped to the halves (the shown one on
+   *  the half its centre is on, the right when it is minimized or never placed), the shown one on top. */
+  private async showLaunched(
+    desktopId: string,
+    request: LaunchRequest,
+    path: string,
+    besideWindowId: string | undefined,
+  ): Promise<LaunchOutcome> {
+    const desktop = this.desktop(desktopId);
+    const already = desktop.windows.find((candidate) => candidate.app === request.app && candidate.path === path);
+    const pinned = desktop.windows.find((candidate) => candidate.app === request.app && candidate.is_pinned);
+    let shown: WindowRecord;
+    let isNew = false;
+    if (already === undefined && pinned !== undefined) {
+      shown = await this.reportWindowLocation(desktopId, pinned.id, request.clientId, path, "");
+      this.writeLayout(
+        desktopId,
+        request.clientId,
+        withWindowRaised(this.layoutOf(desktopId, request.clientId), pinned.id),
+      );
+    } else {
+      const opened = await this.openWindow(desktopId, {
+        app: request.app,
+        path,
+        clientId: request.clientId,
+        ifPresent: "focus",
+        isMinimized: request.isMinimized,
+      });
+      shown = opened.window;
+      isNew = opened.isNew;
+    }
+    const layout = this.layoutOf(desktopId, request.clientId);
+    const placement = placementOf(layout, shown.id);
+    if (
+      besideWindowId !== undefined &&
+      besideWindowId !== shown.id &&
+      !placement.is_detached &&
+      !placementOf(layout, besideWindowId).is_detached
+    ) {
+      const isPlaced = layout.placements.some((candidate) => candidate.window_id === shown.id);
+      const isRight = !isPlaced || placement.is_minimized || placement.frame.x + placement.frame.width / 2 >= 0.5;
+      const beside = withWindowState(layout, besideWindowId, isRight ? "SNAPPED_LEFT" : "SNAPPED_RIGHT");
+      this.writeLayout(
+        desktopId,
+        request.clientId,
+        withWindowState(beside, shown.id, isRight ? "SNAPPED_RIGHT" : "SNAPPED_LEFT"),
+      );
+    }
+    return { window: shown, path, isNew };
   }
 
   async closeWindow(desktopId: string, windowId: string): Promise<void> {

@@ -28,12 +28,15 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   (`id`, `label`, `path`, `method` (`GET`, the default, opens a window at the
   path with the params as its query; `POST` posts them to the path and opens a
   window at the path the app answers), `params`, `presets` (fixed name-value
-  pairs sent with every launch), and an optional `text_param` or `draft_param`
-  naming the one of its params the desktop fills with typed text, sent or
-  drafted; `client_id`, `desktop_id`, and `window_path` are reserved for the
-  shell's launch envelope and can name neither a param nor a preset; `open` is
-  reserved for the root launch path the shell synthesizes for an app that
-  declares none), `LaunchPathMethod`,
+  pairs sent with every launch), and an optional `text_param`, `draft_param`,
+  or `mention_param` naming the one of its params the desktop fills with typed
+  text, sent or drafted, or with a mention of the person whose tray entry was
+  clicked, or an `app_params` pair (`name`, `display_name`) naming the two
+  distinct params the desktop fills with the app whose window's "Chat about
+  this app" button was pressed; `client_id`, `desktop_id`, and `window_path`
+  are reserved for the shell's launch envelope and can name neither a param
+  nor a preset; `open` is reserved for the root launch path the shell
+  synthesizes for an app that declares none), `LaunchPathMethod`,
   `MessageHandler` (`type`, a `MessageType`: a lowercase prefix, `:`, and a
   lowercase kebab-case name, never `shell:`, unique within the manifest; and
   exactly one of `path`, the route under the app's origin the shell posts each

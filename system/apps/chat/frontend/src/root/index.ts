@@ -65,6 +65,7 @@ import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
+import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
@@ -76,7 +77,7 @@ import {
   slotFill,
 } from "./selection";
 import type { SlotFill } from "./selection";
-import { prependToComposer } from "../views/MessageInput";
+import { prependToComposer, setComposerHint } from "../views/MessageInput";
 import { wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 const ROOT_TITLE = "Chats";
@@ -134,12 +135,17 @@ let isOpeningChatForEmptyList = false;
 // empty after that brings no push to ask again on (an unchanged list is not passed on).
 const emptyListChatBackoff = new ReconnectBackoff();
 
+/** Every row's source: the chats (rooms among them), the chats not yet agents, the main chat, and the viewer's
+ *  mentions, each row carrying a rename's pending title. */
+function allRows(): ChatRow[] {
+  return withPendingTitles(
+    rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId(), getMentionedChatIds()),
+  );
+}
+
 /** The rail's rows in display order: the main chat first, then the most recent. */
 function railRows(): ChatRow[] {
-  return groupedRows(
-    withPendingTitles(rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId())),
-    startedHere,
-  );
+  return groupedRows(allRows(), startedHere);
 }
 
 function slotFillFor(chatId: string | null): SlotFill {
@@ -263,13 +269,22 @@ function isReferenceDraftAvailable(): boolean {
   return selectedChatId !== null || (connection?.hasShell() ?? false);
 }
 
+/** Put ``hint`` on a chat's composer as its placeholder, focused: the live page's when it is loaded, else where the
+ *  composer reads it on mount. */
+function hintInto(chatId: string, hint: string): void {
+  if (pool?.hintComposer(chatId, hint) === true) return;
+  setComposerHint(chatId, hint);
+}
+
 /** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft
- *  goes into its composer, a first message launches it. */
+ *  goes into its composer, a first message launches it, a hint becomes its composer's placeholder (the multiplayer
+ *  spec, section 9.2). */
 function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
   settleIntake(applied.chatId);
   if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
   if (applied.firstMessage !== null) void launchWithFirstMessage(applied.chatId, applied.firstMessage);
+  if (applied.hint !== null) hintInto(applied.chatId, applied.hint);
 }
 
 /** Apply a held intake on the chat it resolved to, or on ``pickedChatId``; a token already gone (another client
@@ -332,7 +347,7 @@ function dismissPick(): void {
 
 function onChatsUpdated(): void {
   settleAcceptedRenames();
-  const rows = rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId());
+  const rows = allRows();
   noteStatuses(new Map(rows.map((row) => [row.chatId, row.status])), isRootShown ? selectedChatId : null);
   // A chat that has messaged is no longer new; a deleted chat's frame goes with it.
   for (const chatId of startedHere) {
@@ -519,6 +534,8 @@ function bootstrap(): void {
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
+  // The rows' ``@`` marks: the viewer's unseen mentions, re-read on every push that changes them.
+  void watchPendingMentions().then(() => m.redraw());
   compactQuery.addEventListener("change", () => {
     pool?.setCompact(compactQuery.matches);
     fillSlot();

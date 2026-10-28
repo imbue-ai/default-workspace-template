@@ -17,6 +17,8 @@ from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import assert_api_schema_describes_app
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_layout.identity import ANONYMOUS_OWNER
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 
 from imbue.system_interface.app_context import state_of
@@ -36,7 +38,6 @@ from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.testing import TEST_PAGE_ID
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
@@ -624,13 +625,36 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert messages[3]["notice"] is None
 
 
+@pytest.mark.flaky
+@pytest.mark.timeout(15)
+def test_websocket_connect_sends_the_chats_activity_once_the_chat_app_has_reported_it(app: Flask) -> None:
+    """A window that connects after the chat app's report paints the agent's card from it, after the roster."""
+    report = {"chats": [{"chat_id": "agent-1", "title": "Main chat", "status": "idle", "kind": "agent"}]}
+    assert app.test_client().post("/api/chats-activity", json=report).status_code == 204
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(7)]
+        finally:
+            close_ws(ws)
+
+    assert [message["type"] for message in messages[4:]] == ["presence_updated", "roster_updated", "chats_activity"]
+    assert messages[6] == {"type": "chats_activity", **report}
+
+
 _VISITOR_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _OWNER_IDENTITY = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 
 
-def _heartbeat(client: FlaskClient, identity: RequestIdentity | None) -> Any:
+def _heartbeat(client: FlaskClient, identity: RequestIdentity | None, body: dict[str, Any] | None = None) -> Any:
     headers = {} if identity is None else identity_headers(identity)
-    return client.post("/api/presence/heartbeat", headers=headers)
+    return client.post("/api/presence/heartbeat", json=body if body is not None else {}, headers=headers)
+
+
+def _presence_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The ``presence_updated`` messages among ``messages``: every one rides with a ``roster_updated``."""
+    assert [message["type"] for message in messages[1::2]] == ["roster_updated"] * (len(messages) // 2)
+    return [message for message in messages if message["type"] == "presence_updated"]
 
 
 def _profile_aware_app(
@@ -659,7 +683,15 @@ def test_presence_heartbeat_records_the_requester_and_answers_their_identity(cli
 
     assert response.status_code == 200
     assert response.get_json() == {
-        "identity": {"owner": False, "user_id": "user-bob-4471", "email": "bob@example.com"}
+        "identity": {
+            "owner": False,
+            "user_id": "user-bob-4471",
+            "email": "bob@example.com",
+            "agent_id": None,
+            "agent_name": None,
+            "granter": None,
+        },
+        "participant": "user:user-bob-4471",
     }
     listed = client.get("/api/presence").get_json()
     (user,) = listed["users"]
@@ -667,7 +699,16 @@ def test_presence_heartbeat_records_the_requester_and_answers_their_identity(cli
     assert user["owner"] is False
     # No connector to ask, so no profile; the record itself is complete without one.
     assert user["display_name"] is None and user["profile_picture_url"] is None
-    assert set(user) == {"user_id", "email", "display_name", "profile_picture_url", "owner", "first_seen", "last_seen"}
+    assert set(user) == {
+        "user_id",
+        "email",
+        "display_name",
+        "profile_picture_url",
+        "owner",
+        "first_seen",
+        "last_seen",
+        "last_input_at",
+    }
 
 
 def test_presence_heartbeat_ignores_whatever_body_an_older_page_still_sends(client: FlaskClient) -> None:
@@ -675,12 +716,39 @@ def test_presence_heartbeat_ignores_whatever_body_an_older_page_still_sends(clie
         "/api/presence/heartbeat", json={"session_id": "tab-0001-aaaa"}, headers=identity_headers(_VISITOR_IDENTITY)
     )
     assert response.status_code == 200
+    # A page from before the body was sent posts none at all.
+    bodiless = client.post("/api/presence/heartbeat", headers=identity_headers(_VISITOR_IDENTITY))
+    assert bodiless.status_code == 200
+    assert bodiless.get_json()["participant"] == "user:user-bob-4471"
 
 
-def test_presence_heartbeat_records_nothing_for_an_identity_without_a_user_id(client: FlaskClient) -> None:
-    assert _heartbeat(client, None).status_code == 204
-    assert _heartbeat(client, RequestIdentity(owner=True)).status_code == 204
+def test_presence_heartbeat_records_the_owner_of_an_unshared_workspace_under_the_owner_key(
+    client: FlaskClient,
+) -> None:
+    assert _heartbeat(client, None).get_json()["participant"] == "owner"
+    assert _heartbeat(client, RequestIdentity(owner=True)).get_json()["participant"] == "owner"
+    # The owner has no account to list among the connected accounts; the roster carries them instead.
     assert client.get("/api/presence").get_json() == {"users": []}
+    roster = client.get("/api/roster").get_json()["participants"]
+    assert [(entry["key"], entry["is_connected"], entry["is_owner"]) for entry in roster] == [
+        ("owner", True, True),
+        ("workspace-agent", True, False),
+    ]
+
+
+def test_presence_heartbeat_records_nothing_for_a_visiting_agent(client: FlaskClient) -> None:
+    agent = RequestIdentity(owner=False, agent_id="va-0123", agent_name="Visitor", granter="user:8c0f")
+    assert _heartbeat(client, agent).status_code == 204
+    assert client.get("/api/presence").get_json() == {"users": []}
+
+
+def test_presence_heartbeat_keeps_the_pages_newest_input_time(client: FlaskClient) -> None:
+    _heartbeat(client, _VISITOR_IDENTITY, {"last_input_at": "2026-09-19T10:00:20Z"})
+    _heartbeat(client, _VISITOR_IDENTITY, {"last_input_at": "2026-09-19T10:00:05+00:00"})
+
+    (user,) = client.get("/api/presence").get_json()["users"]
+    assert user["last_input_at"] == "2026-09-19T10:00:20.000000000Z"
+    assert _heartbeat(client, _VISITOR_IDENTITY, {"last_input_at": "yesterday"}).status_code == 400
 
 
 def test_the_leave_route_is_gone(client: FlaskClient) -> None:
@@ -704,8 +772,7 @@ def test_presence_carries_each_users_profile_from_the_connector(
     try:
         _heartbeat(client, _VISITOR_IDENTITY)
         _heartbeat(client, _OWNER_IDENTITY)
-        (joined_bob, joined_owner) = drain_messages(client_queue)
-        assert joined_bob["type"] == joined_owner["type"] == "presence_updated"
+        (joined_bob, joined_owner) = _presence_messages(drain_messages(client_queue))
         assert [
             (user["user_id"], user["display_name"], user["profile_picture_url"]) for user in joined_owner["users"]
         ] == [
@@ -728,8 +795,8 @@ def test_the_sweep_broadcasts_a_silent_departure_and_a_heartbeat_that_changes_no
     try:
         _heartbeat(client, _VISITOR_IDENTITY)
         _heartbeat(client, _OWNER_IDENTITY)
-        joined = drain_messages(client_queue)
-        assert [message["type"] for message in joined] == ["presence_updated", "presence_updated"]
+        joined = _presence_messages(drain_messages(client_queue))
+        assert len(joined) == 2
         assert [user["user_id"] for user in joined[1]["users"]] == ["user-bob-4471", "user-owner-9c21"]
         # A heartbeat that changes nothing about who is here broadcasts nothing.
         _heartbeat(client, _OWNER_IDENTITY)
@@ -741,8 +808,7 @@ def test_the_sweep_broadcasts_a_silent_departure_and_a_heartbeat_that_changes_no
         os.utime(bob_path, (stale_at.timestamp(), stale_at.timestamp()))
         assert state.presence_sweep.sweep_once(utc_now()) is True
 
-        (departed,) = drain_messages(client_queue)
-        assert departed["type"] == "presence_updated"
+        (departed,) = _presence_messages(drain_messages(client_queue))
         assert [user["user_id"] for user in departed["users"]] == ["user-owner-9c21"]
         assert bob_path.exists()
         assert state.presence_sweep.sweep_once(utc_now()) is False
@@ -960,7 +1026,7 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
     shell = state_of(app).shell
     shell.inventory.reload_registry()
     shell.list_desktops()
-    work = shell.create_desktop("Work", "#123456", 1)
+    work = shell.create_desktop("Work", "#123456", 1, ANONYMOUS_OWNER)
     client_queue = shell.broadcaster.register()
     try:
         first = json.dumps(_moving_report("c1", "home"))
@@ -1039,7 +1105,7 @@ def test_a_move_reported_before_its_page_heard_an_ops_move_is_not_recorded_and_i
     shell = state_of(app).shell
     shell.inventory.reload_registry()
     shell.list_desktops()
-    work = shell.create_desktop("Work", "#123456", 1)
+    work = shell.create_desktop("Work", "#123456", 1, ANONYMOUS_OWNER)
     client_queue = shell.broadcaster.register()
     other_queue = shell.broadcaster.register()
     shell.broadcaster.set_client_info(other_queue, "c1", "home")

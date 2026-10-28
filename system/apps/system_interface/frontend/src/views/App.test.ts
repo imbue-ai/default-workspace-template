@@ -11,6 +11,7 @@ import type { GestureListener, GestureSource } from "../gestures/pointerGestures
 import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
 import { TourController } from "../model/tour";
+import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
 import { FakeTourApi } from "../testing/fakeTour";
 import {
@@ -24,7 +25,7 @@ import {
   windowRecord,
 } from "../testing/records";
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
-import { THEME_DESIGN_PROMPT } from "./DesktopSettingsDialog";
+import { THEME_DESIGN_PROMPT } from "./ThemeChooserDialog";
 import { App } from "./App";
 import { enableThemingPrompt } from "./WindowMenu";
 
@@ -93,6 +94,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   unmountViews();
+  resetPresenceForTesting();
   gestureListener = null;
 });
 
@@ -398,17 +400,49 @@ describe("Escape", () => {
     expect(document.querySelector("[data-launcher-overlay]")).toBeNull();
   });
 
-  it("closes a menu opened over the launcher (by keyboard, so the launcher stayed) before the launcher", () => {
+  it("closes a menu opened over the launcher (the backdrop's, by a right-click that leaves the launcher) before the launcher", () => {
     store.openLauncher();
     m.redraw.sync();
-    (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
+    // Cancelable, as a browser's is: the backdrop's handler takes it, so the element menu's document listener
+    // (which yields to a handled event) does not open the element menu over it.
+    (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
+    );
     m.redraw.sync();
-    expect(document.querySelector(".desktops-menu")).not.toBeNull();
+    expect(document.querySelector(".backdrop-menu")).not.toBeNull();
     pressEscape();
-    expect(document.querySelector(".desktops-menu")).toBeNull();
+    expect(document.querySelector(".backdrop-menu")).toBeNull();
     expect(store.isLauncherOpen()).toBe(true);
     pressEscape();
     expect(store.isLauncherOpen()).toBe(false);
+  });
+
+  it("offers the overview on the backdrop's menu except while viewing somebody else's desktop", async () => {
+    setOwnIdentityForTesting({ owner: true, user_id: null, email: null, participant: "owner" });
+    socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("alice", { owner: "user:user-alice-0001" })]);
+    const openBackdropMenu = (): Element | null => {
+      (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
+      );
+      m.redraw.sync();
+      return document.querySelector('.backdrop-menu [data-menu-row="show-all-desktops"]');
+    };
+    expect(openBackdropMenu()?.getAttribute("aria-disabled")).toBeNull();
+    pressEscape();
+    await store.switchDesktop("alice");
+    m.redraw.sync();
+    expect(openBackdropMenu()?.getAttribute("aria-disabled")).toBe("true");
+    pressEscape();
+  });
+
+  it("closes the overview before the launcher", () => {
+    store.openLauncher();
+    store.openOverview();
+    m.redraw.sync();
+    expect(document.querySelector("[data-overview]")).not.toBeNull();
+    pressEscape();
+    expect(store.isOverviewOpen()).toBe(false);
+    expect(store.isLauncherOpen()).toBe(true);
   });
 });
 
@@ -581,6 +615,21 @@ describe("the element menu", () => {
     expect(store.isLauncherOpen()).toBe(false);
     expect(event.defaultPrevented).toBe(true);
     expect(document.body.querySelector(".element-menu")).toBeNull();
+  });
+
+  it("ends an overview thumbnail's menu with the reference rows, after its own delete row", () => {
+    store.openOverview();
+    m.redraw.sync();
+    const thumbnail = document.querySelector('[data-overview-desktop="home"]') as HTMLElement;
+    thumbnail.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }),
+    );
+    m.redraw.sync();
+    const keys = menuRowKeys();
+    expect(keys[0]).toBe("delete");
+    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    pressEscape();
+    expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
   });
 
   it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {

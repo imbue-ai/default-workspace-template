@@ -74,6 +74,7 @@ export interface WindowRecord {
 export interface Desktop {
   readonly id: string;
   readonly name: string;
+  /** Kept in the record and drawn nowhere since the desktops phase (the multiplayer spec, S7). */
   readonly color: string;
   readonly glyph: number;
   readonly wallpaper: Wallpaper | null;
@@ -81,6 +82,9 @@ export interface Desktop {
   readonly theme: string | null;
   readonly shortcuts: readonly DesktopShortcut[];
   readonly windows: readonly WindowRecord[];
+  /** Whose desktop it is by convention (the multiplayer spec, section 8.1): a participant key, or null for the
+   *  workspace owner's. */
+  readonly owner: string | null;
 }
 
 export interface Placement {
@@ -132,6 +136,17 @@ export interface LaunchPath {
   /** The param the shell fills with text to be drafted rather than sent (a free-text row too, and what the avatar
    *  dialog's draft goes through); null for none. */
   readonly draft_param: string | null;
+  /** The param the shell fills with a mention of the person whose tray entry was clicked (the multiplayer spec,
+   *  section 7.5); never a launcher row; null for none. */
+  readonly mention_param: string | null;
+  /** The params the shell fills with the name and display name of the app whose window's "Chat about this app"
+   *  button was pressed (the multiplayer spec, section 9.2); never a launcher row; null for none. */
+  readonly app_params: AppParams | null;
+}
+
+export interface AppParams {
+  readonly name: string;
+  readonly display_name: string;
 }
 
 export interface DefaultShortcut {
@@ -220,6 +235,12 @@ export interface ClientRecord {
   /** Counts the moves of the client's stored desktop and the reports the shell redirected off a deleted desktop:
    *  orders what a window hears of its desktop. */
   readonly desktop_revision: number;
+  /** Who the client last arrived as (the multiplayer spec's participant key); null for a record from before the
+   *  key was kept. */
+  readonly participant: string | null;
+  /** The windows of its active desktop its layout does not minimize, top of the stack first: what the client is
+   *  looking at. */
+  readonly shown: readonly string[];
 }
 
 /** The ``shown_history`` entry that stands for the phone's home grid rather than a window. */
@@ -273,6 +294,48 @@ export interface PresentUser {
   readonly owner: boolean;
   readonly first_seen: string;
   readonly last_seen: string;
+}
+
+/** What a roster entry is (the multiplayer spec, section 4.1). */
+export type ParticipantKind = "person" | "invited" | "visiting_agent" | "workspace_agent";
+
+/** One entry of the roster (the multiplayer spec, section 4.2): everyone who may be here, as the shell lists them. */
+export interface RosterParticipant {
+  readonly key: string;
+  readonly kind: ParticipantKind;
+  readonly display_name: string;
+  readonly profile_picture_url: string | null;
+  readonly email: string | null;
+  /** What they are mentioned by, without the ``@``. */
+  readonly handle: string;
+  /** The colour they are drawn in, as ``#RRGGBB``. */
+  readonly color: string;
+  readonly is_owner: boolean;
+  readonly is_connected: boolean;
+  /** When they were last here (ISO 8601), when ever. */
+  readonly last_seen: string | null;
+  /** When their newest page last saw keyboard or pointer input (ISO 8601), when it reports it. */
+  readonly last_input_at: string | null;
+}
+
+/** What a chat is doing, as the chat app reports it for the agent's card (the multiplayer spec, section 6.4). */
+export type ChatActivityStatus = "working" | "background" | "idle" | "attention" | "stopped" | "error";
+
+export interface ChatActivity {
+  readonly chat_id: string;
+  readonly title: string;
+  readonly status: ChatActivityStatus;
+  readonly kind: "agent" | "room";
+}
+
+/** A speech bubble as the shell pushes it (the multiplayer spec, section 6.5): what somebody just said. */
+export interface BubbleWire {
+  readonly speaker: string;
+  readonly chat_id: string;
+  readonly chat_title: string;
+  readonly text: string;
+  readonly message_id: string;
+  readonly mentions: readonly string[];
 }
 
 /** What the avatar's image says about the machine (pinned-taskbar-entries plan section 4.6). */
@@ -417,6 +480,7 @@ export function parseDesktop(raw: unknown): Desktop {
     theme: asOptionalString(record.theme, "desktop.theme"),
     shortcuts: asArray(record.shortcuts, "desktop.shortcuts").map(parseShortcut),
     windows: asArray(record.windows, "desktop.windows").map(parseWindow),
+    owner: asOptionalString(record.owner, "desktop.owner"),
   };
 }
 
@@ -476,6 +540,17 @@ function parseLaunchPath(raw: unknown): LaunchPath {
     presets: parsePresets(record.presets),
     text_param: asOptionalString(record.text_param, "launch_path.text_param"),
     draft_param: asOptionalString(record.draft_param, "launch_path.draft_param"),
+    mention_param: asOptionalString(record.mention_param, "launch_path.mention_param"),
+    app_params: parseAppParams(record.app_params),
+  };
+}
+
+function parseAppParams(raw: unknown): AppParams | null {
+  if (raw === undefined || raw === null) return null;
+  const record = asObject(raw, "launch_path.app_params");
+  return {
+    name: asString(record.name, "launch_path.app_params.name"),
+    display_name: asString(record.display_name, "launch_path.app_params.display_name"),
   };
 }
 
@@ -575,6 +650,10 @@ export function parseClientRecord(raw: unknown): ClientRecord {
       asString(entry, `client.shown_history[${index}]`),
     ),
     desktop_revision: asNumber(record.desktop_revision ?? 0, "client.desktop_revision"),
+    participant: asOptionalString(record.participant, "client.participant"),
+    shown: asArray(record.shown ?? [], "client.shown").map((entry, index) =>
+      asString(entry, `client.shown[${index}]`),
+    ),
   };
 }
 
@@ -678,6 +757,68 @@ export function parseWallpaperListing(raw: unknown): WallpaperListing {
     kind: asOneOf(record.kind, ["bundled", "file"], "wallpaper.kind"),
     name: asString(record.name, "wallpaper.name"),
     url: asString(record.url, "wallpaper.url"),
+  };
+}
+
+const PARTICIPANT_KINDS: readonly ParticipantKind[] = ["person", "invited", "visiting_agent", "workspace_agent"];
+const CHAT_ACTIVITY_STATUSES: readonly ChatActivityStatus[] = [
+  "working",
+  "background",
+  "idle",
+  "attention",
+  "stopped",
+  "error",
+];
+
+function parseRosterParticipant(raw: unknown): RosterParticipant {
+  const record = asObject(raw, "participant");
+  return {
+    key: asString(record.key, "participant.key"),
+    kind: asOneOf(record.kind, PARTICIPANT_KINDS, "participant.kind"),
+    display_name: asString(record.display_name, "participant.display_name"),
+    profile_picture_url: asOptionalString(record.profile_picture_url, "participant.profile_picture_url"),
+    email: asOptionalString(record.email, "participant.email"),
+    handle: asString(record.handle, "participant.handle"),
+    color: asString(record.color, "participant.color"),
+    is_owner: asBoolean(record.is_owner, "participant.is_owner"),
+    is_connected: asBoolean(record.is_connected, "participant.is_connected"),
+    last_seen: asOptionalString(record.last_seen, "participant.last_seen"),
+    last_input_at: asOptionalString(record.last_input_at, "participant.last_input_at"),
+  };
+}
+
+/** The ``roster_updated`` push's participants, in roster order. */
+export function parseRoster(raw: unknown): RosterParticipant[] {
+  return asArray(raw, "participants").map(parseRosterParticipant);
+}
+
+function parseChatActivity(raw: unknown): ChatActivity {
+  const record = asObject(raw, "chat activity");
+  return {
+    chat_id: asString(record.chat_id, "chat.chat_id"),
+    title: asString(record.title, "chat.title"),
+    status: asOneOf(record.status, CHAT_ACTIVITY_STATUSES, "chat.status"),
+    kind: asOneOf(record.kind, ["agent", "room"], "chat.kind"),
+  };
+}
+
+/** The ``chats_activity`` push's chats, in the chat app's order. */
+export function parseChatsActivity(raw: unknown): ChatActivity[] {
+  return asArray(raw, "chats").map(parseChatActivity);
+}
+
+/** A ``bubble`` push. */
+export function parseBubble(raw: unknown): BubbleWire {
+  const record = asObject(raw, "bubble");
+  return {
+    speaker: asString(record.speaker, "bubble.speaker"),
+    chat_id: asString(record.chat_id, "bubble.chat_id"),
+    chat_title: asString(record.chat_title, "bubble.chat_title"),
+    text: asString(record.text, "bubble.text"),
+    message_id: asString(record.message_id, "bubble.message_id"),
+    mentions: asArray(record.mentions ?? [], "bubble.mentions").map((mention, index) =>
+      asString(mention, `bubble.mentions[${index}]`),
+    ),
   };
 }
 

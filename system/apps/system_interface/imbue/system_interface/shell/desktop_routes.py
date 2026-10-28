@@ -19,7 +19,6 @@ from flask import send_file
 from flask.typing import ResponseReturnValue
 from loguru import logger
 from pydantic import Field
-from workspace_layout.answers import ClientView
 from workspace_layout.answers import ContextAnswer
 from workspace_layout.answers import DesktopOpAnswer
 from workspace_layout.answers import DesktopsListing
@@ -96,7 +95,6 @@ from imbue.system_interface.shell.api_models import WindowOpenedResponse
 from imbue.system_interface.shell.client_activity import summarize_client_activity
 from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
-from imbue.system_interface.shell.data_types import ClientDesktopView
 from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PageShowRequest
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
@@ -104,7 +102,6 @@ from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.data_types import desktop_layout_view
 from imbue.system_interface.shell.data_types import effective_launch_paths
-from imbue.system_interface.shell.desktop_document import choose_show_target
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import find_window_at
@@ -148,19 +145,29 @@ from imbue.system_interface.shell.wallpapers import resolve_wallpaper_file
 
 
 class DesktopMetadataRequest(FrozenModel):
-    """The body of desktop create."""
+    """The body of desktop create: the name, and the colour and glyph the record keeps though the page no longer
+    draws or sends them (the multiplayer spec, section 8.1); an agent may still choose them, and the shell picks
+    them when they are absent."""
 
     name: str = Field(description="The display name")
-    color: str = Field(description="'#RRGGBB'")
-    glyph: int = Field(description="The glyph index")
+    color: str | None = Field(default=None, description="'#RRGGBB'; absent takes the chosen glyph's colour")
+    glyph: int | None = Field(default=None, description="The glyph index; absent takes the next free glyph")
 
 
 class DesktopSettingsRequest(FrozenModel):
-    """The body of desktop settings."""
+    """The body of desktop settings: the name, and the colour and glyph the record keeps though the page no longer
+    draws or sends them (the multiplayer spec, section 8.1); absent, each stays as written."""
 
     name: str = Field(description="The display name")
-    color: str = Field(description="'#RRGGBB'")
-    glyph: int = Field(description="The glyph index")
+    color: str | None = Field(default=None, description="'#RRGGBB'; absent keeps the colour as written")
+    glyph: int | None = Field(default=None, description="The glyph index; absent keeps the glyph as written")
+
+
+class DesktopOrderRequest(FrozenModel):
+    """The body of ``POST /api/desktops/order`` (the multiplayer spec, section 8.2): the requester's own desktops in
+    the order they are to be listed in."""
+
+    desktop_ids: tuple[DesktopId, ...] = Field(description="Every desktop of the requester's, once each, in order")
 
 
 class DesktopWallpaperRequest(FrozenModel):
@@ -225,20 +232,30 @@ def list_desktops() -> ResponseReturnValue:
 
 
 def create_desktop() -> ResponseReturnValue:
-    """Add a desktop with a name, a colour, and a glyph."""
+    """Add a desktop with a name, owned by the requester (none for the workspace owner's); its colour and glyph are
+    the shell's to pick unless given."""
     body = parse_request_body(DesktopMetadataRequest)
     shell = _shell()
-    desktop = shell.create_desktop(body.name, body.color, body.glyph)
+    desktop = shell.create_desktop(body.name, body.color, body.glyph, request_identity())
     return model_response(shell.desktop_view(desktop), HTTP_CREATED)
 
 
 def update_desktop_settings(desktop_id: str) -> ResponseReturnValue:
-    """Rename a desktop or change its colour or glyph."""
+    """Rename a desktop (and change its colour or glyph, when a caller still sends them)."""
     body = parse_request_body(DesktopSettingsRequest)
     shell = _shell()
     desktop = shell.desktops.update_settings(desktop_id, body.name, body.color, body.glyph)
     shell.broadcast_desktops_updated()
     return model_response(shell.desktop_view(desktop))
+
+
+def reorder_desktops() -> ResponseReturnValue:
+    """Put the requester's own desktops in the order given (every one of theirs, once each); the other desktops keep
+    their places. The order is how every listing and ``desktops_updated`` lists them."""
+    body = parse_request_body(DesktopOrderRequest)
+    shell = _shell()
+    reordered = shell.reorder_desktops(body.desktop_ids, request_identity())
+    return model_response(DesktopsListing(desktops=tuple(shell.desktop_views(reordered))))
 
 
 def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
@@ -387,9 +404,7 @@ def arrival_answer(shell: ShellState, outcome: ClientArrivalOutcome | None) -> C
         return ClientArrivalResponse(desktop_id=None, created_desktop=None, replaced_desktop_name=None)
     return ClientArrivalResponse(
         desktop_id=str(outcome.desktop_id),
-        created_desktop=(
-            shell.desktop_view(outcome.created_desktop) if outcome.created_desktop is not None else None
-        ),
+        created_desktop=(shell.desktop_view(outcome.created_desktop) if outcome.created_desktop is not None else None),
         replaced_desktop_name=outcome.replaced_desktop_name,
     )
 
@@ -431,14 +446,6 @@ def _with_active_desktop(record: ClientRecord, active: DesktopId | None) -> Clie
 
 
 @pure
-def resolved_client_view(record: ClientRecord, is_connected: bool, desktops: Sequence[Desktop]) -> ClientView:
-    """The ``client`` object of desktop contracts.md section 5.5 with its desktop settled by the rule of section 4.3:
-    the stored one when a desktop of that id exists, else the first desktop (a stored id nothing holds any more,
-    or a view a version-1 clients file recorded, never reaches a reader)."""
-    return client_view(_with_active_desktop(record, resolve_active_desktop(record, desktops)), is_connected)
-
-
-@pure
 def _popped_out_windows(desktop: Desktop, layout: DesktopLayout) -> tuple[PoppedOutWindow, ...]:
     """The client's popped-out windows of one desktop, each with whether the user hid its ghost."""
     return tuple(
@@ -448,12 +455,10 @@ def _popped_out_windows(desktop: Desktop, layout: DesktopLayout) -> tuple[Popped
     )
 
 
-def inventory_document(shell: ShellState) -> InventoryDocument:
-    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, the workspace's name,
-    every desktop, every app, and every known client with ``shown``, the windows of its active desktop that its layout
-    does not minimize, and ``popped_out``, the windows its layouts of every desktop say it popped out into their own
-    windows."""
-    desktops = shell.list_desktops()
+def inventory_clients(shell: ShellState, desktops: Sequence[Desktop]) -> list[InventoryClient]:
+    """Every known client with ``shown``, the windows of its active desktop that its layout does not minimize, and
+    ``popped_out``, the windows its layouts of every desktop say it popped out into their own windows: the client
+    objects of the inventory document and the clients listing alike."""
     connected = shell.broadcaster.connected_client_ids()
     clients: list[InventoryClient] = []
     for record in shell.clients.list_clients():
@@ -469,12 +474,19 @@ def inventory_document(shell: ShellState) -> InventoryDocument:
             popped_out.extend(_popped_out_windows(desktop, layout))
         view = client_view(_with_active_desktop(record, active), str(record.id) in connected)
         clients.append(InventoryClient.model_validate({**dict(view), "shown": shown, "popped_out": tuple(popped_out)}))
+    return clients
+
+
+def inventory_document(shell: ShellState) -> InventoryDocument:
+    """The one document of desktop contracts.md section 5.5: whether a preview shell answered, the workspace's name,
+    every desktop, every app, and every known client as ``inventory_clients`` answers them."""
+    desktops = shell.list_desktops()
     return InventoryDocument(
         is_preview=get_state().is_preview,
         workspace_name=get_state().workspace_name.resolve(),
         desktops=tuple(shell.desktop_views(desktops)),
         apps=tuple(shell.inventory.views()),
-        clients=tuple(clients),
+        clients=tuple(inventory_clients(shell, desktops)),
     )
 
 
@@ -482,6 +494,9 @@ def register_desktop_routes(application: Flask) -> None:
     """Register the desktop interface's routes on ``application`` (the error handlers are the shell's)."""
     application.add_url_rule(DESKTOPS_ROUTE, view_func=list_desktops, methods=["GET"], endpoint="list_desktops")
     application.add_url_rule(DESKTOPS_ROUTE, view_func=create_desktop, methods=["POST"], endpoint="create_desktop")
+    application.add_url_rule(
+        f"{DESKTOPS_ROUTE}/order", view_func=reorder_desktops, methods=["POST"], endpoint="reorder_desktops"
+    )
     application.add_url_rule(
         "/api/desktops/<desktop_id>/settings",
         view_func=update_desktop_settings,
@@ -989,14 +1004,6 @@ def _navigate(
     return named.window.id
 
 
-def _client_desktop_view(shell: ShellState, desktop: Desktop, client_id: ClientId) -> ClientDesktopView:
-    return ClientDesktopView(
-        desktop=desktop,
-        layout=shell.read_desktop_layout(desktop, client_id),
-        seen_windows=shell.windows_for_client(desktop, client_id),
-    )
-
-
 class ShowResult(FrozenModel):
     """What a ``show`` did: the client and desktop the page is on, the window showing it, and which way it went."""
 
@@ -1023,36 +1030,27 @@ def _show_page(
 ) -> ShowResult:
     """Put the path of the app on the target client's screen, choosing the window by the rule ``choose_show_target``
     spells."""
-    shell.require_app_entry(str(app))
     client_id = target.client_id
-    others = [
-        _client_desktop_view(shell, desktop, client_id)
-        for desktop in shell.list_desktops()
-        if desktop.id != target.desktop.id
-    ]
-    choice = choose_show_target(
-        _client_desktop_view(shell, target.desktop, client_id), others, app, path, showing, repoint
+    shown = shell.show_window(
+        client_id,
+        target.desktop,
+        app,
+        path,
+        showing=showing,
+        repoint=repoint,
+        is_every_desktop_searched=True,
+        is_minimized=False,
     )
-    desktop = shell.get_desktop(choice.desktop_id)
-    is_raised_in_own_window = False
-    if choice.window is None:
-        request = WindowOpenRequest(app=app, path=path, client_id=client_id, if_present=IfPresent.NEW)
-        window_id = shell.open_window(desktop.id, request).window.id
-    else:
-        window_id = choice.window.id
-        if choice.outcome is not ShowOutcome.RAISED:
-            # As a ``navigate`` does: an independent window moves for this client alone, a linked one for everyone.
-            shell.report_window_location(desktop.id, window_id, client_id, path, choice.window.title)
-        is_raised_in_own_window = placement_of(shell.read_desktop_layout(desktop, client_id), window_id).is_detached
-        if not is_raised_in_own_window:
-            shell.edit_desktop_layout(desktop, client_id, lambda current: with_window_raised(current, window_id))
+    desktop = shown.desktop
     # Switched after the raise, so the layout the client fetches on arriving already has the window on top; a window
     # raised in its own window leaves the client where ``args.desktop`` put it.
-    if not is_raised_in_own_window and desktop.id != target.desktop.id:
+    if not shown.is_raised_in_own_window and desktop.id != target.desktop.id:
         shell.set_client_active_desktop(client_id, desktop.id)
     else:
         _switch_as_asked(shell, target)
-    _announce_window_op(shell, LayoutOp.SHOW, window_id, client_id, requester, is_detached=is_raised_in_own_window)
+    _announce_window_op(
+        shell, LayoutOp.SHOW, shown.window_id, client_id, requester, is_detached=shown.is_raised_in_own_window
+    )
     logger.info(
         "layout op={} requester={} desktop={} client={} app={} path={} shown={}",
         LayoutOp.SHOW,
@@ -1061,14 +1059,14 @@ def _show_page(
         client_id,
         app,
         path,
-        choice.outcome.value,
+        shown.outcome.value,
     )
     return ShowResult(
         shown_on=_DesktopOpTarget(client_id=client_id, desktop=desktop),
-        window_id=window_id,
-        outcome=choice.outcome,
-        is_raised_in_own_window=is_raised_in_own_window,
-        has_no_desktop_window=not is_raised_in_own_window and _has_no_desktop_window(shell, client_id),
+        window_id=shown.window_id,
+        outcome=shown.outcome,
+        is_raised_in_own_window=shown.is_raised_in_own_window,
+        has_no_desktop_window=not shown.is_raised_in_own_window and _has_no_desktop_window(shell, client_id),
     )
 
 

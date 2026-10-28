@@ -7,7 +7,7 @@
 import m from "mithril";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
-import { getTerminalOriginLabel } from "../document-meta";
+import { getChatKind, getTerminalOriginLabel } from "../document-meta";
 import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
@@ -128,9 +128,14 @@ export function isHandoffCancellable(handoff: HandoffState): boolean {
   return handoff.kind === "handoff" && (handoff.phase === "draining" || handoff.phase === "summarizing");
 }
 
+/** What a chat is (the backend's ``ChatKind``): a conversation with an agent, or a room, a message log among the
+ *  workspace's people whose agent is the room's reader (the multiplayer spec, section 7.3). */
+export type ChatKind = "agent" | "room";
+
 /** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
 export interface ChatSnapshot {
   chat_id: string;
+  kind: ChatKind;
   // The name the user sees: the ``display_name`` label, else the mngr name.
   title: string;
   // The chat's canonical mngr name, the only way to address it by name.
@@ -150,6 +155,9 @@ export interface ChatSnapshot {
   // Epoch seconds of the chat's most recent message; null when it has never been messaged.
   // The chat root's list orders on it.
   last_messaged_at: number | null;
+  /** The chats a mention from this room sent to and has not heard back from: the room's row shows a working dot
+   *  while one of them works (section 7.4). Empty for an agent chat. */
+  awaiting_chat_ids: string[];
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
@@ -190,6 +198,7 @@ export interface ProvisionalChat {
 
 type WsEvent =
   | { type: "chats_updated"; chats: ChatSnapshot[]; main_chat_id: string | null }
+  | { type: "mentions_updated" }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
   | { type: "accounts_updated" };
@@ -228,6 +237,7 @@ const registrationWaiters = new Map<string, { resolve: () => void; reject: (erro
 // to land and goes to it then, as a send into any creating chat does.
 const launchesInFlight = new Set<string>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
+let mentionsUpdatedListeners: (() => void)[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 let ws: WebSocket | null = null;
@@ -248,8 +258,11 @@ function connect(): void {
     connected = true;
     console.info("[chat-ws] connected");
     reconnectBackoff.reset();
-    // A change to the account list while the socket was down was pushed to no one.
-    if (hasConnectedBefore) rereadAccounts();
+    // A change to the account list, or to someone's pending mentions, while the socket was down was pushed to no one.
+    if (hasConnectedBefore) {
+      rereadAccounts();
+      notifyMentionsUpdated();
+    }
     hasConnectedBefore = true;
     // The app replays what it holds (its provisional chats, then its chat list) on every
     // connection; the list ends the replay and must be handled even when nothing changed.
@@ -291,6 +304,13 @@ function scheduleReconnect(): void {
   }, delayMs);
 }
 
+/** Tell the pages someone's pending mentions changed, so each reads its own again. */
+function notifyMentionsUpdated(): void {
+  for (const listener of mentionsUpdatedListeners) {
+    listener();
+  }
+}
+
 /** Read the account list again because it changed outside this page (a sign-in or a removal in another chat or
  *  window), so a chat whose account was removed shows it at once; a failed read keeps the list read before. */
 function rereadAccounts(): void {
@@ -304,6 +324,9 @@ function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "accounts_updated":
       rereadAccounts();
+      break;
+    case "mentions_updated":
+      notifyMentionsUpdated();
       break;
     case "chats_updated": {
       isChatListReceived = true;
@@ -471,6 +494,22 @@ export function getShoulderTapAvailableForChat(chatId: string): boolean {
   return getChatById(chatId)?.active_agent.shoulder_tap_available === true;
 }
 
+/** Whether ``chatId`` is a room: the list says so, or, before the list has arrived, the page's own document does. */
+export function isRoomChat(chatId: string): boolean {
+  const listed = getChatById(chatId);
+  if (listed !== undefined) return listed.kind === "room";
+  return getChatKind() === "room";
+}
+
+/** Notified when someone's pending mentions changed, so a page reads its own again. */
+export function addMentionsUpdatedListener(listener: () => void): void {
+  mentionsUpdatedListeners.push(listener);
+}
+
+export function removeMentionsUpdatedListener(listener: () => void): void {
+  mentionsUpdatedListeners = mentionsUpdatedListeners.filter((entry) => entry !== listener);
+}
+
 /** Every chat the app has minted that is not an agent yet, for the root's list. */
 export function getProvisionalChats(): ProvisionalChat[] {
   return provisionalChats;
@@ -549,6 +588,7 @@ export interface CreatedChat {
  * shows up as provisional until mngr registers it). The display name is minted server-side.
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
+ * Always an agent chat: a room starts from a chat awaiting its first send (``launchChat``).
  * Throws a ``CreateChatRefusedError`` with the server's detail on rejection.
  */
 export function createChat(
@@ -570,10 +610,6 @@ export async function awaitingChatForEmptyList(): Promise<string> {
   return data.chat_id;
 }
 
-/**
- * Launch a chat minted earlier (a seeded one awaiting its first send, or one whose create
- * failed) on ``accountId``: it keeps its id and name, so the window showing it becomes the chat.
- */
 /** Choose the account and model a chat with no agent yet runs on: it launches on them, or takes them as its
  *  create lands. The provisional record the chat app pushes back carries the choice. */
 export async function setLaunchChoice(chatId: string, accountId: string, pick: ModelIdentity | null): Promise<void> {
@@ -583,16 +619,23 @@ export async function setLaunchChoice(chatId: string, accountId: string, pick: M
   });
 }
 
-export async function launchChat(chatId: string, accountId: string, message = ""): Promise<CreatedChat> {
+/**
+ * Launch a chat minted earlier (a seeded one awaiting its first send, or one whose create
+ * failed) on ``accountId``, or as a room when ``kind`` says so: it keeps its id and name, so the
+ * window showing it becomes the chat.
+ */
+export async function launchChat(
+  chatId: string,
+  accountId: string,
+  message = "",
+  kind: ChatKind = "agent",
+): Promise<CreatedChat> {
   launchesInFlight.add(chatId);
   try {
     // A seeded chat's launch brings the user's first message; a failed create's retry has none
     // to bring, so the field is left out then.
-    return await postCreateChat(
-      message === ""
-        ? { chat_id: chatId, account_id: accountId }
-        : { chat_id: chatId, account_id: accountId, message },
-    );
+    const body = { chat_id: chatId, account_id: accountId, kind };
+    return await postCreateChat(message === "" ? body : { ...body, message });
   } catch (error) {
     // The launch did not take: the next send may launch the chat, and a send that waited on this
     // one gets the refusal back rather than waiting for a chat that is not coming.
@@ -636,6 +679,8 @@ export interface PendingIntake {
   needsPick: boolean;
   // The chat the intake resolved to; null for a choice the user makes.
   chatId: string | null;
+  // The chat's composer placeholder until its next send, focused (the multiplayer spec, section 9.2); null for none.
+  hint: string | null;
 }
 
 /** What applying a held intake came to (the backend's ``IntakeApplyResponse``). */
@@ -645,6 +690,8 @@ export interface AppliedIntake {
   composerText: string | null;
   // The first message of a chat awaiting its first send with no account: the root launches it with this.
   firstMessage: string | null;
+  // The chat's composer placeholder until its next send, focused; null for none.
+  hint: string | null;
 }
 
 /** Thrown when a token names no held intake: it was applied, dismissed, or expired. */
@@ -667,8 +714,15 @@ export async function fetchPendingIntake(token: string): Promise<PendingIntake> 
     is_draft: boolean;
     needs_pick: boolean;
     chat_id: string | null;
+    hint?: string | null;
   }>(response, token);
-  return { message: data.message, isDraft: data.is_draft, needsPick: data.needs_pick, chatId: data.chat_id };
+  return {
+    message: data.message,
+    isDraft: data.is_draft,
+    needsPick: data.needs_pick,
+    chatId: data.chat_id,
+    hint: data.hint ?? null,
+  };
 }
 
 /** Apply a held intake, on ``chatId`` when it needed a pick; the token is consumed. Throws
@@ -683,8 +737,14 @@ export async function applyPendingIntake(token: string, chatId: string | null = 
     chat_id: string;
     composer_text: string | null;
     first_message: string | null;
+    hint?: string | null;
   }>(response, token);
-  return { chatId: data.chat_id, composerText: data.composer_text, firstMessage: data.first_message };
+  return {
+    chatId: data.chat_id,
+    composerText: data.composer_text,
+    firstMessage: data.first_message,
+    hint: data.hint ?? null,
+  };
 }
 
 /** Drop a held intake unapplied (the picker was dismissed); a token already gone is fine. The dismissal never

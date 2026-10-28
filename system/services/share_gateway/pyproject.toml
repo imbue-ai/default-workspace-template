@@ -10,6 +10,7 @@ dependencies = [
     "httpx>=0.27",
     "inotify_simple>=2.0.0",
     "pyjwt>=2.8",
+    "share-grants",
     "werkzeug>=3.1",
 ]
 

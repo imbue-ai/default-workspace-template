@@ -1,5 +1,4 @@
 import json
-import re
 from collections.abc import Callable
 from pathlib import Path
 
@@ -10,8 +9,10 @@ from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.registry import read_registry
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WallpaperKind
 from workspace_layout.primitives import WallpaperName
@@ -47,6 +48,8 @@ from imbue.system_interface.shell.errors import DesktopValueError
 from imbue.system_interface.shell.errors import LastDesktopError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.errors import WindowNotFoundError
+from imbue.system_interface.shell.ownership import desktop_owner_of
+from imbue.system_interface.shell.ownership import is_desktop_owned_by
 from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.testing import BUILTIN_SHORTCUT_APPS_WITH_CHAT
 from imbue.system_interface.shell.testing import TEST_NOW
@@ -60,11 +63,6 @@ from imbue.system_interface.shell.testing import shortcut_apps_on
 from imbue.system_interface.shell.testing import window_record
 from imbue.system_interface.shell.testing import write_desktops_file
 from imbue.system_interface.shell.testing import write_registry
-
-# The frontend's glyph palette, which ``DESKTOP_GLYPH_COLORS`` restates for the desktops the shell names itself.
-_SQUIGGLES_PATH = Path(__file__).resolve().parents[3] / "frontend" / "src" / "views" / "squiggles.ts"
-_SQUIGGLE_GLYPHS_ARRAY = re.compile(r"export const SQUIGGLE_GLYPHS\b[^=]*=\s*\[(.*?)\n\];", re.DOTALL)
-_GLYPH_COLOR = re.compile(r'color: "(#[0-9A-Fa-f]{6})"')
 
 _SEED = (
     DesktopShortcut(
@@ -94,7 +92,7 @@ def test_a_late_apps_default_shortcut_is_offered_once_on_every_desktop_and_a_rem
     before_chat, with_chat = builtin_registry_rows(tmp_path / "registry")
     store = DesktopStore(state_directory=tmp_path)
     store.ensure_default(lambda: seed_desktop_shortcuts(before_chat))
-    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(before_chat), ())
+    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(before_chat), (), None)
     rearranged = store.move_shortcut("work", AppName("files"), LaunchPathId("new"), GridCell(column=0, row=3))
     assert store.ensure_default_shortcuts_offered(before_chat).is_written is False
 
@@ -139,7 +137,7 @@ def test_a_workspaces_own_apps_are_added_once_to_every_desktop_and_a_removal_sti
     )
     store = DesktopStore(state_directory=tmp_path / "state")
     store.ensure_default(lambda: seed_desktop_shortcuts(with_chat))
-    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(with_chat), ())
+    store.create_desktop("Work", "#111111", 1, seed_desktop_shortcuts(with_chat), (), None)
 
     offered = store.ensure_default_shortcuts_offered(with_own_apps)
 
@@ -179,7 +177,7 @@ def test_a_desktops_file_with_no_usable_offered_record_counts_its_shortcuts_as_o
 
 def test_a_created_or_added_desktop_records_the_apps_of_its_default_shortcuts(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
-    store.create_desktop("Alpha", "#111111", 1, _SEED, ())
+    store.create_desktop("Alpha", "#111111", 1, _SEED, (), None)
     assert read_default_shortcuts_offered(tmp_path)["apps"] == ["chat"]
     store.add_desktop(default_desktop(()), {AppName("files")})
     assert read_default_shortcuts_offered(tmp_path)["apps"] == ["chat", "files"]
@@ -190,7 +188,7 @@ def test_a_desktop_added_before_any_offered_record_starts_it_from_the_shortcuts_
     store.ensure_default(lambda: _SEED)
     (tmp_path / DEFAULT_SHORTCUTS_OFFERED_FILENAME).unlink()
 
-    store.create_desktop("Alpha", "#111111", 1, (), ())
+    store.create_desktop("Alpha", "#111111", 1, (), (), None)
 
     assert read_default_shortcuts_offered(tmp_path)["apps"] == ["chat"]
 
@@ -238,7 +236,7 @@ def test_a_desktop_added_where_no_desktop_stands_starts_the_offered_record_over(
     store.ensure_default(lambda: _SEED)
     (tmp_path / "desktops.json").unlink()
 
-    store.create_desktop("Alpha", "#111111", 1, (), ())
+    store.create_desktop("Alpha", "#111111", 1, (), (), None)
 
     assert read_default_shortcuts_offered(tmp_path)["apps"] == []
 
@@ -248,7 +246,7 @@ def _seed_the_default_desktop(store: DesktopStore) -> None:
 
 
 def _create_a_desktop(store: DesktopStore) -> None:
-    store.create_desktop("Alpha", "#111111", 1, _SEED, ())
+    store.create_desktop("Alpha", "#111111", 1, _SEED, (), None)
 
 
 @pytest.mark.parametrize("make_a_desktop_where_none_stands", [_seed_the_default_desktop, _create_a_desktop])
@@ -280,7 +278,7 @@ def test_with_no_desktop_nothing_is_offered_or_recorded(tmp_path: Path) -> None:
 def test_pinned_windows_are_reconciled_across_every_desktop_and_written_only_on_a_change(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     store.ensure_default(lambda: ())
-    store.create_desktop("Alpha", "#111111", 1, (), ())
+    store.create_desktop("Alpha", "#111111", 1, (), (), None)
     pin = AppPin(app=AppName("chat"), pin=Pin(path=LaunchPathValue("/")))
     ensured = store.ensure_pinned_windows([pin], TEST_NOW)
     assert ensured.is_written is True
@@ -294,7 +292,7 @@ def test_pinned_windows_are_reconciled_across_every_desktop_and_written_only_on_
     assert withdrawn.is_written is True
     assert all(desktop.windows[0].is_pinned is False for desktop in withdrawn.desktops)
     # A pinned window is born with a new desktop when the caller hands it over.
-    born = store.create_desktop("Beta", "#222222", 2, (), (ensured.desktops[0].windows[0],))
+    born = store.create_desktop("Beta", "#222222", 2, (), (ensured.desktops[0].windows[0],), None)
     assert born.windows == (ensured.desktops[0].windows[0],)
 
 
@@ -330,18 +328,22 @@ def test_a_desktop_made_again_never_wears_a_theme_its_id_left_behind(tmp_path: P
 def test_desktops_are_created_settled_and_deleted_with_the_last_one_refused(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     home = store.ensure_default(lambda: ())[0]
-    research = store.create_desktop("Research!", "#12B5A5", 4, _SEED, ())
+    research = store.create_desktop("Research!", "#12B5A5", 4, _SEED, (), None)
     assert research.id == "research" and research.shortcuts == _SEED
     with pytest.raises(DesktopConflictError):
-        store.create_desktop("research", "#12B5A5", 4, (), ())
+        store.create_desktop("research", "#12B5A5", 4, (), (), None)
     with pytest.raises(DesktopValueError):
-        store.create_desktop("Bad", "red", 4, (), ())
+        store.create_desktop("Bad", "red", 4, (), (), None)
     with pytest.raises(DesktopValueError):
-        store.create_desktop("Bad", "#12B5A5", 12, (), ())
+        store.create_desktop("Bad", "#12B5A5", 12, (), (), None)
     with pytest.raises(DesktopValueError):
         slugify_desktop_name("!!!")
     settled = store.update_settings("research", "Research 2", "#222222", 2)
     assert (settled.id, settled.name, settled.color, settled.glyph) == ("research", "Research 2", "#222222", 2)
+    # A rename alone keeps the colour and glyph as written (the multiplayer spec, S7).
+    renamed = store.update_settings("research", "Research 3", None, None)
+    assert (renamed.name, renamed.color, renamed.glyph) == ("Research 3", "#222222", 2)
+    assert store.update_settings("research", "Research 2", None, None).name == "Research 2"
     papered = store.set_wallpaper("research", Wallpaper(kind=WallpaperKind.BUNDLED, name=WallpaperName("dunes")))
     assert papered.wallpaper is not None and papered.wallpaper.name == "dunes"
     assert store.set_wallpaper("research", None).wallpaper is None
@@ -407,7 +409,7 @@ def test_shortcuts_are_set_moved_and_removed(tmp_path: Path) -> None:
 
 def test_a_clients_active_desktop_falls_back_from_its_desktop_to_the_first(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
-    home, alpha = store.ensure_default(lambda: ())[0], store.create_desktop("Alpha", "#111111", 1, (), ())
+    home, alpha = store.ensure_default(lambda: ())[0], store.create_desktop("Alpha", "#111111", 1, (), (), None)
     desktops = [home, alpha]
     assert resolve_active_desktop(None, desktops) == home.id
     assert resolve_active_desktop(None, []) is None
@@ -466,12 +468,57 @@ def test_the_next_glyph_is_the_first_unused_then_cycles() -> None:
     assert next_glyph_index([*range(GLYPH_COUNT), 0]) == 1
 
 
-@pytest.mark.frontend
-def test_the_shells_glyph_colours_are_the_frontends_palette_in_glyph_order() -> None:
-    palette = _SQUIGGLE_GLYPHS_ARRAY.search(_SQUIGGLES_PATH.read_text())
-    assert palette is not None, f"no SQUIGGLE_GLYPHS array in {_SQUIGGLES_PATH}"
-    assert tuple(_GLYPH_COLOR.findall(palette.group(1))) == DESKTOP_GLYPH_COLORS
+def test_the_shell_has_a_colour_for_every_glyph() -> None:
     assert len(DESKTOP_GLYPH_COLORS) == GLYPH_COUNT
+
+
+def test_a_desktop_is_the_owners_with_no_key_and_its_keys_owner_otherwise() -> None:
+    """ "Mine" (the multiplayer spec, section 8.1): a desktop with no owner is the workspace owner's under either of
+    the owner's keys; a visitor's is the one carrying their key."""
+    home = default_desktop(())
+    alices = home.model_copy_update(
+        to_update(home.field_ref().id, DesktopId("alice")),
+        to_update(home.field_ref().owner, ParticipantKey("user:user-alice")),
+    )
+    anonymous_owner = RequestIdentity(owner=True)
+    signed_in_owner = RequestIdentity(owner=True, user_id="user-josh", email="josh@example.com")
+    alice = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
+    assert is_desktop_owned_by(home, anonymous_owner) and is_desktop_owned_by(home, signed_in_owner)
+    assert not is_desktop_owned_by(home, alice)
+    assert is_desktop_owned_by(alices, alice)
+    assert not is_desktop_owned_by(alices, signed_in_owner) and not is_desktop_owned_by(alices, anonymous_owner)
+    assert desktop_owner_of(anonymous_owner) is None and desktop_owner_of(signed_in_owner) is None
+    assert desktop_owner_of(alice) == "user:user-alice"
+
+
+def test_reordering_moves_the_requesters_own_desktops_and_leaves_the_others_in_place(tmp_path: Path) -> None:
+    """The order route's rule (the multiplayer spec, section 8.2): the requester's desktops take the order given in
+    the places their desktops held; an order naming any other desktop, or not every one of theirs, is refused."""
+    store = DesktopStore(state_directory=tmp_path)
+    store.ensure_default(lambda: ())
+    store.create_desktop("Alpha", "#111111", 1, (), (), ParticipantKey("user:user-alice"))
+    store.create_desktop("Beta", "#222222", 2, (), (), None)
+    store.create_desktop("Gamma", "#333333", 3, (), (), None)
+    owner = RequestIdentity(owner=True)
+    alice = RequestIdentity(owner=False, user_id="user-alice", email="alice@example.com")
+    reordered = store.reorder_desktops([DesktopId("gamma"), DesktopId("home"), DesktopId("beta")], owner)
+    assert [desktop.id for desktop in reordered] == ["gamma", "alpha", "home", "beta"]
+    assert [desktop.id for desktop in store.list_desktops()] == ["gamma", "alpha", "home", "beta"]
+    # Alice's one desktop is already in order; nothing is rewritten.
+    stamp = (tmp_path / "desktops.json").stat().st_mtime_ns
+    assert [desktop.id for desktop in store.reorder_desktops([DesktopId("alpha")], alice)] == [
+        "gamma",
+        "alpha",
+        "home",
+        "beta",
+    ]
+    assert (tmp_path / "desktops.json").stat().st_mtime_ns == stamp
+    with pytest.raises(DesktopValueError):
+        store.reorder_desktops([DesktopId("home")], owner)
+    with pytest.raises(DesktopValueError):
+        store.reorder_desktops([DesktopId("home"), DesktopId("beta"), DesktopId("gamma"), DesktopId("alpha")], owner)
+    with pytest.raises(DesktopValueError):
+        store.reorder_desktops([DesktopId("home"), DesktopId("home"), DesktopId("beta")], owner)
 
 
 def test_a_returning_client_keeps_its_desktop_only_when_it_last_arrived_as_the_same_user() -> None:

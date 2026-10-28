@@ -244,10 +244,13 @@ included, so to look at another desktop's shortcuts without moving anyone, read 
 off `desktops`, which lists every desktop's shortcuts.
 
 `shortcut set` refuses an app or launch path the registry does not declare.
-Creating, renaming, or deleting a *desktop itself* has no `workspace-layout`
-subcommand: it is the taskbar's desktop menu, or the shell's REST routes
-(`POST /api/desktops`, `POST /api/desktops/<id>/settings`, `POST
-/api/desktops/<id>/delete`), which the `system_interface` README documents.
+Creating, renaming, reordering, or deleting a *desktop itself* has no
+`workspace-layout` subcommand: it is the taskbar's overview (the four-squares
+button) or the backdrop's context menu, or the shell's REST routes
+(`POST /api/desktops` with `{"name"}`, `POST /api/desktops/<id>/settings` with
+`{"name"}`, `POST /api/desktops/order`, `POST /api/desktops/<id>/delete`), which
+the `system_interface` README documents. A desktop created through the route
+by a visitor is theirs (its `owner`); the owner's carry none.
 
 ## Inspecting state
 

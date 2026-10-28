@@ -31,6 +31,7 @@ import simple_websocket
 from app_manifest.registry_location import registry_path
 from flask import Flask
 from pydantic import Field
+from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY
@@ -38,8 +39,12 @@ from imbue.system_interface.app_context import SystemInterfaceState
 from imbue.system_interface.config import Config
 from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.presence import build_presence_sweep
+from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import PROFILES_DIRECTORY_NAME
 from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.roster import RosterSource
+from imbue.system_interface.roster import RosterWatch
+from imbue.system_interface.roster import build_roster_announcer
 from imbue.system_interface.shell.app_lifecycle import IDLE_SWEEP_INTERVAL_SECONDS
 from imbue.system_interface.shell.app_lifecycle import NO_WINDOWS_GRACE_SECONDS
 from imbue.system_interface.shell.inventory import AppInventory
@@ -232,6 +237,7 @@ def build_test_state(
         )
     )
     presence = PresenceStore(directory=resolved_presence_directory)
+    resolved_repo_root = repo_root if repo_root is not None else _fresh_shell_state_directory()
     shell = build_shell_state(
         state_directory=state_directory,
         registry_path=registry_path(),
@@ -247,7 +253,7 @@ def build_test_state(
         background_tasks_root=background_tasks_root
         if background_tasks_root is not None
         else state_directory / "background-tasks",
-        repo_root=repo_root if repo_root is not None else _fresh_shell_state_directory(),
+        repo_root=resolved_repo_root,
         profiles=resolved_profiles,
         launch_poster=launch_poster,
         is_lifecycle_enabled=is_lifecycle_enabled,
@@ -255,18 +261,32 @@ def build_test_state(
         idle_sweep_interval_seconds=idle_sweep_interval_seconds,
     )
     resolved_static_directory = static_directory if static_directory is not None else DEFAULT_STATIC_DIRECTORY
+    workspace_name = workspace_name_source(
+        resolved_config.system_interface_workspace_name,
+        workspace_environ if workspace_environ is not None else {},
+    )
+    roster = RosterSource(
+        presence=presence,
+        profiles=resolved_profiles,
+        users=shell.users,
+        share_grants=shell.share_grants,
+        agent_grants=shell.agent_grants,
+        agent_last_seen_path=resolved_repo_root / AGENT_LAST_SEEN_FILE,
+        workspace_name=workspace_name,
+        avatar_selection=shell.avatar_selection,
+    )
+    announce_roster = build_roster_announcer(roster, resolved_broadcaster, utc_now)
     return SystemInterfaceState(
         config=resolved_config,
         shell=shell,
         is_preview=is_preview,
         static_directory=resolved_static_directory,
         presence=presence,
-        presence_sweep=build_presence_sweep(presence, resolved_profiles, resolved_broadcaster),
+        presence_sweep=build_presence_sweep(presence, resolved_profiles, resolved_broadcaster, announce_roster),
         profiles=resolved_profiles,
-        workspace_name=workspace_name_source(
-            resolved_config.system_interface_workspace_name,
-            workspace_environ if workspace_environ is not None else {},
-        ),
+        roster=roster,
+        roster_watch=RosterWatch(watched_paths=(), announce=announce_roster),
+        workspace_name=workspace_name,
     )
 
 

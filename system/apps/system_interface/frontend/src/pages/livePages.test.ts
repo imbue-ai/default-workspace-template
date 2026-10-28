@@ -936,3 +936,65 @@ describe("the phone's mount policy", () => {
     expect(frameOf("win-3")).toBe(keptFrame);
   });
 });
+
+describe("the overview (the multiplayer spec, section 8.2)", () => {
+  /** Stand in for the overview's tiles: one content box per window of the desktop, minimized ones included. */
+  function renderTiles(): void {
+    windows.innerHTML = "";
+    for (const [windowId, left] of [
+      ["win-1", 40],
+      ["win-2", 340],
+      ["win-3", 640],
+    ] as const) {
+      const tile = document.createElement("div");
+      tile.setAttribute("data-window-id", windowId);
+      const content = document.createElement("div");
+      content.setAttribute("data-window-content", "");
+      content.getBoundingClientRect = () => ({ left, top: 100, width: 250, height: 200 }) as DOMRect;
+      tile.appendChild(content);
+      windows.appendChild(tile);
+    }
+  }
+
+  it("lays every page of the active desktop over its tile at the tile's scale, inert and above the scrim, the minimized ones too", () => {
+    renderTiles();
+    layer.setOverview({ scaleOf: (windowId) => (windowId === "win-3" ? null : 0.5) });
+    layer.reconcile();
+    // win-2 is minimized and had no page; the overview gives it one.
+    for (const windowId of ["win-1", "win-2"]) {
+      const wrapper = wrapperOf(windowId);
+      expect(wrapper.style.display).toBe("");
+      expect(wrapper.style.width).toBe("500px");
+      expect(wrapper.style.height).toBe("400px");
+      expect(wrapper.style.transform).toBe("scale(0.5)");
+      expect(wrapper.style.transformOrigin).toBe("top left");
+      expect(wrapper.style.pointerEvents).toBe("none");
+      expect(wrapper.style.zIndex).toBe("calc(var(--z-sticky) + 1)");
+    }
+    expect(wrapperOf("win-1").style.left).toBe("40px");
+    expect(wrapperOf("win-2").style.left).toBe("340px");
+    // A window the overview has no tile for stays hidden, and nothing holds the frame focus.
+    expect(host.querySelector('iframe[data-live-page="win-3"]')).toBeNull();
+    expect(document.activeElement).not.toBe(frameOf("win-1"));
+
+    // The overview goes: the pages lie over their windows again, at their own size and stacking.
+    layer.setOverview(null);
+    renderChrome();
+    layer.reconcile();
+    const wrapper = wrapperOf("win-1");
+    expect(wrapper.style.transform).toBe("");
+    expect(wrapper.style.width).toBe("500px");
+    expect(wrapper.style.left).toBe("100px");
+    expect(wrapper.style.pointerEvents).toBe("auto");
+    expect(wrapper.style.zIndex).toBe("5");
+    expect(wrapperOf("win-2").style.display).toBe("none");
+  });
+
+  it("hides a page whose tile scale is not positive rather than sizing it by a zero scale", () => {
+    renderTiles();
+    layer.setOverview({ scaleOf: (windowId) => (windowId === "win-1" ? 0 : 0.5) });
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.display).toBe("none");
+    expect(wrapperOf("win-2").style.display).toBe("");
+  });
+});

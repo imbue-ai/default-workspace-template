@@ -16,9 +16,11 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import TypeVar
 from typing import assert_never
 from uuid import uuid4
 
+import httpx
 from app_manifest.content_security_policy import attach_document_policy
 from app_manifest.primitives import AppName
 from app_manifest.registry import read_origin_label
@@ -46,17 +48,23 @@ from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.identity import is_owner_participant
+from workspace_layout.identity import participant_key_of
 from workspace_layout.interfaces import ShellLayoutInterface
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
+from workspace_layout.shell_url import shell_base_url
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
 from imbue.chat import latchkey_endpoints
+from imbue.chat import mentions_endpoints
 from imbue.chat import secret_requests_endpoints
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_exists
@@ -79,17 +87,26 @@ from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
+from imbue.chat.authors import author_prefix
+from imbue.chat.authors import is_unprefixable_input
+from imbue.chat.authors import new_author_annotation
+from imbue.chat.authors import prefix_safe_name
 from imbue.chat.background_tasks import unreported_runner_ends_notice
 from imbue.chat.chat_autocompact import ChatAutocompactState
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import is_genuine_user_turn
+from imbue.chat.chat_intakes import APP_CHAT_LABEL
+from imbue.chat.chat_intakes import app_chat_hint
+from imbue.chat.chat_intakes import app_chat_title
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
 from imbue.chat.chat_intakes import most_recently_messaged_chat_id
 from imbue.chat.chat_settings import ChatSettings
 from imbue.chat.chat_transcript import ChatTranscript
 from imbue.chat.chat_transcript import TranscriptSegment
+from imbue.chat.client_activity import is_client_activity_reportable
+from imbue.chat.client_activity import record_client_message_activity
 from imbue.chat.compaction_status import compact_command_instructions
 from imbue.chat.compaction_status import is_compact_command
 from imbue.chat.compaction_status import is_context_compacted_event
@@ -97,6 +114,7 @@ from imbue.chat.config import Config
 from imbue.chat.documents import document_response
 from imbue.chat.documents import inject_base_path_meta_tag
 from imbue.chat.documents import inject_chat_identity_meta_tags
+from imbue.chat.documents import inject_chat_kind_meta_tag
 from imbue.chat.documents import inject_hostname_meta_tag
 from imbue.chat.documents import inject_plugin_script_tags
 from imbue.chat.documents import inject_primary_agent_id_meta_tag
@@ -123,7 +141,12 @@ from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptReader
+from imbue.chat.identity import request_identity
+from imbue.chat.identity import request_participant
 from imbue.chat.main_chat import MAIN_CHAT_NAME
+from imbue.chat.mention_parser import MentionTarget
+from imbue.chat.mentions import BackgroundMentionDeliverer
+from imbue.chat.mentions import MentionHandler
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentListItem
@@ -163,9 +186,11 @@ from imbue.chat.models import IntakeRequest
 from imbue.chat.models import IntakeResponse
 from imbue.chat.models import IntakeTarget
 from imbue.chat.models import InterruptAgentResponse
+from imbue.chat.models import MeResponse
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import OkResponse
+from imbue.chat.models import ParticipantsResponse
 from imbue.chat.models import PendingIntakeView
 from imbue.chat.models import PoweredByResponse
 from imbue.chat.models import ProvisionalChat
@@ -187,10 +212,12 @@ from imbue.chat.models import SwitchChatRequest
 from imbue.chat.models import SwitchChatResponse
 from imbue.chat.models import parse_subagent_key
 from imbue.chat.naming import canonical_agent_name
+from imbue.chat.naming import is_name_conflict
 from imbue.chat.presence import PresenceReport
+from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import AGENT_ID_PATTERN
-from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import parse_chat_ref
 from imbue.chat.request_helpers import answer_chat_app_error
 from imbue.chat.request_helpers import handle_unhandled_exception
@@ -207,6 +234,7 @@ from imbue.chat.ws_broadcaster import provisional_chat_created_message
 from imbue.chat.wsgi import build_sock
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import MngrError
@@ -378,6 +406,7 @@ def _get_events(chat_id: str) -> Response:
         # Initial load: the newest `limit` events (the live tail). Bounded read
         # from the end; the client pages/jumps from here.
         events = transcript.get_tail_events(limit)
+    get_state().authors.stamp_events(ChatId(chat_id), events)
 
     # `total` is the full transcript length and `offset` is the global index of the
     # first returned event. Together they place the loaded window in the whole
@@ -691,9 +720,12 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     # it starts is already running.
     requested_at = time.monotonic()
     # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
-    # harness still starting -- reads as Connecting on the chat until it resolves.
+    # harness still starting -- reads as Connecting on the chat until it resolves. A room's send
+    # starts nothing (it appends to the room's transcript), so a stopped room stays stopped and
+    # reads so (the multiplayer spec, section 11).
+    is_revived_by_send = get_harness_spec(agent_info.harness).is_revived_by_send
     with agent_manager.track_connecting_send(agent_info.id, message_id, text) as mark_connecting:
-        if is_lifecycle_dead(agent_info.state) or session.is_starting_up():
+        if (is_revived_by_send and is_lifecycle_dead(agent_info.state)) or session.is_starting_up():
             mark_connecting()
             _wait_until_agent_accepts_input(agent_info, agent_manager, session, message_id)
         if not agent_manager.claim_send_for_delivery(agent_info.id, message_id):
@@ -711,7 +743,7 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
         # lifecycle that is true rather than one that says the agent they just messaged is dead.
         # Inside the connecting scope, so the chat never reads as stopped and not connecting,
         # which would let the stopped-chat release drop the watcher of the chat it revived.
-        if outcome is SendOutcome.OK:
+        if outcome is SendOutcome.OK and is_revived_by_send:
             agent_manager.note_agent_alive(agent_info.id)
     if outcome is SendOutcome.OK and compact_handling is ComposerCompactHandling.FORWARDED_TO_HARNESS:
         agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)
@@ -738,6 +770,7 @@ class _ServerSecretRequestBridge(SecretRequestChatBridge):
             # The notice answers a request the agent itself filed, so it reaches the agent whatever
             # account it runs on.
             is_refused_on_signed_out_account=False,
+            delivered_text=text,
         )
         if isinstance(accepted, _SendRefused):
             raise NoticeDeliveryError(accepted.answer.detail)
@@ -813,6 +846,9 @@ def _send_to_chat(
     # A chat whose account was signed out takes no more of the user's messages until it moves to
     # another provider: its agent still holds the credential it loaded, and would keep using it.
     is_refused_on_signed_out_account: bool,
+    # What the agent is handed: the request's words, prefixed with the author for a sender other than the owner
+    # (``_attributed_delivery``). The stamp, the activity report, and the naming read the words alone.
+    delivered_text: str,
 ) -> _SendAccepted | _SendRefused:
     """The ordinary send path, shared by the message route, the intake, and the secret-request notice: hold the send
     while the chat converges, else deliver it to the active agent; either way record the client's activity and the
@@ -820,9 +856,7 @@ def _send_to_chat(
     agent_manager: AgentManager = state.agent_manager
     # While the chat converges on a new agent every send is held for it (spec 5.7): accepted,
     # persisted on the record, and delivered in order once the successor runs.
-    held_phase = agent_manager.hold_send(
-        chat_id, message_id, send_message_request.message, _held_send_origin(send_message_request)
-    )
+    held_phase = agent_manager.hold_send(chat_id, message_id, delivered_text, _held_send_origin(send_message_request))
     is_compaction_requested = False
     if held_phase is None:
         # Resolved after the hold said the chat is not converging: a handoff that finished between
@@ -841,7 +875,7 @@ def _send_to_chat(
             # ahead of the first words sent to it; the seed counts as delivered only with a send that went through.
             outcome = agent_manager.carry_pending_seed(
                 chat_id,
-                send_message_request.message,
+                delivered_text,
                 lambda text: _deliver_message(state, agent_info, text, message_id),
             )
         except AgentNotFoundError as e:
@@ -918,6 +952,7 @@ def _deliver_unreported_runner_ends_notice(
             message_id,
             # The commands were the agent's own, so it hears of them whatever account it runs on.
             is_refused_on_signed_out_account=False,
+            delivered_text=notice,
         )
     if isinstance(accepted, _SendRefused):
         logger.warning(
@@ -926,21 +961,114 @@ def _deliver_unreported_runner_ends_notice(
 
 
 def _hold_send_for_chat_being_created(
-    state: ChatAppState, chat_id: str, send_message_request: SendMessageRequest, message_id: str
+    state: ChatAppState,
+    chat_id: str,
+    send_message_request: SendMessageRequest,
+    delivered_text: str,
+    message_id: str,
 ) -> Response | None:
     """Hold a send to a chat whose create is still running, answering the route's 202; None when the chat is
-    not being created. The chat app keeps it until the agent lands, so a page closed meanwhile loses nothing."""
+    not being created. The chat app keeps it until the agent lands, so a page closed meanwhile loses nothing. The
+    held text is the attributed one, so the agent the chat gets still learns a non-owner's author."""
     parsed = parse_chat_ref(chat_id)
     if parsed is None:
         return None
     is_held = state.agent_manager.hold_send_for_chat_being_created(
-        parsed, message_id, send_message_request.message, _held_send_origin(send_message_request)
+        parsed, message_id, delivered_text, _held_send_origin(send_message_request)
     )
     if not is_held:
         return None
     _consider_naming_chat(state, parsed, send_message_request.message)
     record_client_message_activity(state.shell, parsed, send_message_request, state.is_secondary)
     return model_response(HeldSendResponse(status="held", phase=None), 202)
+
+
+def _attributed_delivery(
+    state: ChatAppState, chat_id: ChatId, message: str, message_id: str, identity: RequestIdentity
+) -> str:
+    """The text the agent is handed for the sender ``identity`` vouches for (the multiplayer spec, sections 5.1 and
+    5.3): the words as they are for the owner (under either key) and for a slash command or bash input, else prefixed
+    ``[from: <name>] ``; a sender other than the owner is recorded in the chat's annotations before delivery. The
+    identity is read from the request by the caller, since an intake's send may run off the request thread."""
+    if is_owner_participant(identity):
+        return message
+    sender = participant_key_of(identity)
+    display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
+    is_prefixed = _is_author_prefixed(chat_id) and not is_unprefixable_input(message)
+    delivered = author_prefix(display_name) + message if is_prefixed else message
+    state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, delivered))
+    return delivered
+
+
+def _is_author_prefixed(chat_id: ChatId) -> bool:
+    """Whether the chat's harness learns a non-owner's author from the delivered text's prefix; a room records the
+    author from the annotation instead. A chat with no agent yet reads as prefixed, like the agent it will get."""
+    agent_info = _find_active_agent(str(chat_id))
+    return agent_info is None or get_harness_spec(agent_info.harness).is_author_prefixed
+
+
+def _act_on_accepted_send(
+    state: ChatAppState, chat_id: ChatId, message_id: str, text: str, identity: RequestIdentity
+) -> None:
+    """What a person's or a visiting agent's send does once it was accepted (the multiplayer spec, sections 6.5 and
+    7.4): their speech bubble is raised over their tray entry, naming the people a room message mentions so their
+    clients mark it; and in a room the mentions act, people marked and the agent or a chat sent the message. In an
+    agent chat a handle is a word the agent reads like any other. Takes the sender's ``identity`` rather than reading
+    the request's, since an intake nobody waits on and a room's first message land on threads of their own."""
+    snapshot = state.agent_manager.get_chat_snapshot(str(chat_id))
+    if snapshot is None:
+        return
+    handler = state.mention_handler
+    targets: tuple[MentionTarget, ...] = ()
+    if snapshot.kind is ChatKind.ROOM and handler is not None and "@" in text:
+        targets = handler.resolve(text)
+    sender = participant_key_of(identity)
+    if state.tray_feed is not None:
+        mentioned = tuple(target.key for target in targets if target.is_person and target.key is not None)
+        state.tray_feed.post_bubble(sender, chat_id, snapshot.title, text, message_id, mentioned)
+    if handler is not None and targets:
+        sender_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
+        handler.act(targets, chat_id, snapshot.title, message_id, text, sender, sender_name)
+
+
+def _me_endpoint() -> Response:
+    """``GET /api/me``: the requester's participant key, which the page tells its own turns by."""
+    return model_response(MeResponse(participant=request_participant()))
+
+
+# Where this app serves the workspace agent's picture from its own origin (the roster names it on the shell's).
+WORKSPACE_AGENT_PICTURE_ROUTE: Final[str] = "/api/participants/workspace-agent/picture"
+_PICTURE_TIMEOUT_SECONDS: Final[float] = 5.0
+
+
+def _participants_endpoint() -> Response:
+    """``GET /api/participants``: the roster as the shell holds it, the workspace agent's picture pointed at this
+    origin, since the page cannot fetch the shell's."""
+    participants = tuple(
+        entry.model_copy_update(to_update(entry.field_ref().profile_picture_url, WORKSPACE_AGENT_PICTURE_ROUTE))
+        if entry.key == WORKSPACE_AGENT_PARTICIPANT_KEY and entry.profile_picture_url is not None
+        else entry
+        for entry in get_state().roster.document().participants
+    )
+    return model_response(ParticipantsResponse(participants=participants))
+
+
+def _workspace_agent_picture_endpoint() -> Response:
+    """The workspace agent's picture, fetched from the shell over loopback: the selected avatar design's icon."""
+    state = get_state()
+    agent = state.roster.participant(WORKSPACE_AGENT_PARTICIPANT_KEY)
+    if agent is None or agent.profile_picture_url is None:
+        return error_response("The workspace agent has no picture yet", 404)
+    try:
+        answer = state.http_client.get(
+            f"{shell_base_url()}{agent.profile_picture_url}", timeout=_PICTURE_TIMEOUT_SECONDS
+        )
+    except httpx.HTTPError as e:
+        logger.debug("Could not fetch the workspace agent's picture from the shell: {}", e)
+        return error_response("The workspace agent's picture could not be fetched", 502)
+    if not answer.is_success:
+        return error_response(f"The shell answered {answer.status_code} for the picture", 502)
+    return Response(answer.content, mimetype=answer.headers.get("Content-Type", "image/png"))
 
 
 def _send_message_endpoint(chat_id: str) -> Response:
@@ -955,9 +1083,13 @@ def _send_message_endpoint(chat_id: str) -> Response:
         return _agent_list_not_known_response()
     send_message_request = parse_request_body(SendMessageRequest)
     message_id = send_message_request.message_id or uuid4().hex
+    delivered_text = _attributed_delivery(
+        state, ChatId(chat_id), send_message_request.message, message_id, request_identity()
+    )
     if _find_active_agent(chat_id) is None:
-        held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, message_id)
+        held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, delivered_text, message_id)
         if held is not None:
+            _act_on_accepted_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
             return held
         # The create may have landed between the lookup and the hold, which then refuses.
         if _find_active_agent(chat_id) is None:
@@ -967,10 +1099,16 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # while the agent is still answering.
     _consider_naming_chat(state, ChatId(chat_id), send_message_request.message)
     accepted = _send_to_chat(
-        state, ChatId(chat_id), send_message_request, message_id, is_refused_on_signed_out_account=True
+        state,
+        ChatId(chat_id),
+        send_message_request,
+        message_id,
+        is_refused_on_signed_out_account=True,
+        delivered_text=delivered_text,
     )
     if isinstance(accepted, _SendRefused):
         return model_response(accepted.answer, accepted.status)
+    _act_on_accepted_send(state, ChatId(chat_id), message_id, send_message_request.message, request_identity())
     # A 202 tells the page to keep its "Sending" placeholder and the script that nothing needs
     # backing off.
     if accepted.held_phase is not None:
@@ -985,48 +1123,9 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
 
 @pure
-def is_client_activity_reportable(send_message_request: SendMessageRequest) -> bool:
-    """Whether a send names the client and the desktop the shell's activity log keys on (a legacy or unframed caller names neither)."""
-    return send_message_request.client_id != "" and send_message_request.desktop_id != ""
-
-
-@pure
 def _held_send_origin(send_message_request: SendMessageRequest) -> HeldSendOrigin:
     """Who a send held during a handoff came from: a chat page names its client, anything else is a script."""
     return HeldSendOrigin.CLIENT if is_client_activity_reportable(send_message_request) else HeldSendOrigin.SCRIPT
-
-
-@pure
-def client_activity_report(chat_id: ChatId, send_message_request: SendMessageRequest) -> ClientActivityReport:
-    """The shell's client-activity report for one send (desktop contracts.md section 5.1), keyed by chat. Raises
-    InvalidLayoutValueError when the send's client or desktop is not an id the shell would take."""
-    return ClientActivityReport(
-        client_id=ClientId(send_message_request.client_id),
-        desktop_id=DesktopId(send_message_request.desktop_id),
-        kind=ClientActivityKind.MESSAGE,
-        app=str(CHAT_APP_NAME),
-        key=chat_id,
-        text=send_message_request.message,
-    )
-
-
-def record_client_message_activity(
-    shell: ShellLayoutInterface, chat_id: ChatId, send_message_request: SendMessageRequest, is_secondary: bool
-) -> None:
-    """Tell the shell which client (and desktop) a message came from, so agents can attribute requests through
-    ``workspace-layout context``. Callers naming no client or no desktop are not recorded, and neither is anything a
-    secondary chat (a preview) hears: the shell's activity log is the live chat's. Reported on its own thread:
-    the shell is a separate app, and a send must not wait on it."""
-    if is_secondary or not is_client_activity_reportable(send_message_request):
-        return
-    try:
-        report = client_activity_report(chat_id, send_message_request)
-    except InvalidLayoutValueError as e:
-        logger.warning("Skipped reporting a send of chat {} to the shell: {}", chat_id, e)
-        return
-    threading.Thread(
-        target=shell.record_client_activity, args=(report,), name="client-activity-report", daemon=True
-    ).start()
 
 
 def _get_harnesses_endpoint() -> Response:
@@ -1566,6 +1665,7 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
             message_id,
             _held_send_origin(switch_request),
             model_pick=switch_request.model,
+            kind=switch_request.kind,
         )
     except ChatConvergingError as e:
         return error_response(str(e), 409)
@@ -1606,7 +1706,7 @@ def _retry_handoff_endpoint(chat_id: str) -> Response:
         return _chat_not_found_response(chat_id)
     retry_request = parse_request_body(HandoffRetryRequest)
     try:
-        phase = get_state().agent_manager.retry_handoff(parsed, retry_request.account_id)
+        phase = get_state().agent_manager.retry_handoff(parsed, retry_request.account_id, retry_request.kind)
     except HandoffError as e:
         return error_response(str(e), 400)
     return model_response(HandoffRetryResponse(status="converging", phase=phase), 202)
@@ -1692,9 +1792,12 @@ def _get_screen_capture(chat_id: str) -> Response:
     return model_response(ScreenCaptureResponse(screen=result.stdout))
 
 
-def _created_chat_or_refusal(create: Callable[[], CreatedChat]) -> CreatedChat | Response:
-    """Run one create of a chat: the chat, else its refusal as the create route answers it (a taken name is a 409,
-    anything else the manager refused a 400 with its reason, and a ``kind`` beside it when the account is the
+_CreatedT = TypeVar("_CreatedT")
+
+
+def _created_or_refusal(create: Callable[[], _CreatedT]) -> _CreatedT | Response:
+    """Run one create of a chat: what it answers, else its refusal as the create route answers it (a taken name is
+    a 409, anything else the manager refused a 400 with its reason, and a ``kind`` beside it when the account is the
     reason)."""
     try:
         return create()
@@ -1737,9 +1840,20 @@ def _run_create_chat() -> CreatedChat | Response:
     ``system/scripts/message_chat.py --create``) holds its "starting..." state until the
     chat exists, without polling.
     """
-    agent_manager: AgentManager = get_state().agent_manager
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
     create_request = parse_request_body(CreateChatRequest)
-    created = _created_chat_or_refusal(
+    identity = request_identity()
+    # The first message's id, which its bubble carries. A room's first message is appended once its agent is up,
+    # by a thread with no identity of its own: who sent it is annotated under this id before the create, and what
+    # its mentions do runs once it has landed.
+    first_message_id = uuid4().hex
+    on_message_delivered = (
+        _room_first_message_hook(state, create_request.message, identity, current_app.app_context())
+        if create_request.kind is ChatKind.ROOM
+        else None
+    )
+    created = _created_or_refusal(
         lambda: agent_manager.create_chat(
             create_request.name,
             # A client asks for no templates: the manager adds `fast` itself, from the
@@ -1752,11 +1866,18 @@ def _run_create_chat() -> CreatedChat | Response:
             labels=create_request.labels,
             is_installation_check_skipped=create_request.is_installation_check_skipped,
             model_pick=create_request.model,
+            kind=create_request.kind,
+            message_id=first_message_id,
+            on_message_delivered=on_message_delivered,
         )
     )
     if isinstance(created, Response):
         return created
-    _consider_naming_chat(get_state(), created.chat_id, create_request.message)
+    if create_request.kind is ChatKind.ROOM:
+        _record_room_first_message_author(state, created.chat_id, create_request.message, identity, first_message_id)
+    else:
+        _consider_naming_chat(state, created.chat_id, create_request.message)
+        _bubble_new_chats_first_message(state, created, create_request.message, identity, first_message_id)
     if not create_request.should_wait:
         return created
     outcome = agent_manager.wait_for_chat_creation(created.chat_id, CHAT_CREATION_WAIT_TIMEOUT_SECONDS)
@@ -1767,6 +1888,57 @@ def _run_create_chat() -> CreatedChat | Response:
         detail = outcome.error or f"Creating chat {created.display_name!r} failed"
         return error_response(detail, 500)
     return created
+
+
+def _bubble_new_chats_first_message(
+    state: ChatAppState, created: CreatedChat, message: str, identity: RequestIdentity, message_id: str
+) -> None:
+    """Raise the bubble a new agent chat's first message is due (the multiplayer spec, section 6.5): the message
+    rides or follows the create rather than a send, so it is posted here, under the chat's minted title, as the
+    create is accepted; its mentions act on nothing, since the chat is an agent's. A room's first message raises
+    its bubble once it has landed (``_act_on_room_first_message``), with its mentions."""
+    if not message or state.tray_feed is None:
+        return
+    state.tray_feed.post_bubble(
+        participant_key_of(identity), created.chat_id, created.display_name, message, message_id, ()
+    )
+
+
+def _record_room_first_message_author(
+    state: ChatAppState, chat_id: ChatId, message: str, identity: RequestIdentity, message_id: str
+) -> None:
+    """Record who a new room's first message is from (the multiplayer spec, section 5.1): the message is appended
+    once the room's agent is up, with no identity of its own, so a sender other than the owner is annotated here,
+    under the id the append will carry."""
+    if not message or is_owner_participant(identity):
+        return
+    sender = participant_key_of(identity)
+    display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
+    state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, message))
+
+
+def _act_on_room_first_message(
+    state: ChatAppState,
+    message: str,
+    identity: RequestIdentity,
+    app_context: AppContext,
+    chat_id: ChatId,
+    message_id: str,
+) -> None:
+    """What a new room's first message does once it has landed: what a message-route send's does (its bubble, its
+    mentions), for the sender the create's request vouched for, under the app's context, since the create's thread
+    has none of its own."""
+    with app_context:
+        _act_on_accepted_send(state, chat_id, message_id, message, identity)
+
+
+def _room_first_message_hook(
+    state: ChatAppState, message: str, identity: RequestIdentity, app_context: AppContext
+) -> Callable[[ChatId, str], None]:
+    """The hook the create route hands the manager for a room's first message, bound to the sender and the app."""
+    return lambda chat_id, message_id: _act_on_room_first_message(
+        state, message, identity, app_context, chat_id, message_id
+    )
 
 
 def _create_chat() -> Response:
@@ -1843,14 +2015,65 @@ def _main_or_most_recent_intake_chat(
     return _ResolvedIntakeChat(chat_id=most_recently_messaged_chat_id(snapshots))
 
 
-def _resolve_intake_chat(agent_manager: AgentManager, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
+def _lounge_or_refusal(state: ChatAppState) -> _ResolvedIntakeChat | Response:
+    """The Lounge, made when there is none (the multiplayer spec, section 7.5), or the refusal: a secondary chat
+    makes no room, and a room's create may be refused as the create route refuses one."""
+    if state.lounge is None:
+        return error_response("A secondary chat has no Lounge", 403)
+    lounge_id = _created_or_refusal(state.lounge.ensure)
+    if isinstance(lounge_id, Response):
+        return lounge_id
+    return _ResolvedIntakeChat(chat_id=lounge_id)
+
+
+def _app_chat_or_refusal(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
+    """The chat about an app (the multiplayer spec, section 9.2): the chat labelled ``app_chat`` with the app's
+    registered name (so a renamed app keeps its chat), else the one titled "<display name> Chat" by the rule the
+    create refuses a taken name by (``is_name_conflict``: canonical forms compared case-insensitively, so "docs chat"
+    is found rather than refused), of either kind or still being made; else one created with that title and label on
+    the default account (never auto-named, since the title is not a "Chat N"); with nothing signed in, a chat
+    awaiting its first send under them, whose page asks for a provider. The refusals are the create route's."""
+    if not intake.app or not intake.app_display_name:
+        return error_response("A chat about an app names the app and its display name", 400)
+    title = app_chat_title(intake.app_display_name)
+    labels = {APP_CHAT_LABEL: intake.app}
+    agent_manager = state.agent_manager
+    snapshots = agent_manager.get_chat_snapshots()
+    provisional = agent_manager.get_provisional_chats()
+    for is_match in (
+        lambda chat_labels, chat_title: chat_labels.get(APP_CHAT_LABEL) == intake.app,
+        lambda chat_labels, chat_title: is_name_conflict(title, (chat_title,)),
+    ):
+        for snapshot in snapshots:
+            if is_match(snapshot.labels, snapshot.title):
+                return _ResolvedIntakeChat(chat_id=snapshot.chat_id)
+        for chat in provisional:
+            if is_match(chat.labels, chat.name):
+                return _ResolvedIntakeChat(chat_id=chat.chat_id)
+    account = _resolve_intake_account(intake)
+    if isinstance(account, Response):
+        return account
+    if account is None:
+        minted = _created_or_refusal(lambda: agent_manager.mint_awaiting_chat("", name=title, labels=labels))
+        return minted if isinstance(minted, Response) else _ResolvedIntakeChat(chat_id=minted.chat_id)
+    created = _created_or_refusal(lambda: agent_manager.create_chat(title, account_id=account, labels=labels))
+    return created if isinstance(created, Response) else _ResolvedIntakeChat(chat_id=created.chat_id)
+
+
+def _resolve_intake_chat(state: ChatAppState, intake: IntakeRequest) -> _ResolvedIntakeChat | Response:
     """The chat an intake's target names (spec 3.5), or the 404 for an explicit chat the app does not list.
 
     ``new_chat`` answers no chat: the caller creates or mints one. ``current_chat``,
-    ``main_chat`` and ``chat_selector`` fall back to that when nothing qualifies.
+    ``main_chat`` and ``chat_selector`` fall back to that when nothing qualifies; ``lounge`` is the Lounge, made
+    when there is none, and ``app_chat`` the chat about the named app, made when there is none.
     """
+    agent_manager = state.agent_manager
     snapshots = agent_manager.get_chat_snapshots()
     match intake.target:
+        case IntakeTarget.LOUNGE:
+            return _lounge_or_refusal(state)
+        case IntakeTarget.APP_CHAT:
+            return _app_chat_or_refusal(state, intake)
         case IntakeTarget.CHAT:
             parsed = parse_chat_ref(intake.chat_id)
             if parsed is None or not agent_manager.knows_chat(parsed):
@@ -1885,25 +2108,39 @@ def _resolve_intake_account(intake: IntakeRequest) -> str | Response | None:
         return None
 
 
-def _deliver_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> _SendRefused | None:
-    """Send an intake's text to a chat that is an agent through the ordinary send path; None when it landed (or was
+def _deliver_intake_send(
+    state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
+) -> _SendRefused | None:
+    """Send an intake's text to a chat that is an agent through the ordinary send path, attributed to the sender
+    ``identity`` vouches for and acted on for its mentions as a message-route send is; None when it landed (or was
     held for a converging chat), else the refusal: what the message route would answer, and under which status."""
     message_id = uuid4().hex
     send_message_request = SendMessageRequest(
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
     )
     _consider_naming_chat(state, chat_id, intake.message)
-    accepted = _send_to_chat(state, chat_id, send_message_request, message_id, is_refused_on_signed_out_account=True)
-    return accepted if isinstance(accepted, _SendRefused) else None
+    delivered_text = _attributed_delivery(state, chat_id, intake.message, message_id, identity)
+    accepted = _send_to_chat(
+        state,
+        chat_id,
+        send_message_request,
+        message_id,
+        is_refused_on_signed_out_account=True,
+        delivered_text=delivered_text,
+    )
+    if isinstance(accepted, _SendRefused):
+        return accepted
+    _act_on_accepted_send(state, chat_id, message_id, intake.message, identity)
+    return None
 
 
 def _log_undelivered_intake_send(
-    app_context: AppContext, state: ChatAppState, chat_id: ChatId, intake: IntakeRequest
+    app_context: AppContext, state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
 ) -> None:
     """The send of an intake nobody waits on, run under the app's context (the send path resolves the agent through
-    the current app): its failure is a warning in the log."""
+    the current app) with the identity the request thread read: its failure is a warning in the log."""
     with app_context:
-        failure = _deliver_intake_send(state, chat_id, intake)
+        failure = _deliver_intake_send(state, chat_id, intake, identity)
     if failure is not None:
         logger.warning(
             "An intake's send to chat {} was not delivered ({}): {}",
@@ -1913,10 +2150,12 @@ def _log_undelivered_intake_send(
         )
 
 
-def _deliver_intake_send_in_background(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> None:
+def _deliver_intake_send_in_background(
+    state: ChatAppState, chat_id: ChatId, intake: IntakeRequest, identity: RequestIdentity
+) -> None:
     threading.Thread(
         target=_log_undelivered_intake_send,
-        args=(current_app.app_context(), state, chat_id, intake),
+        args=(current_app.app_context(), state, chat_id, intake, identity),
         name=f"intake-send-{chat_id}",
         daemon=True,
     ).start()
@@ -1924,10 +2163,11 @@ def _deliver_intake_send_in_background(state: ChatAppState, chat_id: ChatId, int
 
 def _finish_intake_send(state: ChatAppState, chat_id: ChatId, intake: IntakeRequest) -> Response | None:
     """Deliver an intake's send to a chat that is an agent, awaited or not; None when nothing failed here."""
+    identity = request_identity()
     if intake.is_delivery_awaited:
-        refused = _deliver_intake_send(state, chat_id, intake)
+        refused = _deliver_intake_send(state, chat_id, intake, identity)
         return model_response(refused.answer, refused.status) if refused is not None else None
-    _deliver_intake_send_in_background(state, chat_id, intake)
+    _deliver_intake_send_in_background(state, chat_id, intake, identity)
     return None
 
 
@@ -1943,7 +2183,7 @@ def _intake_chat() -> Response:
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     intake = parse_request_body(IntakeRequest)
-    resolved = _resolve_intake_chat(agent_manager, intake)
+    resolved = _resolve_intake_chat(state, intake)
     if isinstance(resolved, Response):
         return resolved
     if resolved.needs_pick:
@@ -1954,6 +2194,11 @@ def _intake_chat() -> Response:
         return model_response(IntakeResponse(path=intake_path(None, token)))
     if resolved.chat_id is None:
         return _intake_into_new_chat(state, intake)
+    if intake.target is IntakeTarget.APP_CHAT:
+        # Held even with nothing to send: the root applies it to set the composer's hint and focus it.
+        hint = app_chat_hint(intake.app_display_name)
+        token = state.pending_intakes.mint(intake, resolved.chat_id, needs_pick=False, hint=hint)
+        return model_response(IntakeResponse(path=intake_path(resolved.chat_id, token)))
     return _intake_into_listed_chat(state, resolved.chat_id, intake)
 
 
@@ -1965,12 +2210,14 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
     if isinstance(account, Response):
         return account
     if account is not None and not intake.is_draft:
-        created = _created_chat_or_refusal(
-            lambda: agent_manager.create_chat("", account_id=account, message=intake.message)
+        message_id = uuid4().hex
+        created = _created_or_refusal(
+            lambda: agent_manager.create_chat("", account_id=account, message=intake.message, message_id=message_id)
         )
         if isinstance(created, Response):
             return created
         _consider_naming_chat(state, created.chat_id, intake.message)
+        _bubble_new_chats_first_message(state, created, intake.message, request_identity(), message_id)
         return model_response(IntakeResponse(path=intake_path(created.chat_id, None)))
     minted = agent_manager.mint_awaiting_chat(account or "")
     token = state.pending_intakes.mint(intake, minted.chat_id, needs_pick=False)
@@ -2006,6 +2253,7 @@ def _get_pending_intake(token: str) -> Response:
         is_draft=pending.request.is_draft,
         needs_pick=pending.needs_pick,
         chat_id=str(pending.chat_id) if pending.chat_id is not None else None,
+        hint=pending.hint or None,
     )
     return model_response(view)
 
@@ -2045,16 +2293,20 @@ def _apply_pending_intake(token: str) -> Response:
     # Section 3.6.1's three outcomes: a draft, or a text for a chat that can neither take a message nor be launched
     # by one, goes to the composer; a chat awaiting its first send is launched with the text; an agent is sent it.
     if intake.is_draft or (not is_agent and not is_awaiting):
-        composer_text = intake.message
+        composer_text = intake.message or None
     elif is_awaiting:
-        first_message = intake.message
+        first_message = intake.message or None
     elif intake.message:
-        _deliver_intake_send_in_background(state, chat_id, intake)
+        _deliver_intake_send_in_background(state, chat_id, intake, request_identity())
     else:
         # A chat that became an agent since the intake was held, with nothing to send: it is selected alone.
         pass
     response = IntakeApplyResponse(
-        path=intake_path(chat_id, None), chat_id=str(chat_id), composer_text=composer_text, first_message=first_message
+        path=intake_path(chat_id, None),
+        chat_id=str(chat_id),
+        composer_text=composer_text,
+        first_message=first_message,
+        hint=pending.hint or None,
     )
     return model_response(response)
 
@@ -2261,8 +2513,12 @@ def _presence_endpoint(chat_id: str) -> Response:
     if not AGENT_ID_PATTERN.fullmatch(chat_id):
         return _chat_not_found_response(chat_id)
     report = parse_request_body(PresenceReport)
-    agent_manager: AgentManager = get_state().agent_manager
-    agent_manager.record_presence(ChatId(chat_id), report)
+    state = get_state()
+    state.agent_manager.record_presence(ChatId(chat_id), report)
+    # A page of theirs looking at the chat is the person having seen what mentioned them (section 7.4).
+    if report.state is PresenceState.VISIBLE and report.is_focused:
+        if state.mentions.clear(request_participant(), ChatId(chat_id)):
+            state.broadcaster.broadcast_mentions_updated()
     return model_response(OkResponse())
 
 
@@ -2336,7 +2592,12 @@ def _chat_document(key: str) -> Response:
     config: Config = get_state().config
     root_path = (request.script_root or "").rstrip("/")
     with_workspace_tags = _inject_workspace_meta_tags(document_path.read_text(), root_path)
-    html_content = inject_chat_identity_meta_tags(with_workspace_tags, chat_id, agent_id, session_id)
+    with_identity = inject_chat_identity_meta_tags(with_workspace_tags, chat_id, agent_id, session_id)
+    # The kind as the chat app lists the chat now; a chat it does not list yet (one still being created) is an
+    # agent's until the list says otherwise.
+    snapshot = get_state().agent_manager.get_chat_snapshot(chat_id)
+    kind = snapshot.kind if snapshot is not None else ChatKind.AGENT
+    html_content = inject_chat_kind_meta_tag(with_identity, kind.value)
     if config.javascript_plugin_basenames:
         html_content = inject_plugin_script_tags(html_content, config.javascript_plugin_basenames, root_path)
     return document_response(html_content, is_frontend_built=True)
@@ -2523,6 +2784,9 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("GET", "/api/harnesses"): RouteModels(response_model=HarnessCatalogsResponse),
     ("GET", "/api/agents"): RouteModels(response_model=AgentListResponse),
     ("GET", "/api/chats"): RouteModels(response_model=ChatListResponse),
+    ("GET", "/api/me"): RouteModels(response_model=MeResponse),
+    ("GET", "/api/participants"): RouteModels(response_model=ParticipantsResponse),
+    ("GET", WORKSPACE_AGENT_PICTURE_ROUTE): SchemalessRoute(reason="The workspace agent's picture, an image"),
     ("POST", "/api/chats/create"): RouteModels(
         request_model=CreateChatRequest,
         response_model=CreateChatResponse,
@@ -2625,8 +2889,23 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     latchkey_endpoints.ROUTE_TABLE,
     focus_chat.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
+    mentions_endpoints.ROUTE_TABLE,
     THEME_STATIC_ROUTE_TABLE,
 )
+
+
+def _send_room_mention(chat_id: ChatId, delivered: str, message_id: str) -> str | None:
+    """Deliver a room's mention to an agent chat through the ordinary send path; the refusal's detail, or None. A
+    person's message, so a chat whose account was signed out refuses it as it does the message route's."""
+    accepted = _send_to_chat(
+        get_state(),
+        chat_id,
+        SendMessageRequest(message=delivered, message_id=message_id),
+        message_id,
+        is_refused_on_signed_out_account=True,
+        delivered_text=delivered,
+    )
+    return accepted.answer.detail if isinstance(accepted, _SendRefused) else None
 
 
 def create_application(state: ChatAppState) -> Flask:
@@ -2665,6 +2944,11 @@ def create_application(state: ChatAppState) -> Flask:
     register_workspace_theme_route(application)
     application.add_url_rule("/api/agents", view_func=_list_agents_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats", view_func=_list_chats_endpoint, methods=["GET"])
+    application.add_url_rule("/api/me", view_func=_me_endpoint, methods=["GET"])
+    application.add_url_rule("/api/participants", view_func=_participants_endpoint, methods=["GET"])
+    application.add_url_rule(
+        WORKSPACE_AGENT_PICTURE_ROUTE, view_func=_workspace_agent_picture_endpoint, methods=["GET"]
+    )
     application.add_url_rule("/api/chats/create", view_func=_create_chat, methods=["POST"])
     application.add_url_rule("/api/chats/seed", view_func=_seed_chat, methods=["POST"])
     application.add_url_rule("/api/chats/awaiting", view_func=_awaiting_chat_for_empty_list, methods=["POST"])
@@ -2722,6 +3006,15 @@ def create_application(state: ChatAppState) -> Flask:
     focus_chat.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
+    state.mention_handler = MentionHandler(
+        agent_manager=state.agent_manager,
+        roster=state.roster,
+        mentions=state.mentions,
+        authors=state.authors,
+        deliverer=BackgroundMentionDeliverer(send=_send_room_mention),
+        on_pending_changed=state.broadcaster.broadcast_mentions_updated,
+    )
+    mentions_endpoints.register_routes(application)
 
     application.add_url_rule("/<path:path>", view_func=_serve_file_or_document, methods=["GET"])
 

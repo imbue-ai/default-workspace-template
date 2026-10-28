@@ -165,6 +165,7 @@ function bootstrap(): void {
       opensCustomSchemeLinks: message.opensCustomSchemeLinks === true,
     });
     desktopStore.setOpensLocalFiles(message.opensLocalFiles === true);
+    desktopStore.setEmbedderPresent(true);
   });
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;

@@ -20,6 +20,7 @@ from pydantic import model_validator
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ShortcutTargetKind
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WallpaperKind
@@ -146,6 +147,11 @@ class Desktop(FrozenModel):
     wallpaper: Wallpaper | None = Field(description="The backdrop image; None draws the theme's default")
     shortcuts: tuple[DesktopShortcut, ...] = Field(description="At most one per (app, launch), in insertion order")
     windows: tuple[Window, ...] = Field(description="Every window on the desktop, in opening order")
+    owner: ParticipantKey | None = Field(
+        default=None,
+        description="Whose desktop this is by convention (the multiplayer spec, section 8.1): the key of the person "
+        "it was made for, or None for the workspace owner's, which every desktop from before the key was kept is",
+    )
 
 
 class WindowPlacement(FrozenModel):
@@ -203,6 +209,11 @@ class ClientRecord(FrozenModel):
     user_id: UserId | None = Field(
         default=None,
         description="The signed-in visitor the client last arrived as; None for the owner or an anonymous client",
+    )
+    participant: ParticipantKey | None = Field(
+        default=None,
+        description="Who the client last arrived as, under the multiplayer spec's keys (the owner's is ``owner`` on an "
+        "unshared workspace); None for a record from before the key was kept",
     )
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"

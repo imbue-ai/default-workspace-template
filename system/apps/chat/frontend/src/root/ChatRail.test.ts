@@ -120,8 +120,8 @@ describe("ChatRail main chat", () => {
   });
 
   it("gives a chat waiting for its first send its verbs, and a chat being created its rename and delete too", () => {
-    const waiting = chatRowFixture("agent-waiting", { isProvisional: true, status: "idle" });
-    const creating = chatRowFixture("agent-creating", { isProvisional: true, status: "working" });
+    const waiting = chatRowFixture("agent-waiting", { kind: "provisional", status: "idle" });
+    const creating = chatRowFixture("agent-creating", { kind: "provisional", status: "working" });
     const context = chatRailAttrsFixture({ rows: [waiting, creating] });
     const rail = mount([waiting, creating]);
 
@@ -137,5 +137,27 @@ describe("ChatRail main chat", () => {
     ).toEqual(["rename", "make-main", "delete"]);
     expect(rail.querySelector('[data-chat-id="agent-waiting"] .chat-rail-rename')).not.toBeNull();
     expect(rail.querySelector('[data-chat-id="agent-creating"] .chat-rail-rename')).not.toBeNull();
+  });
+});
+
+describe("ChatRail rooms", () => {
+  it("draws a room with the people glyph and its mention mark, and offers it rename, stop or restart, and delete", () => {
+    const lounge = chatRowFixture("room-0123456789abcdef", { kind: "room", title: "Lounge", hasMention: true });
+    const busy = chatRowFixture("room-fedcba9876543210", { kind: "room", title: "Hall", status: "working" });
+    const stopped = chatRowFixture("room-0000000000000001", { kind: "room", title: "Attic", status: "stopped" });
+    const rail = mount([lounge, busy]);
+
+    expect(rail.querySelector('[data-chat-id="room-0123456789abcdef"] .chat-rail-room-glyph')).not.toBeNull();
+    expect(rail.querySelector('[data-chat-id="room-0123456789abcdef"] .chat-rail-dot')).toBeNull();
+    expect(rail.querySelector('[data-chat-id="room-0123456789abcdef"] [data-chat-row-mention]')).not.toBeNull();
+    // While an agent the room asked works, the room wears the working dot, as any chat does.
+    expect(dotClassOf("room-fedcba9876543210")).toContain("chat-rail-dot--pulse");
+    expect(rail.querySelector('[data-chat-id="room-fedcba9876543210"] [data-chat-row-mention]')).toBeNull();
+    const context = chatRailAttrsFixture({ rows: [lounge, busy, stopped] });
+    const labelsOf = (row: ChatRow): string[] =>
+      rowMenuRows(context, row).map((menuRow) => (menuRow.kind === "action" ? menuRow.label : "-"));
+    // A room's reader is stopped and restarted from the menu like any chat's agent, and never made the main chat.
+    expect(labelsOf(lounge)).toEqual(["Rename", "Stop room", "-", "Delete room"]);
+    expect(labelsOf(stopped)).toEqual(["Rename", "Restart room", "-", "Delete room"]);
   });
 });

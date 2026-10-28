@@ -1,6 +1,7 @@
 import json
 import queue
 import threading
+from collections.abc import Collection
 from collections.abc import Mapping
 from collections.abc import Sequence
 from typing import Any
@@ -147,7 +148,7 @@ class WebSocketBroadcaster(MutableModel):
 
     def broadcast(self, message: dict[str, Any]) -> None:
         """Serialize and send a message to all connected clients. Thread-safe."""
-        self._broadcast_to_matching(message, target_client_id=None)
+        self._broadcast_to_matching(message, target_client_id=None, excluded_client_ids=())
 
     def broadcast_to_client(self, message: dict[str, Any], client_id: str) -> None:
         """Send a message only to the windows of one client (every registered connection carrying its id).
@@ -155,17 +156,25 @@ class WebSocketBroadcaster(MutableModel):
         Connections that have not (yet) sent their ``client_state`` registration never match:
         without a report there is no client id to compare against.
         """
-        self._broadcast_to_matching(message, target_client_id=client_id)
+        self._broadcast_to_matching(message, target_client_id=client_id, excluded_client_ids=())
 
-    def _broadcast_to_matching(self, message: dict[str, Any], target_client_id: str | None) -> None:
+    def broadcast_except_clients(self, message: dict[str, Any], excluded_client_ids: Collection[str]) -> None:
+        """Send a message to every window but those of ``excluded_client_ids``; a connection that has not registered
+        yet carries no client id, so it is sent to."""
+        self._broadcast_to_matching(message, target_client_id=None, excluded_client_ids=excluded_client_ids)
+
+    def _broadcast_to_matching(
+        self, message: dict[str, Any], target_client_id: str | None, excluded_client_ids: Collection[str]
+    ) -> None:
         text = json.dumps(message)
         with self._lock:
             matching: list[queue.Queue[str | None]] = []
             for client_queue in self._client_queues:
-                if target_client_id is not None:
-                    info = self._client_info_by_queue_id.get(id(client_queue))
-                    if info is None or info.client_id != target_client_id:
-                        continue
+                info = self._client_info_by_queue_id.get(id(client_queue))
+                if target_client_id is not None and (info is None or info.client_id != target_client_id):
+                    continue
+                if info is not None and info.client_id in excluded_client_ids:
+                    continue
                 matching.append(client_queue)
             self._put_locked(text, matching)
 
@@ -226,6 +235,18 @@ class WebSocketBroadcaster(MutableModel):
     def broadcast_presence_updated(self, users: Sequence[Mapping[str, Any]]) -> None:
         """Broadcast the connected users whenever someone joins or leaves (one entry per user)."""
         self.broadcast({"type": "presence_updated", "users": users})
+
+    def broadcast_roster_updated(self, roster: Mapping[str, Any]) -> None:
+        """Broadcast the whole roster (the multiplayer spec, section 4.2) whenever presence or a grants file changed."""
+        self.broadcast({"type": "roster_updated", **roster})
+
+    def broadcast_bubble(self, bubble: Mapping[str, Any], excluded_client_ids: Collection[str]) -> None:
+        """Broadcast a speech bubble (the multiplayer spec, section 6.5) to every window but the speaker's own."""
+        self.broadcast_except_clients({"type": "bubble", **bubble}, excluded_client_ids)
+
+    def broadcast_chats_activity(self, report: Mapping[str, Any]) -> None:
+        """Broadcast what every chat is doing (the multiplayer spec, section 6.4), as the chat app last reported it."""
+        self.broadcast({"type": "chats_activity", **report})
 
     def broadcast_placements_updated(self, desktop_id: str, client_id: str, save_id: str) -> None:
         """A client's layout of a desktop was written (a browser's save or the shell's own edit); the owning windows refetch."""

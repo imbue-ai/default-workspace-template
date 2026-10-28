@@ -179,6 +179,10 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
           ),
           m("span", { class: CAPTION_CLASS }, row.app?.display_name ?? row.window.app),
           row.isOnActiveDesktop || attrs.isSheet ? null : m("span", { class: CAPTION_CLASS }, row.desktopName),
+          // Whose desktop the window is on, when it is not the viewer's (the multiplayer spec, section 8.2).
+          row.ownerName === null || attrs.isSheet
+            ? null
+            : m("span", { class: CAPTION_CLASS, "data-launcher-window-owner": "" }, row.ownerName),
           keys,
         ],
       );

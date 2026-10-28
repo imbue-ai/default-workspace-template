@@ -25,6 +25,7 @@ from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 from imbue.chat.harnesses.message_display import split_background_task_reports
+from imbue.chat.harnesses.message_display import stamp_user_message_display
 
 _SEED_BLOCK = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
 
@@ -588,3 +589,35 @@ def test_a_permission_notice_flushed_with_reports_still_resolves_its_card(is_bet
     assert decision.display is DisplayKind.PERMISSION_RESOLUTION
     assert decision.resolution == "denied"
     assert decision.request_id == "r1"
+
+
+def test_an_author_prefix_names_the_author_and_the_page_is_handed_the_words_behind_it() -> None:
+    event: dict[str, Any] = {}
+    stamp_user_message_display(event, "[from: Bob] please rebase onto main")
+    assert event["author_name"] == "Bob"
+    assert event["display"] == DisplayKind.PROMPT_WITH_CONTEXT.value
+    assert event["display_body"] == "please rebase onto main"
+    assert "non_turn_tail" not in event
+
+
+def test_an_author_prefix_on_a_merged_turn_strips_the_prefixed_line_alone() -> None:
+    event: dict[str, Any] = {}
+    stamp_user_message_display(event, "first\n[from: Bob] second")
+    assert event["author_name"] == "Bob"
+    assert event["display_body"] == "first\nsecond"
+
+
+def test_the_detectors_run_on_the_words_behind_an_author_prefix() -> None:
+    event: dict[str, Any] = {}
+    stamp_user_message_display(event, f"[from: Bob] <{BROWSER_FLEET_TAG}>your browser is free</{BROWSER_FLEET_TAG}>")
+    assert event["author_name"] == "Bob"
+    assert event["display"] == DisplayKind.CHIP.value
+    assert event["display_body"] == "your browser is free"
+
+
+def test_a_message_without_a_prefix_is_stamped_as_before() -> None:
+    event: dict[str, Any] = {}
+    stamp_user_message_display(event, "/model opus")
+    assert "author_name" not in event
+    assert event["display"] == DisplayKind.HIDDEN.value
+    assert event["non_turn_tail"] is True

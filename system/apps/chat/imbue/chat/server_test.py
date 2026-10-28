@@ -20,6 +20,7 @@ from urllib.parse import quote
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import httpx
 import pytest
 from app_manifest.testing import assert_document_policy_admits_page
 from app_schema.testing import assert_api_schema_describes_app
@@ -31,6 +32,14 @@ from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
 from werkzeug.test import TestResponse
+from workspace_layout.identity import IDENTITY_HEADER
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import ParticipantKind
+from workspace_layout.roster import RosterDocument
+from workspace_layout.shell_url import shell_base_url
+from workspace_layout.testing import FakeShell
+from workspace_layout.testing import roster_participant
 
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
@@ -45,11 +54,14 @@ from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
 from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
+from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
+from imbue.chat.authors import author_prefix
+from imbue.chat.authors import text_sha256
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
@@ -84,6 +96,7 @@ from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import CreateChatRequest
+from imbue.chat.models import CreatedChat
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelPick
@@ -97,8 +110,12 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
+from imbue.chat.server import _bubble_new_chats_first_message
 from imbue.chat.server import _open_chat_stream
+from imbue.chat.server import _record_room_first_message_author
 from imbue.chat.server import _revive_and_retry_send
+from imbue.chat.server import _room_first_message_hook
+from imbue.chat.server import _send_room_mention
 from imbue.chat.server import _stream_events
 from imbue.chat.server import _stream_filtered_events
 from imbue.chat.server import create_application
@@ -113,6 +130,7 @@ from imbue.chat.testing import close_ws
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
+from imbue.chat.testing import load_room_agent_script
 from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
@@ -1207,6 +1225,20 @@ def test_a_secret_request_notice_still_reaches_a_chat_whose_account_was_signed_o
     assert messenger.sent == [(agent_id, "The secret you asked for is ready.")]
 
 
+def test_a_rooms_mention_is_refused_by_a_chat_whose_account_was_signed_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000736"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8814")
+
+    with client.application.app_context():
+        delivered = author_prefix("Bob", "Lounge") + "@agent hi"
+        refusal = _send_room_mention(ChatId(agent_id), delivered, "m-1")
+
+    assert refusal is not None and "signed out" in refusal
+    assert messenger.sent == []
+
+
 def test_an_unreadable_account_index_does_not_refuse_a_chats_messages(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1275,6 +1307,27 @@ def test_send_message_to_a_stopped_file_agent_marks_it_alive() -> None:
     assert messenger.sent == [(agent_id, "wake up")]
     tracked = manager.get_agent_by_id(agent_id)
     assert tracked is not None and tracked.state == "WAITING"
+
+
+def test_a_send_into_a_stopped_room_appends_and_leaves_the_room_stopped(tmp_path: Path) -> None:
+    """A room's send appends to its transcript and starts nothing (the multiplayer spec, section 11): the room
+    keeps reading as stopped, and its reader is revived by ``mngr message``, the start verb, or boot, not by a page."""
+    room_id = "agent-00000000000000000000000000000737"
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    seed_agent_state(manager, room_id, name="Attic", state="STOPPED", harness=HarnessType.ROOM)
+    agent_state_dir(get_host_dir(), room_id).mkdir(parents=True, exist_ok=True)
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    response = client.post(f"/api/chats/{room_id}/message", json={"message": "anyone here?", "message_id": "m-1"})
+
+    assert response.status_code == 200
+    assert messenger.sent == []
+    events = client.get(f"/api/chats/{room_id}/events").get_json()["events"]
+    assert [event["content"] for event in events] == ["anyone here?"]
+    tracked = manager.get_agent_by_id(room_id)
+    assert tracked is not None and tracked.state == "STOPPED"
 
 
 class _ReleasingAsEachSendEndsAgentManager(AgentManager):
@@ -4326,6 +4379,32 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     assert not log_path.exists()
 
 
+def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_without_the_prefix(
+    tmp_path: Path,
+) -> None:
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+
+    held = client.post(
+        f"/api/chats/{first}/message",
+        json={"message": "and this", "message_id": "m-2"},
+        headers={IDENTITY_HEADER: _VISITOR.model_dump_json(exclude_none=True)},
+    )
+    assert held.status_code == 202
+
+    # The successor is handed the prefix; the page, which draws the held send as the sender's own bubble, is not.
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    assert [held_send.text for held_send in record.handoff.held_sends] == ["Carry on in Codex", "[from: bob] and this"]
+    listed = client.get("/api/chats").get_json()["chats"]
+    assert listed[0]["handoff"]["held_sends"] == [
+        {"message_id": "trigger-1", "text": "Carry on in Codex"},
+        {"message_id": "m-2", "text": "and this"},
+    ]
+
+
 def test_a_secret_request_notice_to_a_converging_chat_is_held_as_a_script_send(tmp_path: Path) -> None:
     app, _log_path = _recording_app(tmp_path)
     client = app.test_client()
@@ -4538,6 +4617,20 @@ def _token_of(path: str) -> str:
     return parse_qs(urlparse(path).query)["intake"][0]
 
 
+def _chat_id_of(path: str) -> str:
+    return parse_qs(urlparse(path).query)["chat"][0]
+
+
+def _signed_out_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[AgentManager, FlaskClient]:
+    """A chat app with nothing signed in whose agent list is known: an intake cannot launch a chat, so a new one
+    awaits its first send."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    return manager, create_application(build_test_state(agent_manager=manager)).test_client()
+
+
 def test_intake_is_not_ready_until_the_agent_list_is_known() -> None:
     manager = AgentManager.build(WebSocketBroadcaster())
     test_client = create_application(build_test_state(agent_manager=manager)).test_client()
@@ -4598,6 +4691,7 @@ def test_intake_holds_a_draft_for_the_chat_the_window_shows_until_the_root_appli
         "message": "Draw me a seal",
         "is_draft": True,
         "needs_pick": False,
+        "hint": None,
         "chat_id": "agent-00000000000000000000000000000123",
     }
     applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
@@ -4607,6 +4701,7 @@ def test_intake_holds_a_draft_for_the_chat_the_window_shows_until_the_root_appli
         "chat_id": "agent-00000000000000000000000000000123",
         "composer_text": "Draw me a seal",
         "first_message": None,
+        "hint": None,
     }
     assert client.get(f"/api/chats/intakes/{token}").status_code == 404
     assert client.post(f"/api/chats/intakes/{token}/apply", json={}).status_code == 404
@@ -4688,6 +4783,7 @@ def test_intake_with_several_chats_to_choose_from_holds_the_choice_for_the_picke
         "chat_id": "agent-00000000000000000000000000000002",
         "composer_text": None,
         "first_message": None,
+        "hint": None,
     }
     wait_for(lambda: messenger.sent == [("agent-00000000000000000000000000000002", "Carry on")], timeout=10.0)
 
@@ -4736,7 +4832,7 @@ def test_intake_main_chat_with_no_chats_falls_back_to_a_new_chat(
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    provisional = agent_manager.get_provisional_chat(parse_qs(urlparse(path).query)["chat"][0])
+    provisional = agent_manager.get_provisional_chat(_chat_id_of(path))
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
     applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
@@ -4769,7 +4865,7 @@ def test_intake_new_chat_with_an_account_creates_the_chat_with_the_text_as_its_f
     assert response.status_code == 200
     path = response.get_json()["path"]
     assert path.startswith("/?chat=agent-") and "intake" not in path
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.CREATING
@@ -4787,7 +4883,7 @@ def test_intake_new_chat_draft_mints_a_chat_awaiting_its_first_send_and_holds_th
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = agent_manager.get_provisional_chat(chat_id)
     assert provisional is not None
     assert provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
@@ -4804,18 +4900,14 @@ def test_intake_new_chat_with_nothing_signed_in_holds_the_first_message_for_the_
 ) -> None:
     """With no account the server cannot launch: the chat waits for its first send, and applying the intake hands
     the root the message to launch it with once an account is chosen."""
-    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
-    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
-    manager = AgentManager.build(WebSocketBroadcaster(), chat_files_root=tmp_path / "chats")
-    manager.note_agent_list_known()
-    test_client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager, test_client = _signed_out_app(tmp_path, monkeypatch)
 
     response = test_client.post("/api/chats/intake", json={"message": "Teach me", "target": "new_chat"})
 
     assert response.status_code == 200
     path = response.get_json()["path"]
     token = _token_of(path)
-    chat_id = parse_qs(urlparse(path).query)["chat"][0]
+    chat_id = _chat_id_of(path)
     provisional = manager.get_provisional_chat(chat_id)
     assert provisional is not None and provisional.phase is ProvisionalChatPhase.AWAITING_FIRST_SEND
     assert provisional.account_id == ""
@@ -4825,6 +4917,7 @@ def test_intake_new_chat_with_nothing_signed_in_holds_the_first_message_for_the_
         "chat_id": chat_id,
         "composer_text": None,
         "first_message": "Teach me",
+        "hint": None,
     }
 
 
@@ -4876,6 +4969,7 @@ def test_intake_to_a_chat_awaiting_its_first_send_is_held_and_applies_as_its_fir
         "chat_id": str(awaiting.chat_id),
         "composer_text": None,
         "first_message": "Begin here",
+        "hint": None,
     }
 
 
@@ -5285,3 +5379,719 @@ def test_a_compaction_that_finished_while_no_watcher_ran_ends_when_the_chat_is_o
 
 def test_the_chat_describes_its_api_the_way_its_manifest_says(client: FlaskClient) -> None:
     assert_api_schema_describes_app(client, Path(__file__).resolve().parents[2] / "app.toml")
+
+
+def _identity_header(identity: RequestIdentity) -> dict[str, str]:
+    return {IDENTITY_HEADER: identity.model_dump_json(exclude_none=True)}
+
+
+_VISITOR = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
+_VISITING_AGENT = RequestIdentity(
+    owner=False, agent_id="va-0123456789abcdef0123456789abcdef", agent_name="Josh's Claude", granter="user:8c0f"
+)
+_BRACKETED_AGENT = RequestIdentity(
+    owner=False, agent_id="va-0123456789abcdef0123456789abcdef", agent_name="Josh's [Claude]", granter="user:8c0f"
+)
+_OWNER_ACCOUNT = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
+
+
+def test_a_visitors_message_reaches_the_agent_prefixed_and_is_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000031"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-31")
+    client = app.test_client()
+
+    response = client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "please rebase", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 200
+    # No shell to ask for a name, so the visitor is named after their email.
+    assert messenger.sent == [(agent_id, "[from: bob] please rebase")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (annotation.message_id, str(annotation.author), annotation.display_name) == (
+        "m-1",
+        "user:user-bob-4471",
+        "bob",
+    )
+    assert annotation.text_sha256 == text_sha256("[from: bob] please rebase")
+
+
+def test_a_visitors_intake_reaches_the_agent_prefixed_and_is_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    """The launcher's text enters through the intake route rather than the message route, and is attributed the
+    same way."""
+    agent_id = "agent-00000000000000000000000000000035"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-35")
+    client = app.test_client()
+
+    response = client.post(
+        "/api/chats/intake",
+        json={"message": "please deploy", "target": "chat", "chat_id": agent_id, "is_delivery_awaited": True},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 200
+    assert messenger.sent == [(agent_id, "[from: bob] please deploy")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (str(annotation.author), annotation.display_name) == ("user:user-bob-4471", "bob")
+    assert annotation.text_sha256 == text_sha256("[from: bob] please deploy")
+
+
+def test_a_visitors_slash_command_is_delivered_as_typed_but_still_annotated(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000032"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-32")
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "/clear", "message_id": "m-2"},
+        headers=_identity_header(_VISITING_AGENT),
+    )
+
+    assert messenger.sent == [(agent_id, "/clear")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert (str(annotation.author), annotation.display_name) == (
+        "agent:va-0123456789abcdef0123456789abcdef",
+        "Josh's Claude",
+    )
+
+
+def test_a_name_the_prefix_cannot_carry_is_made_safe_before_delivery_and_annotation(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000034"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-34")
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "hello", "message_id": "m-3"},
+        headers=_identity_header(_BRACKETED_AGENT),
+    )
+
+    assert messenger.sent == [(agent_id, "[from: Josh's [Claude] hello")]
+    (annotation,) = state_of(app).authors.annotations(ChatId(agent_id))
+    assert annotation.display_name == "Josh's [Claude"
+
+
+def test_the_owners_messages_are_never_prefixed_nor_annotated_under_either_key(
+    app: Flask, messenger: RecordingMngrMessenger
+) -> None:
+    agent_id = "agent-00000000000000000000000000000033"
+    seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-33")
+    client = app.test_client()
+
+    client.post(f"/api/chats/{agent_id}/message", json={"message": "one"})
+    client.post(f"/api/chats/{agent_id}/message", json={"message": "two"}, headers=_identity_header(_OWNER_ACCOUNT))
+
+    assert messenger.sent == [(agent_id, "one"), (agent_id, "two")]
+    assert state_of(app).authors.annotations(ChatId(agent_id)) == ()
+
+
+def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
+    client = app.test_client()
+    assert client.get("/api/me").get_json() == {"participant": "owner"}
+    assert client.get("/api/me", headers=_identity_header(_VISITOR)).get_json() == {
+        "participant": "user:user-bob-4471"
+    }
+    assert client.get("/api/me", headers=_identity_header(_OWNER_ACCOUNT)).get_json() == {
+        "participant": "user:user-owner-9c21"
+    }
+
+
+_AGENT_PICTURE_PATH = "/api/avatars/imbue-character/icon.png?size=64"
+
+
+def _shell_with_workspace_agent(picture_url: str | None) -> FakeShell:
+    agent = roster_participant(
+        ParticipantKey("workspace-agent"),
+        kind=ParticipantKind.WORKSPACE_AGENT,
+        display_name="Atlas",
+        handle="agent",
+        profile_picture_url=picture_url,
+    )
+    return FakeShell(roster_document=RosterDocument(participants=(agent,)))
+
+
+def test_participants_are_the_shells_roster_with_the_agents_picture_on_this_origin(
+    config: Config, signed_in_account: str, tmp_path: Path
+) -> None:
+    shell = _shell_with_workspace_agent(_AGENT_PICTURE_PATH)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
+    client = create_application(build_test_state(config=config, agent_manager=manager, shell=shell)).test_client()
+
+    (agent,) = client.get("/api/participants").get_json()["participants"]
+
+    assert (agent["key"], agent["display_name"], agent["handle"]) == ("workspace-agent", "Atlas", "agent")
+    assert agent["profile_picture_url"] == "/api/participants/workspace-agent/picture"
+
+
+def test_the_workspace_agents_picture_is_fetched_from_the_shell_and_relayed_with_its_type(
+    config: Config, signed_in_account: str, tmp_path: Path
+) -> None:
+    asked: list[str] = []
+
+    def shell_answers(request: httpx.Request) -> httpx.Response:
+        asked.append(str(request.url))
+        if request.url.path.endswith("icon.png"):
+            return httpx.Response(200, content=b"\x89PNG...", headers={"Content-Type": "image/png"})
+        return httpx.Response(503, text="starting")
+
+    def app_over(shell: FakeShell) -> FlaskClient:
+        manager = AgentManager.build(
+            WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path
+        )
+        state = build_test_state(
+            config=config,
+            agent_manager=manager,
+            shell=shell,
+            http_client=httpx.Client(transport=httpx.MockTransport(shell_answers)),
+        )
+        return create_application(state).test_client()
+
+    relayed = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
+        "/api/participants/workspace-agent/picture"
+    )
+    assert (relayed.status_code, relayed.mimetype, relayed.data) == (200, "image/png", b"\x89PNG...")
+    assert asked == [f"{shell_base_url()}{_AGENT_PICTURE_PATH}"]
+
+    # A shell that does not answer the picture with a success is a bad gateway, not this app's failure.
+    refused = app_over(_shell_with_workspace_agent("/api/avatars/other/missing.svg")).get(
+        "/api/participants/workspace-agent/picture"
+    )
+    assert refused.status_code == 502
+    # A roster that names no picture has nothing to relay.
+    unpictured = app_over(_shell_with_workspace_agent(None)).get("/api/participants/workspace-agent/picture")
+    assert unpictured.status_code == 404
+
+
+# Rooms and mentions (the multiplayer spec, section 7).
+
+_JOSH = RequestIdentity(owner=True, user_id="user-josh-0001", email="josh@example.com")
+_MAIN_ID = "agent-00000000000000000000000000000041"
+_LOUNGE_ID = "agent-00000000000000000000000000000042"
+
+
+def _peopled_app(
+    tmp_path: Path,
+    messenger: RecordingMngrMessenger,
+    imbue_studio_gateway: GatewayAccess | None = None,
+    is_secondary: bool = False,
+) -> Flask:
+    """An app whose shell answers a roster of Josh (the owner), Bob, and the workspace agent Atlas, with a running
+    main chat Josh started and a room, the Lounge, whose agent's state dir is on disk; ``imbue_studio_gateway`` is
+    where the owner's notifications go, when given, and ``is_secondary`` makes it a preview's chat app."""
+    shell = FakeShell(
+        roster_document=RosterDocument(
+            participants=(
+                roster_participant(ParticipantKey("user:user-josh-0001"), display_name="Josh", is_owner=True),
+                roster_participant(ParticipantKey("user:user-bob-4471"), display_name="Bob"),
+                roster_participant(
+                    ParticipantKey("workspace-agent"),
+                    kind=ParticipantKind.WORKSPACE_AGENT,
+                    display_name="Atlas",
+                    handle="agent",
+                ),
+            )
+        )
+    )
+    manager = AgentManager.build(
+        WebSocketBroadcaster(),
+        messenger=messenger,
+        chat_files_root=tmp_path / "chats",
+        imbue_studio_gateway=imbue_studio_gateway,
+    )
+    state = build_test_state(agent_manager=manager, shell=shell, is_secondary=is_secondary)
+    manager.note_agent_list_known()
+    seed_agent_state(manager, _MAIN_ID, name="Main", labels={"display_name": "Main"})
+    seed_agent_state(manager, _LOUNGE_ID, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
+    agent_state_dir(get_host_dir(), _LOUNGE_ID).mkdir(parents=True, exist_ok=True)
+    app = create_application(state)
+    assert manager.make_main_chat(ChatId(_MAIN_ID))
+    return app
+
+
+def _room_events(client: FlaskClient) -> list[dict[str, Any]]:
+    return client.get(f"/api/chats/{_LOUNGE_ID}/events").get_json()["events"]
+
+
+def _post_into_room_as_the_agent(text: str) -> None:
+    """What ``mngr message <room>`` comes to: the room's reader appends the typed text as the workspace agent's."""
+    room_agent = load_room_agent_script()
+    state_dir = agent_state_dir(get_host_dir(), _LOUNGE_ID)
+    author, name, said = room_agent.author_of_typed_text(text)
+    room_agent.ensure_header(state_dir / room_agent.TRANSCRIPT_RELATIVE_PATH, _LOUNGE_ID)
+    room_agent.append_record(
+        state_dir / room_agent.TRANSCRIPT_RELATIVE_PATH,
+        room_agent.step_record(said, author, name, room_agent.now_iso()),
+    )
+
+
+def test_a_room_lists_as_one_and_its_page_reads_and_posts_through_the_chat_routes(tmp_path: Path) -> None:
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+    listed = {chat["chat_id"]: chat for chat in client.get("/api/chats").get_json()["chats"]}
+    assert listed[_LOUNGE_ID]["kind"] == "room" and listed[_MAIN_ID]["kind"] == "agent"
+    assert listed[_LOUNGE_ID]["active_agent"]["harness"] == "room"
+
+    bob = client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "hi all", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+    josh = client.post(f"/api/chats/{_LOUNGE_ID}/message", json={"message": "hey Bob", "message_id": "m-2"})
+
+    assert (bob.status_code, josh.status_code) == (200, 200)
+    # A room's message is appended to its transcript, never typed into a pane, and carries no prefix.
+    assert messenger.sent == []
+    events = _room_events(client)
+    assert [event["content"] for event in events] == ["hi all", "hey Bob"]
+    assert (events[0]["author"], events[0]["author_name"], events[0]["message_id"]) == (
+        "user:user-bob-4471",
+        "Bob",
+        "m-1",
+    )
+    assert "author" not in events[1] and events[1]["message_id"] == "m-2"
+    assert all(event["type"] == "user_message" and event["agent_id"] == _LOUNGE_ID for event in events)
+    assert client.post(f"/api/chats/{_LOUNGE_ID}/make-main").status_code == 409
+
+
+def test_a_mention_of_the_agent_from_a_room_reaches_the_main_chat_prefixed_until_the_agent_answers(
+    tmp_path: Path,
+) -> None:
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+    manager = state_of(app).agent_manager
+
+    client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "@agent what time is it?", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    wait_until_true(lambda: len(messenger.sent) == 1, 10.0, "the mention to reach the main chat")
+    assert messenger.sent == [(_MAIN_ID, author_prefix("Bob", "Lounge") + "@agent what time is it?")]
+    lounge = manager.get_chat_snapshot(_LOUNGE_ID)
+    assert lounge is not None and lounge.awaiting_chat_ids == (ChatId(_MAIN_ID),)
+    # The main chat's turn will be stamped with Bob, not with the owner.
+    annotations = state_of(app).authors.annotations(ChatId(_MAIN_ID))
+    assert [str(annotation.author) for annotation in annotations] == ["user:user-bob-4471"]
+
+    _post_into_room_as_the_agent("It is noon.")
+
+    wait_until_true(
+        lambda: (snapshot := manager.get_chat_snapshot(_LOUNGE_ID)) is not None and snapshot.awaiting_chat_ids == (),
+        10.0,
+        "the room to stop waiting once its agent answered",
+    )
+    answered = _room_events(client)[-1]
+    assert (answered["content"], answered["author"], answered["author_name"]) == (
+        "It is noon.",
+        "workspace-agent",
+        "Atlas",
+    )
+
+
+def test_a_mention_of_a_person_in_a_room_is_pending_until_a_page_of_theirs_watches_it(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "@Josh are you around?", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    pending = client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()["mentions"]
+    assert pending == [{"chat_id": _LOUNGE_ID, "message_id": "m-1", "sender": "user:user-bob-4471"}]
+    assert client.get("/api/mentions/pending", headers=_identity_header(_VISITOR)).get_json()["mentions"] == []
+    client.post(
+        f"/api/chats/{_LOUNGE_ID}/presence",
+        json=_presence_body("visible", "page-josh", is_focused=True),
+        headers=_identity_header(_JOSH),
+    )
+    assert client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()["mentions"] == []
+
+
+def test_a_mention_of_the_owner_in_a_room_is_told_to_the_imbue_studio_app_as_the_rooms_own_agent(
+    tmp_path: Path,
+) -> None:
+    gateway = RecordingGateway(status=200)
+    with serve_app(gateway.application) as served:
+        access = GatewayAccess(
+            base_url=served.http_url, password=SecretStr("gateway-password-7731"), permissions_override=None
+        )
+        app = _peopled_app(tmp_path, RecordingMngrMessenger(), imbue_studio_gateway=access)
+        client = app.test_client()
+        try:
+            client.post(
+                f"/api/chats/{_LOUNGE_ID}/message",
+                json={"message": "@Josh look at this", "message_id": "m-1"},
+                headers=_identity_header(_VISITOR),
+            )
+            wait_until_true(lambda: len(gateway.received) == 1, 10.0, "the owner's notification to be posted")
+        finally:
+            state_of(app).shutdown()
+    (received,) = gateway.received
+    assert received.path == f"/minds-api-proxy/api/v1/agents/{_LOUNGE_ID}/notifications"
+    assert received.body == {
+        "title": "Bob mentioned you in Lounge",
+        "message": "@Josh look at this",
+        "destination": {"type": "minds:focus-chat", "chatId": _LOUNGE_ID},
+    }
+
+
+def test_a_mention_in_an_agent_chat_is_a_word_the_agent_reads_and_nothing_more(tmp_path: Path) -> None:
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+
+    client.post(
+        f"/api/chats/{_MAIN_ID}/message",
+        json={"message": "@Josh @agent see this", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert messenger.sent == [(_MAIN_ID, author_prefix("Bob") + "@Josh @agent see this")]
+    assert client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()["mentions"] == []
+    main = state_of(app).agent_manager.get_chat_snapshot(_MAIN_ID)
+    assert main is not None and main.awaiting_chat_ids == ()
+
+
+def test_the_handle_table_lists_the_people_the_agent_and_every_chat_by_title(tmp_path: Path) -> None:
+    client = _peopled_app(tmp_path, RecordingMngrMessenger()).test_client()
+
+    handles = client.get("/api/mentions").get_json()["handles"]
+
+    assert [(entry["handle"], entry["kind"]) for entry in handles] == [
+        ("Josh", "person"),
+        ("Bob", "person"),
+        ("agent", "workspace_agent"),
+        ("Main", "chat"),
+        ("Lounge", "chat"),
+    ]
+
+
+def _fake_shell_of(app: Flask) -> FakeShell:
+    shell = state_of(app).shell
+    assert isinstance(shell, FakeShell)
+    return shell
+
+
+def test_a_persons_send_raises_a_bubble_over_their_entry_naming_the_people_it_mentions(tmp_path: Path) -> None:
+    """Every message a person sends raises a bubble for the tray (the multiplayer spec, section 6.5): in a room the
+    people it mentions ride with it, so their clients mark it; in an agent chat a handle is a word."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    assert (
+        client.post(
+            f"/api/chats/{_LOUNGE_ID}/message",
+            json={"message": "@Josh @agent look at this", "message_id": "m-1"},
+            headers=_identity_header(_VISITOR),
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            f"/api/chats/{_MAIN_ID}/message",
+            json={"message": "@Bob is right", "message_id": "m-2"},
+            headers=_identity_header(_JOSH),
+        ).status_code
+        == 200
+    )
+
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "both bubbles to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
+        for bubble in shell.bubbles
+    ] == [
+        ("user:user-bob-4471", _LOUNGE_ID, "Lounge", "@Josh @agent look at this", "m-1", ("user:user-josh-0001",)),
+        ("user:user-josh-0001", _MAIN_ID, "Main", "@Bob is right", "m-2", ()),
+    ]
+
+
+def test_the_agents_turns_raise_a_bubble_with_their_first_paragraph(tmp_path: Path) -> None:
+    """An assistant turn of the chat's live agent, and the agent's post into a room, each raise a bubble over the
+    agent's entry; a retired agent's words raise none."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    state = state_of(app)
+    shell = _fake_shell_of(app)
+    turn = {
+        "type": "assistant_message",
+        "event_id": "e-1",
+        "agent_id": _MAIN_ID,
+        "text": "Done: the report is ready.\n\nIt covers three cases.",
+    }
+    room_post = {"type": "user_message", "event_id": "e-2", "content": "It is noon.", "author": "workspace-agent"}
+
+    state.bubble_agent_turns(ChatId(_MAIN_ID), _MAIN_ID, [turn, {**turn, "event_id": "e-3", "text": "  "}])
+    state.bubble_agent_turns(ChatId(_LOUNGE_ID), _LOUNGE_ID, [room_post])
+    state.bubble_agent_turns(ChatId(_MAIN_ID), "agent-00000000000000000000000000000099", [turn])
+
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the agent's bubbles to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id)
+        for bubble in shell.bubbles
+    ] == [
+        ("workspace-agent", _MAIN_ID, "Main", "Done: the report is ready.", "e-1"),
+        ("workspace-agent", _LOUNGE_ID, "Lounge", "It is noon.", "e-2"),
+    ]
+
+
+def test_every_chat_list_push_tells_the_shell_what_each_chat_is_doing(tmp_path: Path) -> None:
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    shell = _fake_shell_of(app)
+
+    # A chat-list push with no mngr behind it: the room starting to wait on the main chat.
+    state_of(app).agent_manager.note_chat_awaiting(ChatId(_LOUNGE_ID), ChatId(_MAIN_ID))
+
+    wait_until_true(lambda: bool(shell.chats_activity), 10.0, "the chats' activity to reach the shell")
+    latest = shell.chats_activity[-1]
+    assert sorted((chat.chat_id, chat.title, chat.kind.value) for chat in latest.chats) == sorted(
+        [(_MAIN_ID, "Main", "agent"), (_LOUNGE_ID, "Lounge", "room")]
+    )
+
+
+def test_a_mention_intake_drafts_into_the_lounge_there_is(tmp_path: Path) -> None:
+    """A click on a person in the desktop's tray (the multiplayer spec, section 7.5): the chat app's ``lounge``
+    launch path drafts ``@<handle> `` into the Lounge, unsent, held for the root to put in the composer."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+
+    response = _intake(client, message="@Bob ", target="lounge", is_draft="true")
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    assert _chat_id_of(path) == _LOUNGE_ID
+    applied = client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
+    assert applied.status_code == 200
+    assert applied.get_json()["composer_text"] == "@Bob "
+    assert applied.get_json()["chat_id"] == _LOUNGE_ID
+
+
+def test_a_mention_intake_makes_the_lounge_when_there_is_none(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-00000000000000000000000000000123")
+    _register_agent(app, "agent-00000000000000000000000000000123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+
+    response = _intake(client, message="@Bob ", target="lounge", is_draft="true")
+
+    assert response.status_code == 200
+    path = response.get_json()["path"]
+    chat_id = _chat_id_of(path)
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    assert provisional is not None and provisional.name == "Lounge"
+    assert provisional.phase is ProvisionalChatPhase.CREATING
+    # A second click while the room is still being created lands in the same Lounge.
+    again = _intake(client, message="@Carol ", target="lounge", is_draft="true")
+    assert _chat_id_of(again.get_json()["path"]) == chat_id
+
+
+_DOCS_CHAT_ID = "agent-00000000000000000000000000000077"
+
+
+def test_an_app_chat_intake_opens_the_chat_titled_for_the_app_and_makes_it_on_the_default_account(
+    app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A window's "Chat about this app" (the multiplayer spec, section 9.2): the chat titled "<display name> Chat" is
+    created on the default account when there is none, never auto-named, and the intake is held with the composer's
+    hint even with nothing to send; a second press lands in the same chat while it is still being made."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-00000000000000000000000000000123")
+    _register_agent(app, "agent-00000000000000000000000000000123", "primary", "RUNNING")
+    agent_manager: AgentManager = state_of(app).agent_manager
+
+    response = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+
+    assert response.status_code == 200, response.get_json()
+    path = response.get_json()["path"]
+    chat_id = _chat_id_of(path)
+    provisional = agent_manager.get_provisional_chat(chat_id)
+    assert provisional is not None
+    assert provisional.name == "Docs Chat"
+    assert provisional.phase is ProvisionalChatPhase.CREATING
+    assert provisional.message == ""
+    token = _token_of(path)
+    held = client.get(f"/api/chats/intakes/{token}").get_json()
+    assert (held["chat_id"], held["message"], held["hint"]) == (chat_id, "", "How do you want to change Docs?")
+    again = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+    assert _chat_id_of(again.get_json()["path"]) == chat_id
+    applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
+    assert applied.status_code == 200
+    assert applied.get_json() == {
+        "path": f"/?chat={chat_id}",
+        "chat_id": chat_id,
+        "composer_text": None,
+        "first_message": None,
+        "hint": "How do you want to change Docs?",
+    }
+    assert provisional.labels == {"app_chat": "docs"}
+    assert _intake(client, target="app_chat", app="docs").status_code == 400
+    assert _intake(client, target="app_chat", app_display_name="Docs").status_code == 400
+
+
+def test_an_app_chat_intake_finds_the_chat_by_its_label_else_its_title_and_the_chat_app_opens_chat_chat(
+    tmp_path: Path,
+) -> None:
+    """The chat about an app is found by the ``app_chat`` label carrying the app's registered name, whatever it has
+    been retitled to, else by the title "<display name> Chat" (a chat so named by hand, or from before the label)."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    manager = state_of(app).agent_manager
+    seed_agent_state(manager, _DOCS_CHAT_ID, name="Docs Chat", labels={"display_name": "Docs Chat"})
+    client = app.test_client()
+
+    response = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+
+    assert _chat_id_of(response.get_json()["path"]) == _DOCS_CHAT_ID
+    labelled_id = "agent-00000000000000000000000000000078"
+    seed_agent_state(
+        manager, labelled_id, name="Notes Chat", labels={"display_name": "Notes, renamed", "app_chat": "notes"}
+    )
+    by_label = _intake(client, target="app_chat", app="notes", app_display_name="Notes")
+    assert _chat_id_of(by_label.get_json()["path"]) == labelled_id
+    # The Lounge is titled "Lounge", not "Lounge Chat", so an app so named gets a chat of its own.
+    other = _intake(client, target="app_chat", app="lounge", app_display_name="Lounge")
+    assert _chat_id_of(other.get_json()["path"]) != _LOUNGE_ID
+    # The chat app's own windows ask for "Chat Chat".
+    own = _intake(client, target="app_chat", app="chat", app_display_name="Chat")
+    own_id = _chat_id_of(own.get_json()["path"])
+    minted = manager.get_provisional_chat(own_id)
+    assert minted is not None and minted.name == "Chat Chat"
+
+
+def test_an_app_chat_intake_finds_a_title_the_create_would_refuse_as_taken(tmp_path: Path) -> None:
+    """The title fallback matches by the rule the create refuses a taken name by (canonical forms compared
+    case-insensitively): a chat titled "docs chat" or "Docs-Chat" by hand is the chat about Docs, rather than a name
+    the create of "Docs Chat" is refused beside on every press."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    manager = state_of(app).agent_manager
+    seed_agent_state(manager, _DOCS_CHAT_ID, name="docs-chat", labels={"display_name": "docs chat"})
+    canonical_id = "agent-00000000000000000000000000000079"
+    seed_agent_state(manager, canonical_id, name="Notes-Chat")
+    client = app.test_client()
+
+    by_case_variant = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
+    by_true_name = _intake(client, target="app_chat", app="notes", app_display_name="Notes")
+
+    assert by_case_variant.status_code == 200, by_case_variant.get_json()
+    assert _chat_id_of(by_case_variant.get_json()["path"]) == _DOCS_CHAT_ID
+    assert by_true_name.status_code == 200, by_true_name.get_json()
+    assert _chat_id_of(by_true_name.get_json()["path"]) == canonical_id
+
+
+def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaiting_its_first_send(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, test_client = _signed_out_app(tmp_path, monkeypatch)
+
+    response = test_client.post(
+        "/api/chats/intake", json={"target": "app_chat", "app": "docs", "app_display_name": "Docs"}
+    )
+
+    assert response.status_code == 200, response.get_json()
+    path = response.get_json()["path"]
+    chat_id = _chat_id_of(path)
+    provisional = manager.get_provisional_chat(chat_id)
+    assert provisional is not None
+    assert (provisional.name, provisional.phase, provisional.account_id, provisional.labels) == (
+        "Docs Chat",
+        ProvisionalChatPhase.AWAITING_FIRST_SEND,
+        "",
+        {"app_chat": "docs"},
+    )
+    applied = test_client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
+    assert applied.get_json()["hint"] == "How do you want to change Docs?"
+    assert applied.get_json()["first_message"] is None
+
+
+def test_a_new_agent_chats_first_message_raises_a_bubble_as_the_create_is_accepted(tmp_path: Path) -> None:
+    """The first send of an awaiting chat and the launcher's send into a new chat hand the message to the create
+    rather than the send path, so the create route raises the bubble itself (the multiplayer spec, section 6.5),
+    under the chat's minted title and the sender the request vouched for; an empty message raises none."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    state = state_of(app)
+    shell = _fake_shell_of(app)
+    created = CreatedChat(
+        chat_id=ChatId("agent-00000000000000000000000000000044"), name="Chat-2", display_name="Chat 2"
+    )
+
+    _bubble_new_chats_first_message(state, created, "", _VISITOR, "m-none")
+    _bubble_new_chats_first_message(state, created, "first words", _VISITOR, "m-first")
+
+    wait_until_true(lambda: len(shell.bubbles) == 1, 10.0, "the first message's bubble to reach the shell")
+    assert [
+        (str(bubble.speaker), bubble.chat_id, bubble.chat_title, bubble.text, bubble.message_id, bubble.mentions)
+        for bubble in shell.bubbles
+    ] == [("user:user-bob-4471", str(created.chat_id), "Chat 2", "first words", "m-first", ())]
+
+
+def test_a_secondary_chat_feeds_no_tray_and_makes_no_lounge(tmp_path: Path) -> None:
+    """A secondary chat's sends and chats are a preview's (the multiplayer spec, section 11): a send raises no bubble,
+    the chat list is never reported, and the ``lounge`` intake target answers 403 rather than making a room."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger(), is_secondary=True)
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+
+    sent = client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "@Josh look at this", "message_id": "m-1"},
+        headers=_identity_header(_VISITOR),
+    )
+    refused = _intake(client, message="@Bob ", target="lounge", is_draft="true")
+
+    assert sent.status_code == 200
+    assert refused.status_code == 403
+    assert shell.bubbles == [] and shell.chats_activity == []
+
+
+def test_a_rooms_first_message_from_a_visitor_is_recorded_as_theirs_before_the_room_is_up(tmp_path: Path) -> None:
+    """The create route annotates the first message of a room a visitor starts: the message is appended once
+    the room's agent is up, by a path with no identity of its own, so the annotation is what names its author."""
+    state = state_of(_peopled_app(tmp_path, RecordingMngrMessenger()))
+    room_id = ChatId("agent-00000000000000000000000000000043")
+
+    _record_room_first_message_author(state, room_id, "first words", _VISITOR, "m-first")
+    _record_room_first_message_author(state, room_id, "", _VISITOR, "m-none")
+    _record_room_first_message_author(state, room_id, "the owner's own", _JOSH, "m-owner")
+
+    annotations = state.authors.annotations(room_id)
+    assert [
+        (str(annotation.author), annotation.display_name, annotation.message_id) for annotation in annotations
+    ] == [("user:user-bob-4471", "Bob", "m-first")]
+    assert annotations[0].text_sha256 == text_sha256("first words")
+
+
+def test_a_rooms_first_message_acts_on_its_mentions_once_the_room_has_it(tmp_path: Path) -> None:
+    """A room launched from the chooser with ``@agent`` in its first message: the message lands by the create's
+    own thread, so the hook the create route hands the manager is what sends the agent the message, as the
+    visitor who typed it, and marks the room as waiting on the main chat."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    state = state_of(app)
+    with app.app_context():
+        hook = _room_first_message_hook(state, "@agent is the build green?", _VISITOR, app.app_context())
+
+    hook(ChatId(_LOUNGE_ID), "m-first")
+
+    wait_until_true(lambda: len(messenger.sent) == 1, 10.0, "the mention to reach the main chat")
+    assert messenger.sent == [(_MAIN_ID, author_prefix("Bob", "Lounge") + "@agent is the build green?")]
+    lounge = state.agent_manager.get_chat_snapshot(_LOUNGE_ID)
+    assert lounge is not None and lounge.awaiting_chat_ids == (ChatId(_MAIN_ID),)
+    annotations = state.authors.annotations(ChatId(_MAIN_ID))
+    assert [(str(annotation.author), annotation.message_id) for annotation in annotations] == [
+        ("user:user-bob-4471", "m-first")
+    ]

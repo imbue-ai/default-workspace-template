@@ -44,6 +44,7 @@ members = [
     "routines",
     "routines-app",
     "share-gateway",
+    "share-grants",
     "system-interface",
     "system-monitor",
     "terminal-app",
@@ -3807,6 +3808,7 @@ dependencies = [
     { name = "httpx" },
     { name = "inotify-simple" },
     { name = "pyjwt" },
+    { name = "share-grants" },
     { name = "werkzeug" },
 ]
 
@@ -3822,8 +3824,24 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "inotify-simple", specifier = ">=2.0.0" },
     { name = "pyjwt", specifier = ">=2.8" },
+    { name = "share-grants", editable = "system/libs/share_grants" },
     { name = "werkzeug", specifier = ">=3.1" },
 ]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.85" }]
+
+[[package]]
+name = "share-grants"
+version = "0.1.0"
+source = { editable = "system/libs/share_grants" }
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
 
 [package.metadata.requires-dev]
 dev = [{ name = "ty", specifier = "==0.0.85" }]
@@ -3883,6 +3901,7 @@ dependencies = [
     { name = "imbue-common" },
     { name = "pydantic-settings" },
     { name = "resvg-py" },
+    { name = "share-grants" },
     { name = "simple-websocket" },
     { name = "watchdog" },
     { name = "werkzeug" },
@@ -3922,6 +3941,7 @@ requires-dist = [
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=c9deab2161a92ff81de77933850f3bf86db47ccc" },
     { name = "pydantic-settings", specifier = ">=2.13.1" },
     { name = "resvg-py", specifier = ">=0.5.0" },
+    { name = "share-grants", editable = "system/libs/share_grants" },
     { name = "simple-websocket", specifier = ">=1.0" },
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },

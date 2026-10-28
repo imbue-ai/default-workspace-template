@@ -127,6 +127,11 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   // status (a compaction) only: who started it -- the chat's idle sweep, the user's /compact, or
   // the harness itself. Null or absent when the chat app could not tell.
   compaction_cause?: CompactionCause | null;
+  // Who wrote the message when it was not the owner (the multiplayer spec, section 5.2): their
+  // participant key, joined from the chat's author annotations, and the name they were called at
+  // the time. Absent for the owner's turns and for every turn from before authors were kept.
+  author?: string;
+  author_name?: string;
 }
 
 /** Who started a compaction (the backend's ``CompactionCause``). */

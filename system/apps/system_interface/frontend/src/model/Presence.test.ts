@@ -7,6 +7,7 @@ import {
   HEARTBEAT_INTERVAL_MS,
   applyPresence,
   getOwnIdentity,
+  getOwnParticipant,
   getPresentUsers,
   resetPresenceForTesting,
   startPresenceHeartbeat,
@@ -56,19 +57,32 @@ afterEach(() => {
 });
 
 describe("startPresenceHeartbeat", () => {
-  it("posts an empty heartbeat at once, then every interval while visible", async () => {
-    const requests = stubFetch(() => jsonResponse(200, { identity: { owner: true, user_id: "u1", email: "a@b" } }));
+  it("posts a heartbeat at once, then every interval while visible, carrying the newest input it saw", async () => {
+    const requests = stubFetch(() =>
+      jsonResponse(200, { identity: { owner: true, user_id: "u1", email: "a@b" }, participant: "user:u1" }),
+    );
 
     startPresenceHeartbeat();
     await vi.advanceTimersByTimeAsync(0);
     expect(requests).toHaveLength(1);
     expect(requests[0].url).toContain("/api/presence/heartbeat");
     expect(requests[0].method).toBe("POST");
-    expect(requests[0].body).toBe("");
+    expect(JSON.parse(requests[0].body)).toEqual({ last_input_at: null });
 
+    vi.setSystemTime(new Date("2026-10-22T10:00:05Z"));
+    window.dispatchEvent(new Event("keydown"));
     await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
     expect(requests).toHaveLength(2);
-    expect(getOwnIdentity()).toEqual({ owner: true, user_id: "u1", email: "a@b" });
+    expect(JSON.parse(requests[1].body)).toEqual({ last_input_at: "2026-10-22T10:00:05.000Z" });
+    expect(getOwnIdentity()).toEqual({ owner: true, user_id: "u1", email: "a@b", participant: "user:u1" });
+    expect(getOwnParticipant()).toBe("user:u1");
+  });
+
+  it("knows the owner of an unshared workspace by the owner key, with no account", async () => {
+    stubFetch(() => jsonResponse(200, { identity: { owner: true }, participant: "owner" }));
+    startPresenceHeartbeat();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getOwnIdentity()).toEqual({ owner: true, user_id: null, email: null, participant: "owner" });
   });
 
   it("stops while the tab is hidden and heartbeats again the moment it is visible", async () => {
@@ -90,7 +104,7 @@ describe("startPresenceHeartbeat", () => {
     let status = 200;
     stubFetch(() =>
       status === 200
-        ? jsonResponse(200, { identity: { owner: true, user_id: "u1", email: "a@b" } })
+        ? jsonResponse(200, { identity: { owner: true, user_id: "u1", email: "a@b" }, participant: "user:u1" })
         : jsonResponse(204),
     );
     startPresenceHeartbeat();
