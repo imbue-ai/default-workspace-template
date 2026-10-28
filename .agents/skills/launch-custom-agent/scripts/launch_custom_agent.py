@@ -128,19 +128,28 @@ def _validate_source(path: Path, mode: str) -> None:
             _fail(f"worktree mode needs a git repository, and {path} is not one; use --mode in-place instead")
 
 
-def _existing_agent_names(runner: Runner) -> set[str]:
+def _list_agent_records(runner: Runner) -> list[dict[str, object]]:
+    """Every agent `mngr list` reports, as parsed jsonl records (non-JSON lines skipped)."""
     listing = runner.run(
         ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
         stdout=subprocess.PIPE,
         text=True,
         check=False,
     )
-    names: set[str] = set()
+    records: list[dict[str, object]] = []
     for line in (listing.stdout or "").splitlines():
         try:
             record = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if isinstance(record, dict):
+            records.append(record)
+    return records
+
+
+def _existing_agent_names(runner: Runner) -> set[str]:
+    names: set[str] = set()
+    for record in _list_agent_records(runner):
         name = record.get("name")
         if isinstance(name, str):
             names.add(name)
@@ -194,17 +203,7 @@ def build_create_argv(
 
 
 def _created_work_dir(runner: Runner, agent_id: str) -> str:
-    listing = runner.run(
-        ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
-        stdout=subprocess.PIPE,
-        text=True,
-        check=False,
-    )
-    for line in (listing.stdout or "").splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
+    for record in _list_agent_records(runner):
         if record.get("id") == agent_id:
             work_dir = record.get("work_dir")
             if isinstance(work_dir, str):
