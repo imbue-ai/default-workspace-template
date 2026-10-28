@@ -1,10 +1,11 @@
 """Running a test selection: each command in order, its output kept, and how it ended.
 
 A command passed, or failed; a pytest run that failed reruns only its failed tests once, and is
-flaky when they pass that time. A command killed by a signal while the memory guard recorded a
+flaky when they pass that time, unless it also missed its coverage floor. A command killed by a signal while the memory guard recorded a
 shed is a shed, not a failure: rerunning it is a judgment about memory the caller makes.
 """
 
+import re
 import shlex
 import signal
 import subprocess
@@ -49,6 +50,10 @@ _PYTEST_TESTS_FAILED_EXIT_CODE: Final[int] = 1
 _SHORT_SUMMARY_HEADER: Final[str] = "short test summary info"
 _FAILURE_LINE_PREFIXES: Final[tuple[str, ...]] = ("FAILED ", "ERROR ")
 _FAILURE_MESSAGE_SEPARATOR: Final[str] = " - "
+# What pytest-cov prints when the total is under fail_under, which also makes pytest exit 1.
+_COVERAGE_FLOOR_MISSED_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^FAIL Required test coverage of .* not reached\.", re.MULTILINE
+)
 # A whole suite under gVisor runs for tens of minutes; this only bounds a hung one.
 _COMMAND_TIMEOUT_SECONDS: Final[float] = 3 * 60 * 60
 _TERMINATE_GRACE_SECONDS: Final[float] = 30
@@ -95,6 +100,9 @@ class CommandRun(FrozenModel):
     )
     shed_records: tuple[ShedRecord, ...] = Field(
         description="What the memory guard killed while it ran, which may surface as test errors"
+    )
+    is_coverage_floor_missed: bool = Field(
+        description="Whether its run reported its suite's coverage floor not reached, a failure whatever the rerun did"
     )
 
 
@@ -217,11 +225,9 @@ def _run_command(
 ) -> CommandRun:
     working_directory = repo_root / command.working_directory
     result = _run_to_log(command.argv, working_directory, log_path)
-    failed_test_ids = (
-        parse_failed_test_ids(log_path.read_text(errors="replace"))
-        if result.exit_code == _PYTEST_TESTS_FAILED_EXIT_CODE
-        else ()
-    )
+    output = log_path.read_text(errors="replace") if result.exit_code == _PYTEST_TESTS_FAILED_EXIT_CODE else ""
+    failed_test_ids = parse_failed_test_ids(output)
+    is_coverage_floor_missed = _COVERAGE_FLOOR_MISSED_PATTERN.search(output) is not None
     rerun = rerun_command(command, failed_test_ids, is_coverage_measured) if failed_test_ids else None
     rerun_result = _run_to_log(rerun.argv, working_directory, rerun_log_path) if rerun is not None else None
     last_result = rerun_result if rerun_result is not None else result
@@ -230,7 +236,7 @@ def _run_command(
         shed_ledger_path, result.started_at, finished_at, last_result.exit_code in _SIGNAL_EXIT_CODES
     )
     outcome, final_failed_test_ids = _classify(
-        result.exit_code, failed_test_ids, rerun_result, rerun_log_path, shed_records
+        result.exit_code, failed_test_ids, rerun_result, rerun_log_path, shed_records, is_coverage_floor_missed
     )
     return CommandRun(
         command=command,
@@ -243,6 +249,7 @@ def _run_command(
         rerun_log_path=rerun_log_path if rerun_result is not None else None,
         rerun=rerun_command(command, final_failed_test_ids, is_coverage_measured) if final_failed_test_ids else None,
         shed_records=shed_records,
+        is_coverage_floor_missed=is_coverage_floor_missed,
     )
 
 
@@ -252,6 +259,7 @@ def _classify(
     rerun_result: _ProcessResult | None,
     rerun_log_path: Path,
     shed_records: tuple[ShedRecord, ...],
+    is_coverage_floor_missed: bool,
 ) -> tuple[CommandOutcome, tuple[str, ...]]:
     if exit_code == 0:
         return CommandOutcome.PASSED, ()
@@ -260,7 +268,8 @@ def _classify(
     elif rerun_result is None:
         return CommandOutcome.FAILED, failed_test_ids
     elif rerun_result.exit_code == 0:
-        return CommandOutcome.FLAKY, failed_test_ids
+        # Its failed tests pass now, so what still fails it is the coverage floor alone.
+        return (CommandOutcome.FAILED, ()) if is_coverage_floor_missed else (CommandOutcome.FLAKY, failed_test_ids)
     elif rerun_result.exit_code in _SIGNAL_EXIT_CODES and shed_records:
         return CommandOutcome.SHED, failed_test_ids
     else:
@@ -329,6 +338,8 @@ def render_report(report: SuiteRunReport, summary_path: Path) -> str:
             lines.append(f"    rerun output: {run.rerun_log_path}")
         if run.exit_code is None:
             lines.append(f"    timed out after {_COMMAND_TIMEOUT_SECONDS / 3600:g} hours")
+        if run.is_coverage_floor_missed:
+            lines.append("    coverage floor not reached")
         match run.outcome:
             case CommandOutcome.FAILED:
                 lines.extend(_render_test_ids("failed", run.failed_test_ids))

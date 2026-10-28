@@ -420,8 +420,10 @@ it goes. Each command ends one of four ways:
   only the tests pytest's short summary lists, once, with every marker
   (`-m ''`) and, in a suite with a coverage floor, `--no-cov`
   (`selection.rerun_command`); the tests that failed again are the ones
-  reported, with the command that reruns them.
-- **flaky**: a pytest run whose failed tests all passed on that rerun.
+  reported, with the command that reruns them. A run that missed its suite's
+  coverage floor fails whatever the rerun does, and says so.
+- **flaky**: a pytest run whose failed tests all passed on that rerun, and
+  that met its coverage floor.
 - **shed**: it, or its rerun, was killed by SIGKILL or SIGTERM while the
   memory guard's shed ledger (`oom_priority`'s, unless `--shed-ledger` names
   another) recorded a kill. Rerunning it is the caller's call, made from how

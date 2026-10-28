@@ -369,11 +369,13 @@ Each command ends one of four ways:
   any change of yours. Name them on your report's `Flaky tests:` line (your
   lead reports or tickets them) and move on.
 - **failed**, with the tests still failing after that rerun when it was a
-  pytest run. Fix what your change broke, commit the fix, and run the gate
-  again as whatever the fix reaches: `run-tests --diff-base <the commit before
-  the fix>`. Everything in that range is your own commits, so it needs no
-  scope file. That is the fix's whole gate; a suite it does not run is a
-  widening, and goes through the `question` gate like any other.
+  pytest run, or `coverage floor not reached` when its suite's coverage fell
+  under the floor (the rerun cannot clear that). Fix what your change broke,
+  commit the fix, and run the gate again as whatever the fix reaches:
+  `run-tests --diff-base <the commit before the fix>`. Everything in that
+  range is your own commits, so it needs no scope file. That is the fix's
+  whole gate; a suite it does not run is a widening, and goes through the
+  `question` gate like any other.
 - **shed**: killed by a signal while the memory guard recorded a shed, which
   the outcome lists. That is memory pressure, never a failure to fix in the
   code ("A shed command" below).

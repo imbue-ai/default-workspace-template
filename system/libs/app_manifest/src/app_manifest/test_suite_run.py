@@ -13,6 +13,7 @@ from app_manifest.selection import SuiteSelection
 from app_manifest.suite_run import CommandOutcome
 from app_manifest.suite_run import SUMMARY_FILE_NAME
 from app_manifest.suite_run import SuiteRunReport
+from app_manifest.suite_run import render_report
 from app_manifest.suite_run import run_selection
 from imbue.imbue_common.primitives import NonEmptyStr
 
@@ -73,11 +74,11 @@ def _project(tmp_path: Path) -> Path:
     return project
 
 
-def _pytest_command(*node_ids: str) -> SuiteCommand:
+def _pytest_command(*arguments: str) -> SuiteCommand:
     return SuiteCommand(
         kind=SuiteKind.PYTEST,
         working_directory=NonEmptyStr("."),
-        argv=(sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *node_ids),
+        argv=(sys.executable, "-m", "pytest", "-p", "no:cacheprovider", *arguments),
         reasons=(_REASON,),
     )
 
@@ -142,6 +143,28 @@ def test_a_command_killed_while_the_guard_recorded_a_shed_is_a_shed_and_otherwis
     # The second command died the same way, but the guard recorded nothing while it ran.
     assert killed.outcome == CommandOutcome.FAILED
     assert killed.shed_records == ()
+
+
+def test_a_run_that_missed_its_coverage_floor_fails_even_when_its_failed_tests_pass_on_the_rerun(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path)
+
+    # Only one test of the module runs, so the module's coverage is under the floor.
+    report = _run(
+        project,
+        tmp_path / "shed.jsonl",
+        _pytest_command(
+            "--cov=suite", "--cov-fail-under=100", "suite/test_cases.py::test_fails_only_the_first_time_48213"
+        ),
+    )
+
+    (run,) = report.runs
+    assert (run.outcome, run.is_coverage_floor_missed, run.failed_test_ids) == (CommandOutcome.FAILED, True, ())
+    assert run.rerun_log_path is not None
+    assert "1 passed" in run.rerun_log_path.read_text()
+    assert "    coverage floor not reached" in render_report(report, project / SUMMARY_FILE_NAME).splitlines()
+    assert not report.is_passing
 
 
 def test_a_failing_command_that_is_not_pytest_fails_without_a_rerun(tmp_path: Path) -> None:
