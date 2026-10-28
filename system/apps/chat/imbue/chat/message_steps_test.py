@@ -15,6 +15,7 @@ from imbue.chat.message_steps import CANCEL_SUFFIX
 from imbue.chat.message_steps import MESSAGE_REF_PREFIX
 from imbue.chat.message_steps import MESSAGE_STEP_RESERVATIONS_DIRNAME
 from imbue.chat.message_steps import MESSAGE_STEP_TAG
+from imbue.chat.message_steps import MESSAGE_STEP_TITLE_SYSTEM_PROMPT
 from imbue.chat.message_steps import MessageAction
 from imbue.chat.message_steps import MessageActionKind
 from imbue.chat.message_steps import MessageStep
@@ -276,6 +277,38 @@ def test_the_title_prompt_lists_each_open_step_with_its_status() -> None:
         "<open_tasks>\n- wor-step-a1b2 (in progress): Add a quiz to each topic\n"
         "- wor-step-c3d4 (not started): Add a glossary\n</open_tasks>"
     ) in prompt
+
+
+def _prompt_examples() -> dict[str, MessageAction | None]:
+    """Each example in the system prompt, as its message mapped to how its answer parses against its open tasks."""
+    examples_text = MESSAGE_STEP_TITLE_SYSTEM_PROMPT.split("Examples:\n", 1)[1]
+    examples = re.findall(
+        r"<open_tasks>\n(.*?)</open_tasks>\n<message>(.*?)</message>\n(.*?)(?:\n|$)", examples_text, re.S
+    )
+    assert examples
+    parsed: dict[str, MessageAction | None] = {}
+    for listed, message, answer in examples:
+        open_steps = tuple(
+            OpenStep(
+                step_id=step_id,
+                title=title,
+                status=MessageStepStatus.IN_PROGRESS if status == "in progress" else MessageStepStatus.OPEN,
+                created_at="2026-10-27T00:00:00.000000Z",
+            )
+            for step_id, status, title in re.findall(r"- (\S+) \((in progress|not started)\): (.*)", listed)
+        )
+        parsed[message] = parse_message_action(answer, open_steps)
+    return parsed
+
+
+def test_every_prompt_example_is_a_usable_answer() -> None:
+    assert all(action is not None for action in _prompt_examples().values())
+
+
+@pytest.mark.parametrize("message", ["which dataset is that?", "can you explain spaced repetition briefly?"])
+def test_the_prompt_shows_a_quick_question_as_not_a_task(message: str) -> None:
+    action = _prompt_examples()[message]
+    assert action is not None and action.kind is MessageActionKind.NOT_A_TASK
 
 
 def _action(

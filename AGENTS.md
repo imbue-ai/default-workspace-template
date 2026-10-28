@@ -55,7 +55,7 @@ A message the user sends while you are busy gets its step from the chat: the cha
 - `tk start <id>` it when you begin on the request (the command waits until the step exists), and `tk close <id> "<summary>"` it when the request is done.
 - A message that arrives while you are busy with something else keeps its step open until you get to it. Do not close it only to clear the list.
 - The chat's decisions about a message come from a quick model that sees one message at a time. Treat them as suggestions, and check them against everything the user has said.
-- A message the model judges not a task (thanks, a question about progress) gets no step: `tk start` on its id says so at once. Reply or carry on without a step, or create one if you judge it is a task.
+- A message the model judges not a task (chitchat, a quick question) gets no step: `tk start` on its id says so at once. Reply or carry on without a step, or create one if you judge it is a task.
 - A message may repeat, change or call off one of your open steps. A repeat gets no step: `tk start` on its id names the step it repeats. A change gets its own step for the updated request, and the chat cancels the step it replaces. A call-off gets no step, and the chat cancels the step it calls off. A cancel (`tk cancel`) hides the step from the user's timeline and marks it in `tk steps`; if it is right, close the step with a short note, and if not, `tk start` the step, which overrides the cancel.
 
 ## When you don't need records
