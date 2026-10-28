@@ -69,6 +69,27 @@ describe("computeAuthErrorHiddenEventIds", () => {
 
     expect(computeAuthErrorHiddenEventIds([ASKED, second, REFUSED, COPY])).toEqual(new Set(["asked"]));
   });
+
+  it("hides nothing for the same words typed again after the user wrote something else", () => {
+    const other = typed("other", "never mind", "2026-10-28T00:40:00.000Z");
+    const otherAnswer = reply("other-answer", "2026-10-28T00:40:05.000Z");
+    const muchLater = typed("much-later", "what is 2+2?", "2026-10-28T09:00:00.000Z");
+    const laterAnswer = reply("later-answer", "2026-10-28T09:00:05.000Z");
+
+    expect(computeAuthErrorHiddenEventIds([ASKED, REFUSED, other, otherAnswer, muchLater, laterAnswer])).toEqual(
+      new Set(),
+    );
+  });
+
+  it("counts copies the agent answered one by one, and none after the user's own message", () => {
+    const second = typed("second", "and 3+3?", "2026-10-28T00:39:55.600Z");
+    const other = typed("other", "never mind", "2026-10-28T00:40:20.000Z");
+    const secondLater = typed("second-later", "and 3+3?", "2026-10-28T00:41:00.000Z");
+
+    expect(computeAuthErrorHiddenEventIds([ASKED, second, REFUSED, COPY, ANSWER, other, secondLater])).toEqual(
+      new Set(["asked"]),
+    );
+  });
 });
 
 describe("messagesToSendAgain", () => {
@@ -105,6 +126,13 @@ describe("messagesToSendAgain", () => {
       const other = typed("other", "never mind", "2026-10-28T00:41:00.000Z");
 
       expect(messagesToSendAgain([ASKED, SECOND, REFUSED, COPY, ANSWER, other], REFUSED)).toBeNull();
+    });
+
+    it("offers nothing once the user wrote something of their own, even if they later typed the rest again", () => {
+      const other = typed("other", "never mind", "2026-10-28T00:41:00.000Z");
+      const secondLater = typed("second-later", "and 3+3?", "2026-10-28T00:42:00.000Z");
+
+      expect(messagesToSendAgain([ASKED, SECOND, REFUSED, COPY, ANSWER, other, secondLater], REFUSED)).toBeNull();
     });
 
     it("offers nothing once a sign-in failed again after it", () => {

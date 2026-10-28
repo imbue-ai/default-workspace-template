@@ -6,8 +6,9 @@
  * stops asking the user to sign in. When the chat app is sending the refused message again itself
  * (it does for an agent the sign-in restarted), the turn says so; otherwise, while it is still the
  * chat's newest turn, it offers to send that message again, and after a resend that stopped
- * partway, the messages it did not get to. Once a copy of a refused message is in
- * the chat, the original and the failure are hidden, so the message shows once.
+ * partway, the messages it did not get to. Once a refused message is sent again right after the
+ * failure, before the user writes anything else, the original and the failure are hidden, so the
+ * message shows once.
  *
  * Which messages a failure refused follows the chat app's rule (``user_turns_refused_for_sign_in``):
  * the user's messages after the agent's last real reply, sent no later than the last failure, by
@@ -101,7 +102,7 @@ function wordsOf(prompt: UserMessageEvent): string {
   return classifyUserMessage(prompt).body.trim();
 }
 
-/** The user's messages sent after the turn's last failure, anywhere in the chat: copies of what it
+/** The user's messages sent after the turn's last failure, in transcript order: copies of what it
  *  refused, or whatever the user wrote next. */
 function userTurnsSentSince(events: readonly TranscriptEvent[], turn: RefusedTurn): UserMessageEvent[] {
   const lastFailure = turn.failures[turn.failures.length - 1];
@@ -116,16 +117,27 @@ function userTurnsSentSince(events: readonly TranscriptEvent[], turn: RefusedTur
 }
 
 /**
- * The refused messages and failures to hide: a refused message once a copy of it was sent later
- * (the chat app sent it again, the user pressed "Send your message again", or typed it again), and
- * the failures once every message they refused has its copy. Nothing the user wrote is hidden
- * while it exists only once.
+ * The copies of the turn's refused messages: the user's messages sent right after its last failure
+ * that repeat one of them (the chat app's resend, "Send your message again", or a retype), up to the
+ * first message that does not. The agent's replies in between do not end the run. A matching
+ * message sent after the user wrote something else is a new message, not a copy.
+ */
+function copiesSentSince(sentSince: readonly UserMessageEvent[], turn: RefusedTurn): UserMessageEvent[] {
+  const refusedWords = new Set(turn.prompts.map(wordsOf));
+  const end = sentSince.findIndex((event) => !refusedWords.has(wordsOf(event)));
+  return end === -1 ? [...sentSince] : sentSince.slice(0, end);
+}
+
+/**
+ * The refused messages and failures to hide: a refused message once a copy of it was sent right
+ * after the failure (see `copiesSentSince`), and the failures once every message they refused has
+ * its copy. Nothing the user wrote is hidden while it exists only once.
  */
 export function computeAuthErrorHiddenEventIds(events: readonly TranscriptEvent[]): Set<string> {
   const hidden = new Set<string>();
   for (const turn of refusedTurns(events)) {
-    const laterWords = new Set(userTurnsSentSince(events, turn).map(wordsOf));
-    const copied = turn.prompts.filter((prompt) => wordsOf(prompt) !== "" && laterWords.has(wordsOf(prompt)));
+    const copiedWords = new Set(copiesSentSince(userTurnsSentSince(events, turn), turn).map(wordsOf));
+    const copied = turn.prompts.filter((prompt) => wordsOf(prompt) !== "" && copiedWords.has(wordsOf(prompt)));
     for (const prompt of copied) hidden.add(prompt.event_id);
     if (copied.length === turn.prompts.length) {
       for (const failure of turn.failures) hidden.add(failure.event_id);
@@ -152,11 +164,11 @@ export function messagesToSendAgain(
   // A later failure is a turn of its own, which offers its own messages.
   if (events.some((event, index) => index > lastFailureIndex && isAuthFailure(event))) return null;
   const sentSince = userTurnsSentSince(events, turn);
-  const refusedWords = new Set(turn.prompts.map(wordsOf));
-  if (sentSince.some((event) => !refusedWords.has(wordsOf(event)))) return null;
+  const copies = copiesSentSince(sentSince, turn);
+  if (copies.length < sentSince.length) return null;
   if (sentSince.length === 0 && !turn.isLast) return null;
   // A message typed again after an earlier failure of the turn is one message, offered once.
-  const coveredWords = new Set(sentSince.map(wordsOf));
+  const coveredWords = new Set(copies.map(wordsOf));
   const prompts: UserMessageEvent[] = [];
   for (const prompt of turn.prompts) {
     const words = wordsOf(prompt);
