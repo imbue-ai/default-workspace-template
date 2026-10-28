@@ -5960,6 +5960,17 @@ class _ResendTranscripts:
         return SendOutcome.OK
 
 
+def _install_resend_capabilities(
+    manager: AgentManager,
+    ensure_watcher: Callable[[AgentInfo], TranscriptReader],
+    deliver: Callable[[AgentInfo, str, str], SendOutcome],
+) -> None:
+    """Give the manager what a re-auth resend uses: the agent's transcript and the message route's delivery."""
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(ensure_watcher=ensure_watcher, drain_to_composer=lambda agent_info: "", deliver=deliver)
+    )
+
+
 def test_a_sign_in_resends_the_message_its_failure_refused_once_the_agent_is_back(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
@@ -5988,9 +5999,7 @@ def test_a_sign_in_resends_the_message_its_failure_refused_once_the_agent_is_bac
         delivered.append((agent_info.id, text, is_restarted))
         return landing.land(agent_info, text)
 
-    manager.set_handoff_capabilities(
-        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
-    )
+    _install_resend_capabilities(manager, landing.reader, deliver)
     try:
         assert manager.restart_agents_on_account(account) == 2
         wait_for(
@@ -6022,9 +6031,7 @@ def test_every_chat_on_a_signed_in_account_reports_its_resend_until_it_settles(
         delivered.append(agent_info.id)
         return landing.land(agent_info, text)
 
-    manager.set_handoff_capabilities(
-        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
-    )
+    _install_resend_capabilities(manager, landing.reader, deliver)
     try:
         manager.restart_agents_on_account_in_background("acct-1")
         # From the moment the sign-in lands, before any restart has finished.
@@ -6123,9 +6130,7 @@ def test_overlapping_sign_ins_resend_a_refused_message_once(broadcaster: WebSock
             assert second_resend.is_alive()
         return landing.land(agent_info, text)
 
-    manager.set_handoff_capabilities(
-        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
-    )
+    _install_resend_capabilities(manager, landing.reader, deliver)
     try:
         manager._begin_resends_after_sign_in("acct-1")
         manager._begin_resends_after_sign_in("acct-1")
@@ -6152,14 +6157,10 @@ def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
         attempted.append(agent_info.name)
         raise SendFailedError("the agent is in shell mode", "blocked_input")
 
-    manager.set_handoff_capabilities(
-        HandoffCapabilities(
-            ensure_watcher=lambda agent_info: _FixedTranscriptReader(
-                [_typed_turn("hi"), _agent_reply(is_auth_error=True)]
-            ),
-            drain_to_composer=lambda agent_info: "",
-            deliver=deliver,
-        )
+    _install_resend_capabilities(
+        manager,
+        lambda agent_info: _FixedTranscriptReader([_typed_turn("hi"), _agent_reply(is_auth_error=True)]),
+        deliver,
     )
     try:
         assert manager.restart_agents_on_account(account) == 2
@@ -6194,9 +6195,7 @@ def test_a_resend_sends_each_refused_message_until_one_does_not_land(
         attempted.append(text)
         return landing.land(agent_info, text) if outcome is SendOutcome.OK else outcome
 
-    manager.set_handoff_capabilities(
-        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
-    )
+    _install_resend_capabilities(manager, landing.reader, deliver)
     try:
         assert manager.restart_agents_on_account(account) == 1
         wait_for(
@@ -6224,9 +6223,7 @@ def test_a_sign_in_resends_nothing_to_a_chat_that_is_switching(
         attempted.append((agent_info.id, text))
         return landing.land(agent_info, text)
 
-    manager.set_handoff_capabilities(
-        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
-    )
+    _install_resend_capabilities(manager, landing.reader, deliver)
     try:
         assert manager.restart_agents_on_account("acct-anthropic") == 2
     finally:
@@ -6302,9 +6299,7 @@ def test_a_sign_in_resends_nothing_to_an_agent_its_chat_moved_on_from_during_the
         attempted.append(agent_info.id)
         return landing.land(agent_info, text)
 
-    manager.set_handoff_capabilities(
-        HandoffCapabilities(ensure_watcher=landing.reader, drain_to_composer=lambda agent_info: "", deliver=deliver)
-    )
+    _install_resend_capabilities(manager, landing.reader, deliver)
     try:
         manager.restart_agents_on_account_in_background("acct-1")
         wait_for(lambda: argv_log.exists() and argv_log.read_text() != "", error_message="the restart never ran")
