@@ -51,14 +51,22 @@ def test_fails_only_the_first_time_48213() -> None:
     assert False, "fails the first time on purpose"
 """
 
-# Appends a shed record for itself to the ledger, as the memory guard does, then dies by SIGKILL.
-_SHED_THEN_DIE = """
-import json, os, signal, sys
+# Appends a shed record for the pid it is given to the ledger, a moment after that process died,
+# as the memory guard's after-kill hook does.
+_RECORD_SHED_LATER = """
+import json, os, sys, threading
 from datetime import datetime, timezone
+threading.Event().wait(0.5)
+with open(sys.argv[1], "a") as ledger:
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    ledger.write(json.dumps({"timestamp": stamp, "type": "process_shed", "pid": int(sys.argv[2]), "comm": "pytest"}) + "\\n")
+"""
+
+# Dies by SIGKILL, leaving behind, when given a ledger, a process that records the kill afterwards.
+_DIE_THEN_SHED = f"""
+import os, signal, subprocess, sys
 if sys.argv[1]:
-    with open(sys.argv[1], "a") as ledger:
-        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        ledger.write(json.dumps({"timestamp": stamp, "type": "process_shed", "pid": os.getpid(), "comm": "pytest"}) + "\\n")
+    subprocess.Popen([sys.executable, "-c", {_RECORD_SHED_LATER!r}, sys.argv[1], str(os.getpid())], start_new_session=True)
 os.kill(os.getpid(), signal.SIGKILL)
 """
 
@@ -122,6 +130,8 @@ def test_each_command_ends_as_passed_flaky_or_failed_by_what_its_tests_did_on_th
     assert not report.is_passing
 
 
+# The command killed with no shed recorded waits out the grace for a record that never comes.
+@pytest.mark.timeout(30)
 def test_a_command_killed_while_the_guard_recorded_a_shed_is_a_shed_and_otherwise_a_failure(
     tmp_path: Path,
 ) -> None:
@@ -131,8 +141,8 @@ def test_a_command_killed_while_the_guard_recorded_a_shed_is_a_shed_and_otherwis
     report = _run(
         project,
         ledger,
-        _python_command(SuiteKind.PYTEST, "-c", _SHED_THEN_DIE, str(ledger)),
-        _python_command(SuiteKind.PYTEST, "-c", _SHED_THEN_DIE, ""),
+        _python_command(SuiteKind.PYTEST, "-c", _DIE_THEN_SHED, str(ledger)),
+        _python_command(SuiteKind.PYTEST, "-c", _DIE_THEN_SHED, ""),
     )
 
     shed, killed = report.runs

@@ -8,9 +8,11 @@ shed is a shed, not a failure: rerunning it is a judgment about memory the calle
 import shlex
 import signal
 import subprocess
+import threading
 from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
+from datetime import timedelta
 from datetime import timezone
 from enum import auto
 from functools import cached_property
@@ -50,6 +52,10 @@ _FAILURE_MESSAGE_SEPARATOR: Final[str] = " - "
 # A whole suite under gVisor runs for tens of minutes; this only bounds a hung one.
 _COMMAND_TIMEOUT_SECONDS: Final[float] = 3 * 60 * 60
 _TERMINATE_GRACE_SECONDS: Final[float] = 30
+# earlyoom records a kill from a hook it runs once the victim is gone, so the record of a command
+# it killed lands just after the command exits.
+_SHED_RECORD_GRACE: Final[timedelta] = timedelta(seconds=5)
+_SHED_RECORD_POLL_SECONDS: Final[float] = 0.1
 _MAX_TEST_IDS_SHOWN: Final[int] = 10
 SUMMARY_FILE_NAME: Final[str] = "summary.json"
 
@@ -171,6 +177,21 @@ def read_shed_records(shed_ledger_path: Path, started_at: datetime, finished_at:
     return tuple(records)
 
 
+def _await_shed_records(
+    shed_ledger_path: Path, started_at: datetime, finished_at: datetime, is_killed_by_signal: bool
+) -> tuple[ShedRecord, ...]:
+    """The memory guard's kills while a command ran, waiting a little for the record of a kill
+    that ended it."""
+    if not is_killed_by_signal:
+        return read_shed_records(shed_ledger_path, started_at, finished_at)
+    deadline = finished_at + _SHED_RECORD_GRACE
+    records = read_shed_records(shed_ledger_path, started_at, deadline)
+    while not records and datetime.now(timezone.utc) < deadline:
+        threading.Event().wait(_SHED_RECORD_POLL_SECONDS)
+        records = read_shed_records(shed_ledger_path, started_at, deadline)
+    return records
+
+
 def _run_command(
     command: SuiteCommand,
     repo_root: Path,
@@ -188,8 +209,11 @@ def _run_command(
     )
     rerun = rerun_command(command, failed_test_ids, is_coverage_measured) if failed_test_ids else None
     rerun_result = _run_to_log(rerun.argv, working_directory, rerun_log_path) if rerun is not None else None
-    finished_at = rerun_result.finished_at if rerun_result is not None else result.finished_at
-    shed_records = read_shed_records(shed_ledger_path, result.started_at, finished_at)
+    last_result = rerun_result if rerun_result is not None else result
+    finished_at = last_result.finished_at
+    shed_records = _await_shed_records(
+        shed_ledger_path, result.started_at, finished_at, last_result.exit_code in _SIGNAL_EXIT_CODES
+    )
     outcome, final_failed_test_ids = _classify(
         result.exit_code, failed_test_ids, rerun_result, rerun_log_path, shed_records
     )
