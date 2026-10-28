@@ -17,7 +17,7 @@ saying where it is running. `--mode` is required and explicit:
 - in-place: the agent runs directly in --path (it sees, and makes, uncommitted
   changes there). Works for non-git directories too.
 
-The create runs with MNGR__allow_settings_key_assignment_narrowing=true: the custom
+The create runs with MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING=true: the custom
 template deliberately replaces __extend-built agent-type aggregates (each harness's
 workspace prompt block, codex's provisioning command), and mngr's narrowing guard
 would otherwise reject those assigns.
@@ -49,7 +49,7 @@ _LAUNCHABLE_HARNESSES = tuple(h for h in HarnessType if h is not HarnessType.SEE
 
 # See the module docstring: the custom template's deliberate aggregate replacements
 # need the narrowing guard relaxed for this one create.
-_NARROWING_ENV = {"MNGR__allow_settings_key_assignment_narrowing": "true"}
+_NARROWING_ENV = {"MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING": "true"}
 
 
 class Runner:

@@ -22,6 +22,7 @@ import pytest
 from imbue.chat import accounts
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import LANES
+from imbue.mngr.config.loader import _parse_mngr_env_overrides
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 
 _SCRIPT = Path(__file__).parent / "launch_custom_agent.py"
@@ -133,7 +134,15 @@ def test_launch_builds_a_valid_mngr_create_for_worktree_mode(workspace_root: Pat
     assert create.argv[create.argv.index("--branch") + 1] == "main"
     assert create.argv[create.argv.index("--message") + 1] == "do the thing"
     # The custom template's aggregate replacements need the narrowing guard relaxed.
-    assert create.kwargs["env"]["MNGR__allow_settings_key_assignment_narrowing"] == "true"
+    assert create.kwargs["env"]["MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING"] == "true"
+
+
+def test_the_narrowing_env_var_is_accepted_by_mngrs_env_override_layer() -> None:
+    """mngr's `MNGR__*` override pattern is uppercase-only and silently skips any
+    other casing, so the exact key the launcher sets must parse to the config flag --
+    otherwise every `-t custom` create fails on the narrowing guard."""
+    parsed = _parse_mngr_env_overrides(launch_custom_agent._NARROWING_ENV)
+    assert parsed == {"allow_settings_key_assignment_narrowing": True}
 
 
 def test_in_place_mode_runs_in_the_directory_itself(workspace_root: Path) -> None:

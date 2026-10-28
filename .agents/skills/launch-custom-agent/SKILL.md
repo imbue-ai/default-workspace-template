@@ -67,6 +67,6 @@ destroy <name>`) removes the agent but never deletes the user's source directory
 - If the user wants several agents on the same repo at once, use worktree mode for
   each; two in-place agents in one directory will trample each other.
 - The launcher relaxes mngr's settings-narrowing guard for its one create
-  (`MNGR__allow_settings_key_assignment_narrowing=true`): the `custom` template
+  (`MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING=true`): the `custom` template
   deliberately replaces the per-harness workspace prompt blocks and codex's
   provisioning command, which that guard would otherwise reject.

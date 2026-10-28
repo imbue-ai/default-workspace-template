@@ -1792,7 +1792,7 @@ append_system_prompt__extend = ["You were launched by another agent. List any qu
 # todo tools are restored (the workspace build disables them in favor of tk).
 # The bare assigns over __extend-built aggregates (append_system_prompt,
 # extra_provision_command) are deliberate replacements: the launch-custom-agent
-# skill sets MNGR__allow_settings_key_assignment_narrowing=true on its create
+# skill sets MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING=true on its create
 # so the narrowing guard admits them. Settings naming a harness other than the
 # create's --type are inert, so this template stacks with any harness.
 [create_templates.custom]
