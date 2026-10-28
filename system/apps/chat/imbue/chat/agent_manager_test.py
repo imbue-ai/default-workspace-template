@@ -5862,6 +5862,11 @@ def test_a_sign_in_restarts_only_the_live_agents_on_the_account(
     for name, state in agent_state_by_name.items():
         seed_agent_state(manager, f"agent-{uuid4().hex}", name=name, state=state, labels={"account": account})
     seed_agent_state(manager, f"agent-{uuid4().hex}", name="Other-Account-Chat", labels={"account": "acct-other"})
+    # A room wears the account label too (the workspace's create defaults stamp it onto every create),
+    # but it runs on no account, so a sign-in never bounces it.
+    seed_agent_state(
+        manager, f"agent-{uuid4().hex}", name="Room-Chat", harness=HarnessType.ROOM, labels={"account": account}
+    )
     try:
         assert manager.restart_agents_on_account(account) == 3
         assert sorted(argv_log.read_text().splitlines()) == [
@@ -8108,6 +8113,29 @@ def test_the_sweep_callback_maps_the_agent_name_to_its_id_and_marks_the_compacti
 
 
 # Rooms (the multiplayer spec, section 7.3): a chat whose agent is the room's reader.
+
+
+def test_a_rooms_snapshot_names_no_account_whatever_its_labels_say(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """The workspace's create defaults stamp the default account's label onto every create, a room's included;
+    the snapshot never surfaces it, so a room's page reads "Chat room" rather than the account's provider."""
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
+    try:
+        seed_agent_state(
+            manager,
+            f"agent-{uuid4().hex}",
+            name="Attic",
+            harness=HarnessType.ROOM,
+            labels={"account": f"acct-{uuid4().hex}"},
+        )
+        manager.note_agent_list_known()
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.kind is ChatKind.ROOM
+        assert snapshot.active_agent.account_id is None
+    finally:
+        manager.stop()
 
 
 def test_a_rooms_create_argv_names_the_room_type_starts_it_on_boot_and_stacks_no_role_template() -> None:

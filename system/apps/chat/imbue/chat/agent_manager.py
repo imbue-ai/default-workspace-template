@@ -948,7 +948,11 @@ def chat_snapshot_for_active_agent(
             agent_id=agent.id,
             name=agent.name,
             harness=agent.harness,
-            account_id=agent.labels.get("account"),
+            # A room runs on no account by definition (the multiplayer spec, section 7.3), whatever its
+            # labels say: the workspace's create defaults (``.mngr/settings.local.toml``) stamp the
+            # default account's label onto every create, a room's included, and surfacing it would
+            # dress the room as an agent chat on that account (its chip would read the provider).
+            account_id=None if agent.harness is HarnessType.ROOM else agent.labels.get("account"),
             state=agent.state,
             activity_state=agent.activity_state,
             # The manager keeps a cause until the compaction's event arrives, which can be after
@@ -2096,6 +2100,10 @@ class AgentManager:
                 for agent in self._agents.values()
                 if agent.labels.get("account") == account_id
                 and agent.labels.get("is_primary") != "true"
+                # A room runs on no account whatever its labels say: the workspace's create defaults
+                # (``.mngr/settings.local.toml``) stamp the default account's label onto every create,
+                # a room's included, and a sign-in must not bounce the rooms.
+                and agent.harness is not HarnessType.ROOM
                 and not self._is_archived_member_locked(agent.id)
                 and not is_lifecycle_dead(agent.state)
             ]
