@@ -859,6 +859,30 @@ class BrowserFleet(MutableModel):
         """Checkpoint the tabs while Chromium can still be asked (spec section 9.3)."""
         self.checkpoint()
 
+    def load_saved(self) -> None:
+        """Register the saved browsers as stopped at service start, before any stack runs, so a launch that arrives
+        while the stack is still down starts the saved browser instead of minting a fresh name beside it -- whose
+        first checkpoint would drop the saved entry from the manifest, and the next ``restore`` then sweep the saved
+        profile (its logins with it). What relaunches when the stack comes up stays ``restore``'s decision."""
+        saved = self.manifest_store.read()
+        with self._lock:
+            if saved is not None:
+                for entry in sorted(saved.browsers, key=lambda e: e.id):
+                    if str(entry.id) in self._browsers:
+                        continue
+                    browser = self._register_locked(entry.id)
+                    browser.lifecycle = BrowserLifecycle.STOPPED
+                    browser.last_known_tabs = list(entry.tabs)
+                    browser.last_known_active_tab = entry.active_tab
+                    browser.is_stopped_by_user = entry.stopped
+            else:
+                for name in self.scan_profile_names():
+                    if name not in self._browsers:
+                        browser = self._register_locked(BrowserName(name))
+                        browser.lifecycle = BrowserLifecycle.STOPPED
+                        browser.is_stopped_by_user = True
+        self.on_changed()
+
     def restore(self) -> None:
         """Bring the saved browsers back: the ones the user had running relaunch one at a time on their tabs, the
         ones the user stopped come back stopped with their tabs, and with no manifest the profiles on disk come

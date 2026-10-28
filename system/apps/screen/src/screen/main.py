@@ -104,6 +104,7 @@ def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) 
         on_browser_running=service.on_browser_running,
     )
     service.attach_fleet(fleet, band_sweeper)
+    fleet.load_saved()
     stack = ScreenStack(
         supervisor=supervisor,
         neko=neko,
