@@ -137,10 +137,13 @@ def browser_type_launch_args(pytestconfig: pytest.Config) -> dict[str, Any]:
         # The workspace's test headless shell, else Fortress (see
         # ``pick_e2e_browser_executable``); Playwright's own cache is empty here. An
         # explicit ``--browser-channel`` wins because Playwright rejects a launch
-        # that names both ``channel`` and ``executable_path``. With neither
-        # installed (CI hosts that ran `playwright install`), both keys stay unset
-        # so the launch falls through to Playwright's managed-browser lookup.
+        # that names both ``channel`` and ``executable_path``.
         launch_options["executable_path"] = str(executable)
+    else:
+        # No channel requested and neither browser installed (e.g. CI hosts that
+        # ran `playwright install`): leave both keys unset so the launch falls
+        # through to Playwright's managed-browser lookup.
+        pass
     slowmo = pytestconfig.getoption("--slowmo", default=0)
     if slowmo:
         launch_options["slow_mo"] = slowmo
