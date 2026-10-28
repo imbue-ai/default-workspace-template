@@ -31,12 +31,10 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import NoReturn
-from typing import Sequence
+from typing import NoReturn, Sequence
 
 from imbue.chat import accounts
-from imbue.chat.agent_discovery import agent_state_dir
-from imbue.chat.agent_discovery import get_host_dir
+from imbue.chat.agent_discovery import agent_state_dir, get_host_dir
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.mngr.primitives import AgentId
@@ -84,7 +82,9 @@ def _resolve_account(account_id: str, harness_name: str) -> accounts.Account:
         account = next((a for a in index.accounts if a.id == account_id), None)
         if account is None:
             known = ", ".join(a.id for a in index.accounts) or "(none)"
-            _fail(f"no provider account with id {account_id!r}; signed-in accounts: {known}")
+            _fail(
+                f"no provider account with id {account_id!r}; signed-in accounts: {known}"
+            )
         account_harness = accounts.harness_for(account)
         if account_harness is None:
             _fail(f"account {account_id!r} is on a lane this build does not support")
@@ -96,9 +96,13 @@ def _resolve_account(account_id: str, harness_name: str) -> accounts.Account:
         return account
     if harness_name:
         harness = HarnessType(harness_name)
-        candidates = tuple(a for a in index.accounts if accounts.harness_for(a) == harness)
+        candidates = tuple(
+            a for a in index.accounts if accounts.harness_for(a) == harness
+        )
         if not candidates:
-            _fail(f"no signed-in account runs on harness {harness_name!r}; sign one in from a chat first")
+            _fail(
+                f"no signed-in account runs on harness {harness_name!r}; sign one in from a chat first"
+            )
         filtered = accounts.AccountIndex(
             version=index.version,
             accounts=candidates,
@@ -106,11 +110,15 @@ def _resolve_account(account_id: str, harness_name: str) -> accounts.Account:
             default_account=index.default_account,
         )
         chosen = accounts.choose_default_account(filtered)
-        assert chosen is not None, "choose_default_account returns an account when usable candidates exist"
+        assert chosen is not None, (
+            "choose_default_account returns an account when usable candidates exist"
+        )
         return chosen
     account = accounts.choose_default_account(index)
     if account is None:
-        _fail("No provider account is signed in for this workspace. Sign in from a chat, then try again.")
+        _fail(
+            "No provider account is signed in for this workspace. Sign in from a chat, then try again."
+        )
     return account
 
 
@@ -126,12 +134,16 @@ def _validate_source(path: Path, mode: str, branch: str) -> None:
             text=True,
         )
         if probe.returncode != 0:
-            _fail(f"worktree mode needs a git repository, and {path} is not one; use --mode in-place instead")
+            _fail(
+                f"worktree mode needs a git repository, and {path} is not one; use --mode in-place instead"
+            )
     elif branch:
         # In-place mode never touches the directory's checkout, and mngr ignores --branch
         # outright for --transfer none -- so honoring the request is impossible and
         # dropping it silently would mislead the caller.
-        _fail("--branch only applies to worktree mode; in-place mode runs on whatever is checked out in --path")
+        _fail(
+            "--branch only applies to worktree mode; in-place mode runs on whatever is checked out in --path"
+        )
 
 
 def _list_agent_records(runner: Runner) -> tuple[int, list[dict[str, object]]]:
@@ -160,7 +172,9 @@ def _existing_agent_names(runner: Runner) -> set[str]:
     disable the taken-name guard."""
     returncode, records = _list_agent_records(runner)
     if returncode != 0:
-        _fail(f"`mngr list` failed with exit code {returncode}, so the agent name cannot be checked for conflicts")
+        _fail(
+            f"`mngr list` failed with exit code {returncode}, so the agent name cannot be checked for conflicts"
+        )
     names: set[str] = set()
     for record in records:
         name = record.get("name")
@@ -248,11 +262,15 @@ def launch(
     _require_workspace_root()
     _validate_source(source_path, mode, branch)
     if name in _existing_agent_names(runner):
-        _fail(f"an agent named {name!r} already exists; pick another name or `mngr destroy {name}` first")
+        _fail(
+            f"an agent named {name!r} already exists; pick another name or `mngr destroy {name}` first"
+        )
 
     account = _resolve_account(account_id, harness_name)
     harness = accounts.harness_for(account)
-    assert harness is not None, "_resolve_account only returns accounts on a supported lane"
+    assert harness is not None, (
+        "_resolve_account only returns accounts on a supported lane"
+    )
 
     # Bind the agent to the account the way a chat is bound: claude rides an env
     # var; the other harnesses get a credential link provisioned over the new
@@ -283,7 +301,9 @@ def launch(
         )
 
     work_dir = _created_work_dir(runner, agent_id)
-    print(f"Launched custom agent {name} ({agent_id}) on account {account.id} ({harness}).")
+    print(
+        f"Launched custom agent {name} ({agent_id}) on account {account.id} ({harness})."
+    )
     print(f"  work dir: {work_dir}")
     print(f"  source: {source_path} ({mode})")
     print("The agent appears as a chat in the workspace UI.")
@@ -291,27 +311,54 @@ def launch(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--name", required=True, help="mngr agent name (also the worktree branch suffix)")
-    parser.add_argument("--path", required=True, type=Path, help="absolute path to the user's repo or directory")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument(
+        "--name",
+        required=True,
+        help="mngr agent name (also the worktree branch suffix)",
+    )
+    parser.add_argument(
+        "--path",
+        required=True,
+        type=Path,
+        help="absolute path to the user's repo or directory",
+    )
     parser.add_argument(
         "--mode",
         required=True,
         choices=("worktree", "in-place"),
         help="worktree: own git worktree of --path; in-place: run directly in --path",
     )
-    parser.add_argument("--account", default="", help="provider account id (default: the workspace default)")
+    parser.add_argument(
+        "--account",
+        default="",
+        help="provider account id (default: the workspace default)",
+    )
     parser.add_argument(
         "--harness",
         default="",
         choices=("", *(str(h) for h in _LAUNCHABLE_HARNESSES)),
         help="harness to run on (default: the chosen account's harness)",
     )
-    parser.add_argument("--branch", default="", help="mngr create --branch spec, e.g. 'main' or 'main:feature-x'")
-    parser.add_argument("--display-name", default="", help="name shown in the chat list (default: --name)")
+    parser.add_argument(
+        "--branch",
+        default="",
+        help="mngr create --branch spec, e.g. 'main' or 'main:feature-x'",
+    )
+    parser.add_argument(
+        "--display-name",
+        default="",
+        help="name shown in the chat list (default: --name)",
+    )
     message_group = parser.add_mutually_exclusive_group()
-    message_group.add_argument("--message", default="", help="first message to send the agent")
-    message_group.add_argument("--message-file", type=Path, help="file whose contents become the first message")
+    message_group.add_argument(
+        "--message", default="", help="first message to send the agent"
+    )
+    message_group.add_argument(
+        "--message-file", type=Path, help="file whose contents become the first message"
+    )
     options = parser.parse_args(argv)
 
     message = options.message

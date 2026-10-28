@@ -12,11 +12,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import subprocess
-from dataclasses import dataclass
-from dataclasses import field
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
-from typing import Sequence
+from typing import Any, Sequence
 
 import pytest
 from imbue.chat import accounts
@@ -61,7 +59,9 @@ class _RecordingRunner:
         if list(argv[:2]) == ["mngr", "list"]:
             return _StubResult(
                 returncode=self.listing_returncode,
-                stdout="".join(json.dumps(record) + "\n" for record in self.listing_records),
+                stdout="".join(
+                    json.dumps(record) + "\n" for record in self.listing_records
+                ),
             )
         return _StubResult()
 
@@ -79,7 +79,9 @@ def _write_account_index(accounts_root: Path, index: accounts.AccountIndex) -> N
 
 
 def _account(account_id: str, harness: HarnessType) -> accounts.Account:
-    return accounts.Account(id=account_id, lane=_lane_id_for(harness), seq=1, display=str(harness))
+    return accounts.Account(
+        id=account_id, lane=_lane_id_for(harness), seq=1, display=str(harness)
+    )
 
 
 @pytest.fixture
@@ -92,7 +94,8 @@ def workspace_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("MINDS_ACCOUNTS_ROOT", str(accounts_root))
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path / "host"))
     _write_account_index(
-        accounts_root, accounts.AccountIndex(accounts=(_account("acct-claude", HarnessType.CLAUDE),))
+        accounts_root,
+        accounts.AccountIndex(accounts=(_account("acct-claude", HarnessType.CLAUDE),)),
     )
     return tmp_path
 
@@ -104,7 +107,12 @@ def _git_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def _launch(source_path: Path, mode: str, runner: _RecordingRunner | None = None, **overrides: Any) -> int:
+def _launch(
+    source_path: Path,
+    mode: str,
+    runner: _RecordingRunner | None = None,
+    **overrides: Any,
+) -> int:
     """Call ``launch()`` with innocuous defaults, so each test states only what it varies."""
     kwargs: dict[str, Any] = {
         "name": "my-task",
@@ -123,11 +131,23 @@ def _launch(source_path: Path, mode: str, runner: _RecordingRunner | None = None
     )
 
 
-def test_launch_builds_a_valid_mngr_create_for_worktree_mode(workspace_root: Path) -> None:
+def test_launch_builds_a_valid_mngr_create_for_worktree_mode(
+    workspace_root: Path,
+) -> None:
     repo = _git_repo(workspace_root)
     runner = _RecordingRunner()
 
-    assert _launch(repo, "worktree", runner, branch="main", display_name="My task", message="do the thing") == 0
+    assert (
+        _launch(
+            repo,
+            "worktree",
+            runner,
+            branch="main",
+            display_name="My task",
+            message="do the thing",
+        )
+        == 0
+    )
 
     (create,) = runner.create_calls()
     assert_mngr_argv_valid(create.argv)
@@ -142,12 +162,16 @@ def test_launch_builds_a_valid_mngr_create_for_worktree_mode(workspace_root: Pat
     assert f"custom_source={repo}" in create.argv
     assert "account=acct-claude" in create.argv
     # Claude binds by the account env var riding the create.
-    env_flag_values = [create.argv[idx + 1] for idx, arg in enumerate(create.argv) if arg == "--env"]
+    env_flag_values = [
+        create.argv[idx + 1] for idx, arg in enumerate(create.argv) if arg == "--env"
+    ]
     assert any(value.startswith("CLAUDE_CONFIG_DIR=") for value in env_flag_values)
     assert create.argv[create.argv.index("--branch") + 1] == "main"
     assert create.argv[create.argv.index("--message") + 1] == "do the thing"
     # The custom template's aggregate replacements need the narrowing guard relaxed.
-    assert create.kwargs["env"]["MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING"] == "true"
+    assert (
+        create.kwargs["env"]["MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING"] == "true"
+    )
 
 
 def test_the_narrowing_env_var_is_accepted_by_mngrs_env_override_layer() -> None:
@@ -218,7 +242,9 @@ def test_a_taken_agent_name_is_refused_before_the_create(workspace_root: Path) -
     assert runner.create_calls() == []
 
 
-def test_an_explicit_harness_picks_an_account_on_that_harness(workspace_root: Path) -> None:
+def test_an_explicit_harness_picks_an_account_on_that_harness(
+    workspace_root: Path,
+) -> None:
     accounts_root = workspace_root / "accounts"
     _write_account_index(
         accounts_root,
@@ -242,7 +268,9 @@ def test_an_explicit_harness_picks_an_account_on_that_harness(workspace_root: Pa
     assert "--extra-provision-command" in create.argv
 
 
-def test_a_conflicting_account_and_harness_pair_is_refused(workspace_root: Path) -> None:
+def test_a_conflicting_account_and_harness_pair_is_refused(
+    workspace_root: Path,
+) -> None:
     repo = _git_repo(workspace_root)
 
     with pytest.raises(SystemExit):
@@ -257,7 +285,11 @@ def test_an_account_on_an_unknown_lane_is_reported_as_unsupported(
     misleading 'conflicting pair' message."""
     _write_account_index(
         workspace_root / "accounts",
-        accounts.AccountIndex(accounts=(accounts.Account(id="acct-old", lane="gone-lane", seq=1, display="Old"),)),
+        accounts.AccountIndex(
+            accounts=(
+                accounts.Account(id="acct-old", lane="gone-lane", seq=1, display="Old"),
+            )
+        ),
     )
     repo = _git_repo(workspace_root)
 
