@@ -783,9 +783,11 @@ describe("the auth-error note's switch link", () => {
       const bubblesBefore = getOutgoingMessages("chat-1").length;
 
       findButton(children, "Send your message again")!.attrs.onclick();
-      expect(getOutgoingMessages("chat-1").slice(bubblesBefore).map((bubble) => bubble.content)).toEqual([
-        "Summarize the deploy thread",
-      ]);
+      expect(
+        getOutgoingMessages("chat-1")
+          .slice(bubblesBefore)
+          .map((bubble) => bubble.content),
+      ).toEqual(["Summarize the deploy thread"]);
       await Promise.resolve();
       expect(transcript.sendMessage).toHaveBeenCalledExactlyOnceWith(
         "chat-1",

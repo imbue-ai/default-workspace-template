@@ -11,7 +11,13 @@ import { getChatById } from "../models/Chats";
 import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
-import { isResendingAfterSignIn, isSignedInSince, messagesToSendAgain, resendStateOf, sendAgain } from "./auth-recovery";
+import {
+  isResendingAfterSignIn,
+  isSignedInSince,
+  messagesToSendAgain,
+  resendStateOf,
+  sendAgain,
+} from "./auth-recovery";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { getExpansionVersion, isBlockExpanded, setBlockExpanded } from "./expansion-state";
@@ -465,18 +471,18 @@ function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text:
       : isResendingAfterSignIn(chatId)
         ? " Sending your message again\u2026"
         : [
-          state === "failed" ? " That didn't send. " : " ",
-          m(
-            "button",
-            {
-              type: "button",
-              class: REAUTH_ACTION_CLASS,
-              disabled: state === "sending",
-              onclick: () => void sendAgain(chatId, event.event_id, prompts),
-            },
-            state === "failed" ? "Try again" : "Send your message again",
-          ),
-        ];
+            state === "failed" ? " That didn't send. " : " ",
+            m(
+              "button",
+              {
+                type: "button",
+                class: REAUTH_ACTION_CLASS,
+                disabled: state === "sending",
+                onclick: () => void sendAgain(chatId, event.event_id, prompts),
+              },
+              state === "failed" ? "Try again" : "Send your message again",
+            ),
+          ];
   return m("div", { class: "message-auth-recovered rounded-md bg-fill-hover px-[0.75em] py-[0.5em] text-secondary" }, [
     m("p", { class: "message-auth-recovered-lead" }, ["Signed in again.", action]),
     m("details", { class: "message-auth-recovered-details mt-[0.4em] text-[0.85em] text-faint" }, [
