@@ -210,8 +210,8 @@ export async function loadAccountsWithRetry(): Promise<void> {
   }
 }
 
-/** Enough attempts to outlast the desktop app remaking its connection to the workspace (about
- *  fifteen seconds of backoff in all), so that only a failure that persists reaches the user. */
+/** Enough attempts to outlast the desktop app remaking its connection to the workspace, so that
+ *  only a failure that persists reaches the user. */
 const LANES_AND_ACCOUNTS_ATTEMPTS = 5;
 
 /** No answer at all, or the server's own failure: what the desktop app answers while its
