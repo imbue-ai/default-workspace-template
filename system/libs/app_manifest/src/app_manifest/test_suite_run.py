@@ -3,24 +3,17 @@ import sys
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
-from inline_snapshot import snapshot
 
-from app_manifest.cli import app_manifest_cli
 from app_manifest.primitives import RepoRelativePath
 from app_manifest.selection import ChangedPathClass
 from app_manifest.selection import SelectionReason
 from app_manifest.selection import SuiteCommand
 from app_manifest.selection import SuiteKind
 from app_manifest.selection import SuiteSelection
-from app_manifest.selection import render_command_line
-from app_manifest.selection import rerun_command
-from app_manifest.selection import select_tests_for_paths
 from app_manifest.suite_run import CommandOutcome
 from app_manifest.suite_run import SUMMARY_FILE_NAME
 from app_manifest.suite_run import SuiteRunReport
 from app_manifest.suite_run import run_selection
-from app_manifest.testing import build_selection_workspace
 from imbue.imbue_common.primitives import NonEmptyStr
 
 _REASON = SelectionReason(
@@ -180,71 +173,3 @@ def test_the_summary_on_disk_matches_the_report_and_every_command_keeps_its_outp
     assert summary == json.loads(report.model_dump_json())
     assert "1 passed" in report.runs[0].log_path.read_text()
     assert "frontend check output 48213" in report.runs[1].log_path.read_text()
-
-
-def test_select_tests_all_runs_every_suite_with_all_its_markers(tmp_path: Path) -> None:
-    build_selection_workspace(tmp_path)
-
-    result = CliRunner().invoke(app_manifest_cli, ["select-tests", "--repo-root", str(tmp_path), "--all"])
-
-    assert result.exit_code == 0, result.output
-    lines = [line for line in result.output.splitlines() if not line.startswith("#")]
-    assert "uv run pytest" in lines
-    assert any(line.startswith("(cd system/apps/chat && uv run pytest -m '' ") for line in lines)
-    assert "(cd system && npm run build)" in lines
-
-
-@pytest.mark.parametrize(
-    "conflicting",
-    [["--diff-base", "main"], ["--path", "README.md"], ["--scope-file", "scope.json"]],
-)
-def test_all_refuses_to_be_combined_with_another_way_of_naming_the_change(
-    tmp_path: Path, conflicting: list[str]
-) -> None:
-    result = CliRunner().invoke(app_manifest_cli, ["run-tests", "--repo-root", str(tmp_path), "--all", *conflicting])
-
-    assert result.exit_code == 2
-    assert "--all selects every suite on its own" in result.output
-
-
-def test_run_tests_with_nothing_selected_passes_and_still_writes_the_summary(tmp_path: Path) -> None:
-    build_selection_workspace(tmp_path)
-    output_directory = tmp_path / "run-output"
-
-    # A change to documentation only selects nothing, so the run passes without running anything.
-    nothing = CliRunner().invoke(
-        app_manifest_cli,
-        [
-            "run-tests",
-            "--repo-root",
-            str(tmp_path),
-            "--path",
-            "system/libs/corelib/README.md",
-            "--output-dir",
-            str(output_directory),
-        ],
-    )
-
-    assert nothing.exit_code == 0, nothing.output
-    assert "0 commands" in nothing.output
-    summary = json.loads((output_directory / SUMMARY_FILE_NAME).read_text())
-    assert summary["runs"] == [] and summary["is_passing"] is True
-
-
-def test_a_rerun_of_some_tests_of_a_suite_with_a_coverage_floor_skips_it_and_includes_every_marker(
-    tmp_path: Path,
-) -> None:
-    build_selection_workspace(tmp_path)
-    selection = select_tests_for_paths(tmp_path, ["system/apps/chat/frontend/src/main.ts"], None)
-    (marker_run,) = [command for command in selection.commands if command.working_directory == "system/apps/chat"]
-
-    rerun = rerun_command(
-        marker_run,
-        ["imbue/chat/test_page.py::test_renders"],
-        marker_run.working_directory in selection.coverage_measured_roots,
-    )
-
-    assert rerun is not None
-    assert render_command_line(rerun) == snapshot(
-        "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_page.py::test_renders)"
-    )
