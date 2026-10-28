@@ -282,7 +282,7 @@ def run_selection(
     on_command_started: Callable[[int, SuiteCommand], None],
 ) -> SuiteRunReport:
     """Run every command of ``selection`` in order from ``repo_root``, keeping each one's output
-    under ``output_directory`` and rewriting the summary there after each command."""
+    under ``output_directory`` and writing the summary there before the first and after each."""
     output_directory.mkdir(parents=True, exist_ok=True)
     notes = (
         selection.notes
@@ -292,23 +292,21 @@ def run_selection(
             f"no shed ledger at {shed_ledger_path}, so a command the memory guard killed reads as failed",
         )
     )
-    runs: list[CommandRun] = []
+    report = SuiteRunReport(runs=(), notes=notes)
+    write_report(report, output_directory)
     for index, command in enumerate(selection.commands, start=1):
         on_command_started(index, command)
         stem = f"{index:02d}-{command.kind}"
-        runs.append(
-            _run_command(
-                command,
-                repo_root,
-                output_directory / f"{stem}.log",
-                output_directory / f"{stem}-rerun.log",
-                shed_ledger_path,
-                command.working_directory in selection.coverage_measured_roots,
-            )
+        run = _run_command(
+            command,
+            repo_root,
+            output_directory / f"{stem}.log",
+            output_directory / f"{stem}-rerun.log",
+            shed_ledger_path,
+            command.working_directory in selection.coverage_measured_roots,
         )
-        write_report(SuiteRunReport(runs=tuple(runs), notes=notes), output_directory)
-    report = SuiteRunReport(runs=tuple(runs), notes=notes)
-    write_report(report, output_directory)
+        report = SuiteRunReport(runs=(*report.runs, run), notes=notes)
+        write_report(report, output_directory)
     return report
 
 
