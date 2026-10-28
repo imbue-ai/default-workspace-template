@@ -81,6 +81,20 @@ describe("computeAuthErrorHiddenEventIds", () => {
     );
   });
 
+  it("hides a refused prompt of machine context alone once the chat app has sent it again", () => {
+    const contextOnly = (eventId: string, timestamp: string): UserMessageEvent => ({
+      ...typed(eventId, "<context>task finished</context>", timestamp),
+      display: "prompt_with_context",
+      display_body: "",
+    });
+    const reports = contextOnly("reports", ASKED.timestamp);
+
+    expect(computeAuthErrorHiddenEventIds([reports, REFUSED])).toEqual(new Set());
+    expect(computeAuthErrorHiddenEventIds([reports, REFUSED, contextOnly("resent", COPY.timestamp)])).toEqual(
+      new Set(["reports", "refused"]),
+    );
+  });
+
   it("counts copies the agent answered one by one, and none after the user's own message", () => {
     const second = typed("second", "and 3+3?", "2026-10-28T00:39:55.600Z");
     const other = typed("other", "never mind", "2026-10-28T00:40:20.000Z");

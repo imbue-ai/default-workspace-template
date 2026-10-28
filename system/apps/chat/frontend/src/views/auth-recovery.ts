@@ -136,8 +136,14 @@ function copiesSentSince(sentSince: readonly UserMessageEvent[], turn: RefusedTu
 export function computeAuthErrorHiddenEventIds(events: readonly TranscriptEvent[]): Set<string> {
   const hidden = new Set<string>();
   for (const turn of refusedTurns(events)) {
-    const copiedWords = new Set(copiesSentSince(userTurnsSentSince(events, turn), turn).map(wordsOf));
-    const copied = turn.prompts.filter((prompt) => wordsOf(prompt) !== "" && copiedWords.has(wordsOf(prompt)));
+    const copies = copiesSentSince(userTurnsSentSince(events, turn), turn);
+    const copiedWords = new Set(copies.map(wordsOf));
+    const copiedContents = new Set(copies.map((copy) => copy.content));
+    // A prompt with no words of the user's (machine context alone) is never offered, but the chat app
+    // sends it again as it was, so it is matched on what was sent.
+    const copied = turn.prompts.filter((prompt) =>
+      wordsOf(prompt) === "" ? copiedContents.has(prompt.content) : copiedWords.has(wordsOf(prompt)),
+    );
     for (const prompt of copied) hidden.add(prompt.event_id);
     if (copied.length === turn.prompts.length) {
       for (const failure of turn.failures) hidden.add(failure.event_id);
