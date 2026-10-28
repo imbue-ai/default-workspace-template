@@ -2087,11 +2087,20 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
 ) -> None:
     """A pinned app's window is on the home desktop from the first read and on a desktop created later; its
     taskbar entry is there with nothing open, a click restores the window at the pinned frame, another
-    minimizes it; the window's close control and both menus' Close minimize it rather than closing it, as does the
-    close chord, and an agent's close is refused."""
+    minimizes it; the window's close control, both menus' Close, and the close chord close it for this client
+    alone (minimized, the entry out of this client's bar until a show lists it back), and an agent's close is
+    refused."""
     with _running_e2e_server(tmp_path, pin=("plain", "linked", "bar")) as server:
         _land(page, server)
+        client_id = _client_id(page)
         pinned = _pinned_window(server.base_url)
+
+        def _reopen_pinned_from_launcher() -> None:
+            """The user's way back to a pinned window whose entry a close hid: the launcher's window row."""
+            menu = _open_launcher(page)
+            page.locator("[data-launcher-field] textarea").fill(_PINNED_APP_NAME)
+            menu.locator(f'[data-launcher-window="{pinned["id"]}"]').click()
+
         assert pinned["path"] == _PINNED_HOME_PATH
         assert pinned["scope"] == "linked"
         entry = _taskbar_entry(page, pinned["id"])
@@ -2113,33 +2122,44 @@ def test_a_pinned_app_has_one_window_on_every_desktop_whose_entry_restores_minim
         _assert_close(shown["height"], 0.9 * backdrop["height"], "pinned frame height")
         expect(window.locator('[data-window-control="minimize"]')).to_be_visible()
         assert _page_frame(page, pinned["id"]).url == f"{server.pinned_url}{_PINNED_HOME_PATH}"
-        # The close control stays, out of habit's way: on a pinned window it minimizes.
+        # The close control stays, out of habit's way: on a pinned window it closes for this client alone --
+        # the window is minimized (never closed for everyone) and its entry leaves this client's bar.
         window.locator('[data-window-control="close"]').click()
         expect(_shown_windows(page)).to_have_count(0)
+        expect(_taskbar_entry(page, pinned["id"])).to_have_count(0)
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
-        entry.click()
+        _wait_for_client_entry(
+            server.base_url,
+            client_id,
+            lambda entry: entry.get("is_window_shown") is False,
+            "the close never reached the client record",
+        )
+        # Reopening from the launcher's window row lists the entry back; the two menus' Close put it away again.
+        _reopen_pinned_from_launcher()
         expect(window).to_be_visible(timeout=15000)
+        expect(entry).to_be_visible(timeout=15000)
         window.locator('[data-window-control="menu"]').click()
         expect(page.locator(".window-menu")).to_be_visible(timeout=5000)
         page.locator('.window-menu [data-menu-row="close"]').click()
         expect(_shown_windows(page)).to_have_count(0)
-        entry.click()
-        expect(window).to_be_visible(timeout=15000)
+        expect(_taskbar_entry(page, pinned["id"])).to_have_count(0)
+        _reopen_pinned_from_launcher()
+        expect(entry).to_be_visible(timeout=15000)
         _open_entry_menu(page, entry).locator('[data-menu-row="close"]').click()
         expect(_shown_windows(page)).to_have_count(0)
+        expect(_taskbar_entry(page, pinned["id"])).to_have_count(0)
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
-        entry.click()
+        _reopen_pinned_from_launcher()
         expect(window).to_be_visible(timeout=15000)
 
-        # The close chord minimizes the pinned window rather than closing it; the entry click brings it back.
+        # The close chord closes the pinned window for this client too; the launcher brings it back.
         page.evaluate("() => window.postMessage({ type: 'minds:close-active-tab' }, '*')")
-        expect(entry).to_have_attribute("data-minimized", "true", timeout=15000)
+        expect(_taskbar_entry(page, pinned["id"])).to_have_count(0, timeout=15000)
         _assert_no_further_window(page, server, [pinned["id"]])
-        entry.click()
+        _reopen_pinned_from_launcher()
         expect(window).to_be_visible(timeout=15000)
 
         # An agent's close is refused with the fix, and the window stays.
-        client_id = _client_id(page)
         payload = json.dumps(
             {"op": "close", "args": {"window": pinned["id"], "client": client_id}, "requester": None}
         ).encode()
