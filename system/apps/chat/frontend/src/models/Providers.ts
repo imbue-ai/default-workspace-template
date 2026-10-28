@@ -210,6 +210,38 @@ export async function loadAccountsWithRetry(): Promise<void> {
   }
 }
 
+/** Enough attempts to outlast the desktop app remaking its connection to the workspace (about
+ *  fifteen seconds of backoff in all), so that only a failure that persists reaches the user. */
+const LANES_AND_ACCOUNTS_ATTEMPTS = 5;
+
+/** No answer at all, or the server's own failure: what the desktop app answers while its
+ *  connection to the workspace is down. Any other status is the backend's answer, and asking
+ *  again would only get it again. */
+function isTransientRequestFailure(error: unknown): boolean {
+  const code = (error as { code?: number }).code;
+  return code === 0 || (code !== undefined && code >= 500);
+}
+
+/** Load the lanes and the accounts the chooser lists, asking again after a transient failure.
+ *
+ * The chooser opens the moment a fresh workspace's welcome chat finds no account, which is also
+ * when the desktop app's connection to the workspace is youngest. Rejects with the last failure
+ * once the attempts run out, or at once on a failure that is not transient.
+ */
+export async function loadLanesAndAccountsWithRetry(): Promise<void> {
+  const backoff = new ReconnectBackoff();
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await loadLanes();
+      await loadAccounts();
+      return;
+    } catch (error) {
+      if (attempt >= LANES_AND_ACCOUNTS_ATTEMPTS || !isTransientRequestFailure(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, backoff.nextDelay()));
+    }
+  }
+}
+
 /** Name an account, or pass "" to go back to the provider's own name.
  *
  * Display only: nothing keys off the name, so this cannot strand a chat. */
