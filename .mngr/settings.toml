@@ -1823,7 +1823,7 @@ Environment facts:
 - Model access is billed through the user's signed-in provider account; never read or modify ~/.minds/accounts/ or /home/user/workspace/data/.secrets/.
 - /tmp is a ~1GiB RAM disk; put anything large under /var/tmp. The container may run under gVisor (no strace/gdb attach, no docker-in-docker, slow file-metadata operations).
 - A background OOM daemon sheds memory-heavy processes. If a command dies with exit 137 that you did not kill, check /home/user/workspace/data/.state/oom_priority/events/shed.jsonl before re-running it, and prefer a lower-memory approach.
-- The whole home tree is backed up; commits in your repo stay local unless the user sets up a push remote.
+- The whole home tree is backed up. Commits in your repo normally stay local -- but if the workspace's GitHub sync is on (`git config --global core.hooksPath` is set), a post-commit hook auto-pushes the current branch of every checkout, yours included, to its own `origin`. Check for that before committing when an auto-push would surprise the user.
 
 Launching more agents:
 
