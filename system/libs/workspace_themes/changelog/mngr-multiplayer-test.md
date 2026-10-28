@@ -1,0 +1,1 @@
+The standard title bar (the chrome a theme without a `[chrome]` table wears) becomes the multiplayer spec's section 9.1 arrangement: the window menu and Refresh lead, the app icon and title sit centred over the bar, and minimize, maximize, and close end at the right edge. Themes that declare their own `[chrome]` are unchanged.
