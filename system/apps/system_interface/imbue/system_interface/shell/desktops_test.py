@@ -308,14 +308,14 @@ def test_a_file_of_another_version_or_shape_is_treated_as_absent(tmp_path: Path)
 def test_a_desktop_made_again_never_wears_a_theme_its_id_left_behind(tmp_path: Path) -> None:
     store = DesktopStore(state_directory=tmp_path)
     store.ensure_default(lambda: ())
-    store.create_desktop("Research", "#12B5A5", 4, (), ())
+    store.create_desktop("Research", "#12B5A5", 4, (), (), None)
     store.set_default_theme(ThemeId("mac-classic"))
     store.set_theme("home", ThemeId("windows-2000"))
     store.set_theme("research", ThemeId("windows-2000"))
     # A shell from before themes deletes the desktop without knowing desktop_themes.json.
     write_desktops_file(tmp_path, *(desktop for desktop in store.list_desktops() if desktop.id != "research"))
 
-    store.create_desktop("Research", "#12B5A5", 4, (), ())
+    store.create_desktop("Research", "#12B5A5", 4, (), (), None)
     assert store.read_theme_choices() == ThemeChoices(
         default=ThemeId("mac-classic"), theme_by_desktop_id={DesktopId("home"): ThemeId("windows-2000")}
     )

@@ -4399,7 +4399,10 @@ def test_a_visitors_send_to_a_converging_chat_is_held_prefixed_and_listed_withou
     assert record is not None and record.handoff is not None
     assert [held_send.text for held_send in record.handoff.held_sends] == ["Carry on in Codex", "[from: bob] and this"]
     listed = client.get("/api/chats").get_json()["chats"]
-    assert listed[0]["handoff"]["held_sends"] == [
+    assert [
+        {"message_id": held_send["message_id"], "text": held_send["text"]}
+        for held_send in listed[0]["handoff"]["held_sends"]
+    ] == [
         {"message_id": "trigger-1", "text": "Carry on in Codex"},
         {"message_id": "m-2", "text": "and this"},
     ]

@@ -36,6 +36,7 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FAST_ROLE_TEMPLATE
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import FirstMessage
+from imbue.chat.primitives import ChatKind
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
@@ -2386,7 +2387,7 @@ def test_run_creation_delivers_the_sends_held_while_it_ran_in_order_after_its_fi
         tmp_path,
         {},
         HarnessType.CLAUDE,
-        deferred_message="the first message",
+        first_message=FirstMessage(text="the first message", message_id="m-0"),
     )
 
     assert [text for text, _message_id in delivered] == ["the first message", "one", "two"]
@@ -2427,6 +2428,7 @@ class _RecordingSwitchAgentManager(AgentManager):
         message_id: str,
         origin: HeldSendOrigin,
         model_pick: ModelPick | None = None,
+        kind: ChatKind = ChatKind.AGENT,
     ) -> tuple[TransitionKind, HandoffPhase, str]:
         self.switches.append((str(chat_id), account_id, message, model_pick))
         return TransitionKind.HANDOFF, HandoffPhase.SUMMARIZING, ""
