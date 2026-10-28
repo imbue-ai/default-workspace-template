@@ -892,9 +892,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               // appended once the room is up.
               await launchChat(chatId, "", finalText, "room");
             } else if (awaiting.is_seeded) {
-              await launchChat(chatId, choice.id, finalText);
+              await launchChat(chatId, choice.id, finalText, "agent");
             } else {
-              await launchChat(chatId, choice.id);
+              await launchChat(chatId, choice.id, "", "agent");
               await sendMessage(chatId, finalText, messageId);
               refocusAfterSend();
               return;
@@ -1549,7 +1549,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             const awaiting = getProvisionalChat(awaitingChatId);
             if (awaiting?.phase !== "awaiting_first_send" || getChatById(awaitingChatId) !== undefined) return;
             if (isLaunchInFlight(awaitingChatId)) return;
-            launchChat(awaitingChatId, accountId).catch((error: unknown) => {
+            launchChat(awaitingChatId, accountId, "", "agent").catch((error: unknown) => {
               console.error(
                 `The chat ${awaitingChatId} could not be started on sign-in: ${describeRequestError(error)}`,
               );

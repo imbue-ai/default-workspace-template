@@ -72,7 +72,7 @@ describe("SendPicker", () => {
     expect(picker.querySelector('[data-send-target="agent-2"]')!.getAttribute("aria-selected")).toBe("true");
     expect(
       Array.from(picker.querySelectorAll("[data-send-target]")).map((row) => row.getAttribute("data-highlighted")),
-    ).toEqual(["false", "true"]);
+    ).toEqual(["false", "true", "false"]);
     input.value = "plan";
     input.dispatchEvent(new InputEvent("input", { bubbles: true }));
     m.redraw.sync();

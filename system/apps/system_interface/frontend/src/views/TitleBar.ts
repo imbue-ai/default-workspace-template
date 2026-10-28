@@ -39,8 +39,8 @@ export interface TitleBarAttrs {
   readonly isFocused: boolean;
   readonly isMenuOpen: boolean;
   /** Whether the bar offers "Chat about this app": an app that is not internal, on a machine with an app-chat launch
-   *  path (the multiplayer spec, section 9.1). */
-  readonly hasAppChat: boolean;
+   *  path (the multiplayer spec, section 9.1); absent reads as not offered. */
+  readonly hasAppChat?: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
   readonly sizeMenuTrigger: m.Attributes;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;

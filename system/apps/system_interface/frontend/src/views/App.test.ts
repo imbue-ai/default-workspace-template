@@ -651,23 +651,25 @@ describe("the element menu", () => {
   });
 });
 
-/** Open Desktop settings from the desktops menu. */
-function openDesktopSettings(): void {
-  (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
+/** Open the theme chooser from the backdrop's context menu. */
+function openThemeChooser(): void {
+  (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
+  );
   m.redraw.sync();
-  const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="settings"]') as HTMLElement;
+  const row = document.querySelector('.backdrop-menu [data-menu-row="change-theme"]') as HTMLElement;
   row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
   row.click();
   m.redraw.sync();
 }
 
-describe("the desktop settings' Make your own...", () => {
+describe("the theme chooser's Make your own...", () => {
   it("closes the dialog and drafts the theme prompt into the pinned window's chat", async () => {
     pinnedEntry();
-    openDesktopSettings();
+    openThemeChooser();
     (document.querySelector("[data-make-theme]") as HTMLElement).click();
     m.redraw.sync();
-    expect(document.querySelector("[data-desktop-settings]")).toBeNull();
+    expect(document.querySelector("[data-theme-chooser]")).toBeNull();
     await settle();
     expect(api.calls).toContain(
       `launch:home:buddy:draft:${JSON.stringify({ message: THEME_DESIGN_PROMPT })}:window:win-9`,
@@ -675,14 +677,14 @@ describe("the desktop settings' Make your own...", () => {
   });
 });
 
-describe("the desktop settings' theme row", () => {
+describe("the theme chooser", () => {
   beforeEach(() => {
     api.themeCatalog = themeCatalog(themeRecord("paper"), themeRecord("ink"));
     socket.deliver().onThemesChanged(api.themeCatalog);
   });
 
-  async function saveSettingsWithTheme(theme: string | null, isWorkspaceDefault: boolean): Promise<void> {
-    openDesktopSettings();
+  async function saveTheme(theme: string | null, isWorkspaceDefault: boolean): Promise<void> {
+    openThemeChooser();
     if (theme !== null) {
       (document.querySelector(`[data-theme="${theme}"]`) as HTMLButtonElement).click();
       m.redraw.sync();
@@ -692,20 +694,20 @@ describe("the desktop settings' theme row", () => {
       asDefault.checked = true;
       asDefault.dispatchEvent(new Event("change", { bubbles: true }));
     }
-    (document.querySelector(".desktop-settings-save") as HTMLButtonElement).click();
+    (document.querySelector(".theme-chooser-save") as HTMLButtonElement).click();
     await settle();
   }
 
   const themeCalls = (): string[] => api.calls.filter((call) => /^set(Desktop|Default)Theme/.test(call));
 
   it("saves a desktop's own theme, a workspace default in its place, and nothing when unchanged", async () => {
-    await saveSettingsWithTheme("paper", false);
+    await saveTheme("paper", false);
     expect(themeCalls()).toEqual(["setDesktopTheme:home:paper"]);
 
-    await saveSettingsWithTheme("ink", true);
+    await saveTheme("ink", true);
     expect(themeCalls()).toEqual(["setDesktopTheme:home:paper", "setDefaultTheme:ink", "setDesktopTheme:home:null"]);
 
-    await saveSettingsWithTheme(null, false);
+    await saveTheme(null, false);
     expect(themeCalls()).toHaveLength(3);
   });
 });

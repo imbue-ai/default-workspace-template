@@ -40,36 +40,44 @@ function slotOrder(bar: HTMLElement): string[] {
 }
 
 describe("TitleBar", () => {
-  it("draws the standard slots and marks every part a theme styles", () => {
+  it("draws the standard slots, the icon and title centred, and marks every part a theme styles", () => {
     const bar = render();
 
     expect(bar.getAttribute("data-focused")).toBe("true");
-    expect(slotOrder(bar)).toEqual([
-      "window-icon",
-      "window-title",
-      "refresh",
-      "menu",
-      "minimize",
-      "maximize",
-      "close",
-    ]);
+    expect(slotOrder(bar)).toEqual(["menu", "refresh", "minimize", "maximize", "close"]);
     expect(bar.querySelector('[data-control="close"]')?.getAttribute("data-part")).toBe("window-control");
-    expect(bar.querySelector('[data-part="window-title"]')?.textContent).toBe("Plan");
+    // The icon and title sit together in the centred group, laid over the middle of the bar.
+    const title = bar.querySelector('[data-part="window-title"]') as HTMLElement;
+    expect(title.textContent).toBe("Plan");
+    expect(title.parentElement?.className).toContain("absolute");
+    expect(title.parentElement?.querySelector('[data-part="window-icon"]')).not.toBeNull();
+  });
+
+  it("offers Chat about this app after Refresh when the window's app takes one", () => {
+    const bar = render({ hasAppChat: true });
+
+    expect(slotOrder(bar)).toEqual(["menu", "refresh", "app-chat", "minimize", "maximize", "close"]);
+    expect(bar.querySelector('[data-window-control="app-chat"]')?.getAttribute("aria-label")).toBe(
+      "Chat about this app",
+    );
+    expect(slotOrder(render({ hasAppChat: false }))).toEqual(["menu", "refresh", "minimize", "maximize", "close"]);
   });
 
   it("arranges the controls as the theme's chrome says and centres the title over the bar", () => {
     const bar = render({ chrome: MAC_CHROME });
 
-    expect(slotOrder(bar)).toEqual(["close", "refresh", "menu", "minimize", "maximize", "window-title"]);
-    expect(bar.querySelector('[data-part="window-icon"]')).toBeNull();
-    expect(bar.querySelector('[data-part="window-title"]')?.className).toContain("absolute");
+    expect(slotOrder(bar)).toEqual(["close", "refresh", "menu", "minimize", "maximize"]);
+    // The chrome names no icon slot, so the centred group holds the title alone.
+    const title = bar.querySelector('[data-part="window-title"]') as HTMLElement;
+    expect(title.parentElement?.className).toContain("absolute");
+    expect(title.parentElement?.querySelector('[data-part="window-icon"]')).toBeNull();
   });
 
   it("drops the window's own actions from a background window without leaving a gap, and draws restore when maximized", () => {
     const bar = render({ chrome: MAC_CHROME, isFocused: false, state: "MAXIMIZED" });
 
     expect(bar.getAttribute("data-focused")).toBe("false");
-    expect(slotOrder(bar)).toEqual(["close", "minimize", "restore", "window-title"]);
+    expect(slotOrder(bar)).toEqual(["close", "minimize", "restore"]);
   });
 
   it("gives the first slot drawn in a run no leading margin when the slots before it are not drawn", () => {

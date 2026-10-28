@@ -3032,6 +3032,8 @@ describe("themes", () => {
     await store.setDesktopTheme("home", "ink");
     expect(store.shownTheme().id).toBe("ink");
     expect(store.shownChrome()).toEqual(INK_CHROME);
+  });
+});
 
 describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
   it("keeps the roster and the chats' activity the socket pushes, and redraws for each", async () => {

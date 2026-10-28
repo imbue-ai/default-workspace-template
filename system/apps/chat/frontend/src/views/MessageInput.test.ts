@@ -979,7 +979,7 @@ describe("MessageInput first send of a chat with no seed", () => {
   it("launches the chat with nothing, then sends the message, which the chat holds where Stop can reach it", async () => {
     await typeAndSend(MessageInput(), "agent-1", "Plan my week");
 
-    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", undefined);
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-1", "acct-1", "", "agent");
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessage.mock.calls[0]).toEqual(expect.arrayContaining(["agent-1", "Plan my week"]));
   });
@@ -1722,7 +1722,7 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
 
     // The agent is up before anything is typed; the first send then carries the seeded conversation.
     expect(mocks.launchChat).toHaveBeenCalledTimes(2);
-    expect(mocks.launchChat).toHaveBeenCalledWith("agent-first-7731", "acct-9", undefined);
+    expect(mocks.launchChat).toHaveBeenCalledWith("agent-first-7731", "acct-9", "", "agent");
   });
 
   it("launches nothing on sign-in once the chat is no longer awaiting its first send or is already listed", () => {
@@ -1748,6 +1748,7 @@ describe("MessageInput on a chat awaiting its first send with nothing signed in"
     mocks.isChatRegistered = true;
     intent.onSignedIn("acct-9");
     expect(mocks.launchChat).not.toHaveBeenCalled();
+  });
 
   it("launches the chat as a room, with nothing said yet, when the notice's chooser picks the room row", async () => {
     mocks.launchAwaitingChatAsRoom.mockClear();
