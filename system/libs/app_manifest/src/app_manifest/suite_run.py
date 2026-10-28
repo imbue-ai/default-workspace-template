@@ -183,7 +183,7 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
         process.wait()
 
 
-def read_shed_records(shed_ledger_path: Path, started_at: datetime, finished_at: datetime) -> tuple[ShedRecord, ...]:
+def _read_shed_records(shed_ledger_path: Path, started_at: datetime, finished_at: datetime) -> tuple[ShedRecord, ...]:
     """The memory guard's kills between the two moments."""
     records: list[ShedRecord] = []
     for record in read_records(shed_ledger_path):
@@ -207,12 +207,12 @@ def _await_shed_records(
     """The memory guard's kills while a command ran, waiting a little for the record of a kill
     that ended it."""
     if not is_killed_by_signal:
-        return read_shed_records(shed_ledger_path, started_at, finished_at)
+        return _read_shed_records(shed_ledger_path, started_at, finished_at)
     deadline = finished_at + _SHED_RECORD_GRACE
-    records = read_shed_records(shed_ledger_path, started_at, deadline)
+    records = _read_shed_records(shed_ledger_path, started_at, deadline)
     while not records and datetime.now(timezone.utc) < deadline:
         threading.Event().wait(_SHED_RECORD_POLL_SECONDS)
-        records = read_shed_records(shed_ledger_path, started_at, deadline)
+        records = _read_shed_records(shed_ledger_path, started_at, deadline)
     return records
 
 
@@ -278,7 +278,7 @@ def _classify(
         return CommandOutcome.FAILED, still_failing or failed_test_ids
 
 
-def write_report(report: SuiteRunReport, output_directory: Path) -> Path:
+def _write_report(report: SuiteRunReport, output_directory: Path) -> Path:
     """Replace the summary in one step, so a reader of a run in progress never sees half of it."""
     summary_path = output_directory / SUMMARY_FILE_NAME
     staged_path = summary_path.with_name(f"{SUMMARY_FILE_NAME}.tmp")
@@ -306,7 +306,7 @@ def run_selection(
         )
     )
     report = SuiteRunReport(runs=(), notes=notes)
-    write_report(report, output_directory)
+    _write_report(report, output_directory)
     for index, command in enumerate(selection.commands, start=1):
         on_command_started(index, command)
         stem = f"{index:02d}-{command.kind}"
@@ -319,7 +319,7 @@ def run_selection(
             command.working_directory in selection.coverage_measured_roots,
         )
         report = SuiteRunReport(runs=(*report.runs, run), notes=notes)
-        write_report(report, output_directory)
+        _write_report(report, output_directory)
     return report
 
 

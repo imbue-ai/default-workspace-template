@@ -39,7 +39,7 @@ from app_manifest.suite_run import run_selection
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
 
-RUN_TESTS_OUTPUT_ROOT: Final[str] = "data/.tasks/run-tests"
+_RUN_TESTS_OUTPUT_ROOT: Final[str] = "data/.tasks/run-tests"
 _RUN_DIRECTORY_FORMAT: Final[str] = "%Y%m%dT%H%M%S%fZ"
 
 
@@ -377,7 +377,7 @@ def select_tests(
     type=click.Path(path_type=Path),
     default=None,
     help="Where each command's output and the summary go (default: a new directory under "
-    f"{RUN_TESTS_OUTPUT_ROOT} in the repo root).",
+    f"{_RUN_TESTS_OUTPUT_ROOT} in the repo root).",
 )
 @click.option(
     "--shed-ledger",
@@ -408,7 +408,7 @@ def run_tests(
     resolved_output_directory = (
         output_directory.resolve()
         if output_directory is not None
-        else resolved_repo_root / RUN_TESTS_OUTPUT_ROOT / datetime.now(timezone.utc).strftime(_RUN_DIRECTORY_FORMAT)
+        else resolved_repo_root / _RUN_TESTS_OUTPUT_ROOT / datetime.now(timezone.utc).strftime(_RUN_DIRECTORY_FORMAT)
     )
     click.echo(f"output: {resolved_output_directory}")
     total = len(selection.commands)
