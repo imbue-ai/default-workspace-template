@@ -39,18 +39,10 @@ def test_a_changed_draft_is_sent_once_on_its_chats_stream_and_an_unchanged_one_n
         publisher.publish_once()
 
     assert sent == [
+        ("chat-7", {"type": REPLY_DRAFT_EVENT_TYPE, "agent_id": "agent-9", "after_event_id": "event-1", "text": "Tides are"}),
         (
             "chat-7",
-            {"type": REPLY_DRAFT_EVENT_TYPE, "agent_id": "agent-9", "after_event_id": "event-1", "text": "Tides are"},
-        ),
-        (
-            "chat-7",
-            {
-                "type": REPLY_DRAFT_EVENT_TYPE,
-                "agent_id": "agent-9",
-                "after_event_id": "event-1",
-                "text": "Tides are the rise",
-            },
+            {"type": REPLY_DRAFT_EVENT_TYPE, "agent_id": "agent-9", "after_event_id": "event-1", "text": "Tides are the rise"},
         ),
     ]
     assert reader.captured == ["pane of agent-9"] * 3
