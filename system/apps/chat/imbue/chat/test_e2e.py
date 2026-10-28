@@ -240,15 +240,10 @@ def _open_fixture_chat(page: Page, server: RunningWorkspace) -> None:
 
 
 def _start_new_chat(page: Page, server: RunningWorkspace) -> FrameLocator:
-    """Run the chat app's ``new`` launch path from the launcher's menu (its primary free-text row, run with nothing
-    typed): the shell posts the intake and points the window at the chat it answers; return that chat's frame."""
-    _land(page, server)
-    page.locator("[data-launcher-field] textarea").click()
-    menu = page.locator("[data-launcher-overlay]")
-    expect(menu).to_be_visible(timeout=10000)
-    menu.locator(f'[data-launch="{CHAT_APP_NAME}:new"]').click()
-    expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
-    return _chat(page, None)
+    """Start a chat from the chat list's New chat button, in the chat window a link opens; return that chat's frame."""
+    _open_fixture_chat_root(page, server)
+    _chat_root(page).locator(".chat-rail-new").first.click()
+    return _shown_chat(page)
 
 
 def _shown_chat(page: Page) -> FrameLocator:
@@ -937,6 +932,19 @@ _MESSAGE_OFFSETS_JS = """
 }
 """
 
+# Whether the messages a wheel tick started from have moved by at least ``minMotionPx`` (their median motion, as
+# the test measures it), or none of them is still shown.
+_WHEEL_TICK_LANDED_JS = f"""
+([before, minMotionPx]) => {{
+  const after = ({_MESSAGE_OFFSETS_JS.strip()})();
+  const motions = Object.keys(after)
+    .filter((key) => key in before)
+    .map((key) => after[key] - before[key])
+    .sort((a, b) => a - b);
+  return motions.length === 0 || motions[Math.floor(motions.length / 2)] >= minMotionPx;
+}}
+"""
+
 
 @pytest.mark.timeout(240, func_only=False)
 def test_wheeling_up_as_a_long_chat_opens_moves_the_view_one_tick_at_a_time(tmp_path: Path, page: Page) -> None:
@@ -972,7 +980,9 @@ def test_wheeling_up_as_a_long_chat_opens_moves_the_view_one_tick_at_a_time(tmp_
             before = frame.evaluate(_MESSAGE_OFFSETS_JS)
             for tick in range(30):
                 page.mouse.wheel(0, -wheel_px)
-                page.wait_for_timeout(50)
+                # The tick reaches the page only once its main thread is free, and measuring the rest of the history
+                # can hold that thread for a few hundred ms on a slow machine, so wait for the motion to land.
+                frame.wait_for_function(_WHEEL_TICK_LANDED_JS, arg=[before, wheel_px / 2], timeout=5000)
                 after = frame.evaluate(_MESSAGE_OFFSETS_JS)
                 shared = sorted(after[key] - before[key] for key in set(before) & set(after))
                 assert shared, (
@@ -1230,13 +1240,12 @@ def test_making_a_chat_the_main_chat_from_its_menu_moves_it_to_the_head_of_the_l
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_own_window(
+def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_on_its_own_page(
     tmp_path: Path, page: Page
 ) -> None:
-    """The window opens either way: with no account the chat app mints a chat that waits for its first send and
-    holds the intake, and that chat's page offers the provider chooser, so signing in happens where the chat will be
-    rather than on the shell or the chat list; no agent is created until an account is chosen (post-launch-paths plan
-    section 4.6)."""
+    """With no account the chat app mints a chat that waits for its first send, and that chat's page offers the
+    provider chooser, so signing in happens where the chat will be rather than on the shell or the chat list; no agent
+    is created until an account is chosen (post-launch-paths plan section 4.6)."""
     with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
         chat_frame = _start_new_chat(page, server)
         expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
@@ -1250,8 +1259,7 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
         ]
         awaiting = server.chat_state.agent_manager.get_provisional_chats()
         assert [chat.phase.value for chat in awaiting] == ["awaiting_first_send"]
-        # The root has applied the intake and reports the awaiting chat's selection alone, so the window keeps it
-        # on reload.
+        # The root reports the awaiting chat's selection alone, so the window keeps it on reload.
         _wait_for_chat_window_path(
             server, lambda path: path == chat_root_path(awaiting[0].chat_id), "the awaiting chat's selection"
         )
@@ -1259,21 +1267,6 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_in_its_ow
         expect(page.locator("iframe[data-live-page]")).to_have_count(1, timeout=15000)
         expect(_chat_root(page).locator(".chat-root")).to_be_visible(timeout=15000)
         expect(_shown_chat(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
-
-
-@pytest.mark.timeout(120, func_only=False)
-def test_the_new_chat_button_with_nothing_signed_in_opens_a_chat_that_asks_for_a_provider(
-    tmp_path: Path, page: Page
-) -> None:
-    """With nothing signed in the New chat button opens the chat awaiting its first send, and that chat's page asks
-    for a provider, the same as any chat with none to start on."""
-    with _running_e2e_server(tmp_path, is_account_signed_in=False) as server:
-        _open_fixture_chat_root(page, server)
-        root = _chat_root(page)
-        root.locator(".chat-rail-new").first.click()
-        expect(_shown_chat(page).locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
-        awaiting = server.chat_state.agent_manager.get_provisional_chats()
-        assert [chat.phase.value for chat in awaiting] == ["awaiting_first_send"]
 
 
 @pytest.mark.timeout(120, func_only=False)
@@ -1417,7 +1410,7 @@ _RECORD_PLACEHOLDERS_SEEN_SCRIPT = """
 def test_a_new_chat_with_an_account_is_a_blank_ready_chat_from_the_start(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """With an account signed in the intake creates the chat at once on it, and the page is an empty chat with its composer
+    """With an account signed in a new chat is created at once on it, and the page is an empty chat with its composer
     ready from the first frame: it says the chat is starting while the agent is created, and that it is ready once it
     lands, and never shows a placeholder screen -- not even for a single frame, which is how a flash of a "not found" or
     "loading" screen shows up."""
@@ -1505,7 +1498,11 @@ def test_a_create_that_fails_keeps_the_window_with_the_reason_and_a_retry(
         # The composer stays under the notice: a message held through the failure is back in it.
         expect(chat.locator(".message-input-textbox")).to_be_visible()
         # The instance stays listed, in the error state, so the window survives a reload.
-        _wait_for_chat_window_path(server, lambda path: path.startswith("/?chat="), "a path selecting a chat")
+        _wait_for_chat_window_path(
+            server,
+            lambda path: path.startswith("/?chat=") and path != _FIXTURE_ROOT_PATH,
+            "a path selecting the new chat",
+        )
         page.reload()
         chat = _shown_chat(page)
         expect(chat.locator(".message-list-create-failed")).to_be_visible(timeout=15000)
@@ -2411,6 +2408,8 @@ def test_the_phone_model_menu_shows_a_pi_chats_model_search_inside_the_card(
         expect(menu.locator("button", has_text="openrouter/vendor/model-11")).to_be_attached()
 
         track = menu.locator("[data-menu-track]")
+        # Measured once the slide has landed: mid-slide the pane is still on its way in from the side.
+        track.locator(".sliding-menu-track").evaluate("el => Promise.all(el.getAnimations().map((a) => a.finished))")
         card = track.bounding_box()
         assert card is not None
         for shown in (menu.locator("[data-menu-track-back]"), search):
