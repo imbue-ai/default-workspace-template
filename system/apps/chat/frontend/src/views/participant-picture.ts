@@ -56,6 +56,6 @@ const ParticipantPicture: m.ClosureComponent<ParticipantPictureAttrs> = () => {
   };
 };
 
-export function participantPicture(attrs: ParticipantPictureAttrs): m.Vnode {
+export function participantPicture(attrs: ParticipantPictureAttrs): m.Vnode<ParticipantPictureAttrs> {
   return m(ParticipantPicture, attrs);
 }
