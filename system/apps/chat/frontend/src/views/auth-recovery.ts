@@ -157,8 +157,15 @@ export function messagesToSendAgain(
   const refusedWords = new Set(turn.prompts.map(wordsOf));
   if (sentSince.some((event) => !refusedWords.has(wordsOf(event)))) return null;
   if (sentSince.length === 0 && !turn.isLast) return null;
-  const copiedWords = new Set(sentSince.map(wordsOf));
-  const prompts = turn.prompts.filter((prompt) => wordsOf(prompt) !== "" && !copiedWords.has(wordsOf(prompt)));
+  // A message typed again after an earlier failure of the turn is one message, offered once.
+  const coveredWords = new Set(sentSince.map(wordsOf));
+  const prompts: UserMessageEvent[] = [];
+  for (const prompt of turn.prompts) {
+    const words = wordsOf(prompt);
+    if (words === "" || coveredWords.has(words)) continue;
+    coveredWords.add(words);
+    prompts.push(prompt);
+  }
   return prompts.length > 0 ? prompts : null;
 }
 

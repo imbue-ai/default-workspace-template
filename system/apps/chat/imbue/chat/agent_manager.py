@@ -680,6 +680,8 @@ def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, .
 
     "After" goes by timestamp where both events have one: claude writes the auth error into its
     transcript ahead of the turn it refused, so their order says nothing about which came first.
+
+    A message typed again after an earlier failure of the tail is one message, so each text is sent once.
     """
     tail_start = next(
         (
@@ -706,7 +708,7 @@ def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, .
         if is_sent_since:
             return ()
         refused.append(str(event.get("content") or ""))
-    return tuple(text for text in refused if text.strip())
+    return tuple(dict.fromkeys(text for text in refused if text.strip()))
 
 
 @pure

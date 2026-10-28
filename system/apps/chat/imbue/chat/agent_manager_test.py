@@ -5875,6 +5875,17 @@ def _agent_reply(is_auth_error: bool = False, at: str | None = None) -> dict[str
         pytest.param(
             [
                 _typed_turn("hi"),
+                _agent_reply(is_auth_error=True),
+                _typed_turn("hello?"),
+                _typed_turn("hi"),
+                _agent_reply(is_auth_error=True),
+            ],
+            ("hi", "hello?"),
+            id="a-message-typed-again-once",
+        ),
+        pytest.param(
+            [
+                _typed_turn("hi"),
                 _agent_reply(),
                 _agent_reply(is_auth_error=True, at="2026-10-28T00:39:55.644Z"),
                 _typed_turn("what is 2+2?", at="2026-10-28T00:39:55.530Z"),

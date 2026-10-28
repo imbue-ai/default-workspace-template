@@ -81,6 +81,13 @@ describe("messagesToSendAgain", () => {
     expect(messagesToSendAgain([ASKED, REFUSED, COPY], REFUSED)).toBeNull();
   });
 
+  it("offers a message typed again after an earlier failure once", () => {
+    const retyped = typed("retyped", "what is 2+2?", "2026-10-28T00:39:58.000Z");
+    const refusedAgain = reply("refused-again", "2026-10-28T00:39:58.200Z", true);
+
+    expect(ids(messagesToSendAgain([ASKED, REFUSED, retyped, refusedAgain], refusedAgain) ?? [])).toEqual(["asked"]);
+  });
+
   it("offers nothing once the agent has replied since", () => {
     expect(messagesToSendAgain([ASKED, REFUSED, reply("later", "2026-10-28T00:41:00.000Z")], REFUSED)).toBeNull();
   });
