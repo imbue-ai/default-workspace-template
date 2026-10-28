@@ -66,7 +66,7 @@ describe("TitleBar", () => {
   it("arranges the controls as the theme's chrome says and centres the title over the bar", () => {
     const bar = render({ chrome: MAC_CHROME });
 
-    expect(slotOrder(bar)).toEqual(["close", "refresh", "menu", "minimize", "maximize"]);
+    expect(slotOrder(bar)).toEqual(["close", "refresh", "menu", "minimize", "maximize", "window-title"]);
     // The chrome names no icon slot, so the title part itself is the centred element the theme styles.
     const title = bar.querySelector('[data-part="window-title"]') as HTMLElement;
     expect(title.className).toContain("absolute");
@@ -77,7 +77,7 @@ describe("TitleBar", () => {
     const bar = render({ chrome: MAC_CHROME, isFocused: false, state: "MAXIMIZED" });
 
     expect(bar.getAttribute("data-focused")).toBe("false");
-    expect(slotOrder(bar)).toEqual(["close", "minimize", "restore"]);
+    expect(slotOrder(bar)).toEqual(["close", "minimize", "restore", "window-title"]);
   });
 
   it("gives the first slot drawn in a run no leading margin when the slots before it are not drawn", () => {
