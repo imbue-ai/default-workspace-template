@@ -52,13 +52,17 @@ class _RecordingRunner:
     """Answers `mngr list` with canned records and records every other call."""
 
     listing_records: list[dict[str, Any]] = field(default_factory=list)
+    listing_returncode: int = 0
     calls: list[_RecordedCall] = field(default_factory=list)
 
     def run(self, argv: Sequence[str], **kwargs: Any) -> _StubResult:
         call = _RecordedCall(argv=list(argv), kwargs=kwargs)
         self.calls.append(call)
         if list(argv[:2]) == ["mngr", "list"]:
-            return _StubResult(stdout="".join(json.dumps(record) + "\n" for record in self.listing_records))
+            return _StubResult(
+                returncode=self.listing_returncode,
+                stdout="".join(json.dumps(record) + "\n" for record in self.listing_records),
+            )
         return _StubResult()
 
     def create_calls(self) -> list[_RecordedCall]:
@@ -189,6 +193,20 @@ def test_a_branch_in_in_place_mode_is_refused(workspace_root: Path) -> None:
     with pytest.raises(SystemExit):
         _launch(source, "in-place", runner, branch="main")
     assert runner.create_calls() == []
+
+
+def test_a_failed_agent_listing_refuses_the_launch_before_the_create(
+    workspace_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A failed `mngr list` parses to zero records, which would read as "no agents" and
+    silently disable the taken-name guard -- so the launch is refused instead."""
+    repo = _git_repo(workspace_root)
+    runner = _RecordingRunner(listing_returncode=3)
+
+    with pytest.raises(SystemExit):
+        _launch(repo, "worktree", runner)
+    assert runner.create_calls() == []
+    assert "`mngr list` failed" in capsys.readouterr().err
 
 
 def test_a_taken_agent_name_is_refused_before_the_create(workspace_root: Path) -> None:

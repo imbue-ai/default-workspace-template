@@ -134,8 +134,9 @@ def _validate_source(path: Path, mode: str, branch: str) -> None:
         _fail("--branch only applies to worktree mode; in-place mode runs on whatever is checked out in --path")
 
 
-def _list_agent_records(runner: Runner) -> list[dict[str, object]]:
-    """Every agent `mngr list` reports, as parsed jsonl records (non-JSON lines skipped)."""
+def _list_agent_records(runner: Runner) -> tuple[int, list[dict[str, object]]]:
+    """`mngr list`'s exit code, and every agent it reports as parsed jsonl records
+    (non-JSON lines skipped; per-agent errors already ride --on-error continue)."""
     listing = runner.run(
         ["mngr", "list", "--format", "jsonl", "--on-error", "continue"],
         stdout=subprocess.PIPE,
@@ -150,12 +151,18 @@ def _list_agent_records(runner: Runner) -> list[dict[str, object]]:
             continue
         if isinstance(record, dict):
             records.append(record)
-    return records
+    return listing.returncode, records
 
 
 def _existing_agent_names(runner: Runner) -> set[str]:
+    """The names `mngr list` reports. An unusable listing fails the launch outright:
+    an empty parse of a failed listing reads as "no agents", which would silently
+    disable the taken-name guard."""
+    returncode, records = _list_agent_records(runner)
+    if returncode != 0:
+        _fail(f"`mngr list` failed with exit code {returncode}, so the agent name cannot be checked for conflicts")
     names: set[str] = set()
-    for record in _list_agent_records(runner):
+    for record in records:
         name = record.get("name")
         if isinstance(name, str):
             names.add(name)
@@ -215,7 +222,10 @@ def build_create_argv(
 
 
 def _created_work_dir(runner: Runner, agent_id: str) -> str:
-    for record in _list_agent_records(runner):
+    """Best-effort: the agent is already launched, so a failed or incomplete listing
+    here degrades to the fallback text rather than failing a successful launch."""
+    _, records = _list_agent_records(runner)
+    for record in records:
         if record.get("id") == agent_id:
             work_dir = record.get("work_dir")
             if isinstance(work_dir, str):
