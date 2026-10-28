@@ -39,9 +39,9 @@ dependencies = [
 dev = [
     "pytest>=8.0",
     "pytest-timeout>=2.0",
-    # Supplies the browser_type_launch_args the root conftest.py's module_browser
-    # builds on, and the browser/page fixtures the chat and shell suites use; each
-    # conftest points them at the test browser (Playwright's headless shell, else Fortress).
+    # Supplies the browser_type_launch_args fixture the root conftest.py's
+    # module_browser builds on; that conftest points it at the test browser
+    # (Playwright's headless shell, else Fortress).
     "pytest-playwright>=0.4",
     "ruff>=0.4",
     "inline-snapshot>=0.31",
