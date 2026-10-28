@@ -278,8 +278,11 @@ def _classify(
 
 
 def write_report(report: SuiteRunReport, output_directory: Path) -> Path:
+    """Replace the summary in one step, so a reader of a run in progress never sees half of it."""
     summary_path = output_directory / SUMMARY_FILE_NAME
-    summary_path.write_text(report.model_dump_json(indent=2) + "\n")
+    staged_path = summary_path.with_name(f"{SUMMARY_FILE_NAME}.tmp")
+    staged_path.write_text(report.model_dump_json(indent=2) + "\n")
+    staged_path.replace(summary_path)
     return summary_path
 
 
