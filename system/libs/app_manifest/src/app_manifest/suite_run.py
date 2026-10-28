@@ -1,8 +1,9 @@
 """Running a test selection: each command in order, its output kept, and how it ended.
 
 A command passed, or failed; a pytest run that failed reruns only its failed tests once, and is
-flaky when they pass that time, unless it also missed its coverage floor. A command killed by a signal while the memory guard recorded a
-shed is a shed, not a failure: rerunning it is a judgment about memory the caller makes.
+flaky when they pass that time, unless it also missed its coverage floor. A command killed by a
+signal while the memory guard recorded a shed is a shed, not a failure: rerunning it is a
+judgment about memory the caller makes.
 """
 
 import re
