@@ -1867,7 +1867,10 @@ describe("links Imbue Studio hands over", () => {
     const store = await startedStore();
     socket
       .deliver()
-      .onAppsUpdated([appRecord("docs"), chatLikeAppRecord("chat", { label: "chat-ab12cd34", display_name: "Chats" })]);
+      .onAppsUpdated([
+        appRecord("docs"),
+        chatLikeAppRecord("chat", { label: "chat-ab12cd34", display_name: "Chats" }),
+      ]);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     api.refusal = "No chat agent-1";
 
