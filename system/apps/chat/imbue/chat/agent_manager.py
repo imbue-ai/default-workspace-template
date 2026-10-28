@@ -1681,6 +1681,13 @@ class AgentManager:
             stored = self._main_chat.read()
             if not self._is_agent_list_known:
                 return stored
+            # A main chat that was switched into a room keeps the star (section 7.6): only a chat that is gone
+            # moves it, and the fallback still never falls to a room (``_main_chat_candidates_locked``).
+            if stored is not None and (
+                stored in self._provisional_chats
+                or any(chat.chat_id == stored for _agent, chat in self._listed_chats_locked())
+            ):
+                return stored
             resolved = resolved_main_chat_id(stored, self._main_chat_candidates_locked())
             self._main_chat.write(resolved)
         return resolved
@@ -1696,8 +1703,9 @@ class AgentManager:
         return True
 
     def _main_chat_candidates_locked(self) -> list[MainChatCandidate]:
-        """The chats that can be the main chat: every listed chat a user started that is not a room (the main chat
-        is never a room, S3), and every chat still provisional. Lock held."""
+        """The chats that can be the main chat: every listed chat a user started that is not a room (make-main
+        never picks a room, though the main chat may be switched into one), and every chat still provisional.
+        Lock held."""
         last_messaged = self._message_stamps.read()
         candidate_ids = [
             chat.chat_id
@@ -2240,9 +2248,8 @@ class AgentManager:
         the handoff a fresh start: no summary is asked for and no prompt is written, so the
         successor begins as a new chat would, and so does a switch to a room, which takes no prompt (the
         multiplayer spec, section 7.6). Raises ``ChatConvergingError`` for a chat already converging and
-        ``HandoffError`` when the chat has no active agent, the account is unknown or the chat's own, a model is
-        named beside a room (which runs on none), or the main chat is to become a room (it never is one, S3).
-        ``begin_switch`` decides between this and a rebind.
+        ``HandoffError`` when the chat has no active agent, the account is unknown or the chat's own, or a model is
+        named beside a room (which runs on none). ``begin_switch`` decides between this and a rebind.
         """
         self._refuse_switch_in_secondary(chat_id)
         runner = self._handoff_runner()
@@ -2250,7 +2257,6 @@ class AgentManager:
         # Refused before anything is written: a pick on a room's successor would fail the switch at its model step.
         if target.harness is HarnessType.ROOM and model_pick is not None:
             raise HandoffError("A switch to a room names no model")
-        self._refuse_room_for_main_chat(chat_id, target)
         now = datetime.now(timezone.utc)
         # Resolved twice on purpose: the freshness read walks the retiring agent's transcript,
         # which must not happen under the lock, so the chat is re-resolved for the write.
@@ -2343,12 +2349,6 @@ class AgentManager:
         if agent_info is None:
             return False
         return not has_user_turn(capabilities.ensure_watcher(agent_info).get_all_events())
-
-    def _refuse_room_for_main_chat(self, chat_id: ChatId, target: _SwitchTarget) -> None:
-        """Raise ``HandoffError`` for a switch that would make the main chat a room: the main chat is never a room
-        (the multiplayer spec, S3 and section 7.6). Called outside the lock, which ``get_main_chat_id`` takes."""
-        if target.harness is HarnessType.ROOM and chat_id == self.get_main_chat_id():
-            raise HandoffError("The main chat cannot become a room")
 
     def _movable_agent_locked(self, chat_id: ChatId, target: _SwitchTarget) -> AgentStateItem:
         """The tracked agent a chat may be moved off (or rebound), or the refusal (spec 5.2). Lock held."""
@@ -2526,7 +2526,6 @@ class AgentManager:
         self._refuse_switch_in_secondary(chat_id)
         self._require_switch_capabilities()
         target = _resolve_switch_target(account_id, kind)
-        self._refuse_room_for_main_chat(chat_id, target)
         discarded_successor_id: str | None = None
         with self._lock:
             record = self._chat_record_by_id.get(chat_id)
@@ -4081,10 +4080,6 @@ class AgentManager:
         owned_keys = sorted(APP_OWNED_LABEL_KEYS.intersection(extra_labels))
         if owned_keys:
             raise AgentCreationError(f"The chat app sets {', '.join(owned_keys)} itself; a create cannot restate them")
-        # The main chat is never a room (the multiplayer spec, S3), so launching it as one is refused the way
-        # a switch to a room is (``_refuse_room_for_main_chat``). Outside the lock, which get_main_chat_id takes.
-        if kind is ChatKind.ROOM and chat_id and ChatId(chat_id) == self.get_main_chat_id():
-            raise AgentCreationError("The main chat cannot become a room")
 
         # Name resolution and the provisional record's registration happen under one lock
         # hold, so a concurrent create sees this one's name as taken (and vice versa).

@@ -979,8 +979,9 @@ the room's harness session, so the chat routes serve a room as they serve any ch
 their authors from the chat's annotations (a message the reader appended is the
 workspace agent's), `/message` appends, and rename, delete, stop, start, presence,
 and watchers work unchanged. A chat snapshot's `kind` says which a chat is, from
-the harness its active agent runs; a room is never the main chat. Agent chats and
-rooms are one list, one id shape, and one push.
+the harness its active agent runs; the main chat may be switched into a room and
+keeps its star, though make-main never stars a room and the star never falls to
+one. Agent chats and rooms are one list, one id shape, and one push.
 
 A room starts from the awaiting chat's provider chooser ("Chat room (no provider)",
 `POST /api/chats/create` with `"kind": "room"`), which the create guard

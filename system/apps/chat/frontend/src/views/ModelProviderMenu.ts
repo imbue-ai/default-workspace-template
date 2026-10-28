@@ -33,7 +33,7 @@
 
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
-import { getChatById, getMainChatId, getProvisionalChat, setLaunchChoice } from "../models/Chats";
+import { getChatById, getProvisionalChat, setLaunchChoice } from "../models/Chats";
 import type { ProvisionalChat } from "../models/Chats";
 import type { ChatSnapshot } from "../models/Chats";
 import type { CatalogModelOption, HarnessCatalog } from "../models/HarnessCatalog";
@@ -833,9 +833,8 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               });
             }),
       ),
-      // A chat among the people here instead (the multiplayer spec, section 7.6); a room is one already, and the
-      // main chat never becomes one (S3).
-      chat !== undefined && chat.kind !== "room" && chat.chat_id !== getMainChatId()
+      // A chat among the people here instead (the multiplayer spec, section 7.6); a room is one already.
+      chat !== undefined && chat.kind !== "room"
         ? m(
             "button",
             {

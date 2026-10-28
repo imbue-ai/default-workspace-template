@@ -8187,34 +8187,47 @@ def test_a_switch_to_a_room_names_no_model(broadcaster: WebSocketBroadcaster, tm
         manager.stop()
 
 
-def test_the_main_chat_is_not_switched_to_a_room(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+def test_the_main_chat_switches_to_a_room_like_any_chat(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    """The main chat may become a room (spec section 7.6); it stays the main chat through the switch."""
     manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, [])
     main = f"agent-{uuid4().hex}"
     seed_agent_state(manager, main, name="Main", labels={"display_name": "Main", "account": "acct-anthropic"})
     manager.note_agent_list_known()
     assert manager.make_main_chat(ChatId(main))
     try:
-        with pytest.raises(HandoffError, match="main chat cannot become a room"):
-            manager.begin_switch(ChatId(main), "", "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM)
-        with pytest.raises(HandoffError, match="main chat cannot become a room"):
-            manager.retry_handoff(ChatId(main), "", kind=ChatKind.ROOM)
-        assert store.read(ChatId(main)) is None and manager.get_main_chat_id() == ChatId(main)
+        kind, phase, _block = manager.begin_switch(ChatId(main), "", "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM)
+        assert (kind, phase) == (TransitionKind.HANDOFF, HandoffPhase.SUMMARIZING)
+
+        record = _wait_until_settled(store, ChatId(main))
+        assert record.agents[-1].harness is HarnessType.ROOM
+        assert manager.get_main_chat_id() == ChatId(main)
     finally:
         manager.stop()
 
 
-def test_the_main_chat_is_not_launched_as_a_room(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
-    """A seeded chat recorded as the main chat refuses the room launch, as the switch refuses the conversion."""
-    manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
+def test_the_seeded_main_chat_launches_as_a_room_like_any_awaiting_chat(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The chooser's room pick goes through for the seeded main chat (spec section 7.6); it stays the main chat."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path))
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary, chat_files_root=tmp_path / "chats")
     manager.note_agent_list_known()
     try:
         seeded = manager.seed_chat("Main", (SeedTurn(role=SeedRole.ASSISTANT, text="Welcome."),))
         assert manager.make_main_chat(ChatId(seeded.chat_id))
-        with pytest.raises(AgentCreationError, match="main chat cannot become a room"):
-            manager.create_chat("", chat_id=seeded.chat_id, kind=ChatKind.ROOM)
+        manager.create_chat("", chat_id=seeded.chat_id, kind=ChatKind.ROOM)
+        wait_until_true(
+            lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+        )
         assert manager.get_main_chat_id() == ChatId(seeded.chat_id)
     finally:
         manager.stop()
+
+    create_line = next(line for line in argv_log.read_text().splitlines() if line.startswith("create "))
+    argv = create_line.split()
+    assert argv[argv.index("--type") + 1] == HarnessType.ROOM
 
 
 def test_a_switch_off_a_room_takes_the_rooms_transcript_as_its_summary(
@@ -8243,9 +8256,12 @@ def test_a_switch_off_a_room_takes_the_rooms_transcript_as_its_summary(
         manager.stop()
 
 
-def test_a_room_is_never_the_main_chat(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+def test_a_room_is_never_starred_or_fallen_to_as_the_main_chat(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
     """A room is not a main-chat candidate (the multiplayer spec, section 7.3): the star refuses it by hand, and
-    does not fall to it when the main chat is deleted, however recently the room was messaged."""
+    does not fall to it when the main chat is deleted, however recently the room was messaged. (The main chat
+    keeps the star when a switch makes it a room, which is a different thing: section 7.6.)"""
     mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
     stamps = MessageStampStore(path=None)
     stamps.record(ChatId("agent-chat"), at=100.0)

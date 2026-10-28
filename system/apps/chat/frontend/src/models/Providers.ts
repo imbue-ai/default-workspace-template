@@ -451,7 +451,7 @@ export interface ProviderChooserIntent {
   /** Run if the chooser closes before any sign-in succeeded or an account was picked. */
   onDismissed?: () => void;
   /** Run when "Chat room (no provider)" is picked instead of an account: the chat awaiting its first send becomes a
-   *  room (the multiplayer spec, section 7.3). Its presence puts that row first. */
+   *  room (the multiplayer spec, section 7.3). Its presence puts that row last, under the providers. */
   onRoomChosen?: () => void;
   /** A signed-in account to list but refuse, and the reason its row reads. */
   unpickable?: UnpickableAccount;

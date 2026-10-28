@@ -356,15 +356,14 @@ describe("picking a signed-in account", () => {
     expect(root.querySelector('[data-e2e^="pick-account-"]')).toBeNull();
   });
 
-  it("offers a room ahead of the accounts when opened for a chat awaiting its first send, and hands it over", () => {
+  it("offers a room under the providers when opened for a chat awaiting its first send, and hands it over", () => {
     const onRoomChosen = vi.fn();
     const onDismissed = vi.fn();
     openProviderChooser({ onRoomChosen, onDismissed });
     const { root } = mount();
 
     const text = root.textContent ?? "";
-    expect(text.indexOf("Chat room (no provider)")).toBeGreaterThanOrEqual(0);
-    expect(text.indexOf("Chat room (no provider)")).toBeLessThan(text.indexOf("Anthropic (Claude Code)"));
+    expect(text.indexOf("Chat room (no provider)")).toBeGreaterThan(text.indexOf("Anthropic (Claude Code)"));
     root.querySelector<HTMLButtonElement>('[data-e2e="pick-room"]')!.click();
 
     expect(onRoomChosen).toHaveBeenCalledOnce();

@@ -752,7 +752,7 @@ describe("the combo card", () => {
     expect(started).toEqual([]);
   });
 
-  it("offers to make the chat a room from the Provider submenu, but never the main chat", () => {
+  it("offers to make the chat a room from the Provider submenu, the main chat included", () => {
     render();
     click(".model-selector-trigger");
     click('[data-menu-row="providers"]');
@@ -764,7 +764,7 @@ describe("the combo card", () => {
     render();
     click(".model-selector-trigger");
     click('[data-menu-row="providers"]');
-    expect(document.querySelector(".model-provider-menu-room")).toBeNull();
+    expect(document.querySelector(".model-provider-menu-room")).not.toBeNull();
   });
 
   it("hands an account on the chat's own harness to the dialog too, now that a chat can change account in place", () => {

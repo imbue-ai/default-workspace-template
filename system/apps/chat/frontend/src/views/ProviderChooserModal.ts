@@ -413,21 +413,22 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     // with nothing to explain.
     const signedIn = renderAccounts();
     return [
-      roomRow(),
       signedIn,
       // Removing an account can fail -- a row with no folder, a store that will not write --
       // and without this the row simply stays put with no explanation.
       error !== null ? m("p", { class: `${css.HINT} text-red-600` }, error) : null,
       signedIn !== null ? m("div", { class: `${css.SECTION_LABEL} mt-6` }, "Add more") : null,
       m("div", { class: css.ROW_STACK }, getLanes().map(laneRow)),
+      roomRow(),
     ];
   }
 
-  /** "Chat room (no provider)": the first row when the chooser was opened for a chat awaiting its first send, which
-   *  then becomes a room among the workspace's people instead of a chat with an agent (section 7.3). */
+  /** "Chat room (no provider)": the last row when the chooser was opened for a chat awaiting its first send, which
+   *  then becomes a room among the workspace's people instead of a chat with an agent (section 7.3). Last, under
+   *  the providers: the chooser's job is signing in, and a room is the way out of that, not the point of it. */
   function roomRow(): m.Children {
     if (!isRoomChoiceOffered()) return null;
-    return m("div", { class: `${css.ROW_STACK} mb-6` }, [
+    return m("div", { class: `${css.ROW_STACK} mt-6` }, [
       // The pickable row anchors the pick target's stretched after-box; without it the box would cover the dialog.
       m("div", { class: css.ACCOUNT_ROW_PICKABLE }, [
         m(
