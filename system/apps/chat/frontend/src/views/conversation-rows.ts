@@ -33,7 +33,7 @@ import {
 } from "./message-renderers";
 import { isHiddenUserMessage } from "./message-classification";
 import type { CompactionPart } from "./compaction-chips";
-import { buildSections, type LiveCompaction, type SectionView } from "./turn-grouping";
+import { buildSections, type LiveCompaction, type SectionView, type ChatStep } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
 import { renderHandoffNode } from "./handoff-node";
 
@@ -288,11 +288,13 @@ export function buildConversationRows(
   events: TranscriptEvent[],
   isTailSettled: boolean,
   liveCompaction: LiveCompaction | null = null,
+  chatSteps: readonly ChatStep[] = [],
+  hiddenStepIds: readonly string[] = [],
 ): RowDescriptor[] {
   const toolResults = buildToolResultsWithSkillExpansions(events);
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
-  const sections = buildSections(visibleEvents, toolResults, isTailSettled, liveCompaction);
+  const sections = buildSections(visibleEvents, toolResults, isTailSettled, liveCompaction, chatSteps, hiddenStepIds);
   return buildRows(chatId, sections, toolResults);
 }
 

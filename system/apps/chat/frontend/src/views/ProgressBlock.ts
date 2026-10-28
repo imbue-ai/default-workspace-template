@@ -1,6 +1,9 @@
 /**
  * Progress block: timeline rendering of one section (one user turn).
  *
+ * A timeline's done steps fold into one "Done" row at its top (the steps arrive ordered by state, done
+ * first); pressing it shows each done step with its summary. Open and waiting steps render below it.
+ *
  * The section is a flat, ordered list of timeline items produced by the
  * transcript walk (see turn-grouping): step nodes, ungrouped work/prose runs
  * (rendered inline, thread-breaking -- including a step's ejected closing
@@ -111,6 +114,26 @@ function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolRes
   return m("div", { class: "pv-expanded markdown-content mt-2.5 text-(length:--font-size-body)" }, children);
 }
 
+/** The label of the row a timeline's done steps fold into. */
+export const DONE_STEPS_LABEL = "Done";
+
+/** How many of the most recently finished steps the Done row names while collapsed. */
+const RECENT_DONE_TITLE_COUNT = 3;
+
+/** The Done row's subtext: the latest finished steps' titles, newest first, with "…" when there are more. The steps
+ *  arrive in the order they closed. */
+export function recentDoneTitles(doneSteps: StepNode[]): string {
+  const recent = doneSteps
+    .slice(-RECENT_DONE_TITLE_COUNT)
+    .reverse()
+    .map((step) => step.title);
+  return doneSteps.length > RECENT_DONE_TITLE_COUNT ? `${recent.join(", ")}, …` : recent.join(", ");
+}
+
+function isDoneStep(item: TimelineItem): boolean {
+  return item.kind === "step" && item.step.status === "done";
+}
+
 export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
   // Per-step expand state lives in the shared in-memory expansion store, keyed
   // by section id + ticket_id: component state would be lost every time the
@@ -121,6 +144,112 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
 
   function stepKey(ticket_id: string): string {
     return `step:${blockKeyPrefix}:${ticket_id}`;
+  }
+
+  function doneRowKey(): string {
+    return `done:${blockKeyPrefix}`;
+  }
+
+  /** The row the done steps fold into: a done badge, the label, and a chevron that shows or hides them below the
+   *  label, inside the row, as a step shows its work (see renderStepNode). */
+  function renderDoneRow(
+    doneSteps: StepNode[],
+    is_last: boolean,
+    toolResults: Map<string, ToolResultEvent>,
+    chatId: string,
+  ): m.Vnode {
+    const isExpanded = isBlockExpanded(doneRowKey());
+    const nodeClasses = [
+      "pv-tl-node",
+      "pv-tl-node--done",
+      "pv-tl-node--done-group",
+      is_last ? "pv-tl-node--last pb-0" : "pb-[18px]",
+      TIMELINE_NODE_CLASS,
+    ].join(" ");
+    return m("div", { class: nodeClasses, key: "done-group" }, [
+      m("div", { class: TIMELINE_BULLET_CLASS }, statusIcon("done", false)),
+      m("div", { class: TIMELINE_BODY_CLASS }, [
+        m(
+          "button",
+          {
+            type: "button",
+            class: timelineTitleClass("done"),
+            "aria-expanded": isExpanded ? "true" : "false",
+            onclick: () => toggleBlockExpanded(doneRowKey()),
+          },
+          [
+            DONE_STEPS_LABEL,
+            m(
+              "span",
+              { class: `${TIMELINE_CHEVRON_CLASS} ${timelineChevronStateClass(isExpanded)}` },
+              m.trust("&rsaquo;"),
+            ),
+          ],
+        ),
+        // Faint and on one line, like a step's summary; hidden while the steps themselves are shown below.
+        isExpanded
+          ? null
+          : m(
+              "div",
+              {
+                class:
+                  "pv-tl-done-recent mt-[3px] truncate pl-0.5 text-(length:--font-size-helper) leading-normal text-faint",
+              },
+              recentDoneTitles(doneSteps),
+            ),
+        // The same wrapper a step's revealed work sits in (renderStepNode, renderExpandedStepBody): flush under the
+        // label, no second column of bullets.
+        isExpanded
+          ? m(
+              "div",
+              { class: "pv-tl-expanded mt-1.5" },
+              m(
+                "div",
+                { class: "pv-expanded mt-2.5 text-(length:--font-size-body)" },
+                doneSteps.map((step, idx) => renderDoneItem(step, idx === 0, toolResults, chatId)),
+              ),
+            )
+          : null,
+      ]),
+    ]);
+  }
+
+  /** One done step under the Done row: its title (pressing it shows its work, as on a step row) and its summary.
+   *  The first sits at the wrapper's own offset; each later one is set off by the reply's gap (mt-4), so the label
+   *  to the first title and each summary to the next title read as the same distance. */
+  function renderDoneItem(
+    step: StepNode,
+    isFirst: boolean,
+    toolResults: Map<string, ToolResultEvent>,
+    chatId: string,
+  ): m.Vnode {
+    const canExpand = step.events.length > 0;
+    const isExpanded = isBlockExpanded(stepKey(step.ticket_id));
+    return m("div", { class: `pv-done-item ${isFirst ? "" : "mt-4"}`, key: `done-${step.ticket_id}` }, [
+      m(
+        "button",
+        {
+          type: "button",
+          class: timelineTitleClass("done"),
+          disabled: !canExpand,
+          onclick: canExpand ? () => toggleBlockExpanded(stepKey(step.ticket_id)) : undefined,
+        },
+        [
+          step.title,
+          canExpand
+            ? m(
+                "span",
+                { class: `${TIMELINE_CHEVRON_CLASS} ${timelineChevronStateClass(isExpanded)}` },
+                m.trust("&rsaquo;"),
+              )
+            : null,
+        ],
+      ),
+      renderStepCaption(step, isExpanded),
+      isExpanded
+        ? m("div", { class: "pv-tl-expanded mt-1.5" }, renderExpandedStepBody(step, toolResults, chatId))
+        : null,
+    ]);
   }
 
   function renderStepNode(
@@ -177,13 +306,17 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
       const { items, trailing_reply, toolResults, chatId, id } = vnode.attrs;
       blockKeyPrefix = id ?? "";
 
+      // The done steps fold into one row; the other items render after it.
+      const doneSteps = items.flatMap((item) => (item.kind === "step" && isDoneStep(item) ? [item.step] : []));
+      const shownItems = items.filter((item) => !isDoneStep(item));
+
       // Index of the last node on the thread (a step or a handoff), so only it gets the `--last` cap.
       let lastStepIdx = -1;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].kind === "step" || items[i].kind === "handoff") lastStepIdx = i;
+      for (let i = 0; i < shownItems.length; i++) {
+        if (shownItems[i].kind === "step" || shownItems[i].kind === "handoff") lastStepIdx = i;
       }
 
-      const timelineNodes: m.Children[] = items.map((item, idx) => {
+      const timelineNodes: m.Children[] = shownItems.map((item, idx) => {
         if (item.kind === "step") {
           return renderStepNode(item.step, idx === lastStepIdx, toolResults, chatId);
         }
@@ -258,7 +391,11 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
               class: "pv-timeline-thread absolute top-2 bottom-0 left-[7.5px] w-px bg-default",
               "aria-hidden": "true",
             }),
-            m("div.pv-timeline-nodes", timelineNodes),
+            m("div.pv-timeline-nodes", [
+              // Spread rather than a null hole: the nodes are keyed, and mithril refuses a mix.
+              ...(doneSteps.length > 0 ? [renderDoneRow(doneSteps, lastStepIdx === -1, toolResults, chatId)] : []),
+              ...timelineNodes,
+            ]),
           ]),
           trailing_reply.length > 0
             ? trailing_reply.map((ev) =>

@@ -255,12 +255,80 @@ _extract_title() {
     awk '/^# / { print substr($0, 3); exit }' "$file"
 }
 
+# Cancels. `tk cancel <id> "<reason>"` records that a step is no longer wanted
+# in a sidecar next to the ticket, `<id>.<stamp>.<n>.cancel`, created exclusively
+# (n counts cancels within one stamp, which is whole seconds where date has no
+# fraction);
+# the ticket itself is never touched and sidecars are never deleted. The latest
+# sidecar of a ticket counts, and only while it is newer than the ticket's
+# `started` stamp: starting the step after a cancel overrides it, while closing
+# it keeps it (the step was given up as asked). The chat app reads the same
+# files by the same rule (system/apps/chat/imbue/chat/message_steps.py).
+
+# The latest cancel of a ticket as "<cancelled><TAB><reason>", or nothing.
+_latest_cancel() {
+    local id="$1" latest="" sidecar
+    for sidecar in "$TICKETS_DIR/$id".*.cancel; do
+        [[ -f "$sidecar" ]] && latest="$sidecar"
+    done
+    [[ -n "$latest" ]] || return 0
+    local cancelled reason
+    cancelled=$(_grep -m1 '^cancelled:' "$latest" | sed 's/^cancelled: *//')
+    reason=$(_grep -m1 '^reason:' "$latest" | sed 's/^reason: *//')
+    printf '%s\t%s\n' "$cancelled" "$reason"
+}
+
+# The reason of a ticket's cancel while it is in force, or nothing.
+_cancel_in_force() {
+    local file="$1" id latest cancelled started
+    id=$(basename "$file" .md)
+    latest=$(_latest_cancel "$id")
+    [[ -n "$latest" ]] || return 0
+    cancelled="${latest%%$'\t'*}"
+    started=$(yaml_field "$file" "started" || true)
+    if [[ "$cancelled" > "$started" ]]; then
+        printf '%s\n' "${latest#*$'\t'}"
+    fi
+}
+
+cmd_cancel() {
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: $(basename "$0") cancel <id> \"<reason>\"" >&2
+        return 1
+    fi
+    local id="$1"
+    shift
+    local reason="$*"
+    local file
+    file=$(ticket_path "$id") || return 1
+    local canonical_id now stamp sidecar n
+    canonical_id=$(basename "$file" .md)
+    now=$(_iso_date)
+    stamp=$(printf '%s' "$now" | tr -d ':.-')
+    for n in 0 1 2 3 4 5 6 7 8 9; do
+        sidecar="$TICKETS_DIR/${canonical_id}.${stamp}.${n}.cancel"
+        if (
+            set -o noclobber
+            {
+                echo "cancelled: $now"
+                echo "by: $(tk_creator)"
+                echo "reason: ${reason//$'\n'/ }"
+            } > "$sidecar"
+        ) 2>/dev/null; then
+            echo "Cancelled $canonical_id: ${reason//$'\n'/ }"
+            return 0
+        fi
+    done
+    echo "Error: could not record the cancel of $canonical_id (too many cancels at $now)" >&2
+    return 1
+}
+
 cmd_create() {
     ensure_dir
 
     local title="" description="" design="" acceptance=""
     local priority=2 issue_type="task" assignee="" external_ref="" parent="" tags=""
-    local is_step=0 title_count=0
+    local is_step=0 title_count=0 given_id=""
 
     # Default assignee to git user.name if available, BUT only when
     # running outside an mngr-managed agent. Inside an mngr context the
@@ -286,6 +354,7 @@ cmd_create() {
             --parent=*) parent="${1#--parent=}"; shift ;;
             --step) is_step=1; shift ;;
             --tags) tags="$2"; shift 2 ;;
+            --id) given_id="$2"; shift 2 ;;
             -*) echo "Unknown option: $1" >&2; return 1 ;;
             *) title="$1"; title_count=$((title_count + 1)); shift ;;
         esac
@@ -310,11 +379,22 @@ cmd_create() {
 
     title="${title:-Untitled}"
     local id
-    id=$(generate_id "$is_step")
+    if [[ -n "$given_id" ]]; then
+        # A caller that reserved its own id (the chat app's message steps); the
+        # file is created exclusively below, so an existing ticket is never
+        # written over.
+        id="$given_id"
+    else
+        id=$(generate_id "$is_step")
+    fi
     local file="$TICKETS_DIR/${id}.md"
     local now
     now=$(_iso_date)
 
+    if ! ( set -o noclobber; : > "$file" ) 2>/dev/null; then
+        echo "Error: a ticket already exists at $id" >&2
+        return 1
+    fi
     {
         echo "---"
         echo "id: $id"
@@ -428,6 +508,13 @@ cmd_start() {
             echo "Warning: reassigning $(basename "$file" .md) from '$current_assignee' to '$MNGR_AGENT_NAME'" >&2
             update_yaml_field "$file" "assignee" "$MNGR_AGENT_NAME"
         fi
+    fi
+
+    # Starting a step overrides a cancel in force on it (see _cancel_in_force).
+    local cancel_reason
+    cancel_reason=$(_cancel_in_force "$file")
+    if [[ -n "$cancel_reason" ]]; then
+        echo "Note: starting $(basename "$file" .md) overrides its cancel (${cancel_reason})."
     fi
 
     # Record the start time so consumers can order steps by when work
@@ -1082,11 +1169,26 @@ cmd_steps() {
     if [[ "$all_agents" -eq 1 ]]; then
         agent_filter=""
     fi
+    # Each ticket's latest cancel as "<id><TAB><cancelled><TAB><reason>", read
+    # first by the awk below (see _cancel_in_force for the rule).
+    local cancels="" sidecar cancel_id
+    for sidecar in "$TICKETS_DIR"/*.cancel; do
+        [[ -f "$sidecar" ]] || continue
+        cancel_id=$(basename "$sidecar")
+        cancel_id="${cancel_id%%.*}"
+        cancels+="${cancel_id}"$'\t'"$(_latest_cancel "$cancel_id")"$'\n'
+    done
     awk -v status_filter="$status_filter" -v agent_filter="$agent_filter" '
     BEGIN { FS=": "; in_front=0 }
+    FILENAME == "-" {
+        split($0, cancel_fields, "\t")
+        cancel_at[cancel_fields[1]] = cancel_fields[2]
+        cancel_reason[cancel_fields[1]] = cancel_fields[3]
+        next
+    }
     FNR==1 {
         if (prev_file) emit()
-        id=""; status=""; title=""; agent=""; step=""; in_front=0
+        id=""; status=""; title=""; agent=""; step=""; started=""; in_front=0
         prev_file=FILENAME
     }
     /^---$/ { in_front = !in_front; next }
@@ -1094,6 +1196,7 @@ cmd_steps() {
     in_front && /^status:/ { status = $2 }
     in_front && /^agent:/ { agent = $2 }
     in_front && /^step:/ { step = $2 }
+    in_front && /^started:/ { started = $2 }
     !in_front && /^# / && title == "" { title = substr($0, 3) }
     function emit() {
         if (id == "" || step != "true") return
@@ -1103,10 +1206,14 @@ cmd_steps() {
         } else if (status != status_filter) {
             return
         }
-        printf "%-8s [%s] - %s\n", id, status, title
+        if ((id in cancel_at) && cancel_at[id] > started) {
+            printf "%-8s [%s] - %s -- cancelled by the user\047s message: %s\n", id, status, title, cancel_reason[id]
+        } else {
+            printf "%-8s [%s] - %s\n", id, status, title
+        }
     }
     END { if (prev_file) emit() }
-    ' "$TICKETS_DIR"/*.md 2>/dev/null
+    ' - "$TICKETS_DIR"/*.md 2>/dev/null <<<"$cancels"
 }
 
 cmd_blocked() {
@@ -1536,11 +1643,23 @@ cmd_show() {
     ' "$TICKETS_DIR"/*.md 2>/dev/null
     }
 
+    _show_with_cancel() {
+        _show_output
+        local cancel_reason
+        cancel_reason=$(_cancel_in_force "$file")
+        if [[ -n "$cancel_reason" ]]; then
+            echo ""
+            echo "## Cancelled"
+            echo ""
+            echo "Cancelled by the user's message: $cancel_reason"
+        fi
+    }
+
     if [[ -t 1 && -n "$TICKET_PAGER" ]]; then
         read -r -a pager_cmd <<<"$TICKET_PAGER"
-        _show_output | "${pager_cmd[@]}"
+        _show_with_cancel | "${pager_cmd[@]}"
     else
-        _show_output
+        _show_with_cancel
     fi
 }
 
@@ -1631,8 +1750,10 @@ Commands:
     --parent               Parent ticket ID
     --step                 Create as a turn-bound progress record (step)
     --tags                 Comma-separated tags (e.g., --tags ui,backend,urgent)
+    --id                   Use this id (fails if a ticket already exists there)
   start <id>               Set status to in_progress (auto-self-assigns)
   close <id> [summary]     Set status to closed (summary required for steps)
+  cancel <id> <reason>     Record that a step is no longer wanted (starting it again overrides)
   reopen <id>              Set status to open
   status <id> <status>     Update status (open|in_progress|closed)
   assign <id> [agent]      Set assignee (defaults to current agent)
@@ -1725,6 +1846,7 @@ case "${1:-help}" in
     create) shift; cmd_create "$@" ;;
     start)  shift; cmd_start "$@" ;;
     close)  shift; cmd_close "$@" ;;
+    cancel) shift; cmd_cancel "$@" ;;
     reopen) shift; cmd_reopen "$@" ;;
     status) shift; cmd_status "$@" ;;
     assign) shift; cmd_assign "$@" ;;
