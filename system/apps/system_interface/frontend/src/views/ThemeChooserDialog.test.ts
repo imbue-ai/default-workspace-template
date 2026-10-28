@@ -4,11 +4,7 @@ import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRecord, desktopRecord, themeCatalog, themeRecord } from "../testing/records";
-import {
-  MAKE_THEME_IN_CHAT_HINT,
-  THEME_PREVIEW_ELSEWHERE_HINT,
-  ThemeChooserDialog,
-} from "./ThemeChooserDialog";
+import { MAKE_THEME_IN_CHAT_HINT, THEME_PREVIEW_ELSEWHERE_HINT, ThemeChooserDialog } from "./ThemeChooserDialog";
 import type { ThemeChooserDialogAttrs } from "./ThemeChooserDialog";
 
 afterEach(unmountViews);

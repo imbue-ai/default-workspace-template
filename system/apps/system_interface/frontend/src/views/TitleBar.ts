@@ -110,8 +110,18 @@ function slotMargin(slot: ChromeSlot, isFirst: boolean): string {
 export function TitleBar(): m.Component<TitleBarAttrs> {
   return {
     view(vnode) {
-      const { title, app, state, isFocused, isMenuOpen, hasAppChat, sizeMenuTrigger, onControl, onDoubleClick, chrome } =
-        vnode.attrs;
+      const {
+        title,
+        app,
+        state,
+        isFocused,
+        isMenuOpen,
+        hasAppChat,
+        sizeMenuTrigger,
+        onControl,
+        onDoubleClick,
+        chrome,
+      } = vnode.attrs;
       const isMaximized = state === "MAXIMIZED";
       const isTitleCentered = chrome.title_align === "center";
 

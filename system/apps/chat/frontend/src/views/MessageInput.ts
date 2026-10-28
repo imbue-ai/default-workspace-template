@@ -390,7 +390,11 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
 function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
     leading ?? null,
-    m("div", { class: `${INPUT_BOX_CLASS} relative min-w-0 flex-1`, ...appPartAttrs("chat", "composer") }, boxChildren),
+    m(
+      "div",
+      { class: `${INPUT_BOX_CLASS} relative min-w-0 flex-1`, ...appPartAttrs("chat", "composer") },
+      boxChildren,
+    ),
   ]);
 }
 

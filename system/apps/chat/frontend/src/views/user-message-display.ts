@@ -149,7 +149,11 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
             size: AUTHOR_PICTURE_SIZE_PX,
             extra: "message-author-picture mt-0.5",
           }),
-          m("div", { class: `${USER_BUBBLE_CLASS} rounded-br-xl rounded-tl-sm`, ...USER_MESSAGE_PART }, bubbleChildren),
+          m(
+            "div",
+            { class: `${USER_BUBBLE_CLASS} rounded-br-xl rounded-tl-sm`, ...USER_MESSAGE_PART },
+            bubbleChildren,
+          ),
         ]),
       ]);
     },

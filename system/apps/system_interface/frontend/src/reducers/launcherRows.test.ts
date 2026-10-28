@@ -118,9 +118,9 @@ describe("the launcher's rows", () => {
     // To Alice, the owner's desktops are somebody else's.
     const toAlice = { owner: false, user_id: "user-alice", email: "alice@example.com", participant: alice.key };
     expect(
-      launcherRowsOf(withAlices, "terminal", { ownership: { roster: [josh, alice], identity: toAlice } }).windowRows.map(
-        (row) => row.ownerName,
-      ),
+      launcherRowsOf(withAlices, "terminal", {
+        ownership: { roster: [josh, alice], identity: toAlice },
+      }).windowRows.map((row) => row.ownerName),
     ).toEqual(["Josh", "Josh", null, null]);
   });
 
