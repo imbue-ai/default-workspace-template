@@ -118,7 +118,10 @@ function colorSample(color: ColorToken): m.Vnode {
       m("span", { style: { color: paint } }, "Aa"),
     );
   }
-  // A border color is shown as a chip of that color: an outline would itself be a border.
+  // A border color is drawn as a border; any other is a solid chip of it, with no outline.
+  if (color.role === "border") {
+    return m("div", { ...sample, class: "h-6 w-12 rounded-md border-2", style: { borderColor: paint } });
+  }
   return m("div", { ...sample, class: "h-6 w-12 rounded-md", style: { backgroundColor: paint } });
 }
 

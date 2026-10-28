@@ -2,7 +2,7 @@
  * The style guide: a sticky contents list beside the catalog, which is split into Foundations (the tokens and the
  * icon set), Components (the shared controls), and Theming (the parts a theme styles). The page scrolls inside its own container (the shared base
  * stylesheet pins the body to the viewport), and the contents entry for the section nearest the top of it reads at
- * full strength.
+ * full strength; the column scrolls on its own to keep that entry in view.
  */
 
 import m from "mithril";
@@ -42,45 +42,71 @@ function tocLink(id: string, label: string, className: string, isActive: boolean
   );
 }
 
+/** How far below the top of the scroll area a section's top must have passed for it to be the current one. */
+const CURRENT_LINE_OFFSET = 96;
+/** How close to the left column's edges the current entry may come before the column scrolls to keep it in view. */
+const NAV_KEEP_IN_VIEW_MARGIN = 24;
+
+/** The section the reader is in: the last whose top has passed the current line, or the last of all at the end. */
+export function currentSectionId(scroller: HTMLElement, targets: readonly Element[]): string | null {
+  if (targets.length === 0) return null;
+  if (scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 2) return targets[targets.length - 1].id;
+  const line = scroller.getBoundingClientRect().top + CURRENT_LINE_OFFSET;
+  let current = targets[0].id;
+  for (const target of targets) {
+    if (target.getBoundingClientRect().top <= line) current = target.id;
+  }
+  return current;
+}
+
+/** Scroll the left column, and only it, just enough to show its current entry. (``scrollIntoView`` would also
+ *  scroll the page the column sits in.) */
+export function keepCurrentEntryInView(nav: HTMLElement): void {
+  const entry = nav.querySelector("[aria-current]");
+  if (entry === null) return;
+  const box = nav.getBoundingClientRect();
+  const entryBox = entry.getBoundingClientRect();
+  if (entryBox.top < box.top + NAV_KEEP_IN_VIEW_MARGIN) {
+    nav.scrollTop -= box.top + NAV_KEEP_IN_VIEW_MARGIN - entryBox.top;
+  } else if (entryBox.bottom > box.bottom - NAV_KEEP_IN_VIEW_MARGIN) {
+    nav.scrollTop += entryBox.bottom - (box.bottom - NAV_KEEP_IN_VIEW_MARGIN);
+  }
+}
+
 export function StyleGuidePage(): m.Component<StyleGuidePageAttrs> {
   const demos = new ComponentDemos();
   let activeId: string | null = null;
-  let observer: IntersectionObserver | null = null;
-  const visible = new Map<string, boolean>();
-
-  function recomputeActive(targets: readonly Element[]): void {
-    let next: string | null = null;
-    let nearestTop = Infinity;
-    for (const target of targets) {
-      if (visible.get(target.id) !== true) continue;
-      const top = target.getBoundingClientRect().top;
-      if (top < nearestTop) {
-        nearestTop = top;
-        next = target.id;
-      }
-    }
-    if (next !== null && next !== activeId) {
-      activeId = next;
-      m.redraw();
-    }
-  }
+  let stopTracking: (() => void) | null = null;
 
   return {
     oncreate({ dom }) {
-      if (!("IntersectionObserver" in window)) return;
+      const scroller = dom.querySelector<HTMLElement>(`#${SCROLL_ID}`);
+      const nav = dom.querySelector<HTMLElement>("nav.toc");
+      if (scroller === null || nav === null) return;
       const targets = Array.from(dom.querySelectorAll(".catalog-section, .catalog-group"));
-      observer = new IntersectionObserver(
-        (entries) => {
-          for (const entry of entries) visible.set(entry.target.id, entry.isIntersecting);
-          recomputeActive(targets);
-        },
-        // A band near the top of the scroll area: a section is current while it crosses it.
-        { root: dom.querySelector(`#${SCROLL_ID}`), rootMargin: "-5% 0px -80% 0px", threshold: 0 },
-      );
-      for (const target of targets) observer.observe(target);
+      let frame: number | null = null;
+      const update = (): void => {
+        frame = null;
+        const next = currentSectionId(scroller, targets);
+        if (next === activeId) return;
+        activeId = next;
+        m.redraw.sync();
+        keepCurrentEntryInView(nav);
+      };
+      const onScroll = (): void => {
+        if (frame === null) frame = requestAnimationFrame(update);
+      };
+      scroller.addEventListener("scroll", onScroll, { passive: true });
+      window.addEventListener("resize", onScroll);
+      stopTracking = () => {
+        scroller.removeEventListener("scroll", onScroll);
+        window.removeEventListener("resize", onScroll);
+        if (frame !== null) cancelAnimationFrame(frame);
+      };
+      update();
     },
     onremove() {
-      observer?.disconnect();
+      stopTracking?.();
       demos.dispose();
     },
     view({ attrs: { tokens } }) {
