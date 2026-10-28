@@ -193,6 +193,28 @@ def test_worktree_mode_refuses_a_non_git_directory(workspace_root: Path) -> None
         )
 
 
+def test_a_branch_in_in_place_mode_is_refused(workspace_root: Path) -> None:
+    """mngr ignores --branch outright for --transfer none, so the launcher refuses the
+    combination rather than silently running on whatever --path has checked out."""
+    source = workspace_root / "plain-dir"
+    source.mkdir()
+    runner = _RecordingRunner()
+
+    with pytest.raises(SystemExit):
+        launch_custom_agent.launch(
+            name="my-task",
+            source_path=source,
+            mode="in-place",
+            account_id="",
+            harness_name="",
+            branch="main",
+            display_name="",
+            message="",
+            runner=runner,
+        )
+    assert runner.create_calls() == []
+
+
 def test_a_taken_agent_name_is_refused_before_the_create(workspace_root: Path) -> None:
     repo = _git_repo(workspace_root)
     runner = _RecordingRunner(listing_records=[{"id": _AGENT_ID, "name": "my-task"}])

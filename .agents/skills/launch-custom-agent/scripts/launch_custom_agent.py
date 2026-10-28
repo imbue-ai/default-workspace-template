@@ -114,7 +114,7 @@ def _resolve_account(account_id: str, harness_name: str) -> accounts.Account:
     return account
 
 
-def _validate_source(path: Path, mode: str) -> None:
+def _validate_source(path: Path, mode: str, branch: str) -> None:
     if not path.is_absolute():
         _fail(f"--path must be absolute, got {path}")
     if not path.is_dir():
@@ -127,6 +127,11 @@ def _validate_source(path: Path, mode: str) -> None:
         )
         if probe.returncode != 0:
             _fail(f"worktree mode needs a git repository, and {path} is not one; use --mode in-place instead")
+    elif branch:
+        # In-place mode never touches the directory's checkout, and mngr ignores --branch
+        # outright for --transfer none -- so honoring the request is impossible and
+        # dropping it silently would mislead the caller.
+        _fail("--branch only applies to worktree mode; in-place mode runs on whatever is checked out in --path")
 
 
 def _list_agent_records(runner: Runner) -> list[dict[str, object]]:
@@ -231,7 +236,7 @@ def launch(
 ) -> int:
     runner = runner or Runner()
     _require_workspace_root()
-    _validate_source(source_path, mode)
+    _validate_source(source_path, mode, branch)
     if name in _existing_agent_names(runner):
         _fail(f"an agent named {name!r} already exists; pick another name or `mngr destroy {name}` first")
 
