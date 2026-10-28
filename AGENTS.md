@@ -35,7 +35,7 @@ When you are following a skill, mirror its rough sequence in the progress view, 
 
 ## Declaring and running steps
 
-The first thing you do on any prompt that warrants real work is decompose it into steps and create them all up front, BEFORE doing any of the work — the step sequence is the user-visible plan. Concretely:
+The first thing you do on any prompt that warrants real work is decompose it into steps and create them all up front, BEFORE doing any of the work — the step sequence is the user-visible plan. A message that arrives with a `[Message step]` note already has its own step (see "Steps made for the user's messages" below), so for it you declare only steps for parts of the work. Concretely:
 
 1. (Optional) one short prose acknowledgement, e.g. "Sure, looking into that now." Keep it to one line; don't narrate the plan here.
 2. `tk create --step "<user facing title>"` for every step you currently expect, in order. You may batch them into one tool call, but each step must be its **own separate `tk create` command** (on its own line or joined with `;`) — each `tk create` makes exactly one step, so never pass multiple `--step`s to a single `tk create` (tk rejects that). **Never redirect the output of a `tk create`/`start`/`close`** (`>`, `>>`, `2>`, `&>`, `| tee`, …): the progress view reads each step from the command's visible output (`Created <id>: <title>`), so a redirect makes the step drop out of the plan. Note the ids. Do NOT `tk start` any yet.
@@ -46,6 +46,17 @@ The first thing you do on any prompt that warrants real work is decompose it int
 Add steps mid-turn (`tk create --step`) as sub-problems surface; drop ones that turn out unneeded (`tk close <id> "No longer needed — covered by the previous step."`). Granularity follows the user's mental model of the work — "first X, then Y, then Z" is three steps — not one-per-tool-call and not one-for-the-whole-turn. Typically 2–5 per substantive turn.
 
 Titles describe the goal as the user understands it. Summaries (required on close) are ONE plain-English line describing **the work you did** in that step — not the result or finding (that goes in your final message below the timeline), and not a list of tool calls or file names.
+
+## Steps made for the user's messages
+
+A message the user sends while you are busy gets its step from the chat: the chat reserves its id the moment they press send, and a `[Message step]` note beside the message names it. The step appears on their progress timeline a few seconds later, titled with their request. A message with no such note (one sent while you were idle) has no step: declare its steps yourself as above.
+
+- Never create a second step for a request whose message came with a `[Message step]` note. You may add steps for parts of your own work (for example "Check it all works"), as usual.
+- `tk start <id>` it when you begin on the request (the command waits until the step exists), and `tk close <id> "<summary>"` it when the request is done.
+- A message that arrives while you are busy with something else keeps its step open until you get to it. Do not close it only to clear the list.
+- The chat's decisions about a message come from a quick model that sees one message at a time. Treat them as suggestions, and check them against everything the user has said.
+- A message the model judges not a task (thanks, a question about progress) gets no step: `tk start` on its id says so at once. Reply or carry on without a step, or create one if you judge it is a task.
+- A message may repeat, change or call off one of your open steps. A repeat gets no step: `tk start` on its id names the step it repeats. A change gets its own step for the updated request, and the chat cancels the step it replaces. A call-off gets no step, and the chat cancels the step it calls off. A cancel (`tk cancel`) hides the step from the user's timeline and marks it in `tk steps`; if it is right, close the step with a short note, and if not, `tk start` the step, which overrides the cancel.
 
 ## When you don't need records
 

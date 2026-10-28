@@ -137,8 +137,8 @@ class ChatNamingState(FrozenModel):
 
 
 @pure
-def chat_naming_prompt(message: str) -> str:
-    """What the model is asked about ``message``: its opening, framed as text to title rather than to answer.
+def framed_message_opening(message: str) -> str:
+    """The opening of ``message``, to go between ``<message>`` tags a prompt calls text to describe.
 
     Tags inside the opening are dropped, so it cannot close the frame early and speak as the instructions.
     Dropping repeats until none is left: the pieces around one dropped tag can join into another.
@@ -146,8 +146,14 @@ def chat_naming_prompt(message: str) -> str:
     opening, tag_count = _MESSAGE_TAG_PATTERN.subn("", message[:_MAX_PROMPT_CHARACTERS])
     while tag_count:
         opening, tag_count = _MESSAGE_TAG_PATTERN.subn("", opening)
+    return opening
+
+
+@pure
+def chat_naming_prompt(message: str) -> str:
+    """What the model is asked about ``message``: its opening, framed as text to title rather than to answer."""
     return (
-        f"<message>\n{opening}\n</message>\n\n"
+        f"<message>\n{framed_message_opening(message)}\n</message>\n\n"
         f"Reply with the title of the chat this message opens, or {_NO_NAME_ANSWER}."
     )
 

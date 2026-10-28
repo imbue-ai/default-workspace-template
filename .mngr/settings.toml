@@ -56,6 +56,9 @@ host_env__extend = [
     # tk reads TICKETS_DIR if set; absolute path so it works from worktree
     # subdirs too. /home/user/workspace/ is the container WORKDIR (set by the Dockerfile).
     "TICKETS_DIR=/home/user/workspace/data/.tickets",
+    # The step ids the chat app reserves for the user's messages until their steps are written
+    # (system/apps/chat/imbue/chat/message_steps.py); absolute for the same reason as TICKETS_DIR.
+    "CHAT_MESSAGE_STEP_RESERVATIONS_DIR=/home/user/workspace/data/.apps/chat/message_step_reservations",
     # The OOM shed ledger + agent-pid registry live under runtime/ (so they ride
     # the runtime-backup branch). The container-level earlyoom kill hook runs
     # with work dir /home/user/workspace, but each agent's SessionStart hooks resolve paths

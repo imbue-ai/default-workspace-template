@@ -147,6 +147,9 @@ from imbue.chat.main_chat import MainChatCandidate
 from imbue.chat.main_chat import MainChatStore
 from imbue.chat.main_chat import resolved_main_chat_id
 from imbue.chat.message_stamps import MessageStampStore
+from imbue.chat.message_steps import MessageStep
+from imbue.chat.message_steps import MessageStepTracker
+from imbue.chat.message_steps import message_step_snapshot
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
@@ -876,6 +879,8 @@ def chat_snapshot_for_active_agent(
     last_messaged_at: float | None,
     background_tasks: tuple[BackgroundTask, ...],
     compaction_cause: CompactionCause | None,
+    message_steps: tuple[MessageStep, ...],
+    hidden_step_ids: tuple[str, ...],
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
 
@@ -918,6 +923,8 @@ def chat_snapshot_for_active_agent(
             is_connecting=is_connecting,
             is_busy=is_busy,
             background_tasks=tuple(background_task_snapshot(task) for task in background_tasks),
+            message_steps=tuple(message_step_snapshot(step) for step in message_steps),
+            hidden_step_ids=hidden_step_ids,
         ),
         last_messaged_at=last_messaged_at,
     )
@@ -1166,6 +1173,8 @@ class AgentManager:
     _accounts_index_poller: AgentFilePoller
     # Reads each chat's background-task markers; None (tests that need none) reads no tasks.
     _background_tasks: BackgroundTaskReader | None
+    # Each chat's message steps (``message_steps.py``); None (tests that need none) shows no steps.
+    _message_steps: MessageStepTracker | None
     # Per chat, its live background tasks as the poller last read them; a chat with none has no
     # entry. A non-empty entry makes the chat busy.
     _background_tasks_by_chat: dict[ChatId, tuple[BackgroundTask, ...]]
@@ -1267,6 +1276,7 @@ class AgentManager:
         is_secondary: bool = False,
         imbue_studio_gateway: GatewayAccess | None = None,
         background_tasks: BackgroundTaskReader | None = None,
+        message_steps: MessageStepTracker | None = None,
     ) -> Self:
         """Build an AgentManager with the given broadcaster.
 
@@ -1295,6 +1305,7 @@ class AgentManager:
         ``imbue_studio_gateway`` is how the Imbue Studio app is reached to mark a chat read when the user
         starts watching it; the default reaches nobody. ``background_tasks`` reads each chat's
         background-task markers; the default reads none, so no chat is ever busy on a task.
+        ``message_steps`` tracks the steps made for messages sent to busy chats; the default shows none.
         """
         manager = cls.__new__(cls)
         manager._broadcaster = broadcaster
@@ -1339,6 +1350,9 @@ class AgentManager:
         manager._session_by_agent = {}
         manager._model_choice_by_agent = {}
         manager._background_tasks = background_tasks
+        manager._message_steps = message_steps
+        if message_steps is not None:
+            message_steps.set_change_callback(manager._broadcast_chats_updated)
         manager._background_tasks_by_chat = {}
         manager._background_tasks_read_lock = threading.Lock()
         manager._finished_tasks_awaiting_turn_by_agent = {}
@@ -1459,6 +1473,8 @@ class AgentManager:
         self._seed_oom_prioritizer()
         self._oom_prioritizer.start()
         self._background_tasks_poller.start()
+        if self._message_steps is not None:
+            self._message_steps.start()
         self._accounts_index_poller.start()
         self._model_state_poller.start()
         self._compacting_marker_poller.start()
@@ -1481,6 +1497,8 @@ class AgentManager:
         self._autocompactor.stop()
         self._auto_open.stop()
         self._background_tasks_poller.stop()
+        if self._message_steps is not None:
+            self._message_steps.stop()
         self._accounts_index_poller.stop()
         self._model_state_poller.stop()
         self._compacting_marker_poller.stop()
@@ -1796,6 +1814,8 @@ class AgentManager:
                     last_messaged.get(chat.chat_id),
                     tasks_by_chat.get(chat.chat_id, ()),
                     compaction_cause_by_agent[agent.id],
+                    self._message_steps_of_chat(chat.chat_id),
+                    self._hidden_step_ids_of_chat(chat.chat_id),
                 )
             )
             for agent, chat in listed
@@ -1829,7 +1849,26 @@ class AgentManager:
             self._message_stamps.read().get(chat.chat_id),
             background_tasks,
             compaction_cause,
+            self._message_steps_of_chat(chat.chat_id),
+            self._hidden_step_ids_of_chat(chat.chat_id),
         )
+
+    def is_chat_busy_with_a_turn(self, chat_id: ChatId) -> bool:
+        """Whether a message sent to the chat now would wait for its agent: a turn is running or closing (what the
+        chat's status reads as working), or messages are already queued behind one."""
+        with self._lock:
+            chat = self._resolve_chat_locked(chat_id)
+            agent = self._agents.get(chat.active_agent_id) if chat is not None and chat.active_agent_id else None
+        if agent is None:
+            return False
+        is_working = agent.activity_state is not None and is_working_activity_state(agent.activity_state)
+        return is_working or agent.is_turn_closing or bool(agent.queued_messages)
+
+    def _message_steps_of_chat(self, chat_id: ChatId) -> tuple[MessageStep, ...]:
+        return () if self._message_steps is None else self._message_steps.steps_of_chat(chat_id)
+
+    def _hidden_step_ids_of_chat(self, chat_id: ChatId) -> tuple[str, ...]:
+        return () if self._message_steps is None else self._message_steps.hidden_step_ids_of_chat(chat_id)
 
     def get_active_agent_info(self, chat_id: ChatId) -> AgentInfo | None:
         """The agent a chat currently runs on (with its resolved dirs), or None for an id that names no chat."""

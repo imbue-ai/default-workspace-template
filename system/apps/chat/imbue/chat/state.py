@@ -28,6 +28,7 @@ from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.message_steps import MessageSteps
 from imbue.chat.primitives import ChatId
 from imbue.chat.reply_drafts import ReplyDraftPublisher
 from imbue.chat.reply_drafts import ReplyDraftReader
@@ -102,6 +103,11 @@ class ChatAppState(MutableModel):
         default=None,
         description="Names new chats from their first messages; None where chats are not named (a secondary "
         "chat, whose renames would be the live chat's)",
+    )
+    message_steps: MessageSteps | None = Field(
+        default=None,
+        description="Gives each message sent to a busy chat a step, its id reserved before the delivery; None where "
+        "no steps are made (a secondary chat, whose sends are a preview's)",
     )
     claude_auth_service: ClaudeAuthService
     auth_flows: AuthFlowService

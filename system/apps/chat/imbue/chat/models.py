@@ -613,6 +613,26 @@ class BackgroundTaskSnapshot(FrozenModel):
     )
 
 
+class MessageStepStatus(LowerCaseStrEnum):
+    """A message step's tk status (``message_steps.py``)."""
+
+    OPEN = auto()
+    IN_PROGRESS = auto()
+    CLOSED = auto()
+
+
+class MessageStepSnapshot(FrozenModel):
+    """One message's step as the chat pages show it, under the message it was made for (``message_steps.py``)."""
+
+    step_id: str = Field(description="The step's tk id")
+    message_id: str = Field(description="The send-time id of the message")
+    message_text: str = Field(description="The message, verbatim, which the page matches its bubbles against")
+    title: str = Field(description="The step's title, as the model wrote it")
+    status: MessageStepStatus = Field(description="The step's tk status")
+    summary: str = Field(description="The agent's close summary; '' before it closes")
+    created_at: str = Field(description="When the step was written (ISO 8601, UTC), once the model titled the message")
+
+
 class ActiveAgentSnapshot(FrozenModel):
     """The agent-level facts about a chat's active agent that the chat pages render."""
 
@@ -641,6 +661,13 @@ class ActiveAgentSnapshot(FrozenModel):
     )
     background_tasks: tuple[BackgroundTaskSnapshot, ...] = Field(
         description="The chat's pending background tasks, oldest first"
+    )
+    message_steps: tuple[MessageStepSnapshot, ...] = Field(
+        description="The steps made for the messages sent to the chat while its agent was busy, oldest first"
+    )
+    hidden_step_ids: tuple[str, ...] = Field(
+        description="The chat's steps whose cancel holds (``tk cancel``), which the pages leave out until the agent "
+        "starts one again (``message_steps.py``)"
     )
 
 

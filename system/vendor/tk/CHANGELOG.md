@@ -14,6 +14,8 @@
 - Timestamps (`created`, note timestamps) now carry microsecond precision where the platform's `date` supports it (GNU `%N`), with a `.000000` fallback elsewhere; the fixed-width format keeps lexicographic order equal to chronological order
 
 ### Added
+- `tk cancel <id> "<reason>"` records that a step is no longer wanted in a sidecar next to the ticket (`<id>.<stamp>.<n>.cancel`, created exclusively; the ticket is untouched). The latest cancel holds until the step is started again: `tk steps` marks the step, `tk show` shows a `## Cancelled` section, and `tk start` prints a notice that it overrides the cancel
+- `tk create --id <id>` creates a ticket under an id the caller reserved, and refuses when a ticket already exists there (every create is now exclusive)
 - `tk start` stamps a `started:` frontmatter timestamp and `tk close` stamps a `closed:` timestamp, so consumers can order tickets by when work began and completed (used by downstream progress views)
 - Plugin system: executables named `tk-<cmd>` or `ticket-<cmd>` in PATH are invoked automatically
 - `super` command to bypass plugins and run built-in commands directly

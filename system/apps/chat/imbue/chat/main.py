@@ -40,6 +40,13 @@ from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MainChatStore
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
+from imbue.chat.message_steps import MESSAGE_STEP_RESERVATIONS_DIRNAME
+from imbue.chat.message_steps import MessageStepFiles
+from imbue.chat.message_steps import MessageStepReservations
+from imbue.chat.message_steps import MessageStepTracker
+from imbue.chat.message_steps import MessageStepWriter
+from imbue.chat.message_steps import MessageSteps
+from imbue.chat.message_steps import step_id_prefix
 from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
 from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
 from imbue.chat.secret_requests import SecretRequestStore
@@ -133,6 +140,13 @@ def build_production_state(
     shell = DisconnectedShell() if is_secondary else build_live_chat_shell_client()
     chat_settings = ChatSettingsStore(path=data_dir / SETTINGS_FILENAME)
     chat_records_root = data_dir / CHAT_RECORDS_DIRNAME
+    # The steps of messages sent to busy chats, in the workspace's tickets folder; a secondary's sends make none.
+    message_step_files = MessageStepFiles(tickets_dir=config.chat_tickets_dir, tk_script=config.tk_script)
+    # The ids reserved for steps not written yet, prefixed as tk mints ids from the repo root every program runs in.
+    message_step_reservations = MessageStepReservations(
+        root=data_dir / MESSAGE_STEP_RESERVATIONS_DIRNAME, id_prefix=step_id_prefix(Path.cwd().name)
+    )
+    message_step_tracker = None if is_secondary else MessageStepTracker(files=message_step_files)
     agent_manager = AgentManager.build(
         broadcaster,
         message_stamps=MessageStampStore(path=data_dir / STAMPS_FILENAME),
@@ -152,6 +166,7 @@ def build_production_state(
         # Reading a chat marks it read in the Imbue Studio app; a secondary's windows are a preview's, not the user's.
         imbue_studio_gateway=None if is_secondary else GatewayAccess.from_environ(os.environ),
         background_tasks=BackgroundTaskReader(root=data_dir / BACKGROUND_TASKS_DIRNAME),
+        message_steps=message_step_tracker,
     )
     # The codex ledger owns live user-turns; route each committed user-turn it emits onto
     # the same per-chat event fan-out the session watchers use. Wired here (not at manager build)
@@ -178,6 +193,19 @@ def build_production_state(
             has_placeholder_name=agent_manager.has_placeholder_name,
             rename_placeholder_named_chat=agent_manager.rename_placeholder_named_chat,
             build_one_shot_completion=build_one_shot_completion,
+        ),
+        message_steps=None
+        if message_step_tracker is None
+        else MessageSteps(
+            files=message_step_files,
+            reservations=message_step_reservations,
+            writer=MessageStepWriter(
+                files=message_step_files,
+                reservations=message_step_reservations,
+                resolve_chat_account_binding=agent_manager.resolve_chat_account_binding,
+                build_one_shot_completion=build_one_shot_completion,
+                on_change=message_step_tracker.refresh,
+            ),
         ),
         # One long-lived service per app: it holds the in-flight sign-in PTY between the
         # start call and the polls that advance it. A successful re-auth restarts the live agents
