@@ -42,8 +42,21 @@ def _load_flat_value_map(path: Path, description: str) -> dict[str, object]:
     return {str(key): value for key, value in raw.items()}
 
 
+def _is_plain_filename_user_id(user_id: str) -> bool:
+    """Whether the user id can safely name a file inside the overrides directory.
+
+    The id names the override file, so one carrying a path separator (or ``..``) would
+    point the read outside the directory. Identity user ids are opaque broker ids and
+    never look like paths, so anything path-shaped is refused rather than resolved.
+    """
+    return bool(user_id) and "/" not in user_id and "\\" not in user_id and "\x00" not in user_id and user_id not in (".", "..")
+
+
 def load_user_override_values(workspace_root: Path, user_id: str) -> dict[str, object]:
     """The given user's override values in this workspace, by setting key (empty when none)."""
+    if not _is_plain_filename_user_id(user_id):
+        logger.warning("Ignoring a profile override lookup for a path-shaped user id: {!r}", user_id)
+        return {}
     path = workspace_root / USER_OVERRIDES_RELATIVE_DIR / f"{user_id}.json"
     return _load_flat_value_map(path, "profile override file")
 
