@@ -670,7 +670,8 @@ def _is_current_compaction_event(event: dict[str, Any], now: float, pending_requ
 
 @pure
 def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, ...]:
-    """The words of the user turns a sign-in failure left unanswered at the end of the transcript, oldest first.
+    """The user turns a sign-in failure left unanswered at the end of the transcript, oldest first, each as it
+    was sent (machine context included).
 
     The unanswered tail is everything after the agent's last reply that was not an auth error. Its user
     turns are the refused ones when it holds an auth error and none of them was sent after the latest one.
