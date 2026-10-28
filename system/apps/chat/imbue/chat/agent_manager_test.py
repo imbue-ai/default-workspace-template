@@ -6232,6 +6232,45 @@ def test_a_sign_in_resends_nothing_to_a_chat_that_is_switching(
     assert (set(landing.read_agent_ids), attempted) == ({settled_id}, [(settled_id, "hi")])
 
 
+def _set_queued_messages(manager: AgentManager, agent_id: str, *contents: str) -> None:
+    with manager._lock:
+        agent = manager._agents[agent_id]
+        queued = tuple(
+            QueuedMessageState(queued_id=f"q{index}", content=content, timestamp="t")
+            for index, content in enumerate(contents)
+        )
+        manager._agents[agent_id] = agent.model_copy_update(to_update(agent.field_ref().queued_messages, queued))
+
+
+def test_a_resend_waits_for_its_message_while_the_agent_holds_it_in_its_queue(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager = AgentManager.build(broadcaster)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Busy-Chat")
+    agent_info = manager.get_agent_info_by_id(agent_id)
+    assert agent_info is not None
+    reader = _FixedTranscriptReader([_typed_turn("first"), _typed_turn("second"), _agent_reply(is_auth_error=True)])
+    _set_queued_messages(manager, agent_id, "second")
+    wait = threading.Thread(target=manager._wait_for_resent_turn, args=(agent_info, reader, "second", 1, 0.1))
+    try:
+        wait.start()
+        # Well past its landing timeout, and still waiting, since the agent has the message queued.
+        wait.join(timeout=0.6)
+        assert wait.is_alive()
+        _set_queued_messages(manager, agent_id)
+        reader._events.append(_typed_turn("second"))
+        wait.join(timeout=5.0)
+        assert not wait.is_alive()
+        # Neither queued nor landed: the wait ends at its timeout.
+        started = time.monotonic()
+        manager._wait_for_resent_turn(agent_info, reader, "never sent", 0, timeout_seconds=0.1)
+        assert time.monotonic() - started < 5.0
+    finally:
+        manager.stop()
+        wait.join(timeout=5.0)
+
+
 def test_a_sign_in_resends_nothing_to_an_agent_its_chat_moved_on_from_during_the_restart(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
