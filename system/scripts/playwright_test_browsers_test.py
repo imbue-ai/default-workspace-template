@@ -136,8 +136,8 @@ def test_a_failed_install_leaves_no_link_to_the_incomplete_shell(
     assert not link.is_symlink()
 
 
-def test_a_unit_that_cannot_resolve_the_shell_still_succeeds(tmp_path: Path) -> None:
-    # The fixtures fall back to Fortress, so the converge must not report the unit failed.
+def test_a_unit_that_cannot_resolve_the_shell_fails(tmp_path: Path) -> None:
+    # The fixtures fall back to Fortress on their own; the exit code is what records it.
     env = {
         **_put_on_path(tmp_path / "bin", "uv", "exit 1\n"),
         "ENV_CONVERGE_WORKSPACE_DIR": str(tmp_path),
@@ -148,8 +148,8 @@ def test_a_unit_that_cannot_resolve_the_shell_still_succeeds(tmp_path: Path) -> 
         ["bash", str(_TEST_SHELL_UNIT_PATH)], env=env, capture_output=True, text=True
     )
 
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "will retry next converge" in result.stdout
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "could not resolve the headless shell's path" in result.stdout
 
 
 def test_the_playwright_paths_resolve_from_the_locked_playwright(

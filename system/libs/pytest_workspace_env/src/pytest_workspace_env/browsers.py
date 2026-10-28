@@ -1,6 +1,6 @@
 """The browsers a workspace installs for its test suites, and which one a browser test launches.
 
-env-converge installs both before any agent starts: Playwright's headless shell, for the
+env-converge installs both, in the background after boot: Playwright's headless shell, for the
 tests alone (system/scripts/env.d/1010-playwright-test-headless-shell.sh), and Fortress, the
 workspace's stealth-patched Chromium fork (system/scripts/env.d/1000-playwright-fortress.sh).
 Playwright's own browser-cache lookup finds neither, so a launch names the binary explicitly.

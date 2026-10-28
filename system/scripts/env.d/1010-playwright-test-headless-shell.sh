@@ -6,9 +6,10 @@
 # test passing on both. It lives in its own directory, outside Playwright's default
 # cache, so nothing reaches it by default: a bare launch keeps using Fortress, whose
 # stealth the browser service and agents' own browsing rely on. The fixtures launch it
-# through the stable link and fall back to Fortress when it is missing, so a failed
-# install never fails the unit. Ordered after 1000-playwright-fortress.sh, whose
-# `playwright install-deps` puts in the system libs this build needs too.
+# through the stable link and fall back to Fortress when it is missing; a failed
+# install still fails the unit, so env-converge records it. Ordered after
+# 1000-playwright-fortress.sh, whose `playwright install-deps` puts in the system
+# libs this build needs too.
 #
 # env.d contract: idempotent with a fast satisfied-check -- NO marker files of our
 # own. The installed build follows the locked Playwright, so a Playwright upgrade
@@ -69,11 +70,11 @@ _install_test_headless_shell() {
 }
 
 main() {
-    if _install_test_headless_shell "$(_resolve_test_headless_shell_path)"; then
-        _log "unit satisfied"
-    else
-        _log "not installed this pass; will retry next converge"
+    if ! _install_test_headless_shell "$(_resolve_test_headless_shell_path)"; then
+        _log "unit failed; tests use Fortress until the next converge retries"
+        return 1
     fi
+    _log "unit satisfied"
 }
 
 main "$@"
