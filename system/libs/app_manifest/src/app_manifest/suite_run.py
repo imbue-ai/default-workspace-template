@@ -8,6 +8,7 @@ judgment about memory the caller makes.
 
 import re
 import shlex
+import shutil
 import signal
 import subprocess
 import threading
@@ -292,6 +293,17 @@ def _classify(
         # The rerun's tests ran and these failed, so the rest of the ones it named passed.
         cleared = tuple(test_id for test_id in failed_test_ids if test_id not in still_failing)
         return CommandOutcome.FAILED, still_failing, cleared
+
+
+def remove_old_runs(runs_root: Path, kept_run_count: int) -> None:
+    """Delete all but the newest ``kept_run_count`` run directories under ``runs_root``, whose
+    timestamped names sort oldest first."""
+    if not runs_root.is_dir():
+        return
+    run_directories = sorted(path for path in runs_root.iterdir() if path.is_dir())
+    for old_run in run_directories[: max(len(run_directories) - kept_run_count, 0)]:
+        logger.debug("Removing the old test run {}", old_run)
+        shutil.rmtree(old_run)
 
 
 def _write_report(report: SuiteRunReport, output_directory: Path) -> Path:

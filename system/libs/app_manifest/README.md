@@ -415,7 +415,8 @@ selection. When the consumer is an app, declaring the path in its manifest's
 `run-tests` takes a change the way `select-tests` does and runs what it selects,
 in order, each command from its own directory. Each command's output goes to a
 file of its own under the output directory (by default a new one under
-`data/.tasks/run-tests/` in the repo root), and `summary.json` there is
+`data/.tasks/run-tests/` in the repo root, which keeps only the ten newest
+runs), and `summary.json` there is
 rewritten as each command ends, so a run in the background can be read while
 it goes. Each command ends one of four ways:
 

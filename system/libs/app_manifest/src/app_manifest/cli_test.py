@@ -970,6 +970,21 @@ def test_run_tests_with_nothing_selected_passes_and_still_writes_the_summary(tmp
     assert summary["runs"] == [] and summary["is_passing"] is True
 
 
+def test_run_tests_keeps_only_the_ten_newest_runs_in_its_default_output_root(tmp_path: Path) -> None:
+    build_selection_workspace(tmp_path)
+    runs_root = tmp_path / "data" / ".tasks" / "run-tests"
+    old_runs = [runs_root / f"20260101T0000{second:02d}000000Z" for second in range(12)]
+    for old_run in old_runs:
+        old_run.mkdir(parents=True)
+
+    result = _run_cli(["run-tests", "--repo-root", str(tmp_path), "--path", "system/libs/corelib/README.md"])
+
+    assert result.exit_code == 0, result.output
+    new_run = Path(result.output.splitlines()[0].removeprefix("output: "))
+    assert sorted(runs_root.iterdir()) == [*old_runs[3:], new_run]
+    assert (new_run / SUMMARY_FILE_NAME).is_file()
+
+
 def test_pass_scope_needs_a_diff_base_for_a_lead_ref(tmp_path: Path) -> None:
     build_news_workspace(tmp_path)
 

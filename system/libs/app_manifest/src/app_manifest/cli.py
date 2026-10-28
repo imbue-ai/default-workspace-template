@@ -35,6 +35,7 @@ from app_manifest.selection import select_tests_for_diff
 from app_manifest.selection import select_tests_for_pass_scope
 from app_manifest.selection import select_tests_for_paths
 from app_manifest.suite_run import SUMMARY_FILE_NAME
+from app_manifest.suite_run import remove_old_runs
 from app_manifest.suite_run import render_report
 from app_manifest.suite_run import run_selection
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -42,6 +43,8 @@ from imbue.imbue_common.primitives import NonEmptyStr
 
 _RUN_TESTS_OUTPUT_ROOT: Final[str] = "data/.tasks/run-tests"
 _RUN_DIRECTORY_FORMAT: Final[str] = "%Y%m%dT%H%M%S%fZ"
+# The new run is one of these, so the nine before it stay.
+_KEPT_RUN_COUNT: Final[int] = 10
 
 
 class ReferenceLookupRow(FrozenModel):
@@ -412,10 +415,13 @@ def run_tests(
     """
     resolved_repo_root = _resolved_repo_root(repo_root)
     selection = _select(resolved_repo_root, diff_base, diff_ref, paths, scope_file, is_everything)
+    runs_root = resolved_repo_root / _RUN_TESTS_OUTPUT_ROOT
+    if output_directory is None:
+        remove_old_runs(runs_root, _KEPT_RUN_COUNT - 1)
     resolved_output_directory = (
         output_directory.resolve()
         if output_directory is not None
-        else resolved_repo_root / _RUN_TESTS_OUTPUT_ROOT / datetime.now(timezone.utc).strftime(_RUN_DIRECTORY_FORMAT)
+        else runs_root / datetime.now(timezone.utc).strftime(_RUN_DIRECTORY_FORMAT)
     )
     click.echo(f"output: {resolved_output_directory}")
     total = len(selection.commands)
