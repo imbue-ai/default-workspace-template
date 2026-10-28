@@ -1,0 +1,1 @@
+The chat list no longer marks an idle chat (it had a hollow ring) or a stopped one (it had a small pause sign): their rows show no mark at all, and a stopped chat's row stays dimmed. Titles keep their place, so every row still lines up. Working, waiting on a background task, needs attention, error, and the green check of a finished turn are unchanged.
