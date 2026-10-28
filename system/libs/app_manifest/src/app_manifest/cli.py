@@ -1,7 +1,12 @@
 import json
+from collections.abc import Callable
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
+from typing import Final
 
 import click
+from oom_priority.paths import shed_ledger_path
 from pydantic import Field
 
 from app_manifest.errors import AppManifestError
@@ -20,13 +25,22 @@ from app_manifest.scope import read_pass_scope_file
 from app_manifest.scope import render_pass_scope_file
 from app_manifest.scope import render_scope_file
 from app_manifest.scope import with_diff_against_base
+from app_manifest.selection import SuiteSelection
+from app_manifest.selection import render_command_line
 from app_manifest.selection import render_selection
 from app_manifest.selection import render_selection_json
+from app_manifest.selection import select_every_test
 from app_manifest.selection import select_tests_for_diff
 from app_manifest.selection import select_tests_for_pass_scope
 from app_manifest.selection import select_tests_for_paths
+from app_manifest.suite_run import SUMMARY_FILE_NAME
+from app_manifest.suite_run import render_report
+from app_manifest.suite_run import run_selection
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.primitives import NonEmptyStr
+
+RUN_TESTS_OUTPUT_ROOT: Final[str] = "data/.tasks/run-tests"
+_RUN_DIRECTORY_FORMAT: Final[str] = "%Y%m%dT%H%M%SZ"
 
 
 class ReferenceLookupRow(FrozenModel):
@@ -136,9 +150,7 @@ def footprint(
 
 
 def _app_scope(repo_root: Path, manifest_path: Path) -> CreationScope:
-    resolved_manifest_path = (
-        manifest_path if manifest_path.is_absolute() else repo_root / manifest_path
-    )
+    resolved_manifest_path = manifest_path if manifest_path.is_absolute() else repo_root / manifest_path
     manifest = load_manifest(resolved_manifest_path, repo_root=repo_root)
     return compute_app_scope(repo_root, resolved_manifest_path, manifest)
 
@@ -251,37 +263,87 @@ def _lookup_row(repo_root: Path, match: ManifestReferenceMatch) -> ReferenceLook
     )
 
 
+def _selection_options(command: Callable[..., None]) -> Callable[..., None]:
+    """The options that name the change a test selection is for, shared by select-tests and run-tests."""
+    options = [
+        click.option(
+            "--diff-base",
+            "diff_base",
+            default=None,
+            help="A git ref; the changed paths are what the ref changed since it forked from this one. "
+            "With --path, only the revision a changed uv.lock is compared against.",
+        ),
+        click.option(
+            "--diff-ref",
+            "diff_ref",
+            default=None,
+            help="The ref the diff runs to (default HEAD); only meaningful with --diff-base.",
+        ),
+        click.option(
+            "--path",
+            "paths",
+            multiple=True,
+            help="A changed repo-root-relative path (repeatable), instead of a diff.",
+        ),
+        click.option(
+            "--scope-file",
+            "scope_file",
+            type=click.Path(path_type=Path),
+            default=None,
+            help="A harden pass's scope file, written by pass-scope with --diff-base and --lead-ref: the "
+            "change is what its footprints account for and what the pass itself changed, not the other "
+            "work in its diff, though the lead's work the branch merged in runs the suites of the pass's "
+            "creations it reaches. Instead of a diff or paths.",
+        ),
+        click.option(
+            "--all",
+            "is_everything",
+            is_flag=True,
+            default=False,
+            help="Every suite, as a change to every tracked file would run it. Instead of a diff, paths or "
+            "a scope file.",
+        ),
+    ]
+    for option in reversed(options):
+        command = option(command)
+    return command
+
+
+def _select(
+    repo_root: Path,
+    diff_base: str | None,
+    diff_ref: str | None,
+    paths: tuple[str, ...],
+    scope_file: Path | None,
+    is_everything: bool,
+) -> SuiteSelection:
+    if is_everything and (scope_file is not None or diff_base is not None or diff_ref is not None or paths):
+        raise click.UsageError(
+            "--all selects every suite on its own; drop --diff-base, --diff-ref, --path and --scope-file"
+        )
+    if scope_file is not None and (diff_base is not None or diff_ref is not None or paths):
+        raise click.UsageError("--scope-file names the change on its own; drop --diff-base, --diff-ref and --path")
+    if diff_ref is not None and (diff_base is None or paths):
+        raise click.UsageError("--diff-ref only says where a --diff-base diff runs to")
+    if not is_everything and scope_file is None and not paths and diff_base is None:
+        raise click.UsageError("pass --diff-base, the changed paths with --path, a pass's --scope-file, or --all")
+    try:
+        if is_everything:
+            return select_every_test(repo_root)
+        elif scope_file is not None:
+            return select_tests_for_pass_scope(repo_root, read_pass_scope_file(scope_file))
+        elif paths:
+            return select_tests_for_paths(repo_root, paths, diff_base)
+        else:
+            assert diff_base is not None
+            return select_tests_for_diff(repo_root, diff_base, diff_ref if diff_ref is not None else "HEAD")
+    except AppManifestError as e:
+        raise click.ClickException(str(e)) from e
+
+
 @app_manifest_cli.command("select-tests")
 @_repo_root_option
-@click.option(
-    "--diff-base",
-    "diff_base",
-    default=None,
-    help="A git ref; the changed paths are what the ref changed since it forked from this one. "
-    "With --path, only the revision a changed uv.lock is compared against.",
-)
-@click.option(
-    "--diff-ref",
-    "diff_ref",
-    default=None,
-    help="The ref the diff runs to (default HEAD); only meaningful with --diff-base.",
-)
-@click.option(
-    "--path",
-    "paths",
-    multiple=True,
-    help="A changed repo-root-relative path (repeatable), instead of a diff.",
-)
-@click.option(
-    "--scope-file",
-    "scope_file",
-    type=click.Path(path_type=Path),
-    default=None,
-    help="A harden pass's scope file, written by pass-scope with --diff-base and --lead-ref: the "
-    "change is what its footprints account for and what the pass itself changed, not the other "
-    "work in its diff, though the lead's work the branch merged in runs the suites of the pass's "
-    "creations it reaches. Instead of a diff or paths.",
-)
+@_selection_options
 @click.option(
     "--format",
     "output_format",
@@ -295,32 +357,69 @@ def select_tests(
     diff_ref: str | None,
     paths: tuple[str, ...],
     scope_file: Path | None,
+    is_everything: bool,
     output_format: str,
 ) -> None:
     """Print the test commands a change calls for, in the order to run them."""
-    if scope_file is not None and (diff_base is not None or diff_ref is not None or paths):
-        raise click.UsageError("--scope-file names the change on its own; drop --diff-base, --diff-ref and --path")
-    if diff_ref is not None and (diff_base is None or paths):
-        raise click.UsageError("--diff-ref only says where a --diff-base diff runs to")
-    if scope_file is None and not paths and diff_base is None:
-        raise click.UsageError("pass --diff-base, the changed paths with --path, or a pass's --scope-file")
-    resolved_repo_root = _resolved_repo_root(repo_root)
-    try:
-        if scope_file is not None:
-            selection = select_tests_for_pass_scope(resolved_repo_root, read_pass_scope_file(scope_file))
-        elif paths:
-            selection = select_tests_for_paths(resolved_repo_root, paths, diff_base)
-        else:
-            assert diff_base is not None
-            selection = select_tests_for_diff(
-                resolved_repo_root, diff_base, diff_ref if diff_ref is not None else "HEAD"
-            )
-    except AppManifestError as e:
-        raise click.ClickException(str(e)) from e
-    rendered = (
-        render_selection_json(selection) if output_format == "json" else render_selection(selection)
-    )
+    selection = _select(_resolved_repo_root(repo_root), diff_base, diff_ref, paths, scope_file, is_everything)
+    rendered = render_selection_json(selection) if output_format == "json" else render_selection(selection)
     click.echo(rendered, nl=False)
+
+
+@app_manifest_cli.command("run-tests")
+@_repo_root_option
+@_selection_options
+@click.option(
+    "--output-dir",
+    "output_directory",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="Where each command's output and the summary go (default: a new directory under "
+    f"{RUN_TESTS_OUTPUT_ROOT} in the repo root).",
+)
+@click.option(
+    "--shed-ledger",
+    "shed_ledger",
+    type=click.Path(path_type=Path),
+    default=None,
+    help="The memory guard's shed ledger, read to tell a command it killed from a failure "
+    "(default: where oom_priority keeps it).",
+)
+def run_tests(
+    repo_root: Path | None,
+    diff_base: str | None,
+    diff_ref: str | None,
+    paths: tuple[str, ...],
+    scope_file: Path | None,
+    is_everything: bool,
+    output_directory: Path | None,
+    shed_ledger: Path | None,
+) -> None:
+    """Run the test commands a change calls for, in order, and say how each ended.
+
+    A pytest run that fails reruns only its failed tests once; when they pass, the run is flaky. A
+    command killed while the memory guard recorded a shed is a shed, not a failure. Exits non-zero
+    when any command failed or was shed.
+    """
+    resolved_repo_root = _resolved_repo_root(repo_root)
+    selection = _select(resolved_repo_root, diff_base, diff_ref, paths, scope_file, is_everything)
+    resolved_output_directory = (
+        output_directory.resolve()
+        if output_directory is not None
+        else resolved_repo_root / RUN_TESTS_OUTPUT_ROOT / datetime.now(timezone.utc).strftime(_RUN_DIRECTORY_FORMAT)
+    )
+    click.echo(f"output: {resolved_output_directory}")
+    total = len(selection.commands)
+    report = run_selection(
+        selection,
+        resolved_repo_root,
+        resolved_output_directory,
+        shed_ledger if shed_ledger is not None else shed_ledger_path(),
+        lambda index, command: click.echo(f"running {index}/{total}: {render_command_line(command)}"),
+    )
+    click.echo(render_report(report, resolved_output_directory / SUMMARY_FILE_NAME), nl=False)
+    if not report.is_passing:
+        raise SystemExit(1)
 
 
 def main() -> None:
