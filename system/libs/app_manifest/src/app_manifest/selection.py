@@ -1229,7 +1229,7 @@ def _refuse_uncommitted_changes(repo_root: Path) -> None:
     if uncommitted:
         raise SuiteSelectionError(
             "the working tree has changes the diff does not include; commit them, or remove "
-            "any that are not part of the change, then run select-tests again: "
+            "any that are not part of the change, then run this again: "
             + ", ".join(uncommitted)
         )
 
@@ -1257,7 +1257,7 @@ def select_tests_for_pass_scope(repo_root: Path, scope: PassScope) -> SuiteSelec
     if diff.ref != head:
         raise SuiteSelectionError(
             f"the pass scope file's diff runs to {diff.ref}, but HEAD is {head}; run pass-scope "
-            "again, then select-tests"
+            "again, then this"
         )
     _refuse_uncommitted_changes(repo_root)
     others = frozenset(diff.others)
