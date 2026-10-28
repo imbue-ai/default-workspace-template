@@ -25,6 +25,7 @@ rm /tmp/offload-symlinks
 
 # The browser stack, which a workspace installs on first boot rather than in the image.
 ENV_CONVERGE_WORKSPACE_DIR="$REPO_ROOT" bash "$REPO_ROOT/system/scripts/env.d/1000-playwright-fortress.sh"
+ENV_CONVERGE_WORKSPACE_DIR="$REPO_ROOT" bash "$REPO_ROOT/system/scripts/env.d/1010-playwright-test-headless-shell.sh"
 
 # offload has no prebuilt binary, so build it with a toolchain that is removed again afterwards.
 readonly BUILD_HOME="/opt/offload-build"

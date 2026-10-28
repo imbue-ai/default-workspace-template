@@ -1,4 +1,5 @@
-"""The browser env.d unit's Playwright path lookup and its install of the headless shell for the test suites."""
+"""The browser env.d units: the Playwright path lookup they share, the Fortress unit's links from
+Playwright's default paths, and the test headless shell's install."""
 
 from __future__ import annotations
 
@@ -6,23 +7,28 @@ import os
 import shlex
 import stat
 import subprocess
-import sys
 from pathlib import Path
 
+import playwright_browser_paths
 import pytest
 
-_UNIT_PATH = Path(__file__).parent / "env.d" / "1000-playwright-fortress.sh"
+_FORTRESS_UNIT_PATH = Path(__file__).parent / "env.d" / "1000-playwright-fortress.sh"
+_TEST_SHELL_UNIT_PATH = (
+    Path(__file__).parent / "env.d" / "1010-playwright-test-headless-shell.sh"
+)
 
 
 def _run_unit_function(
+    unit_path: Path,
     name: str,
     variables: dict[str, Path],
     env: dict[str, str] | None = None,
+    arguments: tuple[Path, ...] = (),
     after: str = "",
 ) -> subprocess.CompletedProcess[str]:
-    """Runs the unit's shell function ``name`` under ``set -euo pipefail``, called outside ``||``
-    as main() calls it, with ``variables`` set and ``after`` run once it returns."""
-    unit = _UNIT_PATH.read_text()
+    """Runs the unit's shell function ``name`` with ``arguments`` under ``set -euo pipefail``,
+    called outside ``||``, with ``variables`` set and ``after`` run once it returns."""
+    unit = unit_path.read_text()
     start = unit.index(f"\n{name}() {{\n") + 1
     function = unit[start : unit.index("\n}\n", start) + len("\n}\n")]
     assignments = "".join(
@@ -34,7 +40,8 @@ def _run_unit_function(
         "_log() { printf '%s\\n' \"$*\"; }\n"
         + assignments
         + function
-        + f"{name}\n"
+        + " ".join([name, *(shlex.quote(str(argument)) for argument in arguments)])
+        + "\n"
         + after
     )
     return subprocess.run(
@@ -63,14 +70,15 @@ def _run_install_test_headless_shell(
 ) -> subprocess.CompletedProcess[str]:
     """Runs the unit's ``_install_test_headless_shell`` with the shell resolved to ``shell``."""
     return _run_unit_function(
+        _TEST_SHELL_UNIT_PATH,
         "_install_test_headless_shell",
         {
             "REPO_ROOT": repo_root,
             "_TEST_BROWSERS_DIR": browsers_dir,
             "_TEST_HEADLESS_SHELL_LINK": link,
-            "_PW_TEST_HEADLESS_SHELL": shell,
         },
         env=env,
+        arguments=(shell,),
     )
 
 
@@ -128,33 +136,52 @@ def test_a_failed_install_leaves_no_link_to_the_incomplete_shell(
     assert not link.is_symlink()
 
 
+def test_a_unit_that_cannot_resolve_the_shell_still_succeeds(tmp_path: Path) -> None:
+    # The fixtures fall back to Fortress, so the converge must not report the unit failed.
+    env = {
+        **_put_on_path(tmp_path / "bin", "uv", "exit 1\n"),
+        "ENV_CONVERGE_WORKSPACE_DIR": str(tmp_path),
+    }
+    env.pop("DWT_SKIP_BROWSER_UNIT", None)
+
+    result = subprocess.run(
+        ["bash", str(_TEST_SHELL_UNIT_PATH)], env=env, capture_output=True, text=True
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "will retry next converge" in result.stdout
+
+
 def test_the_playwright_paths_resolve_from_the_locked_playwright(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     browsers_dir = tmp_path / "playwright-test-browsers"
-    # `uv run python ...` runs this test's interpreter, which has the locked Playwright.
-    env = _put_on_path(
-        tmp_path / "bin", "uv", f'shift 2\nexec {sys.executable!r} "$@"\n'
-    )
-    env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+    monkeypatch.delenv("PLAYWRIGHT_BROWSERS_PATH", raising=False)
 
-    result = _run_unit_function(
-        "_resolve_playwright_paths",
-        {"REPO_ROOT": Path(__file__).parents[2], "_TEST_BROWSERS_DIR": browsers_dir},
-        env=env,
-        after='printf "%s\\n" "$_PW_DEFAULT_CHROMIUM" "$_PW_DEFAULT_HEADLESS_SHELL" "$_PW_TEST_HEADLESS_SHELL"\n',
+    exit_code = playwright_browser_paths.main(
+        [
+            "chromium",
+            "no-such-browser",
+            "chromium-headless-shell",
+            f"chromium-headless-shell={browsers_dir}",
+        ]
     )
 
-    assert result.returncode == 0, result.stderr
-    assert result.stderr == ""
-    default_chromium, default_shell, test_shell = (
-        Path(line) for line in result.stdout.splitlines()
-    )
-    assert default_chromium != default_shell
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    # A name that cannot be resolved keeps its line, so the units can read the rest by position.
+    default_chromium, unknown, default_shell, test_shell = captured.out.splitlines()
+    assert unknown == ""
+    assert "could not resolve no-such-browser" in captured.err
+    assert Path(default_chromium) != Path(default_shell)
     # The executable sits two levels under its browser directory, which sits in the browsers directory.
-    default_cache = default_shell.parents[2]
-    assert default_shell.parents[1].name.startswith("chromium_headless_shell-")
-    assert test_shell == browsers_dir / default_shell.relative_to(default_cache)
+    default_cache = Path(default_shell).parents[2]
+    assert Path(default_shell).parents[1].name.startswith("chromium_headless_shell-")
+    assert Path(test_shell) == browsers_dir / Path(default_shell).relative_to(
+        default_cache
+    )
 
 
 @pytest.mark.parametrize("is_shell_path_blocked", [False, True])
@@ -174,6 +201,7 @@ def test_both_playwright_defaults_point_at_fortress_and_a_failed_link_only_warns
     )
 
     result = _run_unit_function(
+        _FORTRESS_UNIT_PATH,
         "_point_playwright_defaults_at_fortress",
         {
             "_FORTRESS_INSTALL_DIR": install_dir,
