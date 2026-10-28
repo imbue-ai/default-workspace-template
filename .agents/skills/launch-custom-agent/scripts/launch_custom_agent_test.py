@@ -231,6 +231,23 @@ def test_a_conflicting_account_and_harness_pair_is_refused(workspace_root: Path)
         _launch(repo, "worktree", account_id="acct-claude", harness_name="codex")
 
 
+def test_an_account_on_an_unknown_lane_is_reported_as_unsupported(
+    workspace_root: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An account whose lane this build no longer has is reported as unsupported --
+    even alongside a conflicting --harness, which would otherwise win with the
+    misleading 'conflicting pair' message."""
+    _write_account_index(
+        workspace_root / "accounts",
+        accounts.AccountIndex(accounts=(accounts.Account(id="acct-old", lane="gone-lane", seq=1, display="Old"),)),
+    )
+    repo = _git_repo(workspace_root)
+
+    with pytest.raises(SystemExit):
+        _launch(repo, "worktree", account_id="acct-old", harness_name="codex")
+    assert "lane this build does not support" in capsys.readouterr().err
+
+
 def test_no_signed_in_account_is_refused_with_the_sign_in_message(
     workspace_root: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
