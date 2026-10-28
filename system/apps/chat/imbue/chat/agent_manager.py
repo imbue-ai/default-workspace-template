@@ -123,7 +123,6 @@ from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import ModelOption
-from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import validate_model_pick
@@ -216,11 +215,6 @@ from imbue.mngr.primitives import HostName
 # `--type` (see `_build_chat_create_command`); only the role varies in the template list,
 # and it travels as `harness`, not folded into the role name.
 CHAT_ROLE_TEMPLATE: Final[str] = "chat"
-
-# The ``-S`` that waves the claude version check for one create: the in-container mngr
-# refuses every claude create on a pin mismatch, including the update run that would fix
-# it, so ``message_chat.py --create`` asks for it on every chat it makes from outside.
-SKIP_CLAUDE_INSTALLATION_CHECK_SETTING: Final[str] = "agent_types.claude.check_installation=false"
 
 # The labels a chat create sets from what it knows (``_build_chat_create_command`` and the
 # handoff's successor labels); a caller's extra labels may not restate them.
@@ -373,7 +367,6 @@ def _build_chat_create_command(
     account_args: Sequence[str] = (),
     initial_message: str = "",
     extra_labels: Sequence[str] = (),
-    settings: Sequence[str] = (),
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat's agent on a given harness.
 
@@ -432,8 +425,6 @@ def _build_chat_create_command(
     # caller's own labels against ``APP_OWNED_LABEL_KEYS`` first.
     for label in extra_labels:
         cmd.extend(["--label", label])
-    for setting in settings:
-        cmd.extend(["-S", setting])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
     # once the harness signals readiness. A create that has a model to apply first withholds
     # its message and sends it afterwards, so it passes none here.
@@ -2726,13 +2717,8 @@ class AgentManager:
         that set and ``ModelApplyError`` when the harness refused the switch, each with the reason
         the user sees. A per-agent set that could not be fetched is checked against the last set
         the agent was offered instead, and a pick outside that one is a ``ModelApplyError``: an
-        agent just restarted on another account has not answered for its new set yet. A harness
-        whose model the chat app cannot switch rejects every pick.
+        agent just restarted on another account has not answered for its new set yet.
         """
-        if get_catalog(agent_info.harness).switch_mode is SwitchMode.READ_ONLY:
-            raise ModelPickRejectedError(
-                f"{HARNESS_LABEL[agent_info.harness]}'s model is changed from the agent's terminal, not from the chat"
-            )
         resolver = build_resolver(agent_info)
         session = self.get_or_create_session(agent_info)
         dynamic_options = resolver.list_offered_options()
@@ -4096,7 +4082,6 @@ class AgentManager:
         chat_id: str = "",
         message: str = "",
         labels: Mapping[str, str] | None = None,
-        is_installation_check_skipped: bool = False,
         model_pick: ModelPick | None = None,
     ) -> CreatedChat:
         """Create a chat, as an agent in the primary agent's work dir on the given harness.
@@ -4141,10 +4126,9 @@ class AgentManager:
 
         ``labels`` ride the create as extra ``--label``s, for a caller outside the workspace
         that wants the chat's window surfaced (``auto_open``); one that restates a label the app
-        sets itself (``APP_OWNED_LABEL_KEYS``) is refused. ``is_installation_check_skipped``
-        waves the claude version check (``SKIP_CLAUDE_INSTALLATION_CHECK_SETTING``). Both are
-        kept on the provisional record like the message, so a relaunch by ``chat_id`` (the
-        page's "Try again") creates on the same terms and refuses new ones.
+        sets itself (``APP_OWNED_LABEL_KEYS``) is refused. They are kept on the provisional
+        record like the message, so a relaunch by ``chat_id`` (the page's "Try again") creates
+        with the same labels and refuses new ones.
 
         ``model_pick`` is the model the chat runs on. It is applied once the agent is up, so
         with a pick the create is silent and the message is delivered afterwards through the
@@ -4166,10 +4150,10 @@ class AgentManager:
         assert harness is not None, "resolve_binding rejects an account whose lane is unknown"
 
         explicit_name = explicit_chat_name(requested_name)
-        if chat_id and (explicit_name or project_id or extra_labels or is_installation_check_skipped):
+        if chat_id and (explicit_name or project_id or extra_labels):
             raise AgentCreationError(
-                f"Chat {chat_id} keeps the name and project it was minted with, and its create's labels "
-                "and waiver; a launch cannot rename, refile, or relabel it"
+                f"Chat {chat_id} keeps the name and project it was minted with, and its create's labels; "
+                "a launch cannot rename, refile, or relabel it"
             )
         owned_keys = sorted(APP_OWNED_LABEL_KEYS.intersection(extra_labels))
         if owned_keys:
@@ -4222,7 +4206,6 @@ class AgentManager:
                 display_name = provisional.name
                 project_id = provisional.project_id
                 extra_labels = dict(provisional.labels)
-                is_installation_check_skipped = provisional.is_installation_check_skipped
             else:
                 launched_chat_id = ChatId(str(AgentId()))
                 display_name = self._mint_display_name_locked(explicit_name)
@@ -4245,7 +4228,6 @@ class AgentManager:
                 account_id=account.id,
                 message=message,
                 labels=extra_labels,
-                is_installation_check_skipped=is_installation_check_skipped,
                 phase=ProvisionalChatPhase.CREATING,
                 is_seeded=seed_record is not None,
                 held_sends=carried_held_sends,
@@ -4304,7 +4286,6 @@ class AgentManager:
             account_args,
             initial_message="" if deferred_message else launch_message,
             extra_labels=create_labels,
-            settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING] if is_installation_check_skipped else [],
         )
 
         self._broadcast_provisional(provisional)
