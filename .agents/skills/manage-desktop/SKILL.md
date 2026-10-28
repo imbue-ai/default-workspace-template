@@ -216,7 +216,9 @@ Each desktop's backdrop carries **shortcuts**: one per (app, launch path), in
 grid cells. A new desktop is seeded with a shortcut of every app: its
 manifest's `default_shortcut` (which may be a launch path that takes typed
 text), or, when it declares none and a program runs it, its first launch path
-taking no text (its first of all when every one takes text), focusing.
+taking no text (its first of all when every one takes text), focusing. An app
+whose manifest says `desktop_shortcut = false` gets none, on a new desktop or
+later; it is still in the launcher.
 An app that registers after a desktop was made (one you just built included)
 has its shortcut added to every desktop once: there is no need to add it by
 hand, and one taken off after that stays off. The user can also add or remove
