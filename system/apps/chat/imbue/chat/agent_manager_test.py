@@ -5829,15 +5829,21 @@ def test_a_sign_in_restarts_only_the_live_agents_on_the_account(
         manager.stop()
 
 
-def _typed_turn(text: str, display: str | None = None) -> dict[str, Any]:
-    return {"type": "user_message", "content": text, **({"display": display} if display is not None else {})}
+def _typed_turn(text: str, display: str | None = None, at: str | None = None) -> dict[str, Any]:
+    return {
+        "type": "user_message",
+        "content": text,
+        **({"display": display} if display is not None else {}),
+        **({"timestamp": at} if at is not None else {}),
+    }
 
 
-def _agent_reply(is_auth_error: bool = False) -> dict[str, Any]:
+def _agent_reply(is_auth_error: bool = False, at: str | None = None) -> dict[str, Any]:
     return {
         "type": "assistant_message",
         "content": "Login expired" if is_auth_error else "Hi",
         "is_auth_error": is_auth_error,
+        **({"timestamp": at} if at is not None else {}),
     }
 
 
@@ -5861,8 +5867,27 @@ def _agent_reply(is_auth_error: bool = False) -> dict[str, Any]:
                 _typed_turn("hi again"),
                 _agent_reply(is_auth_error=True),
             ],
-            ("hi again",),
-            id="only-the-last-refused-turn",
+            ("hi", "hi again"),
+            id="every-refused-turn-since-the-last-answer",
+        ),
+        pytest.param(
+            [
+                _typed_turn("hi"),
+                _agent_reply(),
+                _agent_reply(is_auth_error=True, at="2026-10-28T00:39:55.644Z"),
+                _typed_turn("what is 2+2?", at="2026-10-28T00:39:55.530Z"),
+            ],
+            ("what is 2+2?",),
+            id="the-error-written-ahead-of-the-message-it-refused",
+        ),
+        pytest.param(
+            [
+                _typed_turn("hi", at="2026-10-28T00:39:55.530Z"),
+                _agent_reply(is_auth_error=True, at="2026-10-28T00:39:55.644Z"),
+                _typed_turn("again", at="2026-10-28T00:41:00.000Z"),
+            ],
+            (),
+            id="a-message-sent-after-the-error",
         ),
         pytest.param(
             [_typed_turn("hi"), _agent_reply(is_auth_error=True), _agent_reply(is_auth_error=True)],
@@ -5886,7 +5911,7 @@ def _agent_reply(is_auth_error: bool = False) -> dict[str, Any]:
         pytest.param([], (), id="an-empty-transcript"),
     ],
 )
-def test_the_turns_refused_for_sign_in_are_the_ones_the_last_auth_error_answered(
+def test_the_turns_refused_for_sign_in_are_the_unanswered_ones_an_auth_error_refused(
     events: list[dict[str, Any]], expected: tuple[str, ...]
 ) -> None:
     assert user_turns_refused_for_sign_in(events) == expected

@@ -666,29 +666,43 @@ def _is_current_compaction_event(event: dict[str, Any], now: float, pending_requ
 
 @pure
 def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, ...]:
-    """The words of the user turns the transcript's last reply refused for want of a working sign-in, oldest first.
+    """The words of the user turns a sign-in failure left unanswered at the end of the transcript, oldest first.
 
-    Empty unless that reply is an auth error that answered them directly: a turn the agent had already
-    worked on before its sign-in failed is not sent again (it could repeat what the agent did), and
-    nothing is sent when the user has spoken since.
+    The unanswered tail is everything after the agent's last reply that was not an auth error. Its user
+    turns are the refused ones when it holds an auth error and none of them was sent after the latest one.
+    A turn the agent had already worked on before its sign-in failed is not in the tail, so it is not sent
+    again (that could repeat what the agent did), and a turn sent after the failure means the user has
+    taken it from there.
+
+    "After" goes by timestamp where both events have one: claude writes the auth error into its
+    transcript ahead of the turn it refused, so their order says nothing about which came first.
     """
+    tail_start = next(
+        (
+            index + 1
+            for index in reversed(range(len(events)))
+            if events[index].get("type") == "assistant_message" and events[index].get("is_auth_error") is not True
+        ),
+        0,
+    )
+    tail = events[tail_start:]
+    error_indices = [index for index, event in enumerate(tail) if event.get("type") == "assistant_message"]
+    if not error_indices:
+        return ()
+    last_error_index = error_indices[-1]
+    refused_at = parse_iso_timestamp_to_epoch(tail[last_error_index].get("timestamp"))
     refused: list[str] = []
-    is_after_auth_error = False
-    for event in reversed(events):
-        if event.get("type") == "assistant_message":
-            if refused:
-                break
-            if event.get("is_auth_error") is not True:
-                return ()
-            is_after_auth_error = True
-        elif is_genuine_user_turn(event):
-            if not is_after_auth_error:
-                return ()
-            refused.append(str(event.get("content") or ""))
-        else:
-            # A tool result, a chip or a turn marker neither answers the user nor carries their words.
+    for index, event in enumerate(tail):
+        if not is_genuine_user_turn(event):
             continue
-    return tuple(text for text in reversed(refused) if text.strip())
+        sent_at = parse_iso_timestamp_to_epoch(event.get("timestamp"))
+        is_sent_since = (
+            sent_at > refused_at if sent_at is not None and refused_at is not None else index > last_error_index
+        )
+        if is_sent_since:
+            return ()
+        refused.append(str(event.get("content") or ""))
+    return tuple(text for text in refused if text.strip())
 
 
 @pure
