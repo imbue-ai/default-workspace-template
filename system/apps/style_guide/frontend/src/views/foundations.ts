@@ -1,6 +1,5 @@
 /**
- * The Foundations group: the color tokens, the type roles and font stacks, spacing, radius, elevation, motion,
- * stacking and widths, and the icon set.
+ * The Foundations group: the design tokens and the icon set.
  *
  * Colors and the scales come from ``base.css`` itself (``models/tokens.ts``) and are drawn through inline
  * ``var(--...)`` styles, so a new token appears here unedited. The type roles are listed by hand: each is a
@@ -95,8 +94,8 @@ function valueIn(tokens: readonly DeclaredToken[], name: string): string {
   return tokens.find((token) => token.name === name)?.value ?? "?";
 }
 
-/** A theme token as a CSS value: the live variable, falling back to the declared value. Tailwind emits a theme
- *  variable only when a utility reads it through ``var()``, and some (the shadows) inline their value instead. */
+/** A theme token as a CSS value: the live variable, falling back to the declared value, since Tailwind emits a theme
+ *  variable only where a utility reads it through ``var()``. */
 function cssValueOf(token: DeclaredToken): string {
   return `var(--${token.name}, ${token.value})`;
 }

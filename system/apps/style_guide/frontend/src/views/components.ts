@@ -1,7 +1,7 @@
 /**
  * The Components group: every shared control of the library in its variants and states, rendered by the library
- * itself, so what shows here is what every app draws. The interactive ones (the menu, the dropdown, the segmented
- * control, the dialogs, the toasts) work: their state lives in ``ComponentDemos``.
+ * itself, so what shows here is what every app draws. The interactive ones work; their state lives in
+ * ``ComponentDemos``.
  */
 
 import m from "mithril";

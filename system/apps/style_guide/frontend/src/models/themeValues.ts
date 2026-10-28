@@ -1,8 +1,7 @@
 /**
  * What the worn theme sets a token to, read from the theme's own stylesheets (the bundle the theme client links,
  * marked `data-workspace-theme`, and the files it imports). A token the theme leaves alone answers null, so the
- * catalog marks a value as the theme's only when the theme really changed it. Comparing the page's computed value
- * with base.css's source text would not do: the build rewrites values (`0.07` to `.07`) without changing them.
+ * catalog marks a value as the theme's only when the theme sets it.
  */
 
 import { THEME_LINK_ATTRIBUTE } from "@imbue/workspace-ui/src/themes/themeClient";

@@ -110,7 +110,7 @@ const STROKE_PATHS = {
 
 export type IconName = keyof typeof STROKE_PATHS;
 
-/** Every stroke-outline icon's name, in the order above (the Style Guide app draws the whole set). */
+/** Every stroke-outline icon's name, in the order above. */
 export const ICON_NAMES = Object.keys(STROKE_PATHS) as readonly IconName[];
 
 export interface IconOptions {

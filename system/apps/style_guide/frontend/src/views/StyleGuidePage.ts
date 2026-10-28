@@ -1,8 +1,7 @@
 /**
- * The style guide: a sticky contents list beside the catalog, which is split into Foundations (the tokens and the
- * icon set), Components (the shared controls), and Theming (the parts a theme styles). The page scrolls inside its own container (the shared base
- * stylesheet pins the body to the viewport), and the contents entry for the section nearest the top of it reads at
- * full strength; the column scrolls on its own to keep that entry in view.
+ * The style guide: a sticky contents list beside the catalog's groups. The page scrolls inside its own container
+ * (the shared base stylesheet pins the body to the viewport); the contents entry for the section the reader is in is
+ * highlighted, and the column scrolls to keep it in view.
  */
 
 import m from "mithril";

@@ -16,7 +16,7 @@ export interface CatalogSection {
   readonly body: () => m.Children;
 }
 
-/** A top-level group of the contents list (Foundations, Components). */
+/** A top-level group of the contents list. */
 export interface CatalogGroup {
   readonly id: string;
   readonly label: string;
