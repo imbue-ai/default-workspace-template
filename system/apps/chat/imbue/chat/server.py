@@ -47,15 +47,9 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
-from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
-from workspace_layout.interfaces import ShellLayoutInterface
-from workspace_layout.ops import ClientActivityReport
-from workspace_layout.primitives import ClientActivityKind
-from workspace_layout.primitives import ClientId
-from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 from workspace_layout.shell_url import shell_base_url
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE

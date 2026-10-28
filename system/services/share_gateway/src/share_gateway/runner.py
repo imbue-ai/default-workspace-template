@@ -41,12 +41,11 @@ from pathlib import Path
 import httpx
 from inotify_simple import INotify
 from inotify_simple import flags as inotify_flags
-from werkzeug.serving import BaseWSGIServer
-from werkzeug.serving import make_server
-
 from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
 from share_grants.agent_grants import AgentGrantsError
 from share_grants.agent_grants import utc_now as agent_access_now
+from werkzeug.serving import BaseWSGIServer
+from werkzeug.serving import make_server
 
 from share_gateway import materials as materials_module
 from share_gateway.agent_access import LastSeenStore

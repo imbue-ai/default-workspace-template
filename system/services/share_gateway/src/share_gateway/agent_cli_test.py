@@ -4,7 +4,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from share_grants.agent_grants import AGENT_INVITES_FILE
 from share_grants.agent_grants import load_agent_invites
 

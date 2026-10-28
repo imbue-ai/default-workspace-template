@@ -10,9 +10,8 @@ from urllib.parse import quote
 from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
 from flask import Flask
 from flask.testing import FlaskClient
-from werkzeug.test import TestResponse
-
 from share_grants.agent_grants import load_agent_grants
+from werkzeug.test import TestResponse
 
 from share_gateway.agent_access import AgentAccessPaths
 from share_gateway.agent_access import LastSeenStore

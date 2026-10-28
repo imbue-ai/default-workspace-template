@@ -13,9 +13,8 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from flask import Flask
 from flask.testing import FlaskClient
-from werkzeug.test import TestResponse
-
 from share_grants.grants import load_grants
+from werkzeug.test import TestResponse
 
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_label_to_name

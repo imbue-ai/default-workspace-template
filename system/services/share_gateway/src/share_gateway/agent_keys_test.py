@@ -1,9 +1,11 @@
 import pytest
 from cryptography.hazmat.primitives.asymmetric.rsa import generate_private_key
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.serialization import Encoding
+from cryptography.hazmat.primitives.serialization import PublicFormat
 from share_grants.agent_grants import fingerprint_of_public_key_line
 
-from share_gateway.agent_keys import AgentKeyError, canonical_public_key_line
+from share_gateway.agent_keys import AgentKeyError
+from share_gateway.agent_keys import canonical_public_key_line
 
 # The public key and fingerprint of the owner-exec profile's shared test vectors, so the fingerprint rule here is
 # checked against the one the daemon uses as keyid.

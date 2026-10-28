@@ -5,7 +5,6 @@ from datetime import timezone
 from pathlib import Path
 
 import pytest
-
 from share_grants.agent_grants import AUTHORIZED_KEYS_MARKER
 from share_grants.agent_grants import AgentGrantsError
 from share_grants.agent_grants import INVITE_MAX_FAILED_ATTEMPTS
