@@ -89,7 +89,7 @@ def _python_command(kind: SuiteKind, *arguments: str) -> SuiteCommand:
     )
 
 
-def _run(project: Path, ledger: Path, *commands: SuiteCommand) -> SuiteRunReport:
+def _run(project: Path, ledger: Path | None, *commands: SuiteCommand) -> SuiteRunReport:
     selection = SuiteSelection(commands=commands, paths=(), is_full_root=False, notes=(), coverage_measured_roots=())
     return run_selection(selection, project, project / "run-output", ledger, lambda index, command: None)
 
@@ -170,14 +170,12 @@ def test_a_run_that_missed_its_coverage_floor_fails_even_when_its_failed_tests_p
 def test_a_failing_command_that_is_not_pytest_fails_without_a_rerun(tmp_path: Path) -> None:
     project = _project(tmp_path)
 
-    report = _run(
-        project, tmp_path / "shed.jsonl", _python_command(SuiteKind.FRONTEND_CHECK, "-c", "raise SystemExit(3)")
-    )
+    report = _run(project, None, _python_command(SuiteKind.FRONTEND_CHECK, "-c", "raise SystemExit(3)"))
 
     (run,) = report.runs
     assert (run.outcome, run.exit_code, run.rerun_log_path, run.rerun) == (CommandOutcome.FAILED, 3, None, None)
-    # No ledger exists here, so the report says a shed could not have been told from a failure.
-    assert any("no shed ledger" in note for note in report.notes)
+    # No memory guard keeps a ledger here, so the report says a shed could not have been told from a failure.
+    assert any("no memory guard" in note for note in report.notes)
 
 
 def test_the_summary_on_disk_matches_the_report_and_every_command_keeps_its_output(tmp_path: Path) -> None:

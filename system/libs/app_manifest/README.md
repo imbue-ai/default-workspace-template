@@ -434,8 +434,10 @@ it goes. Each command ends one of four ways:
   memory is doing, so `run-tests` does not.
 
 Every command also carries the memory guard's kills while it ran, since a shed
-child can surface as ordinary test errors; a missing ledger is noted in the
-report, since every kill then reads as a failure. The run exits non-zero when any
+child can surface as ordinary test errors. The ledger itself appears with the
+guard's first kill; where the guard keeps no state at all (no `oom_priority`
+runtime directory) and `--shed-ledger` names none, the report says so, since
+every kill then reads as a failure. The run exits non-zero when any
 command failed or was shed. `app_manifest.suite_run` holds the runner and the
 report's models.
 

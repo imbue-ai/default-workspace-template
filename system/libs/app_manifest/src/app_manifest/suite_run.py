@@ -222,7 +222,7 @@ def _run_command(
     repo_root: Path,
     log_path: Path,
     rerun_log_path: Path,
-    shed_ledger_path: Path,
+    shed_ledger_path: Path | None,
     is_coverage_measured: bool,
 ) -> CommandRun:
     working_directory = repo_root / command.working_directory
@@ -234,8 +234,12 @@ def _run_command(
     rerun_result = _run_to_log(rerun.argv, working_directory, rerun_log_path) if rerun is not None else None
     last_result = rerun_result if rerun_result is not None else result
     finished_at = last_result.finished_at
-    shed_records = _await_shed_records(
-        shed_ledger_path, result.started_at, finished_at, last_result.exit_code in _SIGNAL_EXIT_CODES
+    shed_records = (
+        _await_shed_records(
+            shed_ledger_path, result.started_at, finished_at, last_result.exit_code in _SIGNAL_EXIT_CODES
+        )
+        if shed_ledger_path is not None
+        else ()
     )
     outcome, final_failed_test_ids = _classify(
         result.exit_code, failed_test_ids, rerun_result, rerun_log_path, shed_records, is_coverage_floor_missed
@@ -292,18 +296,19 @@ def run_selection(
     selection: SuiteSelection,
     repo_root: Path,
     output_directory: Path,
-    shed_ledger_path: Path,
+    shed_ledger_path: Path | None,
     on_command_started: Callable[[int, SuiteCommand], None],
 ) -> SuiteRunReport:
     """Run every command of ``selection`` in order from ``repo_root``, keeping each one's output
-    under ``output_directory`` and writing the summary there before the first and after each."""
+    under ``output_directory`` and writing the summary there before the first and after each.
+    ``shed_ledger_path`` is None where no memory guard keeps a ledger, so no kill is a shed."""
     output_directory.mkdir(parents=True, exist_ok=True)
     notes = (
         selection.notes
-        if shed_ledger_path.is_file()
+        if shed_ledger_path is not None
         else (
             *selection.notes,
-            f"no shed ledger at {shed_ledger_path}, so a command the memory guard killed reads as failed",
+            "no memory guard keeps a shed ledger here, so a command killed for memory reads as failed",
         )
     )
     report = SuiteRunReport(runs=(), notes=notes)

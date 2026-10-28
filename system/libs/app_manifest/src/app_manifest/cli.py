@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Final
 
 import click
+from oom_priority.paths import runtime_dir
 from oom_priority.paths import shed_ledger_path
 from pydantic import Field
 
@@ -265,6 +266,12 @@ def _lookup_row(repo_root: Path, match: ManifestReferenceMatch) -> ReferenceLook
     )
 
 
+def _default_shed_ledger() -> Path | None:
+    """Where oom_priority keeps its shed ledger, or None where it keeps no state at all: every
+    agent's launch creates its runtime directory, while the ledger appears only with the first kill."""
+    return shed_ledger_path() if runtime_dir().is_dir() else None
+
+
 def _selection_options(command: Callable[..., None]) -> Callable[..., None]:
     """The options that name the change a test selection is for, shared by select-tests and run-tests."""
     options = [
@@ -385,7 +392,7 @@ def select_tests(
     type=click.Path(path_type=Path),
     default=None,
     help="The memory guard's shed ledger, read to tell a command it killed from a failure "
-    "(default: where oom_priority keeps it).",
+    "(default: where oom_priority keeps it, when this workspace has its runtime directory).",
 )
 def run_tests(
     repo_root: Path | None,
@@ -416,7 +423,7 @@ def run_tests(
         selection,
         resolved_repo_root,
         resolved_output_directory,
-        shed_ledger if shed_ledger is not None else shed_ledger_path(),
+        shed_ledger if shed_ledger is not None else _default_shed_ledger(),
         lambda index, command: click.echo(f"running {index}/{total}: {render_command_line(command)}"),
     )
     click.echo(render_report(report, resolved_output_directory / SUMMARY_FILE_NAME), nl=False)
