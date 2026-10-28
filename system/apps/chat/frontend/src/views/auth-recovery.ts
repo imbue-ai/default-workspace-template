@@ -13,7 +13,7 @@
  */
 
 import m from "mithril";
-import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import { getChatById } from "../models/Chats";
 import { addOutgoing, dropOutgoing, dropOutgoingNoTurnWillRetire } from "../models/OutgoingMessages";
 import { accountForAgent } from "../models/Providers";
@@ -141,21 +141,41 @@ export function messagesToSendAgain(
   return prompts.length > 0 ? prompts : null;
 }
 
-export type ResendState = "sending" | "sent" | "failed";
+/** "unconfirmed": mngr typed the message and sent Enter but could not confirm the agent took it, so
+ *  the agent may already have it and sending it again can deliver it twice. */
+export type ResendState = "sending" | "sent" | "failed" | "unconfirmed";
+
+interface ResendRecord {
+  state: ResendState;
+  /** The message whose send could not be confirmed, for the "unconfirmed" state. */
+  unconfirmedPromptId: string | null;
+}
 
 // Keyed by the failed turn's event id. Once the message lands in the transcript the failed turn
 // is hidden, whatever its state here.
-const resendStates = new Map<string, ResendState>();
+const resendStates = new Map<string, ResendRecord>();
 
-export function resendStateOf(failedEventId: string): ResendState | null {
-  return resendStates.get(failedEventId) ?? null;
+/** How the page's send of the turn's messages went, given the messages `offered` now. Once the
+ *  message that could not be confirmed has landed it is no longer in doubt, and what is left of
+ *  the turn simply did not send. */
+export function resendStateOf(failedEventId: string, offered: readonly UserMessageEvent[] | null): ResendState | null {
+  const record = resendStates.get(failedEventId);
+  if (record === undefined) return null;
+  if (record.state === "unconfirmed" && !offered?.some((prompt) => prompt.event_id === record.unconfirmedPromptId)) {
+    return "failed";
+  }
+  return record.state;
+}
+
+function setResendState(failedEventId: string, state: ResendState, unconfirmedPromptId: string | null = null): void {
+  resendStates.set(failedEventId, { state, unconfirmedPromptId });
+  m.redraw();
 }
 
 /** Send `prompts` again for the turn `failedEventId`, each painted at once like any send. Each goes
  *  as it was first sent, machine context included: the agent never read any of it. */
 export async function sendAgain(chatId: string, failedEventId: string, prompts: UserMessageEvent[]): Promise<void> {
-  resendStates.set(failedEventId, "sending");
-  m.redraw();
+  setResendState(failedEventId, "sending");
   for (const prompt of prompts) {
     const messageId = mintMessageId();
     const outgoingId = addOutgoing(chatId, wordsOf(prompt), messageId);
@@ -166,13 +186,15 @@ export async function sendAgain(chatId: string, failedEventId: string, prompts: 
     } catch (err) {
       console.error(`Failed to send the message again to chat ${chatId}: ${describeRequestError(err)}`);
       dropOutgoing(chatId, outgoingId);
-      resendStates.set(failedEventId, "failed");
-      m.redraw();
+      if (describeRequestErrorKind(err) === "submission_unconfirmed") {
+        setResendState(failedEventId, "unconfirmed", prompt.event_id);
+      } else {
+        setResendState(failedEventId, "failed");
+      }
       return;
     }
   }
-  resendStates.set(failedEventId, "sent");
-  m.redraw();
+  setResendState(failedEventId, "sent");
 }
 
 export function resetResendStatesForTesting(): void {

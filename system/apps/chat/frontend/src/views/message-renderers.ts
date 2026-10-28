@@ -171,7 +171,7 @@ function reauthNoteSignature(event: AssistantMessageEvent, chatId: string): stri
   if (!isSignedInSince(event, chatId)) return bound;
   const prompts = messagesToSendAgain(getEventsForChat(chatId), event);
   const resending = isResendingAfterSignIn(chatId) ? "resending" : "-";
-  return `${bound}|recovered|${prompts?.map((prompt) => prompt.event_id).join(",") ?? "-"}|${resendStateOf(event.event_id) ?? "-"}|${resending}`;
+  return `${bound}|recovered|${prompts?.map((prompt) => prompt.event_id).join(",") ?? "-"}|${resendStateOf(event.event_id, prompts) ?? "-"}|${resending}`;
 }
 
 export function StableAssistantMessage(): m.Component<{
@@ -464,14 +464,25 @@ function renderReauthAction(chatId: string): m.Children {
  *  turn is still the chat's newest. The provider's own text stays one click away. */
 function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text: string): m.Vnode {
   const prompts = messagesToSendAgain(getEventsForChat(chatId), event);
-  const state = resendStateOf(event.event_id);
+  const state = resendStateOf(event.event_id, prompts);
+  // An unconfirmed send may already be with the agent, so it gets the composer's unconfirmed
+  // wording: check before sending, and a button that says it sends again.
+  const offer =
+    state === "unconfirmed"
+      ? {
+          lead: " Couldn't confirm your message arrived. The agent may already have it, so check its terminal before you send it again. ",
+          label: "Send again",
+        }
+      : state === "failed"
+        ? { lead: " That didn't send. ", label: "Try again" }
+        : { lead: " ", label: "Send your message again" };
   const action =
     prompts === null || state === "sent"
       ? null
       : isResendingAfterSignIn(chatId)
         ? " Sending your message again\u2026"
         : [
-            state === "failed" ? " That didn't send. " : " ",
+            offer.lead,
             m(
               "button",
               {
@@ -480,7 +491,7 @@ function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text:
                 disabled: state === "sending",
                 onclick: () => void sendAgain(chatId, event.event_id, prompts),
               },
-              state === "failed" ? "Try again" : "Send your message again",
+              offer.label,
             ),
           ];
   return m("div", { class: "message-auth-recovered rounded-md bg-fill-hover px-[0.75em] py-[0.5em] text-secondary" }, [

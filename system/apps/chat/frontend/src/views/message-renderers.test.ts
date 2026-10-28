@@ -853,6 +853,25 @@ describe("the auth-error note's switch link", () => {
       expect(findButton(children, "Try again")).not.toBeNull();
     });
 
+    it("asks the user to check the agent before sending a resend mngr could not confirm again", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      transcript.sendMessage.mockRejectedValueOnce({ response: { kind: "submission_unconfirmed" } });
+      vi.spyOn(console, "error").mockImplementationOnce(() => {});
+      const bubblesBefore = getOutgoingMessages("chat-1").length;
+
+      findButton(
+        renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"),
+        "Send your message again",
+      )!.attrs.onclick();
+      await vi.waitFor(() => expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore));
+
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+      expect(allText(children)).toContain("Couldn't confirm your message arrived");
+      expect(allText(children)).not.toContain("That didn't send.");
+      expect(findButton(children, "Try again")).toBeNull();
+      expect(findButton(children, "Send again")).not.toBeNull();
+    });
+
     it("offers nothing to send once the user has written since", () => {
       transcript.events = [
         PROMPT,
