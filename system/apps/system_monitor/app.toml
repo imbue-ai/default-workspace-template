@@ -1,18 +1,20 @@
-# The Memory & disk app: how much memory and disk the workspace is using, which chats, code
-# checkers, and apps hold the memory, and which programs the memory guard stopped in the last
-# 24 hours. Its one page polls /api/stats, which reads /proc and the workspace's own records
-# at most every few seconds; it writes nothing to disk. It declares no launch path, so the
-# desktop offers the synthesized ``open`` at its root; its shortcut focuses the one window it is
-# for.
+# The System Monitor app: how much CPU, memory and disk the workspace is using, which chats, code
+# checkers, and apps use them, the busy stretches, which programs the memory guard stopped in
+# the last 24 hours, and the state of the backups. Its one page (an overview and a view per
+# resource, each a path) polls /api/stats, which reads /proc, the resource sampler's files and
+# the workspace's own records at most every few seconds; it writes nothing to disk. It declares
+# no launch path, so the desktop offers the synthesized ``open`` at its root (the views are
+# reached inside the app, and the shell reopens a window on the view it was on); its shortcut
+# focuses the one window it is for.
 name = "system-monitor"
-display_name = "Memory & disk"
+display_name = "System Monitor"
 icon = "icon.svg"
-description = "How much memory and disk the workspace is using, what is holding the memory, and what the memory guard stopped."
+description = "How much CPU, memory and disk the workspace is using, what is using them, what the memory guard stopped, and the state of the backups."
 api_schema_path = "/api/schema"
 critical = false
 # The shell stops it a minute after no window shows it and starts it again on the next request,
-# so it costs nothing while unseen. Its one background job, recording the memory graph's last
-# 10 minutes, stops with it, so after a reopen the graph starts over.
+# so it costs nothing while unseen; the graphs come from the resource sampler, which keeps
+# running, so a reopen shows them whole.
 stop_when_no_windows = true
 priority = "system-monitor"
 # After the terminal (40): the last of the built-ins on the desktop and in the launcher.

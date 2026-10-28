@@ -82,7 +82,8 @@ _FENCED_CODE = re.compile(
 # substituted textually, since bash would read ``<slug>`` as a redirection.
 _PLACEHOLDER_ENV = {
     "NAME": "demo",
-    "TARGET": "demo",
+    "SLUG": "demo",
+    "CREATIONS": "skill:demo",
     "REF": "demo-ref",
 }
 # The worker-side ``report`` invocation is written against values the worker
@@ -411,9 +412,9 @@ def test_task_block_writes_a_file_the_worker_parses_at_the_path_launch_names(
     )
     assert report_path.name == "report.md"
     if dispatcher.name in {"crystallize-creation", "update-creation", "heal-creation"}:
-        # The generic worker dispatches on these two fields.
+        # The generic worker dispatches on the operation and each creation's type.
         assert frontmatter["operation"] == dispatcher.name.removesuffix("-creation")
-        assert frontmatter["type"]
+        assert frontmatter["creations"]
 
 
 @pytest.mark.parametrize("dispatcher", _DISPATCHERS, ids=[d.name for d in _DISPATCHERS])

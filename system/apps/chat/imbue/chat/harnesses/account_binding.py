@@ -110,7 +110,7 @@ class AccountBinding(ABC):
         runs it again changes nothing.
         """
 
-    def move_sessions(
+    def move_sessions(  # noqa: B027
         self,
         agent_info: AgentInfo,
         # Where the files were found by an earlier attempt of this rebind, or None on its first.

@@ -31,25 +31,31 @@ Users make "creations". There are conventions for the common kinds:
 - a **skill**: teaches the agent how to do work the user cares about (including
   scripts and CLI tools, which ship inside the skill that knows how to use
   them). A skill that is automatically run on a schedule is called an
-  "automation" -- the machinery that runs automations lives in
-  `system/libs/automations/`, and the weekly Caretaker
-  (`system/services/caretaker/`) is the built-in example. Lives under
+  "automation": a routine with a `skill`, run by `system/libs/routines/`;
+  the weekly Caretaker (`system/routines/caretaker.toml`, its check in
+  `system/services/caretaker/`) is the built-in example. Lives under
   `.agents/skills/<name>/`.
+- a **routine**: something that runs on a schedule and then exits, a command
+  or a skill. One TOML file under `system/routines/<id>.toml` (the root
+  `routines` symlink), made and changed with the `routines` command (the
+  manage-routines skill) and shown by the Routines app
+  (`system/apps/routines/`); see `docs/system/specs/routines/spec.md`.
 - **data**: documents, images, notes, or data created by apps and skills.
   Lives under `data/`.
 - **customizations**: changes to any of the above -- everything in the
   workspace can be modified.
 
-A **service** is a background program with no tab -- usually supervised by
-supervisord, sometimes cron-driven (the Caretaker). Standalone services live
-in `system/services/`; a service that exists solely to support one app lives
-in that app's folder and is named `<app>-<role>`.
+A **service** is a background program with no tab, supervised by supervisord;
+work that runs on a schedule and then exits is a routine, not a service (the
+Caretaker's check is one). Standalone services live in `system/services/`; a
+service that exists solely to support one app lives in that app's folder and
+is named `<app>-<role>`.
 
 ## Structure
 
 - `CLAUDE.md` - Agent instructions
-- `apps` / `skills` - Top-level symlinks to `system/apps/` and
-  `.agents/skills/` for discoverability
+- `apps` / `skills` / `routines` - Top-level symlinks to `system/apps/`,
+  `.agents/skills/` and `system/routines/` for discoverability
 - `system/config/parent.toml` - Upstream repo for pulling updates
 - `.mngr/settings.toml` - Agent types, create templates, command defaults
 - `.agents/skills/` - Agent skills (task delegation, app building, self-update)
@@ -59,7 +65,8 @@ in that app's folder and is named `<app>-<role>`.
   services' programs
 - `system/apps/` - Everything tab-openable: `system_interface/` (the workspace
   web UI -- the special app that hosts the other tabs), `chat/` (the agent
-  chats), `terminal/`, `files/`, `browser/`, `system_monitor/` (Memory & disk),
+  chats), `terminal/`, `files/`, `browser/`, `routines/` (Routines),
+  `system_monitor/` (System Monitor),
   and every user-built app, each with an `app.toml` manifest; every
   Python app with a manifest is installed as its own uv tool and is also a
   member of the uv workspace via the `system/apps/*` glob; an app with no
@@ -68,8 +75,9 @@ in that app's folder and is named `<app>-<role>`.
   `share_gateway/`, `host_backup/`, `env_converge/`, `oom_priority/`)
 - `system/libs/` - Support libraries, including `bootstrap/` (first-boot
   setup, then launches supervisord to supervise the apps and services),
-  `app_manifest/` (the manifest and registry models), and `automations/`
-  (the machinery that runs skills on a schedule)
+  `app_manifest/` (the manifest and registry models), and `routines/`
+  (everything that runs on a schedule: the runner, the scheduler and the
+  `routines` command; the definitions themselves are under `system/routines/`)
 - `data/` - Gitignored workspace data: documents and project folders, uploads,
   memories, tickets, secrets, machine state, and per-app data (see
   `data/README.md`)
@@ -137,12 +145,12 @@ repository and can read only `mngr/ci/MODAL_TOKEN_ID` and
 
 ## Creation harden lifecycle
 
-The main agent can promote ad-hoc work into reusable creations, fix creations that fail, and extend creations that came up short -- across skills, apps, services, and the system interface. The user-invokable surface is three generic operation leads (main agent side), each parameterized by the creation type:
+The main agent can promote ad-hoc work into reusable creations, fix creations that fail, and extend creations that came up short -- across skills, apps, services, and the system interface. The user-invokable surface is three generic operation leads (main agent side), each parameterized by the creations a pass covers and their types. A pass hardens one change: every creation the change touched, with one worker.
 
 - `crystallize-creation` - Create a new creation (default: a skill reconstructed from the just-finished turn). Invoked directly post-turn, or by the live-half wrappers (`build-app`, `fetch-process-show`) once a prototype is confirmed.
 - `heal-creation` - Fix a skill, app, or service that errored or produced wrong results.
 - `update-creation` - Extend / refactor / verify a skill, app, service, or shared reference; one flow with a committed-vs-emergent design-gate toggle.
 
-Each lead spawns a `worker` sub-agent that follows the single generic worker contract at `.agents/shared/worker/SKILL.md`. The worker reads the operation and type from its task file and composes the universal `harden-creation.md` contract with one `op-*.md` and one `type-*.md` reference under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs `update-app`'s careful flow for a critical app, which wraps `update-creation` with `type=app`, creates the worker at approval on the branch the lead built up, and adds its preview and its go-live through the atomic update apply.)
+Each lead spawns a `worker` sub-agent that follows the single generic worker contract at `.agents/shared/worker/SKILL.md`. The worker reads the operation and the creations (each with its type) from its task file and composes the universal `harden-creation.md` contract with one `op-*.md` and a `type-*.md` reference per type among them, under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs `update-app`'s careful flow for a critical app, which wraps `update-creation` for the whole change the critical app is part of, creates the worker at approval on the branch the lead built up, and adds its preview and its go-live through the atomic update apply.)
 
 Crystallized skills are marked with `metadata.crystallized: true` in their SKILL.md frontmatter and follow the [agentskills.io](https://agentskills.io/specification) layout (`scripts/run.py` as a PEP 723 script, companion SKILL.md, optional `references/` and `assets/`).

@@ -17,6 +17,7 @@ import { createContextMenuOpener } from "@imbue/workspace-ui/src/components/cont
 import { installElementContextMenu } from "@imbue/workspace-ui/src/context_menu";
 import type { ContextMenuRow } from "@imbue/workspace-ui/src/context_menu_rows";
 import { installCursorHidingWhileTyping } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
+import { wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 import { entryOf, pageUrlOf, readPageData } from "./models/server";
 import { decodePathname, isFolderPath, titleOf } from "./models/paths";
@@ -57,7 +58,17 @@ function bootstrap(): void {
   }
 
   let handshake: ShellHandshake | null = null;
-  const connection = connectToShell({ onHandshake: (received) => (handshake = received) });
+  // The handshake comes as a message, so after the window below exists.
+  let filesApp: FilesController | null = null;
+  const connection = connectToShell({
+    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
+    onHandshake: (received) => {
+      handshake = received;
+      filesApp?.setOpensLocalFiles(received.opensLocalFiles);
+    },
+    onShown: () => filesApp?.setShownByShell(true),
+    onHidden: () => filesApp?.setShownByShell(false),
+  });
   window.addEventListener("focus", () => connection.focused());
   const opener = createContextMenuOpener();
   // The pointer hides while text is typed into the editor or a name being changed.
@@ -81,8 +92,11 @@ function bootstrap(): void {
   // A `?path=` folder is fetched rather than taken from the page, which lists the folder the launch landed on.
   const folder = requested ?? (isFolderPath(path) ? path : `${path}/`);
   const initial =
-    requested === null ? { exists: true, entries: data.entries.map((record) => entryOf(folder, record)) } : undefined;
+    requested === null
+      ? { exists: true, entries: data.entries.map((record) => entryOf(folder, record)), stamp: data.stamp ?? null }
+      : undefined;
   const app = new FilesController(folder, initial, connection);
+  filesApp = app;
 
   installElementContextMenu({
     connection,

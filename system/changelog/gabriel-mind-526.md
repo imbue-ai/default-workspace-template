@@ -1,0 +1,1 @@
+AGENTS.md now tells agents that the user may be reaching the workspace from the Imbue Studio desktop app or through a sharing URL in any browser, desktop or mobile, which the whole workspace and each of its apps has once sharing is on, and points them at the new `use-from-phone` skill for setting it up.

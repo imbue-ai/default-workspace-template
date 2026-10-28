@@ -245,7 +245,7 @@ def _pick_port(
 
 
 def _format_dep_list(extras: Iterable[str]) -> str:
-    base = ['"app-schema"', '"flask>=3.0"', '"flask-sock>=0.7"', '"imbue-common"', '"pydantic>=2.0"', '"werkzeug>=3.0"']
+    base = ['"app-schema"', '"flask>=3.0"', '"flask-sock>=0.7"', '"imbue-common"', '"loguru>=0.7"', '"pydantic>=2.0"', '"werkzeug>=3.0"']
     extras_lines = [f'"{dep}"' for dep in extras]
     all_lines = base + extras_lines
     return ",\n    ".join(all_lines)
@@ -332,7 +332,6 @@ WebSockets.
 import base64
 import hashlib
 import os
-import sys
 from pathlib import Path
 
 from app_schema.api_schema import (
@@ -345,6 +344,8 @@ from app_schema.api_schema import (
 from app_schema.routes import model_response
 from flask import Flask, Response, abort, request, send_file
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.logging import setup_logging
+from loguru import logger
 from pydantic import Field
 from werkzeug.serving import run_simple
 
@@ -466,8 +467,7 @@ def index() -> Response:
 
 @app.route("/_csp-report", methods=["POST"])
 def content_security_policy_report() -> Response:
-    # The browser's report of one thing the policy blocked on a page. A block
-    # caused by a browser extension is the policy doing its job and is not logged.
+    """Where the browser reports what the page's security policy blocked."""
     body = request.get_json(force=True, silent=True)
     report = body.get("csp-report") if isinstance(body, dict) else None
     if not isinstance(report, dict):
@@ -476,6 +476,7 @@ def content_security_policy_report() -> Response:
         str(report.get(key, ""))[:500]
         for key in ("blocked-uri", "document-uri", "source-file", "effective-directive", "line-number", "script-sample")
     )
+    # A block caused by a browser extension is the policy doing its job and is not logged.
     if blocked.startswith(BROWSER_EXTENSION_SCHEMES) or source.startswith(BROWSER_EXTENSION_SCHEMES):
         return Response(status=204)
     # An inline script or style is reported as "inline": say where it is and how it starts instead.
@@ -486,10 +487,8 @@ def content_security_policy_report() -> Response:
         if blocked == "inline"
         else "add its origin to CONTENT_SECURITY_POLICY if the page needs it"
     )
-    print(
-        f"ERROR Content-Security-Policy blocked {{blocked!r}} on {{page!r}} ({{directive}}){{where}}{{starting}}; {{remedy}}",
-        file=sys.stderr,
-        flush=True,
+    logger.error(
+        "Content-Security-Policy blocked {{!r}} on {{!r}} ({{}}){{}}{{}}; {{}}", blocked, page, directive, where, starting, remedy
     )
     return Response(status=204)
 
@@ -515,6 +514,7 @@ def health() -> Response:
 
 
 def main() -> None:
+    setup_logging()
     run_simple(
         "127.0.0.1", PORT, app, threaded=True, use_reloader=False, use_debugger=False
     )
@@ -733,8 +733,10 @@ program = "{name}"
 # The shell stops the app once no window shows it (a minute after the last one
 # closes) and starts it again on the next request; false keeps it running for
 # the life of the workspace. Set false if the app does work between requests
-# (a background thread, a poller, a scheduled refresh, a subscription to an
-# outside service, a job that outlives the window): a stop loses that work.
+# (a background thread, a poller, a subscription to an outside service, a job
+# that outlives the window): a stop loses that work. Periodic work (a refresh
+# every N minutes, a nightly sync) is a routine, not a loop in the service:
+# see the manage-routines skill.
 stop_when_no_windows = true
 
 # How update-app boots a throwaway preview of this app: on a free port, over a
@@ -876,7 +878,6 @@ def _run_uv_sync(repo_root: Path) -> None:
 def _start_and_wait(
     repo_root: Path, name: str, port: int, timeout: float = 10.0
 ) -> None:
-    # Reload supervisord to pick up the new program block
     _run_checked(["supervisorctl", "reread"], repo_root, "supervisorctl reread")
     _run_checked(["supervisorctl", "update"], repo_root, "supervisorctl update")
 
@@ -1006,7 +1007,7 @@ def main() -> None:
         f"{program_path.relative_to(repo_root)}; the window renders at the service's "
         f"own origin, http://{args.name}.<workspace-host>/). "
         f"Next: implement your routes in src/{package}/runner.py, then verify per "
-        f"references/verify.md (smoketest_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
+        f"references/verify.md (verify_app.py or curl + Playwright against http://127.0.0.1:{port}/)."
     )
 
 

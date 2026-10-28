@@ -144,6 +144,8 @@ from browser.wsgi import make_threaded_server
 # The agent-facing CDP proxy port. Fixed by default so an attach URL an agent already
 # holds keeps resolving across a service restart; 0 picks an ephemeral port (tests).
 _PROXY_PORT = int(os.environ.get("BROWSER_CDP_PROXY_PORT", "8083"))
+# The app's own port, the one registered with forward_port.py. A preview runs beside the live service on another.
+_PORT = int(os.environ.get("BROWSER_PORT", "8081"))
 
 _INDEX_HTML = Path(__file__).parent / "assets" / "index.html"
 
@@ -1107,6 +1109,10 @@ def _shutdown() -> None:
 
 
 def _exit_on_signal(_signum: int, _frame: FrameType | None) -> None:
+    # A stop can arrive twice: stopping a preview signals its process group, and `uv run`, which launched the daemon,
+    # forwards the same SIGTERM. A repeat raised here would cut _shutdown short before it unloads the audio sinks.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     raise SystemExit(0)
 
 
@@ -1125,7 +1131,7 @@ def main() -> None:
     start_oom_retagging()
     signal.signal(signal.SIGTERM, _exit_on_signal)
     signal.signal(signal.SIGINT, _exit_on_signal)
-    server = make_threaded_server("127.0.0.1", 8081, app)
+    server = make_threaded_server("127.0.0.1", _PORT, app)
     try:
         server.serve_forever()
     finally:

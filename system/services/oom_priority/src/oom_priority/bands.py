@@ -13,12 +13,12 @@ memory.
 Bands are positive-only. A negative ``oom_score_adj`` (true "never kill") would
 require ``CAP_SYS_RESOURCE``, which the container's default capability set does
 not grant; positive values still establish the relative ordering. The never-kill
-infrastructure (sshd, supervisord, earlyoom itself, tini, and tmux) keeps the
-inherited default of 0 -- nothing needs to tag it -- and is additionally shielded
-by earlyoom ``--avoid``. The supervisord services (the UI, the tunnel, the
-terminal, the backups, ...) are tagged into the low ``SERVICE_BANDS`` range so
-they stay well below the agent bands while remaining strictly ordered among
-themselves.
+infrastructure (sshd, supervisord, earlyoom itself and its log timestamper
+earlyoom-stamp, tini, and tmux) keeps the inherited default of 0 -- nothing
+needs to tag it -- and is additionally shielded by earlyoom ``--avoid``. The
+supervisord services (the UI, the tunnel, the terminal, the backups, ...) are
+tagged into the low ``SERVICE_BANDS`` range so they stay well below the agent
+bands while remaining strictly ordered among themselves.
 
 Raising a process's own (or a descendant's) ``oom_score_adj`` is unprivileged,
 so the tagging hooks need no special capability.
@@ -191,8 +191,8 @@ def chat_agent_oom_score_adj(
 # terminal) come first, then the UI and the chat app, then the sharing stack,
 # then the runtime-state sync (github-sync, opt-in) and the host backup, then
 # the job scheduler, then the browser stack (its X display, then the
-# coordinator), then the Files app, and last the two single-page apps
-# (Getting Started, then Memory & disk).
+# coordinator), then the Files app, then the two single-page apps (Getting
+# Started, then System Monitor), and last the System Monitor's resource sampler.
 # ``user`` is the single band every *user-created* service shares;
 # it sits above every built-in service so a user's own service is shed before any
 # built-in one, while staying below USER_AGENT.
@@ -203,9 +203,9 @@ def chat_agent_oom_score_adj(
 # before all of them. That is the opposite of what a built-in wants, and the only
 # signal is a warning on the service's stderr.
 #
-# sshd and the other never-kill infrastructure (supervisord, earlyoom, tini,
-# tmux) are deliberately absent: they keep the inherited PROTECTED default (0)
-# and are additionally shielded by earlyoom ``--avoid``.
+# sshd and the other never-kill infrastructure (supervisord, earlyoom,
+# earlyoom-stamp, tini, tmux) are deliberately absent: they keep the inherited
+# PROTECTED default (0) and are additionally shielded by earlyoom ``--avoid``.
 #
 # This is a best-effort steer, not a hard guarantee. earlyoom picks the highest
 # badness, which adds each process's live memory usage on top of its
@@ -243,8 +243,7 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The sharing stack (gateway + caddy + frpc children inherit its band): a
     # shed share tunnel drops live viewers, so it sits just above the UI.
     "share-gateway": 35,
-    # Opt-in runtime/ sync (added by the github-sync skill); inherits the band the
-    # now-removed runtime-backup service used to hold.
+    # Opt-in runtime/ sync (added by the github-sync skill).
     "github-sync": 40,
     "host-backup": 50,
     # The cron daemon behind the workspace's scheduled jobs. A shed defers those
@@ -272,13 +271,18 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The Files app: a small Flask server over the workspace's files. It
     # holds little memory and supervisord restarts it if shed.
     "files": 75,
+    # The Routines app: a small Flask page over the routines library's state. It stores nothing
+    # of its own, so a shed costs one reload.
+    "routines": 78,
     # The Getting Started page: one static page and a cached catalog. A shed costs
     # one reload of a window that shows nothing of the user's.
     "getting-started": 80,
-    # The Memory & disk page: one polling page that writes nothing to disk, so a
-    # shed costs a reload and the memory graph's last 10 minutes. The most
-    # expendable built-in service of all.
+    # The System Monitor page: one polling page that writes nothing to disk, so a
+    # shed costs a reload. The most expendable built-in service of all, with the
+    # sampler that feeds its graphs just below it: a shed sampler costs a gap in
+    # the graphs until supervisord brings it back, and it holds almost no memory.
     "system-monitor": 85,
+    "resource_sampler": 86,
     "user": USER_SERVICE,
     # The shell of a workspace terminal window (and everything run in it), tagged by the
     # terminal app's session command. Not a supervisord program: the pane is a child of the

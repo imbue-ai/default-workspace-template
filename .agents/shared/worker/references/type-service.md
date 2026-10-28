@@ -13,7 +13,19 @@ solely to support one app lives in that app's folder under
 - The `[program:<name>]` block in its own `system/supervisord.conf.d/<name>.conf`
   (see `.agents/shared/references/service-processes.md` for the block schema).
   One file per program, so adding or removing a service never edits a file
-  another creation also owns.
+  another creation also owns. A standalone service's program is named after
+  its package with underscores as hyphens (`host_backup` runs as
+  `host-backup`), and any further program it runs is `<name>-<role>`: the scope
+  file's `wiring` and the update apply's rollback find its programs only by
+  those names. `oom_priority`'s programs (`earlyoom`, `publish_cgroup_meminfo`,
+  `resource_sampler`, and the `oom-tag-backstop` event listener) are named
+  otherwise, so its `wiring` is empty: an edit to their blocks lands in
+  `outside_footprint`, and a rollback leaves restarting them to the agent. A
+  service a routine runs (the Caretaker's check, run by
+  `system/routines/caretaker.toml`) has no program, so its `wiring` is empty
+  too: an edit to its routine's definition lands in `outside_footprint` (name
+  it under `Outside footprint:`), and nothing needs restarting, since its next
+  run reads the merged code.
 
 ## Running and testing
 
