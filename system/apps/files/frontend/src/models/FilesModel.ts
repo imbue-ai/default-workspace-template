@@ -5,6 +5,7 @@
  * dialogs) through a `FilesHost`.
  */
 
+import type { FailureMessage } from "@imbue/workspace-ui/src/models/failure";
 import { ToastQueue } from "@imbue/workspace-ui/src/models/toasts";
 
 import * as server from "./server";
@@ -32,6 +33,7 @@ import {
 } from "./preferences";
 import { UploadQueue, type UploadSource } from "./uploads";
 import { fetchConnections, isLiveShared, targetOf, type Connections } from "./connections";
+import { plainFailure, toastFailures, toldFailure, type BugReporter } from "./failures";
 
 export const WORKSPACE = "/home/user/workspace/";
 
@@ -67,7 +69,7 @@ export type ConflictChoice = "replace" | "keep-both" | "cancel";
 
 export type HistoryMode = "push" | "replace";
 
-export interface FilesHost {
+export interface FilesHost extends BugReporter {
   redraw(): void;
   /** Draw before returning, for a change the next keystroke must already find on the page. */
   redrawNow(): void;
@@ -424,11 +426,11 @@ export class FilesModel {
     }
     this.rename = { ...rename, isSaving: true };
     this.host.redraw();
-    try {
-      if (await server.exists(target)) throw new Error(`"${name}" is already taken.`);
-      await server.movePath(rename.path, target);
-    } catch (error) {
-      this.rename = { ...rename, isSaving: false, error: messageOf(error) };
+    const failure = await this.renameOnServer(rename.path, target, name);
+    if (failure !== null) {
+      // The name field says it where the name was typed; it has no room for the details, which go to the log.
+      if (failure.details !== null) console.warn(`[files] ${failure.message}`, failure.details);
+      this.rename = { ...rename, isSaving: false, error: failure.message };
       this.host.redraw();
       return;
     }
@@ -442,17 +444,28 @@ export class FilesModel {
     await this.load(parent);
   }
 
+  /** Rename `path` to `target` (named `name`); what went wrong, or null once it is done. */
+  private async renameOnServer(path: string, target: string, name: string): Promise<FailureMessage | null> {
+    try {
+      if (await server.exists(target)) return plainFailure(`"${name}" is already taken.`);
+      await server.movePath(path, target);
+      return null;
+    } catch (error) {
+      return toldFailure(error, `Couldn't rename "${nameOf(path)}" to "${name}"`);
+    }
+  }
+
   async deleteEntries(paths: readonly string[]): Promise<void> {
     const entries = paths.map((path) => this.entryFor(path)).filter((entry): entry is Entry => entry !== undefined);
     if (entries.length === 0 || !(await this.host.confirmDelete(entries))) return;
-    const failures: string[] = [];
+    const failures: FailureMessage[] = [];
     const deleted = new Set<string>();
     for (const entry of entries) {
       try {
         await server.deletePath(entry.path);
         deleted.add(entry.path);
       } catch (error) {
-        failures.push(messageOf(error));
+        failures.push(toldFailure(error, `Couldn't delete "${entry.name}"`));
       }
     }
     this.selection = this.selection.filter((path) => !deleted.has(path));
@@ -461,7 +474,7 @@ export class FilesModel {
       this.navigate(parentOf(enclosing) ?? ROOT, { history: "replace" });
     }
     await Promise.all([...new Set(entries.map((entry) => parentOf(entry.path) ?? ROOT))].map((f) => this.load(f)));
-    if (failures.length > 0) this.toasts.show(failures.join("\n"));
+    toastFailures(this.toasts, failures, this.host);
   }
 
   /** Make an "untitled folder" in the folder on show and start naming it. */
@@ -483,14 +496,9 @@ export class FilesModel {
     const name = isLive ? await this.host.askNewName(suggested, isFolder) : suggested;
     if (name === null) return;
     const path = childPath(folder, name, isFolder);
-    try {
-      if (this.isNameTaken(folder, name) || (isLive && (await server.exists(path)))) {
-        throw new Error(`"${name}" is already taken.`);
-      }
-      if (isFolder) await server.createFolder(path);
-      else await server.writeFile(path, "");
-    } catch (error) {
-      this.toasts.show(messageOf(error));
+    const failure = await this.createOnServer(folder, path, name, isFolder, isLive);
+    if (failure !== null) {
+      toastFailures(this.toasts, [failure], this.host);
       return;
     }
     await this.load(folder);
@@ -503,29 +511,57 @@ export class FilesModel {
     }
   }
 
+  /** Make the folder or empty file at `path`; what went wrong, or null once it is there. */
+  private async createOnServer(
+    folder: string,
+    path: string,
+    name: string,
+    isFolder: boolean,
+    isLive: boolean,
+  ): Promise<FailureMessage | null> {
+    try {
+      if (this.isNameTaken(folder, name) || (isLive && (await server.exists(path)))) {
+        return plainFailure(`"${name}" is already taken.`);
+      }
+      if (isFolder) await server.createFolder(path);
+      else await server.writeFile(path, "");
+      return null;
+    } catch (error) {
+      return toldFailure(error, `Couldn't create "${name}"`);
+    }
+  }
+
   /** Move entries into a folder, as a drag onto it asks. One that would land on a name already there stays put, and
    *  nothing moves to or from a computer's live share, whose file server cannot move. */
   async moveInto(paths: readonly string[], folder: string): Promise<void> {
     const moving = paths.filter((path) => parentOf(path) !== folder && !isWithin(folder, path));
     if (moving.length === 0) return;
-    const failures: string[] = [];
+    const failures: FailureMessage[] = [];
     const moved = new Set<string>();
     for (const path of moving) {
-      const target = childPath(folder, nameOf(path), isFolderPath(path));
-      try {
-        if (isLiveShared(path) || isLiveShared(folder)) throw new Error(LIVE_MOVE_REFUSAL);
-        if (await server.exists(target))
-          throw new Error(`${nameOf(folder)} already has an item named "${nameOf(path)}".`);
-        await server.movePath(path, target);
-        moved.add(path);
-      } catch (error) {
-        failures.push(messageOf(error));
-      }
+      const failure = await this.moveOnServer(path, folder);
+      if (failure === null) moved.add(path);
+      else failures.push(failure);
     }
     this.selection = this.selection.filter((path) => !moved.has(path));
     const touched = new Set([folder, ...moving.map((path) => parentOf(path) ?? ROOT)]);
     await Promise.all([...touched].filter((f) => this.folders.has(f)).map((f) => this.load(f)));
-    if (failures.length > 0) this.toasts.show([...new Set(failures)].join("\n"));
+    toastFailures(this.toasts, failures, this.host);
+  }
+
+  /** Move `path` into `folder`; what went wrong, or null once it is there. */
+  private async moveOnServer(path: string, folder: string): Promise<FailureMessage | null> {
+    if (isLiveShared(path) || isLiveShared(folder)) return plainFailure(LIVE_MOVE_REFUSAL);
+    const target = childPath(folder, nameOf(path), isFolderPath(path));
+    try {
+      if (await server.exists(target)) {
+        return plainFailure(`${nameOf(folder)} already has an item named "${nameOf(path)}".`);
+      }
+      await server.movePath(path, target);
+      return null;
+    } catch (error) {
+      return toldFailure(error, `Couldn't move "${nameOf(path)}" into "${nameOf(folder) || folder}"`);
+    }
   }
 
   /** Send files into a folder, asking first about names that are already taken there. */

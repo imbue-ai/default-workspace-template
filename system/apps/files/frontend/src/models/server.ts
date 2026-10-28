@@ -6,6 +6,9 @@
  * into `#index-data`.
  */
 
+import { readFailure, type RequestKind } from "@imbue/workspace-ui/src/models/failure";
+import { HttpError, fetchOrNotAnswered, readResponseFailure } from "@imbue/workspace-ui/src/models/http";
+
 import { childPath, encodePath } from "./paths";
 
 /** One entry of a folder as the server lists it. A folder's `size` is how many entries it holds; `mtime` is in
@@ -32,15 +35,6 @@ export interface Entry {
   /** Bytes for a file, entries for a folder. */
   size: number;
   mtime: number;
-}
-
-export class ServerError extends Error {
-  constructor(
-    message: string,
-    readonly status: number,
-  ) {
-    super(message);
-  }
 }
 
 export function entryOf(folder: string, record: EntryRecord): Entry {
@@ -78,20 +72,10 @@ export function downloadUrlOf(path: string, isFolder: boolean): string {
   return `${urlOf(path)}?${isFolder ? "zip" : "download"}`;
 }
 
-async function failureOf(response: Response, what: string): Promise<ServerError> {
-  let detail: string;
-  try {
-    detail = (await response.text()).trim();
-  } catch {
-    detail = "";
-  }
-  const reason = detail === "" || detail.startsWith("<") ? response.statusText || `error ${response.status}` : detail;
-  return new ServerError(`${what}: ${reason}`, response.status);
-}
-
-async function send(url: string, init: RequestInit, what: string): Promise<Response> {
-  const response = await fetch(url, init);
-  if (!response.ok) throw await failureOf(response, what);
+/** ``fetch`` that throws an ``HttpError`` for a refusal or a request nothing answered. */
+async function send(url: string, init: RequestInit, requestKind: RequestKind): Promise<Response> {
+  const response = await fetchOrNotAnswered(url, init, requestKind);
+  if (!response.ok) throw await readResponseFailure(response, requestKind);
   return response;
 }
 
@@ -104,11 +88,16 @@ export interface Listing {
 }
 
 export async function listFolder(folder: string, signal?: AbortSignal): Promise<Listing> {
-  const response = await fetch(`${urlOf(folder)}?json`, { signal });
+  const response = await fetchOrNotAnswered(`${urlOf(folder)}?json`, { signal }, "read");
   if (response.status === 404) return { exists: false, entries: [] };
-  if (!response.ok) throw await failureOf(response, `Couldn't open ${folder}`);
+  if (!response.ok) throw await readResponseFailure(response, "read");
   const data = (await response.json()) as PageData;
-  if (data.kind !== "folder") throw new ServerError(`Couldn't open ${folder}: it is a file`, 400);
+  if (data.kind !== "folder") {
+    const sentence = `${folder} is a file, not a folder.`;
+    throw new HttpError(
+      readFailure({ status: 400, body: { user_facing_message: sentence }, rawText: null, requestKind: "read" }),
+    );
+  }
   return { exists: true, entries: data.entries.map((record) => entryOf(folder, record)), stamp: data.stamp ?? null };
 }
 
@@ -116,8 +105,7 @@ export async function listFolder(folder: string, signal?: AbortSignal): Promise<
  *  renamed, or null for a path that is not a folder. One stat a folder on the server. */
 export async function folderStamps(folders: readonly string[]): Promise<Record<string, string | null>> {
   const query = folders.map((folder) => `path=${encodeURIComponent(folder)}`).join("&");
-  const response = await fetch(`/__files/api/stamps?${query}`);
-  if (!response.ok) throw await failureOf(response, "Couldn't check the folders");
+  const response = await send(`/__files/api/stamps?${query}`, {}, "read");
   return ((await response.json()) as { stamps: Record<string, string | null> }).stamps;
 }
 
@@ -129,25 +117,25 @@ export async function exists(path: string): Promise<boolean> {
 }
 
 export async function deletePath(path: string): Promise<void> {
-  await send(urlOf(path), { method: "DELETE" }, `Couldn't delete ${path}`);
+  await send(urlOf(path), { method: "DELETE" }, "change");
 }
 
 export async function movePath(from: string, to: string): Promise<void> {
   const destination = new URL(urlOf(to), window.location.href).href;
-  await send(urlOf(from), { method: "MOVE", headers: { Destination: destination } }, `Couldn't move ${from}`);
+  await send(urlOf(from), { method: "MOVE", headers: { Destination: destination } }, "change");
 }
 
 export async function createFolder(path: string): Promise<void> {
-  await send(urlOf(path), { method: "MKCOL" }, `Couldn't create ${path}`);
+  await send(urlOf(path), { method: "MKCOL" }, "change");
 }
 
 export async function writeFile(path: string, body: BodyInit): Promise<void> {
-  await send(urlOf(path), { method: "PUT", body }, `Couldn't save ${path}`);
+  await send(urlOf(path), { method: "PUT", body }, "change");
 }
 
 export async function readText(path: string, signal?: AbortSignal, maxBytes?: number): Promise<string> {
   const headers: Record<string, string> = maxBytes === undefined ? {} : { Range: `bytes=0-${maxBytes - 1}` };
-  const response = await send(urlOf(path), { signal, headers }, `Couldn't read ${path}`);
+  const response = await send(urlOf(path), { signal, headers }, "read");
   return response.text();
 }
 
@@ -156,17 +144,41 @@ export interface Upload {
   abort(): void;
 }
 
-/** PUT a file with progress, which fetch cannot report. The server creates the folders above it as needed. */
+function parsedJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Not JSON (an error page, a proxy's plain text): quoted behind "See details".
+    return null;
+  }
+}
+
+/** PUT a file with progress, which fetch cannot report. The server creates the folders above it as needed. A refusal
+ *  or a dropped connection rejects with an ``HttpError``; a canceled upload with an ``AbortError``. */
 export function uploadFile(path: string, file: Blob, onProgress: (loaded: number) => void): Upload {
   const request = new XMLHttpRequest();
   const done = new Promise<void>((resolve, reject) => {
     request.upload.addEventListener("progress", (event) => onProgress(event.loaded));
     request.addEventListener("load", () => {
-      if (request.status >= 200 && request.status < 300) resolve();
-      else reject(new ServerError(request.responseText.trim() || request.statusText, request.status));
+      if (request.status >= 200 && request.status < 300) {
+        resolve();
+        return;
+      }
+      const rawText = request.responseText;
+      reject(
+        new HttpError(
+          readFailure({ status: request.status, body: parsedJson(rawText), rawText, requestKind: "change" }),
+        ),
+      );
     });
-    request.addEventListener("error", () => reject(new ServerError("The connection was lost", 0)));
-    request.addEventListener("abort", () => reject(new ServerError("Canceled", 0)));
+    request.addEventListener("error", () =>
+      reject(
+        new HttpError(
+          readFailure({ status: 0, body: null, rawText: "The connection was lost", requestKind: "change" }),
+        ),
+      ),
+    );
+    request.addEventListener("abort", () => reject(new DOMException("Canceled", "AbortError")));
   });
   request.open("PUT", urlOf(path));
   request.send(file);

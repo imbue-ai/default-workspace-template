@@ -76,11 +76,14 @@ function bootstrap(): void {
 
   const path = decodePathname(window.location.pathname);
   if (data.kind === "file") {
-    const page = new FilePageModel({
-      path,
-      page: new URLSearchParams(window.location.search).has("edit") ? "edit" : "view",
-      isText: data.is_text,
-    });
+    const page = new FilePageModel(
+      {
+        path,
+        page: new URLSearchParams(window.location.search).has("edit") ? "edit" : "view",
+        isText: data.is_text,
+      },
+      connection,
+    );
     document.title = titleOf(path);
     connection.location(window.location.pathname + window.location.search, titleOf(path));
     installElementContextMenu({ connection, handshake: () => handshake, open: opener.open });
