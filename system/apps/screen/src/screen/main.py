@@ -104,7 +104,6 @@ def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) 
         on_browser_running=service.on_browser_running,
     )
     service.attach_fleet(fleet, band_sweeper)
-    fleet.load_saved()
     stack = ScreenStack(
         supervisor=supervisor,
         neko=neko,
@@ -117,6 +116,8 @@ def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) 
         on_stopping=fleet.prepare_for_stack_stop,
     )
     service.attach_stack(stack)
+    # After the stack is attached: loading broadcasts state, which reads it.
+    fleet.load_saved()
     return service
 
 
