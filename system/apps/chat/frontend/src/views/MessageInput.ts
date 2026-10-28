@@ -1345,10 +1345,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             ? ["The agent may already have it, so check its terminal before you send it again."]
             : [
                 detail,
-                // Only when the detail does not already say what to do. An input_blocked reason is
-                // the dialog's own advice ("press Enter in its terminal to run it") -- following it
-                // with a vaguer paraphrase of the same instruction is the third time one screen has
-                // told the reader to go look at their terminal.
+                // Only when the detail does not already say what to do: an input_blocked reason is
+                // the dialog's own advice ("press Enter in its terminal to run it").
                 actionFailureKind === "agent_unreachable"
                   ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
                   : isRepeatable && actionFailureKind !== "input_blocked"
