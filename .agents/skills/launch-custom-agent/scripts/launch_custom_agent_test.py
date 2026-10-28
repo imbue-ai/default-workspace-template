@@ -208,9 +208,7 @@ def test_a_taken_agent_name_is_refused_before_the_create(workspace_root: Path) -
     assert runner.create_calls() == []
 
 
-def test_an_explicit_harness_picks_an_account_on_that_harness(
-    workspace_root: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_an_explicit_harness_picks_an_account_on_that_harness(workspace_root: Path) -> None:
     accounts_root = workspace_root / "accounts"
     _write_account_index(
         accounts_root,

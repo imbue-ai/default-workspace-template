@@ -85,13 +85,14 @@ def _resolve_account(account_id: str, harness_name: str) -> accounts.Account:
         if account is None:
             known = ", ".join(a.id for a in index.accounts) or "(none)"
             _fail(f"no provider account with id {account_id!r}; signed-in accounts: {known}")
-        if harness_name and accounts.harness_for(account) != HarnessType(harness_name):
+        account_harness = accounts.harness_for(account)
+        if account_harness is None:
+            _fail(f"account {account_id!r} is on a lane this build does not support")
+        if harness_name and account_harness != HarnessType(harness_name):
             _fail(
-                f"account {account_id!r} runs on harness {accounts.harness_for(account)}, not {harness_name!r}; "
+                f"account {account_id!r} runs on harness {account_harness}, not {harness_name!r}; "
                 "name one or the other, not a conflicting pair"
             )
-        if accounts.harness_for(account) is None:
-            _fail(f"account {account_id!r} is on a lane this build does not support")
         return account
     if harness_name:
         harness = HarnessType(harness_name)
