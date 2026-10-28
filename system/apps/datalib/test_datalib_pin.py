@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 from typing import Final
 
-from datalib_launcher_testing import launcher
+import launch_datalib_http as launcher
 
 # system/apps/datalib/test_datalib_pin.py -> the repository root.
 _REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[3]
