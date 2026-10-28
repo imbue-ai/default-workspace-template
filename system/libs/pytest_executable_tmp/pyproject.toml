@@ -1,7 +1,7 @@
 [project]
 name = "pytest-executable-tmp"
 version = "0.1.0"
-description = "Test-only pytest plugin that keeps temporary files on a filesystem that can run them"
+description = "Test-only pytest plugin that stops a session whose temporary files cannot be run"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
