@@ -141,14 +141,12 @@ def build_production_state(
     chat_settings = ChatSettingsStore(path=data_dir / SETTINGS_FILENAME)
     chat_records_root = data_dir / CHAT_RECORDS_DIRNAME
     # The steps of messages sent to busy chats, in the workspace's tickets folder; a secondary's sends make none.
-    message_step_files = MessageStepFiles(tickets_dir=config.chat_tickets_dir)
+    message_step_files = MessageStepFiles(tickets_dir=config.chat_tickets_dir, tk_script=config.tk_script)
     # The ids reserved for steps not written yet, prefixed as tk mints ids from the repo root every program runs in.
     message_step_reservations = MessageStepReservations(
         root=data_dir / MESSAGE_STEP_RESERVATIONS_DIRNAME, id_prefix=step_id_prefix(Path.cwd().name)
     )
-    message_step_tracker = (
-        None if is_secondary else MessageStepTracker(files=message_step_files, reservations=message_step_reservations)
-    )
+    message_step_tracker = None if is_secondary else MessageStepTracker(files=message_step_files)
     agent_manager = AgentManager.build(
         broadcaster,
         message_stamps=MessageStampStore(path=data_dir / STAMPS_FILENAME),

@@ -14,6 +14,8 @@ DEFAULT_CHAT_DATA_DIR: Final[Path] = Path("data/.apps/chat")
 # Where tk keeps the workspace's tickets, relative to the same root. The agents' own TICKETS_DIR
 # (``.mngr/settings.toml``) names the same folder.
 DEFAULT_CHAT_TICKETS_DIR: Final[Path] = Path("data/.tickets")
+# The vendored tk the chat app runs to create and cancel message steps, relative to the same root.
+DEFAULT_TK_SCRIPT: Final[Path] = Path("system/vendor/tk/ticket")
 
 
 class DuplicateStaticBasenameError(ValueError):
@@ -33,6 +35,7 @@ class Config(BaseSettings):
     # in the live chat's data.
     chat_data_dir: Path = Field(default=DEFAULT_CHAT_DATA_DIR)
     chat_tickets_dir: Path = Field(default=DEFAULT_CHAT_TICKETS_DIR)
+    tk_script: Path = Field(default=DEFAULT_TK_SCRIPT)
 
     @field_validator("chat_javascript_plugins", "chat_static_paths", mode="before")
     @classmethod

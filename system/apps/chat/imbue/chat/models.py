@@ -666,8 +666,8 @@ class ActiveAgentSnapshot(FrozenModel):
         description="The steps made for the messages sent to the chat while its agent was busy, oldest first"
     )
     hidden_step_ids: tuple[str, ...] = Field(
-        description="The chat's steps a later message called off or replaced, which the pages leave out until the "
-        "agent starts one again (``message_steps.py``)"
+        description="The chat's steps whose cancel holds (``tk cancel``), which the pages leave out until the agent "
+        "starts one again (``message_steps.py``)"
     )
 
 

@@ -1286,11 +1286,14 @@ class _ReservationCheckingMessenger(RecordingMngrMessenger):
         return super().send_to_agent(agent_id, message, known_locations)
 
 
+_TK_SCRIPT_FOR_MESSAGE_STEPS = Path(__file__).resolve().parents[4] / "vendor" / "tk" / "ticket"
+
+
 def _message_step_folders(
     tmp_path: Path,
 ) -> tuple[MessageStepFiles, MessageStepReservations]:
     (tmp_path / ".tickets").mkdir()
-    files = MessageStepFiles(tickets_dir=tmp_path / ".tickets")
+    files = MessageStepFiles(tickets_dir=tmp_path / ".tickets", tk_script=_TK_SCRIPT_FOR_MESSAGE_STEPS)
     return files, MessageStepReservations(root=tmp_path / "reservations", id_prefix="wor")
 
 
@@ -1309,7 +1312,7 @@ def _client_making_message_steps(
         agent_state_dir=tmp_path / "agent",
         claude_config_dir=tmp_path,
     )
-    tracker = MessageStepTracker(files=files, reservations=reservations)
+    tracker = MessageStepTracker(files=files)
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, message_steps=tracker)
     manager.note_agent_list_known()
     with manager._lock:

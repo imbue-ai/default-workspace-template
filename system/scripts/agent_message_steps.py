@@ -5,9 +5,10 @@ When a user sends a chat a message, the chat app reserves a tk step id for it be
 asks a small model what the message does to the chat's open steps (usually a few seconds; longer when the call is
 retried) (``system/apps/chat/imbue/chat/message_steps.py``). A new request gets its step written under the reserved
 id, an ordinary tk step record in ``$TICKETS_DIR`` created with the chat's id as its creator. So does a message that
-changes what an open step asks for, recorded as replacing that step under ``replacements/``. A message that repeats
-an open step gets no step of its own, and neither does one that calls an open step off. The chat app never changes
-the open step itself: the agent does, told by this hook what the message suggests. A reservation is one JSON file under
+changes what an open step asks for, and the chat cancels the step it replaces with ``tk cancel`` (a sidecar tk honours
+until the agent starts the step again). A message that repeats an open step gets no step of its own, and neither does
+one that calls an open step off, which the chat cancels the same way. The model sees one message at a time, so the
+agent is told its decisions as suggestions to check against everything the user said. A reservation is one JSON file under
 ``$CHAT_MESSAGE_STEP_RESERVATIONS_DIR``; every id that ends without a step of its own has its outcome recorded under
 ``settled/`` beside it, naming the open step when there is one.
 
@@ -21,8 +22,7 @@ Two hooks, one subcommand each:
   it, at most as long as the chat app tries. An id judged not a task, or whose message belongs to an open step, is
   answered at once: the command is declined with that reason, which is not a failure. An id whose step could not be
   created blocks the command with an error. Either way the command never reaches tk, which would only say the id is
-  unknown. A ``tk start`` of a message's own step that replaces a step still open is declined until the agent has
-  closed the step it replaces.
+  unknown. Records of another chat are ignored, as if the id were never reserved here.
 
 Standard library only: Claude runs hooks under a plain ``python3``.
 """
@@ -60,8 +60,6 @@ _SETTLED_OUTCOMES = (
     OUTCOME_SAME_AS,
     OUTCOME_CANCELS,
 )
-# Kept equal to the chat app's REPLACEMENTS_DIRNAME (message_steps.py).
-REPLACEMENTS_DIRNAME = "replacements"
 OUTCOME_WRITTEN = "written"
 OUTCOME_UNKNOWN = "unknown"
 _POLL_SECONDS = 0.2
@@ -195,15 +193,20 @@ def message_step_context(step: PendingStep) -> str:
     return (
         "[Message step]\n"
         f"If this message is a new task, its step is being created under id {step.step_id}: it appears on the user's "
-        "progress timeline within seconds, titled with their request. If it repeats, changes or calls off one of your "
-        "open steps, `tk start` on this id tells you which and what to do with that step. If it is not a task "
-        "(thanks, a question about progress), no step is created. Either way, never create your own step for this "
-        "message; you may add steps for parts of your own work.\n"
+        "progress timeline within seconds, titled with their request. These decisions come from the chat's quick "
+        "model, which sees one message at a time: treat them as suggestions, and check them against everything the "
+        "user has said. If the model judges that the message repeats or calls off one of your open steps, `tk start` "
+        "on this id tells you which; if it changes one, its step replaces that one, and the chat cancels the old step "
+        "(`tk cancel`; starting the old step again overrides that). If the model judges it not a task (thanks, a "
+        "question about progress), no step is created. Either way, do not create a second step for this message; you "
+        "may add steps for parts of your own work.\n"
         f"- When you start on this message, run `tk start {step.step_id}` (it waits until the step exists) and do "
         "its work under that step.\n"
         f'- When it is done, run `tk close {step.step_id} "<one-line summary of the work>"`.\n'
-        f"- If `tk start {step.step_id}` says the message was judged not to be a task, reply or carry on without a step.\n"
-        f"- If `tk start {step.step_id}` says the message repeats, replaces or calls off another step, do what it says."
+        f"- If `tk start {step.step_id}` says the model judged the message not a task, reply or carry on without a step, "
+        "or create one if you judge it is a task.\n"
+        f"- If `tk start {step.step_id}` says the message repeats or calls off another step, decide what to do with that "
+        "step as it suggests."
     )
 
 
@@ -253,6 +256,8 @@ class Settled(NamedTuple):
     target_title: str
     # Why the step is no longer needed, for cancels; '' otherwise.
     reason: str
+    # The chat the message was sent to.
+    chat_id: str
 
 
 def read_settled(reservations_dir: Path, step_id: str) -> Settled | None:
@@ -271,6 +276,7 @@ def read_settled(reservations_dir: Path, step_id: str) -> Settled | None:
         target_id=str(record.get("target_id", "")),
         target_title=str(record.get("target_title", "")),
         reason=str(record.get("reason", "")),
+        chat_id=str(record.get("chat_id", "")),
     )
 
 
@@ -283,58 +289,38 @@ def _is_open(fields: Mapping[str, str]) -> bool:
     return fields.get("status") in ("open", "in_progress")
 
 
+def _is_open(fields: Mapping[str, str]) -> bool:
+    return fields.get("status") in ("open", "in_progress")
+
+
 def belonging_note(settled: Settled, target_fields: Mapping[str, str]) -> str | None:
-    """What to tell the agent about a message the model judged to repeat or call off an open step, given that step's
-    record now, or None for any other outcome."""
+    """What to tell the agent about a message the chat's model judged to repeat or call off an open step, given that
+    step's record now, or None for any other outcome."""
     target = f'step {settled.target_id} "{settled.target_title}"'
+    judged = "The chat's quick model, which sees only this message, judged"
     if settled.outcome == OUTCOME_SAME_AS and not _is_open(target_fields):
         return (
-            f"This message asks for what {target} covered, and that step is already done. Reply or carry on "
-            f"without a step, and do not start {settled.target_id} again."
+            f"{judged} that it asks for what {target} covered, and that step is already done. If that is right after "
+            "everything the user has said, reply or carry on without a step; if not, create a step for it."
         )
     if settled.outcome == OUTCOME_SAME_AS:
         return (
-            f"This message asks for what {target} already covers, so it has no step of its own. Do it under "
-            f"{settled.target_id}: run `tk start {settled.target_id}` if that step is not in progress, and close it "
-            "when the work is done."
+            f"{judged} that it asks for what {target} already covers, so no step was made for it. If that is right "
+            f"after everything the user has said, do it under {settled.target_id}; if not, create a step for it."
         )
     if settled.outcome == OUTCOME_CANCELS and not _is_open(target_fields):
         return (
-            f"This message calls off {target}, which was already done before it arrived. Tell the user it was "
-            "already done, and do not start it again."
+            f"{judged} that it calls off {target}, which was already done before it arrived. Tell the user it was "
+            "already done."
         )
     if settled.outcome == OUTCOME_CANCELS:
         return (
-            f"This message calls off {target} ({settled.reason}), so it has no step of its own. Stop that work and "
-            f'close the step with a short note: `tk close {settled.target_id} "No longer needed: {settled.reason}"`.'
+            f"{judged} that it calls off {target} ({settled.reason}), so no step was made for it, and the chat "
+            "recorded that with `tk cancel`: the step no longer shows to the user. If that is right after everything "
+            f'the user has said, stop that work and close the step: `tk close {settled.target_id} "No longer needed: '
+            f'{settled.reason}"`. If not, run `tk start {settled.target_id}` to keep it, which overrides the cancel.'
         )
     return None
-
-
-def replacement_note(
-    step_id: str, step_title: str, replaced_id: str, replaced_title: str
-) -> str:
-    return (
-        f'This message replaces step {replaced_id} "{replaced_title}" with its own step {step_id} "{step_title}", '
-        f"for the user's updated request. First close the old step with a short note: "
-        f'`tk close {replaced_id} "Replaced by an updated request"`. Then run `tk start {step_id}` and do the '
-        "updated work under it."
-    )
-
-
-def read_replacement(reservations_dir: Path, step_id: str) -> tuple[str, str] | None:
-    """The step a message's own step replaces (id and title), or None."""
-    try:
-        record = json.loads(
-            (reservations_dir / REPLACEMENTS_DIRNAME / f"{step_id}.json").read_text(
-                encoding="utf-8"
-            )
-        )
-    except (OSError, ValueError):
-        return None
-    if not isinstance(record, dict) or not isinstance(record.get("target_id"), str):
-        return None
-    return record["target_id"], str(record.get("target_title", ""))
 
 
 def read_step_fields(tickets_dir: Path, step_id: str) -> dict[str, str]:
@@ -400,6 +386,21 @@ def _current_outcome(
     return OUTCOME_WRITTEN if step_path.exists() else OUTCOME_UNKNOWN
 
 
+def is_other_chats(reservations_dir: Path, step_id: str, chat_id: str) -> bool:
+    """Whether a reserved id's records name another chat than the agent's (records without a chat count as its own)."""
+    if not chat_id:
+        return False
+    try:
+        pending = parse_reservation(
+            (reservations_dir / f"{step_id}.json").read_text(encoding="utf-8")
+        )
+    except OSError:
+        pending = None
+    settled = read_settled(reservations_dir, step_id)
+    owners = {pending.creator if pending else "", settled.chat_id if settled else ""}
+    return any(owner and owner != chat_id for owner in owners)
+
+
 def _deny(reason: str) -> int:
     decision = {
         "hookEventName": "PreToolUse",
@@ -421,26 +422,19 @@ def cmd_wait(
         return 0
     tickets_dir, reservations_dir = _tickets_and_reservations_dirs(environ)
     separately = " Run any other tk commands from this call separately."
+    chat_id = environ.get("MINDS_CHAT_ID", "")
     for step_id in reserved_step_ids_in_command(command):
+        # Another chat's message is none of this agent's: tk answers as for any id.
+        if is_other_chats(reservations_dir, step_id, chat_id):
+            continue
         outcome = wait_for_step(
             step_id, tickets_dir, reservations_dir, max_wait_seconds
         )
         if outcome == OUTCOME_NOT_A_TASK:
             return _deny(
-                f"No step {step_id}: this message was judged not to be a task, so it has no step. Reply or carry on "
-                "without one, and do not create a step for it." + separately
-            )
-        replaced = (
-            read_replacement(reservations_dir, step_id)
-            if outcome == OUTCOME_WRITTEN
-            else None
-        )
-        if replaced is not None and _is_open(
-            read_step_fields(tickets_dir, replaced[0])
-        ):
-            title = read_step_fields(tickets_dir, step_id).get("title", "")
-            return _deny(
-                replacement_note(step_id, title, replaced[0], replaced[1]) + separately
+                f"No step {step_id}: the chat's quick model, which sees only this message, judged it not to be a task, "
+                "so no step was made for it. If that is right after everything the user has said, reply or carry on "
+                "without one; if not, create a step for it." + separately
             )
         if outcome in (OUTCOME_SAME_AS, OUTCOME_CANCELS):
             settled = read_settled(reservations_dir, step_id)

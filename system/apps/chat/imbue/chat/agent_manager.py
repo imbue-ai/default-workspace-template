@@ -149,7 +149,6 @@ from imbue.chat.main_chat import resolved_main_chat_id
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_steps import MessageStep
 from imbue.chat.message_steps import MessageStepTracker
-from imbue.chat.message_steps import StepSuggestion
 from imbue.chat.message_steps import message_step_snapshot
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentCreationError
@@ -881,7 +880,7 @@ def chat_snapshot_for_active_agent(
     background_tasks: tuple[BackgroundTask, ...],
     compaction_cause: CompactionCause | None,
     message_steps: tuple[MessageStep, ...],
-    step_suggestions: tuple[StepSuggestion, ...],
+    hidden_step_ids: tuple[str, ...],
 ) -> ChatSnapshot:
     """The snapshot of a chat from the agent it runs on.
 
@@ -925,7 +924,7 @@ def chat_snapshot_for_active_agent(
             is_busy=is_busy,
             background_tasks=tuple(background_task_snapshot(task) for task in background_tasks),
             message_steps=tuple(message_step_snapshot(step) for step in message_steps),
-            hidden_step_ids=tuple(suggestion.step_id for suggestion in step_suggestions),
+            hidden_step_ids=hidden_step_ids,
         ),
         last_messaged_at=last_messaged_at,
     )
@@ -1816,7 +1815,7 @@ class AgentManager:
                     tasks_by_chat.get(chat.chat_id, ()),
                     compaction_cause_by_agent[agent.id],
                     self._message_steps_of_chat(chat.chat_id),
-                    self._step_suggestions_of_chat(chat.chat_id),
+                    self._hidden_step_ids_of_chat(chat.chat_id),
                 )
             )
             for agent, chat in listed
@@ -1851,7 +1850,7 @@ class AgentManager:
             background_tasks,
             compaction_cause,
             self._message_steps_of_chat(chat.chat_id),
-            self._step_suggestions_of_chat(chat.chat_id),
+            self._hidden_step_ids_of_chat(chat.chat_id),
         )
 
     def is_chat_busy_with_a_turn(self, chat_id: ChatId) -> bool:
@@ -1868,8 +1867,8 @@ class AgentManager:
     def _message_steps_of_chat(self, chat_id: ChatId) -> tuple[MessageStep, ...]:
         return () if self._message_steps is None else self._message_steps.steps_of_chat(chat_id)
 
-    def _step_suggestions_of_chat(self, chat_id: ChatId) -> tuple[StepSuggestion, ...]:
-        return () if self._message_steps is None else self._message_steps.suggestions_of_chat(chat_id)
+    def _hidden_step_ids_of_chat(self, chat_id: ChatId) -> tuple[str, ...]:
+        return () if self._message_steps is None else self._message_steps.hidden_step_ids_of_chat(chat_id)
 
     def get_active_agent_info(self, chat_id: ChatId) -> AgentInfo | None:
         """The agent a chat currently runs on (with its resolved dirs), or None for an id that names no chat."""

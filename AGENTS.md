@@ -51,11 +51,12 @@ Titles describe the goal as the user understands it. Summaries (required on clos
 
 A message the user sends while you are busy gets its step from the chat: the chat reserves its id the moment they press send, and a `[Message step]` note beside the message names it. The step appears on their progress timeline a few seconds later, titled with their request. A message with no such note (one sent while you were idle) has no step: declare its steps yourself as above.
 
-- Never create your own step for a request whose message came with a `[Message step]` note. You may add steps for parts of your own work (for example "Check it all works"), as usual.
+- Never create a second step for a request whose message came with a `[Message step]` note. You may add steps for parts of your own work (for example "Check it all works"), as usual.
 - `tk start <id>` it when you begin on the request (the command waits until the step exists), and `tk close <id> "<summary>"` it when the request is done.
 - A message that arrives while you are busy with something else keeps its step open until you get to it. Do not close it only to clear the list.
-- A message the chat judges not a task (thanks, a question about progress) gets no step: `tk start` on its id says so at once. Reply or carry on without a step, and do not create one for it.
-- A message may repeat, change or call off one of your open steps. The chat never changes your steps; `tk start` on the message's id tells you what it suggests, and you make the change. A repeat gets no step of its own: do it under that step. A changed request gets its own step: close the old step with a short note, then work under the new one. A call-off gets no step: stop that work and close the step with a short note. The user's timeline hides a called-off or replaced step.
+- The chat's decisions about a message come from a quick model that sees one message at a time. Treat them as suggestions, and check them against everything the user has said.
+- A message the model judges not a task (thanks, a question about progress) gets no step: `tk start` on its id says so at once. Reply or carry on without a step, or create one if you judge it is a task.
+- A message may repeat, change or call off one of your open steps. A repeat gets no step: `tk start` on its id names the step it repeats. A change gets its own step for the updated request, and the chat cancels the step it replaces. A call-off gets no step, and the chat cancels the step it calls off. A cancel (`tk cancel`) hides the step from the user's timeline and marks it in `tk steps`; if it is right, close the step with a short note, and if not, `tk start` the step, which overrides the cancel.
 
 ## When you don't need records
 

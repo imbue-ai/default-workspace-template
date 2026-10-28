@@ -11,6 +11,7 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletion
 from imbue.chat.harnesses.one_shot import OneShotCompletionError
+from imbue.chat.message_steps import CANCEL_SUFFIX
 from imbue.chat.message_steps import MESSAGE_REF_PREFIX
 from imbue.chat.message_steps import MESSAGE_STEP_RESERVATIONS_DIRNAME
 from imbue.chat.message_steps import MESSAGE_STEP_TAG
@@ -25,7 +26,6 @@ from imbue.chat.message_steps import MessageStepTracker
 from imbue.chat.message_steps import MessageStepWriter
 from imbue.chat.message_steps import MessageSteps
 from imbue.chat.message_steps import OpenStep
-from imbue.chat.message_steps import REPLACEMENTS_DIRNAME
 from imbue.chat.message_steps import SETTLED_DIRNAME
 from imbue.chat.message_steps import TITLE_CALL_RETRY_COUNT
 from imbue.chat.message_steps import TITLE_CALL_TIMEOUT_SECONDS
@@ -48,10 +48,10 @@ class _Folders:
     """The tickets folder and the reservations folder of one test, with the records over them."""
 
     def __init__(self, tmp_path: Path) -> None:
-        self.files = MessageStepFiles(tickets_dir=tmp_path / ".tickets")
+        self.files = MessageStepFiles(tickets_dir=tmp_path / ".tickets", tk_script=_TK_SCRIPT)
         self.files.tickets_dir.mkdir()
         self.reservations = MessageStepReservations(root=tmp_path / "reservations", id_prefix="wor")
-        self.tracker = MessageStepTracker(files=self.files, reservations=self.reservations)
+        self.tracker = MessageStepTracker(files=self.files)
 
     def reserve(
         self, message: str, chat_id: ChatId = _CHAT_ID, message_id: str = "message-1"
@@ -85,14 +85,14 @@ class _Folders:
         path = self.reservations.root / SETTLED_DIRNAME / f"{step_id}.json"
         return MessageStepOutcome(json.loads(path.read_text())["outcome"]) if path.exists() else None
 
-    def run_tk(self, *args: str) -> None:
-        """Run tk as the chat's agent does, on this test's tickets folder."""
+    def run_tk(self, *args: str) -> str:
+        """Run tk as the chat's agent does, on this test's tickets folder; its output."""
         env = {
             **os.environ,
             "TICKETS_DIR": str(self.files.tickets_dir),
             "MINDS_CHAT_ID": str(_CHAT_ID),
         }
-        run_local_command_modern_version(command=[str(_TK_SCRIPT), *args], timeout=30, env=env)
+        return run_local_command_modern_version(command=[str(_TK_SCRIPT), *args], timeout=30, env=env).stdout
 
 
 @pytest.fixture
@@ -454,7 +454,7 @@ def test_a_start_on_a_thanks_sent_while_busy_is_answered_not_a_task(
 
     assert hook_thread.returncode == 0
     assert '"permissionDecision": "deny"' in hook_thread.stdout
-    assert "judged not to be a task" in hook_thread.stdout
+    assert "not to be a task" in hook_thread.stdout
     assert list(folders.files.tickets_dir.iterdir()) == []
 
 
@@ -526,7 +526,7 @@ def test_the_agent_hook_reads_the_same_records_the_chat_writes() -> None:
         hook.OUTCOME_SAME_AS,
         hook.OUTCOME_CANCELS,
     ) == tuple(outcome.value for outcome in MessageStepOutcome)
-    assert hook.REPLACEMENTS_DIRNAME == REPLACEMENTS_DIRNAME
+    assert hook.SETTLED_DIRNAME == SETTLED_DIRNAME
     assert hook.MAX_WAIT_SECONDS > TITLE_CALL_TIMEOUT_SECONDS * (TITLE_CALL_RETRY_COUNT + 1)
 
 
@@ -547,8 +547,8 @@ def _ticket_text(folders: _Folders, step_id: str) -> str:
 
 
 def _start_long_ago(folders: _Folders, step_id: str) -> None:
-    """Start a step with tk, then date the start well before any suggestion this test makes (tk stamps whole seconds
-    on macOS, and a start in a suggestion's own second counts as after it)."""
+    """Start a step with tk, then date the start well before anything this test does next (tk stamps whole seconds
+    on macOS, and a cancel in the start's own second does not count as after it)."""
     folders.run_tk("start", step_id)
     path = folders.files.tickets_dir / f"{step_id}.md"
     path.write_text(re.sub(r"^started: .*$", "started: 2026-01-01T00:00:00.000000Z", path.read_text(), flags=re.M))
@@ -556,7 +556,68 @@ def _start_long_ago(folders: _Folders, step_id: str) -> None:
 
 def _hidden(folders: _Folders) -> list[str]:
     folders.tracker.refresh()
-    return [suggestion.step_id for suggestion in folders.tracker.suggestions_of_chat(_CHAT_ID)]
+    return list(folders.tracker.hidden_step_ids_of_chat(_CHAT_ID))
+
+
+def _tk_steps(folders: _Folders) -> str:
+    return folders.run_tk("steps")
+
+
+def test_tk_cancel_writes_a_sidecar_and_never_the_ticket(folders: _Folders) -> None:
+    own = _created_step_id(folders, "Add a quiz")
+    before = _ticket_text(folders, own)
+
+    folders.run_tk("cancel", own, "you called off the quiz")
+
+    (sidecar,) = folders.files.tickets_dir.glob(f"{own}.*{CANCEL_SUFFIX}")
+    assert _ticket_text(folders, own) == before
+    assert "reason: you called off the quiz" in sidecar.read_text()
+    assert f"by: {_CHAT_ID}" in sidecar.read_text()
+
+
+def test_a_cancel_hides_the_step_and_marks_it_in_tk_steps(folders: _Folders) -> None:
+    own = _created_step_id(folders, "Add a quiz")
+    _start_long_ago(folders, own)
+
+    folders.run_tk("cancel", own, "you called off the quiz")
+
+    assert _hidden(folders) == [own]
+    assert "Add a quiz -- cancelled by the user's message: you called off the quiz" in _tk_steps(folders)
+    assert "Cancelled by the user's message: you called off the quiz" in folders.run_tk("show", own)
+
+
+def test_starting_the_step_after_a_cancel_overrides_it(folders: _Folders) -> None:
+    own = _created_step_id(folders, "Add a quiz")
+    folders.run_tk("cancel", own, "you called off the quiz")
+
+    started = folders.run_tk("start", own)
+
+    assert "overrides its cancel (you called off the quiz)" in started
+    assert _hidden(folders) == []
+    assert "cancelled by" not in _tk_steps(folders)
+
+
+def test_closing_the_step_after_a_cancel_keeps_it_hidden(folders: _Folders) -> None:
+    own = _created_step_id(folders, "Add a quiz")
+    _start_long_ago(folders, own)
+    folders.run_tk("cancel", own, "you called off the quiz")
+
+    folders.run_tk("close", own, "No longer needed: you called off the quiz")
+
+    assert _hidden(folders) == [own]
+
+
+def test_a_cancel_after_a_start_holds_and_a_later_cancel_counts(folders: _Folders) -> None:
+    own = _created_step_id(folders, "Add a quiz")
+    folders.run_tk("cancel", own, "first")
+    folders.run_tk("start", own)
+    path = folders.files.tickets_dir / f"{own}.md"
+    path.write_text(re.sub(r"^started: .*$", "started: 2026-01-01T00:00:00.000000Z", path.read_text(), flags=re.M))
+
+    folders.run_tk("cancel", own, "second")
+
+    assert _hidden(folders) == [own]
+    assert "cancelled by the user's message: second" in _tk_steps(folders)
 
 
 def test_the_model_sees_only_the_chats_open_steps_its_agents_own_and_the_message_steps(folders: _Folders) -> None:
@@ -564,6 +625,8 @@ def test_the_model_sees_only_the_chats_open_steps_its_agents_own_and_the_message
     folders.run_tk("start", own)
     finished = _created_step_id(folders, "Read the paper")
     folders.run_tk("close", finished, "Read it")
+    cancelled = _created_step_id(folders, "Add a sidebar")
+    folders.run_tk("cancel", cancelled, "no sidebar")
     first = folders.reserve("Add a quiz", message_id="message-1")
     folders.writer(ScriptedOneShotCompletion(["NEW: Add a quiz"])).consider(first)
     other_chat = folders.reserve("Add folders", chat_id=_OTHER_CHAT_ID, message_id="message-2")
@@ -582,13 +645,12 @@ def test_the_model_sees_only_the_chats_open_steps_its_agents_own_and_the_message
 def test_a_message_naming_a_step_the_agent_closed_is_an_unusable_answer(folders: _Folders) -> None:
     own = _created_step_id(folders, "Add a quiz")
     folders.run_tk("close", own, "Added the quiz")
-    before = _ticket_text(folders, own)
     reservation = folders.reserve("never mind the quiz")
     attempt_count = TITLE_CALL_RETRY_COUNT + 1
 
     folders.writer(ScriptedOneShotCompletion([f"CANCEL: {own}: not wanted"] * attempt_count)).consider(reservation)
 
-    assert _ticket_text(folders, own) == before
+    assert list(folders.files.tickets_dir.glob(f"*{CANCEL_SUFFIX}")) == []
     assert folders.outcome_of(reservation.step_id) is MessageStepOutcome.FAILED
 
 
@@ -613,17 +675,13 @@ def test_a_message_the_same_as_an_open_step_gets_no_step_and_names_that_step(fol
 
     assert folders.step(reservation.step_id) is None
     record = _settled_record(folders, reservation.step_id)
-    assert (record["outcome"], record["target_id"], record["target_title"]) == (
-        "same_as",
-        own,
-        "Add a quiz to each topic",
-    )
+    assert (record["outcome"], record["target_id"], record["chat_id"]) == ("same_as", own, _CHAT_ID)
     assert _ticket_text(folders, own) == before
     assert _hidden(folders) == []
     assert changes == []
 
 
-def test_a_message_that_calls_off_a_step_only_suggests_it_and_hides_it(folders: _Folders) -> None:
+def test_a_message_that_calls_off_a_step_cancels_it_with_tk(folders: _Folders) -> None:
     changes: list[str] = []
     first = folders.reserve("Add a quiz", message_id="message-1")
     folders.writer(ScriptedOneShotCompletion(["NEW: Add a quiz"])).consider(first)
@@ -636,39 +694,14 @@ def test_a_message_that_calls_off_a_step_only_suggests_it_and_hides_it(folders: 
     )
 
     assert _ticket_text(folders, first.step_id) == before
-    record = _settled_record(folders, reservation.step_id)
-    assert (record["outcome"], record["target_id"], record["reason"], record["chat_id"]) == (
-        "cancels",
-        first.step_id,
-        "you called off the quiz",
-        _CHAT_ID,
-    )
+    assert folders.step(reservation.step_id) is None
+    assert _settled_record(folders, reservation.step_id)["outcome"] == "cancels"
+    assert "cancelled by the user's message: you called off the quiz" in _tk_steps(folders)
     assert _hidden(folders) == [first.step_id]
     assert changes == ["changed"]
 
 
-def test_a_called_off_step_stays_hidden_once_the_agent_closes_it(folders: _Folders) -> None:
-    own = _created_step_id(folders, "Add a quiz")
-    _start_long_ago(folders, own)
-    reservation = folders.reserve("never mind the quiz")
-    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {own}: you called it off"])).consider(reservation)
-
-    folders.run_tk("close", own, "No longer needed: you called it off")
-
-    assert _hidden(folders) == [own]
-
-
-def test_a_called_off_step_shows_again_once_the_agent_starts_it_after_the_suggestion(folders: _Folders) -> None:
-    own = _created_step_id(folders, "Add a quiz")
-    reservation = folders.reserve("never mind the quiz")
-    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {own}: you called it off"])).consider(reservation)
-
-    folders.run_tk("start", own)
-
-    assert _hidden(folders) == []
-
-
-def test_a_message_that_changes_a_step_gets_its_own_step_and_suggests_replacing_the_old(folders: _Folders) -> None:
+def test_a_message_that_changes_a_step_gets_its_own_and_cancels_the_old(folders: _Folders) -> None:
     changes: list[str] = []
     own = _created_step_id(folders, "Write the paper's ten parts and diagrams")
     _start_long_ago(folders, own)
@@ -681,30 +714,21 @@ def test_a_message_that_changes_a_step_gets_its_own_step_and_suggests_replacing_
 
     replacement = folders.step(reservation.step_id)
     assert replacement is not None and replacement.title == "Write the paper's parts and diagrams, not ten"
+    assert replacement.message_text == "I don't want 10 parts"
     assert _ticket_text(folders, own) == before
+    assert f"Replaced by {reservation.step_id}: Write the paper's parts and diagrams, not ten" in _tk_steps(folders)
     assert _hidden(folders) == [own]
     assert changes == ["changed"]
 
 
-def test_a_step_called_off_or_replaced_is_not_offered_to_the_model_again(folders: _Folders) -> None:
-    own = _created_step_id(folders, "Add a quiz")
-    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {own}: you called it off"])).consider(
-        folders.reserve("never mind the quiz", message_id="message-1")
-    )
-    completion = ScriptedOneShotCompletion(["NONE"])
-
-    folders.writer(completion).consider(folders.reserve("thanks", message_id="message-2"))
-
-    assert own not in completion.prompts[0]
-
-
-def _wait_hook(folders: _Folders, step_id: str) -> _WaitHookRun:
+def _wait_hook(folders: _Folders, step_id: str, chat_id: str = _CHAT_ID) -> _WaitHookRun:
     hook_run = _WaitHookRun(folders, step_id)
+    hook_run.env["MINDS_CHAT_ID"] = chat_id
     hook_run.run()
     return hook_run
 
 
-def test_the_wait_hook_asks_the_agent_to_close_a_called_off_step(folders: _Folders) -> None:
+def test_the_wait_hook_offers_the_agent_both_ways_on_a_called_off_step(folders: _Folders) -> None:
     own = _created_step_id(folders, "Add a quiz")
     reservation = folders.reserve("never mind the quiz")
     folders.writer(ScriptedOneShotCompletion([f"CANCEL: {own}: you called off the quiz"])).consider(reservation)
@@ -712,35 +736,18 @@ def test_the_wait_hook_asks_the_agent_to_close_a_called_off_step(folders: _Folde
     hook_run = _wait_hook(folders, reservation.step_id)
 
     assert '"permissionDecision": "deny"' in hook_run.stdout
-    assert f'tk close {own} \\"No longer needed: you called off the quiz\\"' in hook_run.stdout
+    assert "quick model" in hook_run.stdout
+    assert f"tk start {own}" in hook_run.stdout and f"tk close {own}" in hook_run.stdout
 
 
-def test_the_wait_hook_holds_a_replacement_until_the_agent_closes_the_old_step(folders: _Folders) -> None:
-    own = _created_step_id(folders, "Add a quiz")
-    reservation = folders.reserve("make it multiple choice")
-    folders.writer(ScriptedOneShotCompletion([f"MODIFY: {own}: Add a multiple-choice quiz"])).consider(reservation)
-
-    while_open = _wait_hook(folders, reservation.step_id)
-    folders.run_tk("close", own, "Replaced by an updated request")
-    after_close = _wait_hook(folders, reservation.step_id)
-
-    assert '"permissionDecision": "deny"' in while_open.stdout
-    assert f"tk close {own}" in while_open.stdout and f"tk start {reservation.step_id}" in while_open.stdout
-    assert (after_close.returncode, after_close.stdout) == (0, "")
-
-
-def test_the_wait_hook_says_a_called_off_step_was_already_done(folders: _Folders) -> None:
+def test_the_wait_hook_ignores_another_chats_message(folders: _Folders) -> None:
     own = _created_step_id(folders, "Add a quiz")
     reservation = folders.reserve("never mind the quiz")
-    completion = ScriptedOneShotCompletion([f"CANCEL: {own}: you called off the quiz"])
-    # The agent closes the step between the model's answer and the chat's records.
-    completion.on_call = lambda: folders.run_tk("close", own, "Added the quiz")
-    folders.writer(completion).consider(reservation)
+    folders.writer(ScriptedOneShotCompletion([f"CANCEL: {own}: you called off the quiz"])).consider(reservation)
 
-    hook_run = _wait_hook(folders, reservation.step_id)
+    hook_run = _wait_hook(folders, reservation.step_id, chat_id=_OTHER_CHAT_ID)
 
-    assert "already done before it arrived" in hook_run.stdout
-    assert "Added the quiz" in _ticket_text(folders, own) and _ticket_text(folders, own).count("## Summary") == 1
+    assert (hook_run.returncode, hook_run.stdout) == (0, "")
 
 
 def test_a_message_cannot_name_another_chats_step(folders: _Folders) -> None:
@@ -753,5 +760,5 @@ def test_a_message_cannot_name_another_chats_step(folders: _Folders) -> None:
         reservation
     )
 
-    assert _hidden(folders) == []
+    assert list(folders.files.tickets_dir.glob(f"*{CANCEL_SUFFIX}")) == []
     assert folders.outcome_of(reservation.step_id) is MessageStepOutcome.FAILED

@@ -129,6 +129,15 @@ def step_ticket_has_status(context, ticket_id, status):
     ticket_path.write_text(content)
 
 
+@given(r'ticket "(?P<ticket_id>[^"]+)" was started long ago')
+def step_ticket_started_long_ago(context, ticket_id):
+    """Stamp a start well before anything the scenario does next (date may stamp whole seconds)."""
+    ticket_path = Path(context.test_dir) / '.tickets' / f'{ticket_id}.md'
+    content = ticket_path.read_text()
+    content = content.replace('---\n', '---\nstarted: 2026-01-01T00:00:00.000000Z\n', 1)
+    ticket_path.write_text(content)
+
+
 @given(r'ticket "(?P<ticket_id>[^"]+)" depends on "(?P<dep_id>[^"]+)"')
 def step_ticket_depends_on(context, ticket_id, dep_id):
     """Add dependency to ticket."""
@@ -607,6 +616,14 @@ def step_ticket_not_has_link(context, ticket_id, link_id):
     assert links_match, f"links field not found\nContent: {content}"
     links = links_match.group(1)
     assert link_id not in links, f"Link '{link_id}' should not be in links: [{links}]"
+
+
+@then(r'ticket "(?P<ticket_id>[^"]+)" should have a cancel sidecar with reason "(?P<reason>[^"]+)"')
+def step_ticket_has_cancel_sidecar(context, ticket_id, reason):
+    """Exactly one cancel sidecar sits next to the ticket, with this reason."""
+    sidecars = list((Path(context.test_dir) / '.tickets').glob(f'{ticket_id}.*.cancel'))
+    assert len(sidecars) == 1, f"Expected one cancel sidecar, found {sidecars}"
+    assert f'reason: {reason}' in sidecars[0].read_text(), sidecars[0].read_text()
 
 
 @then(r'ticket "(?P<ticket_id>[^"]+)" should contain "(?P<text>[^"]+)"')

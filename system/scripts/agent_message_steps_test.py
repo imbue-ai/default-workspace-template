@@ -51,11 +51,17 @@ class _Folders:
         outcome: str,
         target: tuple[str, str] | None = None,
         reason: str = "",
+        chat_id: str = _CHAT_ID,
     ) -> None:
         """An outcome as the chat app records it, with the open step a repeating or calling-off message names."""
         settled = self.reservations_dir / hooks.SETTLED_DIRNAME
         settled.mkdir(exist_ok=True)
-        record = {"step_id": step_id, "outcome": outcome, "reason": reason}
+        record = {
+            "step_id": step_id,
+            "chat_id": chat_id,
+            "outcome": outcome,
+            "reason": reason,
+        }
         if target is not None:
             record.update(target_id=target[0], target_title=target[1])
         (settled / f"{step_id}.json").write_text(json.dumps(record))
@@ -97,7 +103,7 @@ def test_the_prompt_hook_names_the_id_reserved_for_the_message(
     assert exit_code == 0
     context = json.loads(printed)["hookSpecificOutput"]["additionalContext"]
     assert (
-        "tk start wor-step-ab12" in context and "never create your own step" in context
+        "tk start wor-step-ab12" in context and "do not create a second step" in context
     )
 
 
@@ -157,7 +163,7 @@ def test_starting_a_step_judged_not_a_task_is_declined_at_once(
     assert exit_code == 0
     decision = json.loads(printed)["hookSpecificOutput"]
     assert decision["permissionDecision"] == "deny"
-    assert "judged not to be a task" in decision["permissionDecisionReason"]
+    assert "not to be a task" in decision["permissionDecisionReason"]
 
 
 def test_starting_a_step_that_could_not_be_created_fails(
@@ -192,7 +198,7 @@ def _write_step(folders: _Folders, step_id: str, title: str, *fields: str) -> No
 @pytest.mark.parametrize(
     ("outcome", "target_status", "expected"),
     [
-        ("same_as", "in_progress", "tk start wor-step-qz01"),
+        ("same_as", "in_progress", "do it under wor-step-qz01"),
         ("same_as", "closed", "already done"),
         (
             "cancels",
@@ -221,39 +227,10 @@ def test_starting_a_message_that_named_an_open_step_says_what_to_do_with_it(
     assert expected in _denial(printed)
 
 
-def _record_replacement(folders: _Folders, step_id: str, replaced_id: str) -> None:
-    replacements = folders.reservations_dir / hooks.REPLACEMENTS_DIRNAME
-    replacements.mkdir(exist_ok=True)
-    (replacements / f"{step_id}.json").write_text(
-        json.dumps(
-            {"step_id": step_id, "target_id": replaced_id, "target_title": "Add a quiz"}
-        )
-    )
-
-
-def test_starting_a_replacement_waits_for_the_agent_to_close_the_old_step(
-    folders: _Folders,
-) -> None:
-    _write_step(folders, "wor-step-qz01", "Add a quiz", "status: in_progress")
-    _write_step(folders, "wor-step-mc02", "Add a multiple-choice quiz", "status: open")
-    _record_replacement(folders, "wor-step-mc02", "wor-step-qz01")
-    payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-mc02"}}
-
-    exit_code, printed = _run(["wait"], payload, folders.environ)
-
-    assert exit_code == 0
-    reason = _denial(printed)
-    assert 'tk close wor-step-qz01 "Replaced by an updated request"' in reason
-    assert "tk start wor-step-mc02" in reason
-
-
-def test_starting_a_replacement_goes_through_once_the_old_step_is_closed(
-    folders: _Folders,
-) -> None:
-    _write_step(folders, "wor-step-qz01", "Add a quiz", "status: closed")
-    _write_step(folders, "wor-step-mc02", "Add a multiple-choice quiz", "status: open")
-    _record_replacement(folders, "wor-step-mc02", "wor-step-qz01")
-    payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-mc02"}}
+def test_another_chats_message_is_left_to_tk(folders: _Folders) -> None:
+    folders.reserve("wor-step-ab12", "thanks!", chat_id=_OTHER_CHAT_ID)
+    folders.settle("wor-step-ab12", hooks.OUTCOME_NOT_A_TASK, chat_id=_OTHER_CHAT_ID)
+    payload = {"tool_name": "Bash", "tool_input": {"command": "tk start wor-step-ab12"}}
 
     assert _run(["wait"], payload, folders.environ) == (0, "")
 
