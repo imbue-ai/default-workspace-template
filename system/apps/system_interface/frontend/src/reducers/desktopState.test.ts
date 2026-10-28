@@ -21,6 +21,7 @@ import {
   initialDesktopState,
   isAppShownStopped,
   isAppStoppable,
+  isChatOnScreen,
   isLayoutDirty,
   pinnedWindowOf,
   reduceDesktopState,
@@ -28,6 +29,7 @@ import {
   windowTitle,
 } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
+import type { Placement } from "../model/records";
 
 const MODES = { isPhone: false, isTouch: false };
 const home = desktopRecord("home", {
@@ -479,5 +481,63 @@ describe("selectors", () => {
     expect(isAppShownStopped(state, state.apps[3])).toBe(false);
     expect(isAppShownStopped(state, state.apps[4])).toBe(false);
     expect(isAppShownStopped(state, undefined)).toBe(false);
+  });
+});
+
+describe("isChatOnScreen", () => {
+  const chat = windowRecord("win-chat", "chat", "/?chat=agent-7");
+  function stateWithPlacements(placements: readonly Placement[]): DesktopState {
+    return reduceAll(
+      initialDesktopState("client-1", MODES),
+      { type: "apps_updated", apps: [appRecord("chat"), appRecord("docs")] },
+      { type: "desktops_updated", desktops: [desktopRecord("home", { windows: [chat, home.windows[0]] }), work] },
+      { type: "desktop_activated", desktopId: "home" },
+      { type: "layout_loaded", desktopId: "home", layout: layoutRecord(placements, "t1") },
+    );
+  }
+
+  it("is true for the focused window whose path carries the chat id in a query value, whatever the key", () => {
+    const state = stateWithPlacements([placementRecord("win-1"), placementRecord("win-chat")]);
+    expect(isChatOnScreen(state, "agent-7")).toBe(true);
+    expect(isChatOnScreen(state, "agent-9")).toBe(false);
+    expect(isChatOnScreen(state, "")).toBe(false);
+  });
+
+  it("is false while the chat's window is minimized or behind another", () => {
+    const minimized = stateWithPlacements([
+      placementRecord("win-1"),
+      placementRecord("win-chat", { is_minimized: true }),
+    ]);
+    expect(isChatOnScreen(minimized, "agent-7")).toBe(false);
+    const behind = stateWithPlacements([placementRecord("win-chat"), placementRecord("win-1")]);
+    expect(isChatOnScreen(behind, "agent-7")).toBe(false);
+  });
+
+  it("is true for a pulled-out window whatever the stack says, and false on another desktop", () => {
+    const detached = stateWithPlacements([
+      placementRecord("win-chat", { is_detached: true }),
+      placementRecord("win-1"),
+    ]);
+    expect(isChatOnScreen(detached, "agent-7")).toBe(true);
+    const elsewhere = reduceDesktopState(detached, { type: "desktop_activated", desktopId: "work" });
+    expect(isChatOnScreen(elsewhere, "agent-7")).toBe(false);
+  });
+
+  it("reads an independent window's path as this client stored it", () => {
+    const independent = windowRecord("win-ind", "chat", "/", { is_pinned: true, scope: "independent" });
+    const before = reduceAll(
+      initialDesktopState("client-1", MODES),
+      { type: "apps_updated", apps: [appRecord("chat")] },
+      { type: "desktops_updated", desktops: [desktopRecord("home", { windows: [independent] }), work] },
+      { type: "desktop_activated", desktopId: "home" },
+      { type: "layout_loaded", desktopId: "home", layout: layoutRecord([placementRecord("win-ind")], "t1") },
+    );
+    expect(isChatOnScreen(before, "agent-7")).toBe(false);
+    const state = reduceDesktopState(before, {
+      type: "window_location_reported",
+      desktopId: "home",
+      window: { ...independent, path: "/?chat=agent-7" },
+    });
+    expect(isChatOnScreen(state, "agent-7")).toBe(true);
   });
 });

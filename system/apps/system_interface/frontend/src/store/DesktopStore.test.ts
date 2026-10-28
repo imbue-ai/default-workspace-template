@@ -3102,6 +3102,51 @@ describe("the tray (the multiplayer spec, sections 6 and 7.5)", () => {
     expect(store.getBubbles().map((candidate) => candidate.speaker)).toEqual(["user:user-carol-1d2e"]);
   });
 
+  it("raises no bubble for the chat the user is looking at, unless it mentions the viewer", async () => {
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-chat", "chat", "/?chat=agent-2"), windowRecord("win-1", "docs", "/a")],
+      }),
+    ];
+    api.writeLayout("home", CLIENT, {
+      updated_at: null,
+      placements: [placementRecord("win-1"), placementRecord("win-chat")],
+    });
+    const store = await startedStore();
+    const bubble = {
+      speaker: "user:user-bob-4471",
+      chat_id: "agent-2",
+      chat_title: "Lounge",
+      text: "hi",
+      message_id: "m-1",
+      mentions: [],
+    };
+
+    // The chat's window is focused: its bubbles say nothing the user cannot see, so none is raised; the entry
+    // still hops, and a bubble of another chat still rises.
+    socket.deliver().onBubble(bubble);
+    expect(store.getBubbles()).toEqual([]);
+    expect(store.getHopping().has(bubble.speaker)).toBe(true);
+    socket.deliver().onBubble({ ...bubble, speaker: "user:user-carol-1d2e", chat_id: "agent-3", message_id: "m-2" });
+    expect(store.getBubbles().map((candidate) => candidate.chatId)).toEqual(["agent-3"]);
+
+    // A mention of the viewer rises even over its own chat; with the chat's window minimized, everything rises.
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    socket.deliver().onBubble({ ...bubble, message_id: "m-3", mentions: [VIEWER] });
+    expect(store.getBubbles().map((candidate) => [candidate.chatId, candidate.isMention])).toEqual([
+      ["agent-3", false],
+      ["agent-2", true],
+    ]);
+    store.minimizeWindow("win-chat");
+    socket.deliver().onBubble({ ...bubble, speaker: "user:user-dave-9b3c", message_id: "m-4" });
+    expect(last(store.getBubbles())?.speaker).toBe("user:user-dave-9b3c");
+  });
+
   it("drafts a mention of a clicked person through the mention launch path into the pinned window, and opens the main chat for the agent", async () => {
     const store = await startedStore();
     const chat = chatLikeAppRecord("chat", {

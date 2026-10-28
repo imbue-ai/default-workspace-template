@@ -589,3 +589,26 @@ export function floatingEntries(state: DesktopState): TaskbarEntry[] {
 export function avatarPinnedEntryOf(state: DesktopState): TaskbarEntry | null {
   return taskbarEntries(state).find((entry) => entry.isPinned && entry.look?.declaredStyle === "avatar") ?? null;
 }
+
+/** The values of a window path's query ("/?chat=abc" gives ["abc"]); none with no query. */
+function pathQueryValues(path: string): string[] {
+  const queryStart = path.indexOf("?");
+  if (queryStart === -1) return [];
+  return Array.from(new URLSearchParams(path.slice(queryStart + 1)).values());
+}
+
+/** Whether this client is looking at the chat (the multiplayer spec, section 6.5): a window of the active desktop
+ *  whose path carries the chat's id among its query values, and which is the focused (topmost shown) window or is
+ *  pulled out into a desktop window of the chrome's own (on the user's screen whatever the stack says). A
+ *  minimized window, and a window on another desktop, is not being looked at. The shell names no app: the id is
+ *  matched against every query value, never a key of the chat app's own. */
+export function isChatOnScreen(state: DesktopState, chatId: string): boolean {
+  if (chatId === "") return false;
+  const placements = activePlacements(state);
+  const focused = focusedWindowId(placements);
+  return (activeDesktop(state)?.windows ?? []).some(
+    (window) =>
+      (window.id === focused || isWindowDetached(placements, window.id)) &&
+      pathQueryValues(effectiveWindow(state, window).path).includes(chatId),
+  );
+}

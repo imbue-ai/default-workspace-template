@@ -5,8 +5,9 @@
  * agent's new message within its bubble's lifetime is appended to it ("and 2 more" past three lines) and restarts
  * the timer; bubbles of different speakers stack upward in arrival order. A bubble lives `BUBBLE_LIFETIME_MS` after
  * its last change, unless it is a mention of the viewer, which stays until dismissed or its chat is opened. Every
- * message raises one on every client but the speaker's own (the shell leaves those out); nothing a client has on
- * screen suppresses it. The reducer is pure; the timers are the model's.
+ * message raises one on every client but the speaker's own (the shell leaves those out) and the clients looking at
+ * the chat it was said in (the store leaves those out on receipt -- a mention of the viewer still rises there).
+ * The reducer is pure; the timers are the model's.
  */
 
 import type { BubbleWire } from "./records";

@@ -321,7 +321,7 @@ Outbound:
 | `presence_updated` | `{"users": [present_user, ...]}` | on connect, when a heartbeat brings a user into the connected set, and when the shell's sweep (every 10 seconds) finds that a user's heartbeats have stopped (section 5.1) |
 | `roster_updated` | `{"participants": [participant, ...]}` (the document of `GET /api/roster`, section 5.1) | on connect (after `presence_updated`), whenever `presence_updated` goes out, and whenever a grants file or the gateway's last-seen record changes |
 | `chats_activity` | `{"chats": [chat_activity, ...]}` (the body of `POST /api/chats-activity`, section 5.1) | on connect (after `roster_updated`) once the chat app has reported anything, and on every report |
-| `bubble` | `{"speaker", "chat_id", "chat_title", "text", "message_id", "mentions"}` (the body of `POST /api/bubbles`, section 5.1) | on every post, to every window but the speaker's own clients (a connection that has not registered its client yet is sent it) |
+| `bubble` | `{"speaker", "chat_id", "chat_title", "text", "message_id", "mentions"}` (the body of `POST /api/bubbles`, section 5.1) | on every post, to every window but the speaker's own clients (a connection that has not registered its client yet is sent it); a page looking at the bubble's chat drops it on receipt unless it mentions the viewer |
 
 `is_connected` on a client is whether any window of it holds the socket, a solo page's included.
 

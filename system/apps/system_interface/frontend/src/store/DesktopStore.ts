@@ -127,6 +127,7 @@ import {
   findWindow,
   initialDesktopState,
   isAppStoppable,
+  isChatOnScreen,
   isEmbedderMessageHandled,
   isLayoutDirty,
   openableApps,
@@ -1165,10 +1166,14 @@ export class DesktopStore {
   }
 
   /** Somebody just said something: their bubble is raised or refreshed (S11), their entry hops, and the next
-   *  timeout is armed. */
+   *  timeout is armed. A bubble for the chat the user is looking at says nothing they cannot already see, so it
+   *  is not raised -- unless it mentions the viewer, whose mark must not be missable. */
   private takeBubble(bubble: BubbleWire): void {
     this.hop([bubble.speaker]);
-    this.setBubbles(withBubble(this.bubbles, bubble, getOwnParticipant(), Date.now()));
+    const viewer = getOwnParticipant();
+    const isMentionOfViewer = viewer !== null && bubble.mentions.includes(viewer);
+    if (!isMentionOfViewer && isChatOnScreen(this.state, bubble.chat_id)) return;
+    this.setBubbles(withBubble(this.bubbles, bubble, viewer, Date.now()));
   }
 
   /** Put a speaker's bubble away: it was dismissed, or clicked. */
