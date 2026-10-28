@@ -133,7 +133,7 @@ def test_launch_builds_a_valid_mngr_create_for_worktree_mode(workspace_root: Pat
     # the source repo's uncommitted files into the worktree against this mode's promise.
     assert "--exclude-unclean" in create.argv
     assert create.argv[create.argv.index("--type") + 1] == "claude"
-    assert "custom" in create.argv
+    assert create.argv[create.argv.index("--template") + 1] == "custom"
     assert "user_created=true" in create.argv
     assert f"custom_source={repo}" in create.argv
     assert "account=acct-claude" in create.argv
