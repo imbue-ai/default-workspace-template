@@ -5,7 +5,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import m from "mithril";
-import { DONE_STEPS_LABEL, ProgressBlock } from "./ProgressBlock";
+import { DONE_STEPS_LABEL, ProgressBlock, recentDoneTitles } from "./ProgressBlock";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
 
 function step(ticket_id: string, title: string, status: StepStatus, summary: string | null = null): TimelineItem {
@@ -97,5 +97,36 @@ describe("the Done row", () => {
 
     expect(rowTitles()).toEqual([DONE_STEPS_LABEL]);
     expect(root.querySelector(".pv-tl-node--done-group")?.classList.contains("pv-tl-node--last")).toBe(true);
+  });
+});
+
+describe("the Done row's subtext", () => {
+  const done = (title: string): StepNode => ({
+    ticket_id: title,
+    title,
+    status: "done",
+    summary: null,
+    narration: null,
+    is_frontier: false,
+    events: [],
+  });
+
+  it("names the finished steps newest first", () => {
+    expect(recentDoneTitles([done("Read"), done("Write")])).toBe("Write, Read");
+  });
+
+  it("names the three newest and ends with an ellipsis when there are more", () => {
+    expect(recentDoneTitles([done("A"), done("B"), done("C"), done("D")])).toBe("D, C, B, …");
+  });
+
+  it("shows under the label while collapsed, and not while the steps are shown", () => {
+    mount(MIXED, "progress-subtext");
+    const subtext = (): string | null => root.querySelector(".pv-tl-done-recent")?.textContent ?? null;
+    expect(subtext()).toBe("Write the summary, Read the paper");
+
+    (root.querySelector(".pv-tl-node--done-group button") as HTMLButtonElement).click();
+    m.redraw.sync();
+
+    expect(subtext()).toBeNull();
   });
 });

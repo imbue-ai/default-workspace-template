@@ -117,6 +117,19 @@ function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolRes
 /** The label of the row a timeline's done steps fold into. */
 export const DONE_STEPS_LABEL = "Done";
 
+/** How many of the most recently finished steps the Done row names while collapsed. */
+const RECENT_DONE_TITLE_COUNT = 3;
+
+/** The Done row's subtext: the latest finished steps' titles, newest first, with "…" when there are more. The steps
+ *  arrive in the order they closed. */
+export function recentDoneTitles(doneSteps: StepNode[]): string {
+  const recent = doneSteps
+    .slice(-RECENT_DONE_TITLE_COUNT)
+    .reverse()
+    .map((step) => step.title);
+  return doneSteps.length > RECENT_DONE_TITLE_COUNT ? `${recent.join(", ")}, …` : recent.join(", ");
+}
+
 function isDoneStep(item: TimelineItem): boolean {
   return item.kind === "step" && item.step.status === "done";
 }
@@ -173,6 +186,17 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             ),
           ],
         ),
+        // Faint and on one line, like a step's summary; hidden while the steps themselves are shown below.
+        isExpanded
+          ? null
+          : m(
+              "div",
+              {
+                class:
+                  "pv-tl-done-recent mt-[3px] truncate pl-0.5 text-(length:--font-size-helper) leading-normal text-faint",
+              },
+              recentDoneTitles(doneSteps),
+            ),
         isExpanded
           ? m(
               "div",
