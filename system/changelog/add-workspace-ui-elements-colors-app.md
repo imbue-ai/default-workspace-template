@@ -4,4 +4,4 @@ The Classic Mac and Windows 2000 themes ship the Style Guide's icon (`icons/styl
 
 `forward_port.py` copies a manifest's `desktop_shortcut` onto the app's registry row (and clears it when a manifest drops it), and the desktop interface's contracts and plan document the field.
 
-`system/supervisord.conf.d/style-guide.conf` no longer autostarts; `style_guide_register.conf` registers the app at boot and exits.
+`system/supervisord.conf.d/style-guide.conf` does not autostart.

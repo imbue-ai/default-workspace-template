@@ -17,11 +17,6 @@ system = true
 # still lists it, and a shortcut of it can be added by hand).
 desktop_shortcut = false
 
-# Registered at boot by this one-shot program, which starts nothing: the app's own program does not start at
-# boot, and the shell starts it on the first request for its page.
-[wiring]
-programs = ["style_guide_register"]
-
 # Built only from the shared components and the design tokens, so every theme styles it with no work of its own
 # (docs/system/blueprint/workspace-themes/, section 7). Under a theme it is a live sample of that theme.
 [theming]

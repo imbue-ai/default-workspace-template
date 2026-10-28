@@ -12,4 +12,4 @@ The colors are one compact table, a row per color: a swatch (a text color as "Aa
 
 The contents column highlights the section the reader is in from the scroll position (a section jumped to is the highlighted one, not the one above it, and the last at the end of the page), and scrolls itself to keep that entry in view.
 
-The app does not start at boot: a one-shot `style_guide_register` program lists it in the launcher, and the shell starts it on the first request for its page.
+The app does not start at boot and is listed once it has been started by hand (`supervisorctl start style-guide`); from then on the shell starts it on the next request for its page.
