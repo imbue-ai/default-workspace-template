@@ -571,7 +571,8 @@ class RunStatus:
     ``started_by`` is how the run was started (``STARTED_BY_VALUES``), or
     ``None`` when nothing recorded it, and is then left out of the file.
     ``stopped_agents`` is what ``run-status stop-chats`` paused, for
-    ``resume-chats``.
+    ``resume-chats``; ``stopped_programs`` is what ``run-status stop-apps``
+    stopped to free memory, for ``resume-apps``.
     """
 
     chat_agent_name: str
@@ -590,6 +591,7 @@ class RunStatus:
     verdict_at: float | None = None
     started_by: str | None = None
     stopped_agents: list[StoppedAgent] = field(default_factory=list)
+    stopped_programs: list[str] = field(default_factory=list)
 
     def to_json(self) -> str:
         payload: dict[str, object] = {
@@ -608,6 +610,7 @@ class RunStatus:
             "in_place_compatible_ref": self.in_place_compatible_ref,
             "verdict_at": self.verdict_at,
             "stopped_agents": [agent.to_dict() for agent in self.stopped_agents],
+            "stopped_programs": list(self.stopped_programs),
         }
         if self.started_by is not None:
             payload["started_by"] = self.started_by
@@ -625,6 +628,7 @@ class RunStatus:
         verdict = raw.get("verdict")
         verdict_at = raw.get("verdict_at")
         started_by = raw.get("started_by")
+        programs = raw.get("stopped_programs")
         stopped = raw.get("stopped_agents")
         stopped_agents = [
             agent
@@ -655,6 +659,11 @@ class RunStatus:
             verdict_at=float(verdict_at) if verdict_at is not None else None,
             started_by=str(started_by) if started_by in STARTED_BY_VALUES else None,
             stopped_agents=stopped_agents,
+            stopped_programs=[
+                program
+                for program in (programs if isinstance(programs, list) else [])
+                if isinstance(program, str) and program
+            ],
         )
 
 
@@ -666,19 +675,32 @@ def last_dispatch_path(repo_root: Path) -> Path:
     return repo_root / STATE_DIR_REL / LAST_DISPATCH_FILENAME
 
 
-def dispatched_started_by(repo_root: Path, chat_agent_name: str) -> str | None:
-    """How the app's last dispatch started ``chat_agent_name``'s run, or ``None``.
+def dispatched_started_by(
+    repo_root: Path, chat_agent_name: str, chat_id: str = ""
+) -> str | None:
+    """How the app's last dispatch started this chat's run, or ``None``.
 
-    ``None`` unless the last-dispatch file names that very chat: a run started by
+    ``None`` unless the last-dispatch file names this very chat: a run started by
     hand, or an older run's chat, was not started by that dispatch. A missing or
     unreadable file is the same ``None``; the field is the app's to show, never a
     reason to fail a run's start.
+
+    Either identifier settles it. The name is what the app knows it created, but a
+    rename renames the agent and the name goes stale under a live chat, which is
+    why the dispatch also carries the chat id. An empty identifier never matches:
+    the file omitting a field and the caller lacking it must not read as the same
+    chat.
     """
     try:
         raw = json.loads(last_dispatch_path(repo_root).read_text())
     except (OSError, ValueError):
         return None
-    if not isinstance(raw, dict) or raw.get("chat_agent_name") != chat_agent_name:
+    if not isinstance(raw, dict):
+        return None
+    is_this_chats = (
+        chat_agent_name and raw.get("chat_agent_name") == chat_agent_name
+    ) or (chat_id and raw.get("chat_id") == chat_id)
+    if not is_this_chats:
         return None
     started_by = raw.get("started_by")
     return started_by if started_by in STARTED_BY_VALUES else None

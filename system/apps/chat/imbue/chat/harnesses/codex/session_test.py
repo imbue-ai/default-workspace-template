@@ -16,6 +16,7 @@ from collections import deque
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from typing import NoReturn
 
 import pytest
 
@@ -82,7 +83,9 @@ def _session_over(transport: _ScriptedTransport, state_dir: Path) -> tuple[Codex
         client.thread_id = "thread-1"
         return client
 
-    unused: Any = lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("unused"))
+    def unused(*args: object, **kwargs: object) -> NoReturn:
+        raise AssertionError("unused")
+
     deps = SessionDeps(
         harness=HarnessType.CODEX,
         state_dir=state_dir,

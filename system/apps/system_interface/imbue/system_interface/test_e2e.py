@@ -2248,8 +2248,9 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
                 error_message="the windows never drew the chosen design",
             )
             # "Design your own..." drafts into this client's pinned window rather than opening a chat: the app's
-            # draft launch path is posted the prompt with this client's view of the window as the envelope's
-            # ``window_path``, the window is pointed at the page it answers and shown, and no window is opened.
+            # draft launch path is posted the prompt with no ``window_path`` (the text is not about the page the
+            # window shows, so it goes to the main chat), the window is pointed at the page it answers and shown,
+            # and no window is opened.
             chooser.locator(".avatar-design-own").click()
             expect(chooser).to_have_count(0)
             pinned_id = _pinned_window(server.base_url)["id"]
@@ -2274,7 +2275,6 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
                 _PINNED_TEXT_PARAM: draft,
                 "client_id": client_id,
                 "desktop_id": _HOME_DESKTOP_ID,
-                "window_path": _PINNED_HOME_PATH,
             }
             expect(_window(page, pinned_id)).to_be_visible(timeout=15000)
             # The page itself is moved there (the following step, as for an agent's navigate), and only here: the
