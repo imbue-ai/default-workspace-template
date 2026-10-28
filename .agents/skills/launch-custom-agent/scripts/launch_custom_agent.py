@@ -36,6 +36,7 @@ from typing import Sequence
 
 from imbue.chat import accounts
 from imbue.chat.agent_discovery import agent_state_dir
+from imbue.chat.agent_discovery import get_host_dir
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.mngr.primitives import AgentId
@@ -236,9 +237,8 @@ def launch(
     # var; the other harnesses get a credential link provisioned over the new
     # agent's state dir, which is why the agent id is minted before the create.
     agent_id = str(AgentId())
-    host_dir = Path(os.environ.get("MNGR_HOST_DIR", "~/.mngr")).expanduser()
     binding_args = build_account_binding(harness).create_args(
-        accounts.account_dir(account.id), agent_state_dir(host_dir, agent_id)
+        accounts.account_dir(account.id), agent_state_dir(get_host_dir(), agent_id)
     )
 
     argv = build_create_argv(
