@@ -89,9 +89,7 @@ def _python_command(kind: SuiteKind, *arguments: str) -> SuiteCommand:
 
 
 def _run(project: Path, ledger: Path, *commands: SuiteCommand) -> SuiteRunReport:
-    selection = SuiteSelection(
-        commands=commands, paths=(), is_full_root=False, notes=(), coverage_measured_roots=frozenset()
-    )
+    selection = SuiteSelection(commands=commands, paths=(), is_full_root=False, notes=(), coverage_measured_roots=())
     return run_selection(selection, project, project / "run-output", ledger, lambda index, command: None)
 
 

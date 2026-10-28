@@ -226,7 +226,7 @@ class SuiteSelection(FrozenModel):
     notes: tuple[str, ...] = Field(
         description="Anything the selection could not settle, for the reader"
     )
-    coverage_measured_roots: frozenset[str] = Field(
+    coverage_measured_roots: tuple[str, ...] = Field(
         description="The own-root suites with a coverage floor, which a run of only some of their tests misses"
     )
 
@@ -1129,7 +1129,7 @@ def select_tests(
             ),
             is_full_root=False,
             notes=tuple(notes),
-            coverage_measured_roots=layout.coverage_measured_units,
+            coverage_measured_roots=tuple(sorted(layout.coverage_measured_units)),
         )
 
     if lockfile_failure is not None:
@@ -1186,7 +1186,7 @@ def select_tests(
         paths=tuple(classified),
         is_full_root=is_full_root,
         notes=tuple(notes),
-        coverage_measured_roots=layout.coverage_measured_units,
+        coverage_measured_roots=tuple(sorted(layout.coverage_measured_units)),
     )
 
 
