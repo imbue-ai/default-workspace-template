@@ -144,16 +144,16 @@ chat = { workspace = true }
 workspace-scripts = { workspace = true }
 agents-shared = { workspace = true }
 update-self-skill = { workspace = true }
-imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/imbue_common" }
-imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/mngr" }
-imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/mngr_claude" }
-imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/mngr_codex" }
-imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/mngr_pi_coding" }
-imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/mngr_opencode" }
-imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/mngr_antigravity" }
-imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/mngr_autocompact" }
-concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/concurrency_group" }
-imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "a7172101244d43d2ad624caf988c9d2e17d9d8d7", subdirectory = "libs/mngr_ttyd" }
+imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "52ecf61ca92793c169da1c3f2be7c042df9866ba", subdirectory = "libs/imbue_common" }
+imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "52ecf61ca92793c169da1c3f2be7c042df9866ba", subdirectory = "libs/mngr" }
+imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "52ecf61ca92793c169da1c3f2be7c042df9866ba", subdirectory = "libs/mngr_claude" }
+imbue-mngr-codex = { git = "https://github.com/imbue-ai/mngr", rev = "52ecf61ca92793c169da1c3f2be7c042df9866ba", subdirectory = "libs/mngr_codex" }
+imbue-mngr-pi-coding = { git = "https://github.com/imbue-ai/mngr", rev = "52ecf61ca92793c169da1c3f2be7c042df9866ba", subdirectory = "libs/mngr_pi_coding" }
+imbue-mngr-opencode = { git = "https://github.com/imbue-ai/mngr", rev = "52ecf61ca92793c169da1c3f2be7c042df9866ba", subdirectory = "libs/mngr_opencode" }
+imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "52ecf61ca92793c169da1c3f2be7c042df9866ba", subdirectory = "libs/mngr_antigravity" }
+imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "52ecf61ca92793c169da1c3f2be7c042df9866ba", subdirectory = "libs/mngr_autocompact" }
+concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "52ecf61ca92793c169da1c3f2be7c042df9866ba", subdirectory = "libs/concurrency_group" }
+imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "52ecf61ca92793c169da1c3f2be7c042df9866ba", subdirectory = "libs/mngr_ttyd" }
 
 [tool.pytest.ini_options]
 testpaths = ["."]
