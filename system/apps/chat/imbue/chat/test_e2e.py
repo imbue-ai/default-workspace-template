@@ -33,6 +33,7 @@ from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
+from pytest_workspace_env.browsers import is_e2e_browser_installed
 
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import delete_account
@@ -68,7 +69,6 @@ from imbue.system_interface.shell.testing import message_handling_app
 from imbue.system_interface.shell.testing import registry_row_toml
 from imbue.system_interface.shell.testing import running_files
 from imbue.system_interface.testing import find_free_port
-from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.testing import serve_app
 
 

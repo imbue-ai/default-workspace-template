@@ -24,6 +24,7 @@ from uuid import uuid4
 import pytest
 from playwright.sync_api import Page
 from playwright.sync_api import expect
+from pytest_workspace_env.browsers import is_e2e_browser_installed
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import discover_agents
@@ -43,7 +44,6 @@ from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
-from imbue.system_interface.testing import is_e2e_browser_installed
 
 pytestmark = [
     pytest.mark.real_claude,

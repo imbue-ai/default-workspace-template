@@ -2,7 +2,8 @@
 
 A test-only pytest plugin that makes a test run in a workspace behave like
 CI: it clears the environment an mngr agent runs with, and it turns a skip
-into a failure where the environment is supposed to be complete.
+into a failure where the environment is supposed to be complete. It also
+says which browser a browser test launches.
 
 ## The agent environment is cleared
 
@@ -47,6 +48,27 @@ The plugin acts on the skips of collected tests: a `skipif`, a `pytest.skip()`
 from the test body or from a fixture. A module that skips itself at collection
 (`pytest.importorskip(...)`, or `pytest.skip(allow_module_level=True)` at module
 level) is outside its reach, so skip per test rather than per module.
+
+## Which browser a test launches
+
+A workspace installs two Chromium builds before any agent starts, and
+Playwright's own browser-cache lookup finds neither, so a test names the
+binary it launches. `pytest_workspace_env.browsers` holds that choice for
+every suite (the root pass and the `chat` and `system_interface` passes):
+
+- `pick_e2e_browser_executable(is_headed)` returns Playwright's headless
+  shell at `/opt/playwright-test-browsers/headless-shell`, installed for the
+  tests alone by `system/scripts/env.d/1010-playwright-test-headless-shell.sh`,
+  else Fortress at `/opt/fortress/tilion-fortress/tilion`, the workspace's
+  own browser. A browser suite runs about a third faster in about a third
+  less memory on the shell. A headed run gets Fortress, since the shell
+  cannot show a window. With neither installed it returns `None`, and the
+  launch falls through to Playwright's managed browser.
+- `is_e2e_browser_installed()` is the skip condition for a browser test:
+  either build, or anything in Playwright's own download cache.
+
+Each suite's `browser_type_launch_args` fixture calls the first; this module
+does not override any fixture itself.
 
 ## Where it runs
 

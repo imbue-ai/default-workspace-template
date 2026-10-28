@@ -25,6 +25,7 @@ from playwright.sync_api import FrameLocator
 from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import expect
+from pytest_workspace_env.browsers import is_e2e_browser_installed
 
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
@@ -48,7 +49,6 @@ from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_last_compaction_record
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.testing import find_free_port
-from imbue.system_interface.testing import is_e2e_browser_installed
 
 pytestmark = [
     pytest.mark.browser,

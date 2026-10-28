@@ -43,6 +43,7 @@ from playwright.sync_api import WebSocket
 from playwright.sync_api import WebSocketRoute
 from playwright.sync_api import expect
 from pydantic import Field
+from pytest_workspace_env.browsers import is_e2e_browser_installed
 from workspace_themes.contract import BUILTIN_THEMES_DIRECTORY
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -63,7 +64,6 @@ from imbue.system_interface.shell.testing import write_stub_update_self_script
 from imbue.system_interface.shell.tour import OFFER_TOUR_FILENAME
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import find_free_port
-from imbue.system_interface.testing import is_e2e_browser_installed
 from imbue.system_interface.testing import is_server_answering
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.wsgi import make_threaded_server

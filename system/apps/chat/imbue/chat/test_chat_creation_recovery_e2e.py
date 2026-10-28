@@ -34,6 +34,7 @@ from pathlib import Path
 import pytest
 from playwright.sync_api import Page
 from playwright.sync_api import expect
+from pytest_workspace_env.browsers import is_e2e_browser_installed
 
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
@@ -50,7 +51,6 @@ from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.testing import find_free_port
-from imbue.system_interface.testing import is_e2e_browser_installed
 
 
 def _playwright_browsers_installed() -> bool:

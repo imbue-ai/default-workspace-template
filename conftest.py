@@ -1,20 +1,9 @@
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any, Final, NoReturn
 
 import pytest
 from playwright.sync_api import Browser, BrowserContext, ViewportSize, sync_playwright
-
-# The browser the suites launch, both provisioned by env-converge before any agent
-# starts (system/scripts/env.d/1000-playwright-fortress.sh): Playwright's headless
-# shell, installed for the tests alone because a browser suite runs about a third
-# faster in about a third less memory on it, else Fortress (the workspace's
-# stealth-patched Chromium fork). A launch names the binary explicitly, so every
-# suite collected under the repo root inherits this override and `module_browser`
-# needs no per-app setup. The `chat` and `system_interface` apps are NOT under it:
-# the root pytest config ignores them and each runs from its own directory.
-TEST_HEADLESS_SHELL_PATH = Path("/opt/playwright-test-browsers/headless-shell")
-FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
+from pytest_workspace_env.browsers import pick_e2e_browser_executable
 
 # The phone the plan's e2e sizes name (an iPhone 15 in portrait), with touch.
 _PHONE_VIEWPORT: Final[ViewportSize] = {"width": 393, "height": 852}
@@ -24,20 +13,19 @@ _PHONE_VIEWPORT: Final[ViewportSize] = {"width": 393, "height": 852}
 def browser_type_launch_args(
     browser_type_launch_args: dict[str, Any],
 ) -> dict[str, Any]:
-    # With neither (CI, a developer laptop) leave the launch args untouched so
-    # Playwright falls through to its own managed browser. Never skip on browser
-    # absence: a browser that cannot launch must fail the run loudly.
-    # A headed run (`--headed`) skips the shell, which cannot show a window.
-    is_headed = browser_type_launch_args.get("headless") is False
-    candidates = (
-        (FORTRESS_CHROMIUM_PATH,)
-        if is_headed
-        else (TEST_HEADLESS_SHELL_PATH, FORTRESS_CHROMIUM_PATH)
+    # Every suite collected under the repo root inherits this override, so
+    # `module_browser` needs no per-app setup. The `chat` and `system_interface`
+    # apps are NOT under it: the root pytest config ignores them and each runs
+    # from its own directory. With no workspace browser (CI, a developer laptop)
+    # leave the launch args untouched so Playwright falls through to its own
+    # managed browser. Never skip on browser absence: a browser that cannot
+    # launch must fail the run loudly.
+    executable = pick_e2e_browser_executable(
+        is_headed=browser_type_launch_args.get("headless") is False
     )
-    for executable in candidates:
-        if executable.exists():
-            return {**browser_type_launch_args, "executable_path": str(executable)}
-    return browser_type_launch_args
+    if executable is None:
+        return browser_type_launch_args
+    return {**browser_type_launch_args, "executable_path": str(executable)}
 
 
 @pytest.fixture(scope="session")

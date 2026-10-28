@@ -18,6 +18,7 @@ from playwright.sync_api import Browser
 from playwright.sync_api import BrowserType
 from playwright.sync_api import Playwright
 from playwright.sync_api import sync_playwright
+from pytest_workspace_env.browsers import pick_e2e_browser_executable
 
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_announcements import AppAnnouncementWriter
@@ -37,7 +38,6 @@ from imbue.system_interface.testing import PipelineHarness
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.testing import is_server_answering
-from imbue.system_interface.testing import pick_e2e_browser_executable
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.testing import stand_in_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster

@@ -8,10 +8,8 @@ directory, mirroring `main.build_production_state` without ever starting the she
 
 from __future__ import annotations
 
-import os
 import socket
 import socketserver
-import sys
 import tempfile
 import threading
 import time
@@ -48,32 +46,6 @@ from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.workspace_name import workspace_name_source
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
-
-# The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
-# provisioned by env-converge. Playwright's own browser-cache lookup only
-# auto-discovers builds Playwright downloaded itself, so launches must name
-# this binary explicitly via ``executable_path`` (see the
-# ``browser_type_launch_args`` fixture override in ``conftest.py``).
-FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
-
-# Playwright's headless shell, which the same env-converge unit installs for the test suites
-# alone (system/scripts/env.d/1000-playwright-fortress.sh): a browser suite runs about a third
-# faster in about a third less memory on it than on Fortress.
-TEST_HEADLESS_SHELL_PATH = Path("/opt/playwright-test-browsers/headless-shell")
-
-
-def pick_e2e_browser_executable(is_headed: bool) -> Path | None:
-    """The browser binary the e2e fixtures launch: the test headless shell, else Fortress.
-
-    A headed run (``--headed``) skips the shell, which cannot show a window. None when
-    neither is installed (CI hosts that ran ``playwright install``), leaving the launch to
-    Playwright's own managed-browser lookup.
-    """
-    candidates = (FORTRESS_CHROMIUM_PATH,) if is_headed else (TEST_HEADLESS_SHELL_PATH, FORTRESS_CHROMIUM_PATH)
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    return None
 
 
 class _FakeSupervisorRequestHandler(SimpleXMLRPCRequestHandler):
@@ -159,26 +131,6 @@ class FakeSupervisorServer:
             raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_NOT_RUNNING, f"NOT_RUNNING: {program}")
         self.statename_by_program[program] = "STOPPED"
         return True
-
-
-def is_e2e_browser_installed() -> bool:
-    """True when a Chromium the e2e suite can launch is present on this host.
-
-    The test headless shell or Fortress (which the ``browser_type_launch_args``
-    fixture prefers, in that order) or a browser in Playwright's own download
-    cache satisfies the check; with none present the e2e tests skip
-    instead of erroring at browser launch.
-    """
-    if pick_e2e_browser_executable(is_headed=False) is not None:
-        return True
-    env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if env_path:
-        cache_dir = Path(env_path)
-    elif sys.platform == "darwin":
-        cache_dir = Path.home() / "Library" / "Caches" / "ms-playwright"
-    else:
-        cache_dir = Path.home() / ".cache" / "ms-playwright"
-    return cache_dir.exists() and any(cache_dir.iterdir())
 
 
 # The directories minted for states built without a ``shell_state_directory``; each is removed
