@@ -426,7 +426,9 @@ def test_a_path_too_long_to_look_up_makes_only_its_theme_unavailable(
 
     long_entry = catalog.find("long")
     assert long_entry is not None and not long_entry.is_available
-    assert any("cannot be read" in problem for problem in long_entry.problems)
+    # Most filesystems refuse to look the name up (the files "cannot be read"); gVisor's 9p, once the folder has
+    # been listed, reports it missing instead ("does not exist"). Either problem names the file.
+    assert any("a" * 300 in problem for problem in long_entry.problems)
     assert catalog.find_available("paper") is not None
 
 

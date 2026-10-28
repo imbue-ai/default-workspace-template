@@ -37,7 +37,10 @@ from loguru import logger
 from pydantic import ConfigDict, Field, field_validator
 from workspace_layout.windows import WindowClosedHint, window_query_value
 from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
-from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE, register_workspace_theme_route
+from workspace_themes.flask_routes import (
+    THEME_STATIC_ROUTE_TABLE,
+    register_workspace_theme_route,
+)
 from workspace_themes.primitives import THEME_ID_PATTERN
 from workspace_themes.serving import THEME_STATIC_ROUTE_PREFIX
 

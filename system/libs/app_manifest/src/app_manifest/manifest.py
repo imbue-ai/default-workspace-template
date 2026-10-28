@@ -6,10 +6,6 @@ from typing import Any
 from typing import Final
 from typing import Self
 
-from imbue.imbue_common.enums import LowerCaseStrEnum
-from imbue.imbue_common.enums import UpperCaseStrEnum
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.primitives import NonEmptyStr
 from pydantic import Field
 from pydantic import ValidationError
 from pydantic import model_validator
@@ -35,6 +31,10 @@ from app_manifest.primitives import ReferenceNote
 from app_manifest.primitives import ReferencePath
 from app_manifest.primitives import SecretFileName
 from app_manifest.primitives import is_path_covered_by
+from imbue.imbue_common.enums import LowerCaseStrEnum
+from imbue.imbue_common.enums import UpperCaseStrEnum
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.primitives import NonEmptyStr
 
 MANIFEST_FILENAME: Final[str] = "app.toml"
 

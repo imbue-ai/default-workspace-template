@@ -5,8 +5,6 @@ import tomllib
 from pathlib import Path
 from typing import Final
 
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.primitives import NonEmptyStr
 from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
@@ -29,6 +27,8 @@ from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.primitives import PriorityName
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.primitives import NonEmptyStr
 
 # The browser-side app contract module (desktop-interface contracts.md section 7), where the
 # shell's frontend build writes it, relative to the repo root every supervised program runs

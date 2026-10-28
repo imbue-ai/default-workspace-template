@@ -26,10 +26,6 @@ from pathlib import Path
 from pathlib import PurePosixPath
 from typing import Final
 
-from imbue.imbue_common.enums import LowerCaseStrEnum
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.primitives import NonEmptyStr
-from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import Field
 
@@ -50,12 +46,12 @@ from app_manifest.scope import load_app_manifests
 from app_manifest.scope import match_referencing_manifests
 from app_manifest.scope import read_file_at_revision
 from app_manifest.scope import resolve_commit
+from app_manifest.workspace_graph import LockfileChange
 from app_manifest.workspace_graph import NPM_ROOT
 from app_manifest.workspace_graph import NPM_ROOT_MANIFEST
-from app_manifest.workspace_graph import ROOT_DIRECTORY
-from app_manifest.workspace_graph import LockfileChange
 from app_manifest.workspace_graph import NpmPackage
 from app_manifest.workspace_graph import PythonMember
+from app_manifest.workspace_graph import ROOT_DIRECTORY
 from app_manifest.workspace_graph import classify_lockfile_change
 from app_manifest.workspace_graph import npm_consumers
 from app_manifest.workspace_graph import python_consumers
@@ -65,6 +61,10 @@ from app_manifest.workspace_graph import read_own_root_units
 from app_manifest.workspace_graph import read_python_members
 from app_manifest.workspace_graph import read_root_dependencies
 from app_manifest.workspace_graph import read_root_ignored_directories
+from imbue.imbue_common.enums import LowerCaseStrEnum
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.primitives import NonEmptyStr
+from imbue.imbue_common.pure import pure
 
 _APPS_DIRECTORY: Final[str] = "system/apps"
 _PACKAGE_PARENT_DIRECTORIES: Final[tuple[str, ...]] = (
