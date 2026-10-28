@@ -167,7 +167,6 @@ SHAPE_TOKENS: Final[tuple[str, ...]] = (
 MOTION_TOKENS: Final[tuple[str, ...]] = ("--dur-fast", "--dur-base", "--dur-slow")
 
 DESKTOP_TOKENS: Final[tuple[str, ...]] = (
-    "--desk-window-radius",
     "--desk-window-shadow",
     "--desk-taskbar-surface",
     "--desk-taskbar-entry-shadow",
@@ -187,6 +186,7 @@ DESKTOP_TOKENS: Final[tuple[str, ...]] = (
 # The desktop's metrics a theme may set, each to a pixel length within its range: the shell's geometry reads them.
 PIXEL_RANGE_BY_METRIC_TOKEN: Final[dict[str, tuple[int, int]]] = {
     "--desk-title-bar-height": (16, 64),
+    "--desk-window-radius": (0, 32),
     "--desk-taskbar-height": (24, 96),
     "--desk-window-control-size": (12, 48),
     "--desk-taskbar-entry-size": (16, 64),
