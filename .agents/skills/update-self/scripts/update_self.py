@@ -829,10 +829,17 @@ def _run_status_for_recorder(
 
     The app matches a record to a workspace's row by chat name, so writing
     this pass's facts onto another pass's record would file them under a run
-    the app is not watching.
+    the app is not watching. A record holding this chat's id is its own under
+    the name it started with: a rename rewrites ``$MNGR_AGENT_NAME`` for the
+    lead's next launch, and that name is not the one the app is watching.
     """
     status = read_run_status(repo_root)
-    if status is not None and recorder and status.chat_agent_name != recorder:
+    lead_chat_id = LeadIdentity.from_environ(os.environ).chat_id
+    is_this_chats = status is not None and (
+        status.chat_agent_name == recorder
+        or (bool(status.chat_id) and status.chat_id == lead_chat_id)
+    )
+    if status is not None and recorder and not is_this_chats:
         sys.stderr.write(
             f"warning: {run_status_path(repo_root)} records {status.chat_agent_name or '<unnamed>'}, "
             f"not {recorder}; recording under {recorder} instead.\n"

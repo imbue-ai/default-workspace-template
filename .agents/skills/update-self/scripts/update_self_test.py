@@ -8040,10 +8040,13 @@ def test_run_status_verdict_is_recorded_under_the_agent_recording_it(
     # start in the file. The running pass's verdict must not be filed under that
     # pass's name: the app matches a record to a workspace's row by chat name,
     # so it would discard the verdict and read the real run as having died.
+    monkeypatch.delenv("MINDS_CHAT_ID", raising=False)
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-aborted")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-aborted")
     assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
 
     monkeypatch.setenv("MNGR_AGENT_NAME", "update-real")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-real")
     assert (
         update_self.main(
             ["run-status", "verdict", "UPDATED", "--repo-root", str(tmp_path)]
@@ -8056,6 +8059,37 @@ def test_run_status_verdict_is_recorded_under_the_agent_recording_it(
     assert status.chat_agent_name == "update-real"
     assert status.verdict == "UPDATED"
     assert "records update-aborted, not update-real" in capsys.readouterr().err
+
+
+def test_a_renamed_and_restarted_lead_records_its_verdict_on_its_own_run(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    # A rename rewrites the lead's MNGR_AGENT_NAME for its next launch, so a lead
+    # restarted mid-run records under a name the app is not watching. Its chat id
+    # finds its own record, which keeps the name, start and chats it paused.
+    monkeypatch.setenv("MNGR_AGENT_NAME", "Chat-2")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-lead")
+    monkeypatch.setenv("MINDS_CHAT_ID", "agent-chat")
+    assert update_self.main(["run-status", "start", "--repo-root", str(tmp_path)]) == 0
+    started = update_apply_contract.read_run_status(tmp_path)
+    assert started is not None
+
+    monkeypatch.setenv("MNGR_AGENT_NAME", "Checking-for-version-094-release")
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-restarted")
+    assert (
+        update_self.main(
+            ["run-status", "verdict", "UPDATED", "--repo-root", str(tmp_path)]
+        )
+        == 0
+    )
+
+    status = update_apply_contract.read_run_status(tmp_path)
+    assert status is not None
+    assert status.chat_agent_name == "Chat-2"
+    assert status.chat_id == "agent-chat"
+    assert status.started_at == started.started_at
+    assert status.verdict == "UPDATED"
+    assert "recording under" not in capsys.readouterr().err
 
 
 def test_run_status_verdict_without_a_start_still_records(
