@@ -48,9 +48,10 @@ jobs:
           git rev-parse --verify "refs/remotes/origin/${CHANGELOG_BASE_REF}" >/dev/null
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@18d369b23da25a81e9458561248e1aafff6a70fa # v10.3.1
         with:
-          version: "latest"
+          # UV_VERSION in system/scripts/setup_system.sh: another uv writes uv.lock differently.
+          version: "0.13.4"
 
       - name: Sync the scripts package
         run: uv sync --frozen --package workspace-scripts
