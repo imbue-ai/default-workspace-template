@@ -5,8 +5,8 @@ library every frontend draws with (`system/libs/workspace_ui`). It is the
 workspace's counterpart of Imbue Studio's own styleguide page: a sticky
 contents list beside the catalog, in three groups.
 
-- **Foundations**: every colour token (the swatch, its utility, its `--c-*`
-  value and the value as declared, grouped as `base.css` groups them), the type
+- **Foundations**: every color token, in one table of name (its utility and
+  `--c-*` value), value and swatch, grouped as `base.css` groups them; the type
   roles and font stacks, spacing, corner radius, elevation, motion, the
   stacking layers and widths, and the whole icon set.
 - **Components**: the Button in every variant, size and state, the text
@@ -20,7 +20,7 @@ contents list beside the catalog, in three groups.
   plain-HTML page (`/page-kit-sample`) wearing the page kit, the shell-built
   `/_static/workspace_theme.css` and `.js` the app serves from its own origin.
 
-Nothing here is a copy. The colours and the scales are read out of the
+Nothing here is a copy. The colors and the scales are read out of the
 library's `base.css` at build time (`frontend/src/models/tokens.ts`), so a new
 token appears with no edit to this app; the components are the library's own,
 so a change to one shows here on the next build. The type roles are the one

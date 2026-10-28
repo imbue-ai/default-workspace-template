@@ -1,7 +1,7 @@
 [project]
 name = "style-guide-app"
 version = "0.1.0"
-description = "The Style Guide app: every colour, type role and shared control of the workspace's design system, drawn live from the shared library"
+description = "The Style Guide app: every color, type role and shared control of the workspace's design system, drawn live from the shared library"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [

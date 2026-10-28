@@ -1,8 +1,8 @@
 /**
- * The Foundations group: the colour tokens, the type roles and font stacks, spacing, radius, elevation, motion,
+ * The Foundations group: the color tokens, the type roles and font stacks, spacing, radius, elevation, motion,
  * stacking and widths, and the icon set.
  *
- * Colours and the scales come from ``base.css`` itself (``models/tokens.ts``) and are drawn through inline
+ * Colors and the scales come from ``base.css`` itself (``models/tokens.ts``) and are drawn through inline
  * ``var(--...)`` styles, so a new token appears here unedited. The type roles are listed by hand: each is a
  * utility, and the Tailwind scanner only emits a utility it can read as a literal in the source.
  */
@@ -21,7 +21,7 @@ import {
   warningIcon,
 } from "@imbue/workspace-ui/src/components/icons";
 
-import { tokensWithPrefix, type ColourToken, type DeclaredToken, type DesignTokens } from "../models/tokens";
+import { tokensWithPrefix, type ColorToken, type DeclaredToken, type DesignTokens } from "../models/tokens";
 import { themeValue } from "../models/themeValues";
 import { caption, code, subCaption, type CatalogGroup, type CatalogSection } from "./catalog";
 
@@ -101,31 +101,52 @@ function cssValueOf(token: DeclaredToken): string {
   return `var(--${token.name}, ${token.value})`;
 }
 
-function swatch(colour: ColourToken): m.Vnode {
-  const paint = `var(--${colour.variable})`;
-  const sample =
-    colour.role === "text"
-      ? m(
-          "div",
-          {
-            // Text meant for a coloured surface ("on-accent") is shown on one.
-            class: `flex h-12 items-center justify-center rounded-md border border-subtle type-heading ${
-              colour.name.startsWith("on-") ? "bg-accent" : "bg-page"
-            }`,
-          },
-          m("span", { style: { color: paint } }, "Aa"),
-        )
-      : colour.role === "border"
-        ? m("div", { class: "h-12 rounded-md border-2 bg-surface", style: { borderColor: paint } })
-        : m("div", { class: "h-12 rounded-md border border-subtle", style: { backgroundColor: paint } });
-  return m("div", { id: `colour-${colour.name}`, class: "colour-swatch flex min-w-0 flex-col gap-1.5" }, [
-    sample,
-    m("div", [
-      colour.utility === null ? caption(`--${colour.variable}`) : caption(colour.utility),
-      colour.utility === null ? null : subCaption(`--${colour.variable}`),
-      valueCaptions(colour.variable, colour.value),
+/** A color's sample, drawn with the value the page wears: text as a word, a border as an outline, a fill as itself. */
+function colorSample(color: ColorToken): m.Vnode {
+  const paint = `var(--${color.variable})`;
+  const sample = { "data-color-sample": "" };
+  if (color.role === "text") {
+    return m(
+      "div",
+      {
+        ...sample,
+        // Text meant for a colored surface ("on-accent") is shown on one.
+        class: `flex h-6 w-16 items-center justify-center rounded-md border border-subtle type-helper font-semibold ${
+          color.name.startsWith("on-") ? "bg-accent" : "bg-page"
+        }`,
+      },
+      m("span", { style: { color: paint } }, "Aa"),
+    );
+  }
+  if (color.role === "border") {
+    return m("div", { ...sample, class: "h-6 w-16 rounded-md border-2 bg-surface", style: { borderColor: paint } });
+  }
+  // The strong edge, so a fill the same as the page (a theme's surfaces often are) still shows as a box.
+  return m("div", { ...sample, class: "h-6 w-16 rounded-md border border-strong", style: { backgroundColor: paint } });
+}
+
+/** One row of the color table: the utility and its value variable, the value the page wears, and the sample. */
+function colorRow(color: ColorToken): m.Vnode {
+  return m("tr", { id: `color-${color.name}`, class: "color-swatch border-t border-subtle" }, [
+    m("td", { class: "py-1 pr-6 align-middle whitespace-nowrap" }, [
+      m("code", { class: "font-mono type-helper text-primary select-all" }, color.utility ?? `--${color.variable}`),
+      color.utility === null
+        ? null
+        : m("code", { class: "ml-2 font-mono type-helper text-faint select-all" }, `--${color.variable}`),
     ]),
+    m("td", { class: "w-full py-1 pr-4 align-middle" }, inlineValue(color.variable, color.value)),
+    m("td", { class: "py-1 align-middle" }, colorSample(color)),
   ]);
+}
+
+/** A value as the page wears it on one line, with the standard value struck through after it when a theme changed it. */
+function inlineValue(name: string, declared: string): m.Children {
+  const themed = themeValue(name);
+  const value = (text: string, extra: string): m.Vnode =>
+    m("code", { class: `font-mono type-helper break-all ${extra}` }, text);
+  return themed === null || themed === declared
+    ? value(declared, "text-secondary")
+    : [value(themed, "text-secondary"), " ", value(declared, "text-faint line-through")];
 }
 
 /** A token's value as the page wears it, and, when a theme has changed it, the standard value beside it. */
@@ -141,13 +162,13 @@ function wornValue(name: string, declared: string): string {
   return themeValue(name) ?? declared;
 }
 
-function coloursSection(tokens: DesignTokens): CatalogSection {
+function colorsSection(tokens: DesignTokens): CatalogSection {
   return {
-    id: "colours",
-    toc: "Colours",
-    title: "Colour tokens",
+    id: "colors",
+    toc: "Colors",
+    title: "Color tokens",
     desc: [
-      "Every colour has one semantic utility over one raw value. Views use the utility (",
+      "Every color has one semantic utility over one raw value. Views use the utility (",
       code("text-primary"),
       ", ",
       code("bg-fill-hover"),
@@ -158,16 +179,22 @@ function coloursSection(tokens: DesignTokens): CatalogSection {
       " value. Each swatch is drawn with the value the page wears, so under a theme it is that theme's palette.",
     ],
     body: () =>
-      tokens.colourGroups.map((group) =>
-        m("div", { class: "colour-group mb-6", "data-colour-group": group.label }, [
-          m("h3", { class: "type-section text-faint mb-2" }, group.label),
-          m(
-            "div",
-            { class: "grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-x-4 gap-y-5" },
-            group.colours.map(swatch),
-          ),
-        ]),
-      ),
+      m("table", { class: "color-table w-full border-collapse text-left" }, [
+        m(
+          "thead",
+          m("tr", [
+            m("th", { class: "pb-1 pr-4 type-section text-faint font-normal" }, "Name"),
+            m("th", { class: "pb-1 pr-4 type-section text-faint font-normal" }, "Value"),
+            m("th", { class: "pb-1 type-section text-faint font-normal" }, "Swatch"),
+          ]),
+        ),
+        tokens.colorGroups.map((group) =>
+          m("tbody", { class: "color-group", "data-color-group": group.label }, [
+            m("tr", m("th", { colspan: 3, class: "pt-4 pb-1 type-label text-primary capitalize" }, group.label)),
+            group.colors.map(colorRow),
+          ]),
+        ),
+      ]),
   };
 }
 
@@ -177,7 +204,7 @@ function typeSection(tokens: DesignTokens): CatalogSection {
     toc: "Type",
     title: "Type roles",
     desc: [
-      "Seven roles, one utility each, bundling size, weight and line height. Colour is separate: compose a role with a text colour, e.g. ",
+      "Seven roles, one utility each, bundling size, weight and line height. Color is separate: compose a role with a text color, e.g. ",
       code("type-label text-secondary"),
       ". Dense chrome (the rail, menus, launcher tables) sits on ",
       code("--font-size-row"),
@@ -452,7 +479,7 @@ export function foundationsGroup(tokens: DesignTokens): CatalogGroup {
     label: "Foundations",
     description: "The tokens every surface is built from, read live from the shared stylesheet, and the icon set.",
     sections: [
-      coloursSection(tokens),
+      colorsSection(tokens),
       typeSection(tokens),
       spacingSection(tokens),
       radiusSection(tokens),

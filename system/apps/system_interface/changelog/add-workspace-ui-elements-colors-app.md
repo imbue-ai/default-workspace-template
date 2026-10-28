@@ -1,0 +1,1 @@
+An app whose manifest says `desktop_shortcut = false` gets no default shortcut: a new desktop is not seeded with one, and none is added to an existing desktop when the app first registers. Adding one by hand, from the launcher or a window's menu, works as before. The Style Guide app is the first to declare it.

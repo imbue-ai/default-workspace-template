@@ -1,10 +1,10 @@
-# The Style Guide app: one page cataloguing the workspace's design system -- every colour token, type role,
+# The Style Guide app: one page cataloguing the workspace's design system -- every color token, type role,
 # radius, shadow, motion and stacking step, the icon set, and every shared control in its variants. It renders
-# the shared library (system/libs/workspace_ui) itself, and reads the colour and scale tokens out of that
+# the shared library (system/libs/workspace_ui) itself, and reads the color and scale tokens out of that
 # library's base.css at build time, so a new token shows up here with no edit to this app. It stores nothing.
 name = "style-guide"
 display_name = "Style Guide"
-description = "Every colour, type role and shared control of the workspace's design system, drawn live from the library the other apps use."
+description = "Every color, type role and shared control of the workspace's design system, drawn live from the library the other apps use."
 api_schema_path = "/api/schema"
 icon = "icon.svg"
 critical = false
@@ -14,6 +14,9 @@ stop_when_no_windows = true
 priority = "user"
 # Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group.
 system = true
+# A reference for whoever works on the workspace's look, not an everyday app: it stays off the desktop (the launcher
+# still lists it, and a shortcut of it can be added by hand).
+desktop_shortcut = false
 
 # Built only from the shared components and the design tokens, so every theme styles it with no work of its own
 # (docs/system/blueprint/workspace-themes/, section 7). Under a theme it is a live sample of that theme.

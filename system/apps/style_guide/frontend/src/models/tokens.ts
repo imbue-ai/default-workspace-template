@@ -3,7 +3,7 @@
  * a token added there appears in the catalog with no edit to this app.
  *
  * ``base.css`` keeps every raw value once, as a ``--c-*`` (or scale) custom property on ``:root``, registers each
- * colour under its semantic utility name in an ``@theme inline`` block grouped by comment headers, and keeps the
+ * color under its semantic utility name in an ``@theme inline`` block grouped by comment headers, and keeps the
  * font stacks, spacing base, radii and shadows in a plain ``@theme`` block. This module reads those three blocks.
  */
 
@@ -13,13 +13,13 @@ export interface DeclaredToken {
   readonly value: string;
 }
 
-/** The utility prefix a colour is drawn with in the catalog (and most often used with). */
-export type ColourRole = "text" | "border" | "bg";
+/** The utility prefix a color is drawn with in the catalog (and most often used with). */
+export type ColorRole = "text" | "border" | "bg";
 
-/** One colour: ``text-primary`` is ``{ utility: "text-primary", name: "primary", variable: "c-text-primary" }``. */
-export interface ColourToken {
+/** One color: ``text-primary`` is ``{ utility: "text-primary", name: "primary", variable: "c-text-primary" }``. */
+export interface ColorToken {
   readonly name: string;
-  readonly role: ColourRole;
+  readonly role: ColorRole;
   /** The utility a view writes, or null for a raw value no utility is registered over. */
   readonly utility: string | null;
   /** The ``--c-*`` value the utility resolves through. */
@@ -28,23 +28,23 @@ export interface ColourToken {
   readonly value: string;
 }
 
-/** The colours under one of the ``@theme inline`` block's comment headers ("text", "borders", "status", ...). */
-export interface ColourGroup {
+/** The colors under one of the ``@theme inline`` block's comment headers ("text", "borders", "status", ...). */
+export interface ColorGroup {
   readonly label: string;
-  readonly colours: readonly ColourToken[];
+  readonly colors: readonly ColorToken[];
 }
 
 export interface DesignTokens {
-  readonly colourGroups: readonly ColourGroup[];
-  /** Every ``:root`` property that is not a colour: the type, motion, stacking and width scales, and the shadow
+  readonly colorGroups: readonly ColorGroup[];
+  /** Every ``:root`` property that is not a color: the type, motion, stacking and width scales, and the shadow
    *  values (``--c-shadow-*``), which sit in the value layer so a theme can redeclare them but draw no swatch. */
   readonly scales: readonly DeclaredToken[];
   /** The plain ``@theme`` block: font stacks, the spacing base, radii and shadows. */
   readonly theme: readonly DeclaredToken[];
 }
 
-/** A ``--c-*`` value that is not a colour: the elevation values a theme may redeclare. */
-function isColourValue(name: string): boolean {
+/** A ``--c-*`` value that is not a color: the elevation values a theme may redeclare. */
+function isColorValue(name: string): boolean {
   return name.startsWith("c-") && !name.startsWith("c-shadow-");
 }
 
@@ -86,7 +86,7 @@ function groupLabel(comment: string): string {
   return (colon === -1 ? comment : comment.slice(0, colon)).trim();
 }
 
-function roleOf(groupName: string, utility: string): ColourRole {
+function roleOf(groupName: string, utility: string): ColorRole {
   if (groupName.startsWith("text") || groupName.startsWith("progress")) return "text";
   if (groupName.startsWith("border") || utility.endsWith("-border")) return "border";
   return "bg";
@@ -96,30 +96,30 @@ export function readDesignTokens(css: string): DesignTokens {
   const root = declarations(blockBody(css, /:root\s*\{/));
   const valueOf = new Map(root.map((token) => [token.name, token.value]));
 
-  const colourGroups: { label: string; colours: ColourToken[] }[] = [];
+  const colorGroups: { label: string; colors: ColorToken[] }[] = [];
   const mapped = new Set<string>();
   for (const entry of entries(blockBody(css, /@theme\s+inline\s*\{/))) {
     if (entry.kind === "comment") {
-      colourGroups.push({ label: groupLabel(entry.text), colours: [] });
+      colorGroups.push({ label: groupLabel(entry.text), colors: [] });
       continue;
     }
     const reference = VAR_REFERENCE.exec(entry.value);
     if (!entry.name.startsWith("color-") || reference === null) continue;
-    if (colourGroups.length === 0) colourGroups.push({ label: "colours", colours: [] });
-    const group = colourGroups[colourGroups.length - 1];
+    if (colorGroups.length === 0) colorGroups.push({ label: "colors", colors: [] });
+    const group = colorGroups[colorGroups.length - 1];
     const name = entry.name.slice("color-".length);
     const variable = reference[1];
     mapped.add(variable);
     const role = roleOf(group.label, name);
-    group.colours.push({ name, role, utility: `${role}-${name}`, variable, value: valueOf.get(variable) ?? "" });
+    group.colors.push({ name, role, utility: `${role}-${name}`, variable, value: valueOf.get(variable) ?? "" });
   }
 
-  // A raw colour value with no utility over it still belongs in the catalog, under a group that says so.
-  const unmapped = root.filter((token) => isColourValue(token.name) && !mapped.has(token.name));
+  // A raw color value with no utility over it still belongs in the catalog, under a group that says so.
+  const unmapped = root.filter((token) => isColorValue(token.name) && !mapped.has(token.name));
   if (unmapped.length > 0) {
-    colourGroups.push({
+    colorGroups.push({
       label: "values with no utility",
-      colours: unmapped.map((token) => ({
+      colors: unmapped.map((token) => ({
         name: token.name,
         role: "bg" as const,
         utility: null,
@@ -130,8 +130,8 @@ export function readDesignTokens(css: string): DesignTokens {
   }
 
   return {
-    colourGroups: colourGroups.filter((group) => group.colours.length > 0),
-    scales: root.filter((token) => !isColourValue(token.name)),
+    colorGroups: colorGroups.filter((group) => group.colors.length > 0),
+    scales: root.filter((token) => !isColorValue(token.name)),
     theme: declarations(blockBody(css, /@theme\s*\{/)),
   };
 }

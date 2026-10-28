@@ -465,6 +465,7 @@ def test_minimal_manifest_takes_the_documented_defaults() -> None:
     assert manifest.program == "news"
     assert manifest.internal is False
     assert manifest.default_shortcut is None
+    assert manifest.desktop_shortcut is True
     assert manifest.launch_paths == ()
     assert manifest.launcher_rank is None
     assert manifest.pin is None
@@ -1080,3 +1081,15 @@ def test_theming_parts_declare_the_elements_a_theme_may_style() -> None:
 def test_theming_refuses_misdeclared_parts_and_unknown_modes(theming: dict[str, object], match: str) -> None:
     with pytest.raises(ValidationError, match=match):
         AppManifest.model_validate({**_full_manifest_data(), "theming": theming})
+
+
+def test_desktop_shortcut_false_keeps_an_app_off_the_desktop_and_must_be_a_boolean() -> None:
+    manifest = AppManifest.model_validate(
+        {"name": "news", "display_name": "News", "icon": "icon.svg", "desktop_shortcut": False}
+    )
+
+    assert manifest.desktop_shortcut is False
+    with pytest.raises(ValidationError):
+        AppManifest.model_validate(
+            {"name": "news", "display_name": "News", "icon": "icon.svg", "desktop_shortcut": "sometimes"}
+        )

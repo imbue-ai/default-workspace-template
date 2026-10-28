@@ -34,18 +34,18 @@ describe("StyleGuidePage", () => {
       root.querySelectorAll<HTMLElement>("[data-toc-target]"),
       (link) => link.dataset.tocTarget,
     );
-    expect(targets).toContain("colours");
+    expect(targets).toContain("colors");
     expect(targets).toContain("buttons");
     for (const target of targets) expect(root.querySelector(`#${target}`), target).not.toBeNull();
   });
 
-  it("draws a swatch for every colour token, painted with its own value", () => {
+  it("draws a swatch for every color token, painted with its own value", () => {
     const root = mountPage();
-    const colours = tokens.colourGroups.flatMap((group) => group.colours);
-    expect(root.querySelectorAll(".colour-swatch")).toHaveLength(colours.length);
-    const accent = root.querySelector<HTMLElement>("#colour-accent > div");
+    const colors = tokens.colorGroups.flatMap((group) => group.colors);
+    expect(root.querySelectorAll(".color-swatch")).toHaveLength(colors.length);
+    const accent = root.querySelector<HTMLElement>("#color-accent [data-color-sample]");
     expect(accent?.style.backgroundColor).toBe("var(--c-accent)");
-    expect(root.querySelector("#colour-accent")?.textContent).toContain("bg-accent");
+    expect(root.querySelector("#color-accent")?.textContent).toContain("bg-accent");
   });
 
   it("draws every icon of the shared set and every button variant and badge tone", () => {
@@ -129,7 +129,7 @@ describe("StyleGuidePage", () => {
     document.head.appendChild(theme);
     try {
       const root = mountPage();
-      const swatch = root.querySelector("#colour-accent");
+      const swatch = root.querySelector("#color-accent");
       expect(swatch?.textContent).toContain("#000080");
       expect(swatch?.querySelector(".line-through")?.textContent).toBe("#2f6b4f");
       expect(root.querySelectorAll(".line-through")).toHaveLength(1);

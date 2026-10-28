@@ -459,7 +459,7 @@ function statusSection(): CatalogSection {
         m("span", { class: "text-accent" }, m.trust(spinnerIcon(24))),
         m("span", { class: "flex items-center gap-2 rounded-md bg-inverse px-3 py-2 text-on-accent type-body" }, [
           m("span", { class: "spinner spinner--sm spinner--current" }),
-          "On a coloured surface",
+          "On a colored surface",
         ]),
       ]),
     ],

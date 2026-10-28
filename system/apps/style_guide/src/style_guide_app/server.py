@@ -45,7 +45,7 @@ PORT: Final[int] = int(os.environ.get("STYLE_GUIDE_APP_PORT", "8060"))
 
 APP_DISPLAY_NAME: Final[str] = "Style Guide"
 APP_DESCRIPTION: Final[str] = (
-    "Every colour, type role and shared control of the workspace's design system, drawn live from the library "
+    "Every color, type role and shared control of the workspace's design system, drawn live from the library "
     "the other apps use."
 )
 STATIC_DIR: Final[Path] = Path(__file__).parent / "static"

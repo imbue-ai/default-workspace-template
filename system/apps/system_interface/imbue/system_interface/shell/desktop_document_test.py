@@ -473,6 +473,8 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
             registry_row_toml("extra", "http://localhost:6", default_shortcut=("open", "focus")),
             # A default shortcut naming a launch path the row does not declare seeds nothing.
             registry_row_toml("odd", "http://localhost:5", default_shortcut=("make", "focus")),
+            # Nor does an app that keeps itself off the desktop, whatever shortcut it would otherwise get.
+            registry_row_toml("reference", "http://localhost:7", program="reference", has_desktop_shortcut=False),
         )
     )
     seeded = seed_desktop_shortcuts(rows)
@@ -495,6 +497,7 @@ def test_a_new_desktop_is_seeded_from_every_non_internal_default_shortcut_in_one
         "files": "open",
         "extra": "open",
         "odd": None,
+        "reference": None,
     }
 
 
@@ -622,6 +625,7 @@ def test_an_offered_app_an_internal_app_and_an_app_without_a_usable_default_shor
             registry_row_toml("hidden", "http://localhost:2", is_internal=True, default_shortcut=("open", "focus")),
             registry_row_toml("plain", "http://localhost:3"),
             registry_row_toml("odd", "http://localhost:5", default_shortcut=("make", "focus")),
+            registry_row_toml("reference", "http://localhost:7", program="reference", has_desktop_shortcut=False),
         )
     )
     # The user removed the chat's shortcut after it was offered: an empty desktop the seed no longer matches.
