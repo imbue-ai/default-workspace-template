@@ -15,6 +15,7 @@ from imbue.chat.message_steps import CANCEL_SUFFIX
 from imbue.chat.message_steps import MESSAGE_REF_PREFIX
 from imbue.chat.message_steps import MESSAGE_STEP_RESERVATIONS_DIRNAME
 from imbue.chat.message_steps import MESSAGE_STEP_TAG
+from imbue.chat.message_steps import MESSAGE_STEP_TITLE_SYSTEM_PROMPT
 from imbue.chat.message_steps import MessageAction
 from imbue.chat.message_steps import MessageActionKind
 from imbue.chat.message_steps import MessageStep
@@ -773,3 +774,14 @@ def test_tk_and_the_chat_app_agree_on_the_latest_of_two_quick_cancels(folders: _
     assert len(list(folders.files.tickets_dir.glob(f"{own}.*{CANCEL_SUFFIX}"))) == 2
     assert "cancelled by the user's message: second" in _tk_steps(folders)
     assert folders.files.cancels_in_force()[own].reason == "second"
+
+
+def test_the_prompt_states_the_title_limit_the_parser_enforces() -> None:
+    match = re.search(
+        r"Every title and every reason must be at most (\d+) characters\.", MESSAGE_STEP_TITLE_SYSTEM_PROMPT
+    )
+    assert match is not None
+    limit = int(match.group(1))
+
+    assert parse_message_action(f"NEW: A{'b' * (limit - 1)}", ()) is not None
+    assert parse_message_action(f"NEW: A{'b' * limit}", ()) is None
