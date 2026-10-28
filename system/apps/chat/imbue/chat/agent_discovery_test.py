@@ -306,6 +306,48 @@ def test_a_failure_that_may_have_typed_the_message_is_never_sent_again(
     assert send_calls == [(known,)]
 
 
+def _not_submitted() -> MessageResult:
+    return MessageResult(
+        failures=[
+            AgentSendFailure(
+                agent_name="alpha",
+                reason="the message never left the agent's input box, so it was cleared from there",
+                kind=SendFailureKind.NOT_SUBMITTED,
+            )
+        ]
+    )
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("second_result", "expected_kind"),
+    [(MessageResult, None), (_not_submitted, "not_submitted")],
+    ids=["taken-the-second-time", "untaken-again"],
+)
+def test_a_message_the_agent_never_took_is_sent_there_once_more(
+    second_result: Callable[[], MessageResult], expected_kind: str | None
+) -> None:
+    """The agent cleared the untaken message from its input box, so one more send delivers it once."""
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    results = [_not_submitted()]
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        raise AssertionError("an untaken message is sent where the agent is, not looked up again")
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        if results:
+            return results.pop()
+        result = second_result()
+        return result if result.failures else MessageResult(successful_agents=[str(m.agent_id) for m in matches])
+
+    messenger = MngrMessenger(discover=_discover, send=_send)
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,))
+    assert (failure.kind if failure is not None else None) == expected_kind
+    assert send_calls == [(known,), (known,)]
+
+
 @pytest.mark.usefixtures("isolated_mngr_env")
 def test_returns_a_reason_when_nothing_reachable() -> None:
     """A send that reaches no agent reports why, since the reason is what the user can act on."""
