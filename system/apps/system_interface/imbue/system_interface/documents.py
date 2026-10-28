@@ -120,6 +120,8 @@ APPLE_WEB_APP_TITLE_META_NAME: Final[str] = "apple-mobile-web-app-title"
 THEME_COLOR_META_NAME: Final[str] = "theme-color"
 TOUCH_ICON_PATH: Final[str] = "/apple-touch-icon.png"
 MANIFEST_PATH: Final[str] = "/manifest.webmanifest"
+# The theme gallery: every theme worn by a page of sample parts (the workspace-themes plan, section 8.2).
+THEME_GALLERY_ROUTE: Final[str] = "/theme-gallery"
 
 
 def inject_install_tags(html_content: str, workspace_name: str, root_path: str) -> str:

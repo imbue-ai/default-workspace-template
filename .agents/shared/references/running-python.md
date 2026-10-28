@@ -57,7 +57,7 @@ its own uv project, `python/` (`python/pyproject.toml`, package
 `system/scripts` are a project each, with the packages beside the entry files.
 A built-in script that only this release calls has no entry file: its module
 has its own `if __name__ == "__main__":` block and runs by its path
-(`uv run --no-sync system/scripts/workspace_scripts/smoketest_app.py`). Such a
+(`uv run --no-sync system/scripts/workspace_scripts/verify_app.py`). Such a
 run puts the module's own directory first on `sys.path`, so a package with one
 never holds a module named like a standard-library module. An entry file is
 kept where a script runs with no venv or something outside this release calls

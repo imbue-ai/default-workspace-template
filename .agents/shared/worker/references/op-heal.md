@@ -106,8 +106,13 @@ Fixed app or service `<name>`:
 ```
 
 The `References registered` and `Outside footprint` lines come from the scope
-file (`harden-creation.md`); a creation with no footprint writes `none` for
-both.
+file (`harden-creation.md`).
+
+In a pass over several creations, write one block per creation, in the order
+the task lists them; the lines about the pass as a whole (the scenarios and tests
+run, `Outside footprint`, which the scope file judges against every creation at
+once, `Undeclared couplings`, `Flaky tests`) may instead come once, after the
+last block.
 
 Push it and stop. On approval, commit on your branch and emit a `name: done`
 terminal report.

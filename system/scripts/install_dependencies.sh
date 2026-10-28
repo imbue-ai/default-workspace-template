@@ -15,6 +15,12 @@ export PATH="/root/.local/bin:$PATH"
 # not carry, so it must run on every create to regenerate them (fast via the
 # baked warm uv/npm caches). Only setup_system (global-only effects) is skipped.
 
+# Pin uv to Python 3.12 for the venv below. The Docker base ships 3.12; on other
+# bases uv downloads a managed 3.12. Pinned on every base, because
+# uv's default for an open-ended request moves with the uv release. Build-time
+# only: the runtime env (.mngr/settings.toml host_env__extend) does not set it.
+export UV_PYTHON=3.12
+
 REPO_ROOT="${REPO_ROOT:-/home/user/workspace}"
 
 # The lockfile's mngr packages may come from the private mngr repo; the uv sync

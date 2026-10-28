@@ -6,6 +6,8 @@ requires-python = ">=3.12"
 dependencies = [
     # validate_template.py checks a template.toml against env_converge's pydantic schema.
     "pydantic>=2",
+    # record_publish.py writes the version history in update-self's ledger format.
+    "update-self-skill",
 ]
 
 [build-system]

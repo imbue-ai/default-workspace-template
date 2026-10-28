@@ -47,7 +47,11 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   a throwaway instance boots, with named free ports, a scratch copy of the
   directories it names, and placeholders in its command, args, and env;
   absent, it is `scaffold_preview_spec(name)`, the build-app convention, so
-  every app previews by construction), `load_manifest(path, repo_root=None)`
+  every app previews by construction), `AppTheming` (the optional `[theming]`
+  table: how far the app takes part in workspace themes, a `ThemingMode` of
+  `tokens` (the default), `parts`, or `none`, and for `parts` the `AppPart`s
+  a theme may style, each an `AppPartName` unique within the app and a
+  description), `load_manifest(path, repo_root=None)`
   (reads, validates, checks the icon file exists beside the manifest, and --
   against the repo root, given or derived from a `system/apps/<package>/app.toml`
   layout -- that every reference exists, sits neither in the app's own
@@ -101,9 +105,14 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   app's stale reference does not block every other creation's footprint).
   `compute_skill_scope` refuses a path that does not exist, because git ignores a
   pathspec that matches nothing and a mistyped path would read as "unchanged".
-  `BUILT_IN_EXCLUDES`, `APP_CONVENTIONS`, and `SKILL_CONVENTIONS` are the fixed
-  lists. Exclude matching is `pathspec` gitignore syntax; a failing git command
-  raises `ScopeComputationError` rather than reporting an empty diff.
+  `parse_creation_spec`, `compute_creation_scope`, `compute_pass_scope`, and
+  `render_pass_scope_file` build the pass scope file behind `app-manifest
+  pass-scope`, with `find_fork_point` and `find_departure_point` telling the
+  pass's own commits from the lead's, and `read_pass_scope_file` reads one back; `split_against_creations`
+  is the diff split both scope files share. `BUILT_IN_EXCLUDES`, `APP_CONVENTIONS`, `SKILL_CONVENTIONS`, and
+  `SERVICE_CONVENTIONS` are the fixed lists. Exclude matching is `pathspec`
+  gitignore syntax; a failing git command raises `ScopeComputationError` rather
+  than reporting an empty diff.
 - `app_manifest.selection` and `app_manifest.workspace_graph`: the test
   selection behind `app-manifest select-tests` (below). `workspace_graph` reads
   what the workspace declares about its packages: the uv workspace members and
@@ -111,7 +120,7 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   suites that run as their own pytest root, and what a `uv.lock` change
   upgraded and who depends on it (`classify_lockfile_change`).
   `scope.list_changed_files` is the diff both `footprint` and `select-tests`
-  read.
+  read, and `select_tests_for_pass_scope` selects from a pass scope file.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `LaunchPathId`, `LaunchParamName`, `LaunchPathValue` (rooted with one
   slash, no query string or fragment, nothing a URL would escape), `MessageType`,
@@ -163,8 +172,9 @@ goes to stdout; with it, the parent directories are created.
 }
 ```
 
-- `creation.type` is `app` or `skill`; a skill's `package` and `manifest` are
-  null and its `name` is the directory's name.
+- `creation.type` is `app` or `skill` (or `service`, from `pass-scope` below); a
+  skill's `package` and `manifest` are null and its `name` is the directory's
+  name.
 - `primary` is what the creation is: the app's package directory, or the
   `--for-path` path. A directory ends in `/`.
 - `wiring` is the supervisord sections the app owns: its own
@@ -200,7 +210,51 @@ goes to stdout; with it, the parent directories are created.
   file, a reference, or a `context` entry's `app.toml`, and `outside_footprint`,
   the changed files under none of those. A file matched by `exclude` is in
   neither. A non-empty `outside_footprint` means either a missing reference or a
-  change that does not belong on the branch.
+  change that does not belong on the branch. `fork_point`, `lockfile_base` and
+  `incoming_base` are null and `others` and `incoming` empty: they are
+  `pass-scope --lead-ref`'s (below).
+
+`app-manifest pass-scope` writes the scope file for a harden pass, which covers
+every creation one change touched:
+
+    app-manifest pass-scope --creation <type>:<name> [--creation ...] [--repo-root DIR] [--diff-base REF [--diff-ref REF] [--lead-ref REF]] [--out FILE]
+
+Each `--creation` is `app:<registered name or package directory>`,
+`skill:<directory under .agents/skills>`, `service:<package under
+system/services>`, or `shared:<path under .agents/shared>` (a shared script or
+reference, scoped as `--for-path` scopes it). The file is
+`{"creations": [...], "diff": ...}`: one entry per creation, each the scope
+`footprint` writes with its `diff` null, and one `diff` for the pass, whose
+`inside_footprint` is every changed file some creation's footprint accounts
+for (and that creation does not exclude) and whose `outside_footprint` is
+every changed file none does. With `--lead-ref` (the branch the pass's branch
+was cut from), the diff also tells the pass's own work from other work that
+landed in the window, as a worker branched off a shared branch needs: its
+`fork_point` is the newest commit of the lead's first-parent history the ref
+holds, the pass's own changes are what the ref changes relative to it, every
+file of a non-merge commit on the ref's first-parent line since it left the
+lead's, and every file of a commit on the lead's first-parent line between the diff base
+and the fork point that changed something a footprint accounts for (how the
+change being hardened reached the branch; merges are skipped),
+`outside_footprint` keeps only those, and `others` lists every changed file
+that is neither in a footprint nor the pass's own. A milestone the lead merged
+from the pass's branch sits on a second parent there, so it does not move the
+fork point; a lead commit the branch merged in does, so what came in with it
+is the lead's, while the branch's own commits from before that merge stay its own. `lockfile_base` is the commit a changed `uv.lock` is compared
+against to tell what the pass upgraded: the fork point, or the merge base of the
+diff base and the fork point when one of the pass's commits before the fork
+point changed the lock. `incoming` lists the changed files of the lead's
+commits the branch merged in after it left the lead's line (a catch-up): those
+from `incoming_base`, the newer of where it left and the window's start, to
+the fork point. `incoming_base` is null, and `incoming` empty, when it merged
+none within the window. Without `--lead-ref`, `fork_point`, `lockfile_base` and
+`incoming_base` are null and `others` and `incoming` empty.
+A service has `type` `service`, its directory as
+`primary`, and as `wiring` the program named after its package (`host_backup`
+runs as `host-backup`) and every `<name>-<role>` one; an app directory with no
+`app.toml` yet is scoped the same way. A pass that names one creation twice is
+refused, including an app named by both its registered name and its package
+directory.
 
 `app-manifest references --for-path <path>` prints one JSON object per line
 (`app`, `manifest`, `path`, `note`) for every app whose manifest claims that
@@ -222,6 +276,7 @@ manifest it writes) and by every reader of the registry.
 
     app-manifest select-tests --diff-base REF [--diff-ref REF] [--repo-root DIR] [--format text|json]
     app-manifest select-tests --path P [--path P ...] [--diff-base REF] [--repo-root DIR] [--format text|json]
+    app-manifest select-tests --scope-file FILE [--repo-root DIR] [--format text|json]
 
 `select-tests` prints the commands that can observe a change, one per line, in
 the order to run them, each under a comment saying which changed paths called
@@ -229,9 +284,27 @@ for it. Every line runs from the repo root. With `--diff-base` the change is
 what the ref changed since it forked from the base (the same three-dot diff as
 `footprint`); with `--path` it is the paths given, as the working tree holds
 them, and `--diff-base` only names the revision a changed `uv.lock` is compared
-against. A `--diff-base` selection that runs to the checked-out commit refuses
-to run while the working tree holds uncommitted or untracked changes, and names
-them, since the tests would run against changes the diff leaves out.
+against. With `--scope-file`, a harden pass's file from `pass-scope
+--diff-base REF --lead-ref REF`, the change is every file of its diff except
+`others`: what the pass's footprints account for and the pass's own changes,
+but not the other work that landed in the window. A changed `uv.lock`
+is then compared against the file's `lockfile_base`. Each `incoming` file also
+selects whatever it would of the pass's creations' own suites and npm
+packages, and nothing else: no suite has yet run those creations against that
+work and the pass's together, while the rest of what it reaches was tested
+where it was committed. The root project's own `pyproject.toml` or
+`conftest.py` runs the suite of each creation in the pass that the root project
+collects rather than the full root suite. A skill also runs on the root
+project's dependencies, so a package the root project depends on, or a
+`uv.lock` upgrade of one, runs the suite of each skill in the pass. A shared
+script in the pass belongs to no package or skill, so each of those runs the
+full root suite for it, as a change to the script itself does. An incoming
+`uv.lock` is compared from `incoming_base` to the fork point; when that cannot
+be read, every creation's own suite runs. A `--diff-base` selection that runs to
+the checked-out commit refuses to run while the working tree holds uncommitted
+or untracked changes, and names them, since the tests would run against
+changes the diff leaves out; a `--scope-file` selection always does, and also
+refuses a file with no fork point or whose diff does not run to `HEAD`.
 
 Selection reads only what the workspace declares. A path selects:
 

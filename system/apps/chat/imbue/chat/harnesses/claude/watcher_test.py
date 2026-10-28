@@ -2069,3 +2069,70 @@ def test_a_task_the_ledger_reports_over_is_handed_on_after_the_cycles_events(tmp
 
     watcher._emit_cycle()
     assert len(handed_on) == 1
+
+
+_REPLY_DRAFT_FIXTURE_DIR = Path(__file__).parent / "testdata" / "reply_draft"
+
+
+def _reply_draft_watcher(tmp_path: Path) -> ClaudeSessionWatcher:
+    """A watcher whose transcript holds one user turn and the reply Claude gave it (a real one)."""
+    landed_reply = (_REPLY_DRAFT_FIXTURE_DIR / "landed_previous_reply.md").read_text()
+    reply_line = {
+        "type": "assistant",
+        "uuid": "reply-uuid-5521",
+        "timestamp": "2026-01-01T00:00:02Z",
+        "message": {
+            "role": "assistant",
+            "model": "claude-test",
+            "content": [{"type": "text", "text": landed_reply}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+    }
+    agent_state_dir, claude_config_dir, _ = _setup_agent(tmp_path, [_user_event(1), reply_line])
+    watcher = _make_watcher(agent_state_dir, claude_config_dir, [])
+    watcher.get_all_events()
+    return watcher
+
+
+def test_reply_draft_reads_nothing_and_captures_nothing_while_no_turn_runs(tmp_path: Path) -> None:
+    watcher = _reply_draft_watcher(tmp_path)
+    captures: list[str] = []
+
+    def capture() -> str:
+        captures.append("captured")
+        return (_REPLY_DRAFT_FIXTURE_DIR / "pane_reply_streaming.txt").read_text()
+
+    draft = watcher.read_reply_draft(capture)
+
+    assert draft is not None and draft.text == ""
+    assert captures == []
+
+
+def test_reply_draft_reads_the_reply_on_screen_after_the_last_event_while_a_turn_runs(tmp_path: Path) -> None:
+    watcher = _reply_draft_watcher(tmp_path)
+    (tmp_path / "agent_state" / "active").touch()
+
+    draft = watcher.read_reply_draft(lambda: (_REPLY_DRAFT_FIXTURE_DIR / "pane_reply_streaming.txt").read_text())
+
+    assert draft is not None
+    assert draft.text.startswith("**How Tides Work**")
+    assert draft.after_event_id == "reply-uuid-5521-assistant"
+
+
+def test_reply_draft_shows_no_reply_the_transcript_already_holds(tmp_path: Path) -> None:
+    watcher = _reply_draft_watcher(tmp_path)
+    (tmp_path / "agent_state" / "active").touch()
+
+    draft = watcher.read_reply_draft(lambda: (_REPLY_DRAFT_FIXTURE_DIR / "pane_previous_reply_only.txt").read_text())
+
+    assert draft is not None and draft.text == ""
+
+
+def test_reply_draft_is_empty_when_the_pane_cannot_be_read(tmp_path: Path) -> None:
+    watcher = _reply_draft_watcher(tmp_path)
+    (tmp_path / "agent_state" / "active").touch()
+
+    draft = watcher.read_reply_draft(lambda: None)
+
+    assert draft is not None and draft.text == "" and draft.after_event_id == "reply-uuid-5521-assistant"

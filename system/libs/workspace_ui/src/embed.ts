@@ -38,7 +38,8 @@ export const OPEN_SHARE_SETTINGS: "minds:open-share-settings" =
 // first agent's id). No page handles it here: the shell relays it to the app
 // whose manifest registers the type.
 const FOCUS_CHAT: "minds:focus-chat" = "FOCUS_CHAT" in embedContract ? embedContract.FOCUS_CHAT : "minds:focus-chat";
-// Workspace -> embedder: this page's endpoint is listening. Payload: {}. The
+// Workspace -> embedder: this page's endpoint is listening. Payload:
+// { opensLinks, opensCustomSchemeLinks } (see ReadyAnnouncement). The
 // embedder holds a focus-chat ask until it arrives, rather than guessing when
 // a freshly-mounted frame's page is live.
 export const WORKSPACE_READY: "minds:workspace-ready" =
@@ -61,7 +62,9 @@ export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
 // Payload: { windows: [{ windowId, title }] }.
 export const DETACHED_WINDOWS: "minds:detached-windows" =
   "DETACHED_WINDOWS" in embedContract ? embedContract.DETACHED_WINDOWS : "minds:detached-windows";
-// Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut }.
+// Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut,
+// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles? }: whether it takes OPEN_EXTERNAL, custom-scheme
+// links there, and OPEN_LOCAL_FILES.
 export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
   "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.
@@ -85,19 +88,35 @@ export const PROVIDER_SIGN_IN_END: "minds:provider-sign-in-end" =
 // Embedder -> workspace (contract v8, the workspace link routing plan): a popup (or an external page replacing a
 // frame) a page of this workspace asked for, which Imbue Studio turned away from a window of its own; the workspace
 // opens it where it belongs. Payload: { url }. Sent only to a workspace that announced ``opensLinks`` with
-// WORKSPACE_READY.
+// WORKSPACE_READY, and a custom-scheme URL (contract v10) only to one that announced ``opensCustomSchemeLinks`` too.
 export const OPEN_LINK: "minds:open-link" = "OPEN_LINK" in embedContract ? embedContract.OPEN_LINK : "minds:open-link";
-// Workspace -> embedder (contract v8): open an external web, mailto or tel link outside the workspace, which no app of
-// it takes. Payload: { url }. Sent only to an embedder that said ``opensExternalLinks`` with EMBEDDER_CAPABILITIES, or
-// for an external link that embedder handed over with OPEN_LINK.
+// Workspace -> embedder (contract v8): open an external web, mailto, tel or (contract v10) custom-scheme link outside
+// the workspace, which no app of it takes. Payload: { url }. Sent only to an embedder that said ``opensExternalLinks``
+// with EMBEDDER_CAPABILITIES (and, for a custom-scheme link, ``opensCustomSchemeLinks``), or for an external link that
+// embedder handed over with OPEN_LINK.
 export const OPEN_EXTERNAL: "minds:open-external" =
   "OPEN_EXTERNAL" in embedContract ? embedContract.OPEN_EXTERNAL : "minds:open-external";
+// Workspace -> embedder: ring one of the Imbue Studio chrome's own controls while the
+// workspace's tour talks about it, or clear the ring. Payload: { anchor }, one of the
+// chrome's anchor names ("share", "help", ...) or null. Fire-and-forget; a chrome that does
+// not know the type ignores it, and the tour's words never depend on the ring.
+export const HIGHLIGHT_CHROME: "minds:highlight-chrome" =
+  "HIGHLIGHT_CHROME" in embedContract ? embedContract.HIGHLIGHT_CHROME : "minds:highlight-chrome";
+
+// Workspace -> embedder (contract v11): open the chrome's settings for the files shared from the user's computer
+// (its Permissions pane, at Local files). Payload: {}. Sent only to an embedder that said ``opensLocalFiles`` with
+// EMBEDDER_CAPABILITIES.
+export const OPEN_LOCAL_FILES: "minds:open-local-files" =
+  "OPEN_LOCAL_FILES" in embedContract ? embedContract.OPEN_LOCAL_FILES : "minds:open-local-files";
 
 type EmbedderMessageHandler = (message: ContractMessage) => void;
 
 // Every embedder->workspace type the contract defines: the endpoint dispatches
 // only the types it is handed a handler for, and each of these reaches its own
-// handler and then the observer.
+// handler and then the observer. A type outside this list the endpoint drops
+// (the contract's tolerant policy), so an app message the chrome posts beside
+// the contract's own (a notification's destination, `minds:show-routine`, say)
+// never reaches the observer: the shell's relay.ts hands those on itself.
 const EMBEDDER_TO_WORKSPACE_TYPES: readonly string[] = [
   CLOSE_ACTIVE_TAB,
   OPEN_AI_KEYS_ACK,
@@ -155,23 +174,35 @@ export function setEmbedderMessageHandler(type: string, handler: EmbedderMessage
   handlerByType[type] = handler;
 }
 
-/** Observe every embedder->workspace message, whatever its type, after its
- * type's own handler (replaces any prior observer). */
+/** Observe every embedder->workspace message of a type the contract defines,
+ * after its type's own handler (replaces any prior observer). */
 export function setEmbedderMessageObserver(observer: EmbedderMessageHandler): void {
   getEndpoint();
   messageObserver = observer;
+}
+
+/** Whether `type` is an embedder->workspace type the contract defines, which the
+ * endpoint dispatches (and the observer sees); any other type from the chrome
+ * the endpoint drops. */
+export function isContractEmbedderMessageType(type: string): boolean {
+  return EMBEDDER_TO_WORKSPACE_TYPES.includes(type);
 }
 
 /** What a page says it handles when it announces itself ready. */
 export interface ReadyAnnouncement {
   /** Whether it opens the links Imbue Studio hands it with OPEN_LINK. */
   readonly opensLinks: boolean;
+  /** Whether it takes custom-scheme links (``slack:``, ``vscode:``) among them. */
+  readonly opensCustomSchemeLinks: boolean;
 }
 
 /** Tell the embedder this page is listening, so it can send what it held, and what it handles.
  * Called once per load, after the handlers that the held messages need. */
 export function announceReadyToEmbedder(announcement: ReadyAnnouncement): void {
-  sendToEmbedder(WORKSPACE_READY, { opensLinks: announcement.opensLinks });
+  sendToEmbedder(WORKSPACE_READY, {
+    opensLinks: announcement.opensLinks,
+    opensCustomSchemeLinks: announcement.opensCustomSchemeLinks,
+  });
 }
 
 /** Clear the handler for one embedder->workspace type. */

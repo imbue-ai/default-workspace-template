@@ -44,10 +44,12 @@ from typing import Final
 
 from loguru import logger as _loguru_logger
 
+from imbue.chat.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.claude.queue_tracker import ClaudeQueueTracker
+from imbue.chat.harnesses.claude.reply_draft import ClaudeReplyDraft
 from imbue.chat.harnesses.claude.session_files import MissingSessionScanSchedule
 from imbue.chat.harnesses.claude.session_files import PROJECTS_DIRNAME
 from imbue.chat.harnesses.claude.session_files import SESSION_ID_HISTORY_FILENAME
@@ -59,8 +61,10 @@ from imbue.chat.harnesses.claude.session_parser import finished_task_id
 from imbue.chat.harnesses.claude.session_parser import parse_line_detail
 from imbue.chat.harnesses.claude.session_parser import parse_lines
 from imbue.chat.harnesses.claude.session_parser import parse_queue_signals
+from imbue.chat.harnesses.session_watcher import CapturePaneCallback
 from imbue.chat.harnesses.session_watcher import FinishedTasksCallback
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
+from imbue.chat.harnesses.session_watcher import ReplyDraft
 from imbue.chat.harnesses.transcript_store import EventSource
 from imbue.chat.harnesses.transcript_store import StoreBackedTranscriptLoader
 from imbue.chat.harnesses.transcript_store import StoreBackedWatcher
@@ -74,6 +78,13 @@ logger = _loguru_logger
 # a history can name a session whose file never lands, and every watcher wake refreshes.
 _MISSING_SESSION_FIRST_SCAN_DELAY_SECONDS: Final[float] = 1.0
 _MISSING_SESSION_MAX_SCAN_DELAY_SECONDS: Final[float] = 60.0
+
+# How far back a reply draft is compared with the replies that landed: the latest few, so the
+# last block of the previous turn, and the block that landed just before a tool call, both count.
+_LANDED_REPLIES_COMPARED: Final[int] = 3
+_LANDED_REPLY_LOOKBACK_EVENTS: Final[int] = 60
+# A pause in reply-draft reads longer than this means the poller skipped the agent for a while.
+_REPLY_DRAFT_READ_GAP_SECONDS: Final[float] = 2.0
 
 
 def _is_dead_epoch_enqueue(signal: QueueSignal, process_epoch_started_at: float | None) -> bool:
@@ -534,6 +545,9 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         # before the chat stops waiting on the task.
         self._finished_task_ids: list[str] = []
         self._finished_tasks_callback: FinishedTasksCallback | None = None
+        # Read only by the reply-draft poller, so neither takes a lock of its own.
+        self._reply_draft = ClaudeReplyDraft()
+        self._reply_draft_read_at = float("-inf")
 
     def _watch_paths(self) -> tuple[Path, ...]:
         # The projects tree (recursive: every session file and subagent dir under it wakes
@@ -604,6 +618,33 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         if cursor is not None and cursor.file_path.exists():
             return cursor.file_path
         return None
+
+    def read_reply_draft(self, capture_pane: CapturePaneCallback) -> ReplyDraft | None:
+        """The reply Claude is streaming to its terminal, read back from the pane while a turn runs.
+
+        Claude writes a text block to the session file only once the block is finished. Outside
+        a turn (no ``active`` marker) nothing is captured and the stitched reply is forgotten.
+        """
+        now = time.monotonic()
+        is_after_a_gap = now - self._reply_draft_read_at > _REPLY_DRAFT_READ_GAP_SECONDS
+        self._reply_draft_read_at = now
+        if not (self._agent_state_dir / ACTIVE_MARKER_FILENAME).exists():
+            self._reply_draft.reset()
+            return ReplyDraft(after_event_id="", text="")
+        # Reads stopped for a while (the user looked away): what was stitched before may belong to
+        # a reply that has since finished, and stitching onto it could splice the two.
+        if is_after_a_gap:
+            self._reply_draft.reset()
+        pane_text = capture_pane()
+        with self._lock:
+            recent_events = self._store.tail(self._selected_lane_ids_locked(None), _LANDED_REPLY_LOOKBACK_EVENTS)
+        after_event_id = recent_events[-1]["event_id"] if recent_events else ""
+        if pane_text is None:
+            return ReplyDraft(after_event_id=after_event_id, text="")
+        landed_reply_texts = [
+            event["text"] for event in recent_events if event["type"] == "assistant_message" and event.get("text")
+        ][-_LANDED_REPLIES_COMPARED:]
+        return ReplyDraft(after_event_id=after_event_id, text=self._reply_draft.read(pane_text, landed_reply_texts))
 
     def set_queue_snapshot_callback(self, callback: Callable[[list[dict[str, Any]]], None]) -> None:
         """Register the sink the watcher pushes each new queued-message snapshot to."""

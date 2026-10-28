@@ -37,6 +37,7 @@ import type {
   WallpaperListing,
   WindowRecord,
 } from "./records";
+import { parseThemeCatalog, type ThemeCatalog } from "./themes";
 
 const HTTP_CONFLICT = 409;
 
@@ -68,6 +69,26 @@ export async function updateDesktopSettings(
 
 export async function setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {
   return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/wallpaper"), { wallpaper }));
+}
+
+/** The theme a desktop wears by its own choice; null wears the workspace's default. */
+export async function setDesktopTheme(desktopId: string, theme: string | null): Promise<Desktop> {
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/theme"), { theme }));
+}
+
+/** The workspace's themes and its default (docs/system/blueprint/workspace-themes/, section 5.2). */
+export async function fetchThemes(): Promise<ThemeCatalog> {
+  return parseThemeCatalog(await getJson(apiUrl("/api/themes")));
+}
+
+/** Turn a themeable app's theming on or off. */
+export async function setAppTheming(app: string, isOn: boolean): Promise<void> {
+  await postJson<unknown>(apiUrl(`/api/apps/${encodeURIComponent(app)}/theming`), { is_on: isOn });
+}
+
+/** The workspace's default theme; null wears the standard one. */
+export async function setDefaultTheme(theme: string | null): Promise<void> {
+  await postJson<unknown>(apiUrl("/api/themes/default"), { theme });
 }
 
 /** Delete a desktop; answers the desktop its clients fall back to. The last desktop is refused. */
@@ -129,10 +150,40 @@ export async function openWindow(desktopId: string, request: WindowOpenRequest):
   };
 }
 
+export interface PageShowRequest {
+  readonly app: string;
+  readonly path: string;
+  /** The app's pages whose on-screen window the shell may point at ``path`` (contracts.md section 8, ``show``). */
+  readonly repoint: readonly string[];
+}
+
+export interface PageShowOutcome {
+  /** The client has only pop-outs open, so the page waits on its desktop for a desktop window. */
+  readonly hasNoDesktopWindow: boolean;
+}
+
+/** Put a page of an app on this client's screen through the shell's ``show`` (contracts.md section 5.3): a window
+ *  already there is raised, else the app's window on a ``repoint`` page or its pinned window is pointed at it, else
+ *  one is opened. */
+export async function showPage(clientId: string, request: PageShowRequest): Promise<PageShowOutcome> {
+  const data = await postJson<{ has_no_desktop_window?: boolean }>(
+    apiUrl(`/api/clients/${encodeURIComponent(clientId)}/show`),
+    { app: request.app, path: request.path, repoint: request.repoint },
+  );
+  return { hasNoDesktopWindow: data.has_no_desktop_window === true };
+}
+
 /** Where a launch's page goes (post-launch-paths plan section 3.3): a new window, a window already at the path (else
  *  a new one), or a named window this client points at it. */
 export type LaunchTarget =
-  { readonly kind: "new" } | { readonly kind: "focus" } | { readonly kind: "window"; readonly windowId: string };
+  | { readonly kind: "new" }
+  | { readonly kind: "focus" }
+  | {
+      readonly kind: "window";
+      readonly windowId: string;
+      /** False for a text that is not about the window's page: the app is not told which page it shows. */
+      readonly sendsWindowPath?: boolean;
+    };
 
 export interface LaunchRequest {
   readonly app: string;
@@ -157,7 +208,10 @@ export interface LaunchOutcome {
  *  GET launch path, asked of the app for a POST one) and opens or navigates a window there. */
 export async function launch(desktopId: string, request: LaunchRequest): Promise<LaunchOutcome> {
   const target: Record<string, unknown> = { kind: request.target.kind };
-  if (request.target.kind === "window") target.window_id = request.target.windowId;
+  if (request.target.kind === "window") {
+    target.window_id = request.target.windowId;
+    if (request.target.sendsWindowPath === false) target.sends_window_path = false;
+  }
   const data = await postJson<{ window: unknown; path: string; is_new: boolean }>(desktopUrl(desktopId, "/launch"), {
     app: request.app,
     launch: request.launch,

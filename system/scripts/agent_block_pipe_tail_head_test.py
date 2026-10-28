@@ -36,6 +36,8 @@ def _run(command: str) -> int:
         "for f in *.md; do cat $f | head -5; done",
         "if true; then git log --oneline | head -3; fi",
         "time cat f | head",
+        # A line continuation after the pipe is not part of the next stage.
+        "cat f | \\\n  tail -5",
         # head/tail picking one value inside a command substitution.
         "INIT=$(git rev-list --first-parent HEAD | tail -1)",
         # `||` is not a pipe.
@@ -85,6 +87,7 @@ def test_output_that_can_be_read_again_may_pipe_into_head_or_tail(command: str) 
         "cat <(pytest)|head",
         "cat f | head; pytest | tail -5",
         "cat f && pytest | tail -20",
+        "uv run pytest -q 2>&1 | \\\n  tail -30",  # continued onto the next line
         "cat f & pytest | tail -20",
         "for f in a b; do pytest $f | tail -5; done",
         "concatenate f | head",

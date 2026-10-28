@@ -12,6 +12,7 @@ from pydantic import PrivateAttr
 from workspace_layout.interfaces import ShellLayoutInterface
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import agent_tmux_session_name
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.chat_intakes import PendingIntakeStore
 from imbue.chat.chat_naming import ChatNamer
@@ -28,6 +29,9 @@ from imbue.chat.harnesses.registry import get_harness_spec
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.primitives import ChatId
+from imbue.chat.reply_drafts import ReplyDraftPublisher
+from imbue.chat.reply_drafts import ReplyDraftReader
+from imbue.chat.reply_drafts import capture_tmux_session_pane
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -130,6 +134,7 @@ class ChatAppState(MutableModel):
     # get_or_create_watcher starting it.
     _starting_watchers: dict[int, AgentSessionWatcher] = PrivateAttr(default_factory=dict)
     _latchkey_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _reply_draft_publisher: ReplyDraftPublisher | None = PrivateAttr(default=None)
     _is_shut_down: bool = PrivateAttr(default=False)
 
     @property
@@ -255,6 +260,53 @@ class ChatAppState(MutableModel):
         with self._watchers_lock:
             return self.loaders.get(agent_id)
 
+    def start_reply_draft_publisher(self) -> None:
+        """Begin streaming the replies agents are writing to the pages showing their chats (``reply_drafts.py``).
+
+        Started by the composition root beside the agent manager; idempotent.
+        """
+        if self._reply_draft_publisher is None:
+            self._reply_draft_publisher = ReplyDraftPublisher(
+                list_watched_agents=self.list_watched_agents,
+                capture_agent_pane=self.capture_agent_pane,
+                broadcast_to_chat=self.event_queues.broadcast,
+            )
+        self._reply_draft_publisher.start()
+
+    def list_watched_agents(self) -> list[tuple[str, str, ReplyDraftReader]]:
+        """``(chat id, agent id, watcher)`` for every running watcher whose chat a user is looking at now.
+
+        Looking at means a page streams the chat and a page reports it shown and focused
+        (``AgentManager.chat_watchers``): a chat in a hidden or unfocused window, one the chat root
+        keeps loaded in the background, and one no page has open are never read.
+        """
+        watched_chat_ids = {
+            chat_id
+            for chat_id in self.event_queues.streamed_chat_ids()
+            if self.agent_manager.chat_watchers(ChatId(chat_id))
+        }
+        if not watched_chat_ids:
+            return []
+        with self._watchers_lock:
+            running = [
+                (agent_id, watcher)
+                for agent_id, watcher in self.watchers.items()
+                if id(watcher) not in self._starting_watchers
+            ]
+        watched: list[tuple[str, str, ReplyDraftReader]] = []
+        for agent_id, watcher in running:
+            chat_id = str(self.agent_manager.chat_id_of_agent(agent_id))
+            if chat_id in watched_chat_ids:
+                watched.append((chat_id, agent_id, watcher))
+        return watched
+
+    def capture_agent_pane(self, agent_id: str) -> str | None:
+        """The visible terminal pane of an agent, colour codes kept, or None when it cannot be read."""
+        agent_info = self.agent_manager.get_agent_info_by_id(agent_id)
+        if agent_info is None:
+            return None
+        return capture_tmux_session_pane(agent_tmux_session_name(agent_info.name))
+
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         """Whether a streamed event belongs to its agent's own session rather than a subagent's.
 
@@ -362,6 +414,8 @@ class ChatAppState(MutableModel):
         self._is_shut_down = True
         if self.chat_namer is not None:
             self.chat_namer.stop()
+        if self._reply_draft_publisher is not None:
+            self._reply_draft_publisher.stop()
         self.event_queues.shutdown()
         self.broadcaster.shutdown()
         self.agent_manager.stop()

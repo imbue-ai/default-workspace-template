@@ -37,6 +37,13 @@ tool_env_pin
 # below, which run before /home/user/.mngr/env is sourced.
 export OPENSSL_armcap=0
 
+# Pin uv to Python 3.12 for the tool installs and the venv below. The Docker base
+# ships 3.12; on other bases uv downloads a managed 3.12. Pinned on
+# every base, because uv's default for an open-ended request moves with the uv
+# release. Build-time only: the runtime env (.mngr/settings.toml host_env__extend)
+# does not set it, so a user's own uv commands are unaffected.
+export UV_PYTHON=3.12
+
 REPO_ROOT="${REPO_ROOT:-/home/user/workspace}"
 cd "$REPO_ROOT"
 

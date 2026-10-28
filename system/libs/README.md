@@ -18,9 +18,10 @@ README for details.
   a member of the npm workspace at `system/package.json`): the design
   system's token layer, the shared components, and the browser-side app
   contract and embed modules the frontends build from.
-- `automations/` - The machinery that runs automations (skills on a
-  schedule): the durable recurring-job runner, the cron env wrapper, and the
-  automation-agent waker (see the manage-scheduled-tasks skill).
+- `routines/` - Everything that runs on a schedule: the routine definitions
+  under `system/routines/`, the scheduler, the runner for command runs and
+  skill runs (automations), the run ledger, the cron env wrapper, and the
+  `routines` command (see the manage-routines skill and the Routines app).
 - `bootstrap/` - First-boot setup; then launches supervisord, which supervises
   the apps and services.
 - `chat_background_tasks/` - The marker files recording the background tasks
@@ -32,7 +33,8 @@ README for details.
 - `pytest_executable_tmp/` - Test-only pytest plugin that keeps a session's
   temporary files where a stub executable written there can run, or stops
   the session before any test starts.
-- `pytest_workspace_env/` - Test-only pytest plugin that, with
+- `pytest_workspace_env/` - Test-only pytest plugin that clears the
+  environment an mngr agent runs with before any test code runs, and, with
   `DWT_REQUIRE_WORKSPACE_ENV=1` set, fails rather than skips any test (the CI
   job that runs the suites inside the workspace image sets it).
 - `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket

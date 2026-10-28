@@ -52,18 +52,21 @@ def project_for_path(rel_path: Path | str, repo_root: Path) -> str:
     """Return the project that owns ``rel_path`` (a repo-relative path).
 
     A ``system/libs/<name>/...``, ``system/services/<name>/...``, or
-    ``system/apps/<name>/...`` path resolves to ``<name>`` when that directory
-    contains a ``pyproject.toml``. Anything under ``.agents/`` (skills and
-    shared agent config) resolves to the synthetic ``agents`` bucket.
-    Everything else falls back to ``dev``. The ``pyproject.toml`` check guards
-    against a path like ``system/libs/garbage/...`` (not an actual project)
-    being treated as a real project.
+    ``system/apps/<name>/...`` path resolves to ``libs/<name>``,
+    ``services/<name>``, or ``apps/<name>`` when that directory contains a
+    ``pyproject.toml``: the parent is part of the key, since a library and an
+    app may share a name (``libs/routines`` and ``apps/routines``) and each
+    owes its own entry. Anything under ``.agents/`` (skills and shared agent
+    config) resolves to the synthetic ``agents`` bucket. Everything else falls
+    back to ``dev``. The ``pyproject.toml`` check guards against a path like
+    ``system/libs/garbage/...`` (not an actual project) being treated as a
+    real project.
     """
     parts = Path(rel_path).parts
     if len(parts) >= 3 and "/".join(parts[:2]) in PROJECT_PARENT_DIRS:
         candidate = repo_root / parts[0] / parts[1] / parts[2]
         if (candidate / "pyproject.toml").exists():
-            return parts[2]
+            return f"{parts[1]}/{parts[2]}"
     if parts and parts[0] == AGENTS_DIR:
         return AGENTS_PROJECT
     return DEV_PROJECT
@@ -75,18 +78,18 @@ def project_entries_dir(project: str, repo_root: Path) -> Path:
         return repo_root / "system" / "changelog"
     if project == AGENTS_PROJECT:
         return repo_root / AGENTS_DIR / "changelog"
-    for parent_name in PROJECT_PARENT_DIRS:
-        candidate = repo_root / parent_name / project
-        if candidate.is_dir():
-            return candidate / "changelog"
+    candidate = repo_root / "system" / project
+    if f"system/{Path(project).parent}" in PROJECT_PARENT_DIRS and candidate.is_dir():
+        return candidate / "changelog"
     raise ValueError(f"Unknown project: {project!r}")
 
 
 def all_known_projects(repo_root: Path) -> set[str]:
-    """Return every known project name, including the synthetic buckets.
+    """Return every known project key, including the synthetic buckets.
 
     A project is every ``system/libs/<name>``, ``system/services/<name>``, and
-    ``system/apps/<name>`` that contains a ``pyproject.toml``, plus the
+    ``system/apps/<name>`` that contains a ``pyproject.toml``, keyed
+    ``libs/<name>``, ``services/<name>`` or ``apps/<name>``, plus the
     synthetic ``dev`` and ``agents`` buckets.
     """
     names: set[str] = {DEV_PROJECT, AGENTS_PROJECT}
@@ -96,7 +99,7 @@ def all_known_projects(repo_root: Path) -> set[str]:
             continue
         for child in parent.iterdir():
             if child.is_dir() and (child / "pyproject.toml").exists():
-                names.add(child.name)
+                names.add(f"{parent.name}/{child.name}")
     return names
 
 

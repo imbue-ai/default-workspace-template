@@ -209,7 +209,7 @@ version `<n>` you pulled in §1.
   the shipped starter first -- the `# Version history` heading, its explanatory
   paragraph, and the sections `## Workspace`, `## Migrations`, `## Templates`,
   `## Adopted templates` in that order (byte-identical to the shipped root
-  file; the exact block is `_VERSION_HISTORY_STARTER` in `update-self`'s
+  file; the exact block is `VERSION_HISTORY_STARTER` in `update-self`'s
   `python/update_self_skill/update_ledger.py`) -- then append.
 - **Create the heading** `### <slug>  --  <repo-url>` under `## Adopted
   templates` if this slug has none yet (an agent's first update of a given

@@ -2,7 +2,7 @@
 name = "datalib-skill"
 version = "0.1.0"
 description = "Searches and mirrors the user's own data with datalib"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = []
 
 [build-system]

@@ -21,7 +21,9 @@ service.
 2. **Workspace main branch** - on first boot only (gated by
    `data/.state/workspace_main_branch_initialized`), commits the rsynced workspace
    onto a clean `main` branch. It creates no chat: the chat app creates chats on
-   demand.
+   demand. The same first boot writes `data/.state/system_interface/offer_tour`,
+   which tells the system interface the workspace is new, so its show-around tour
+   may start by itself; a workspace that already existed never gets it.
 3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
@@ -65,8 +67,10 @@ writes separate, rotated, container-local logs under
 
 To add, change, or remove a service, add/edit/delete its own
 `system/supervisord.conf.d/<name>.conf` and run
-`supervisorctl reread && supervisorctl update` (and `supervisorctl restart
-<name>` to bounce one). See the `update-app` skill, or
+`supervisorctl reread && supervisorctl update`. To bounce an app after a code
+change use `uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart`, which
+does not wait out a scaffolded app's `startsecs=30`; `supervisorctl restart
+<name>` is for a daemon with no port. See the `update-app` skill, or
 `.agents/shared/references/service-processes.md`, for details.
 
 ## Environment convergence (env-converge)

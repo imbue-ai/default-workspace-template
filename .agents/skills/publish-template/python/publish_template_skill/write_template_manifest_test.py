@@ -2,11 +2,14 @@
 against the tree's references and the workspace's own files, and rendered into both
 halves of the manifest."""
 
+import shutil
 from pathlib import Path
 
 import pytest
 
 from publish_template_skill import write_template_manifest as writer
+
+_REPO_ROOT = Path(__file__).resolve().parents[5]
 
 _SKILL_WITH_SECRETS = """---
 name: fetch-widgets
@@ -83,20 +86,6 @@ def test_a_skill_outside_the_include_paths_is_not_read(tmp_path: Path) -> None:
     assert writer.collect_declarations(root, ["docs"]) == {}
 
 
-def test_references_are_read_off_mcp_config_and_supervisord_programs(
-    tmp_path: Path,
-) -> None:
-    root = _tree(tmp_path)
-    (root / "mcp-servers.json").write_text(
-        '{"mcpServers": {"w": {"command": "python3", "args": ["/home/user/workspace/system/scripts/with_secrets.py", "/home/user/workspace/data/.secrets/widget.env", "--", "npx", "w"]},'
-        ' "h": {"url": "https://mcp.example.com/mcp", "headers": {"Authorization": "Bearer ${HOSTED_KEY}"}, "secretsFile": "/home/user/workspace/data/.secrets/hosted.env"}}}'
-    )
-    assert writer.collect_references(root) == {
-        "widget": ["mcp-servers.json", "system/supervisord.conf.d/widget-app.conf"],
-        "hosted": ["mcp-servers.json"],
-    }
-
-
 def test_an_undeclared_reference_and_a_missing_variable_stop_the_publish(
     tmp_path: Path,
 ) -> None:
@@ -126,16 +115,9 @@ def test_a_complete_workspace_passes_and_the_check_is_skipped_without_one(
         tmp_path,
         {"widget": "export WIDGET_TOKEN='t'\n", "mailer": "SMTP_PASSWORD='p'\n"},
     )
-    assert (
-        writer.check_declarations(
-            declarations, writer.collect_references(root), workspace
-        )
-        == []
-    )
-    assert (
-        writer.check_declarations(declarations, writer.collect_references(root), None)
-        == []
-    )
+    references = {"widget": ["system/supervisord.conf.d/widget-app.conf"]}
+    assert writer.check_declarations(declarations, references, workspace) == []
+    assert writer.check_declarations(declarations, references, None) == []
 
 
 @pytest.mark.parametrize(
@@ -200,15 +182,9 @@ def test_the_rendered_manifest_and_markdown_lines_agree(tmp_path: Path) -> None:
     assert writer.render_requires_secret_lines({}) == ""
 
 
-def test_main_refuses_an_undeclared_reference_and_writes_nothing(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    root = _tree(tmp_path)
-    (root / "system/supervisord.conf.d/ghost.conf").write_text(
-        "command=x data/.secrets/ghost.env\n"
-    )
-    output = tmp_path / "template.toml"
-    status = writer.main(
+def _run_main(root: Path, output: Path, *includes: str) -> int:
+    include_args = [arg for include in includes for arg in ("--include", include)]
+    return writer.main(
         [
             "--slug",
             "w",
@@ -222,14 +198,44 @@ def test_main_refuses_an_undeclared_reference_and_writes_nothing(
             "v2",
             "--thumbnail",
             "template.svg",
-            "--include",
-            "system/apps/widget_app",
+            *include_args,
             "--repo-root",
             str(root),
             "--output",
             str(output),
         ]
     )
+
+
+def test_main_refuses_an_undeclared_reference_and_writes_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root = _tree(tmp_path)
+    (root / "system/supervisord.conf.d/ghost.conf").write_text(
+        "[program:ghost]\ncommand=x data/.secrets/ghost.env\n"
+    )
+    output = tmp_path / "template.toml"
+
+    status = _run_main(
+        root, output, "system/apps/widget_app", "system/supervisord.conf.d/ghost.conf"
+    )
+
     assert status == 1
     assert "ghost" in capsys.readouterr().err
     assert not output.exists()
+
+
+def test_main_writes_a_manifest_alongside_the_stock_workspace_programs(
+    tmp_path: Path,
+) -> None:
+    """Every snapshot carries the base's programs; their secrets are not the template's to declare."""
+    root = _tree(tmp_path)
+    shutil.copytree(
+        _REPO_ROOT / "system/supervisord.conf.d",
+        root / "system/supervisord.conf.d",
+        dirs_exist_ok=True,
+    )
+    output = tmp_path / "template.toml"
+
+    assert _run_main(root, output, "system/apps/widget_app") == 0
+    assert output.is_file()

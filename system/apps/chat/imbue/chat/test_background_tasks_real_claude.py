@@ -13,8 +13,10 @@ a finished task's marker when no Stop follows; it must name the task by the id t
 agent's Claude does. It is started through ``sh -c 'CLAUDE_PID=$$ exec claude ...'`` so the hook's
 ``CLAUDE_PID`` names the Claude process itself.
 
-Marked ``real_claude``: it runs two real turns, so it needs the pinned claude on PATH, signed in. Skipped when
-the binary is missing or is not the pinned version.
+Marked ``real_claude``: it runs two real turns, so it needs the pinned claude on PATH and a signed-in Claude
+account in the workspace's account store. A test run carries no agent's ``CLAUDE_CONFIG_DIR`` (pytest-workspace-env
+clears it), so the account's folder is named to claude here. Skipped when the binary is missing or is not the
+pinned version, or when no Claude account is signed in.
 """
 
 import json
@@ -30,15 +32,24 @@ from typing import Any
 
 import pytest
 
+from imbue.chat.accounts import account_dir
+from imbue.chat.accounts import choose_default_account
+from imbue.chat.accounts import harness_for
+from imbue.chat.accounts import read_index
 from imbue.chat.activity_state import ActivityState
+from imbue.chat.harnesses.claude.auth import MANAGED_AUTH_ENV_KEYS
 from imbue.chat.harnesses.claude.session_files import find_session_file
 from imbue.chat.harnesses.claude.session_parser import finished_task_id
 from imbue.chat.harnesses.claude.session_parser import parse_queue_signals
+from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.registry import build_account_binding
+from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.harnesses.signed_in import is_signed_in
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import running_workspace
 from imbue.chat.testing import seed_agent_state
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
-from imbue.mngr_claude.claude_config import get_claude_config_dir
 from imbue.system_interface.testing import find_free_port
 
 pytestmark = pytest.mark.real_claude
@@ -61,6 +72,26 @@ def _pinned_claude_or_skip() -> str:
     return claude
 
 
+def _signed_in_claude_account_or_skip() -> Path:
+    """The folder of the Claude account the default-account rule picks among the workspace's Claude accounts.
+
+    Named by home: the conftest points ``MINDS_ACCOUNTS_ROOT`` at an empty store of the test's own, and the default
+    lookup follows it."""
+    home = Path.home()
+    index = read_index(home)
+    claude_accounts = tuple(account for account in index.accounts if harness_for(account) is HarnessType.CLAUDE)
+    account = choose_default_account(index.model_copy_update(to_update(index.field_ref().accounts, claude_accounts)))
+    if account is None:
+        pytest.skip("no Claude account in this workspace's account store")
+    folder = account_dir(account.id, home)
+    signed_in = is_signed_in(HarnessType.CLAUDE, folder)
+    if signed_in is not SignedIn.YES:
+        pytest.skip(
+            f"the Claude account in {folder} is not confirmed signed in (its sign-in check answered {signed_in})"
+        )
+    return folder
+
+
 def _repo_stop_hook() -> dict[str, Any]:
     """The repo's own Stop hook entry that records Claude's background tasks, as ``.claude/settings.json`` has it."""
     settings = json.loads((_REPO_ROOT / ".claude" / "settings.json").read_text())
@@ -81,9 +112,9 @@ def _project_with_only_the_stop_hook(tmp_path: Path) -> Path:
     return project
 
 
-def _finished_task_ids_in_transcript(session_id: str) -> set[str]:
+def _finished_task_ids_in_transcript(claude_config_dir: Path, session_id: str) -> set[str]:
     """The ids of the tasks the session's queue ledger reports as over, read as the chat app's Claude watcher reads them."""
-    transcript = find_session_file(get_claude_config_dir() / "projects", session_id)
+    transcript = find_session_file(claude_config_dir / "projects", session_id)
     assert transcript is not None, f"no transcript for session {session_id}"
     signals = (parse_queue_signals(line) for line in transcript.read_text().splitlines())
     return {
@@ -105,6 +136,7 @@ def test_a_claude_turn_that_ends_on_a_background_bash_command_leaves_its_chat_wa
     tmp_path: Path,
 ) -> None:
     claude = _pinned_claude_or_skip()
+    claude_config_dir = _signed_in_claude_account_or_skip()
     project = _project_with_only_the_stop_hook(tmp_path)
     marker_root = tmp_path / "background_tasks"
     prompt = (
@@ -128,7 +160,13 @@ def test_a_claude_turn_that_ends_on_a_background_bash_command_leaves_its_chat_wa
         )
         manager._background_tasks_poller.start()
 
-        env = {key: value for key, value in os.environ.items() if key != "MNGR_CLAUDE_SUBAGENT_PROXY_CHILD"}
+        # The account folder alone authenticates the run, not a credential the test session happens to carry.
+        env = {
+            key: value
+            for key, value in os.environ.items()
+            if key != "MNGR_CLAUDE_SUBAGENT_PROXY_CHILD" and key not in MANAGED_AUTH_ENV_KEYS
+        }
+        env.update(build_account_binding(HarnessType.CLAUDE).account_env(claude_config_dir))
         env.update(
             {
                 "MINDS_CHAT_ID": FIXTURE_AGENT_ID,
@@ -179,7 +217,7 @@ def test_a_claude_turn_that_ends_on_a_background_bash_command_leaves_its_chat_wa
             # The command's completion started a turn, whose Stop handed over no tasks.
             assert list((marker_root / FIXTURE_AGENT_ID).glob("harness-claude-*.json")) == []
             wait_for(lambda: _chat(workspace.chat_url)["status"] == "idle", timeout=3.0, poll_interval=0.1)
-            assert task["id"] in _finished_task_ids_in_transcript(session_id)
+            assert task["id"] in _finished_task_ids_in_transcript(claude_config_dir, session_id)
         finally:
             if run.poll() is None:
                 run.kill()
