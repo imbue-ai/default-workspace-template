@@ -13,9 +13,6 @@ stop_when_no_windows = true
 priority = "user"
 # Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group.
 system = true
-# A reference for whoever works on the workspace's look, not an everyday app: it stays off the desktop (the launcher
-# still lists it, and a shortcut of it can be added by hand).
-desktop_shortcut = false
 
 # Built only from the shared components and the design tokens, so every theme styles it with no work of its own
 # (docs/system/blueprint/workspace-themes/, section 7). Under a theme it is a live sample of that theme.

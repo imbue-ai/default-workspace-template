@@ -1,1 +1,0 @@
-`AppManifest` and `RegistryRow` carry `desktop_shortcut` (default `true`): `false` gives the app no default shortcut, so the shell neither seeds a new desktop with one nor adds one when the app first registers. The launcher lists it as ever, and the user can still put a shortcut of it on a desktop.

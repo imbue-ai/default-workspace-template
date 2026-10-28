@@ -97,7 +97,6 @@ def registry_row_toml(
     pin: tuple[str, str, str, str] | None = None,
     window_closed_path: str | None = None,
     stop_when_no_windows: bool = False,
-    has_desktop_shortcut: bool = True,
     # Each message handler as ``(type, path)``.
     message_handlers: Sequence[tuple[str, str]] = (),
     # Each ``show`` message handler as ``(type, show, showing)``.
@@ -117,8 +116,6 @@ def registry_row_toml(
         f"system = {'true' if is_system else 'false'}",
         f"stop_when_no_windows = {'true' if stop_when_no_windows else 'false'}",
     ]
-    if not has_desktop_shortcut:
-        lines.append("desktop_shortcut = false")
     if program is not None:
         lines.append(f'program = "{program}"')
     if launcher_rank is not None:

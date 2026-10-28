@@ -663,8 +663,8 @@ def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
     offers, whether or not that path takes text; else, for a supervised app (one whose row names a ``program``), its
     first launch path that takes no typed or drafted text, or its first launch path when every one takes text,
     focusing. A manifest-less row with no program (a preview, an isolated test server) gets none, and neither does an
-    internal app or one whose manifest says ``desktop_shortcut = false`` (the user can still add one of it)."""
-    if row.internal or not row.desktop_shortcut:
+    internal app."""
+    if row.internal:
         return None
     offered = effective_launch_paths(row)
     if row.default_shortcut is not None:

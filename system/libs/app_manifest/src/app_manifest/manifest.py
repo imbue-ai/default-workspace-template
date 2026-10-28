@@ -435,11 +435,6 @@ class AppManifest(FrozenModel):
         "its System group instead of offering it up front",
     )
     default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new desktop is seeded with")
-    desktop_shortcut: bool = Field(
-        default=True,
-        description="Whether the shell gives the app a desktop shortcut of its own: on a new desktop, and on every desktop when "
-        "it first registers. False keeps it off the desktop until the user adds one; the launcher lists it either way",
-    )
     launch_paths: tuple[LaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at, with their labels and params"
     )

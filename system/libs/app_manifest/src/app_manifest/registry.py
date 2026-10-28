@@ -121,11 +121,6 @@ class RegistryRow(FrozenModel):
     )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new desktop is seeded with")
-    desktop_shortcut: bool = Field(
-        default=True,
-        description="Whether the shell gives the app a desktop shortcut of its own: on a new desktop, and on every desktop when "
-        "it first registers. False keeps it off the desktop until the user adds one; the launcher lists it either way",
-    )
     launch_paths: tuple[RegistryLaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at"
     )

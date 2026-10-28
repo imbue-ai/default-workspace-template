@@ -760,7 +760,6 @@ icon = "icon.svg"
 critical = false
 stop_when_no_windows = true
 system = true
-desktop_shortcut = false
 priority = "files"
 launcher_rank = 20
 window_closed_path = "/api/window-closed"
@@ -828,7 +827,6 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["critical"] is False
     assert row["stop_when_no_windows"] is True
     assert row["system"] is True
-    assert row["desktop_shortcut"] is False
     assert row["priority"] == "files"
     assert row["program"] == "files"
     assert "internal" not in row
@@ -1012,7 +1010,6 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
         "stop_when_no_windows",
         "system",
         "default_shortcut",
-        "desktop_shortcut",
         "actions",
         "launch_paths",
         "launcher_rank",
