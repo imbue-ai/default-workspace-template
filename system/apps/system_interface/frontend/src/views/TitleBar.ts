@@ -234,26 +234,39 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
        *  only when the theme names its slot, which the runs then leave out. */
       function centeredGroup(): m.Vnode {
         const hasIconSlot = chrome.leading.includes("icon") || chrome.trailing.includes("icon");
+        // With no icon slot the title part itself is the positioned element, as it was before the group: a theme
+        // styles the part as the one centred patch over the bar (mac-classic's white patch over the stripes).
+        if (!hasIconSlot) {
+          return m(
+            "span",
+            {
+              ...partAttrs("window-title"),
+              class:
+                "window-title pointer-events-none absolute left-1/2 max-w-[60%] min-w-0 -translate-x-1/2 truncate " +
+                "text-(length:--font-size-row) " +
+                (isFocused ? "font-bold" : "font-medium opacity-70"),
+            },
+            title,
+          );
+        }
         return m(
           "span",
           { class: "pointer-events-none absolute left-1/2 flex max-w-[60%] min-w-0 -translate-x-1/2 items-center" },
           [
-            !hasIconSlot
-              ? null
-              : m(
-                  "span",
-                  {
-                    ...partAttrs("window-icon"),
-                    class: `flex shrink-0 items-center ${isFocused ? "" : "opacity-50"}`,
-                  },
-                  m.trust(appGlyph(app, APP_GLYPH_SIZE)),
-                ),
+            m(
+              "span",
+              {
+                ...partAttrs("window-icon"),
+                class: `flex shrink-0 items-center ${isFocused ? "" : "opacity-50"}`,
+              },
+              m.trust(appGlyph(app, APP_GLYPH_SIZE)),
+            ),
             m(
               "span",
               {
                 ...partAttrs("window-title"),
                 class:
-                  `window-title ${hasIconSlot ? "ml-1.5 " : ""}min-w-0 truncate text-(length:--font-size-row) ` +
+                  "window-title ml-1.5 min-w-0 truncate text-(length:--font-size-row) " +
                   (isFocused ? "font-bold" : "font-medium opacity-70"),
               },
               title,

@@ -67,10 +67,10 @@ describe("TitleBar", () => {
     const bar = render({ chrome: MAC_CHROME });
 
     expect(slotOrder(bar)).toEqual(["close", "refresh", "menu", "minimize", "maximize"]);
-    // The chrome names no icon slot, so the centred group holds the title alone.
+    // The chrome names no icon slot, so the title part itself is the centred element the theme styles.
     const title = bar.querySelector('[data-part="window-title"]') as HTMLElement;
-    expect(title.parentElement?.className).toContain("absolute");
-    expect(title.parentElement?.querySelector('[data-part="window-icon"]')).toBeNull();
+    expect(title.className).toContain("absolute");
+    expect(bar.querySelector('[data-part="window-icon"]')).toBeNull();
   });
 
   it("drops the window's own actions from a background window without leaving a gap, and draws restore when maximized", () => {

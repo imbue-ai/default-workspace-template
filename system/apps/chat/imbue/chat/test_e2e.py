@@ -2302,7 +2302,8 @@ def test_a_narrow_window_under_a_mouse_opens_the_rail_in_the_drawer_at_its_dragg
     drawer = page.locator("[data-chat-drawer]")
     expect(drawer).to_be_visible()
     expect(drawer.locator(".chat-rail-new")).to_have_text("New chat")
-    expect(drawer.locator("[data-chat-row-menu]")).to_have_count(0)
+    # Under a mouse the rows keep the hover kebab (hidden until hover), never the touch layout's always-shown one.
+    expect(drawer.locator("[data-chat-row-menu]:visible")).to_have_count(0)
     panel = page.locator(".chat-drawer-panel").bounding_box()
     row = drawer.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]').bounding_box()
     # The panel's box is measured in fractional pixels.

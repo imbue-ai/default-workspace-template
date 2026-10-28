@@ -428,19 +428,22 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
   function roomRow(): m.Children {
     if (!isRoomChoiceOffered()) return null;
     return m("div", { class: `${css.ROW_STACK} mb-6` }, [
-      m(
-        "button",
-        {
-          type: "button",
-          class: css.ACCOUNT_PICK,
-          "data-e2e": "pick-room",
-          onclick: () => pickRoom(),
-        },
-        [
-          m("span", { class: "flex w-6 shrink-0 items-center justify-center text-secondary" }, peopleGlyph(20)),
-          m("span", { class: `${css.OPTION_ROW_NAME} min-w-0 flex-1 truncate` }, "Chat room (no provider)"),
-        ],
-      ),
+      // The pickable row anchors the pick target's stretched after-box; without it the box would cover the dialog.
+      m("div", { class: css.ACCOUNT_ROW_PICKABLE }, [
+        m(
+          "button",
+          {
+            type: "button",
+            class: css.ACCOUNT_PICK,
+            "data-e2e": "pick-room",
+            onclick: () => pickRoom(),
+          },
+          [
+            m("span", { class: "flex w-6 shrink-0 items-center justify-center text-secondary" }, peopleGlyph(20)),
+            m("span", { class: `${css.OPTION_ROW_NAME} min-w-0 flex-1 truncate` }, "Chat room (no provider)"),
+          ],
+        ),
+      ]),
     ]);
   }
 
