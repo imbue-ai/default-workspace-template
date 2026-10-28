@@ -455,7 +455,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       key: row.chatId,
       type: "button",
       class: [
-        "chat-rail-row group flex w-full items-center gap-2 rounded-md py-1.5 text-left",
+        "chat-rail-row group flex w-full items-center gap-1.5 rounded-md py-1.5 text-left",
         // A finger's height in the drawer; the rail's rows stay dense under a pointer.
         attrs.isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "chat-rail-row--nested pr-2 pl-5" : "px-2",
@@ -591,7 +591,7 @@ function renameRow(row: ChatRow, isSelected: boolean, isTouch: boolean): m.Vnode
     {
       key: row.chatId,
       class: [
-        "chat-rail-row chat-rail-row--renaming flex w-full items-center gap-2 rounded-md py-1.5",
+        "chat-rail-row chat-rail-row--renaming flex w-full items-center gap-1.5 rounded-md py-1.5",
         isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "pr-2 pl-5" : "px-2",
         isSelected ? "bg-fill-active text-primary" : "text-primary",
