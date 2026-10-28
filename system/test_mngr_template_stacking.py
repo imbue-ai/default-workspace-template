@@ -170,17 +170,23 @@ def test_worker_template_installs_no_worker_skill_and_keeps_the_venv() -> None:
     assert "MNGR_AGENT_ROLE=worker" in result["env"]
 
 
+def _apply_custom() -> dict[str, Any]:
+    """Apply the custom template on a resolved claude --type (the chat-app launcher always
+    passes one). Routing the template's role keys to the resolved agent type needs mngr's
+    agent-config plugins registered, hence the plugin manager."""
+    get_or_create_plugin_manager()
+    return _apply(("custom",), extra_param_defaults={"type": "claude"})
+
+
 def test_custom_template_marks_the_agent_role_and_keeps_every_harness_launchable() -> None:
     """A `-t custom` create works outside a checkout of this template.
 
     The role marker drives tooling that tells agent kinds apart, and the absolute
     launch-command overrides are what keep a custom agent launchable from a work
     dir that has no `system/` tree of its own (the agent-type defaults are
-    ${MNGR_AGENT_WORK_DIR}-relative). Routing the template's own appended block
-    requires a resolved --type, which the chat-app launcher always passes.
+    ${MNGR_AGENT_WORK_DIR}-relative).
     """
-    get_or_create_plugin_manager()
-    result = _apply(("custom",), extra_param_defaults={"type": "claude"})
+    result = _apply_custom()
     assert "MNGR_AGENT_ROLE=custom" in result["env"]
     settings = result["setting"]
     command_overrides = [entry for entry in settings if ".command=" in entry]
@@ -200,8 +206,7 @@ def test_custom_template_replaces_the_workspace_prompt_with_the_custom_block() -
     The assign must come before the extend in the settings list, since mngr applies
     them in order.
     """
-    get_or_create_plugin_manager()
-    result = _apply(("custom",), extra_param_defaults={"type": "claude"})
+    result = _apply_custom()
     settings = list(result["setting"])
     clear_idx = settings.index("agent_types.claude.append_system_prompt=[]")
     routed_idx = next(
@@ -220,8 +225,7 @@ def test_custom_template_replaces_the_workspace_prompt_with_the_custom_block() -
 def test_custom_template_settings_resolve_against_the_live_mngr_config() -> None:
     """Every -S entry the custom template contributes must resolve against mngr's
     config model, or the first `-t custom` create fails outright in a workspace."""
-    get_or_create_plugin_manager()
-    result = _apply(("custom",), extra_param_defaults={"type": "claude"})
+    result = _apply_custom()
     assert_mngr_settings_valid(result["setting"])
 
 
