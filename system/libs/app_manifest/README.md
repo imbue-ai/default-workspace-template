@@ -114,13 +114,17 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   gitignore syntax; a failing git command raises `ScopeComputationError` rather
   than reporting an empty diff.
 - `app_manifest.selection` and `app_manifest.workspace_graph`: the test
-  selection behind `app-manifest select-tests` (below). `workspace_graph` reads
+  selection behind `app-manifest select-tests` and `run-tests` (below). `workspace_graph` reads
   what the workspace declares about its packages: the uv workspace members and
   npm packages with their consumers (`python_consumers`, `npm_consumers`), the
   suites that run as their own pytest root, and what a `uv.lock` change
   upgraded and who depends on it (`classify_lockfile_change`).
   `scope.list_changed_files` is the diff both `footprint` and `select-tests`
   read, and `select_tests_for_pass_scope` selects from a pass scope file.
+- `app_manifest.suite_run`: the runner behind `app-manifest run-tests`
+  (below). `run_selection` runs a selection's commands and returns a
+  `SuiteRunReport` of `CommandRun`s, `parse_failed_test_ids` reads the tests to
+  rerun from pytest's short summary, and `render_report` is the text it ends with.
 - `app_manifest.primitives`: the validated string types (`AppName`,
   `DisplayName`, `LaunchPathId`, `LaunchParamName`, `LaunchPathValue` (rooted with one
   slash, no query string or fragment, nothing a URL would escape), `MessageType`,
