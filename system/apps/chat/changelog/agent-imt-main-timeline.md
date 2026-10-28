@@ -3,3 +3,5 @@ A message sent to a chat whose agent is busy gets its own step, written about tw
 - The model sees the chat's open steps, the agent's own and the ones made for messages, each listed with whether it is in progress or not started, and decides what the message does: a new step; the same as an open step; a change to one, which gets its own step for the updated request; calling one off; or not a task. It follows the agent's own rules for step titles. A failed call is tried again, up to three attempts with a 10 s limit each.
 
 - The chat app writes only through tk: `tk create --id` for the message's own step (refused when a ticket already exists there) and `tk cancel` for a step called off or replaced. A cancel holds until the agent starts the step again.
+
+- On the progress timeline, the steps not started yet fold into one "Up next" row at the end, with a faint line naming the next few; pressing it shows them all. A message's step shows there about two seconds after sending, before the agent starts it. A step a later message called off or replaced is left out until the agent starts it again. Everything else about the timeline is unchanged.

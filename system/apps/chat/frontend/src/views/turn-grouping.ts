@@ -156,6 +156,14 @@ export function isFreshStartNode(node: HandoffNode): boolean {
   return node.switch !== null && node.switch.is_fresh_start;
 }
 
+/** A step the chat app made for a message (the chat snapshot's ``message_steps``): one not started yet waits in
+ *  the tail section's pending roster, so it shows about two seconds after the message is sent. */
+export interface ChatStep {
+  step_id: string;
+  title: string;
+  status: "open" | "in_progress" | "closed";
+}
+
 /** One item on a section's timeline, in transcript order. */
 export type TimelineItem =
   | { kind: "step"; step: StepNode }
@@ -593,8 +601,13 @@ export function buildSections(
   toolResults: Map<string, ToolResultEvent>,
   isTailSettled: boolean,
   liveCompaction: LiveCompaction | null = null,
+  chatSteps: readonly ChatStep[] = [],
+  hiddenStepIds: readonly string[] = [],
 ): SectionView[] {
   const { deco, knownSteps, createdOrder } = buildDecorationMap(events, toolResults);
+  // A step a later message called off or replaced (the chat snapshot's ``hidden_step_ids``) never renders: its
+  // transitions are skipped, so its work renders as if no step were open.
+  const hidden = new Set(hiddenStepIds);
   const noticeAnchorId = autocompactNoticeAnchorId(events);
 
   const builders: SectionBuilder[] = [];
@@ -763,7 +776,7 @@ export function buildSections(
         // a `-step-` id nor a known step) rather than mint a phantom node titled
         // with the raw ticket id. Any work batched with that command stays in
         // the step that was already open (or renders inline if none was).
-        if (!isStepId(t.id) && !knownSteps.has(t.id)) continue;
+        if ((!isStepId(t.id) && !knownSteps.has(t.id)) || hidden.has(t.id)) continue;
         applyTransition(current, t);
         if (t.status === "in_progress") lastOpened = t.id;
       }
@@ -794,9 +807,24 @@ export function buildSections(
   // transcript (creation) order.
   const transitioned = new Set<string>();
   for (const b of builders) for (const id of b.step_order) transitioned.add(id);
-  const pending: { id: string; title: string }[] = createdOrder
-    .filter((id) => !transitioned.has(id))
-    .map((id) => ({ id, title: deco.get(id)?.title ?? id }));
+  // Then each message step the chat app wrote that the agent has not started yet.
+  const pending: { id: string; title: string }[] = [
+    ...createdOrder
+      .filter((id) => !transitioned.has(id) && !hidden.has(id))
+      .map((id) => ({
+        id,
+        title: deco.get(id)?.title ?? id,
+      })),
+    ...chatSteps
+      .filter(
+        (step) =>
+          step.status === "open" &&
+          !hidden.has(step.step_id) &&
+          !transitioned.has(step.step_id) &&
+          !createdOrder.includes(step.step_id),
+      )
+      .map((step) => ({ id: step.step_id, title: step.title })),
+  ];
 
   const lastBuilder = builders[builders.length - 1];
   return builders.map((b) =>
