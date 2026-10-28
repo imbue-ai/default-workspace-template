@@ -24,7 +24,6 @@ mode = "new"
 path = "/"
 style = "avatar"
 scope = "independent"
-default_mode = "floating"
 
 # The chat list: a pure page, the launcher's "Chat" row (which raises the pinned window) and the shortcut.
 [[launch_paths]]

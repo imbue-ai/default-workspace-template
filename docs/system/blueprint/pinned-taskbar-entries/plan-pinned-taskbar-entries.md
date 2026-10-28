@@ -29,7 +29,7 @@ The avatar's knowledge of agents therefore comes from reading a file mngr writes
 | Pin | An app's manifest declaration that it has a pinned entry: the path its pinned window opens, the entry's style, its location scope, and its default mode |
 | Pinned window | The one window of a pinned app on a given desktop; shared, permanent, never closed |
 | Pinned entry | The taskbar entry of a pinned window; present on every desktop because the window is |
-| Entry mode | Where one client shows a pinned entry: `bar` or `floating`; per client |
+| Entry mode | Where one client shows the pinned app's creature (the avatar): in the taskbar's tray, or floating; per client. The window's own bar entry stays whatever the mode |
 | Entry style | How one client draws a pinned entry: `plain` (icon and title) or the style the pin declares (`avatar`); per client |
 | Location scope | Whether a window's path and title are followed by every client (`linked`, the V1 rule) or kept by each client for itself (`independent`) |
 | Home path | The path a pin declares; the shared path of an independent pinned window, and where a client with no path of its own opens it |
@@ -46,7 +46,7 @@ Every desktop is shared (desktop-interface concepts.md, decision 13); a window's
 A pin is declared in an app's manifest as a `[pin]` table and copied onto the app's registry row by `forward_port.py`, the way `default_shortcut` and `launch_paths` are.
 The set of pinned apps is exactly the set of registered, non-internal apps whose row carries a pin.
 Nothing stores the set: an app is pinned while its manifest says so, and unpinned when the declaration is removed.
-A user who dislikes an app's pinned entry chooses its `plain` style and `bar` mode, which makes it an ordinary-looking entry that is always there.
+The pinned window's bar entry is an ordinary-looking plain entry like every other window's; the mode moves only the app's creature (the avatar) between the tray and the backdrop.
 
 The table:
 
@@ -57,7 +57,7 @@ The table:
 | `scope` | string | no | `linked` | `linked` or `independent`; the location scope of the pinned window |
 | `default_mode` | string | no | `bar` | `bar` or `floating`; the entry mode a client that has chosen none renders |
 
-The chat's manifest declares `path = "/"`, `style = "avatar"`, `scope = "independent"`, `default_mode = "floating"` (section 8).
+The chat's manifest declares `path = "/"`, `style = "avatar"`, `scope = "independent"`, keeping the default mode, `bar`: the avatar sits in the tray until a client floats it (section 8).
 
 ### 3.2 Pinned windows
 
@@ -68,7 +68,7 @@ Both new fields are additive with defaults, `is_pinned = false` and `scope = "li
 
 Pinned windows are never closed.
 The close route answers `409` for one and the agent `close` op is refused with the fix named (minimize instead).
-The human-facing controls keep their shape so habit is not punished: the title bar's close control, the window menu's Close, the entry menu's Close, and the minds close chord all minimize a pinned window instead of closing it.
+The human-facing controls keep their shape so habit is not punished: the title bar's close control, the window menu's Close, the entry menu's Close, and the minds close chord all close a pinned window for that client alone -- minimized, and its entry out of that client's bar until something shows the window again -- instead of closing it for everyone.
 Deleting a desktop still deletes its pinned windows with it.
 
 The shell reconciles pinned windows on read, extending the rule that creates the `Home` desktop.
@@ -101,7 +101,7 @@ The field is stored on the window so a later toggle needs no migration.
 
 ### 3.4 Entry presentation, per client
 
-How one client shows a pinned entry is three values on the client record, keyed by app: the mode (`bar` or `floating`), the style (`plain` or the pin's declared style), and the floating position.
+How one client shows a pinned entry is four values on the client record, keyed by app: the mode (`bar` or `floating`), the style (`plain` or the pin's declared style), the floating position, and `is_window_shown` (false after the client closed the pinned window, which keeps its entry out of that client's bar while it is minimized).
 They are global to the client rather than per desktop: an always-on-top entry that jumped when the desktop switched would read as broken.
 A client with no presentation for an app renders the pin's `default_mode`, the pin's declared style, and the default floating position.
 
@@ -148,7 +148,7 @@ There is no badge dot and no third image state in this version.
 - A pinned window is never removed by a close; only its desktop's deletion or its pin's withdrawal changes that.
 - An independent window's shared path equals its home path at all times.
 - A client's stored path for an independent window is written only by that client's own location report or by an agent op targeting that client.
-- The taskbar shows one entry per window of the active desktop; a pinned window's entry is that entry, drawn in the bar or floating, never both and never twice.
+- The taskbar shows one entry per window of the active desktop; a pinned window's entry is a plain bar entry like any other window's (absent while this client has closed the window), and the floating creature, when the mode floats it, is drawn beside it, never in its place.
 - Nothing in the shell package names an app, imports mngr, or runs mngr.
 
 ## 4. Behaviour
@@ -162,7 +162,7 @@ Dimming and the focused mark apply in both styles.
 
 ### 4.2 The floating entry
 
-A pinned entry in `floating` mode leaves the bar and is drawn in a layer above every window and every live page, below the launcher overlay, the floating menus, and the modals.
+A pinned entry in `floating` mode draws the app's creature in a layer above every window and every live page, below the launcher overlay, the floating menus, and the modals; the window's own bar entry stays in the bar.
 The layer is a sibling of the windows layer inside the backdrop's own stacking context, at the theme's sticky level, which is what the snap preview and the shortcut ghost already use to sit above the windows.
 The layer is inert; only the entry's own box takes a press, so nothing else on the desktop is shadowed.
 The entry is a square button of the theme's floating-entry size at the client's stored position, drawing the avatar image, or in `plain` style the app's icon on a raised tile.

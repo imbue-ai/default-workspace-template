@@ -15,7 +15,7 @@ import type { MenuRow, SubmenuChildRow } from "@imbue/workspace-ui/src/component
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
 import { windowSizeSubmenuRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
-import type { AppRecord, EntryMode, PinStyle } from "../model/records";
+import type { AppRecord, EntryMode } from "../model/records";
 import type { EntryLook } from "../reducers/desktopState";
 
 /** The width the shell's menus, the desktop's and the phone's, never go under, so a menu of two-word verbs is still
@@ -168,9 +168,9 @@ export function phoneWindowMenuRows(app: AppRecord | undefined, actions: PhoneWi
 /** The presentation verbs of a pinned entry's menu (pinned-taskbar-entries plan section 4.4). */
 export interface EntryPresentationActions {
   readonly look: EntryLook;
+  /** Where the avatar creature lives: in the tray (``bar``), or floating above the windows. */
   readonly setMode: (mode: EntryMode) => void;
-  readonly setStyle: (style: PinStyle) => void;
-  /** Open the avatar chooser; offered while the entry shows the avatar. */
+  /** Open the avatar chooser; offered while the pin declares the avatar. */
   readonly changeAvatar: () => void;
 }
 
@@ -189,7 +189,7 @@ export interface TaskbarEntryMenuActions {
   readonly minimize: () => void;
   readonly maximize: () => void;
   readonly unmaximize: () => void;
-  /** Close the window for everyone; for a pinned window, minimize it instead. */
+  /** Close the window for everyone; for a pinned window, minimize it and take this client's entry out of the bar. */
   readonly close: () => void;
   /** Null for an ordinary window's entry, which has no presentation to choose. */
   readonly presentation: EntryPresentationActions | null;
@@ -197,20 +197,10 @@ export interface TaskbarEntryMenuActions {
   readonly desktopShortcut: MenuRow | null;
 }
 
-/** What "Show as <style>" reads for a style the pin declares. */
-function styleLabel(style: PinStyle): string {
-  switch (style) {
-    case "plain":
-      return "Show as plain entry";
-    case "avatar":
-      return "Show as avatar";
-  }
-}
-
 /** A taskbar entry's context menu: Restore or Minimize, Maximize or Restore size (for a pulled-out window, Show,
  *  Hide placeholder or Show placeholder, and Bring back to desktop instead of those), then for a pinned entry
- *  Float or Move to taskbar, the style to show it in, and the avatar chooser while it shows the avatar, then Add
- *  to desktop or Remove from desktop, then Close. */
+ *  Float or Move to taskbar (where the avatar creature lives) and the avatar chooser when the pin declares one,
+ *  then Add to desktop or Remove from desktop, then Close. */
 export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions): MenuRow[] {
   // A pulled-out window's arrangement is the chrome's: the entry shows its window, hides or shows its
   // placeholder here, or brings it back.
@@ -236,22 +226,13 @@ export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions): MenuRow[
   }
   const presentation = actions.presentation;
   if (presentation !== null) {
-    const { look, setMode, setStyle, changeAvatar } = presentation;
+    const { look, setMode, changeAvatar } = presentation;
     const presentationRows: MenuRow[] = [
       look.mode === "floating"
         ? { kind: "action", key: "move-to-taskbar", label: "Move to taskbar", onSelect: () => setMode("bar") }
         : { kind: "action", key: "float", label: "Float", onSelect: () => setMode("floating") },
     ];
-    if (look.declaredStyle !== "plain") {
-      const other: PinStyle = look.style === "plain" ? look.declaredStyle : "plain";
-      presentationRows.push({
-        kind: "action",
-        key: `style-${other}`,
-        label: styleLabel(other),
-        onSelect: () => setStyle(other),
-      });
-    }
-    if (look.style === "avatar") {
+    if (look.declaredStyle === "avatar") {
       presentationRows.push({
         kind: "action",
         key: "change-avatar",
@@ -259,7 +240,7 @@ export function taskbarEntryMenuRows(actions: TaskbarEntryMenuActions): MenuRow[
         onSelect: changeAvatar,
       });
     }
-    if (presentationRows.length > 0) rows.push({ kind: "divider" }, ...presentationRows);
+    rows.push({ kind: "divider" }, ...presentationRows);
   }
   if (actions.desktopShortcut !== null) rows.push({ kind: "divider" }, actions.desktopShortcut);
   rows.push(

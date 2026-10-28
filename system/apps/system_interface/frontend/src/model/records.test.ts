@@ -346,7 +346,9 @@ describe("the small helpers", () => {
         is_connected: true,
         entries: { docs: { mode: "floating", style: "avatar", position: { x: 0.9, y: 0.85 } } },
       }).entries,
-    ).toEqual({ docs: { mode: "floating", style: "avatar", position: { x: 0.9, y: 0.85 } } });
+    ).toEqual({
+      docs: { mode: "floating", style: "avatar", position: { x: 0.9, y: 0.85 }, is_window_shown: true },
+    });
     expect(() =>
       parseClientRecord({
         id: "c1",

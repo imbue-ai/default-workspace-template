@@ -220,6 +220,8 @@ export interface EntryPresentation {
   readonly mode: EntryMode;
   readonly style: PinStyle;
   readonly position: FloatingPosition | null;
+  /** Whether this client lists the pinned window in its taskbar; false after the client closed it. */
+  readonly is_window_shown: boolean;
 }
 
 export interface ClientRecord {
@@ -628,6 +630,7 @@ export function parseEntryPresentation(raw: unknown): EntryPresentation {
     mode: asOneOf(record.mode, ["bar", "floating"], "entry.mode"),
     style: asOneOf(record.style, ["plain", "avatar"], "entry.style"),
     position: parseFloatingPosition(record.position),
+    is_window_shown: record.is_window_shown !== false,
   };
 }
 

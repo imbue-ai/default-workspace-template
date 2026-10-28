@@ -122,8 +122,8 @@ def test_an_entry_presentation_is_kept_on_the_client_across_its_reports_and_refu
     both = store.set_entry_presentation(ClientId("c1"), AppName("notes"), bar, TEST_NOW + timedelta(minutes=4))
     assert both.entries == {"chat": floating, "notes": bar}
     assert client_view(both, False).model_dump(mode="json")["entries"] == {
-        "chat": {"mode": "floating", "style": "avatar", "position": {"x": 0.9, "y": 0.85}},
-        "notes": {"mode": "bar", "style": "plain", "position": None},
+        "chat": {"mode": "floating", "style": "avatar", "position": {"x": 0.9, "y": 0.85}, "is_window_shown": True},
+        "notes": {"mode": "bar", "style": "plain", "position": None, "is_window_shown": True},
     }
     stored = json.loads((tmp_path / CLIENTS_FILENAME).read_text())["clients"]["c1"]["entries"]
     assert set(stored) == {"chat", "notes"}

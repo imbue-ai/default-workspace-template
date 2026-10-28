@@ -2068,7 +2068,8 @@ def _pinned_window(base_url: str, desktop_id: str = _HOME_DESKTOP_ID) -> dict[st
 
 
 def _pinned_entry(page: Page) -> Locator:
-    return page.locator(f'[data-pinned-entry="{_PINNED_APP_NAME}"]')
+    """The pinned app's floating creature; the window's own bar entry is ``_taskbar_entry`` like any window's."""
+    return page.locator(f'[data-floating-entries] [data-pinned-entry="{_PINNED_APP_NAME}"]')
 
 
 def _resting_box(page: Page, entry: Locator) -> FloatRect:
@@ -2260,9 +2261,10 @@ def _wait_for_client_entry(
 def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a_reload_and_returns_to_the_bar(
     tmp_path: Path, page: Page
 ) -> None:
-    """A pin whose default mode is floating draws its entry above the windows: a click restores the window and
-    another minimizes it, a drag moves the entry and writes the position once to the client record so a reload
-    puts it back, and its menu moves it into the taskbar (and out again)."""
+    """A pin whose default mode is floating draws its creature above the windows beside the window's own bar entry
+    (which stays whatever the mode): a click restores the window and another minimizes it, a drag moves the
+    creature and writes the position once to the client record so a reload puts it back, and its menu moves it
+    into the taskbar (and out again)."""
     with _running_e2e_server(tmp_path, pin=("plain", "linked", "floating")) as server:
         _land(page, server)
         pinned = _pinned_window(server.base_url)
@@ -2271,7 +2273,9 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         expect(entry).to_be_visible(timeout=15000)
         expect(entry).to_have_attribute("data-entry-mode", "floating")
         expect(entry).to_have_attribute("data-entry-style", "plain")
-        expect(_taskbar_entry(page, pinned["id"])).to_have_count(0)
+        # The floating creature does not take the window's entry out of the bar.
+        expect(_taskbar_entry(page, pinned["id"])).to_be_visible()
+        expect(_taskbar_entry(page, pinned["id"])).to_have_attribute("data-entry-mode", "bar")
         expect(page.locator("[data-floating-entries]")).to_have_count(1)
 
         entry.click()
@@ -2324,6 +2328,20 @@ def test_a_floating_entry_toggles_its_window_drags_to_a_position_that_survives_a
         # The position it was dragged to is kept across the trip through the bar.
         _assert_same_box(_resting_box(page, _pinned_entry(page)), moved, "back afloat")
 
+        # Closing the pinned window takes its entry out of this client's bar (the window itself is only
+        # minimized); the floating creature stays, and a click on it shows the window and lists the entry back.
+        _open_entry_menu(page, _pinned_entry(page)).locator('[data-menu-row="close"]').click()
+        expect(_taskbar_entry(page, pinned["id"])).to_have_count(0)
+        _wait_for_client_entry(
+            server.base_url,
+            client_id,
+            lambda entry: entry.get("is_window_shown") is False,
+            "the close never reached the client record",
+        )
+        _pinned_entry(page).click()
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=15000)
+        expect(_taskbar_entry(page, pinned["id"])).to_be_visible(timeout=10000)
+
 
 def _avatar_image_source(entry: Locator) -> str:
     return str(entry.locator("img").get_attribute("src"))
@@ -2348,11 +2366,10 @@ def _write_agent_events(path: Path, state: str) -> None:
 def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_every_window(
     tmp_path: Path, page: Page
 ) -> None:
-    """An ``avatar`` pin draws the workspace's design wearing the mood the agents event file folds to (stale and
-    idle until the file exists, working once an agent runs), its menu's style rows swap the image for the app's
-    icon and back, "Change avatar..." opens the chooser, choosing a design changes every open window, and
-    "Design your own..." drafts the design prompt into this client's pinned window, which declares a launch path that
-    takes a draft, rather than opening a chat."""
+    """An ``avatar`` pin's floating creature draws the workspace's design wearing the mood the agents event file
+    folds to (stale and idle until the file exists, working once an agent runs), "Change avatar..." opens the
+    chooser, choosing a design changes every open window, and "Design your own..." drafts the design prompt into
+    this client's pinned window, which declares a launch path that takes a draft, rather than opening a chat."""
     with _running_e2e_server(tmp_path, pin=("avatar", "independent", "floating")) as server:
         # A new workspace: the bootstrap marked it on its first boot, so the tour may start by itself.
         server.state_dir.mkdir(parents=True, exist_ok=True)
@@ -2383,21 +2400,6 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
         page.locator("[data-tour-next]").click()
         expect(page.locator("[data-tour-badge]")).to_have_count(0)
         assert _get_json(f"{server.base_url}/api/tour") == {"is_seen": True, "resume_index": None}
-
-        # The plain style shows the app's icon in place of the avatar; the pin's style brings the image back.
-        _open_entry_menu(page, entry).locator('[data-menu-row="style-plain"]').click()
-        expect(entry).to_have_attribute("data-entry-style", "plain", timeout=10000)
-        expect(entry.locator("svg")).to_have_count(1)
-        expect(entry.locator("[data-character-body]")).to_have_count(0)
-        _wait_for_client_entry(
-            server.base_url,
-            _client_id(page),
-            lambda entry: entry.get("style") == "plain",
-            "the style never reached the client record",
-        )
-        _open_entry_menu(page, entry).locator('[data-menu-row="style-avatar"]').click()
-        expect(entry).to_have_attribute("data-entry-style", "avatar", timeout=10000)
-        expect(entry.locator("[data-character-body]")).to_have_count(1)
 
         with _second_client(page, server) as other:
             other_entry = _pinned_entry(other)

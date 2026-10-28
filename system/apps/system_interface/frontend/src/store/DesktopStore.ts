@@ -1796,7 +1796,25 @@ export class DesktopStore {
     const window = pinnedWindowOf(this.state, app);
     if (window === null) return null;
     const look = entryLook(this.state, window, appByName(this.state, app));
-    return look === null ? null : { mode: look.mode, style: look.style, position: look.position };
+    if (look === null) return null;
+    return { mode: look.mode, style: look.style, position: look.position, is_window_shown: look.isWindowShown };
+  }
+
+  /** Whether this client lists a pinned window in its taskbar, or hid its entry by closing it. */
+  private isPinnedEntryShown(windowId: string): boolean {
+    const window = findWindow(this.state, windowId)?.window;
+    if (window === undefined) return true;
+    const look = entryLook(this.state, window, appByName(this.state, window.app));
+    return look === null || look.isWindowShown;
+  }
+
+  /** Write whether this client lists a pinned window in its taskbar. */
+  private setPinnedEntryShown(windowId: string, isShown: boolean): void {
+    const app = findWindow(this.state, windowId)?.window.app;
+    if (app === undefined) return;
+    const current = this.presentationOf(app);
+    if (current === null || current.is_window_shown === isShown) return;
+    void this.setEntryPresentation(app, { ...current, is_window_shown: isShown });
   }
 
   setEntryMode(app: string, mode: EntryMode): Promise<void> {
@@ -2404,7 +2422,7 @@ export class DesktopStore {
     const focused = this.isPhoneLayout() ? (shownWindowOf(this.state)?.id ?? null) : activeFocusedWindowId(this.state);
     if (focused === null) return;
     if (findWindow(this.state, focused)?.window.is_pinned === true) {
-      this.minimizeWindow(focused);
+      this.closePinnedWindowHere(focused);
       return;
     }
     this.pageDriver?.requestClose(focused);
@@ -2414,13 +2432,23 @@ export class DesktopStore {
   }
 
   /** What every human-facing Close does (the title bar's control, the two menus): close the window for everyone,
-   *  or, for a pinned window, which is never closed, minimize it, so the habit of reaching for the control holds. */
+   *  or, for a pinned window, which is never closed for everyone, close it for this client alone (minimized, and
+   *  its entry out of this client's bar until something shows it again), so the habit of reaching for the control
+   *  holds. */
   async closeOrMinimizeWindow(windowId: string): Promise<void> {
     if (findWindow(this.state, windowId)?.window.is_pinned === true) {
-      this.minimizeWindow(windowId);
+      this.closePinnedWindowHere(windowId);
       return;
     }
     await this.closeWindow(windowId);
+  }
+
+  /** Close a pinned window for this client: minimized, and its entry out of this client's bar (the shared window
+   *  is never closed; showing it again lists the entry back). The raw minimize, not ``minimizeWindow``, whose
+   *  relisting of a plain minimize would undo the very flag this writes. */
+  private closePinnedWindowHere(windowId: string): void {
+    this.dispatch({ type: "window_minimized", windowId });
+    this.setPinnedEntryShown(windowId, false);
   }
 
   /** Raise a window to the top of the stack, unless a move or resize of another window is in progress: the
@@ -2429,6 +2457,8 @@ export class DesktopStore {
    *  rather than deferred, since the gesture's end raises its own window again. */
   raiseWindow(windowId: string): void {
     if (this.isAnotherWindowGestured(windowId)) return;
+    // Raising shows the window, so a pinned entry a close took out of the bar is listed back.
+    if (!this.isPinnedEntryShown(windowId)) this.setPinnedEntryShown(windowId, true);
     this.dispatch({ type: "window_raised", windowId });
   }
 
@@ -2439,6 +2469,9 @@ export class DesktopStore {
   }
 
   minimizeWindow(windowId: string): void {
+    // Minimizing is not closing: a pinned window whose entry a close took out of the bar, revealed again since
+    // (a launch, the shell's show op), is relisted here, so the minimize dims its entry instead of vanishing it.
+    if (!this.isPinnedEntryShown(windowId)) this.setPinnedEntryShown(windowId, true);
     this.dispatch({ type: "window_minimized", windowId });
   }
 

@@ -516,6 +516,8 @@ export interface EntryLook {
   /** The style the pin declares, which the client may choose over plain; ``plain`` when it declares none. */
   readonly declaredStyle: PinStyle;
   readonly position: FloatingPosition | null;
+  /** Whether this client lists the pinned window in its taskbar; false after the client closed it. */
+  readonly isWindowShown: boolean;
 }
 
 /** One entry of the taskbar: a window of the active desktop, in opening order. */
@@ -546,6 +548,7 @@ export function entryLook(state: DesktopState, window: WindowRecord, app: AppRec
     style: ownStyle ?? declaredStyle,
     declaredStyle,
     position: own?.position ?? null,
+    isWindowShown: own?.is_window_shown ?? true,
   };
 }
 
@@ -569,14 +572,18 @@ export function taskbarEntries(state: DesktopState): TaskbarEntry[] {
   });
 }
 
-/** Whether an entry is drawn floating: its mode says so. */
+/** Whether an entry's app also draws its floating creature: its mode says so. */
 export function isEntryFloating(entry: TaskbarEntry): boolean {
   return entry.look !== null && entry.look.mode === "floating";
 }
 
-/** The entries the bar draws, in opening order. */
+/** The entries the bar draws, in opening order: every window of the active desktop, the pinned ones as plain
+ *  entries whatever their mode (the floating creature is the avatar, not the window's entry) -- except a pinned
+ *  window this client closed, which stays out of the bar while it is minimized (showing it lists it back). */
 export function barEntries(state: DesktopState): TaskbarEntry[] {
-  return taskbarEntries(state).filter((entry) => !isEntryFloating(entry));
+  return taskbarEntries(state).filter(
+    (entry) => entry.look === null || entry.look.isWindowShown || !entry.isMinimized,
+  );
 }
 
 /** The entries drawn floating above the windows. */

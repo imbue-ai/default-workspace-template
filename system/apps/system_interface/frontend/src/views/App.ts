@@ -51,6 +51,7 @@ import {
   effectiveWindowTitle,
   entryLook,
   floatingEntries,
+  isEntryFloating,
   pinnedWindowOf,
 } from "../reducers/desktopState";
 import {
@@ -669,7 +670,6 @@ export function App(): m.Component<AppAttrs> {
           : {
               look,
               setMode: (mode) => void current.setEntryMode(window.app, mode),
-              setStyle: (style) => void current.setEntryStyle(window.app, style),
               changeAvatar: () => openAvatarChooser(current),
             },
       desktopShortcut: desktopShortcutRow(current, window.app),
@@ -1383,7 +1383,6 @@ export function App(): m.Component<AppAttrs> {
           ),
           m(Taskbar, {
             entries: barEntries(state),
-            avatar: state.avatar,
             openEntryMenuWindowId: openMenu?.kind === "entry" ? openMenu.windowId : null,
             launcher: {
               query: launcherQuery,
@@ -1426,6 +1425,7 @@ export function App(): m.Component<AppAttrs> {
               avatar: state.avatar,
               workspaceName: state.workspaceName,
               isAgentAttending: pinnedChat !== null && pinnedChat.isFocused && !pinnedChat.isMinimized,
+              isAvatarFloating: pinnedChat !== null && isEntryFloating(pinnedChat),
               onPersonClick: (entry) => {
                 trayCard.close();
                 void current.mentionPerson(entry.handle);

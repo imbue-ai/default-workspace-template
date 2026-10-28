@@ -32,6 +32,7 @@ function trayAttrs(overrides: Partial<SystemTrayAttrs> = {}): SystemTrayAttrs {
     avatar: avatarStateRecord(),
     workspaceName: "Atlas",
     isAgentAttending: false,
+    isAvatarFloating: false,
     onPersonClick: vi.fn(),
     onAgentClick: vi.fn(),
     onPersonHoverStart: vi.fn(),
@@ -44,7 +45,6 @@ function trayAttrs(overrides: Partial<SystemTrayAttrs> = {}): SystemTrayAttrs {
 function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
   const docs = appRecord("docs");
   const attrs: TaskbarAttrs = {
-    avatar: avatarStateRecord(),
     entries: [
       {
         window: windowRecord("win-1", "docs", "/a", { title: "Plan" }),
@@ -74,7 +74,7 @@ function render(overrides: Partial<TaskbarAttrs> = {}): HTMLElement {
         isDetached: false,
         isFocused: false,
         isPinned: true,
-        look: { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
+        look: { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null, isWindowShown: true },
       },
     ],
     openEntryMenuWindowId: null,
@@ -111,7 +111,6 @@ describe("Taskbar", () => {
     expect(entries.map((entry) => entry.getAttribute("data-pinned"))).toEqual(["false", "false", "true"]);
     expect(entries.map((entry) => entry.getAttribute("data-pinned-entry"))).toEqual([null, null, "docs"]);
     expect(entries[2].getAttribute("data-entry-mode")).toBe("bar");
-    expect(entries[2].getAttribute("data-entry-style")).toBe("avatar");
     expect(entries[0].getAttribute("aria-label")).toBe("Plan");
     (entries[1] as HTMLElement).click();
     expect(onEntryClick).toHaveBeenCalledWith("win-2");
@@ -153,13 +152,10 @@ describe("Taskbar", () => {
     expect(entries.map((entry) => entry.querySelector(".opacity-70") !== null)).toEqual([true, false]);
   });
 
-  it("does not dim the avatar when its window is minimized, the way it dims an app's icon", () => {
-    // The fixture's third entry is the pinned chat in the avatar style, minimized. A dimmed icon reads
-    // as "not on screen"; a dimmed character reads as unwell.
+  it("dims a minimized pinned entry's icon like any other window's", () => {
     const entries = [...render().querySelectorAll("[data-taskbar-entry]")];
     expect(entries.map((entry) => entry.getAttribute("data-minimized"))).toEqual(["false", "true", "true"]);
-    expect(entries.map((entry) => entry.querySelector(".opacity-70") !== null)).toEqual([false, true, false]);
-    expect(entries[2].getAttribute("data-mood")).not.toBeNull();
+    expect(entries.map((entry) => entry.querySelector(".opacity-70") !== null)).toEqual([false, true, true]);
   });
 
   it("writes each window's title on its entry, with the whole of it in a bubble above", () => {
@@ -180,18 +176,19 @@ describe("Taskbar", () => {
     ]);
   });
 
-  it("draws the avatar in place of the icon for an avatar-style entry, wearing the mood", () => {
-    const stale = avatarStateRecord({ design: "jelly-cat", status: { mood: "working", is_stale: true } });
-    const taskbar = render({ avatar: stale });
+  it("draws a pinned entry as a plain entry like any other window's: the avatar creature lives in the tray", () => {
+    const taskbar = render();
     const entry = taskbar.querySelector('[data-taskbar-entry="win-3"]') as HTMLElement;
-    expect(entry.getAttribute("data-mood")).toBe("working");
-    expect(entry.getAttribute("data-stale")).toBe("true");
-    expect(entry.getAttribute("data-hover-tooltip")).toBe("Docs (status may be out of date)");
-    expect(entry.querySelector("svg")).toBeNull();
-    expect(entry.querySelector("img")?.getAttribute("src")).toBe("/api/avatars/jelly-cat/image.svg?mood=working");
-    const ordinary = taskbar.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
-    expect(ordinary.getAttribute("data-mood")).toBeNull();
-    expect(ordinary.querySelector("svg")).not.toBeNull();
+    expect(entry.getAttribute("data-mood")).toBeNull();
+    expect(entry.getAttribute("data-hover-tooltip")).toBe("Docs");
+    expect(entry.querySelector("svg")).not.toBeNull();
+    expect(entry.querySelector("img")).toBeNull();
+  });
+
+  it("drops the agent from the tray while the avatar floats: one creature, there or here", () => {
+    expect(render().querySelector("[data-tray-agent]")).not.toBeNull();
+    const floating = render({ tray: trayAttrs({ isAvatarFloating: true }) });
+    expect(floating.querySelector("[data-tray-agent]")).toBeNull();
   });
 
   it("asks for an entry's menu on a right click", () => {

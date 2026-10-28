@@ -8,7 +8,7 @@
 
 import m from "mithril";
 import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
-import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
+import type { TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
 import { LauncherField } from "./LauncherField";
 import type { LauncherFieldAttrs } from "./LauncherField";
 import { OverviewButton } from "./OverviewButton";
@@ -21,7 +21,6 @@ import type { ViewingChipAttrs } from "./tray/ViewingChip";
 
 export interface TaskbarAttrs {
   readonly entries: readonly TaskbarEntryRecord[];
-  readonly avatar: AvatarState;
   readonly openEntryMenuWindowId: string | null;
   readonly launcher: LauncherFieldAttrs;
   /** The overview button, between the launcher field and the window entries. */
@@ -70,7 +69,6 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
             m(TaskbarEntry, {
               key: entry.window.id,
               entry,
-              avatar: attrs.avatar,
               isMenuOpen: attrs.openEntryMenuWindowId === entry.window.id,
               onClick: () => attrs.onEntryClick(entry.window.id),
               onContextMenu: (x, y, target) => attrs.onEntryContextMenu(entry.window.id, x, y, target),

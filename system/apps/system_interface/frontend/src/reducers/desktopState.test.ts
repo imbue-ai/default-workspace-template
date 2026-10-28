@@ -352,36 +352,48 @@ describe("pinned entries", () => {
     );
   }
 
-  it("give a pinned entry the pin's defaults until the client chooses, and split the bar from the floating", () => {
+  it("give a pinned entry the pin's defaults until the client chooses, and keep its bar entry whatever the mode", () => {
     const state = withPinned();
     expect(entryLook(state, pinned, pinnedApp)).toEqual({
       mode: "floating",
       style: "avatar",
       declaredStyle: "avatar",
       position: null,
+      isWindowShown: true,
     });
     expect(entryLook(state, home.windows[0], appRecord("docs"))).toBeNull();
     expect(pinnedWindowOf(state, "buddy")).toBe(pinned);
     expect(pinnedWindowOf(state, "docs")).toBeNull();
     expect(avatarPinnedWindow(state)).toBe(pinned);
-    expect(barEntries(state).map((entry) => entry.window.id)).toEqual(["win-1", "win-2"]);
+    // The floating creature does not take the window's entry out of the bar.
+    expect(barEntries(state).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
     expect(floatingEntries(state).map((entry) => entry.window.id)).toEqual(["win-9"]);
     const chosen = reduceDesktopState(state, {
       type: "entries_updated",
-      entries: { buddy: { mode: "bar", style: "plain", position: { x: 0.1, y: 0.2 } } },
+      entries: { buddy: { mode: "bar", style: "plain", position: { x: 0.1, y: 0.2 }, is_window_shown: true } },
     });
     expect(entryLook(chosen, pinned, pinnedApp)).toEqual({
       mode: "bar",
       style: "plain",
       declaredStyle: "avatar",
       position: { x: 0.1, y: 0.2 },
+      isWindowShown: true,
     });
     expect(barEntries(chosen).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
     expect(floatingEntries(chosen)).toEqual([]);
+    // A pinned window this client closed stays out of the bar while it is minimized (win-9 has no placement,
+    // which reads as minimized); a shown one is listed back whatever the stored flag says.
+    const closedHere = reduceDesktopState(state, {
+      type: "entries_updated",
+      entries: { buddy: { mode: "bar", style: "avatar", position: null, is_window_shown: false } },
+    });
+    expect(barEntries(closedHere).map((entry) => entry.window.id)).toEqual(["win-1", "win-2"]);
+    const revealed = reduceDesktopState(closedHere, { type: "window_raised", windowId: "win-9" });
+    expect(barEntries(revealed).map((entry) => entry.window.id)).toEqual(["win-1", "win-2", "win-9"]);
     // A style stored while the pin declared it is not drawn once the pin declares plain.
     const kept = reduceDesktopState(state, {
       type: "entries_updated",
-      entries: { buddy: { mode: "bar", style: "avatar", position: null } },
+      entries: { buddy: { mode: "bar", style: "avatar", position: null, is_window_shown: true } },
     });
     const plainPin = appRecord("buddy", { pin: { path: "/", style: "plain", scope: "linked", default_mode: "bar" } });
     expect(entryLook(kept, pinned, plainPin)?.style).toBe("plain");
@@ -392,6 +404,7 @@ describe("pinned entries", () => {
       style: "plain",
       declaredStyle: "plain",
       position: null,
+      isWindowShown: true,
     });
   });
 

@@ -44,7 +44,7 @@ const CLIENT = "client-1";
 /** The viewer's participant key, as the heartbeat's answer names it. */
 const VIEWER = "user:user-josh-0001";
 const NO_LINK = { desktopId: null, open: null, launch: null };
-const PLAIN_BAR = { mode: "bar", style: "plain", position: null } as const;
+const PLAIN_BAR = { mode: "bar", style: "plain", position: null, is_window_shown: true } as const;
 
 const PAGE_ID = expect.stringMatching(/^page-[0-9a-f]{16}$/);
 
@@ -1251,7 +1251,11 @@ describe("pinned entries", () => {
       }),
       desktopRecord("work"),
     ];
-    api.clients = [clientRecord(CLIENT, { entries: { buddy: { mode: "floating", style: "plain", position: null } } })];
+    api.clients = [
+      clientRecord(CLIENT, {
+        entries: { buddy: { mode: "floating", style: "plain", position: null, is_window_shown: true } },
+      }),
+    ];
     const store = makeStore();
     await store.start(NO_LINK);
     socket.deliver().onAppsUpdated([appRecord("docs"), pinnedApp]);
@@ -1262,28 +1266,43 @@ describe("pinned entries", () => {
     const store = await pinnedStore();
     socket.deliver().onConnected();
     // Another window of this client moved the entry, and someone chose a design, while the socket was down.
-    api.clients = [clientRecord(CLIENT, { entries: { buddy: { mode: "bar", style: "avatar", position: null } } })];
+    api.clients = [
+      clientRecord(CLIENT, {
+        entries: { buddy: { mode: "bar", style: "avatar", position: null, is_window_shown: true } },
+      }),
+    ];
     api.avatars = { ...api.avatars, selected: "jelly-cat" };
     socket.deliver().onConnected();
     await settle();
-    expect(store.getState().entries.buddy).toEqual({ mode: "bar", style: "avatar", position: null });
+    expect(store.getState().entries.buddy).toEqual({
+      mode: "bar",
+      style: "avatar",
+      position: null,
+      is_window_shown: true,
+    });
     expect(store.getState().avatar.design).toBe("jelly-cat");
   });
 
   it("an entries push that lands while the client records are read stands over the records' older answer", async () => {
     api.desktops = [desktopRecord("home", { windows: [windowRecord("win-9", "buddy", "/", { is_pinned: true })] })];
-    api.clients = [clientRecord(CLIENT, { entries: { buddy: { mode: "floating", style: "plain", position: null } } })];
+    api.clients = [
+      clientRecord(CLIENT, {
+        entries: { buddy: { mode: "floating", style: "plain", position: null, is_window_shown: true } },
+      }),
+    ];
     const answerReads = api.holdReads();
     const store = makeStore();
     const starting = store.start(NO_LINK);
     await settle();
     socket.deliver().onClientEntriesChanged({
       clientId: CLIENT,
-      entries: { buddy: { mode: "bar", style: "avatar", position: null } },
+      entries: { buddy: { mode: "bar", style: "avatar", position: null, is_window_shown: true } },
     });
     answerReads();
     await starting;
-    expect(store.getState().entries).toEqual({ buddy: { mode: "bar", style: "avatar", position: null } });
+    expect(store.getState().entries).toEqual({
+      buddy: { mode: "bar", style: "avatar", position: null, is_window_shown: true },
+    });
   });
 
   it("leaves the pinned window where a close is refused", async () => {
@@ -1400,14 +1419,18 @@ describe("pinned entries", () => {
 
   it("loads this client's entries with its record and takes the shell's word on a change", async () => {
     const store = await pinnedStore();
-    expect(store.getState().entries).toEqual({ buddy: { mode: "floating", style: "plain", position: null } });
+    expect(store.getState().entries).toEqual({
+      buddy: { mode: "floating", style: "plain", position: null, is_window_shown: true },
+    });
     socket.deliver().onClientEntriesChanged({ clientId: "other", entries: {} });
     expect(store.getState().entries.buddy.mode).toBe("floating");
     socket.deliver().onClientEntriesChanged({
       clientId: CLIENT,
-      entries: { buddy: { mode: "bar", style: "avatar", position: null } },
+      entries: { buddy: { mode: "bar", style: "avatar", position: null, is_window_shown: true } },
     });
-    expect(store.getState().entries).toEqual({ buddy: { mode: "bar", style: "avatar", position: null } });
+    expect(store.getState().entries).toEqual({
+      buddy: { mode: "bar", style: "avatar", position: null, is_window_shown: true },
+    });
   });
 
   it("writes one field of the presentation over the entry's current look", async () => {
@@ -1416,7 +1439,12 @@ describe("pinned entries", () => {
     expect(last(api.calls)).toBe("setEntryPresentation:client-1:buddy:floating:avatar:-");
     await store.setEntryMode("buddy", "bar");
     expect(last(api.calls)).toBe("setEntryPresentation:client-1:buddy:bar:avatar:-");
-    expect(store.getState().entries.buddy).toEqual({ mode: "bar", style: "avatar", position: null });
+    expect(store.getState().entries.buddy).toEqual({
+      mode: "bar",
+      style: "avatar",
+      position: null,
+      is_window_shown: true,
+    });
     api.refusal = "no such client";
     await store.setEntryMode("buddy", "floating");
     expect(notices()).toEqual(["Could not change the entry: no such client"]);
@@ -1431,7 +1459,10 @@ describe("pinned entries", () => {
   it("an entries push that lands while a write is answered stands over the answer and over a refusal's undo", async () => {
     const store = await pinnedStore();
     // Another window of this client wrote after this one; its push arrives before this write's older answer.
-    const pushed = { buddy: { mode: "bar", style: "avatar", position: null }, pal: PLAIN_BAR } as const;
+    const pushed = {
+      buddy: { mode: "bar", style: "avatar", position: null, is_window_shown: true },
+      pal: PLAIN_BAR,
+    } as const;
     const writing = store.setEntryMode("buddy", "bar");
     socket.deliver().onClientEntriesChanged({ clientId: CLIENT, entries: pushed });
     await writing;

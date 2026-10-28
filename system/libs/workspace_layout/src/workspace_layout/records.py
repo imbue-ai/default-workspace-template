@@ -198,6 +198,11 @@ class EntryPresentation(FrozenModel):
     mode: EntryMode = Field(description="In the taskbar, or floating above the windows")
     style: PinStyle = Field(description="Plain, or the style the pin declares")
     position: FloatingPosition | None = Field(default=None, description="The floating position; None for the default")
+    is_window_shown: bool = Field(
+        default=True,
+        description="Whether this client lists the pinned window in its taskbar; False after the client closed it "
+        "(the window itself is only minimized, and showing it again lists it back)",
+    )
 
 
 class ClientRecord(FrozenModel):

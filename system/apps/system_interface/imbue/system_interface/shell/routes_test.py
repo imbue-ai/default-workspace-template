@@ -933,14 +933,14 @@ def test_a_clients_entry_presentation_is_written_announced_to_that_client_and_ch
     )
     assert written.status_code == 200
     assert written.get_json()["entries"] == {
-        "buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}}
+        "buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}, "is_window_shown": True}
     }
     assert written.get_json()["is_connected"] is True
     assert drain_messages(first_queue) == [
         {
             "type": "client_entries_changed",
             "client_id": "c1",
-            "entries": {"buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}}},
+            "entries": {"buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}, "is_window_shown": True}},
         }
     ]
     assert drain_messages(second_queue) == []

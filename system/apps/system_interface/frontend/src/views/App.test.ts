@@ -494,7 +494,7 @@ describe("the avatar chooser", () => {
     m.redraw.sync();
   }
 
-  it("routes the entry menu's style row and the chooser's Design your own... to the store", async () => {
+  it("routes the entry menu's float row and the chooser's Design your own... to the store", async () => {
     const entry = pinnedEntry();
     openEntryMenuRow(entry, "change-avatar");
     await settle();
@@ -509,9 +509,9 @@ describe("the avatar chooser", () => {
     expect(api.calls).toContain(`reportWindowLocation:home:win-9:${CLIENT}:/?chat=agent-1:`);
     expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
 
-    openEntryMenuRow(entry, "style-plain");
+    openEntryMenuRow(entry, "float");
     await settle();
-    expect(api.calls).toContain("setEntryPresentation:client-1:buddy:bar:plain:-");
+    expect(api.calls).toContain("setEntryPresentation:client-1:buddy:floating:avatar:-");
   });
 
   it("opens from the pinned entry's menu, and stays closed when dismissed before the catalog answered", async () => {
