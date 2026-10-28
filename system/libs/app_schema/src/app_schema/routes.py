@@ -134,5 +134,11 @@ def error_response(
 ) -> Response:
     """A refusal or a failure as the ``ErrorResponse`` every route answers them with."""
     return model_response(
-        ErrorResponse(detail=detail, user_facing_message=user_facing_message, reportable=reportable, kind=kind), status
+        ErrorResponse(
+            detail=detail,
+            user_facing_message=user_facing_message,
+            reportable=reportable,
+            kind=kind,
+        ),
+        status,
     )

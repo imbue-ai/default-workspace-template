@@ -78,7 +78,7 @@ class ErrorResponse(FrozenModel):
     kind: str | None = Field(
         default=None,
         exclude_if=lambda value: value is None,
-        description="The refusal's kind, for a frontend that words it itself",
+        description="The refusal's kind, for a frontend that offers different controls per kind",
     )
 
 
