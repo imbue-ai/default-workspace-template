@@ -127,9 +127,9 @@ def browser_type_launch_args(pytestconfig: pytest.Config) -> dict[str, Any]:
         # that names both ``channel`` and ``executable_path``.
         launch_options["executable_path"] = str(executable)
     else:
-        # No channel requested and neither browser installed (e.g. CI hosts that ran
-        # `playwright install`): leave both keys unset so the launch falls through to
-        # Playwright's managed-browser lookup.
+        # No channel requested and neither browser installed (e.g. CI hosts that
+        # ran `playwright install`): leave both keys unset so the launch falls
+        # through to Playwright's managed-browser lookup.
         pass
     slowmo = pytestconfig.getoption("--slowmo", default=0)
     if slowmo:

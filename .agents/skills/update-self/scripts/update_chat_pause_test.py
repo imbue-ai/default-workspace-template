@@ -457,7 +457,9 @@ def test_a_waiting_agent_whose_background_command_still_runs_is_paused_with_it(
     }
 
 
-def _write_last_dispatch(tmp_path: Path, chat_agent_name: str, started_by: str) -> None:
+def _write_last_dispatch(
+    tmp_path: Path, chat_agent_name: str, started_by: str, chat_id: str = "agent-lead"
+) -> None:
     path = update_apply_contract.last_dispatch_path(tmp_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -465,7 +467,7 @@ def _write_last_dispatch(tmp_path: Path, chat_agent_name: str, started_by: str) 
             {
                 "schema": 1,
                 "chat_agent_name": chat_agent_name,
-                "chat_id": "agent-lead",
+                "chat_id": chat_id,
                 "started_by": started_by,
                 "ceiling": "minds-v0.9.0",
                 "target_ref": "minds-v0.9.0",
@@ -495,6 +497,52 @@ def test_run_status_start_takes_how_it_was_started_from_the_dispatch_that_made_t
     assert _record(tmp_path).started_by is None
     raw = json.loads(update_apply_contract.run_status_path(tmp_path).read_text())
     assert "started_by" not in raw
+
+
+def test_started_by_reads_the_dispatch_through_either_identifier(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """The licence a scheduled run carries hangs on this answer, so a rename must not lose it:
+    renaming a chat renames its agent, and the dispatch's name goes stale under a live chat."""
+    monkeypatch.setenv("MNGR_AGENT_NAME", _LEAD)
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-lead")
+    monkeypatch.setenv("MINDS_CHAT_ID", "agent-lead")
+    _write_last_dispatch(tmp_path, _LEAD, "scheduled")
+
+    assert _main(tmp_path, "run-status", "started-by") == 0
+    assert capsys.readouterr().out.strip() == "scheduled"
+
+    # The chat was renamed mid-pass: the name no longer matches, the chat id still does.
+    monkeypatch.setenv("MNGR_AGENT_NAME", "update-to-v0-9-0-take-2")
+    assert _main(tmp_path, "run-status", "started-by") == 0
+    assert capsys.readouterr().out.strip() == "scheduled"
+    # And the run record agrees with it, rather than falling to None on the stale name.
+    assert _main(tmp_path, "run-status", "start") == 0
+    assert _record(tmp_path).started_by == "scheduled"
+    capsys.readouterr()
+
+    # Someone else's dispatch is not this run's, by either identifier.
+    _write_last_dispatch(
+        tmp_path, "update-to-minds-v0-8-0", "scheduled", chat_id="agent-other"
+    )
+    assert _main(tmp_path, "run-status", "started-by") == 0
+    assert capsys.readouterr().out.strip() == "unknown"
+
+
+def test_started_by_never_matches_a_dispatch_on_two_absent_identifiers(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    """Both sides defaulting to nothing must not read as the same chat: that would hand a run the
+    app never dispatched the broader licence a scheduled run carries."""
+    monkeypatch.delenv("MNGR_AGENT_NAME", raising=False)
+    monkeypatch.delenv("MNGR_AGENT_ID", raising=False)
+    monkeypatch.delenv("MINDS_CHAT_ID", raising=False)
+    path = update_apply_contract.last_dispatch_path(tmp_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"schema": 1, "started_by": "scheduled"}))
+
+    assert _main(tmp_path, "run-status", "started-by") == 0
+    assert capsys.readouterr().out.strip() == "unknown"
 
 
 def test_a_needs_decision_verdict_ends_the_run_and_the_resume_still_follows_it(
