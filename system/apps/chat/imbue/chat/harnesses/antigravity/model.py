@@ -1,22 +1,23 @@
-"""antigravity's model catalog and its display-only resolver.
+"""antigravity's model catalog and its resolver.
 
-agy's model bar is READ-ONLY. Its `/model` is an interactive TUI picker with no scriptable
-one-shot form, and `--model` applies only at launch, so there is no mid-session switch to
-offer: the bar reflects what agy reports and never drives it.
+The bar drives agy with ``/model <slug>``, which switches the running session in place. agy
+names a model at an effort by suffixing the effort to the base slug (``gemini-3.8-flash`` at
+``low`` is ``gemini-3.8-flash-low``), so one command sets both axes. agy has no fast mode.
 
-ONE slot, not three. agy has no separate effort or fast axis -- the tier is baked into the
-model id itself (``gemini-3.7-flash-high``), and `agy models` lists each pairing as its own
-row. So every option declares ``efforts=()`` and ``supports_fast=False``, which is what makes
-the bar render the model chip alone (the shown slots are decided purely by the matched
-option's data).
+The command is never typed by the switch request itself. agy is driven by one typist -- the
+watcher's flush worker (see ``queue_tracker.py``) -- which types it once no turn is open: a
+command typed into a live turn lands in whatever agy is showing, which can be a dialog.
 """
 
-import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
+from loguru import logger
+
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.antigravity.queue_tracker import get_agent_tracker
+from imbue.chat.harnesses.model import EffortChoice
 from imbue.chat.harnesses.model import HarnessCatalog
 from imbue.chat.harnesses.model import HarnessModelResolver
 from imbue.chat.harnesses.model import ModelAxis
@@ -26,41 +27,27 @@ from imbue.chat.harnesses.model import PickerMode
 from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import SwitchResult
 
-# =============================================================================================
-# !!! THIS LIST MUST BE UPDATED WHEN GOOGLE SHIPS NEW ANTIGRAVITY MODELS !!!
+# This list must be updated when Google ships new Antigravity models.
 #
 # Pinning the agy BINARY does not pin this. `agy models` fetches the list over the network
 # (it prints "Fetching available models..." first), so it is account- and server-side: Google
 # can add or retire models with no version bump, and `update_policy = "NEVER"` does nothing
 # to stop that.
 #
-# Captured from a signed-in `agy models` on 2026-08-21 (agy 1.1.16). Left column is agy's own
-# id, right column its display name -- copied verbatim, both.
+# Captured from a signed-in agy 1.4.7 on 2026-10-26: `agy models` for the slugs, and
+# `agy --model <slug> -p /effort --output-format json` for each model's adjustable efforts and
+# the one a bare base slug starts at. Each row is (base slug, name, efforts, default effort).
+# The name is what the statusline records as the model: agy's display name, with the effort
+# suffix dropped for a model whose effort is adjustable ("Gemini 3.8 Flash (High)" is recorded
+# as "Gemini 3.8 Flash" at "high"). A model agy reports no effort for keeps its whole name.
 #
-# A model missing from this list still renders, via the derived label in `derived_option`
-# below -- but that derivation is STRING PARSING OF AN ID AND IS NOT ROBUST. It reconstructs
-# "Gemini 3.8 Flash (High)" from "gemini-3.8-flash-high" by rule, so it cannot know about
-# things like Claude Sonnet's "(Thinking)" suffix or GPT-OSS's capitalisation, and it will
-# silently produce a slightly-wrong name for any family whose naming does not follow the
-# gemini pattern. It exists so a new default model degrades to a readable name instead of a
-# shrug -- NOT as a substitute for updating this list. Re-run `agy models` in a signed-in
-# workspace and paste the output here whenever agy is bumped.
-# =============================================================================================
-_MODEL_ROWS: Final[tuple[tuple[str, str], ...]] = (
-    ("gemini-3.7-flash-high", "Gemini 3.7 Flash (High)"),
-    ("gemini-3.7-flash-medium", "Gemini 3.7 Flash (Medium)"),
-    ("gemini-3.7-flash-low", "Gemini 3.7 Flash (Low)"),
-    ("gemini-3.6-flash-high", "Gemini 3.6 Flash (High)"),
-    ("gemini-3.6-flash-medium", "Gemini 3.6 Flash (Medium)"),
-    ("gemini-3.6-flash-low", "Gemini 3.6 Flash (Low)"),
-    ("gemini-3.5-flash-high", "Gemini 3.5 Flash (High)"),
-    ("gemini-3.5-flash-medium", "Gemini 3.5 Flash (Medium)"),
-    ("gemini-3.5-flash-low", "Gemini 3.5 Flash (Low)"),
-    ("gemini-3.1-pro-high", "Gemini 3.1 Pro (High)"),
-    ("gemini-3.1-pro-low", "Gemini 3.1 Pro (Low)"),
-    ("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)"),
-    ("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)"),
-    ("gpt-oss-120b-medium", "GPT-OSS 120B (Medium)"),
+# A model missing from this list still renders, via `derived_option` below, but it is not
+# offered in the picker. Re-run those commands in a signed-in workspace whenever agy is bumped.
+_MODEL_ROWS: Final[tuple[tuple[str, str, tuple[str, ...], str | None], ...]] = (
+    ("gemini-3.8-flash", "Gemini 3.8 Flash", ("low", "medium", "high"), "high"),
+    ("claude-sonnet-4-6", "Claude Sonnet 4.6 (Thinking)", (), None),
+    ("claude-opus-4-6-thinking", "Claude Opus 4.6 (Thinking)", (), None),
+    ("gpt-oss-120b-medium", "GPT-OSS 120B (Medium)", (), None),
 )
 
 # agy writes its live state at the agent state-dir root (the statusline command runs with
@@ -69,19 +56,21 @@ ANTIGRAVITY_STATE_RELATIVE_PATH: Final[Path] = Path(".")
 
 ANTIGRAVITY_CATALOG: Final[HarnessCatalog] = HarnessCatalog(
     options=tuple(
-        # ``harness_reported_model_id`` is the LABEL, not the id: agy's statusline payload
-        # reports its model as a display name ("Gemini 3.7 Flash (High)"), not the
-        # `gemini-3.7-flash-high` slug it lists in `agy models` -- verified against a live
-        # 1.1.19 payload. The id stays the slug because that is agy's own identifier; this
-        # field is exactly the seam for a harness whose reported id differs from it (claude
-        # sets it for the same reason).
-        ModelOption(id=model_id, label=label, harness_reported_model_id=label, efforts=(), supports_fast=False)
-        for model_id, label in _MODEL_ROWS
+        # agy's statusline reports a display name, not the slug `/model` takes, so the name is
+        # the reported id.
+        ModelOption(
+            id=slug,
+            label=label,
+            harness_reported_model_id=label,
+            efforts=tuple(EffortChoice(level=level) for level in efforts),
+            default_effort=default_effort,
+            supports_fast=False,
+        )
+        for slug, label, efforts, default_effort in _MODEL_ROWS
     ),
-    switch_mode=SwitchMode.READ_ONLY,
-    # LIST is the honest presentation of a small hand-written set. It is never rendered --
-    # a READ_ONLY bar opens no picker -- but the field is not optional and SEARCH would be a
-    # lie about the set's size.
+    # The chip moves on the click and settles once the statusline reports the new model, which
+    # for a pick made mid-turn is after the turn ends.
+    switch_mode=SwitchMode.EAGER_THEN_RECONCILE,
     picker_mode=PickerMode.LIST,
     powered_by_text="Powered by Antigravity",
     # agy's tap does not restart: it ends the turn with Escape and then delivers the block we
@@ -89,55 +78,57 @@ ANTIGRAVITY_CATALOG: Final[HarnessCatalog] = HarnessCatalog(
     native_atomic_shoulder_tap_possible=True,
 )
 
-# A tier suffix agy bakes into the id, rendered parenthesised in its display name.
-_TIER_SUFFIXES: Final[tuple[str, ...]] = ("high", "medium", "low")
-# A dotted version agy writes hyphenated in the id ("3-7" -> "3.7"), but only between digits,
-# so "gpt-oss-120b" is left alone.
-_VERSION_PAIR_RE: Final = re.compile(r"(?<=\d)-(?=\d)")
+_CATALOG_SLUGS: Final[frozenset[str]] = frozenset(slug for slug, _, _, _ in _MODEL_ROWS)
 
 
-def derived_option(model_id: str) -> ModelOption:
-    """A best-effort option for a model id absent from :data:`_MODEL_ROWS`.
+def derived_option(identity: ModelIdentity) -> ModelOption:
+    """An option for a model agy reports that is absent from :data:`_MODEL_ROWS`.
 
-    STRING PARSING, AND DELIBERATELY NOT AUTHORITATIVE -- see the banner above. A new model
-    (especially a new DEFAULT, which is when this bites) would otherwise show the unrecognized
-    shrug and tell the user nothing; a slightly-wrong name is strictly better than that. It is
-    marked ``in_picker=False`` because it is a rendering fallback, not an offer.
+    agy reports a display name, so it is the label as it stands. The model's reported effort is
+    its one declared effort, which matches the live read without offering an effort control that
+    could name a level the model does not have. Not offered in the picker: it is a rendering
+    fallback, so a model newer than the list (worst case, a new default) shows its name and
+    still lets the user switch to a listed one.
     """
-    # agy reports a DISPLAY NAME, so the common case needs no reconstruction at all -- use it
-    # verbatim. The slug path below stays for an id that really is a slug (a hand-set
-    # settings.json, or a future agy that reports one).
-    if " " in model_id:
-        return ModelOption(
-            id=model_id,
-            label=model_id,
-            harness_reported_model_id=model_id,
-            efforts=(),
-            supports_fast=False,
-            in_picker=False,
-        )
-    words = _VERSION_PAIR_RE.sub(".", model_id).split("-")
-    tier = words.pop().title() if len(words) > 1 and words[-1] in _TIER_SUFFIXES else None
-    label = " ".join(word.title() for word in words)
     return ModelOption(
-        id=model_id,
-        label=f"{label} ({tier})" if tier else label,
-        harness_reported_model_id=model_id,
-        efforts=(),
+        id=identity.model_id,
+        label=identity.model_id,
+        harness_reported_model_id=identity.model_id,
+        efforts=(EffortChoice(level=identity.effort),) if identity.effort is not None else (),
         supports_fast=False,
         in_picker=False,
     )
 
 
+def model_command(identity: ModelIdentity) -> str:
+    """The agy slash command that puts a session on ``identity``'s model at its effort."""
+    if identity.effort is None:
+        return f"/model {identity.model_id}"
+    return f"/model {identity.model_id}-{identity.effort}"
+
+
 class AntigravityModelResolver(HarnessModelResolver):
-    """Display-only: agy's model is read from the uniform ``model_state.json`` like every
-    other harness, and there is nothing to write back."""
+    """Switches an agy agent by holding its ``/model`` command for the flush worker to type."""
+
+    _agent_id: str
+    _state_dir: Path
 
     @classmethod
     def build(cls, agent_info: AgentInfo) -> "AntigravityModelResolver":
-        return cls()
+        self = cls.__new__(cls)
+        self._agent_id = agent_info.id
+        self._state_dir = agent_info.agent_state_dir
+        return self
 
     def switch(self, identity: ModelIdentity, axes: frozenset[ModelAxis], send: Callable[[str], bool]) -> SwitchResult:
-        # Unreachable through the UI (a READ_ONLY bar never offers a pick) -- this answers the
-        # endpoint if something calls it anyway, rather than silently pretending to switch.
-        return SwitchResult(ok=False, detail="Antigravity's model is changed from the agent's terminal.")
+        # Not through ``send``, which types now whatever agy is doing (see the module docstring).
+        if ModelAxis.MODEL not in axes and ModelAxis.EFFORT not in axes:
+            return SwitchResult(ok=True)
+        if identity.model_id not in _CATALOG_SLUGS:
+            # A pick can only name an unlisted model through `derived_option`, which is in the
+            # option set only while the agent reports that model at that effort, so the agent is
+            # already on it. Its id is a display name, which `/model` would not accept.
+            logger.debug("antigravity: {} already runs the unlisted model {!r}", self._agent_id, identity.model_id)
+            return SwitchResult(ok=True)
+        get_agent_tracker(self._agent_id, self._state_dir).request_model_command(model_command(identity))
+        return SwitchResult(ok=True)
