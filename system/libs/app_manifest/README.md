@@ -409,7 +409,7 @@ selection. When the consumer is an app, declaring the path in its manifest's
 
 ## Running tests
 
-    app-manifest run-tests (--diff-base REF [--diff-ref REF] | --path P ... | --scope-file FILE | --all)
+    app-manifest run-tests (--diff-base REF [--diff-ref REF] | --path P ... [--diff-base REF] | --scope-file FILE | --all)
         [--repo-root DIR] [--output-dir DIR] [--shed-ledger FILE]
 
 `run-tests` takes a change the way `select-tests` does and runs what it selects,
