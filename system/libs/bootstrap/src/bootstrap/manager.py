@@ -58,7 +58,7 @@ _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 # same file). /etc/localtime lives on the container rootfs and is lost when the
 # container is recreated, so each boot re-applies this instead of leaving the
 # container on UTC.
-USER_TIMEZONE_CACHE = STATE_DIR / "user_timezone"
+USER_TIMEZONE_FILE = STATE_DIR / "user_timezone"
 
 # The in-flight update-apply marker and the script that rolls a stale one
 # back (see the update-self skill's apply/recover). The marker persists with
@@ -379,7 +379,7 @@ def _apply_container_timezone(
 
 
 def _set_container_timezone(
-    timezone_file_path: Path = USER_TIMEZONE_CACHE,
+    timezone_file_path: Path = USER_TIMEZONE_FILE,
     zoneinfo_dir: Path = Path("/usr/share/zoneinfo"),
     localtime_path: Path = Path("/etc/localtime"),
     timezone_path: Path = Path("/etc/timezone"),
