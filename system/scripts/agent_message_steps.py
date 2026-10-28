@@ -202,8 +202,6 @@ def message_step_context(step: PendingStep) -> str:
         f"- When you start on this message, run `tk start {step.step_id}` (it waits until the step exists) and do "
         "its work under that step.\n"
         f'- When it is done, run `tk close {step.step_id} "<one-line summary of the work>"`.\n'
-        "- If you handle it together with other messages, start their steps together and close each one with its "
-        "own summary when that work is done.\n"
         f"- If `tk start {step.step_id}` says the message was judged not to be a task, reply or carry on without a step.\n"
         f"- If `tk start {step.step_id}` says the message repeats, replaces or calls off another step, do what it says."
     )

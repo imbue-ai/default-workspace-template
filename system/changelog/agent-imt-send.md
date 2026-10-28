@@ -1,3 +1,1 @@
 - Claude agents are told, beside each message sent while they were busy, the id of the step the chat is making for it, and never declare their own step for that request. A `tk start` or `tk close` of that id waits until the step exists, and is answered at once when the message was judged not a task (`system/scripts/agent_message_steps.py`, wired in `.claude/settings.json`; `CHAT_MESSAGE_STEP_RESERVATIONS_DIR` in `.mngr/settings.toml`).
-
-- The agent instructions and step reminders allow several message steps in progress at once, when one piece of work answers several messages.
