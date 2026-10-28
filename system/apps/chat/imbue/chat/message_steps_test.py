@@ -762,3 +762,14 @@ def test_a_message_cannot_name_another_chats_step(folders: _Folders) -> None:
 
     assert list(folders.files.tickets_dir.glob(f"*{CANCEL_SUFFIX}")) == []
     assert folders.outcome_of(reservation.step_id) is MessageStepOutcome.FAILED
+
+
+def test_tk_and_the_chat_app_agree_on_the_latest_of_two_quick_cancels(folders: _Folders) -> None:
+    own = _created_step_id(folders, "Add a quiz")
+
+    folders.run_tk("cancel", own, "first")
+    folders.run_tk("cancel", own, "second")
+
+    assert len(list(folders.files.tickets_dir.glob(f"{own}.*{CANCEL_SUFFIX}"))) == 2
+    assert "cancelled by the user's message: second" in _tk_steps(folders)
+    assert folders.files.cancels_in_force()[own].reason == "second"

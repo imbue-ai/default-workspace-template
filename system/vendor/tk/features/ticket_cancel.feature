@@ -41,10 +41,12 @@ Feature: Cancelling a step
     And I run "ticket steps --all-agents --status=closed"
     Then the output should contain "cancelled by the user's message: no quiz"
 
-  Scenario: A second cancel in the same second gets its own sidecar, and counts
+  Scenario: A later cancel gets its own sidecar, and counts
     Given ticket "wor-step-0001" was started long ago
-    When I run "ticket cancel wor-step-0001 'first' && ticket cancel wor-step-0001 'second'"
-    And I run "ticket steps --all-agents"
+    When I run "ticket cancel wor-step-0001 'first'"
+    And I run "ticket cancel wor-step-0001 'second'"
+    Then the command should succeed
+    When I run "ticket steps --all-agents"
     Then the output should contain "cancelled by the user's message: second"
 
   Scenario: Create with a given id never writes over an existing ticket

@@ -1750,6 +1750,7 @@ Commands:
     --parent               Parent ticket ID
     --step                 Create as a turn-bound progress record (step)
     --tags                 Comma-separated tags (e.g., --tags ui,backend,urgent)
+    --id                   Use this id (fails if a ticket already exists there)
   start <id>               Set status to in_progress (auto-self-assigns)
   close <id> [summary]     Set status to closed (summary required for steps)
   cancel <id> <reason>     Record that a step is no longer wanted (starting it again overrides)

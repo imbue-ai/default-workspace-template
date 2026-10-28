@@ -68,8 +68,10 @@ Commands:
     --parent               Parent ticket ID
     --step                 Create as a turn-bound progress record (step)
     --tags                 Comma-separated tags (e.g., --tags ui,backend,urgent)
+    --id                   Use this id (fails if a ticket already exists there)
   start <id>               Set status to in_progress (auto-self-assigns when MNGR_AGENT_NAME is set)
   close <id> [summary]     Set status to closed (positional summary required for steps)
+  cancel <id> <reason>     Record that a step is no longer wanted (starting it again overrides)
   reopen <id>              Set status to open
   status <id> <status>     Update status (open|in_progress|closed)
   assign <id> [agent]      Set assignee (defaults to MNGR_AGENT_NAME / git user.name)
