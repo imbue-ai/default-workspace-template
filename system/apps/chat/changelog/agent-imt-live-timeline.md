@@ -2,7 +2,7 @@ The chat shows one progress timeline at a time, always as the last thing in the 
 
 - A user message or agent reply that arrives while steps are open renders above the timeline. A step open across several messages shows once, with all its work, and is no longer repeated under each new message.
 
-- The timeline lists its steps by state: done (in the order they closed), the one being worked on now, the others in progress, then the ones not started. When every step is done the timeline stays where it is, and what follows (usually the agent's wrap-up reply) renders below it. The next step starts a new timeline.
+- The timeline lists its steps by state: done (in the order they closed), the one being worked on now, the others in progress, then the ones not started. The done steps fold into a single "Done" row, which expands to show each with its summary. When every step is done the timeline stays where it is, and what follows (usually the agent's wrap-up reply) renders below it. The next step starts a new timeline.
 
 - The step the chat makes for a message sent while the agent is busy shows on the live timeline as waiting about two seconds after sending, before the agent starts it. The line under the user's message for that step is gone.
 
