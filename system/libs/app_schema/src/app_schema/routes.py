@@ -126,9 +126,17 @@ def model_response(model: BaseModel, status: int = 200) -> Response:
 
 
 def error_response(
-    detail: str, status: int, user_facing_message: str | None = None, reportable: bool | None = None
+    detail: str,
+    status: int,
+    user_facing_message: str | None = None,
+    reportable: bool | None = None,
 ) -> Response:
     """A refusal or a failure as the ``ErrorResponse`` every route answers them with."""
     return model_response(
-        ErrorResponse(detail=detail, user_facing_message=user_facing_message, reportable=reportable), status
+        ErrorResponse(
+            detail=detail,
+            user_facing_message=user_facing_message,
+            reportable=reportable,
+        ),
+        status,
     )
