@@ -5,7 +5,8 @@
  * and each account carries when it last signed in. A failed turn older than that is resolved: it
  * stops asking the user to sign in. When the chat app is sending the refused message again itself
  * (it does for an agent the sign-in restarted), the turn says so; otherwise, while it is still the
- * chat's newest turn, it offers to send that message again. Once a copy of a refused message is in
+ * chat's newest turn, it offers to send that message again, and after a resend that stopped
+ * partway, the messages it did not get to. Once a copy of a refused message is in
  * the chat, the original and the failure are hidden, so the message shows once.
  *
  * Which messages a failure refused is decided as the chat app decides it
@@ -102,6 +103,20 @@ function wordsOf(prompt: UserMessageEvent): string {
   return classifyUserMessage(prompt).body.trim();
 }
 
+/** The user's messages sent after the turn's last failure, anywhere in the chat: copies of what it
+ *  refused, or whatever the user wrote next. */
+function userTurnsSentSince(events: readonly TranscriptEvent[], turn: RefusedTurn): UserMessageEvent[] {
+  const lastFailure = turn.failures[turn.failures.length - 1];
+  const lastFailureIndex = events.indexOf(lastFailure);
+  return events.filter(
+    (event, index): event is UserMessageEvent =>
+      event.type === "user_message" &&
+      isTurnUserMessage(event) &&
+      !turn.prompts.includes(event) &&
+      isSentAfter(event, index, lastFailure, lastFailureIndex),
+  );
+}
+
 /**
  * The refused messages and failures to hide: a refused message once a copy of it was sent later
  * (the chat app sent it again, the user pressed "Send your message again", or typed it again), and
@@ -111,13 +126,7 @@ function wordsOf(prompt: UserMessageEvent): string {
 export function computeAuthErrorHiddenEventIds(events: readonly TranscriptEvent[]): Set<string> {
   const hidden = new Set<string>();
   for (const turn of refusedTurns(events)) {
-    const lastFailure = turn.failures[turn.failures.length - 1];
-    const lastFailureIndex = events.indexOf(lastFailure);
-    const laterWords = new Set<string>();
-    events.forEach((event, index) => {
-      if (event.type !== "user_message" || !isTurnUserMessage(event) || turn.prompts.includes(event)) return;
-      if (isSentAfter(event, index, lastFailure, lastFailureIndex)) laterWords.add(wordsOf(event));
-    });
+    const laterWords = new Set(userTurnsSentSince(events, turn).map(wordsOf));
     const copied = turn.prompts.filter((prompt) => wordsOf(prompt) !== "" && laterWords.has(wordsOf(prompt)));
     for (const prompt of copied) hidden.add(prompt.event_id);
     if (copied.length === turn.prompts.length) {
@@ -127,8 +136,12 @@ export function computeAuthErrorHiddenEventIds(events: readonly TranscriptEvent[
   return hidden;
 }
 
-/** The messages `failed` refused, while nothing has happened in the chat since: it is the last
- *  failure of the chat's last turn and the user sent nothing after it. Null otherwise. */
+/**
+ * The messages `failed` refused that have no copy in the chat yet, while the user has not moved on:
+ * no sign-in failed again after it, and everything the user sent since is a copy of one of them
+ * (a resend that stopped partway leaves the rest offered here). With no copy yet, the turn must
+ * also still be the chat's last. Null otherwise.
+ */
 export function messagesToSendAgain(
   events: readonly TranscriptEvent[],
   failed: Pick<AssistantMessageEvent, "event_id">,
@@ -136,8 +149,16 @@ export function messagesToSendAgain(
   const turn = refusedTurns(events).find(
     (candidate) => candidate.failures[candidate.failures.length - 1].event_id === failed.event_id,
   );
-  if (turn === undefined || !turn.isLast || turn.isAnsweredSince) return null;
-  const prompts = turn.prompts.filter((prompt) => wordsOf(prompt) !== "");
+  if (turn === undefined) return null;
+  const lastFailureIndex = events.indexOf(turn.failures[turn.failures.length - 1]);
+  // A later failure is a turn of its own, which offers its own messages.
+  if (events.some((event, index) => index > lastFailureIndex && isAuthFailure(event))) return null;
+  const sentSince = userTurnsSentSince(events, turn);
+  const refusedWords = new Set(turn.prompts.map(wordsOf));
+  if (sentSince.some((event) => !refusedWords.has(wordsOf(event)))) return null;
+  if (sentSince.length === 0 && !turn.isLast) return null;
+  const copiedWords = new Set(sentSince.map(wordsOf));
+  const prompts = turn.prompts.filter((prompt) => wordsOf(prompt) !== "" && !copiedWords.has(wordsOf(prompt)));
   return prompts.length > 0 ? prompts : null;
 }
 

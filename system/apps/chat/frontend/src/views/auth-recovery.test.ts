@@ -84,4 +84,27 @@ describe("messagesToSendAgain", () => {
   it("offers nothing once the agent has replied since", () => {
     expect(messagesToSendAgain([ASKED, REFUSED, reply("later", "2026-10-28T00:41:00.000Z")], REFUSED)).toBeNull();
   });
+
+  describe("after a resend that stopped partway", () => {
+    const SECOND = typed("second", "and 3+3?", "2026-10-28T00:39:55.600Z");
+
+    it.each<[string, TranscriptEvent[]]>([
+      ["before the agent answers the copy", [ASKED, SECOND, REFUSED, COPY]],
+      ["once the agent has answered the copy", [ASKED, SECOND, REFUSED, COPY, ANSWER]],
+    ])("offers the refused messages that have no copy yet, %s", (_case, events) => {
+      expect(ids(messagesToSendAgain(events, REFUSED) ?? [])).toEqual(["second"]);
+    });
+
+    it("offers nothing once the user has written something of their own", () => {
+      const other = typed("other", "never mind", "2026-10-28T00:41:00.000Z");
+
+      expect(messagesToSendAgain([ASKED, SECOND, REFUSED, COPY, ANSWER, other], REFUSED)).toBeNull();
+    });
+
+    it("offers nothing once a sign-in failed again after it", () => {
+      const refusedAgain = reply("refused-again", "2026-10-28T00:40:13.000Z", true);
+
+      expect(messagesToSendAgain([ASKED, SECOND, REFUSED, COPY, refusedAgain], REFUSED)).toBeNull();
+    });
+  });
 });

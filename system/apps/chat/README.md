@@ -48,7 +48,8 @@ observe`, its own supervised service) writes, and serves:
   every open chat. While the chat app is sending the refused message again
   itself (its agent's snapshot reports `is_resending_after_sign_in`), the turn
   says so; otherwise it offers to send the message again while it is still the
-  chat's newest turn. Once a copy of a refused message is in the chat, the
+  chat's newest turn, and after a resend that stopped partway, the messages it
+  did not get to. Once a copy of a refused message is in the chat, the
   original and its sign-in error are hidden, so the message shows once.
   The list's right edge drags to resize it (100px to 480px, 180px by default,
   kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
