@@ -1,0 +1,3 @@
+A turn that failed because the chat's sign-in stopped working no longer keeps asking for a sign-in after the account is signed in again. Wherever the sign-in finished (the turn's own "Sign in again", another chat, the chat list), every open chat on that account replaces the red failure with "Signed in again." and, while that turn is still the chat's newest, offers "Send your message again" for the message it failed on. It is offered, not sent on its own. The provider's original text stays under "See details".
+
+Each account now records when it last finished a sign-in, in its own folder, and `GET /api/accounts` carries it as `signed_in_at`.

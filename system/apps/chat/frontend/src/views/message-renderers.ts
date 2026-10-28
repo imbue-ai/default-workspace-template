@@ -6,11 +6,12 @@
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
-import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
+import { getEventDetailState, getEventDetailVersion, getEventsForChat, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
 import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
+import { isSignedInSince, messageToSendAgain, resendStateOf, sendAgain } from "./auth-recovery";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { activityDotClass } from "@imbue/workspace-ui/src/components/activityDot";
 import { getExpansionVersion, isBlockExpanded, setBlockExpanded } from "./expansion-state";
@@ -195,13 +196,18 @@ function resolvedResultSignature(
     .join("|");
 }
 
-/** The Chats-store input the auth-error note renders from: whether the chat is known yet, and
- *  which account it is bound to. It sits outside the event, so the memo below has to carry it --
- *  the chat list can land after the transcript, and the switch link is only offered once it has. */
+/** The input outside the event that the auth-error note renders from: whether the chat is known
+ *  yet, which account it is bound to, and, once that account signed in again, the message offered
+ *  again and how its send went. The memo below has to carry it -- the chat list and the account
+ *  list can land after the transcript. */
 function reauthNoteSignature(event: AssistantMessageEvent, chatId: string): string {
   if (!event.is_auth_error) return "";
   const chat = getChatById(chatId);
-  return chat === undefined ? "unknown" : `bound:${chat.active_agent.account_id ?? ""}`;
+  if (chat === undefined) return "unknown";
+  const bound = `bound:${chat.active_agent.account_id ?? ""}`;
+  if (!isSignedInSince(event, chatId)) return bound;
+  const prompt = messageToSendAgain(getEventsForChat(chatId), event);
+  return `${bound}|recovered|${prompt?.event_id ?? "-"}|${resendStateOf(event.event_id) ?? "-"}`;
 }
 
 export function StableAssistantMessage(): m.Component<{
@@ -489,6 +495,37 @@ function renderReauthAction(chatId: string): m.Children {
   ]);
 }
 
+/** A failed sign-in turn whose account has since been signed in again, wherever that happened: one
+ *  neutral line in place of the red failure, and the message it failed on to send again while the
+ *  turn is still the chat's newest. The provider's own text stays one click away. */
+function renderSignedInAgain(event: AssistantMessageEvent, chatId: string, text: string): m.Vnode {
+  const prompt = messageToSendAgain(getEventsForChat(chatId), event);
+  const state = resendStateOf(event.event_id);
+  const action =
+    prompt === null || state === "sent"
+      ? null
+      : [
+          state === "failed" ? " That didn't send. " : " ",
+          m(
+            "button",
+            {
+              type: "button",
+              class: REAUTH_ACTION_CLASS,
+              disabled: state === "sending",
+              onclick: () => void sendAgain(chatId, event.event_id, prompt),
+            },
+            state === "failed" ? "Try again" : "Send your message again",
+          ),
+        ];
+  return m("div", { class: "message-auth-recovered rounded-md bg-fill-hover px-[0.75em] py-[0.5em] text-secondary" }, [
+    m("p", { class: "message-auth-recovered-lead" }, ["Signed in again.", action]),
+    m("details", { class: "message-auth-recovered-details mt-[0.4em] text-[0.85em] text-faint" }, [
+      m("summary", { class: "cursor-pointer" }, "See details"),
+      m(MarkdownContent, { content: text, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
+    ]),
+  ]);
+}
+
 /** The grey note shown under a provider-fault API error: the failure is the model
  *  provider's, not ours. Wording nudged by kind; every harness's provider faults
  *  land here since they stamp the same is_provider_fault flag. */
@@ -651,7 +688,9 @@ function appendEventParts(
   }
   if (textContent) {
     flushChips();
-    if (event.is_api_error || event.is_auth_error) {
+    if (event.is_auth_error && isSignedInSince(event, chatId)) {
+      children.push(renderSignedInAgain(event, chatId, textContent));
+    } else if (event.is_api_error || event.is_auth_error) {
       // A model API error: render the failure text in light red, and for a
       // provider-side fault (5xx / overloaded) add a grey "not Imbue Studio's fault" note.
       //
