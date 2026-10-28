@@ -2157,9 +2157,9 @@ class AgentManager:
                 )
                 return
             _loguru_logger.info("Resent {}'s message {} refused for want of a sign-in", agent_info.name, message_id)
-            self._wait_for_resent_turn(reader, text, copies_before)
+            self._wait_for_resent_turn(agent_info.name, reader, text, copies_before)
 
-    def _wait_for_resent_turn(self, reader: TranscriptReader, text: str, copies_before: int) -> None:
+    def _wait_for_resent_turn(self, agent_name: str, reader: TranscriptReader, text: str, copies_before: int) -> None:
         """Wait, briefly, for a delivered resend to reach the transcript: until it does, the chat's refused
         turn is still its newest, and ending the resend would have the page offer to send it again."""
         deadline = time.monotonic() + _RESENT_TURN_LANDING_TIMEOUT_SECONDS
@@ -2167,6 +2167,12 @@ class AgentManager:
             if _count_user_turns_saying(reader.get_tail_events(_SIGN_IN_REFUSAL_TAIL_EVENTS), text) > copies_before:
                 return
             self._pause(_RESENT_TURN_LANDING_POLL_SECONDS)
+        if not self._shutdown_event.is_set():
+            _loguru_logger.warning(
+                "{}'s resent message did not reach its transcript within {}s; its chat may offer to send it again",
+                agent_name,
+                _RESENT_TURN_LANDING_TIMEOUT_SECONDS,
+            )
 
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
         """Record one chat page's presence report: re-tags the chats, and marks the chat read in the Imbue
