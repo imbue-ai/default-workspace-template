@@ -57,6 +57,7 @@ from imbue.chat.chat_records import ChatRecord
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_transcript import agent_switch_event_id
+from imbue.chat.compaction_status import COMPACTION_CAUSE_FIELD
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
@@ -98,6 +99,7 @@ from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
 from imbue.chat.server import _open_chat_stream
+from imbue.chat.server import _request_compaction_from_mngr
 from imbue.chat.server import _revive_and_retry_send
 from imbue.chat.server import _stream_events
 from imbue.chat.server import _stream_filtered_events
@@ -133,6 +135,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -949,6 +952,7 @@ def _fake_watcher(
     return SimpleNamespace(
         set_queue_snapshot_callback=lambda _callback: None,
         set_finished_tasks_callback=lambda _callback: None,
+        set_wake_pending_tasks_callback=lambda _callback: None,
         notify_idle=lambda: [],
         notify_busy=lambda: None,
         set_flush_hooks=lambda _send, _is_alive: None,
@@ -1787,6 +1791,7 @@ def test_get_harnesses_says_which_harnesses_compact_and_whose_interrupt_cancels_
     assert capabilities.pop("claude") == (True, True)
     assert capabilities.pop("codex") == (True, False)
     assert capabilities.pop("pi-coding") == (True, False)
+    assert capabilities.pop("grok") == (True, False)
     assert capabilities
     assert set(capabilities.values()) == {(False, False)}
 
@@ -5029,7 +5034,11 @@ _COMPACTED_EVENT: Final[dict[str, Any]] = {
     "non_turn_tail": True,
 }
 
-_COMPACTING_THROUGH_MNGR_HARNESSES: Final[tuple[HarnessType, ...]] = (HarnessType.CODEX, HarnessType.PI_CODING)
+_COMPACTING_THROUGH_MNGR_HARNESSES: Final[tuple[HarnessType, ...]] = (
+    HarnessType.CODEX,
+    HarnessType.PI_CODING,
+    HarnessType.GROK,
+)
 
 
 @contextmanager
@@ -5078,7 +5087,7 @@ def _compact_sent_from_the_composer(
         pytest.param("/compact keep the test plan", "keep the test plan", id="with_instructions"),
     ],
 )
-def test_a_compact_command_from_a_codex_or_pi_composer_asks_mngr_to_compact_instead_of_sending_it(
+def test_a_compact_command_from_a_codex_pi_or_grok_composer_asks_mngr_to_compact_instead_of_sending_it(
     tmp_path: Path, harness: HarnessType, message: str, instructions: str | None
 ) -> None:
     with _compact_sent_from_the_composer(tmp_path, harness, message) as (response, manager, messenger, agent_id):
@@ -5134,7 +5143,8 @@ def test_a_compact_command_after_a_new_exchange_since_the_last_compaction_asks_m
 def test_a_compact_command_while_the_agent_cannot_compact_is_declined_without_asking_mngr(
     tmp_path: Path, harness: HarnessType, lifecycle_state: str, activity_state: ActivityState | None, detail: str
 ) -> None:
-    """mngr's compaction would abort a running turn (Codex and Pi both start it in the turn's place)."""
+    """mngr's compaction would abort a running turn (Codex and Pi both start it in the turn's place), and mngr
+    types nothing into a busy Grok."""
     with _compact_sent_from_the_composer(
         tmp_path, harness, lifecycle_state=lifecycle_state, activity_state=activity_state
     ) as (response, manager, messenger, agent_id):
@@ -5173,6 +5183,66 @@ def test_a_compaction_mngr_did_not_start_leaves_no_compaction_showing(
         assert response.get_json() == {"detail": failure.reason, "kind": failure.kind}
         assert messenger.compactions == [(agent_id, None)]
         assert agent_id not in manager._compaction_pending_by_agent
+
+
+class _CompactionReportingMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger whose compaction request returns only once the agent reported the compaction, as
+    grok's does: mngr waits for grok's compaction record, which the chat's watcher emits meanwhile."""
+
+    report_compaction: Callable[[str], None]
+
+    def request_compaction(self, agent_id: AgentId, instructions: str | None) -> None:
+        super().request_compaction(agent_id, instructions)
+        self.report_compaction(str(agent_id))
+
+
+def test_a_compaction_mngr_waits_out_shows_while_it_runs_and_ends_with_its_compacted_event(tmp_path: Path) -> None:
+    """The request is noted before mngr is asked, so a compaction mngr waits out shows while it runs."""
+    agent_info = _agent_info(agent_id=f"agent-{uuid4().hex}", harness=HarnessType.GROK, agent_state_dir=tmp_path)
+    managers: list[AgentManager] = []
+    shown_while_compacting: list[bool] = []
+    compacted_events: list[dict[str, Any]] = []
+
+    def report_compaction(_agent_id: str) -> None:
+        shown_while_compacting.append(managers[0].is_compaction_in_flight(agent_info))
+        compacted_events.append({**_COMPACTED_EVENT, "timestamp": utc_iso_seconds_ago(0.0)})
+        managers[0].stamp_compaction_events(agent_info, compacted_events)
+
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=_CompactionReportingMngrMessenger(report_compaction=report_compaction)
+    )
+    managers.append(manager)
+    state = build_test_state(agent_manager=manager)
+    try:
+        outcome = _request_compaction_from_mngr(manager, agent_info, "/compact", _EXCHANGE_EVENTS)
+
+        assert outcome is SendOutcome.OK
+        assert shown_while_compacting == [True]
+        assert agent_info.id not in manager._compaction_pending_by_agent
+        assert [event[COMPACTION_CAUSE_FIELD] for event in compacted_events] == [CompactionCause.MANUAL.value]
+    finally:
+        state.shutdown()
+
+
+class _CompactionFailingMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger whose compaction request fails with an error mngr did not turn into a send failure."""
+
+    def request_compaction(self, agent_id: AgentId, instructions: str | None) -> None:
+        raise MngrError("mngr's config could not be read")
+
+
+def test_a_compaction_request_that_fails_unexpectedly_is_withdrawn(tmp_path: Path) -> None:
+    agent_info = _agent_info(agent_id=f"agent-{uuid4().hex}", harness=HarnessType.GROK, agent_state_dir=tmp_path)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=_CompactionFailingMngrMessenger())
+    state = build_test_state(agent_manager=manager)
+    try:
+        with pytest.raises(MngrError):
+            _request_compaction_from_mngr(manager, agent_info, "/compact", _EXCHANGE_EVENTS)
+
+        assert agent_info.id not in manager._compaction_pending_by_agent
+        assert not manager.is_compaction_in_flight(agent_info)
+    finally:
+        state.shutdown()
 
 
 def _claude_stop_with_no_open_turn(tmp_path: Path) -> tuple[AgentInfo, Path]:

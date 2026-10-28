@@ -329,6 +329,24 @@ def _first_failure(result: MessageResult) -> SendFailure:
     return SendFailure(reason="The agent could not be reached.", kind="agent_unreachable")
 
 
+# The failure kinds of a delivery that found no agent where the caller located it.
+_STALE_LOCATION_FAILURE_KINDS: Final[frozenset[SendFailureKind]] = frozenset(
+    {SendFailureKind.AGENT_NOT_FOUND, SendFailureKind.AGENT_UNREACHABLE}
+)
+
+
+def _was_answered(result: MessageResult) -> bool:
+    """Whether a delivery that reached no agent as a success still reached one.
+
+    The agent refused it, may already have typed it (mngr's ``SUBMISSION_UNCONFIRMED``), or took it
+    and a dialog came up behind it (``blocked_agents``). An unclassified failure (``UNKNOWN``) counts
+    too: mngr may have typed before it failed.
+    """
+    return bool(result.blocked_agents) or any(
+        failure.kind not in _STALE_LOCATION_FAILURE_KINDS for failure in result.failures
+    )
+
+
 def _without_send_prefix(message: str, agent_name: str) -> str:
     """Drop mngr's standalone-raise framing from a blocked message before showing it.
 
@@ -420,6 +438,8 @@ class MngrMessenger(FrozenModel):
         hosts), it falls back to a full mngr discovery. The id is globally unique, so it
         resolves to exactly the intended agent, never fanning out across same-named
         agents on other hosts. STOPPED agents are auto-started (`is_start_desired=True`).
+        A send the agent answered at its known location -- refused it, may already have typed
+        it, or took it and met a dialog -- is never sent again.
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
@@ -427,6 +447,8 @@ class MngrMessenger(FrozenModel):
                 result = self.send(known_locations, message, mngr_ctx)
                 if result.successful_agents:
                     return None
+                if _was_answered(result):
+                    return _first_failure(result)
             matches = self.discover(agent_id, mngr_ctx)
             result = self.send(matches, message, mngr_ctx)
             if result.successful_agents:
@@ -438,15 +460,19 @@ class MngrMessenger(FrozenModel):
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.
 
-        The key-chord sibling of ``send_to_agent`` and resolves the agent exactly the same
-        way (known location first, discovery on a miss), but delivers a keystroke rather than
-        text and never auto-starts a stopped agent. Returns True when the chord reached the
-        agent.
+        The key-chord sibling of ``send_to_agent``, resolving the agent the same way: the known
+        location first, and discovery only when that reached no agent, so a press the agent
+        refused is not pressed again. It delivers a keystroke rather than text and never
+        auto-starts a stopped agent. Returns True when the chord reached the agent.
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
-            if known_locations and self.press(known_locations, key, mngr_ctx).successful_agents:
-                return True
+            if known_locations:
+                result = self.press(known_locations, key, mngr_ctx)
+                if result.successful_agents:
+                    return True
+                if _was_answered(result):
+                    return False
             matches = self.discover(agent_id, mngr_ctx)
             return bool(self.press(matches, key, mngr_ctx).successful_agents)
         finally:

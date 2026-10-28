@@ -162,7 +162,7 @@ switching agents is working, or error once the switch failed.
 A chat is busy when its agent will resume on its own: a turn is in flight, or a
 background task is pending whose completion starts one. The pending tasks are
 one marker file each under `data/.apps/chat/background_tasks/<chat-id>/`,
-written by `system/scripts/run_in_background.py` and by Claude's Stop hook, and
+written by `system/scripts/run_in_background.py` and by Claude's and grok's hooks, and
 read through the `system/libs/chat_background_tasks` library (`background_tasks.py`
 here wraps it, and creates the directory's root at startup so the shell's avatar
 can watch it). A poller of its own reads each chat's directory, keyed by the
@@ -174,7 +174,13 @@ the Claude watcher removes a Claude task's marker once the transcript's
 `<task-notification>` reports the task completed, failed or killed: a turn the
 user interrupts, or one that fails, runs no Stop hook, and the finished task
 would otherwise read as pending until the next Stop or Claude's exit, as it
-still does in a chat the app is not tailing. With no turn in flight the removal
+still does in a chat the app is not tailing. The grok watcher does the same for a
+grok task (a background shell, monitor or subagent of a top-level session) once
+the session's `task_completed` or `subagent_finished` record reports it over.
+One the record marks `will_wake` starts a turn of its own: its removal waits for
+that turn even when the task ended during another turn, whose Stop hook removes
+its marker before the turn ends, and the chat stays busy until it starts.
+With no turn in flight the removal
 waits for the turn the notice starts and goes out with it, so the chat goes from
 `background` to `working` without reading idle in between; a notice that starts
 no turn (a task stopped from Claude's `/tasks`) ends the wait three poller passes
@@ -344,9 +350,10 @@ while since `mngr start` does not wait for the harness to come up. A new chat
 created with a pick (`POST /api/chats/create` takes `model` too) is set up the
 same way. `GET /api/accounts/<account-id>/model-options` is where the dialog
 gets the target account's models, for a handoff's successor and a rebound agent
-alike: the catalog for a static harness, for codex the options an agent of the
-account was last offered, and nothing for antigravity, whose model is changed
-from the agent's terminal.
+alike: the catalog for a static harness, for grok the catalog's models that
+`grok models` lists for the account (all of them when it lists none or cannot
+run), for codex the options an agent of the account was last offered, and
+nothing for antigravity, whose model is changed from the agent's terminal.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
@@ -542,7 +549,7 @@ user sends in it. A
 name the user or an agent chose is left alone. What has been tried is kept in
 `naming.json` in the chat's folder, so a restart neither renames a named chat
 nor retries past the limit. A harness with no `OneShotCompletion` (Pi,
-Antigravity, OpenCode) keeps the minted name, and a secondary chat names
+Antigravity, Grok, OpenCode) keeps the minted name, and a secondary chat names
 nothing.
 
 A name a person or an agent gives wins over the automatic one. While their
@@ -582,10 +589,13 @@ sweep does no work at all. The plugin's rules are in its README in the mngr repo
 (`libs/mngr_autocompact/README.md`); the cron-driven `mngr autocompact run` it
 describes is not used here, since the sweep is the timer.
 
-Idle compaction applies to the harnesses mngr can compact: Claude, Codex and Pi
+Idle compaction applies to the harnesses mngr can compact: Claude, Codex, Pi and Grok
 (`supports_compaction` in `harnesses/registry.py`, shipped on `/api/harnesses`).
 Antigravity and OpenCode chats are never compacted or passed to the plugin, and
-their model menu has no Auto-compact row.
+their model menu has no Auto-compact row. xAI publishes no prompt-cache lifetime, so
+mngr_grok reports none, and the plugin passes over a Grok chat unless
+`[plugins.autocompact] cache_ttl_minutes` is set, which this workspace does not set
+since it would be every harness's lifetime.
 
 **The Auto-compact setting.** Each chat is On or Off, chosen in the model menu's
 Auto-compact submenu, which ends with a "New chats start with" row whose On /
@@ -609,19 +619,26 @@ compacted when its harness reaches its own context limit (Claude's
 auto-compaction, for one) and when the user types `/compact`. What a composer
 `/compact` does is the harness's `composer_compact_handling` in
 `harnesses/registry.py`. In a Claude chat it reaches Claude as its own command.
-In a Codex or Pi chat it is never sent, since either would hand it to the model
-as prose: the chat app asks mngr to compact the agent instead, through the same
-`request_compaction` call the sweep makes (`MngrMessenger.request_compaction`),
-passing any text after `/compact` as instructions (Pi uses them, Codex ignores
-them). mngr records the compaction against the agent's idle period, so the sweep
-does not compact it again before its next turn. The send answers 200 with
+In a Codex, Pi or Grok chat it is never sent: Codex and Pi would hand it to the
+model as prose, and a Grok `/compact` typed by the flush worker would show no
+compaction and leave the next held message free to be typed into it. The chat app
+asks mngr to compact the agent instead, through the same `request_compaction`
+call the sweep makes (`MngrMessenger.request_compaction`), passing any text after
+`/compact` as instructions (Pi uses them, Codex and Grok ignore them). For Grok,
+mngr types grok's own `/compact` and holds the agent's message lock until grok
+logs the compaction, so no held message is typed into it meanwhile. mngr records
+the compaction against the agent's idle period, so the sweep does not compact it
+again before its next turn. The chat shows the request before
+it asks mngr, since mngr's request for Grok returns only once the compaction is
+over, and withdraws it when mngr declines or fails it. The send answers 200 with
 `status: compaction_requested`, and the composer drops its "Sending…" bubble
 then, since no transcript turn will replace it; the status and chips below show
 the compaction. Such a `/compact` is declined with the "/compact wasn't sent"
 notice, asking nothing of mngr, when nothing was said since the last compaction
 (`kind: nothing_to_compact`), and while the agent is mid-turn, compacting, has
-messages queued, or is stopped (`kind: compact_unavailable`), since both
-harnesses start a compaction in place of a running turn; mngr re-checks the idle
+messages queued, or is stopped (`kind: compact_unavailable`), since Codex and
+Pi start a compaction in place of a running turn and mngr types nothing into a
+busy Grok; mngr re-checks the idle
 period under the agent's message lock and declines the same way. A request mngr
 fails is a send failure in mngr's words. pi refuses a compaction of a session
 too small to cut without telling anyone but stderr, so such a Pi `/compact`
@@ -641,9 +658,9 @@ shows only once the agent is idle, so a `/compact` queued behind a running turn
 leaves the turn's label up until the turn ends. The exception is Codex, which
 runs its compaction as a turn (`is_compaction_run_as_turn` on its activity
 tracker): the chat asks it to compact only while idle, so its request shows
-over that turn. Pi writes no marker and compacts outside any turn, so a user
-turn that starts after the chat's request ends the request: pi runs no turn
-while it compacts, so its compaction is over or it refused it. A stopped agent
+over that turn. Pi and Grok write no marker and compact outside any turn, so a
+user turn that starts after the chat's request ends the request: neither runs a
+turn while it compacts, so its compaction is over or it refused it. A stopped agent
 still reads idle. It counts as working: the chat list shows the chat as working, and the
 composer stays open, with a message sent meanwhile queued behind the
 compaction. The status row at the end of the transcript names who started it, from
@@ -667,11 +684,11 @@ the pair replaces it. The state comes from two signals:
 - The chat app's own requests: the sweep's and a composer `/compact`'s, on every
   harness mngr can compact.
 
-So the status does not show for a Codex or Pi chat's own compaction, or for an
+So the status does not show for a Codex, Pi or Grok chat's own compaction, or for an
 older Claude agent's own compaction or a `/compact` typed in its terminal. It
 clears when the compaction finishes: the "Context was compacted" event arrives,
 or for Claude the marker goes or `last_compaction.json` records a finish after
-the request, or for Pi a user turn starts after it. One that never reports completion (cancelled, failed, or crashed)
+the request, or for Pi or Grok a user turn starts after it. One that never reports completion (cancelled, failed, or crashed)
 stops showing after 10 minutes (`PENDING_COMPACTION_TIMEOUT_SECONDS`), and a
 marker older than that is ignored. A request on a chat nobody has open, which no
 "Context was compacted" event can end, stops after 3 minutes instead
@@ -681,8 +698,9 @@ during a compaction: with no turn in flight it presses Claude's cancel chord
 (`M-q`, bound to `chat:cancel`, the action Escape takes), which cancels the
 compaction. When a chord or a restart was actually sent, the app drops the
 marker and its own pending request, since a cancelled compaction reports no
-completion; a stop that found nothing to interrupt leaves them alone. Codex and Pi interrupts do not
-cancel a compaction (`can_interrupt_compaction`), so their stop button is hidden
+completion; a stop that found nothing to interrupt leaves them alone. Codex, Pi and Grok interrupts do not
+cancel a compaction (`can_interrupt_compaction`; mngr presses Grok's Ctrl+C only
+into a top-level turn, which a compaction is not), so their stop button is hidden
 while they compact. A `/compact` typed in a Claude chat's composer before the
 agent's first reply is declined with "Nothing to compact yet." (a 409 with
 `kind: nothing_to_compact`, which the composer shows as a declined-command
@@ -700,7 +718,7 @@ Where they land depends on who started it:
 - `native` (Claude's own compaction, mid-turn): at the event's position in the
   turn, appended to the chip run beside it, or as a chip row of their own when
   nothing chips beside them.
-- `manual` (a `/compact`): directly below the `/compact` bubble; a Codex or Pi
+- `manual` (a `/compact`): directly below the `/compact` bubble; a Codex, Pi or Grok
   chat shows no such bubble, so there they follow the last turn, as for `idle`.
 - `idle` (the sweep): after the last turn, below its reply, or appended to its
   last chip run when it ended with no reply.
@@ -833,6 +851,17 @@ sign-in for Codex in ChatGPT's security settings. "Sign in again" on an API-key
 account asks for a key again; any other account signs in through its lane's
 first way in (`reauth_method` on each account row).
 
+An xAI sign-in has no browser to relay. `grok login --device-auth` prints a
+page and a one-time code; the chooser shows both and waits while the user
+confirms the code on that page, from any device, and grok decides the outcome:
+its clean exit with its "Signed in" line succeeds, and its `Error:` line is the
+failure shown. A pasted xAI API key is checked with xAI (`GET
+https://api.x.ai/v1/api-key`) before anything is written, and then replaces the
+account's `auth.json` with grok's key scope. Every agent on the account shares
+that file, so the chat writes it only under grok's own `auth.json.lock`, and a
+device sign-in takes away a key an earlier paste left, which grok would
+otherwise fall back to.
+
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
 
@@ -842,16 +871,17 @@ create the Imbue Studio app's chats fall back to on a template whose script has 
 create mode -- through `.mngr/settings.local.toml`, mngr's
 git-ignored local config layer (`create_defaults.py`). The account store writes
 it on every index write and at boot: `[commands.create]` with the default
-account's harness as `type`, its binding (`env__extend` for claude, an
-`extra_provision_command__extend` credential link over `$MNGR_AGENT_STATE_DIR`
-for codex, agy and pi) and the `account=<id>` label a re-auth restarts agents
-by (only the live ones; a stopped agent picks up the new credentials when it
-next starts). The pin and the most recently used account stay in `index.json`;
-the file is derived from them and nobody is expected to edit it, though keys
-outside the managed ones survive every rewrite. With no usable account the
-managed keys are removed, and a create in the workspace is then refused by
-`system/scripts/require_create_account.py` (mngr's `pre_command_scripts.create`
-entry in `.mngr/settings.toml`) with a message that says to sign in.
+account's harness as `type`, its binding (`env__extend` for claude and grok,
+an `extra_provision_command__extend` credential link over
+`$MNGR_AGENT_STATE_DIR` for codex, agy and pi) and the `account=<id>` label a
+re-auth restarts agents by (only the live ones; a stopped agent picks up the
+new credentials when it next starts). The pin and the most recently used
+account stay in `index.json`; the file is derived from them and nobody is
+expected to edit it, though keys outside the managed ones survive every rewrite.
+With no usable account the managed keys are removed, and a create in the
+workspace is then refused by `system/scripts/require_create_account.py` (mngr's
+`pre_command_scripts.create` entry in `.mngr/settings.toml`) with a message that
+says to sign in.
 
 A chat created from outside the workspace with an `auto_open` or `assist` label
 (the Imbue Studio app's update and help chats) has its window surfaced by this app

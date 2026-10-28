@@ -178,10 +178,8 @@ class HarnessCatalog(FrozenModel):
     # string, prefix included, so a harness that wants no credit at all declares "" -- the
     # frontend then renders nothing. Claude does this today.
     powered_by_text: str
-    # Whether this harness can flush a queued "shoulder tap" atomically -- merging the parked
-    # messages into the currently-running turn without a restart. True only for codex, whose
-    # patched binary watches shoulder_tap_atomic.jsonl and ABA-gates the flush on the live turn
-    # id. False harnesses (claude, pi) keep the restart-based flush.
+    # Whether this harness can flush a queued "shoulder tap" without a restart; the tap endpoint
+    # refuses a harness that cannot.
     native_atomic_shoulder_tap_possible: bool = False
 
 
@@ -344,8 +342,8 @@ class HarnessModelResolver(ABC):
     now write-only) -- so the resolver only owns the harness-specific WRITE side:
 
     * :meth:`switch` -- apply a selection (a no-op for a display-only harness)
-    * :meth:`list_offered_models` -- the picker's offer set (only pi overrides it;
-      its offer set is per-agent and auth-gated)
+    * :meth:`list_offered_models` -- the picker's offer set (overridden by a harness whose
+      offer set is per-agent and auth-gated)
 
     ``build`` takes the whole :class:`AgentInfo` (like the watcher) so each harness
     reads the paths IT needs and the caller never learns which.
@@ -377,8 +375,7 @@ class HarnessModelResolver(ABC):
         account exists -- a classmethod for the same reason: there is no agent to build from. The
         default is None, the honest answer for a harness whose catalog is static and the same on
         every account of it (claude, pi): the catalog is the offer, and the account changes nothing
-        about it. A harness whose set is account-derived (codex) overrides this and asks the
-        account.
+        about it. A harness whose set is account-derived overrides this and asks the account.
         """
         return None
 

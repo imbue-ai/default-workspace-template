@@ -40,6 +40,18 @@ than no entry, because the next person plans around it.
   (nothing is parked inside agy to retract), keeping the restart only as the hammer for a
   cancel that cannot be trusted to have landed.
 
+- **grok (antigravity's shape, with mngr gating the edges):** grok parks mid-turn input in its
+  own queue, so a grok chat holds every message itself and one flush worker on the grok watcher
+  types the block only when mngr_grok's root-turn files show no top-level turn in flight (a
+  pending-wake placeholder included), waking on those files as well as on the idle edge. mngr's
+  `busy_send_policy = "REFUSE"` refuses a send that finds a turn already started, so grok parks
+  only a paste a turn starting inside mngr's send overtakes (E17), and its Ctrl+C rule presses
+  only into a cancellable turn. delivered = grok's session log gaining a user turn that ends
+  with our block, or mngr confirming the submission. stop = one ctrl+c through mngr, then
+  waiting for the turns it pressed into and handing back what we hold, also when the restart
+  fails. tap = the same press, then the worker delivers. `/model` and `/effort` go through a
+  control lane the worker sends alone, never merged into a block or handed back.
+
 The target is to make them converge on the clean, single-path shape; claude's heuristic
 path is what most needs to move toward it.
 
@@ -290,6 +302,10 @@ In the ordinary failure modes this is bounded and self-correcting:
   bounded delivery witness, and an attempt ceiling after which the entry stops being retried
   and reads *Queued* rather than *Sending*. Its worker also republishes the queue on every
   tick, level-triggered, so a stale snapshot is corrected as soon as any watcher exists.
+- **grok:** the send only holds the message, and its POST waits at most
+  `SEND_RESULT_WAIT_SECONDS` for the flush worker's first send of it. Each send of the worker is
+  bounded by mngr's confirmation, and an entry that spent `MAX_DELIVERY_ATTEMPTS` reads *Queued*
+  (E19). The worker also republishes the queue on every attempt.
 
 What is NOT bounded is the case where nothing is left to report: a watcher torn down while a
 send is still in flight (its publisher is detached, so the settle updates the queue but
@@ -305,6 +321,27 @@ reload re-reads real state; stopping the agent returns the message to the compos
 
 The scope is deliberately minimal: this is reachable only when the backend keeps running but
 stops publishing for a given agent, which is not a state ordinary failures produce.
+
+### E17. grok — a send mngr confirmed counts as delivered without a witnessed turn
+Unlike agy (E12), a message mngr confirmed grok took leaves the queue when the witness window ends
+even if no user turn holding it appeared, because grok can queue it behind a wake turn that
+started inside mngr's send and the retype would duplicate it. The exposure is that message, held
+inside grok: it is lost if grok is restarted before it runs it; once its chip leaves at the end of
+the window it shows nowhere, neither chip nor turn, until grok runs it (A1a); and a stop does not
+return it to the composer (Interrupt step 2), because grok runs it as soon as the cancel lands.
+Until that window ends the flush keeps the live emit muted, so the overtaking turn's events show
+only then. A send mngr could not confirm is still retyped, up to `MAX_DELIVERY_ATTEMPTS`.
+
+### E18. grok — a draft typed into grok's own composer
+A person typing at grok's pane leaves text mngr appends the next message to. grok runs both as one
+turn, which the witness accepts, but mngr's submission probe looks for the message's own tail, so
+the send holds mngr's message lock for its whole confirmation window (about 90 s) before failing
+as unconfirmed, the chat shows none of the merged turn's events until it does (the flush mutes the
+live emit while it waits), and a `/model` typed after a draft becomes part of a prompt.
+
+### E19. grok — an entry that spent its delivery attempts stays Queued
+An entry whose attempts are exhausted stays Queued until a stop hands it back; there is no
+channel to return it on its own.
 
 ---
 

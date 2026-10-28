@@ -22,6 +22,10 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.codex.model import codex_model_options_path
 from imbue.chat.harnesses.codex.model import write_codex_model_options
+from imbue.chat.harnesses.grok.testing import GROK_SESSION_SCOPE
+from imbue.chat.harnesses.grok.testing import build_grok_key_scope
+from imbue.chat.harnesses.grok.testing import write_grok_auth
+from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
@@ -76,7 +80,16 @@ def test_lanes_carry_every_key_the_chooser_reads() -> None:
         }
         assert lane["harness_label"], "the sign-in header has nothing to name the harness with"
         for method in lane["methods"]:
-            assert set(method) == {"id", "label", "description", "signup_url", "note", "shape", "is_primary"}
+            assert set(method) == {
+                "id",
+                "label",
+                "description",
+                "signup_url",
+                "key_hint",
+                "note",
+                "shape",
+                "is_primary",
+            }
         for key_provider in lane["key_providers"]:
             assert set(key_provider) == {"provider_id", "display", "env_var", "hint"}
 
@@ -484,4 +497,25 @@ def test_an_api_key_account_signs_in_again_with_a_key() -> None:
         subscription_id: "subscription",
         key_id: "api_key",
         codex_key_id: "api_key",
+    }
+
+
+def test_a_grok_account_holding_only_a_key_signs_in_again_with_a_key() -> None:
+    """A grok account holding only a stored key re-auths by key; one whose session login sits beside a key re-auths
+    with the lane's device sign-in."""
+    key_id, key_dir = mint_account_dir()
+    commit_account(key_id, "xai", "xAI")
+    write_grok_auth(key_dir, {"xai::api_key": build_grok_key_scope()})
+    session_id, session_dir = mint_account_dir()
+    commit_account(session_id, "xai", "xAI")
+    write_grok_auth(
+        session_dir, {GROK_SESSION_SCOPE: {"key": "session-token"}, "xai::api_key": build_grok_key_scope()}
+    )
+
+    with _client() as client:
+        rows = client.get("/api/accounts").get_json()["accounts"]
+
+    assert {row["id"]: row["reauth_method"] for row in rows} == {
+        key_id: "api_key",
+        session_id: get_lane("xai").methods[0].id,
     }

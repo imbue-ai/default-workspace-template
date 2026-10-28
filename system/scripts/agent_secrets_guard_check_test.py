@@ -193,6 +193,35 @@ def test_a_shell_call_under_another_harnesss_tool_name_is_judged_by_its_command(
             "tool_input": {"file_path": "/home/user/.mcpc/credentials.json"},
         },
         {"tool_name": "Glob", "tool_input": {"pattern": "~/.mcpc/**"}},
+        # grok's spellings.
+        {
+            "tool_name": "read_file",
+            "tool_input": {"target_file": "data/.secrets/svc.env"},
+        },
+        {
+            "tool_name": "read_file",
+            "tool_input": {
+                "target_file": "/home/user/workspace/data/.secrets/svc.env",
+                "offset": 1,
+                "limit": 20,
+            },
+        },
+        {
+            "tool_name": "read_file",
+            "tool_input": {"target_file": "/home/user/.mcpc/credentials.json"},
+        },
+        {
+            "tool_name": "search_replace",
+            "tool_input": {
+                "file_path": "data/.secrets/svc.env",
+                "old_string": "a",
+                "new_string": "b",
+            },
+        },
+        {
+            "tool_name": "write",
+            "tool_input": {"file_path": "data/.secrets/svc.env", "content": "X"},
+        },
         # codex edits through a patch whose file lines name the target.
         {
             "tool_name": "apply_patch",
@@ -224,11 +253,56 @@ def test_file_tools_on_a_secret_file_are_refused(payload: dict[str, object]) -> 
                 "command": "*** Begin Patch\n*** Update File: README.md\n+see data/.secrets/\n*** End Patch"
             },
         },
-        # pi's `ls` is the shell's `ls`.
+        # pi's `ls` and grok's `list_dir` are the shell's `ls`.
         {"tool_name": "ls", "tool_input": {"path": "data/.secrets"}},
+        {"tool_name": "list_dir", "tool_input": {"target_directory": "data/.secrets"}},
+        {
+            "tool_name": "read_file",
+            "tool_input": {"target_file": "data/.secrets/README.md"},
+        },
+        {
+            "tool_name": "read_file",
+            "tool_input": {"target_file": "data/.state/apps.toml"},
+        },
+        # Only the path is judged: an edit elsewhere may mention the directory.
+        {
+            "tool_name": "search_replace",
+            "tool_input": {
+                "file_path": "README.md",
+                "old_string": "x",
+                "new_string": "values live in data/.secrets/svc.env",
+            },
+        },
     ],
 )
 def test_file_tools_off_the_secret_files_pass(payload: dict[str, object]) -> None:
+    assert _run_guard(payload).returncode == 0
+
+
+@pytest.mark.parametrize(
+    "cwd",
+    ["data/.secrets", "/home/user/workspace/data/.secrets/", "/home/user/.mcpc"],
+)
+def test_a_subagent_started_inside_the_secrets_store_is_refused(cwd: str) -> None:
+    """grok's subagent shell would then read a secret file by its bare name."""
+    payload = {
+        "tool_name": "spawn_subagent",
+        "tool_input": {"prompt": "cat svc.env", "description": "x", "cwd": cwd},
+    }
+    completed = _run_guard(payload)
+    assert completed.returncode == 2
+    assert "starts work inside" in completed.stderr
+
+
+def test_a_subagent_whose_prompt_only_mentions_the_secrets_store_passes() -> None:
+    payload = {
+        "tool_name": "spawn_subagent",
+        "tool_input": {
+            "prompt": "run it under with_secrets.py data/.secrets/svc.env",
+            "description": "x",
+            "cwd": "system",
+        },
+    }
     assert _run_guard(payload).returncode == 0
 
 

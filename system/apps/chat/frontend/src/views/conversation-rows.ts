@@ -301,12 +301,16 @@ export function buildConversationRows(
  * server-derived `activity_state` (which doesn't apply to a subagent). Minimal
  * by design: the subagent is running while its last assistant turn has no
  * terminal stop_reason (it's mid-tool-use or hasn't stopped); once it stops
- * with `end_turn`/`stop_sequence` it's settled. Drives whether the subagent's
- * frontier step may show a spinner.
+ * with `end_turn`/`stop_sequence`, or a turn-end marker follows it (grok's
+ * child sessions), it's settled. Drives whether the subagent's frontier step
+ * may show a spinner.
  */
 export function isSubagentRunning(events: TranscriptEvent[]): boolean {
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
+    if (event.type === "special" && event.kind !== "turn_started") {
+      return false;
+    }
     if (event.type === "assistant_message") {
       return event.stop_reason === null || event.stop_reason === "tool_use";
     }

@@ -18,6 +18,7 @@ import fcntl
 import json
 import os
 import queue
+import re
 import shutil
 import socket
 import subprocess
@@ -752,13 +753,15 @@ def build_test_state(
     # Match production: route the codex ledger's live user-turns onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
     state = ChatAppState(
-        # Never the production probe: it shells out to whatever claude/codex/agy/pi this
-        # machine happens to have, over the network, from any test that reaches a sign-in
-        # route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a test
-        # that cares about the verdict injects its own service.
+        # Never the production probes: they shell out to whatever claude/codex/agy/pi/grok this
+        # machine happens to have, or send a pasted key to xAI, from any test that reaches a
+        # sign-in route. UNKNOWN is the honest stand-in -- "the check could not run" -- and a
+        # test that cares about the verdict injects its own service.
         auth_flows=auth_flows
         if auth_flows is not None
-        else AuthFlowService.create(probe=lambda *_args: SignedIn.UNKNOWN),
+        else AuthFlowService.create(
+            probe=lambda *_args: SignedIn.UNKNOWN, xai_key_probe=lambda _key: SignedIn.UNKNOWN
+        ),
         config=config if config is not None else Config(),
         provider_names=None,
         include_filters=(),
@@ -799,14 +802,25 @@ class FakeFinishedProcess:
         self.returncode = returncode
 
 
+def _find_scripted_match(patterns: object, return_index: int, chunk: str) -> re.Match[str] | None:
+    """Where the regex at ``return_index`` of an ``expect`` pattern list matches ``chunk``, if it is one that does."""
+    if not isinstance(patterns, list) or not 0 <= return_index < len(patterns):
+        return None
+    pattern = patterns[return_index]
+    return pattern.search(chunk) if isinstance(pattern, re.Pattern) else None
+
+
 class FakePexpectProcess:
     """Scripted stand-in for a `pexpect.spawn` in the PTY auth flows.
 
     `expect_script` is a sequence of `(return_index, output_chunk)` pairs:
     each `expect()` call consumes the next entry (the final entry repeats
     once the script is exhausted), returns `return_index`, and exposes
-    `output_chunk` through `before`/`after` the way pexpect does after a
-    match (index 0: chunk in `after`) or a non-match (chunk in `before`).
+    `output_chunk` the way pexpect does. When the pattern at `return_index`
+    is a regex found in the chunk, `before` holds the text ahead of the
+    match, `after` the match, and `buffer` the rest of the chunk, which
+    `read_nonblocking` never returns. Otherwise index 0 puts the whole chunk
+    in `after` and any other index puts it in `before`.
     The return indexes are positions in the pattern list the production
     code passes to `expect`, so a test scripting e.g. the token pump must
     use that pump's pattern order.
@@ -839,12 +853,18 @@ class FakePexpectProcess:
         self.timeout: float | None = None
         self.before = ""
         self.after: str = ""
+        self.buffer = ""
 
-    def expect(self, _patterns: object, timeout: float | None = None) -> int:
+    def expect(self, patterns: object, timeout: float | None = None) -> int:
         entry_idx = min(self._call_idx, len(self._script) - 1)
         self._call_idx += 1
         return_index, chunk = self._script[entry_idx]
-        if return_index == 0:
+        match = _find_scripted_match(patterns, return_index, chunk)
+        if match is not None:
+            self.before = chunk[: match.start()]
+            self.after = match.group(0)
+            self.buffer = chunk[match.end() :]
+        elif return_index == 0:
             self.before = ""
             self.after = chunk
         else:

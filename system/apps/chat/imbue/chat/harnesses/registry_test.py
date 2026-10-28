@@ -1,5 +1,7 @@
 """Unit tests for the harness registry's declared popups."""
 
+import pytest
+
 from imbue.chat.harnesses.registry import ComposerCompactHandling
 from imbue.chat.harnesses.registry import HARNESS_SPECS
 from imbue.chat.harnesses.registry import HarnessPopup
@@ -63,6 +65,50 @@ def test_the_model_bar_commands_are_not_also_in_a_harness_declined_tuple() -> No
             assert overlap == set(), f"{harness}: {overlap} duplicated in the terminal-notice tuple"
 
 
+def _grok_composer_actions() -> dict[str, tuple[PopupAction, str | None]]:
+    return {
+        command: (popup.action, popup.notice_body)
+        for popup in HARNESS_SPECS[HarnessType.GROK].popups
+        if popup.trigger is PopupTrigger.COMPOSER_COMMAND
+        for command in popup.commands
+    }
+
+
+def test_grok_opens_the_sign_in_for_login_and_logout_and_declines_its_model_alias_like_model() -> None:
+    actions = _grok_composer_actions()
+    assert actions["/login"] == (PopupAction.OPEN_AUTH, None)
+    assert actions["/logout"] == (PopupAction.OPEN_AUTH, None)
+    assert actions["/m"] == actions["/model"]
+    assert actions["/quit"] == (PopupAction.NOTICE, None)
+    assert "/compact" not in actions
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        pytest.param("/density", id="density_picker_saves_a_level"),
+        pytest.param("/info", id="info_opens_the_session_info_modal"),
+        pytest.param("/jump", id="jump_opens_a_turn_picker"),
+        pytest.param("/mem", id="mem_completes_to_the_memory_note_composer"),
+        pytest.param("/minimal", id="minimal_replaces_the_composer_mngr_reads"),
+        pytest.param("/rename", id="rename_picker_renames_the_session"),
+        pytest.param("/session-info", id="session_info_opens_a_modal"),
+        pytest.param("/t", id="t_switches_the_theme"),
+        pytest.param("/theme", id="theme_switches_the_theme"),
+        pytest.param("/timeline", id="timeline_saves_the_sidebar_setting"),
+        pytest.param("/timestamps", id="timestamps_picker_turns_timestamps_off"),
+        pytest.param("/title", id="title_picker_renames_the_session"),
+        pytest.param("/vim-mode", id="vim_mode_saves_vim_keys_on"),
+        pytest.param("/btw", id="btw_answers_in_a_side_panel"),
+        pytest.param("/recap", id="recap_answers_in_a_side_panel"),
+        pytest.param("/summarize", id="summarize_answers_in_a_side_panel"),
+        pytest.param("/voice", id="voice_starts_dictation"),
+    ],
+)
+def test_grok_declines_a_command_whose_enter_answers_a_picker_or_changes_a_setting(command: str) -> None:
+    assert _grok_composer_actions()[command] == (PopupAction.NOTICE, None)
+
+
 def test_only_claude_adds_the_billing_line_to_the_fast_mode_notice() -> None:
     bodies = {
         harness: popup.notice_body
@@ -86,6 +132,7 @@ def test_only_the_harnesses_mngr_can_compact_support_compaction_and_only_claude_
         HarnessType.PI_CODING: (True, False),
         HarnessType.OPENCODE: (False, False),
         HarnessType.ANTIGRAVITY: (False, False),
+        HarnessType.GROK: (True, False),
         HarnessType.SEED: (False, False),
     }
 
@@ -98,6 +145,7 @@ def test_a_composer_compact_runs_on_every_harness_mngr_can_compact_and_is_declin
         HarnessType.PI_CODING: ComposerCompactHandling.REQUESTED_FROM_MNGR,
         HarnessType.OPENCODE: ComposerCompactHandling.SENT_AS_TEXT,
         HarnessType.ANTIGRAVITY: ComposerCompactHandling.SENT_AS_TEXT,
+        HarnessType.GROK: ComposerCompactHandling.REQUESTED_FROM_MNGR,
         HarnessType.SEED: ComposerCompactHandling.SENT_AS_TEXT,
     }
     for harness, spec in HARNESS_SPECS.items():

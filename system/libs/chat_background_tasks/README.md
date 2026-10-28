@@ -25,8 +25,11 @@ task's completion will start the next one.
   SessionStart hooks, which `.claude/settings.json` wires: they write and clear
   the `harness-claude-*` markers. A harness's hook logic lives with its hooks,
   not here; this package holds only what every writer and reader shares.
+- `system/scripts/grok_background_task_hooks.py` -- grok's Stop, PostToolUse and
+  SessionStart hooks, which `.grok/hooks/policy.json` wires: they write and clear
+  the `harness-grok-*` markers.
 - The chat app -- reads the markers on its state poller, shows the `background`
-  status, and removes a Claude marker once the transcript reports the task over.
+  status, and removes a harness's marker once the transcript reports the task over.
 - The shell's avatar, which keeps working while a chat is busy.
 - `system/services/oom_priority/bin/memory_candidates.py`, which never offers a
   busy chat's agent as safe to stop.

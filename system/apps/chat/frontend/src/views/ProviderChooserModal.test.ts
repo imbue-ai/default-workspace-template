@@ -57,6 +57,7 @@ import m from "mithril";
 import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import type { UnpickableReason } from "../models/Providers";
 import { PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
+import { providerMark } from "./providerMarks";
 import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
@@ -82,6 +83,7 @@ function lane(overrides: Partial<Lane> = {}): Lane {
         label: "Claude subscription",
         description: "Sign in with your Claude account.",
         signup_url: "",
+        key_hint: "",
         note: "",
         shape: "url_then_code",
         is_primary: true,
@@ -102,6 +104,7 @@ const PI_KEY_LANE = lane({
       label: "Paste a key",
       description: "Pick the provider, then paste its key.",
       signup_url: "",
+      key_hint: "",
       note: "",
       shape: "paste",
       is_primary: true,
@@ -243,6 +246,16 @@ describe("the provider chooser", () => {
     expect(text).toContain("API key");
   });
 
+  it("draws a mark in xAI's row, which has no brand mark of its own", () => {
+    state.lanes = [lane({ id: "xai", provider_name: "xAI", harness: "grok" })];
+    const root = document.createElement("div");
+    m.render(root, m(ProviderChooserModal as never, { onClose: () => undefined }));
+    const mark = document.createElement("span");
+    mark.innerHTML = providerMark("xai", 30);
+    expect(mark.querySelector("svg")).not.toBeNull();
+    expect(root.querySelector('[data-e2e="lane-xai"]')?.innerHTML).toContain(mark.innerHTML);
+  });
+
   it("renders a live flow's spinner", () => {
     state.flow = {
       flow_id: "f1",
@@ -369,6 +382,7 @@ describe("a sign-in finished in the browser", () => {
         label: "Use your ChatGPT plan (runs on Codex)",
         description: "",
         signup_url: "",
+        key_hint: "",
         note: "",
         shape: "browser",
         is_primary: true,
@@ -378,6 +392,7 @@ describe("a sign-in finished in the browser", () => {
         label: "ChatGPT with a code",
         description: "",
         signup_url: "",
+        key_hint: "",
         note: "",
         shape: "code_then_wait",
         is_primary: false,
@@ -395,6 +410,7 @@ describe("a sign-in finished in the browser", () => {
           label: "Use an API key",
           description: "",
           signup_url: "",
+          key_hint: "",
           note: "",
           shape: "paste",
           is_primary: false,
@@ -530,6 +546,76 @@ describe("a sign-in finished in the browser", () => {
     expect(note?.textContent?.trim()).toBe("Turn on the setting in the settings.");
     expect(note?.querySelector("em")?.textContent).toBe("the setting");
     expect(note?.querySelector("a")?.getAttribute("href")).toBe("https://example.com/settings");
+  });
+
+  it("shows xAI's page and one-time code from grok's own sign-in and asks for nothing back", async () => {
+    const page = "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234";
+    state.lanes = [
+      lane({
+        id: "xai",
+        provider_name: "xAI",
+        harness: "grok",
+        methods: [
+          {
+            id: "device",
+            label: "Continue with your xAI account",
+            description: "",
+            signup_url: "",
+            key_hint: "",
+            note: "",
+            shape: "code_then_wait",
+            is_primary: true,
+          },
+          {
+            id: "api_key",
+            label: "Use an API key",
+            description: "",
+            signup_url: "https://console.x.ai",
+            key_hint: "xai-...",
+            note: "",
+            shape: "paste",
+            is_primary: false,
+          },
+        ],
+      }),
+    ];
+    state.flow = { ...(startedFlow("code_then_wait", null) as object), url: page, code: "ABCD-1234" };
+
+    const root = await clickLane("xai");
+
+    expect(startFlow).toHaveBeenCalledExactlyOnceWith("xai", "device", undefined);
+    expect(requestProviderRelay).not.toHaveBeenCalled();
+    expect(root.querySelector(`a[href="${page}"]`)).not.toBeNull();
+    expect(root.textContent).toContain("ABCD-1234");
+    expect(root.textContent).not.toContain(PASTE_STEP_LABEL);
+    expect(root.textContent).toContain("Use an API key");
+  });
+
+  it("hints at an xAI key in the xAI lane's key field", async () => {
+    state.lanes = [
+      lane({
+        id: "xai",
+        provider_name: "xAI",
+        harness: "grok",
+        methods: [
+          {
+            id: "api_key",
+            label: "Use an API key",
+            description: "Paste an xAI API key.",
+            signup_url: "",
+            key_hint: "xai-...",
+            note: "",
+            shape: "paste",
+            is_primary: true,
+          },
+        ],
+      }),
+    ];
+    state.flow = { ...(startedFlow("paste", null) as object), url: null, laneId: "xai", methodId: "api_key" };
+
+    const root = await clickLane("xai");
+
+    expect(root.querySelector('[data-e2e="api-key-input"]')?.getAttribute("placeholder")).toBe("xai-...");
   });
 
   it("shows no note on the one-time code, which does not need the setting", async () => {

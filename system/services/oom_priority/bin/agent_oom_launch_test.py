@@ -169,7 +169,7 @@ def _fake_harness_dir(tmp_path: Path, args_out: Path, binary: str = "claude") ->
     return bindir
 
 
-@pytest.mark.parametrize("binary", ["claude", "codex", "pi", "opencode", "agy"])
+@pytest.mark.parametrize("binary", ["claude", "codex", "pi", "opencode", "agy", "grok"])
 def test_wrapper_execs_named_harness_forwarding_args_after_tagging(
     tmp_path: Path, binary: str
 ) -> None:

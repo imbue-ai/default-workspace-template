@@ -3,9 +3,10 @@
 Inside a workspace ``python3`` is the system interpreter, which has none of the root venv's
 packages: a script that imports one runs fine under ``uv run`` and in these tests, and fails
 with ``ModuleNotFoundError`` the moment an agent or a supervisord program line calls it as
-documented. The list below is every script the docs, skills, prompts, program lines, and shell
-scripts invoke that way (``grep -rho "python3 system/scripts/[a-z_]*\\.py"``, and the shell
-scripts' ``python3 "$REPO_ROOT/system/scripts/<name>.py"`` spelling); a script may import a
+documented. The list below is every script the docs, skills, prompts, program lines, hook
+configs, and shell scripts invoke that way (``grep -rho "python3 system/scripts/[a-z_]*\\.py"``,
+the shell scripts' ``python3 "$REPO_ROOT/system/scripts/<name>.py"`` spelling, and the hook
+configs' ``python3 ${MNGR_AGENT_WORK_DIR:-.}/system/scripts/<name>.py``); a script may import a
 sibling script, which is then held to the same rule.
 """
 
@@ -20,10 +21,13 @@ import pytest
 _SCRIPTS_DIR = Path(__file__).parent
 
 _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
+    "agent_grok_policy_guards.py",
+    "agent_rewrite_bash_command.py",
     "background_tasks.py",
     "claude_background_task_hooks.py",
     "collect_bug_report_diagnostics.py",
     "forward_port.py",
+    "grok_background_task_hooks.py",
     "install_mngr.py",
     "list_mngr_plugins.py",
     "message_chat.py",

@@ -276,13 +276,16 @@ export function renderAssistantMessage(
   );
 }
 
+/** The harnesses' tools that delegate to a sub-agent: Claude's `Agent`, grok's `spawn_subagent`. */
+const SUBAGENT_TOOL_NAMES: ReadonlySet<string> = new Set(["Agent", "spawn_subagent"]);
+
 /** Whether this call renders as a sub-agent card. Gated on the description,
- *  which rides the tool input, so the card stands as soon as the Agent call is
- *  issued -- before its subagent session is linked -- showing a non-clickable
+ *  which rides the tool input, so the card stands as soon as the delegating call
+ *  is issued -- before its subagent session is linked -- showing a non-clickable
  *  "Running…" until `subagent_metadata.session_id` arrives. A sub-agent is a
  *  whole conversation, not an action, so it never joins the chips. */
 function isSubagentCardCall(toolCall: ToolCall): boolean {
-  return toolCall.tool_name === "Agent" && Boolean(toolCall.subagent_metadata || toolCall.description);
+  return SUBAGENT_TOOL_NAMES.has(toolCall.tool_name) && Boolean(toolCall.subagent_metadata || toolCall.description);
 }
 
 /** Whether a call renders as a card of its own instead of joining the chip row.

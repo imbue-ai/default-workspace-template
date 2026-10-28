@@ -1,5 +1,6 @@
 """Tests for the AgentManager."""
 
+import heapq
 import json
 import os
 import queue
@@ -11,6 +12,7 @@ import tomllib
 from collections.abc import Callable
 from datetime import datetime
 from datetime import timezone
+from operator import itemgetter
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -82,6 +84,16 @@ from imbue.chat.harnesses.codex.model import write_codex_model_options
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
+from imbue.chat.harnesses.grok.session_parser import record_timestamp
+from imbue.chat.harnesses.grok.testing import add_grok_session
+from imbue.chat.harnesses.grok.testing import append_grok_updates
+from imbue.chat.harnesses.grok.testing import find_fixture_scenario
+from imbue.chat.harnesses.grok.testing import make_grok_agent_info
+from imbue.chat.harnesses.grok.testing import read_fixture_root_ids
+from imbue.chat.harnesses.grok.testing import read_fixture_session_ids
+from imbue.chat.harnesses.grok.testing import read_fixture_updates
+from imbue.chat.harnesses.grok.testing import write_grok_agent_state
+from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
@@ -3530,12 +3542,13 @@ def test_chats_on_a_harness_mngr_cannot_compact_are_never_swept(
             ("chat-claude", HarnessType.CLAUDE),
             ("chat-antigravity", HarnessType.ANTIGRAVITY),
             ("chat-opencode", HarnessType.OPENCODE),
+            ("chat-grok", HarnessType.GROK),
         ):
             seed_agent_state(
                 manager, agent_id, name=f"{agent_id}-name", labels={"user_created": "true"}, harness=harness
             )
 
-        assert manager.get_opted_in_running_chat_agent_names() == ["chat-claude-name"]
+        assert manager.get_opted_in_running_chat_agent_names() == ["chat-claude-name", "chat-grok-name"]
     finally:
         manager.stop()
 
@@ -5047,6 +5060,265 @@ def test_a_turn_that_ends_to_wait_is_published_with_its_wait_never_idle_in_betwe
 
         pushed = [message for message in _drain(client_queue) if message.get("type") == "chats_updated"]
         assert [message["chats"][0]["status"] for message in pushed] == ["background"]
+    finally:
+        manager.stop()
+
+
+def _grok_chat_manager(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> tuple[AgentManager, BackgroundTaskReader, Path]:
+    """A manager reading background tasks under ``tmp_path``, mngr's host dir there, and agent-1's grok state dir."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager, reader = _manager_reading_tasks(broadcaster, tmp_path)
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    return manager, reader, state_dir
+
+
+def _track_grok_chat(manager: AgentManager) -> None:
+    """Track agent-1 as Chat-1, a RUNNING grok chat."""
+    seed_agent_state(manager, "agent-1", name="Chat-1", state="RUNNING", harness=HarnessType.GROK)
+    manager._ensure_activity_tracking("agent-1")
+
+
+def test_a_grok_turn_that_leaves_a_background_subagent_running_reads_background_not_working(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """mngr_grok keeps ``active`` (and a RUNNING lifecycle) while a background subagent outlives the top-level turn
+    that started it. Grok's dot reads the turn's end from its transcript and declares no ``active`` marker, so the
+    turn is not left closing: the chat waits on the subagent's marker as ``background``."""
+    manager, reader, state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
+    root_session_id = "01a156db-07ea-7993-b2e6-dcaa7cb0a81c"
+    try:
+        _track_grok_chat(manager)
+        (state_dir / "active").touch()
+        manager.update_session_events(
+            "agent-1",
+            [
+                {
+                    "type": SPECIAL_EVENT_TYPE,
+                    "kind": SpecialEventKind.TURN_STARTED.value,
+                    "session_id": root_session_id,
+                    "timestamp": "2026-10-20T01:09:19.316Z",
+                },
+                {
+                    "type": "user_message",
+                    "session_id": root_session_id,
+                    "timestamp": "2026-10-20T01:09:19.316Z",
+                    "content": "spawn one in the background",
+                },
+            ],
+        )
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        manager._background_tasks_poller.poll_once()
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.WORKING]
+        client_queue = broadcaster.register()
+
+        write_background_task_marker(
+            reader, "agent-1", "01a156db-10ae-70c2-9a0f-a0dff6d5f376", os.getpid(), harness=HarnessType.GROK.value
+        )
+        manager.update_session_events(
+            "agent-1",
+            [
+                {
+                    "type": SPECIAL_EVENT_TYPE,
+                    "kind": SpecialEventKind.TURN_COMPLETED.value,
+                    "session_id": root_session_id,
+                    "timestamp": "2026-10-20T01:09:20.059Z",
+                }
+            ],
+        )
+        manager._recompute_activity_state("agent-1", broadcast_on_change=True)
+
+        assert (state_dir / "active").exists()
+        pushed = [message for message in _drain(client_queue) if message.get("type") == "chats_updated"]
+        assert pushed
+        assert {message["chats"][0]["status"] for message in pushed} == {"background"}
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.status is ChatStatus.BACKGROUND
+        assert snapshot.active_agent.is_busy
+        assert [task.id for task in snapshot.active_agent.background_tasks] == ["01a156db-10ae-70c2-9a0f-a0dff6d5f376"]
+    finally:
+        manager.stop()
+
+
+def test_a_grok_subagent_that_ends_during_a_later_turn_keeps_the_chat_waiting_until_its_wake_turn(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """grok 1.0.62's own session logs replayed line by line through the grok watcher, wired as the app wires it: a
+    background subagent ends while a later turn runs, that turn's Stop hook drops its marker, and grok wakes the
+    session for it once the turn ends. The chat reads background between the two turns, never idle."""
+    manager, reader, state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
+    scenario_dir = find_fixture_scenario("subagent_ends_mid_reply")
+    root_ids = read_fixture_root_ids(scenario_dir)
+    (child_id,) = [session_id for session_id in read_fixture_session_ids(scenario_dir) if session_id not in root_ids]
+    lines_by_session: list[list[tuple[str, str, bytes]]] = []
+    for session_id in read_fixture_session_ids(scenario_dir):
+        add_grok_session(state_dir, session_id, b"", is_root=session_id in root_ids)
+        lines = read_fixture_updates(scenario_dir, session_id).splitlines(keepends=True)
+        lines_by_session.append([(record_timestamp(json.loads(line)), session_id, line) for line in lines])
+    watcher = _grok_watcher_wired_to(manager, state_dir)
+    marker_path = reader.chat_dir(ChatId("agent-1")) / f"harness-grok-{child_id}.json"
+    try:
+        _track_grok_chat(manager)
+        statuses: list[ChatStatus] = []
+        is_subagent_finished = False
+        for _timestamp, session_id, line in heapq.merge(*lines_by_session, key=itemgetter(0)):
+            append_grok_updates(state_dir, session_id, line)
+            update = json.loads(line)["params"]["update"]
+            # The template's hooks: PostToolUse marks a subagent spawn_subagent leaves running in the background,
+            # and a Stop that no longer lists it removes its marker.
+            if update.get("event_name") == "post_tool_use" and update.get("tool_name") == "spawn_subagent":
+                write_background_task_marker(reader, "agent-1", child_id, os.getpid(), harness=HarnessType.GROK.value)
+                manager._background_tasks_poller.poll_once()
+            is_subagent_finished = is_subagent_finished or update["sessionUpdate"] == "subagent_finished"
+            if update.get("event_name") == "stop" and is_subagent_finished:
+                marker_path.unlink(missing_ok=True)
+            watcher._emit_cycle()
+            (snapshot,) = manager.get_chat_snapshots()
+            if not statuses or statuses[-1] != snapshot.status:
+                statuses.append(snapshot.status)
+
+        assert statuses == [
+            ChatStatus.IDLE,
+            ChatStatus.WORKING,
+            ChatStatus.BACKGROUND,
+            ChatStatus.WORKING,
+            ChatStatus.BACKGROUND,
+            ChatStatus.WORKING,
+            ChatStatus.IDLE,
+        ]
+        assert not marker_path.exists()
+    finally:
+        manager.stop()
+
+
+@pytest.mark.parametrize("scenario", ["background_subagent", "failed_wake"])
+def test_a_grok_chat_whose_history_ended_its_background_work_reads_idle_when_the_app_starts_tailing_it(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, scenario: str
+) -> None:
+    """A watcher primes on the whole history, whose ended work grok already woke the session for."""
+    manager, _reader, state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
+    write_grok_agent_state(state_dir, find_fixture_scenario(scenario))
+    watcher = _grok_watcher_wired_to(manager, state_dir)
+    try:
+        _track_grok_chat(manager)
+        manager.update_session_events("agent-1", watcher.get_all_events())
+        watcher._prime()
+        watcher._emit_cycle()
+
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.IDLE]
+        assert not manager.busy_state_of_agent("agent-1", {}).is_busy
+    finally:
+        manager.stop()
+
+
+def _grok_watcher_wired_to(manager: AgentManager, state_dir: Path) -> GrokSessionWatcher:
+    """agent-1's grok watcher, its finished and wake-pending task callbacks wired to ``manager`` as the app wires them."""
+    watcher = GrokSessionWatcher.build(
+        make_grok_agent_info(state_dir, "agent-1", "Chat-1"), manager.update_session_events
+    )
+    watcher.set_finished_tasks_callback(
+        lambda task_ids: manager.forget_finished_tasks("agent-1", HarnessType.GROK, task_ids)
+    )
+    watcher.set_wake_pending_tasks_callback(
+        lambda task_ids: manager.forget_finished_tasks(
+            "agent-1", HarnessType.GROK, task_ids, is_wake_turn_pending=True
+        )
+    )
+    return watcher
+
+
+def _observe_grok_turn_marker(manager: AgentManager, kind: SpecialEventKind, timestamp: str) -> None:
+    manager.update_session_events(
+        "agent-1",
+        [{"type": SPECIAL_EVENT_TYPE, "kind": kind.value, "session_id": "root-1", "timestamp": timestamp}],
+    )
+
+
+def test_a_task_whose_own_turn_is_still_to_come_keeps_the_chat_busy_past_the_turn_it_ended_in(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """grok reports ``will_wake`` on a background task's end; one that ends during a turn starts its own turn after
+    it, and the turn's Stop hook has removed its marker by then."""
+    manager, reader, _state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
+    try:
+        _track_grok_chat(manager)
+        write_background_task_marker(reader, "agent-1", "sub-1", os.getpid(), harness=HarnessType.GROK.value)
+        _observe_grok_turn_marker(manager, SpecialEventKind.TURN_STARTED, "2026-10-21T22:33:18.973Z")
+
+        manager.forget_finished_tasks("agent-1", HarnessType.GROK, ("sub-1",), is_wake_turn_pending=True)
+        _let_unclaimed_finished_tasks_lapse(manager)
+        marker_path = reader.chat_dir(ChatId("agent-1")) / "harness-grok-sub-1.json"
+        assert marker_path.exists()
+        marker_path.unlink()
+        client_queue = broadcaster.register()
+        _observe_grok_turn_marker(manager, SpecialEventKind.TURN_COMPLETED, "2026-10-21T22:33:49.348Z")
+
+        pushed = [message for message in _drain(client_queue) if message.get("type") == "chats_updated"]
+        assert [message["chats"][0]["status"] for message in pushed] == ["background"]
+        assert manager.busy_state_of_agent("agent-1", {}).is_busy
+        _observe_grok_turn_marker(manager, SpecialEventKind.TURN_STARTED, "2026-10-21T22:33:49.462Z")
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.WORKING]
+        _observe_grok_turn_marker(manager, SpecialEventKind.TURN_COMPLETED, "2026-10-21T22:33:50.006Z")
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.IDLE]
+    finally:
+        manager.stop()
+
+
+def test_a_task_whose_own_turn_starts_in_the_batch_that_ends_the_last_one_stops_keeping_the_chat_busy(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """grok can end a turn and start the one a task's end wakes within one read, so the agent never reads idle
+    between them and no turn start claims the task; the watcher reports it over again as that turn starts."""
+    manager, _reader, _state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
+    try:
+        _track_grok_chat(manager)
+        _observe_grok_turn_marker(manager, SpecialEventKind.TURN_STARTED, "2026-10-21T22:33:18.973Z")
+        manager.forget_finished_tasks("agent-1", HarnessType.GROK, ("sub-1",), is_wake_turn_pending=True)
+        manager.update_session_events(
+            "agent-1",
+            [
+                {
+                    "type": SPECIAL_EVENT_TYPE,
+                    "kind": kind.value,
+                    "session_id": "root-1",
+                    "timestamp": timestamp,
+                }
+                for kind, timestamp in (
+                    (SpecialEventKind.TURN_COMPLETED, "2026-10-21T22:33:49.348Z"),
+                    (SpecialEventKind.TURN_STARTED, "2026-10-21T22:33:49.462Z"),
+                )
+            ],
+        )
+
+        manager.forget_finished_tasks("agent-1", HarnessType.GROK, ("sub-1",))
+        _observe_grok_turn_marker(manager, SpecialEventKind.TURN_COMPLETED, "2026-10-21T22:33:50.006Z")
+
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.IDLE]
+        assert not manager.busy_state_of_agent("agent-1", {}).is_busy
+    finally:
+        manager.stop()
+
+
+def test_a_task_whose_own_turn_never_comes_stops_keeping_the_chat_busy_after_the_grace_passes(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager, _reader, _state_dir = _grok_chat_manager(broadcaster, tmp_path, monkeypatch)
+    try:
+        _track_grok_chat(manager)
+        _observe_grok_turn_marker(manager, SpecialEventKind.TURN_STARTED, "2026-10-21T22:33:18.973Z")
+        manager.forget_finished_tasks("agent-1", HarnessType.GROK, ("sub-1",), is_wake_turn_pending=True)
+        _observe_grok_turn_marker(manager, SpecialEventKind.TURN_COMPLETED, "2026-10-21T22:33:49.348Z")
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.BACKGROUND]
+        client_queue = broadcaster.register()
+
+        _let_unclaimed_finished_tasks_lapse(manager)
+
+        pushed = [message for message in _drain(client_queue) if message.get("type") == "chats_updated"]
+        assert [message["chats"][0]["status"] for message in pushed][-1:] == ["idle"]
+        assert [snapshot.status for snapshot in manager.get_chat_snapshots()] == [ChatStatus.IDLE]
+        assert not manager.busy_state_of_agent("agent-1", {}).is_busy
     finally:
         manager.stop()
 
@@ -7695,6 +7967,7 @@ def test_a_pi_compaction_request_does_not_show_over_a_turn_already_running(
     ("harness", "is_ended"),
     [
         pytest.param(HarnessType.PI_CODING, True, id="pi"),
+        pytest.param(HarnessType.GROK, True, id="grok"),
         pytest.param(HarnessType.CODEX, False, id="codex_whose_compaction_is_a_turn"),
         pytest.param(HarnessType.CLAUDE, False, id="claude_whose_marker_tracks_its_compaction"),
     ],
@@ -7702,7 +7975,8 @@ def test_a_pi_compaction_request_does_not_show_over_a_turn_already_running(
 def test_a_user_turn_after_a_compaction_request_ends_it_only_on_a_harness_compacting_outside_turns_unmarked(
     agent_manager: AgentManager, tmp_path: Path, loguru_records: list[str], harness: HarnessType, is_ended: bool
 ) -> None:
-    """pi runs no turn while it compacts, so a turn after the request means its compaction is over or was refused."""
+    """pi and grok run no turn while they compact, so a turn after the request means the compaction is over or was
+    refused."""
     agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=harness)
     agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic() - 1.0)
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
@@ -7732,11 +8006,12 @@ def test_a_pi_compaction_request_ended_by_a_turn_does_not_come_back_once_the_tur
     assert _snapshot_compaction_cause(agent_manager, agent_id) is None
 
 
-def test_a_pi_compact_requested_from_the_composer_shows_compacting_as_requested_until_its_compacted_event(
-    agent_manager: AgentManager, tmp_path: Path
+@pytest.mark.parametrize("harness", [HarnessType.PI_CODING, HarnessType.GROK], ids=["pi", "grok"])
+def test_a_compact_requested_from_the_composer_shows_compacting_as_requested_until_its_compacted_event(
+    agent_manager: AgentManager, tmp_path: Path, harness: HarnessType
 ) -> None:
-    """pi compacts outside a turn, and its compaction record is the only completion it reports."""
-    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.PI_CODING)
+    """pi and grok compact outside a turn, and the compaction record is the only completion either reports."""
+    agent_id, _ = _tracked_compaction_agent(agent_manager, tmp_path, harness=harness)
 
     agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, time.monotonic())
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
@@ -7758,6 +8033,38 @@ def test_a_compaction_request_is_recorded_beside_the_marker(agent_manager: Agent
     assert request is not None
     assert request.cause == CompactionCause.IDLE
     assert request.requested_at < before
+
+
+def test_a_withdrawn_compaction_request_stops_showing_and_leaves_no_record(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    """mngr declined or failed the compaction the chat showed as requested before asking it."""
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.GROK)
+    requested_at = time.monotonic()
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.MANUAL, requested_at)
+    assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
+
+    agent_manager.withdraw_compaction_request(agent_id, requested_at)
+
+    assert agent_id not in agent_manager._compaction_pending_by_agent
+    assert _activity_of(agent_manager, agent_id) == ActivityState.IDLE
+    assert not (state_dir / COMPACTION_REQUEST_FILENAME).exists()
+    later_compaction = _compacted_event(seconds_ago=0.0)
+    agent_manager.stamp_compaction_events(_compaction_agent_info(agent_manager, agent_id), [later_compaction])
+    assert later_compaction["compaction_cause"] is None
+
+
+def test_withdrawing_an_older_compaction_request_leaves_a_newer_one(
+    agent_manager: AgentManager, tmp_path: Path
+) -> None:
+    agent_id, state_dir = _tracked_compaction_agent(agent_manager, tmp_path, harness=HarnessType.GROK)
+    older = time.monotonic() - 1.0
+    agent_manager.note_compaction_requested(agent_id, CompactionCause.IDLE, time.monotonic())
+
+    agent_manager.withdraw_compaction_request(agent_id, older)
+
+    assert agent_manager._compaction_pending_by_agent[agent_id][1] == CompactionCause.IDLE
+    assert (state_dir / COMPACTION_REQUEST_FILENAME).exists()
 
 
 def test_a_compaction_request_for_an_agent_without_a_local_state_dir_is_pending_but_not_recorded(

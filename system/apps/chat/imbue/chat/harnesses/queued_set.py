@@ -20,9 +20,17 @@ model: it is per-session scratch state mutated in place by its populator, not a
 domain value object.
 """
 
+from datetime import datetime
+from datetime import timezone
+
 from pydantic import Field
 
 from imbue.imbue_common.frozen_model import FrozenModel
+
+
+def now_enqueue_timestamp() -> str:
+    """The current UTC time in the shape a held entry's ``enqueue_ts`` takes, e.g. ``2026-10-27T12:00:00Z``."""
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 class QueuedMessage(FrozenModel):

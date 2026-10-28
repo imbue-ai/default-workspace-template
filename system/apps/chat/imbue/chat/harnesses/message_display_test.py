@@ -25,6 +25,7 @@ from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 from imbue.chat.harnesses.message_display import split_background_task_reports
+from imbue.chat.harnesses.message_display import stamp_user_message_display
 
 _SEED_BLOCK = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
 
@@ -588,3 +589,170 @@ def test_a_permission_notice_flushed_with_reports_still_resolves_its_card(is_bet
     assert decision.display is DisplayKind.PERMISSION_RESOLUTION
     assert decision.resolution == "denied"
     assert decision.request_id == "r1"
+
+
+# Grok 1.0.62's own wake prompts and Stop-hook note, verbatim from the captured sessions under
+# ``harnesses/grok/fixtures``.
+_GROK_SHELL_WAKE = (
+    '<system-reminder>\nBackground task "01a156da-5fa8-7e01-bed9-b3e2112a053a" completed (exit code: 0).\n'
+    "Description: background sleep | Duration: 8.0s\n"
+    'Use get_command_or_subagent_output("01a156da-5fa8-7e01-bed9-b3e2112a053a") to see the full output.\n'
+    "</system-reminder>"
+)
+_GROK_SUBAGENT_WAKE = (
+    "<system-reminder>\nWhile you were idle, 1 background subagent completed:\n"
+    '- [general-purpose] "stub subagent bg" \u2014 completed successfully (16.4s, 0 tool calls)\n'
+    "=== Task 01a156db-10ae-70c2-9a0f-a0dff6d5f376 ===\nCommand: [subagent:general-purpose] stub subagent bg\n"
+    "Status: completed\nDuration: 16.43s\nExit Code: 0\n\n=== Output ===\n"
+    "STUB_CHILD: slow child one two three four five six seven eight nine ten eleven twelve\n\n"
+    "<subagent_meta>id=01a156db-10ae-70c2-9a0f-a0dff6d5f376, tool_calls=0, turns=1, duration_ms=16430</subagent_meta>\n\n"
+    "<subagent_result>\nsubagent_id: 01a156db-10ae-70c2-9a0f-a0dff6d5f376\n"
+    'To continue this subagent\'s conversation, use resume_from="01a156db-10ae-70c2-9a0f-a0dff6d5f376".\n'
+    "</subagent_result>\n\n</system-reminder>"
+)
+_GROK_MONITOR_END_WAKE = (
+    '<system-reminder>\nMonitor "01a167b8-138d-7a02-9fbe-d755f98795ab" ended: [monitor ended: exited (code 0)].\n'
+    "Description: two ticks | Duration: 1.0s\n"
+    'Use get_command_or_subagent_output("01a167b8-138d-7a02-9fbe-d755f98795ab") for full output.\n\n'
+    "</system-reminder>"
+)
+_GROK_MONITOR_EVENT_WAKE = (
+    '<monitor-event task_id="01a167b8-138d-7a02-9fbe-d755f98795ab">\n[two ticks] tick 2\n</monitor-event>'
+)
+_GROK_STOP_NOTE = "\u21a9 Stop blocked by global/stopblock, continuing: STOPGATE_FEEDBACK please continue once more"
+
+
+def test_a_grok_stop_hook_note_is_a_chip_showing_the_hooks_feedback() -> None:
+    decision = classify_user_message(_GROK_STOP_NOTE, is_harness_note=True)
+
+    assert decision is not None
+    assert decision.display is DisplayKind.CHIP
+    assert decision.display_label == "Stop hook feedback"
+    assert decision.display_body == "STOPGATE_FEEDBACK please continue once more"
+
+    unnamed = classify_user_message(
+        "\u21a9 Stop hook feedback, continuing: run the linter first", is_harness_note=True
+    )
+    assert unnamed is not None
+    assert unnamed.display_body == "run the linter first"
+
+
+def test_a_human_message_worded_like_a_grok_stop_note_is_a_human_turn() -> None:
+    assert classify_user_message("Stop blocked by the firewall, continuing: what now?") is None
+
+
+@pytest.mark.parametrize(
+    ("end", "expected_body"),
+    [("exit code: 0", "background sleep"), ("exit code: 2", "background sleep (exit code: 2)")],
+)
+def test_a_grok_background_task_wake_is_a_notice_naming_the_task(end: str, expected_body: str) -> None:
+    decision = classify_user_message(_GROK_SHELL_WAKE.replace("exit code: 0", end))
+
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == "Background task completed"
+    assert decision.display_body == expected_body
+
+
+def test_a_grok_background_task_wake_without_a_description_names_the_task_id() -> None:
+    decision = classify_user_message(_GROK_SHELL_WAKE.replace("Description: background sleep | ", "Elapsed | "))
+
+    assert decision is not None
+    assert decision.display_body == "01a156da-5fa8-7e01-bed9-b3e2112a053a"
+
+
+def test_a_grok_subagent_wake_names_each_subagent_and_how_it_ended() -> None:
+    decision = classify_user_message(_GROK_SUBAGENT_WAKE)
+
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == "Background subagent completed"
+    assert decision.display_body == '"stub subagent bg" completed successfully'
+
+    second = '- [explore] "map the repo" \u2014 failed (2.0s, 3 tool calls)\n'
+    two = classify_user_message(
+        _GROK_SUBAGENT_WAKE.replace(
+            "1 background subagent completed:\n", "2 background subagents completed:\n"
+        ).replace("=== Task", second + "=== Task", 1)
+    )
+    assert two is not None
+    assert two.display_label == "Background subagents completed"
+    assert two.display_body == '"stub subagent bg" completed successfully; "map the repo" failed'
+
+
+def test_a_grok_subagent_wake_whose_line_does_not_parse_shows_no_part_of_the_prompt() -> None:
+    unparsed = _GROK_SUBAGENT_WAKE.replace('"stub subagent bg"', '"review "auth" module"', 1)
+
+    decision = classify_user_message(unparsed)
+
+    assert decision is not None
+    assert decision.display_label == "Background subagent completed"
+    assert decision.display_body == ""
+
+
+def test_grok_monitor_wakes_are_notices() -> None:
+    ended = classify_user_message(_GROK_MONITOR_END_WAKE)
+    event = classify_user_message(_GROK_MONITOR_EVENT_WAKE)
+
+    assert ended is not None and ended.display is DisplayKind.NOTICE
+    assert (ended.display_label, ended.display_body) == ("Monitor ended", "two ticks")
+    assert event is not None and event.display is DisplayKind.NOTICE
+    assert (event.display_label, event.display_body) == ("Monitor event", "[two ticks] tick 2")
+    assert classify_user_message(f"{_GROK_MONITOR_EVENT_WAKE}\nwhat is this?") is None
+
+
+def test_a_wake_turn_no_detector_names_is_still_a_notice_carrying_its_first_line() -> None:
+    wake = "<system-reminder>\nYour scheduled check fired.\n</system-reminder>"
+
+    assert classify_user_message(wake) is None
+    decision = classify_user_message(wake, is_wake=True)
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == "Background update"
+    assert decision.display_body == "Your scheduled check fired."
+
+    bare = classify_user_message("<system-reminder></system-reminder>", is_wake=True)
+    assert bare is not None
+    assert bare.display is DisplayKind.NOTICE
+    assert bare.display_body == ""
+
+
+def test_a_detector_still_names_a_wake_turn() -> None:
+    decision = classify_user_message(_GROK_SHELL_WAKE, is_wake=True)
+
+    assert decision is not None
+    assert decision.display_label == "Background task completed"
+
+
+def test_a_grok_wake_turn_awaits_a_reply() -> None:
+    event: dict[str, object] = {"type": "user_message"}
+
+    stamp_user_message_display(event, _GROK_SUBAGENT_WAKE, is_wake=True)
+
+    assert event["display"] == "notice"
+    assert "non_turn_tail" not in event
+    assert is_non_turn_tail(_GROK_MONITOR_EVENT_WAKE) is False
+
+
+def test_text_that_quotes_a_grok_wake_line_is_a_human_turn() -> None:
+    assert classify_user_message('why did Background task "x" completed (exit code: 0). show up?') is None
+    assert classify_user_message("what does While you were idle, 1 background subagent completed: mean?") is None
+
+
+def test_grok_s_note_on_a_turn_its_process_exited_during_is_a_chip() -> None:
+    """Verbatim from grok 1.0.62's ``turn_completed{stop_reason: "interrupted"}`` after a ``--resume``."""
+    note = (
+        "Grok stopped before this turn finished (the agent process exited or was restarted). "
+        "Committed tool results were kept."
+    )
+
+    decision = classify_user_message(note, is_harness_note=True)
+
+    assert decision is not None
+    assert (decision.display, decision.display_label, decision.display_body) == (
+        DisplayKind.CHIP,
+        "Turn interrupted",
+        None,
+    )
+    assert classify_user_message(f"{note} What happened here?") is None
+    assert classify_user_message(_GROK_STOP_NOTE) is None

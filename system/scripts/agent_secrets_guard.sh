@@ -15,7 +15,7 @@
 # Unlike the shell-only guards, this one also polices the file tools, because a
 # `Read` of the file defeats the rule as surely as a `cat`. The whole hook payload
 # goes to the checker, which knows which tool names carry a command and which
-# carry a path (claude's, codex's, and pi's spellings).
+# carry a path, in each harness's spelling.
 #
 # Blocks via exit 2 with a stderr message the agent sees. The parsing lives in the
 # sibling agent_secrets_guard_check.py, which shell-tokenizes with `shlex` so a

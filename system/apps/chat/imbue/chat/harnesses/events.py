@@ -55,10 +55,10 @@ MAX_TK_STAMP_LENGTH: Final[int] = 4000
 class SpecialEventKind(StrEnum):
     """Every non-message marker any harness may emit.
 
-    Turn boundaries come from codex, which records them in real time: ``task_started``
-    when a user turn begins, ``task_complete`` when it ends, and ``turn_aborted`` on a
-    user interrupt. Claude's transcript carries no equivalent, so claude declares an
-    empty set -- that emptiness is the honest statement, not an omission.
+    Turn boundaries come from the harnesses whose logs record them as they happen, such as
+    codex's rollout: ``task_started`` when a user turn begins, ``task_complete`` when it ends,
+    and ``turn_aborted`` on a user interrupt. Claude's transcript carries no equivalent, so
+    claude declares an empty set -- that emptiness is the honest statement, not an omission.
     """
 
     TURN_STARTED = "turn_started"

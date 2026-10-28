@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -7,12 +8,15 @@ from imbue.chat.harnesses.claude.activity import ClaudeActivityTracker
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
+from imbue.chat.harnesses.grok.activity import GrokActivityTracker
 from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.chat.harnesses.pi_coding.activity import PiActivityTracker
 from imbue.chat.harnesses.registry import build_tracker
 from imbue.chat.harnesses.registry import get_harness_spec
+from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
+from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 
@@ -27,12 +31,16 @@ from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
 # stale tail. Covering them here would mean weakening these assertions for the harnesses that
 # CAN meet them; they get their own test instead. Move a harness up to this tuple when it lands
 # a real transcript watcher.
-_TRACKER_HARNESSES = (HarnessType.CLAUDE, HarnessType.CODEX, HarnessType.PI_CODING, HarnessType.ANTIGRAVITY)
+_TRACKER_HARNESSES = (
+    HarnessType.CLAUDE,
+    HarnessType.CODEX,
+    HarnessType.PI_CODING,
+    HarnessType.ANTIGRAVITY,
+    HarnessType.GROK,
+)
 
 # The harnesses on the shared placeholder watcher/tracker -- launchable, with no transcript
-# behind them. Emptying this tuple is what retires ``harnesses/placeholder.py``. antigravity
-# graduated out of it once its real watcher landed; it still uses the placeholder RESOLVER,
-# which is why its catalog is asserted empty below rather than here.
+# behind them. Emptying this tuple is what retires ``harnesses/placeholder.py``.
 _PLACEHOLDER_HARNESSES = (HarnessType.OPENCODE,)
 
 
@@ -45,6 +53,7 @@ def _turn_started_marker() -> dict[str, Any]:
     [
         pytest.param(HarnessType.CLAUDE, ClaudeActivityTracker, "claude_process_started", id="claude"),
         pytest.param(HarnessType.PI_CODING, PiActivityTracker, "pi_process_started", id="pi"),
+        pytest.param(HarnessType.GROK, GrokActivityTracker, "grok_process_started", id="grok"),
     ],
 )
 def test_build_tracker(harness: HarnessType, expected_type: type, expected_marker: str) -> None:
@@ -238,20 +247,164 @@ def test_dead_lifecycle_settles_idle_for_every_harness(harness: HarnessType) -> 
 
 def test_active_marker_declarations_match_what_mngr_writes() -> None:
     """claude/pi keep the shared `active` marker their hooks/extension flip; codex declares
-    None (mngr_codex writes no marker -- the daemon is the turn authority)."""
+    None (mngr_codex writes no marker -- the daemon is the turn authority), and so does grok,
+    whose `active` mngr_grok keeps on while a background subagent outlives its turn."""
     assert build_tracker(HarnessType.CLAUDE).active_marker_filename == "active"
     assert build_tracker(HarnessType.PI_CODING).active_marker_filename == "active"
     assert build_tracker(HarnessType.CODEX).active_marker_filename is None
+    assert build_tracker(HarnessType.GROK).active_marker_filename is None
+
+
+def _grok_turn_marker(kind: SpecialEventKind, session_id: str, timestamp: str) -> dict[str, Any]:
+    return {"type": SPECIAL_EVENT_TYPE, "kind": kind.value, "session_id": session_id, "timestamp": timestamp}
+
+
+def test_a_grok_turn_ends_idle_while_mngrs_active_marker_stays_for_a_background_subagent() -> None:
+    """mngr_grok keeps ``active`` while a background subagent runs; the chat must not read that as a turn."""
+    tracker = build_tracker(HarnessType.GROK)
+    tracker.observe(
+        [
+            _grok_turn_marker(SpecialEventKind.TURN_STARTED, "root-1", "2026-10-20T01:09:19.316Z"),
+            {"type": "user_message", "session_id": "root-1", "timestamp": "2026-10-20T01:09:19.316Z"},
+        ]
+    )
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=True, process_started_at=None)
+        == ActivityState.THINKING
+    )
+    tracker.observe([_grok_turn_marker(SpecialEventKind.TURN_COMPLETED, "root-1", "2026-10-20T01:09:20.059Z")])
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=True, process_started_at=None)
+        == ActivityState.IDLE
+    )
+
+
+def test_a_grok_turn_open_in_a_second_top_level_session_keeps_the_agent_working() -> None:
+    """``/new`` opens a second top-level session; one session's turn ending leaves the other's open."""
+    tracker = build_tracker(HarnessType.GROK)
+    tracker.observe(
+        [
+            _grok_turn_marker(SpecialEventKind.TURN_STARTED, "root-1", "2026-10-20T01:10:59.814Z"),
+            _grok_turn_marker(SpecialEventKind.TURN_STARTED, "root-2", "2026-10-20T01:11:03.669Z"),
+            _grok_turn_marker(SpecialEventKind.TURN_ABORTED, "root-1", "2026-10-20T01:11:04.000Z"),
+        ]
+    )
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.THINKING
+    )
+    tracker.observe([_grok_turn_marker(SpecialEventKind.TURN_COMPLETED, "root-2", "2026-10-20T01:11:04.780Z")])
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.IDLE
+    )
+
+
+def test_a_grok_turn_a_quit_left_open_does_not_hold_the_next_processs_dot() -> None:
+    """A quit mid-turn writes no ``turn_completed``; once grok relaunches, that session's open turn is the
+    dead process's, so another session's finished turn reads idle."""
+    # 2026-10-20T01:30:00Z, between the two turns' starts.
+    relaunched_at = 1792459800.0
+    tracker = build_tracker(HarnessType.GROK)
+    tracker.observe(
+        [
+            _grok_turn_marker(SpecialEventKind.TURN_STARTED, "root-1", "2026-10-20T01:00:00.000Z"),
+            _grok_turn_marker(SpecialEventKind.TURN_STARTED, "root-2", "2026-10-20T02:00:00.000Z"),
+        ]
+    )
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=relaunched_at)
+        == ActivityState.THINKING
+    )
+    tracker.observe([_grok_turn_marker(SpecialEventKind.TURN_COMPLETED, "root-2", "2026-10-20T02:00:05.000Z")])
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=relaunched_at)
+        == ActivityState.IDLE
+    )
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.THINKING
+    )
+
+
+def test_a_grok_tool_call_a_quit_left_unanswered_does_not_read_as_running_in_the_next_process() -> None:
+    """A quit mid-tool answers no call; the relaunched grok's next turn is thinking, not running that tool."""
+    # 2026-10-20T01:30:00Z, between the abandoned call and the next turn.
+    relaunched_at = 1792459800.0
+    tracker = build_tracker(HarnessType.GROK)
+    tracker.observe(
+        [
+            _grok_turn_marker(SpecialEventKind.TURN_STARTED, "root-1", "2026-10-20T01:00:00.000Z"),
+            {
+                "type": "assistant_message",
+                "session_id": "root-1",
+                "timestamp": "2026-10-20T01:00:01.000Z",
+                "tool_calls": [{"tool_call_id": "grok-root-1-1291-call", "tool_name": "run_terminal_command"}],
+            },
+            _grok_turn_marker(SpecialEventKind.TURN_STARTED, "root-2", "2026-10-20T02:00:00.000Z"),
+        ]
+    )
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=relaunched_at)
+        == ActivityState.THINKING
+    )
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.TOOL_RUNNING
+    )
+
+
+def test_a_redelivered_grok_tool_call_does_not_reopen_its_answered_call() -> None:
+    """A batch can re-broadcast a call event (a spawn card linked to its child late); its answered call stays answered."""
+    tracker = build_tracker(HarnessType.GROK)
+    call = {
+        "type": "assistant_message",
+        "session_id": "root-1",
+        "timestamp": "2026-10-20T01:09:19.400Z",
+        "tool_calls": [{"tool_call_id": "grok-root-1-1217-call", "tool_name": "spawn_subagent"}],
+    }
+    tracker.observe(
+        [
+            _grok_turn_marker(SpecialEventKind.TURN_STARTED, "root-1", "2026-10-20T01:09:19.316Z"),
+            call,
+            {
+                "type": "tool_result",
+                "session_id": "root-1",
+                "timestamp": "2026-10-20T01:09:19.500Z",
+                "tool_call_id": "grok-root-1-1217-call",
+            },
+        ]
+    )
+    tracker.observe([call])
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.THINKING
+    )
+
+
+def test_a_redelivered_older_grok_turn_marker_does_not_reopen_its_turn() -> None:
+    """A batch can re-broadcast an old event; an older turn_started must not undo its session's later end."""
+    tracker = build_tracker(HarnessType.GROK)
+    started = _grok_turn_marker(SpecialEventKind.TURN_STARTED, "root-1", "2026-10-20T01:07:13.731Z")
+    tracker.observe(
+        [started, _grok_turn_marker(SpecialEventKind.TURN_COMPLETED, "root-1", "2026-10-20T01:07:14.327Z")]
+    )
+    tracker.observe([started])
+    assert (
+        tracker.derive(lifecycle_state="RUNNING", is_active_marker_present=False, process_started_at=None)
+        == ActivityState.IDLE
+    )
 
 
 @pytest.mark.parametrize("harness", _PLACEHOLDER_HARNESSES)
 def test_placeholder_harness_dot_follows_the_active_marker(harness: HarnessType) -> None:
     """A launch-only harness derives its dot from mngr's ``active`` marker and nothing else.
 
-    Both plugins behind these harnesses maintain that marker already, so the dot is live even
-    with no transcript. The states it can reach are exactly two: THINKING while a turn is in
-    flight, IDLE otherwise -- never TOOL_RUNNING, which needs an unmatched tool call from a
-    transcript. Pinned here so swapping in a real tracker is a deliberate, visible change.
+    The plugin behind these harnesses maintains that marker already, so the dot is live even
+    with no transcript. The states it can reach are exactly two: THINKING while the marker is
+    present (a turn in flight), IDLE otherwise -- never TOOL_RUNNING, which needs an unmatched
+    tool call from a transcript. Pinned here so swapping in a real tracker is a deliberate,
+    visible change.
     """
     tracker = build_tracker(harness)
     assert (
@@ -284,6 +437,7 @@ def test_placeholder_harness_reports_an_empty_transcript(harness: HarnessType) -
         (HarnessType.CLAUDE, "claude_process_started"),
         (HarnessType.CODEX, "codex_process_started"),
         (HarnessType.PI_CODING, "pi_process_started"),
+        (HarnessType.GROK, "grok_process_started"),
     ],
 )
 def test_process_started_marker_is_declared_on_the_spec(harness: HarnessType, expected: str) -> None:
@@ -293,6 +447,17 @@ def test_process_started_marker_is_declared_on_the_spec(harness: HarnessType, ex
     local state dir. Pinned to the literal mngr touches, since a drift here silently costs
     the prioritizer its aging rather than raising."""
     assert get_harness_spec(harness).process_started_marker_filename == expected
+
+
+def test_a_grok_agent_reads_as_starting_until_its_session_starts(tmp_path: Path) -> None:
+    """mngr_grok's launch deletes ``grok_session_started`` before touching ``grok_process_started``,
+    and grok's SessionStart hook writes it, so a send reads as connecting exactly while it is absent."""
+    spec = get_harness_spec(HarnessType.GROK)
+    assert spec.startup_ready_marker == StartupReadyMarker(filename="grok_session_started", is_deleted_at_launch=True)
+    (tmp_path / "grok_process_started").touch()
+    assert is_harness_starting_up(tmp_path, spec.startup_ready_marker, spec.process_started_marker_filename)
+    (tmp_path / "grok_session_started").touch()
+    assert not is_harness_starting_up(tmp_path, spec.startup_ready_marker, spec.process_started_marker_filename)
 
 
 def test_spec_process_started_marker_matches_its_tracker() -> None:

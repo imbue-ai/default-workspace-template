@@ -16,6 +16,7 @@ from playwright.sync_api import Playwright
 from playwright.sync_api import sync_playwright
 
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.harnesses.grok import queue_tracker as grok_queue_tracker
 from imbue.chat.testing import FORTRESS_CHROMIUM_PATH
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 
@@ -72,6 +73,16 @@ def _isolate_chat_tests(
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(isolated / "work"))
     monkeypatch.setenv("MNGR_AGENT_STATE_DIR", str(isolated / "agents" / "test-agent"))
     return isolated
+
+
+@pytest.fixture(autouse=True)
+def _empty_grok_tracker_registry() -> Iterator[None]:
+    """Give every test an empty grok tracker registry, and leave none of its trackers behind."""
+    with grok_queue_tracker._TRACKERS_LOCK:
+        grok_queue_tracker._TRACKERS.clear()
+    yield
+    with grok_queue_tracker._TRACKERS_LOCK:
+        grok_queue_tracker._TRACKERS.clear()
 
 
 # The pytest-playwright fixture-scope overrides.

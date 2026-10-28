@@ -6,6 +6,7 @@ the agent quietly running on the shared credential instead.
 """
 
 import os
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -19,19 +20,26 @@ from imbue.chat.accounts import set_default_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.harnesses.account_binding import BindingError
 from imbue.chat.harnesses.account_binding import CredentialLinkAccountBinding
+from imbue.chat.harnesses.account_binding import DefaultCreateBinding
 from imbue.chat.harnesses.binding import REBIND_VERIFIED_HARNESSES
 from imbue.chat.harnesses.binding import is_rebind_supported
 from imbue.chat.harnesses.binding import resolve_binding
+from imbue.chat.harnesses.grok.account_binding import read_sole_api_key
+from imbue.chat.harnesses.grok.testing import GROK_SESSION_SCOPE
+from imbue.chat.harnesses.grok.testing import build_grok_key_scope
+from imbue.chat.harnesses.grok.testing import write_grok_auth
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import LANES
 from imbue.chat.harnesses.registry import build_account_binding
 from imbue.mngr_claude.claude_config import check_claude_dialogs_dismissed
+from imbue.mngr_grok.api import build_pinned_grok_environment
 
 _BOUND_HARNESSES = (
     HarnessType.CLAUDE,
     HarnessType.CODEX,
     HarnessType.ANTIGRAVITY,
     HarnessType.PI_CODING,
+    HarnessType.GROK,
 )
 
 
@@ -42,13 +50,24 @@ def _link_binding(harness: HarnessType) -> CredentialLinkAccountBinding:
     return binding
 
 
-def test_each_harness_scopes_through_exactly_one_variable(tmp_path: Path) -> None:
-    """One variable per harness is the entire multi-account mechanism."""
+def test_every_harness_but_grok_scopes_through_exactly_one_variable(tmp_path: Path) -> None:
+    """One variable per harness is the entire multi-account mechanism, except for grok's split."""
     assert build_account_binding(HarnessType.CLAUDE).account_env(tmp_path) == {"CLAUDE_CONFIG_DIR": str(tmp_path)}
     assert build_account_binding(HarnessType.CODEX).account_env(tmp_path) == {"CODEX_HOME": str(tmp_path)}
     # agy has no config-dir override at all; relocating HOME is the only scope it offers.
     assert build_account_binding(HarnessType.ANTIGRAVITY).account_env(tmp_path) == {"HOME": str(tmp_path)}
     assert build_account_binding(HarnessType.PI_CODING).account_env(tmp_path) == {"PI_CODING_AGENT_DIR": str(tmp_path)}
+
+
+def test_grok_runs_on_the_account_as_its_home_and_credential_file_under_mngrs_pins(tmp_path: Path) -> None:
+    """A sign-in, a probe or a listing keeps its state in the account folder and reads the account's credential,
+    on the same privacy and isolation pins an agent runs with."""
+    assert build_account_binding(HarnessType.GROK).account_env(tmp_path) == {
+        **build_pinned_grok_environment(),
+        "GROK_HOME": str(tmp_path),
+        "GROK_AUTH_PATH": str(tmp_path / "auth.json"),
+    }
+    assert build_account_binding(HarnessType.GROK).account_env(tmp_path)["GROK_MANAGED_CONFIG"] == "0"
 
 
 def test_a_harness_no_account_runs_has_no_binding_to_build() -> None:
@@ -64,8 +83,9 @@ def test_credential_paths_match_what_mngr_provisions(tmp_path: Path) -> None:
     assert _link_binding(HarnessType.ANTIGRAVITY).agent_credential_path(state) == (
         state / "plugin/antigravity/home/.gemini/antigravity-cli/antigravity-oauth-token"
     )
-    # claude binds by environment, so it has no path to repoint.
+    # claude and grok bind by environment, so they have no path to repoint.
     assert not isinstance(build_account_binding(HarnessType.CLAUDE), CredentialLinkAccountBinding)
+    assert not isinstance(build_account_binding(HarnessType.GROK), CredentialLinkAccountBinding)
 
 
 def test_the_account_side_of_each_link_mirrors_the_agent_side(tmp_path: Path) -> None:
@@ -81,6 +101,16 @@ def test_claude_binds_through_the_env_file(tmp_path: Path) -> None:
     repoint would arrive after the first turn had already run."""
     args = build_account_binding(HarnessType.CLAUDE).create_args(tmp_path, tmp_path / "state")
     assert args == ["--env", f"CLAUDE_CONFIG_DIR={tmp_path}"]
+
+
+def test_grok_binds_through_the_env_file_by_its_credential_path_alone(tmp_path: Path) -> None:
+    """mngr_grok reads an env-file GROK_AUTH_PATH at provision and launch. A GROK_HOME there would move the trust store
+    mngr resolves at provision onto the account."""
+    binding = build_account_binding(HarnessType.GROK)
+    assignment = f"GROK_AUTH_PATH={tmp_path / 'auth.json'}"
+
+    assert binding.create_args(tmp_path, tmp_path / "state") == ["--env", assignment]
+    assert binding.default_create_binding(tmp_path) == DefaultCreateBinding(env=(assignment,), provision_commands=())
 
 
 def test_the_others_bind_by_replacing_the_provisioned_symlink(tmp_path: Path) -> None:
@@ -140,6 +170,31 @@ def test_seeding_is_idempotent(tmp_path: Path) -> None:
         build_account_binding(harness).seed_account(account, work_dir)
         build_account_binding(harness).seed_account(account, work_dir)
         assert account.is_dir()
+
+
+def test_seeding_grok_pins_the_home_and_keeps_its_consent_answers(tmp_path: Path) -> None:
+    """Seeding runs on every flow start, and the account's config.toml is where mngr reads the consent answers it
+    merges into each agent's home: a seed that dropped them would block every new agent on a notice already
+    accepted."""
+    account = tmp_path / "acct"
+    binding = build_account_binding(HarnessType.GROK)
+    binding.seed_account(account, tmp_path)
+    config = tomllib.loads((account / "config.toml").read_text())
+    assert config["features"]["telemetry"] is False
+    assert (account / "requirements.toml").is_file()
+
+    answer = '\n[consent.answers.terms-2026]\nversion = 3\naccount = "user@example.com"\nacked = true\n'
+    (account / "config.toml").write_text((account / "config.toml").read_text() + answer)
+    binding.seed_account(account, tmp_path)
+    seeded = (account / "config.toml").read_text()
+    binding.seed_account(account, tmp_path)
+
+    assert tomllib.loads(seeded)["consent"]["answers"]["terms-2026"] == {
+        "version": 3,
+        "account": "user@example.com",
+        "acked": True,
+    }
+    assert (account / "config.toml").read_text() == seeded
 
 
 def _bound_id(account_id: str = "", home: Path | None = None) -> str | None:
@@ -247,38 +302,86 @@ def test_a_re_auth_clears_every_file_that_says_the_account_is_signed_in(tmp_path
         assert build_account_binding(harness).credential_paths(tmp_path) == (
             _link_binding(harness).account_credential_path(tmp_path),
         )
+    # A session login and a stored API key are both scopes of the one file grok reads.
+    assert build_account_binding(HarnessType.GROK).credential_paths(tmp_path) == (tmp_path / "auth.json",)
 
 
-def test_every_scoped_harness_can_be_rebound_and_the_unscoped_one_cannot() -> None:
-    assert REBIND_VERIFIED_HARNESSES == frozenset(_BOUND_HARNESSES)
-    assert all(is_rebind_supported(harness) for harness in _BOUND_HARNESSES)
+def test_every_scoped_harness_but_grok_can_be_rebound_and_the_unscoped_one_cannot() -> None:
+    """A grok chat moving to another account takes the handoff: mngr_grok merges the account's consent answers into
+    an agent's home only when it provisions, which a rebind's restart does not and a handoff's create does."""
+    rebound = tuple(harness for harness in _BOUND_HARNESSES if harness is not HarnessType.GROK)
+    assert REBIND_VERIFIED_HARNESSES == frozenset(rebound)
+    assert all(is_rebind_supported(harness) for harness in rebound)
+    assert not is_rebind_supported(HarnessType.GROK)
     assert not is_rebind_supported(HarnessType.OPENCODE)
 
 
-def test_rebinding_claude_rewrites_only_the_config_dir_line_and_lands_whole(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("harness", "variable", "account_file"),
+    ((HarnessType.CLAUDE, "CLAUDE_CONFIG_DIR", ""), (HarnessType.GROK, "GROK_AUTH_PATH", "auth.json")),
+)
+def test_rebinding_rewrites_only_the_binding_line_and_lands_whole(
+    tmp_path: Path, harness: HarnessType, variable: str, account_file: str
+) -> None:
+    binding = build_account_binding(harness)
     state = tmp_path / "state"
     state.mkdir()
     env_path = state / "env"
-    env_path.write_text(f"MNGR_AGENT_ID=agent-1\nCLAUDE_CONFIG_DIR={tmp_path / 'old'}\nMINDS_CHAT_ID=agent-1\n")
-    env_path.chmod(0o600)
-
-    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "new", state)
-
-    assert (
-        env_path.read_text() == f"MNGR_AGENT_ID=agent-1\nMINDS_CHAT_ID=agent-1\nCLAUDE_CONFIG_DIR={tmp_path / 'new'}\n"
+    env_path.write_text(
+        f"MNGR_AGENT_ID=agent-1\n{variable}={tmp_path / 'old' / account_file}\nMINDS_CHAT_ID=agent-1\n"
     )
+    env_path.chmod(0o600)
+    rebound_text = f"MNGR_AGENT_ID=agent-1\nMINDS_CHAT_ID=agent-1\n{variable}={tmp_path / 'new' / account_file}\n"
+
+    binding.rebind_agent(tmp_path / "new", state)
+
+    assert env_path.read_text() == rebound_text
     assert oct(env_path.stat().st_mode & 0o777) == "0o600"
     assert not env_path.with_name("env.rebind-tmp").exists()
     # Again is the same file; a value with a space is quoted the way mngr quotes its own.
-    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "new", state)
-    assert env_path.read_text().count("CLAUDE_CONFIG_DIR=") == 1
-    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "with space", state)
-    assert env_path.read_text().endswith(f'CLAUDE_CONFIG_DIR="{tmp_path / "with space"}"\n')
+    binding.rebind_agent(tmp_path / "new", state)
+    assert env_path.read_text() == rebound_text
+    binding.rebind_agent(tmp_path / "with space", state)
+    assert env_path.read_text().endswith(f'{variable}="{tmp_path / "with space" / account_file}"\n')
     # An agent with no env file yet gets one holding just the line.
     bare = tmp_path / "bare"
     bare.mkdir()
-    build_account_binding(HarnessType.CLAUDE).rebind_agent(tmp_path / "new", bare)
-    assert (bare / "env").read_text() == f"CLAUDE_CONFIG_DIR={tmp_path / 'new'}\n"
+    binding.rebind_agent(tmp_path / "new", bare)
+    assert (bare / "env").read_text() == f"{variable}={tmp_path / 'new' / account_file}\n"
+
+
+def test_a_grok_account_holding_only_a_key_reads_as_that_key(tmp_path: Path) -> None:
+    write_grok_auth(tmp_path, {"xai::api_key": build_grok_key_scope()})
+    key = read_sole_api_key(tmp_path)
+    assert key is not None and key.get_secret_value() == "xai-key-5c1e"
+
+
+@pytest.mark.parametrize(
+    "scopes",
+    (
+        {GROK_SESSION_SCOPE: {"key": "session-token", "auth_mode": "oidc"}},
+        {GROK_SESSION_SCOPE: {"key": "session-token"}, "xai::api_key": build_grok_key_scope()},
+        {"xai::api_key": {"key": "xai-key-5c1e", "auth_mode": "api_key"}},
+        {"xai::api_key": {**build_grok_key_scope(), "key": None}},
+        {},
+    ),
+    ids=("session", "session-and-key", "key-scope-grok-cannot-read", "key-scope-without-a-key", "empty"),
+)
+def test_a_grok_account_with_a_session_or_no_readable_key_reads_as_no_sole_key(
+    tmp_path: Path, scopes: dict[str, object]
+) -> None:
+    """Grok 1.0.62 takes an auth.json whose key scope lacks `create_time` or `user_id` as holding no credential."""
+    write_grok_auth(tmp_path, scopes)
+    assert read_sole_api_key(tmp_path) is None
+
+
+def test_a_grok_account_without_a_readable_auth_file_reads_as_no_sole_key(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    assert read_sole_api_key(tmp_path) is None
+    (tmp_path / "auth.json").write_text("{not json")
+    assert read_sole_api_key(tmp_path) is None
+    assert any(record.startswith("WARNING") and "auth.json" in record for record in loguru_records)
 
 
 @pytest.mark.parametrize("harness", [HarnessType.CODEX, HarnessType.PI_CODING, HarnessType.ANTIGRAVITY])

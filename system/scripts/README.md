@@ -10,7 +10,8 @@ Provisioning and utility scripts:
   the apply runs as a self-contained unit), and the boot-convergence units in
   `env.d/`.
 - Cross-harness agent policy hooks (`agent_*.sh` / `agent_*.py`), wired in
-  `.claude/settings.json` for claude and `.codex/hooks.json` for codex; pi's
+  `.claude/settings.json` for claude, `.codex/hooks.json` for codex and
+  `.grok/hooks/policy.json` (through `agent_grok_policy_guards.py`) for grok; pi's
   `.pi/extensions/policy_guards.ts` and agy's `agy_shim/bash` feed the same
   scripts the payload they read on stdin. See `tool-call-policies.md` for what
   each one enforces.
@@ -42,13 +43,16 @@ Provisioning and utility scripts:
   `.agents/skills/update-self/scripts/`, whose staged copy update-self waits
   through), `background_tasks.py` (the background tasks each chat is waiting
   on, one marker file per task under `data/.apps/chat/background_tasks/<chat-id>/`,
-  written by `run_in_background.py` and by Claude's Stop hook; `list` and
+  written by `run_in_background.py` and by Claude's and grok's hooks; `list` and
   `is-busy` ask the chat app and fall back to the files; a thin entry point over
   the `system/libs/chat_background_tasks` library, which everything else imports),
   `claude_background_task_hooks.py` (Claude's Stop and SessionStart hooks,
   wired in `.claude/settings.json`, that record Claude's own background tasks as
   markers; the Claude-specific logic lives in this script, over the same
-  library's markers),
+  library's markers), `grok_background_task_hooks.py` (grok's Stop, PostToolUse
+  and SessionStart hooks, wired in `.grok/hooks/policy.json`, that do the same
+  for grok's shells, monitors and subagents), `grok_turn_end_stop_hook.sh` (runs
+  a grok Stop hook only at a turn's end, not when a session ends),
   `with_secrets.py` (run a
   command with one `data/.secrets/<name>.env` file's variables in its
   environment; the one sanctioned reader of that directory, which

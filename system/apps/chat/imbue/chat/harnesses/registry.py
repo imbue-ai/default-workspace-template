@@ -5,11 +5,16 @@ A harness is resolved EXACTLY ONCE, in :mod:`agent_discovery`, from mngr's
 receives an already-resolved object from this module and never re-derives, re-checks, or
 branches on the harness name.
 
-Adding a harness is one :class:`HarnessSpec` entry here, one subclass per concern, and --
-if it emits markers of its own -- one member of
-:class:`~imbue.chat.harnesses.events.SpecialEventKind`. Nothing else changes:
-``ChatAppState`` (``state.py``) builds watchers through :func:`build_watcher`, ``agent_manager`` builds
-trackers through :func:`build_tracker`, and neither names a harness.
+Adding a harness is one :class:`HarnessType` member, one :class:`HarnessSpec` entry here, one
+subclass per concern, its label in ``lanes.HARNESS_LABEL``, its ``[agent_types.<name>]`` block
+in ``.mngr/settings.toml`` (launching through the OOM band wrapper), its mngr plugin package (a
+dependency of the chat app, pinned in the root ``pyproject.toml`` and listed in
+``system/config/mngr_plugins.toml``), its CLI installed by ``system/scripts/setup_system.sh``,
+and -- if it emits markers of its own -- one member of
+:class:`~imbue.chat.harnesses.events.SpecialEventKind`. No consumer
+of the registry changes: ``ChatAppState`` (``state.py``) builds watchers through
+:func:`build_watcher`, ``agent_manager`` builds trackers through :func:`build_tracker`, and
+neither names a harness.
 
 One spec per harness rather than a dict per concern, deliberately: parallel registries
 would mean two places to edit for one harness, which is how the split drifts.
@@ -55,6 +60,16 @@ from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.codex.watcher import CodexSessionWatcher
 from imbue.chat.harnesses.codex.watcher import CodexTranscriptLoader
 from imbue.chat.harnesses.events import SpecialEventKind
+from imbue.chat.harnesses.grok.account_binding import GrokAccountBinding
+from imbue.chat.harnesses.grok.activity import GrokActivityTracker
+from imbue.chat.harnesses.grok.model import GROK_CATALOG
+from imbue.chat.harnesses.grok.model import GROK_STATE_RELATIVE_PATH
+from imbue.chat.harnesses.grok.model import GrokModelResolver
+from imbue.chat.harnesses.grok.session import GrokHarnessSession
+from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
+from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
+from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
+from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import InterruptToComposer
 from imbue.chat.harnesses.interrupt import RestartDrainInterruptToComposer
@@ -88,6 +103,7 @@ from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.harnesses.startup_readiness import StartupReadyMarker
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.mngr_grok.api import SESSION_STARTED_MARKER_FILENAME as GROK_SESSION_STARTED_MARKER_FILENAME
 
 
 class PopupTrigger(StrEnum):
@@ -265,6 +281,95 @@ _PI_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
     "/scoped-models",
     "/session",
     "/tree",
+)
+
+# Grok Build commands the chat declines (action="notice"), by first token: typed and entered as mngr sends them, each
+# opens a picker or view over grok 1.0.62's composer, ends grok, changes a setting or how grok takes later messages,
+# or answers only in a side panel the chat does not show.
+_GROK_DECLINED_COMMANDS: Final[tuple[str, ...]] = (
+    "/agents",
+    "/agents-dashboard",
+    # These two leave always-approve, so the next tool call waits on a permission card.
+    "/always-approve",
+    "/auto",
+    "/btw",
+    # Hides the footer hints mngr reads grok's state from.
+    "/compact-mode",
+    "/config",
+    "/config-agents",
+    "/context",
+    "/cost",
+    "/dashboard",
+    "/delete",
+    "/density",
+    "/docs",
+    "/edit-prompt",
+    "/exit",
+    "/feedback",
+    "/find",
+    "/fork",
+    "/guides",
+    "/help",
+    "/history",
+    "/home",
+    "/hooks",
+    "/howto",
+    "/import-claude",
+    "/info",
+    "/jump",
+    "/log",
+    "/marketplace",
+    "/mcps",
+    # grok's menu completes it to /remember, whose composer saves the next message as a memory note.
+    "/mem",
+    # Replaces the composer box and footer hints mngr reads grok's state from.
+    "/minimal",
+    # Makes Enter insert a newline, so no later message is submitted.
+    "/ml",
+    "/multiline",
+    "/onboarding",
+    "/personas",
+    # Leaves grok in plan mode, whose exit tool this workspace removes.
+    "/plan",
+    "/plugin",
+    "/plugins",
+    "/preferences",
+    "/prefs",
+    "/privacy",
+    "/quit",
+    "/recap",
+    "/remember",
+    "/rename",
+    "/resume",
+    "/rewind",
+    "/session-info",
+    "/sessions",
+    "/settings",
+    "/skills",
+    "/summarize",
+    "/t",
+    "/theme",
+    "/timeline",
+    "/timestamps",
+    "/title",
+    "/tour",
+    "/transcript",
+    "/tutorial",
+    "/undo",
+    "/usage",
+    "/vim-mode",
+    # Starts dictation from the machine's microphone.
+    "/voice",
+    "/welcome",
+    "/workflows",
+)
+
+# The model bar's popup for grok also declines `/m`, grok's alias of `/model`.
+_GROK_MODEL_BAR_POPUP: Final[HarnessPopup] = HarnessPopup(
+    trigger=PopupTrigger.COMPOSER_COMMAND,
+    commands=(*_MODEL_BAR_COMMANDS, "/m"),
+    action=PopupAction.NOTICE,
+    notice_body=_MODEL_BAR_NOTICE,
 )
 
 # The auth-intercept commands every auth-declaring harness shares: typing either opens
@@ -476,7 +581,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
     # registered anyway, because an UNregistered harness is not neutral -- ``parse_harness``
     # would fall it back to claude and point claude's watcher at another harness's state dir.
     # So it names the shared placeholders (see ``harnesses/placeholder.py``) until its own
-    # implementation lands. antigravity has since landed all four and no longer uses them.
+    # implementation lands.
     HarnessType.OPENCODE: HarnessSpec(
         name=HarnessType.OPENCODE,
         watcher_class=PlaceholderSessionWatcher,
@@ -533,6 +638,52 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         popups=(_MODEL_BAR_POPUP,),
         # No `/login` popup, unlike codex and pi: agy has no such command. Signing in is what
         # a bare `agy` does on first launch, which is what the instructions below say.
+    ),
+    HarnessType.GROK: HarnessSpec(
+        name=HarnessType.GROK,
+        # Tails the updates.jsonl of each top-level session mngr_grok records and of each subagent's
+        # child session. The dot is a latch per top-level session on the turn markers grok writes for
+        # every turn; mngr_grok's ``active`` also covers background subagents, which read as
+        # ``background`` instead.
+        watcher_class=GrokSessionWatcher,
+        loader_class=GrokTranscriptLoader,
+        tracker_class=GrokActivityTracker,
+        process_started_marker_filename=GrokActivityTracker.marker_filename,
+        # Written by mngr_grok's hook at grok's SessionStart and deleted by its launch script. It can
+        # appear before grok's paywall paints, so a send relies on mngr_grok's gate check, not on it.
+        startup_ready_marker=StartupReadyMarker(
+            filename=GROK_SESSION_STARTED_MARKER_FILENAME, is_deleted_at_launch=True
+        ),
+        binding_class=GrokAccountBinding,
+        # The chat holds every message and the watcher's flush worker alone types it, once no top-level turn
+        # is in flight. Stop and the tap press one Ctrl+C, which mngr presses only into a cancellable turn.
+        session_class=GrokHarnessSession,
+        interrupt_to_composer_class=GrokInterruptToComposer,
+        shoulder_tap_class=GrokAtomicShoulderTap,
+        cancel_chord="C-c",
+        resolver_class=GrokModelResolver,
+        catalog_factory=lambda: GROK_CATALOG,
+        model_state_relative_path=GROK_STATE_RELATIVE_PATH,
+        special_kinds=frozenset(
+            {
+                SpecialEventKind.TURN_STARTED,
+                SpecialEventKind.TURN_COMPLETED,
+                SpecialEventKind.TURN_ABORTED,
+            }
+        ),
+        # A typed `/logout` would delete the account's `auth.json`, which every agent on the account shares.
+        popups=(
+            HarnessPopup(trigger=PopupTrigger.COMPOSER_COMMAND, commands=_AUTH_COMMANDS, action=PopupAction.OPEN_AUTH),
+            HarnessPopup(
+                trigger=PopupTrigger.COMPOSER_COMMAND, commands=_GROK_DECLINED_COMMANDS, action=PopupAction.NOTICE
+            ),
+            _GROK_MODEL_BAR_POPUP,
+        ),
+        # mngr_grok types grok's `/compact` and holds the agent's message lock until grok logs the compaction.
+        supports_compaction=True,
+        # A compaction is no top-level turn, and mngr presses Ctrl+C only into one.
+        can_interrupt_compaction=False,
+        composer_compact_handling=ComposerCompactHandling.REQUESTED_FROM_MNGR,
     ),
     # The seed segment of a seeded chat (``chat_seed.py``): turns written before any agent joined
     # it, read like an archived segment. No agent ever runs

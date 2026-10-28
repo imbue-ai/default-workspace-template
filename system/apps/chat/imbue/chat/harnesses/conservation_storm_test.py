@@ -1,12 +1,13 @@
-"""Seeded message-conservation storms for the three harness stop/flush executors (invariant U1).
+"""Seeded message-conservation storms for the claude, pi, antigravity and grok stop/flush executors (invariant U1).
 
 THE PROPERTY (system/apps/chat/imbue/chat/harnesses/core-contracts/messages-lifecycle-contract.md A1, U1): across any
 interleaving of send / park / stop / flush / restart, every accepted message ends in EXACTLY one
 terminal state -- delivered (a user turn on disk), or returned-to-composer (rides a captured stop
-block) -- never silently lost and never duplicated as a ghost re-queue after a replay. The one
-designed-in exception is the shipped "slow-send corner" (contract E2): a send still holding
-``message.lock`` past the bounded wait when a stop hammers is *stopped, never runs* -- the ledger admits that message as
-KILLED, and only when the storm deliberately staged such a send.
+block) -- never silently lost and never duplicated as a ghost re-queue after a replay. Two designed-in
+exceptions are admitted as KILLED. The shipped "slow-send corner" (contract E2): a send still holding
+``message.lock`` past the bounded wait when a stop hammers is *stopped, never runs*, admitted only when the storm
+deliberately staged such a send. And in the grok storm, the messages the chat held when grok exited, which grok's
+relaunch drops with its old session (contract Part B).
 
 Each storm drives the REAL executor under test -- claude's tap + stop executors over a REAL
 :class:`ClaudeSessionWatcher` reading real session JSONL, and pi's flush/retract inbox writers --
@@ -17,6 +18,13 @@ executor starts its bounded acquire, and a timer thread completes the send (park
 mid-acquire. What the executors cannot see -- the harness process consuming its inbox / control
 file / cancel chord -- is simulated by a scripted world that replays the REAL bytes the executor
 wrote, in file order, exactly as the extension / patched binary / claude would.
+
+antigravity and grok hold their queue in the chat, and one flush worker types it, so their scripted
+worlds play the harness itself. grok's world also plays mngr: its root-turn files, which outlive
+grok's own turn end, its REFUSE busy-send policy and its Ctrl+C rule, reading the world's pane with
+mngr_grok's own predicates. grok's storm drives the real tracker, flush worker, session send, stop,
+tap and model-bar control lane, and checks after every op that each accepted message is in exactly
+one state.
 
 The op sequence is derived purely from ``_BASE_SEED`` (per-round ``random.Random``), so a failure
 is replayable: every assertion message carries the seed and the full cumulative op log. Timing
@@ -39,13 +47,18 @@ import threading
 import time
 from collections import Counter
 from collections.abc import Callable
+from collections.abc import Generator
+from contextlib import contextmanager
 from pathlib import Path
+from types import TracebackType
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
 from imbue.chat.activity_state import ACTIVE_MARKER_FILENAME
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
 from imbue.chat.harnesses.antigravity.tap import AntigravityAtomicShoulderTap
 from imbue.chat.harnesses.antigravity.tap import AntigravityInterruptToComposer
@@ -56,19 +69,54 @@ from imbue.chat.harnesses.claude.tap import ClaudeTapStatus
 from imbue.chat.harnesses.claude.tap import execute_claude_shoulder_tap
 from imbue.chat.harnesses.claude.tap import execute_claude_stop_to_composer
 from imbue.chat.harnesses.claude.watcher import ClaudeSessionWatcher
+from imbue.chat.harnesses.grok.model import GrokModelResolver
+from imbue.chat.harnesses.grok.queue_tracker import drop_tracker as drop_grok_tracker
+from imbue.chat.harnesses.grok.queue_tracker import get_tracker as get_grok_tracker
+from imbue.chat.harnesses.grok.session import GrokHarnessSession
+from imbue.chat.harnesses.grok.tap import GrokAtomicShoulderTap
+from imbue.chat.harnesses.grok.tap import GrokInterruptToComposer
+from imbue.chat.harnesses.grok.testing import GROK_PID_RELATIVE_PATH
+from imbue.chat.harnesses.grok.testing import add_grok_session
+from imbue.chat.harnesses.grok.testing import append_grok_updates
+from imbue.chat.harnesses.grok.testing import grok_update_line
+from imbue.chat.harnesses.grok.testing import make_grok_agent_info
+from imbue.chat.harnesses.grok.testing import write_live_grok_pid
+from imbue.chat.harnesses.grok.testing import write_root_turn
+from imbue.chat.harnesses.grok.watcher import GrokSessionWatcher
+from imbue.chat.harnesses.grok.watcher import GrokTranscriptLoader
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.interrupt import InterruptToComposer
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.interrupt import restart_drain
 from imbue.chat.harnesses.interrupt import try_hold_message_lock
+from imbue.chat.harnesses.model import ModelAxis
+from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.pi_coding.inbox import PI_INBOX_NAME
 from imbue.chat.harnesses.pi_coding.inbox import PI_INTERRUPT_KEY
 from imbue.chat.harnesses.pi_coding.inbox import PI_RETRACT_KEY
 from imbue.chat.harnesses.pi_coding.model import PiFlushTapStatus
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.pi_coding.model import flush_pi_queue_atomic
+from imbue.chat.harnesses.registry import get_harness_spec
+from imbue.chat.harnesses.session import AtomicShoulderTap
+from imbue.chat.harnesses.session import SendOutcome
+from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
+from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.chat.testing import agent_message_lock
+from imbue.mngr.errors import MngrError
+from imbue.mngr.errors import SendFailureKind
+from imbue.mngr.utils.polling import wait_for
+from imbue.mngr_grok.api import PROCESS_STARTED_MARKER_FILENAME
+from imbue.mngr_grok.api import SESSION_STARTED_MARKER_FILENAME
+from imbue.mngr_grok.api import composer_holds_text
+from imbue.mngr_grok.api import detect_gate_screen
+from imbue.mngr_grok.api import get_model_state_path as get_grok_model_state_path
+from imbue.mngr_grok.api import get_root_turns
+from imbue.mngr_grok.api import get_root_turns_dir
+from imbue.mngr_grok.api import has_cancel_hint
+from imbue.mngr_grok.api import is_root_turn_in_flight
 
 # One seed drives every storm; a failure report carries it plus the op log for replay.
 _BASE_SEED = 20260810
@@ -116,9 +164,10 @@ class _Ledger:
 
     ``accepted`` records every message a send op produced; ``delivered`` / ``returned`` /
     ``killed`` record terminal states as ground truth observes them (the simulated harness's
-    commits and discards, the executors' returned blocks, the staged slow-send deaths).
-    ``killable`` is the set of messages the storm deliberately staged as the slow-send corner --
-    the only ones allowed to die. ``ops`` is the cumulative op log for the replay report.
+    commits and discards, the executors' returned blocks, the staged slow-send deaths, grok's relaunch
+    drops). ``killable`` is the set of messages allowed to die: the ones the storm deliberately staged
+    as the slow-send corner, and the ones a grok relaunch dropped. ``ops`` is the cumulative op log for
+    the replay report.
     """
 
     def __init__(self, storm_name: str) -> None:
@@ -1283,3 +1332,1325 @@ def test_antigravity_tap_delivers_once_and_returns_nothing(tmp_path: Path) -> No
     assert len(ledger.delivered) == 2
     ledger.verify()
     assert not world.queue.has_entries()
+
+
+# grok keeps the queue it shows the user inside its TUI too, so the chat holds the messages and one flush worker types
+# them, as for agy. What tells that worker grok is busy is different: mngr's root-turn files, which outlive grok's own
+# turn end, and mngr's REFUSE busy-send policy, under which mngr types nothing into a running turn. So the scripted
+# world plays grok AND mngr (its hooks, its send and its Ctrl+C rule), and everything on the chat's side of mngr is the
+# real code: the tracker, the flush worker, the session's send, stop, the tap and the model bar's control lane.
+
+_GROK_PENDING_WAKE_PREFIX = "pending-wake:"
+_GROK_CONTROL_VERBS = frozenset({"/model", "/effort"})
+
+# How long a root-turn file outlives its turn once something waits on it in real time: a shortened stand-in, well
+# inside _GROK_TURN_END_DEADLINE_SECONDS, for the lag mngr's StopCancelled hook and streamer leave.
+_GROK_TURN_FILE_LAG_SECONDS = 0.03
+# How long stop and the tap wait for a turn to end: one their press ends, and one it cannot (which ends the same way
+# however long they wait).
+_GROK_TURN_END_DEADLINE_SECONDS = 2.0
+_GROK_STRANDED_TURN_DEADLINE_SECONDS = 0.0
+# How long a POST waits on the flush worker's first send of its message; a send that settles answers it at once.
+_GROK_SEND_RESULT_WAIT_SECONDS = 3.0
+# How long a test waits on a staged step that happens at once.
+_GROK_STEP_WAIT_SECONDS = 5.0
+_GROK_THREAD_JOIN_SECONDS = 30.0
+# How often the storm's flush thread looks up from the worker's wake to see whether it should stop.
+_GROK_FLUSH_THREAD_POLL_SECONDS = 0.01
+_GROK_MAX_WAKES_PER_OP = 8
+
+# Logical seconds per storm op, against mngr's spacing between two Ctrl+C presses.
+_GROK_OP_SECONDS = 0.4
+_MNGR_CTRL_C_SPACING_SECONDS = 1.5
+
+_GROK_RECORD_CLOCK_BASE_MS = 1_792_500_000_000
+_GROK_PROCESS_CLOCK_BASE_NS = 1_792_500_000_000_000_000
+_GROK_SETTLE_TICKS = 16
+# Rounds that open with a scripted run of ops, for paths random ops reach too rarely to rely on.
+_GROK_STAGED_ROUNDS: dict[int, tuple[str, ...]] = {
+    # A placeholder holds a message, and stop and the tap find no turn to cancel.
+    3: ("spawn_subagent", "turn_ends", "streamer", "subagent_ends", "send", "tap", "stop", "wake_starts", "send"),
+    # A turn whose composer holds a draft, which mngr will not press into: stop restarts grok.
+    7: ("send", "stop:stranded"),
+    # A gate with a model switch held in the control lane, and a message sent to it.
+    11: ("turn_ends", "streamer", "gate", "model_switch", "send", "gate"),
+    # The restart meets the consent notice: everything comes back, and the next message is refused as not ready.
+    19: ("send", "stop:restart_fails", "send", "gate"),
+    # grok exits with messages held: its relaunch, started by the next send, drops them with the old session.
+    23: ("send", "send", "grok_exits", "send"),
+    # grok runs a slash command itself with no turn for it; mngr types the next message after a draft left at the pane.
+    15: ("settle", "slash", "idle_draft", "send", "slash", "send", "turn_ends"),
+    # A wake turn starts inside mngr's send and outlives the witness window, so grok runs the paste after it.
+    25: ("settle", "race:paste_long", "send", "stop"),
+    # grok exits with nothing held, so nothing wakes the worker at its relaunch before the reviving send lands.
+    27: ("turn_ends", "streamer", "grok_exits", "send"),
+}
+_GROK_MODEL_PICKS = (("grok-4.6", "xhigh"), ("grok-4.6", "low"), ("grok-4.5", "medium"), ("grok-4.5", "high"))
+
+# grok 1.0.62's pane as mngr_grok's captures show it: the composer box, the footer under it, and the consent gate.
+_GROK_BOX_TOP = "  ╭" + "─" * 74 + "╮"
+_GROK_BOX_BOTTOM = "  ╰" + "─" * 67 + " Stub ─╯"
+_GROK_IDLE_FOOTER = "  Shift+Tab:mode  │  Ctrl+x:shortcuts"
+_GROK_IDLE_TYPED_FOOTER = "  Enter:send  │  Opt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+x:shortcuts"
+_GROK_BUSY_FOOTER = "  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+x:shortcuts"
+_GROK_BUSY_TYPED_FOOTER = "  Enter:queue  │  Opt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+c:cancel  │"
+_GROK_BUSY_QUEUED_FOOTER = (
+    "  Enter:send now  │  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+;:queue  │  Ctrl+x:shortcuts"
+)
+_GROK_CONSENT_PANE = "\n".join(
+    (
+        "",
+        "  Updates to our terms",
+        "  Got it                       a",
+        "  Quit                         q",
+        "",
+        "Grok Build  1.0.62",
+        "",
+    )
+)
+
+# Every op the storm draws from, weighted by repetition.
+_GROK_STORM_OPS = (
+    "send",
+    "send",
+    "send",
+    "send",
+    "send",
+    "send",
+    "race:worker",
+    "race:preflight",
+    "race:paste",
+    "worker",
+    "turn_ends",
+    "turn_ends",
+    "streamer",
+    "streamer",
+    "spawn_subagent",
+    "subagent_ends",
+    "subagent_ends",
+    "wake_starts",
+    "spawn_shell",
+    "shell_ends",
+    "pane_turn",
+    "pane_draft",
+    "gate",
+    "gate",
+    "grok_exits",
+    "model_switch",
+    "model_switch",
+    "emit",
+    "tap",
+    "tap",
+    "tap",
+    "stop",
+    "stop",
+    "stop",
+)
+# The paths each grok storm must reach, so a reseed that stops exercising one fails loudly.
+_GROK_REQUIRED_PATHS = (
+    "cancel",
+    "press_refused",
+    "placeholder",
+    "wake",
+    "race:worker",
+    "race:preflight",
+    "race:paste",
+    "send_refused_busy",
+    "send_blocked",
+    "post_failed",
+    "post_not_ready",
+    "restart",
+    "restart_failed",
+    "control_applied",
+    "gate",
+    "exit",
+    "local_command",
+    "draft_appended",
+    "parked_long",
+)
+
+
+def _do_nothing() -> None:
+    pass
+
+
+def _is_never_true() -> bool:
+    return False
+
+
+def _is_always_true() -> bool:
+    return True
+
+
+def _is_grok_control_command(text: str) -> bool:
+    words = text.split(maxsplit=1)
+    return bool(words) and words[0] in _GROK_CONTROL_VERBS
+
+
+def _grok_flush_hook_must_not_send(_text: str) -> bool:
+    raise AssertionError("the session's bound send carries mngr's refusal kind, so the flush hook is never used")
+
+
+def _grok_tap_must_not_send(_text: str) -> bool:
+    raise AssertionError("the tap must never send: the flush worker is grok's only typist")
+
+
+def _grok_bar_must_not_type(_text: str) -> bool:
+    raise AssertionError("the model bar must not type: its commands go through the flush worker's control lane")
+
+
+class _GrokWorld:
+    """The scripted grok behind mngr: its turns, its own queue and pane, mngr's hooks, and mngr's send and Ctrl+C rules.
+
+    What it models, as measured on grok 1.0.62 under mngr, because modelling any of it wrong validates the wrong gate:
+
+    * **mngr's root-turn file outlives grok's turn.** grok logs ``turn_completed`` and goes idle at the pane; mngr's
+      streamer clears the file at its next poll (the ``streamer`` op), and its StopCancelled hook 39-65 ms after a
+      cancel. In between mngr still reports the turn in flight.
+    * **Background work.** A background subagent keeps ``active`` with no root turn. One that ends while grok is idle
+      leaves a ``pending-wake:`` placeholder until grok starts its wake turn; a background shell's wake turn starts at
+      once with no placeholder. Work that ends during a turn wakes grok when that turn ends.
+    * **The pane**, rendered from grok's own footers and read with mngr_grok's own predicates: the busy footer's
+      ``Ctrl+c:cancel``, the composer's text, grok's ``#N`` queue rows and a consent gate.
+    * **Ctrl+C.** mngr presses it only into a busy turn with an empty composer, which it cancels, after which grok
+      runs whatever it holds; mngr refuses every other press (on an idle grok Ctrl+C arms quit, and with text in the
+      composer it only clears the text).
+    * **mngr's send under REFUSE** types nothing into a running turn or a placeholder (AGENT_BUSY) or a gate
+      (INPUT_BLOCKED). A turn that starts between that check and the paste still parks the paste in grok's own queue,
+      where it runs as its own turn once that turn ends, which can be well after the worker's witness window.
+    * **Slash commands and drafts.** grok runs a slash command itself and logs no turn for it. mngr types a message
+      after a draft left in grok's idle composer, grok logs both as one turn, and mngr, looking for the message's
+      own prompt, cannot confirm it. A `/model` or `/effort` rewrites mngr_grok's model_state.json.
+    * **Exits and launches.** grok can exit (an OOM shed or a crash), and the chat's next send starts it again. Every
+      launch touches the process marker, so the chat's queue, bound to the old session, dies with it (contract Part
+      B). mngr's hook records grok's pid and touches its session marker at a session's start, and its launch removes
+      both, so a restart that meets the consent notice leaves grok up at the gate with no session, not ready for a
+      send.
+    """
+
+    def __init__(self, agent_state_dir: Path, ledger: _Ledger) -> None:
+        self.dir = agent_state_dir
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.ledger = ledger
+        self.clock = 0.0
+        self.session_id = ""
+        self.turn_prompt_id: str | None = None
+        self.grok_queue: list[str] = []
+        self.composer = ""
+        self.is_gated = False
+        self.subagent_ids: list[str] = []
+        self.shell_ids: list[str] = []
+        # Background work that ended during a turn, whose wake turn grok starts when the turn ends.
+        self.due_wakes: list[tuple[str, str]] = []
+        # The ended turn whose root-turn file mngr has not cleared yet.
+        self.lagging_prompt_id: str | None = None
+        # The ended subagent whose wake turn mngr's placeholder stands in for.
+        self.placeholder_child_id: str | None = None
+        self.last_press_at: float | None = None
+        self.requested_by_verb: dict[str, str] = {}
+        self.applied_by_verb: dict[str, str] = {}
+        self.restart_count = 0
+        # The slash commands grok ran itself, logging no turn, and each turn mngr typed after a person's draft.
+        self.local_commands_run: list[str] = []
+        self.delivered_text_by_drafted_turn: dict[str, str] = {}
+        self.is_last_paste_after_draft = False
+        # The prompt of every top-level turn grok started, and the turn running when grok was last restarted.
+        self.prompt_text_by_id: dict[str, str] = {}
+        self.prompt_id_at_last_restart: str | None = None
+        self.stats: Counter[str] = Counter()
+        self.is_running = False
+        self.is_worker_race_armed = False
+        self.is_preflight_race_armed = False
+        self.is_paste_race_armed = False
+        # Whether a raced wake turn outlives the flush worker's witness window.
+        self.is_raced_wake_long = False
+        self.is_next_restart_failing = False
+        # A test stages a slow send with these: the paste waits for the gate, and the confirmation for stop's press.
+        self.paste_gate: threading.Event | None = None
+        self.is_confirm_held_for_press = False
+        self.send_holds_lock = threading.Event()
+        self.press_waits_for_lock = threading.Event()
+        self.on_turn_files_changed: Callable[[], None] = _do_nothing
+        self._lock = threading.RLock()
+        self._timers: list[threading.Timer] = []
+        self._is_turn_files_changed = False
+        self._process_count = 0
+        self._prompt_index = 0
+        self._record_ms = _GROK_RECORD_CLOCK_BASE_MS
+        self._message_count = 0
+        self._id_count = 0
+        self._launch(is_gated=False)
+
+    # identity and reads
+
+    def new_text(self) -> str:
+        self._message_count += 1
+        return f"grok-msg-{self._message_count:03d}"
+
+    def new_command(self) -> str:
+        """A slash command grok runs itself, such as `/new` or `/timestamps`."""
+        self._message_count += 1
+        return f"/storm-command-{self._message_count:03d}"
+
+    def _next_id(self, prefix: str) -> str:
+        self._id_count += 1
+        return f"{prefix}-{self._id_count:03d}"
+
+    def is_alive(self) -> bool:
+        return self.is_running
+
+    def advance(self) -> None:
+        with self._lock:
+            self.clock += _GROK_OP_SECONDS
+
+    def cancellable_prompt_id(self) -> str | None:
+        """The top-level turn grok is running, which a Ctrl+C would cancel, if any."""
+        with self._lock:
+            return self.turn_prompt_id if self.is_running and not self.is_gated else None
+
+    def is_turn_stranded(self) -> bool:
+        """Whether a running turn outlives a stop: its Ctrl+C is refused for composer text, or grok runs more after it."""
+        with self._lock:
+            return self.turn_prompt_id is not None and bool(self.composer or self.grok_queue or self.due_wakes)
+
+    def is_quiet(self) -> bool:
+        with self._lock:
+            return (
+                self.is_running
+                and self.turn_prompt_id is None
+                and self.lagging_prompt_id is None
+                and self.placeholder_child_id is None
+                and not self.is_gated
+                and not self.grok_queue
+            )
+
+    def render_pane(self) -> str:
+        """grok's pane as a plain capture shows it, read back through mngr_grok's predicates before it is returned."""
+        if self.is_gated:
+            pane = _GROK_CONSENT_PANE
+        else:
+            rows = [""]
+            rows.extend(
+                f"    #{index} {text.split(chr(10))[0]}" for index, text in enumerate(self.grok_queue, start=1)
+            )
+            if self.turn_prompt_id is not None:
+                rows.extend(("", "    ⠸ Responding… 2.9s"))
+            rows.extend(("", _GROK_BOX_TOP, f"  │ ❯ {self.composer:<72}│", _GROK_BOX_BOTTOM, "", self._footer(), ""))
+            pane = "\n".join(rows)
+        is_busy = self.turn_prompt_id is not None and not self.is_gated
+        assert (detect_gate_screen(pane) is not None) == self.is_gated, f"the gate misreads:\n{pane}"
+        assert has_cancel_hint(pane) == is_busy, f"the cancel hint misreads:\n{pane}"
+        assert composer_holds_text(pane) == bool(self.composer), f"the composer misreads:\n{pane}"
+        return pane
+
+    def _footer(self) -> str:
+        if self.turn_prompt_id is None:
+            return _GROK_IDLE_TYPED_FOOTER if self.composer else _GROK_IDLE_FOOTER
+        if self.composer:
+            return _GROK_BUSY_TYPED_FOOTER
+        return _GROK_BUSY_QUEUED_FOOTER if self.grok_queue else _GROK_BUSY_FOOTER
+
+    # what grok and the people at its pane do
+
+    def end_turn(self) -> None:
+        """grok finishes its turn on its own; mngr's file for it stays until the streamer catches up."""
+        with self._acting():
+            self._end_turn()
+
+    def catch_up_streamer(self) -> None:
+        """mngr's streamer reads grok's ``turn_completed``: the finished turn's root-turn file goes."""
+        with self._acting():
+            if self.lagging_prompt_id is not None:
+                self._complete_turn_file(self.lagging_prompt_id)
+
+    def catch_up_streamer_soon(self) -> None:
+        """The streamer catches up in real time, while an executor waits on the file."""
+        with self._lock:
+            lagging_prompt_id = self.lagging_prompt_id
+            if lagging_prompt_id is not None:
+                self._schedule(lambda: self._complete_turn_file(lagging_prompt_id))
+
+    def spawn_subagent(self) -> None:
+        with self._acting():
+            if self.turn_prompt_id is not None:
+                self.subagent_ids.append(self._next_id("subagent"))
+                self._recompute_active()
+
+    def end_subagent(self) -> None:
+        """A background subagent ends: grok wakes for it now, after the running turn, or behind mngr's placeholder."""
+        with self._acting():
+            if not self.subagent_ids:
+                return
+            child_id = self.subagent_ids.pop(0)
+            self._log({"sessionUpdate": "subagent_finished", "subagent_id": child_id, "will_wake": True})
+            if self.turn_prompt_id is not None or self.is_gated or self.placeholder_child_id is not None:
+                self.due_wakes.append(("subagent", child_id))
+            elif self.lagging_prompt_id is not None:
+                # grok, already idle, starts the wake before the streamer catches up with the turn it finished.
+                self._start_wake_turn("subagent", child_id)
+            else:
+                self.placeholder_child_id = child_id
+                self._write_turn_file(_GROK_PENDING_WAKE_PREFIX + child_id, "<auto-wake>")
+                self.stats["placeholder"] += 1
+            self._recompute_active()
+
+    def start_pending_wake(self) -> None:
+        """grok starts the wake turn mngr's placeholder stood in for."""
+        with self._acting():
+            if self.placeholder_child_id is not None and self.turn_prompt_id is None and not self.is_gated:
+                self._start_wake_turn("subagent", self.placeholder_child_id)
+
+    def spawn_shell(self) -> None:
+        with self._acting():
+            if self.turn_prompt_id is not None:
+                self.shell_ids.append(self._next_id("shell"))
+
+    def end_shell(self) -> None:
+        """A background shell ends: an idle grok starts its wake turn at once, with no placeholder before it."""
+        with self._acting():
+            if not self.shell_ids:
+                return
+            task_id = self.shell_ids.pop(0)
+            if self.turn_prompt_id is not None or self.is_gated or self.placeholder_child_id is not None:
+                self._log(
+                    {"sessionUpdate": "task_completed", "task_snapshot": {"task_id": task_id}, "will_wake": True}
+                )
+                self.due_wakes.append(("shell", task_id))
+            else:
+                self._end_shell_and_wake(task_id)
+
+    def pane_turn(self) -> None:
+        """A person at grok's pane sends a message of their own: grok runs it, or queues it behind the running turn."""
+        with self._acting():
+            if self.is_gated or not self.is_running:
+                return
+            text = self._next_id("pane-turn")
+            if self.turn_prompt_id is None:
+                self._start_user_turn(text)
+            else:
+                self.grok_queue.append(text)
+
+    def pane_draft(self) -> None:
+        """A person types into grok's composer during a turn, and sends it once the turn ends."""
+        with self._acting():
+            if self.turn_prompt_id is not None and not self.composer:
+                self.composer = self._next_id("pane-draft")
+
+    def pane_idle_draft(self) -> None:
+        """A person types into an idle grok's composer and leaves it there."""
+        with self._acting():
+            if self.is_running and not self.is_gated and self.turn_prompt_id is None and not self.composer:
+                self.composer = self._next_id("pane-draft")
+
+    def strand_turn(self) -> None:
+        """A running turn whose composer holds a person's draft, which mngr will not press Ctrl+C into."""
+        with self._acting():
+            if not self.is_running:
+                self._launch(is_gated=False)
+            if self.is_gated:
+                self._clear_gate()
+            if self.turn_prompt_id is None:
+                self._start_user_turn(self._next_id("pane-turn"))
+            if not self.composer:
+                self.composer = self._next_id("pane-draft")
+
+    def toggle_gate(self) -> None:
+        """A consent notice comes up on a grok with no turn running, or the person accepts the one that is up."""
+        with self._acting():
+            if self.is_gated:
+                self._clear_gate()
+            elif self.is_running and self.turn_prompt_id is None:
+                self.is_gated = True
+                self.stats["gate"] += 1
+            else:
+                self.stats["gate_deferred"] += 1
+
+    def arm_worker_race(self) -> None:
+        """A background shell from an earlier turn ends right after the chat's next send checks for a turn."""
+        with self._lock:
+            self.is_worker_race_armed = True
+
+    def start_worker_race(self) -> None:
+        """The armed shell's wake turn starts now, between a send's hold check and the flush worker's."""
+        with self._acting():
+            if self.is_worker_race_armed and self.is_running and not self.is_gated and self.turn_prompt_id is None:
+                self.is_worker_race_armed = False
+                self.stats["race:worker"] += 1
+                self._end_shell_and_wake(self._next_id("shell"))
+
+    def arm_preflight_race(self) -> None:
+        """A background shell from an earlier turn ends just before mngr's next send checks grok."""
+        with self._lock:
+            self.is_preflight_race_armed = True
+
+    def arm_paste_race(self, *, is_wake_long: bool = False) -> None:
+        """A background shell from an earlier turn ends between mngr's next check and its paste."""
+        with self._lock:
+            self.is_paste_race_armed = True
+            self.is_raced_wake_long = is_wake_long
+
+    def exit_grok(self) -> None:
+        """grok's process exits (an OOM shed or a crash): mngr's SessionEnd hook clears its turn, and what it held dies."""
+        with self._acting():
+            if not self.is_running:
+                return
+            self.stats["exit"] += 1
+            self.is_running = False
+            (self.dir / GROK_PID_RELATIVE_PATH).unlink()
+            self._reset_process_state(is_gated=False)
+            self._recompute_active()
+
+    def start_grok(self) -> None:
+        """``mngr start`` on a grok that exited."""
+        with self._acting():
+            if not self.is_running:
+                self._launch(is_gated=False)
+
+    def settle_step(self) -> None:
+        """One step toward a quiet grok: the gate accepted, the turn finished, the streamer caught up, a wake started."""
+        with self._acting():
+            if not self.is_running:
+                self._launch(is_gated=False)
+                return
+            if self.is_gated:
+                self._clear_gate()
+                return
+            if self.turn_prompt_id is not None:
+                self._end_turn()
+                return
+            if self.lagging_prompt_id is not None:
+                self._complete_turn_file(self.lagging_prompt_id)
+                return
+            if self.placeholder_child_id is not None:
+                self._start_wake_turn("subagent", self.placeholder_child_id)
+
+    # mngr
+
+    def press_ctrl_c(self) -> bool:
+        """mngr's Ctrl+C into grok (``press_key_chord`` under the message lock), then grok's answer to the key."""
+        self.press_waits_for_lock.set()
+        with agent_message_lock(self.dir):
+            with self._acting():
+                if self.last_press_at is not None:
+                    self.clock = max(self.clock, self.last_press_at + _MNGR_CTRL_C_SPACING_SECONDS)
+                if self._find_press_refusal(self.render_pane()) is not None:
+                    self.stats["press_refused"] += 1
+                    return False
+                self.last_press_at = self.clock
+                self._take_ctrl_c()
+                return True
+
+    def _find_press_refusal(self, pane: str) -> str | None:
+        """mngr's rule: Ctrl+C only into a cancellable top-level turn whose footer shows the cancel hint, composer empty."""
+        if detect_gate_screen(pane) is not None:
+            return "a gate screen holds the keyboard"
+        if not is_root_turn_in_flight(self.dir, is_pending_wake_counted=False):
+            return "no cancellable top-level turn is in flight"
+        if not has_cancel_hint(pane):
+            return "the footer shows no cancel hint"
+        if composer_holds_text(pane):
+            return "the composer holds text"
+        return None
+
+    def mngr_send(self, text: str) -> bool:
+        """mngr's send under the REFUSE busy-send policy: the check, then the paste, all under the message lock."""
+        assert self.is_running, (
+            f"the flush worker sent {text!r} to a grok that is not running\n{self.ledger.replay_note()}"
+        )
+        with agent_message_lock(self.dir):
+            with self._acting():
+                self._check_send(text)
+            self.send_holds_lock.set()
+            if self.paste_gate is not None:
+                assert self.paste_gate.wait(timeout=_GROK_THREAD_JOIN_SECONDS), "the staged paste was never released"
+            with self._acting():
+                self._paste(text)
+                is_after_draft = self.is_last_paste_after_draft
+            if self.is_confirm_held_for_press:
+                assert self.press_waits_for_lock.wait(timeout=_GROK_THREAD_JOIN_SECONDS), "stop never pressed"
+        if is_after_draft:
+            # Measured live: mngr's evidence looks for the message's own prompt, which the draft ahead of it hides.
+            raise SendFailedError("Message submission was not confirmed", SendFailureKind.SUBMISSION_UNCONFIRMED.value)
+        return True
+
+    def restart_process(self) -> tuple[bool, str]:
+        """``mngr start --restart --no-resume``: grok dies with its turn and its own queue, and relaunches."""
+        with self._acting():
+            self.restart_count += 1
+            self.stats["restart"] += 1
+            self.prompt_id_at_last_restart = self.turn_prompt_id
+            is_failing = self.is_next_restart_failing
+            self.is_next_restart_failing = False
+            self._launch(is_gated=is_failing)
+            if is_failing:
+                self.stats["restart_failed"] += 1
+                return (False, "grok shows its consent screen")
+            return (True, "ok")
+
+    def join_timers(self) -> None:
+        with self._lock:
+            timers = list(self._timers)
+            self._timers.clear()
+        for timer in timers:
+            timer.join(timeout=_GROK_THREAD_JOIN_SECONDS)
+
+    # internals, under the lock
+
+    @contextmanager
+    def _acting(self) -> Generator[None, None, None]:
+        """Change the world under its lock, then wake the watcher for a root-turn file change, as its path watcher does."""
+        try:
+            with self._lock:
+                yield
+        finally:
+            with self._lock:
+                is_changed = self._is_turn_files_changed
+                self._is_turn_files_changed = False
+            if is_changed:
+                self.on_turn_files_changed()
+
+    def _launch(self, *, is_gated: bool) -> None:
+        """A grok launch: mngr resets its turn files, pid record and session marker and touches the process marker, and
+        grok starts a fresh session unless a gate holds it."""
+        self._process_count += 1
+        for timer in self._timers:
+            timer.cancel()
+        get_root_turns_dir(self.dir).mkdir(parents=True, exist_ok=True)
+        (self.dir / GROK_PID_RELATIVE_PATH).unlink(missing_ok=True)
+        (self.dir / SESSION_STARTED_MARKER_FILENAME).unlink(missing_ok=True)
+        marker = self.dir / PROCESS_STARTED_MARKER_FILENAME
+        marker.touch()
+        launched_at_ns = _GROK_PROCESS_CLOCK_BASE_NS + self._process_count * 1_000_000_000
+        os.utime(marker, ns=(launched_at_ns, launched_at_ns))
+        self.is_running = True
+        self._reset_process_state(is_gated=is_gated)
+        if not is_gated:
+            self._start_session()
+        self._recompute_active()
+
+    def _reset_process_state(self, *, is_gated: bool) -> None:
+        """Everything a grok process held, gone with it; mngr's own turn files go too."""
+        for turn_path in get_root_turns_dir(self.dir).iterdir():
+            turn_path.unlink()
+        self.turn_prompt_id = None
+        self.lagging_prompt_id = None
+        self.placeholder_child_id = None
+        self.grok_queue = []
+        self.composer = ""
+        self.subagent_ids = []
+        self.shell_ids = []
+        self.due_wakes = []
+        self.is_gated = is_gated
+        self.session_id = ""
+        self._is_turn_files_changed = True
+
+    def _start_session(self) -> None:
+        """grok's root SessionStart, at which mngr's hook records grok's pid and touches the session marker."""
+        self.session_id = str(uuid4())
+        add_grok_session(self.dir, self.session_id, b"", is_root=True)
+        write_live_grok_pid(self.dir)
+        (self.dir / SESSION_STARTED_MARKER_FILENAME).touch()
+
+    def _clear_gate(self) -> None:
+        self.is_gated = False
+        if not self.session_id:
+            self._start_session()
+        self._run_next_held_by_grok()
+
+    def _log(self, update: dict[str, Any]) -> None:
+        self._record_ms += 1
+        append_grok_updates(self.dir, self.session_id, grok_update_line(self.session_id, update, self._record_ms))
+
+    def _write_turn_file(self, prompt_id: str, tail: str) -> None:
+        write_root_turn(self.dir, self.session_id, prompt_id, tail)
+        self._is_turn_files_changed = True
+
+    def _recompute_active(self) -> None:
+        """mngr's ``active``: a top-level turn or a subagent is in flight; background shells do not count."""
+        marker = self.dir / ACTIVE_MARKER_FILENAME
+        if any(get_root_turns_dir(self.dir).iterdir()) or self.subagent_ids:
+            marker.write_text("")
+        else:
+            marker.unlink(missing_ok=True)
+
+    def _schedule(self, action: Callable[[], None]) -> None:
+        timer = threading.Timer(_GROK_TURN_FILE_LAG_SECONDS, self._run_scheduled, args=(action,))
+        self._timers.append(timer)
+        timer.start()
+
+    def _run_scheduled(self, action: Callable[[], None]) -> None:
+        with self._acting():
+            action()
+
+    def _begin_turn(self, text: str, prompt_id: str, *, is_wake: bool) -> None:
+        """grok starts a top-level turn, and mngr's UserPromptSubmit hook writes its file over any older one."""
+        self._prompt_index += 1
+        chunk_meta: dict[str, Any] = {"modelId": "stub", "promptIndex": self._prompt_index}
+        if is_wake:
+            chunk_meta["hideFromScrollback"] = True
+        self._log(
+            {"sessionUpdate": "user_message_chunk", "content": {"type": "text", "text": text}, "_meta": chunk_meta}
+        )
+        if self.placeholder_child_id is not None and prompt_id != f"subagent-completed-{self.placeholder_child_id}":
+            self.due_wakes.append(("subagent", self.placeholder_child_id))
+        self.placeholder_child_id = None
+        self.turn_prompt_id = prompt_id
+        self.prompt_text_by_id[prompt_id] = text
+        self.lagging_prompt_id = None
+        self._write_turn_file(prompt_id, "<auto-wake>" if is_wake else "turn")
+        self._recompute_active()
+
+    def _start_user_turn(self, text: str, *, delivered_text: str | None = None) -> None:
+        """grok commits a user turn: each accepted message it holds is Delivered, here and only here."""
+        self._begin_turn(text, str(uuid4()), is_wake=False)
+        accepted = set(self.ledger.accepted)
+        lines = _block_texts(text if delivered_text is None else delivered_text)
+        self.ledger.delivered.extend(line for line in lines if line in accepted)
+
+    def _start_wake_turn(self, kind: str, task_id: str) -> None:
+        """grok's wake turn for background work whose end it already logged."""
+        prompt_id = f"task-completed-{task_id}" if kind == "shell" else f"subagent-completed-{task_id}"
+        self._begin_turn(f"Background work {task_id} finished.", prompt_id, is_wake=True)
+        self.stats["wake"] += 1
+
+    def _end_shell_and_wake(self, task_id: str) -> None:
+        """A background shell ends on an idle grok, whose wake turn starts at once with no placeholder before it."""
+        self._log({"sessionUpdate": "task_completed", "task_snapshot": {"task_id": task_id}, "will_wake": True})
+        self._start_wake_turn("shell", task_id)
+
+    def _end_turn(self) -> None:
+        prompt_id = self.turn_prompt_id
+        if prompt_id is None:
+            return
+        self._log({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "STUB_REPLY: ok"}})
+        self._log({"sessionUpdate": "turn_completed", "prompt_id": prompt_id, "stop_reason": "end_turn"})
+        self.turn_prompt_id = None
+        self.lagging_prompt_id = prompt_id
+        self._run_next_held_by_grok()
+
+    def _run_next_held_by_grok(self) -> bool:
+        """An idle grok's next turn: what it queued, then the draft its pane's person sends, then a wake that is due."""
+        if self.is_gated:
+            return False
+        if self.grok_queue:
+            self._start_user_turn(self.grok_queue.pop(0))
+            return True
+        if self.composer:
+            draft = self.composer
+            self.composer = ""
+            self._start_user_turn(draft)
+            return True
+        if self.due_wakes:
+            kind, task_id = self.due_wakes.pop(0)
+            self._start_wake_turn(kind, task_id)
+            return True
+        return False
+
+    def _complete_turn_file(self, prompt_id: str) -> None:
+        """mngr completes an ended turn: its file goes, unless a newer turn already wrote over it."""
+        if self.lagging_prompt_id != prompt_id:
+            return
+        self.lagging_prompt_id = None
+        (get_root_turns_dir(self.dir) / self.session_id).unlink(missing_ok=True)
+        self._is_turn_files_changed = True
+        self._recompute_active()
+
+    def _take_ctrl_c(self) -> None:
+        """grok's answer to a Ctrl+C mngr let through: the running turn, whose composer is empty, is cancelled."""
+        prompt_id = self.turn_prompt_id
+        assert prompt_id is not None and not self.composer, "mngr's rule let a press through that does not cancel"
+        self.stats["cancel"] += 1
+        self._log({"sessionUpdate": "turn_completed", "prompt_id": prompt_id, "stop_reason": "cancelled"})
+        self.turn_prompt_id = None
+        self.lagging_prompt_id = prompt_id
+        if not self._run_next_held_by_grok():
+            self._schedule(lambda: self._complete_turn_file(prompt_id))
+
+    def _check_send(self, text: str) -> None:
+        """mngr's preflight: a gate fails the send as INPUT_BLOCKED, a turn or a placeholder as AGENT_BUSY."""
+        lines = text.split("\n")
+        if len(lines) > 1 and any(line.startswith("/") for line in lines):
+            raise AssertionError(
+                f"MERGED: a slash command was typed inside a block: {text!r}\n{self.ledger.replay_note()}"
+            )
+        if self.is_preflight_race_armed and not self.is_gated and self.turn_prompt_id is None:
+            self.is_preflight_race_armed = False
+            self.stats["race:preflight"] += 1
+            self._end_shell_and_wake(self._next_id("shell"))
+        pane = self.render_pane()
+        gate_screen = detect_gate_screen(pane)
+        if gate_screen is not None:
+            self.stats["send_blocked"] += 1
+            raise SendFailedError(f"grok shows its {gate_screen.lower()} screen", SendFailureKind.INPUT_BLOCKED.value)
+        if get_root_turns(self.dir) or has_cancel_hint(pane):
+            self.stats["send_refused_busy"] += 1
+            raise SendFailedError("grok is running a turn", SendFailureKind.AGENT_BUSY.value)
+
+    def _paste(self, text: str) -> None:
+        """grok takes mngr's paste: a slash command runs at once, a message starts a turn or queues behind one."""
+        self.is_last_paste_after_draft = False
+        if self.is_paste_race_armed:
+            self.is_paste_race_armed = False
+            self.stats["race:paste"] += 1
+            self._end_shell_and_wake(self._next_id("shell"))
+        if _is_grok_control_command(text):
+            verb, value = text.split(maxsplit=1)
+            self.applied_by_verb[verb] = value
+            self.stats["control_applied"] += 1
+            self._write_model_state()
+            return
+        if text.startswith("/") and not self.composer:
+            self.local_commands_run.append(text)
+            self.ledger.delivered.append(text)
+            self.stats["local_command"] += 1
+            return
+        if self.turn_prompt_id is None:
+            # mngr warns about a draft left in the composer and types the message after it, so both go as one turn.
+            draft = self.composer
+            self.composer = ""
+            if draft:
+                self.delivered_text_by_drafted_turn[draft + text] = text
+                self.is_last_paste_after_draft = True
+                self.stats["draft_appended"] += 1
+            self._start_user_turn(draft + text, delivered_text=text)
+            return
+        # grok queues the paste behind the turn that started after mngr's check; mngr's queued-row probe confirms it.
+        self.grok_queue.append(text)
+        self.stats["parked"] += 1
+        if self.is_raced_wake_long:
+            self.is_raced_wake_long = False
+            self.stats["parked_long"] += 1
+        else:
+            # The raced wake turn ends inside the worker's witness window, and grok runs the paste as its own turn.
+            self._end_turn()
+
+    def _write_model_state(self) -> None:
+        """mngr_grok's status line: what grok runs, rewritten once a switch applies."""
+        state = {
+            "model": self.applied_by_verb.get("/model"),
+            "effort": self.applied_by_verb.get("/effort"),
+            "fast": False,
+        }
+        get_grok_model_state_path(self.dir).write_text(json.dumps(state) + "\n")
+
+
+class _GrokFlushThread:
+    """The flush worker's own thread, woken by the watcher's wake as the real one is, while the driver blocks on a call."""
+
+    def __init__(self, watcher: GrokSessionWatcher) -> None:
+        self._watcher = watcher
+        self._stopping = threading.Event()
+        self._errors: list[AssertionError | MngrError | OSError] = []
+        self._thread = threading.Thread(target=self._run, name="grok-storm-flush", daemon=True)
+
+    def __enter__(self) -> None:
+        self._thread.start()
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        self._stopping.set()
+        self._thread.join(timeout=_GROK_THREAD_JOIN_SECONDS)
+        assert not self._thread.is_alive(), "the storm's flush thread never stopped"
+        if self._errors:
+            raise self._errors[0]
+
+    def _run(self) -> None:
+        wake = self._watcher._flush_wake
+        while not self._stopping.is_set():
+            if not wake.wait(timeout=_GROK_FLUSH_THREAD_POLL_SECONDS) or self._stopping.is_set():
+                continue
+            wake.clear()
+            try:
+                self._watcher._attempt_flush()
+            except (AssertionError, MngrError, OSError) as error:
+                self._errors.append(error)
+                return
+
+
+class _GrokChat:
+    """The chat app's real grok pieces for one agent, wired as AgentManager and the stop and tap endpoints wire them."""
+
+    def __init__(self, world: _GrokWorld, *, delivery_witness_seconds: float = 0.0) -> None:
+        self.world = world
+        self.ledger = world.ledger
+        agent_id = world.dir.name
+        self.agent_info = make_grok_agent_info(world.dir, agent_id, agent_id)
+        drop_grok_tracker(agent_id)
+        self.turn_end_deadline_seconds = _GROK_TURN_END_DEADLINE_SECONDS
+        self.tap_statuses: Counter[str] = Counter()
+        self._published: list[str] = []
+        self._published_lock = threading.Lock()
+        self._early_turn_messages: list[str] = []
+        # What the chat held when grok last exited: the relaunch's new session drops it (contract Part B).
+        self._held_at_exit: list[str] = []
+        # Breaches of the lifecycle's rules that leave every message accounted for, reported together at the end.
+        self.violations: list[str] = []
+        self._stuck_reported: set[str] = set()
+        self.tracker = get_grok_tracker(world.dir)
+        self.watcher = GrokSessionWatcher.build(self.agent_info, self._on_broadcast)
+        self.watcher.set_flush_hooks(_grok_flush_hook_must_not_send, world.is_alive)
+        self.watcher.delivery_witness_seconds = delivery_witness_seconds
+        self.tracker.attach(publish=self._on_published, wake=self._on_tracker_wake)
+        world.on_turn_files_changed = self.watcher._on_root_turns_changed
+        self.session = GrokHarnessSession.build(
+            SessionDeps(
+                harness=HarnessType.GROK,
+                state_dir=world.dir,
+                model_state_path=get_grok_model_state_path(world.dir),
+                send_to_harness=world.mngr_send,
+                notify_agents_changed=_do_nothing,
+                is_harness_starting_up=lambda: is_harness_starting_up(
+                    world.dir, get_harness_spec(HarnessType.GROK).startup_ready_marker, PROCESS_STARTED_MARKER_FILENAME
+                ),
+                is_tracked=_is_always_true,
+                on_queue_snapshot=lambda _snapshot: None,
+                on_user_turn=lambda _event: None,
+                recompute_activity=_do_nothing,
+                clear_queue_state=_do_nothing,
+                catalog_options=lambda: (),
+                build_interrupter=self._build_interrupter,
+                build_shoulder_tap=self._build_shoulder_tap,
+            )
+        )
+        self.session.send_result_wait_seconds = _GROK_SEND_RESULT_WAIT_SECONDS
+        self.session.ensure_live()
+        self.resolver = GrokModelResolver.build(self.agent_info)
+
+    def close(self) -> None:
+        self.world.join_timers()
+        self.session.close()
+        self.tracker.detach(self._on_published)
+        drop_grok_tracker(self.agent_info.id)
+
+    def _build_interrupter(self, agent_info: AgentInfo) -> InterruptToComposer:
+        interrupter = GrokInterruptToComposer.build(agent_info)
+        interrupter.turn_end_deadline_seconds = self.turn_end_deadline_seconds
+        return interrupter
+
+    def _build_shoulder_tap(self, agent_info: AgentInfo) -> AtomicShoulderTap:
+        tap = GrokAtomicShoulderTap.build(agent_info)
+        tap.turn_end_deadline_seconds = self.turn_end_deadline_seconds
+        return tap
+
+    def record_violation(self, message: str) -> None:
+        last_round = next((op for op in reversed(self.ledger.ops) if op.startswith("round ")), "before round 0")
+        last_op = self.ledger.ops[-1].strip() if self.ledger.ops else "setup"
+        self.violations.append(f"{last_round.rstrip(':')}, at {last_op}: {message}")
+
+    def assert_no_violations(self) -> None:
+        assert not self.violations, "\n".join(
+            ("lifecycle rule violations:", *self.violations, self.ledger.replay_note())
+        )
+
+    def _on_tracker_wake(self) -> None:
+        """The tracker waking the flush worker, as the watcher's start binds it, with an armed wake turn starting first."""
+        self.world.start_worker_race()
+        self.watcher._flush_wake.set()
+
+    def _on_published(self, snapshot: list[dict[str, Any]]) -> None:
+        with self._published_lock:
+            self._published = [str(entry["content"]) for entry in snapshot]
+
+    def _on_broadcast(self, _agent_id: str, events: list[dict[str, Any]]) -> None:
+        """Contract A3b: a delivered message's turn reaches the client only once its chip has left the queue."""
+        with self._published_lock:
+            chips = set(self._published)
+        for event in events:
+            if event.get("type") == "user_message" and event.get("role") == "user":
+                content = str(event.get("content") or "")
+                self._early_turn_messages.extend(line for line in _block_texts(content) if line in chips)
+
+    # the operations
+
+    def run_op(self, op: str, rng: random.Random) -> None:
+        world = self.world
+        world.advance()
+        match op:
+            case "send":
+                self.send(world.new_text())
+            case "race:worker":
+                world.arm_worker_race()
+                self.send(world.new_text())
+            case "race:preflight":
+                world.arm_preflight_race()
+                self.send(world.new_text())
+            case "race:paste":
+                world.arm_paste_race()
+                self.send(world.new_text())
+            case "race:paste_long":
+                world.arm_paste_race(is_wake_long=True)
+                self.send(world.new_text())
+            case "slash":
+                self.send(world.new_command())
+            case "idle_draft":
+                world.pane_idle_draft()
+            case "settle":
+                self.settle()
+            case "worker":
+                self.watcher._attempt_flush()
+            case "turn_ends":
+                world.end_turn()
+            case "streamer":
+                world.catch_up_streamer()
+            case "spawn_subagent":
+                world.spawn_subagent()
+            case "subagent_ends":
+                world.end_subagent()
+            case "wake_starts":
+                world.start_pending_wake()
+            case "spawn_shell":
+                world.spawn_shell()
+            case "shell_ends":
+                world.end_shell()
+            case "pane_turn":
+                world.pane_turn()
+            case "pane_draft":
+                world.pane_draft()
+            case "gate":
+                world.toggle_gate()
+            case "grok_exits":
+                self._held_at_exit = [str(entry["content"]) for entry in self.tracker.snapshot()]
+                world.exit_grok()
+            case "model_switch":
+                self.switch_model(rng)
+            case "emit":
+                self.watcher._emit_cycle()
+            case "tap":
+                self.tap()
+            case "stop":
+                self.stop()
+            case "stop:stranded":
+                world.strand_turn()
+                self.stop()
+            case "stop:restart_fails":
+                world.strand_turn()
+                world.is_next_restart_failing = True
+                self.stop()
+            case _:
+                pytest.fail(f"unknown grok op {op}")
+        self.drain_wakes()
+
+    def send(self, text: str) -> None:
+        """A POST to the real session: held at once behind a turn, or answered by the flush worker's first send."""
+        self.ledger.accepted.append(text)
+        with _GrokFlushThread(self.watcher):
+            try:
+                outcome = self.session.send(text, f"storm-{uuid4().hex}")
+                if outcome is SendOutcome.NOT_READY:
+                    # The route starts the agent and sends again.
+                    self.world.start_grok()
+                    outcome = self.session.send(text, f"storm-{uuid4().hex}")
+                if outcome is SendOutcome.NOT_READY:
+                    # The route's 503 for a grok up with no session, as at a consent notice: the composer keeps it.
+                    self.ledger.returned.append(text)
+                    self.world.stats["post_not_ready"] += 1
+                    return
+            except SendFailedError as error:
+                # A failed POST: the composer gets the text back, which is how the user sees it Returned.
+                assert error.kind == SendFailureKind.INPUT_BLOCKED.value, (
+                    f"only a gate fails a POST here, not {error.kind}: {error.detail}\n{self.ledger.replay_note()}"
+                )
+                self.ledger.returned.append(text)
+                self.world.stats["post_failed"] += 1
+                return
+        assert outcome is SendOutcome.OK, f"the POST answered {outcome}\n{self.ledger.replay_note()}"
+
+    def stop(self, *, is_flush_thread_needed: bool = True) -> None:
+        """The stop button through the real session, accounting for every message it hands back."""
+        world = self.world
+        note = self.ledger.replay_note
+        is_stranded = world.is_turn_stranded()
+        found_prompt_id = world.cancellable_prompt_id()
+        restarts_before = world.restart_count
+        delivered_before = len(self.ledger.delivered)
+        # grok runs what it queued itself once the cancel lands; the chat no longer holds those messages.
+        parked_before = {line for text in world.grok_queue for line in _block_texts(text)}
+        self.turn_end_deadline_seconds = (
+            _GROK_STRANDED_TURN_DEADLINE_SECONDS if is_stranded else _GROK_TURN_END_DEADLINE_SECONDS
+        )
+        world.catch_up_streamer_soon()
+        if is_flush_thread_needed:
+            with _GrokFlushThread(self.watcher):
+                block = self._interrupt()
+        else:
+            block = self._interrupt()
+        world.join_timers()
+        returned = _block_texts(block)
+        assert not any(_is_grok_control_command(line) for line in returned), (
+            f"stop returned a command: {returned}\n{note()}"
+        )
+        positions = [self.ledger.accepted.index(text) for text in returned if text in self.ledger.accepted]
+        assert positions == sorted(positions), f"stop returned {returned} out of send order\n{note()}"
+        delivered_by_stop = [text for text in self.ledger.delivered[delivered_before:] if text not in parked_before]
+        assert not delivered_by_stop, f"stop delivered {delivered_by_stop} instead of returning them\n{note()}"
+        killed_prompt_id = world.prompt_id_at_last_restart
+        if world.restart_count > restarts_before and (found_prompt_id is None or killed_prompt_id != found_prompt_id):
+            # The restart is the hammer for a turn stop could not end; any other restart kills a turn for nothing.
+            self.record_violation(
+                f"stop restarted grok with --no-resume although the turn it found "
+                f"({world.prompt_text_by_id.get(found_prompt_id or '', 'none')!r}) had ended; the turn it killed was "
+                f"{world.prompt_text_by_id.get(killed_prompt_id or '', 'none')!r}, which grok started after the cancel"
+            )
+        self.ledger.returned.extend(returned)
+
+    def _interrupt(self) -> str:
+        return self.session.interrupt_to_composer(
+            self.agent_info,
+            self.watcher,
+            self.world.restart_process,
+            _do_nothing,
+            self.world.press_ctrl_c,
+            _is_never_true,
+        )
+
+    def tap(self) -> None:
+        """The shoulder tap through the real session: it may cancel the turn, and it never hands anything back."""
+        world = self.world
+        self.turn_end_deadline_seconds = (
+            _GROK_STRANDED_TURN_DEADLINE_SECONDS if world.is_turn_stranded() else _GROK_TURN_END_DEADLINE_SECONDS
+        )
+        world.catch_up_streamer_soon()
+        with _GrokFlushThread(self.watcher):
+            outcome = self.session.shoulder_tap(
+                self.agent_info, self.watcher, world.press_ctrl_c, _grok_tap_must_not_send
+            )
+        world.join_timers()
+        assert outcome.block == "", f"the tap handed back {outcome.block!r}\n{self.ledger.replay_note()}"
+        self.tap_statuses[outcome.status] += 1
+
+    def switch_model(self, rng: random.Random) -> None:
+        """The model bar's switch through the real resolver, which holds both commands in the control lane."""
+        model_id, effort = rng.choice(_GROK_MODEL_PICKS)
+        result = self.resolver.switch(
+            ModelIdentity(model_id=model_id, effort=effort, fast=False),
+            frozenset({ModelAxis.MODEL, ModelAxis.EFFORT}),
+            _grok_bar_must_not_type,
+        )
+        assert result.ok, result.detail
+        self.world.requested_by_verb.update({"/model": model_id, "/effort": effort})
+
+    def drain_wakes(self) -> None:
+        """The flush worker answering each wake, as its thread does between the storm's ops."""
+        wake = self.watcher._flush_wake
+        for _ in range(_GROK_MAX_WAKES_PER_OP):
+            if not wake.is_set():
+                return
+            wake.clear()
+            self.watcher._attempt_flush()
+
+    def settle(self) -> None:
+        """grok finishes everything it is doing while the worker delivers what is held, as at the end of any turn."""
+        for _ in range(_GROK_SETTLE_TICKS):
+            if self.world.is_quiet() and not self.tracker.has_held_work():
+                return
+            self.world.settle_step()
+            self.drain_wakes()
+            self.watcher._attempt_flush()
+
+    # the checks
+
+    def assert_each_message_in_one_state(self, context: str) -> None:
+        """Contract Part D, after every step: each accepted message is in exactly one state, and the chips are true."""
+        note = self.ledger.replay_note
+        snapshot = self.tracker.snapshot()
+        held = [str(entry["content"]) for entry in snapshot]
+        if self._held_at_exit and self.world.is_running:
+            still_held = [text for text in self._held_at_exit if text in held]
+            assert not still_held, f"{still_held} outlived the grok session they were queued for\n{note()}"
+            settled = set(self.ledger.delivered + self.ledger.returned)
+            dropped = [text for text in self._held_at_exit if text not in settled]
+            self.ledger.killable.update(dropped)
+            self.ledger.killed.extend(dropped)
+            self._held_at_exit = []
+        stuck = [
+            str(entry["content"])
+            for entry in snapshot
+            if entry["is_sending"] and str(entry["content"]) not in self._stuck_reported
+        ]
+        if stuck:
+            # Contract Send: a message resolves to Delivered, Queued or Returned and is never left Sending.
+            self._stuck_reported.update(stuck)
+            self.record_violation(f"STUCK Sending once its POST had answered: {stuck}")
+        with self._published_lock:
+            published = list(self._published)
+        assert published == held, (
+            f"the chips last published {published} are not the queue {held} after {context}\n{note()}"
+        )
+        assert not self._early_turn_messages, (
+            f"A3b: {self._early_turn_messages} reached the transcript while still a chip, after {context}\n{note()}"
+        )
+        accepted = set(self.ledger.accepted)
+        parked = [line for text in self.world.grok_queue for line in _block_texts(text) if line in accepted]
+        placements = Counter(self.ledger.delivered + self.ledger.returned + self.ledger.killed + held + parked)
+        misplaced = {text: placements[text] for text in self.ledger.accepted if placements[text] != 1}
+        assert not misplaced, (
+            f"not in exactly one state after {context} (0 = lost, 2 or more = a ghost or a duplicate): {misplaced}"
+            f"\n  held={held} parked-in-grok={parked}\n{note()}"
+        )
+        strangers = [text for text in placements if text not in accepted]
+        assert not strangers, f"never accepted, yet in a state after {context}: {strangers}\n{note()}"
+
+    def assert_round_settled(self) -> None:
+        note = self.ledger.replay_note
+        assert not self.tracker.has_held_work(), (
+            f"the queue or the control lane must drain once grok is quiet -- a held message that never arrives is "
+            f"a strand, not conservation: {self.tracker.snapshot()} {self.tracker.next_control_command()!r}\n{note()}"
+        )
+        assert self.world.applied_by_verb == self.world.requested_by_verb, (
+            f"LOST control command: grok runs {self.world.applied_by_verb}, the bar asked for "
+            f"{self.world.requested_by_verb}\n{note()}"
+        )
+
+    def assert_the_transcript_holds_each_delivered_message_once(self) -> None:
+        """The on-disk cross-check: user turns in grok's real session logs are exactly the delivered set, once each."""
+        note = self.ledger.replay_note
+        accepted = set(self.ledger.accepted)
+        events = GrokTranscriptLoader.build_loader(self.agent_info).get_all_events()
+        drafted = self.world.delivered_text_by_drafted_turn
+        on_disk = Counter(
+            drafted.get(line, line)
+            for event in events
+            if event.get("type") == "user_message" and event.get("role") == "user"
+            for line in _block_texts(str(event.get("content") or ""))
+            if drafted.get(line, line) in accepted
+        )
+        local_commands = Counter(self.world.local_commands_run)
+        delivered_turns = Counter(text for text in self.ledger.delivered if text not in local_commands)
+        assert on_disk == delivered_turns, (
+            f"user turns on disk {on_disk} != the delivered ledger {delivered_turns}\n{note()}"
+        )
+        assert all(count == 1 for count in local_commands.values()), (
+            f"grok ran a command twice: {local_commands}\n{note()}"
+        )
+        order = [self.ledger.accepted.index(text) for text in self.ledger.delivered]
+        assert order == sorted(order), f"messages were delivered out of send order: {self.ledger.delivered}\n{note()}"
+
+
+@contextmanager
+def _grok_chat(
+    tmp_path: Path, storm_name: str, *, delivery_witness_seconds: float
+) -> Generator[_GrokChat, None, None]:
+    """A grok world in a fresh agent dir, its ledger, and the chat's real pieces over it, closed afterwards."""
+    chat = _GrokChat(
+        _GrokWorld(tmp_path / f"agent-{uuid4().hex}", _Ledger(storm_name)),
+        delivery_witness_seconds=delivery_witness_seconds,
+    )
+    try:
+        yield chat
+    finally:
+        chat.close()
+
+
+def test_grok_conservation_storm_stop_and_tap_executors(tmp_path: Path) -> None:
+    """Seeded rounds of grok sends, turns, background work, gates, model switches, stops and taps.
+
+    The property is the other storms' (contract A1), checked after every op rather than per round: each accepted
+    message is Delivered, Returned, held (Queued) or parked inside grok, and in exactly one of them. grok's specific
+    risks are the worker typing into a turn mngr still reports (its files lag grok), stop or the tap meeting mngr's
+    refusal of a press, a restart that loses what it took, a model switch merged into a block,
+    handed back by stop, or dropped, and a message grok already has typed again: a slash command it ran, one it parked
+    behind a turn, or one typed after a draft. Breaches that leave every message accounted for -- a message left
+    Sending, a restart after a cancel that landed -- are collected and reported together once the rounds are done.
+    """
+    with _grok_chat(tmp_path, "grok", delivery_witness_seconds=0.0) as chat:
+        world = chat.world
+        ledger = chat.ledger
+        for round_index in range(_ROUND_COUNT):
+            rng = random.Random(_BASE_SEED + round_index)
+            ledger.log(f"round {round_index}:")
+            if world.is_quiet():
+                ledger.log("  kickoff-send")
+                chat.run_op("send", rng)
+            random_ops = tuple(rng.choice(_GROK_STORM_OPS) for _ in range(rng.randint(3, 6)))
+            for op in (*_GROK_STAGED_ROUNDS.get(round_index, ()), *random_ops):
+                ledger.log(f"  {op}")
+                chat.run_op(op, rng)
+                chat.assert_each_message_in_one_state(op)
+            chat.settle()
+            chat.assert_each_message_in_one_state("the round's settle")
+            chat.assert_round_settled()
+            ledger.verify()
+        chat.assert_the_transcript_holds_each_delivered_message_once()
+        missing_paths = [path for path in _GROK_REQUIRED_PATHS if not world.stats[path]]
+        missing_paths.extend(
+            f"tap:{status}" for status in ("flushed", "nothing_queued") if not chat.tap_statuses[status]
+        )
+        assert not missing_paths, (
+            f"the storm never reached {missing_paths}: reseed or reweight it\n{ledger.replay_note()}"
+        )
+        chat.assert_no_violations()
+
+
+@pytest.mark.parametrize("is_flush_slow", (False, True))
+def test_grok_interrupt_during_a_flush_conserves_every_message(tmp_path: Path, is_flush_slow: bool) -> None:
+    """Contract Part D's required case: stop lands while the flush worker's send holds mngr's message lock.
+
+    - fast: the paste has started the block's turn and mngr is still confirming it under the lock, so stop's Ctrl+C
+      waits on the lock and then cancels a turn whose messages are already Delivered.
+    - slow: the send holds the lock and has not pasted yet, so stop finds no turn, presses nothing and leaves the
+      claimed block alone; the paste lands after stop has returned.
+
+    Either way stop hands back nothing: the claimed block is the flush's to settle, and it lands exactly once.
+    """
+    with _grok_chat(
+        tmp_path,
+        f"grok-interrupt-during-flush[slow={is_flush_slow}]",
+        delivery_witness_seconds=_GROK_STEP_WAIT_SECONDS,
+    ) as chat:
+        world = chat.world
+        ledger = chat.ledger
+        world.pane_turn()
+        for _ in range(2):
+            chat.send(world.new_text())
+        world.end_turn()
+        chat.drain_wakes()
+        chat.assert_each_message_in_one_state("two messages held behind a lagging turn file")
+        world.paste_gate = threading.Event()
+        world.is_confirm_held_for_press = not is_flush_slow
+        with _GrokFlushThread(chat.watcher):
+            world.catch_up_streamer()
+            wait_for(world.send_holds_lock.is_set, timeout=_GROK_STEP_WAIT_SECONDS, poll_interval=0.01)
+            if not is_flush_slow:
+                world.paste_gate.set()
+                wait_for(lambda: world.turn_prompt_id is not None, timeout=_GROK_STEP_WAIT_SECONDS)
+            chat.stop(is_flush_thread_needed=False)
+            world.paste_gate.set()
+            wait_for(lambda: not chat.tracker.has_entries(), timeout=_GROK_STEP_WAIT_SECONDS, poll_interval=0.01)
+        chat.assert_each_message_in_one_state("stop during the flush")
+        assert ledger.returned == [], "stop must not hand back a block whose flush it left running"
+        assert ledger.delivered == ledger.accepted, "both messages reach grok exactly once, as one block"
+        assert world.stats["cancel"] == (0 if is_flush_slow else 1)
+        world.end_turn()
+        world.catch_up_streamer()
+        chat.drain_wakes()
+        ledger.verify()
+        chat.assert_the_transcript_holds_each_delivered_message_once()
+        chat.assert_no_violations()
+
+
+def test_grok_tap_delivers_once_and_returns_nothing(tmp_path: Path) -> None:
+    """A tap cancels the turn and hands nothing back to the composer: the flush worker delivers the held block once."""
+    with _grok_chat(tmp_path, "grok-tap-handback", delivery_witness_seconds=0.0) as chat:
+        world = chat.world
+        ledger = chat.ledger
+        world.pane_turn()
+        for _ in range(2):
+            chat.send(world.new_text())
+
+        outcome = chat.session.shoulder_tap(chat.agent_info, chat.watcher, world.press_ctrl_c, _grok_tap_must_not_send)
+        world.join_timers()
+
+        assert (outcome.status, outcome.block) == ("flushed", ""), "nothing goes back to the composer on a tap"
+        assert [str(entry["content"]) for entry in chat.tracker.snapshot()] == ledger.accepted, (
+            "the queue is still the worker's to deliver"
+        )
+        assert world.stats["cancel"] == 1
+        chat.drain_wakes()
+        assert ledger.delivered == ledger.accepted
+        ledger.verify()
+        assert not chat.tracker.has_entries()
+        chat.assert_no_violations()

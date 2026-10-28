@@ -34,6 +34,7 @@ from imbue.chat.harnesses.auth_flows import flow_shape
 from imbue.chat.harnesses.claude.auth import ANTHROPIC_API_KEY_ENV_VAR
 from imbue.chat.harnesses.claude.auth import ClaudeAuthError
 from imbue.chat.harnesses.claude.auth import read_managed_auth_env
+from imbue.chat.harnesses.grok.account_binding import read_sole_api_key
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import AppServerMethod
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
@@ -65,6 +66,7 @@ class SignInMethodRow(FrozenModel):
     label: str = Field(description="The method's name on its button")
     description: str = Field(description="What the method asks of the user, in a line")
     signup_url: str = Field(description="Where to get a key for a paste method; '' for the others")
+    key_hint: str = Field(description="What a paste method's key looks like, for its field; '' for the others")
     note: str = Field(description="A note shown beside an app-server method; '' for the others")
     shape: FlowShape = Field(description="What the dialog renders for the flow: a link and a code, a code, or a paste")
     is_primary: bool = Field(description="Whether this is the lane's first, recommended method")
@@ -186,6 +188,7 @@ def list_lanes() -> Response:
                     label=method.label,
                     description=method.description,
                     signup_url=method.signup_url if isinstance(method, PasteMethod) else "",
+                    key_hint=method.key_hint if isinstance(method, PasteMethod) else "",
                     note=method.note if isinstance(method, AppServerMethod) else "",
                     shape=flow_shape(method),
                     is_primary=index == 0,
@@ -247,6 +250,8 @@ def _reauth_method_id(account: accounts.Account, harness: HarnessType) -> str:
             )
         case HarnessType.CODEX:
             is_key = _codex_auth_mode(folder) == "apikey"
+        case HarnessType.GROK:
+            is_key = read_sole_api_key(folder) is not None
         case _:
             is_key = False
     if is_key:
@@ -274,8 +279,10 @@ def account_model_options(account_id: str) -> Response:
 
     The account-level twin of the per-chat ``/model-options``. A static harness offers its whole
     catalog (``models`` and ``options`` both null). A harness whose set is account-derived (codex)
-    has no catalog to offer, so the account's own codex is asked for it. A harness whose model the
-    chat app cannot switch offers nothing (``options`` empty).
+    has no catalog to offer, so the account's own codex is asked for it. A harness whose catalog
+    depends on the account (grok) offers the catalog's models the account's own CLI lists, and the
+    whole catalog when it cannot tell. A harness whose model the chat app cannot switch offers
+    nothing (``options`` empty).
 
     The question is put to the ACCOUNT, never to some other account's agent: the two accounts of one
     provider can be on different subscriptions and genuinely offer different models, so an answer

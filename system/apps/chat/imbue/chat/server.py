@@ -636,7 +636,9 @@ def _request_compaction_from_mngr(
     """Have mngr compact the agent in place of sending a composer ``/compact``, and show the compaction as requested.
 
     Declined with ``SendFailedError`` when nothing was said since the last compaction, and while
-    the agent is stopped or busy: mngr's compaction would abort a running turn.
+    the agent is stopped or busy: mngr's compaction would abort a running turn. The request shows
+    before mngr is asked, since mngr can wait out the whole compaction (grok's does), and is
+    withdrawn when mngr declines or fails it.
     """
     if not _has_compactable_exchange(_events_since_last_compaction(events)):
         raise SendFailedError(NOTHING_TO_COMPACT_DETAIL, NOTHING_TO_COMPACT_SEND_FAILURE_KIND)
@@ -648,8 +650,14 @@ def _request_compaction_from_mngr(
     ):
         raise SendFailedError(COMPACT_WHILE_BUSY_DETAIL, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND)
     requested_at = time.monotonic()
-    agent_manager.request_agent_compaction(AgentId(agent_info.id), compact_command_instructions(text))
     agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)
+    is_requested = False
+    try:
+        agent_manager.request_agent_compaction(AgentId(agent_info.id), compact_command_instructions(text))
+        is_requested = True
+    finally:
+        if not is_requested:
+            agent_manager.withdraw_compaction_request(agent_info.id, requested_at)
     return SendOutcome.OK
 
 
@@ -664,10 +672,10 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
     path.
     """
     # Ensure the watcher exists BEFORE the send, as the tap and stop endpoints already do. For
-    # a harness that holds its own queue (antigravity), the watcher owns the only thread that
-    # can ever deliver it -- so a send arriving here first (a headless client, or the first
-    # request after a restart) would otherwise enqueue a message with nothing running to drain
-    # it, and decide "is a turn open?" from an unpublished reading.
+    # a harness that holds its own queue, the watcher owns the only thread that can ever
+    # deliver it -- so a send arriving here first (a headless client, or the first request
+    # after a restart) would otherwise enqueue a message with nothing running to drain it, and
+    # decide "is a turn open?" from an unpublished reading.
     watcher = state.get_or_create_watcher(agent_info)
     agent_manager = state.agent_manager
     compact_handling = _composer_compact_handling_of(agent_info, text)

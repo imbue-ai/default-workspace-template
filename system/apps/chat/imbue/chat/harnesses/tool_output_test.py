@@ -72,8 +72,14 @@ def test_error_snippet_is_empty_for_a_call_a_hook_refused() -> None:
     assert error_snippet("PreToolUse:mcp__linear__create-issue hook error: [check.sh]: not now") == ""
 
 
+def test_error_snippet_is_empty_for_a_call_grok_reports_a_hook_refused() -> None:
+    """grok 1.0.62 records a PreToolUse refusal as the failed call's whole content."""
+    assert error_snippet("Hook denied: Blocked: git rebase commands are not allowed") == ""
+
+
 def test_error_snippet_keeps_an_ordinary_error_that_merely_mentions_a_hook() -> None:
     assert error_snippet("bash: hook error: not a real hook block") == "bash: hook error: not a real hook block"
+    assert error_snippet("curl: Hook denied: by the remote") == "curl: Hook denied: by the remote"
 
 
 # the secret request: recognised from the input, lifted from the result

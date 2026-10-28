@@ -11,7 +11,8 @@ reach a process only through ``with_secrets.py``. mcpc's store is
 the link counts as a mention of the directory.
 
 * A **shell** command (claude's and codex's ``Bash``, pi's ``bash``, the
-  ``Bash`` payload the agy shim synthesises) is tokenized with the shared
+  ``Bash`` payload the agy shim synthesises and the one grok's policy dispatcher
+  builds for its shell tools) is tokenized with the shared
   ``tk_command_parsing`` parser, so a rationale that happens to mention the
   directory inside a quoted argument stays inside one token. Any segment whose
   words mention ``data/.secrets`` passes only when its program is the wrapper or
@@ -22,9 +23,14 @@ the link counts as a mention of the directory.
   variables in that command's environment, it does not license it to open the
   file.
 * A **file** tool (claude's Read / Grep / Glob / Edit / Write, pi's read / edit /
-  write / grep / find, codex's ``apply_patch``) is refused when its path, or the
-  patch's file lines, point under ``data/.secrets/``. The directory's README is
-  not a secret and stays readable.
+  write / grep / find, grok's read_file / search_replace / write / grep, codex's
+  ``apply_patch``) is refused when its path, or the patch's file lines, point
+  under ``data/.secrets/``. The directory's README is not a secret and stays
+  readable, and a listing of the directory (pi's ``ls``, grok's ``list_dir``)
+  passes as the shell's ``ls`` does.
+* A tool that starts work in a directory it names (grok's ``spawn_subagent``,
+  by its ``cwd``) is refused when that directory is under ``data/.secrets/``,
+  as the shell's ``cd`` there is: inside it a bare file name opens a secret.
 
 Nothing here prints the command or a path back: either may carry a value.
 
@@ -73,10 +79,12 @@ _PYTHON_PASSTHROUGH_FLAGS = frozenset(
 _SHELL_PROGRAMS = frozenset({"bash", "sh", "zsh", "dash"})
 _ENV_ASSIGNMENT_RE = re.compile(r"^[A-Za-z_]\w*=")
 
-# Tool names whose payload is a shell command: claude and codex ``Bash``, pi's
-# ``bash``, and the empty name the agy shim's synthesised payload may carry.
+# Tool names whose payload is a shell command: claude and codex ``Bash`` (and grok's
+# shell tools, as its policy dispatcher hands them over), pi's ``bash``, and the
+# empty name the agy shim's synthesised payload may carry.
 _SHELL_TOOL_NAMES = frozenset({"Bash", "bash", ""})
-# claude's file tools plus pi's; codex edits files through apply_patch.
+# claude's file tools, pi's, and grok's (whose write and grep share pi's names);
+# codex edits files through apply_patch.
 _PATH_TOOL_NAMES = frozenset(
     {
         "Read",
@@ -92,13 +100,18 @@ _PATH_TOOL_NAMES = frozenset(
         "write",
         "grep",
         "find",
+        "read_file",
+        "search_replace",
     }
 )
 _PATCH_TOOL_NAME = "apply_patch"
 # Where a file tool names its target. ``pattern`` is a path only for the glob
 # tools (claude's Glob, pi's find); Grep's ``pattern`` is a regex and is left alone.
-_PATH_FIELDS = ("file_path", "path", "notebook_path")
+_PATH_FIELDS = ("file_path", "path", "notebook_path", "target_file")
 _GLOB_TOOL_NAMES = frozenset({"Glob", "find"})
+# Tools that start work in a directory they name, where a bare file name then opens a file inside it: grok's
+# spawn_subagent runs its subagent in `cwd`.
+_WORKING_DIRECTORY_FIELD_BY_TOOL_NAME = {"spawn_subagent": "cwd"}
 _PATCH_FILE_LINE_RE = re.compile(
     r"^\*\*\* (?:Add|Update|Delete) File: (.*)$", re.MULTILINE
 )
@@ -111,6 +124,9 @@ _UNPARSEABLE_REASON = (
     f"it mentions {_STORE_NAME} and could not be parsed as a shell command"
 )
 _FILE_TOOL_REASON = f"it opens a file under {_STORE_NAME}"
+_WORKING_DIRECTORY_REASON = (
+    f"it starts work inside {_STORE_NAME}, where a bare file name opens a secret file"
+)
 
 
 def _is_secret_path_mention(word: str) -> bool:
@@ -240,6 +256,14 @@ def classify_file_tool(tool_name: str, tool_input: Mapping[str, object]) -> str 
     )
 
 
+def classify_working_directory(directory: object) -> str | None:
+    return (
+        _WORKING_DIRECTORY_REASON
+        if isinstance(directory, str) and _is_secret_path_mention(directory)
+        else None
+    )
+
+
 def classify_patch(patch_body: str) -> str | None:
     file_lines = _PATCH_FILE_LINE_RE.findall(patch_body)
     return (
@@ -263,6 +287,9 @@ def classify_payload(payload: Mapping[str, object]) -> str | None:
         return classify_patch(patch_body) if isinstance(patch_body, str) else None
     if tool_name in _PATH_TOOL_NAMES:
         return classify_file_tool(tool_name, tool_input)
+    working_directory_field = _WORKING_DIRECTORY_FIELD_BY_TOOL_NAME.get(tool_name)
+    if working_directory_field is not None:
+        return classify_working_directory(tool_input.get(working_directory_field))
     return None
 
 

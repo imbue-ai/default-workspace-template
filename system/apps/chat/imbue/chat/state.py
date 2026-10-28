@@ -187,16 +187,21 @@ class ChatAppState(MutableModel):
             watcher.set_finished_tasks_callback(
                 lambda task_ids: self.agent_manager.forget_finished_tasks(agent_info.id, agent_info.harness, task_ids)
             )
+            watcher.set_wake_pending_tasks_callback(
+                lambda task_ids: self.agent_manager.forget_finished_tasks(
+                    agent_info.id, agent_info.harness, task_ids, is_wake_turn_pending=True
+                )
+            )
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
             self.agent_manager.register_queue_busy_handler(agent_info.id, watcher.notify_busy)
-            # A harness that holds the queue on its agent's behalf (antigravity) also needs to
-            # DELIVER it, which needs the manager's send path and a liveness check. No-op for
-            # every other harness, whose queue its own harness consumes.
+            # A harness that holds the queue on its agent's behalf also needs to DELIVER it, which
+            # needs the manager's send path and a liveness check. A harness whose agent consumes
+            # its own queue ignores them.
             watcher.set_flush_hooks(
                 # `is None` is the delivery test: send_message_to_agent returns the FAILURE
                 # (or None on success), while FlushSendCallback is declared to return True for
-                # delivered. Passing the result straight through inverts it, and antigravity's
-                # flush would count every failed send as delivered and drop the queue.
+                # delivered. Passing the result straight through inverts it, and the flush would
+                # count every failed send as delivered and drop the queue.
                 lambda text: self.agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
                 lambda: self.agent_manager.is_agent_alive(agent_info.id),
             )
