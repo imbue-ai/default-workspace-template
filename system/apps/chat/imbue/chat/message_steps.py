@@ -147,6 +147,11 @@ Examples:
 <open_tasks>
 - wor-step-a1b2 (in progress): Add a quiz to each topic
 </open_tasks>
+<message>Also add a glossary at the end of each topic</message>
+{_NEW_KEYWORD}: Add a glossary to each topic
+<open_tasks>
+- wor-step-a1b2 (in progress): Add a quiz to each topic
+</open_tasks>
 <message>Add a light mode and dark mode to the app, and make the sidebar collapsible.</message>
 {_NEW_KEYWORD}: Add light and dark modes and a collapsible sidebar
 <open_tasks>
