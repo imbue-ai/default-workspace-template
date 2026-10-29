@@ -6377,6 +6377,21 @@ def test_an_earlier_turn_saying_the_same_does_not_count_as_the_lost_message(
         chat.manager.stop()
 
 
+def test_one_recorded_turn_accounts_for_only_one_of_two_sends_saying_the_same(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    chat = _LostSendChat(broadcaster)
+    try:
+        chat.send("yes")
+        chat.send("yes")
+        chat.transcript._events.append(_typed_turn("yes"))
+        chat.observe(AgentLifecycleState.DONE)
+        wait_for(lambda: chat.resent == ["yes"], error_message="the second message was never sent again")
+    finally:
+        chat.manager.stop()
+    assert chat.resent == ["yes"]
+
+
 def test_a_stopped_agent_is_not_sent_its_unrecorded_messages_again(broadcaster: WebSocketBroadcaster) -> None:
     chat = _LostSendChat(broadcaster)
     try:

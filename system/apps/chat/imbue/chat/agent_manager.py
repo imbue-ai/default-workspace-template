@@ -710,11 +710,16 @@ def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, .
 
 @pure
 def _ids_of_user_turns_saying(events: list[dict[str, Any]], text: str) -> frozenset[str | None]:
-    return frozenset(
+    return frozenset(_ordered_ids_of_user_turns_saying(events, text))
+
+
+@pure
+def _ordered_ids_of_user_turns_saying(events: list[dict[str, Any]], text: str) -> list[str | None]:
+    return [
         event.get("event_id")
         for event in events
         if is_genuine_user_turn(event) and str(event.get("content") or "").strip() == text.strip()
-    )
+    ]
 
 
 @pure
@@ -1053,6 +1058,30 @@ class _UnrecordedSend(FrozenModel):
     )
     sent_at: float = Field(frozen=True, description="When it was delivered (monotonic seconds)")
     is_resend: bool = Field(frozen=True, description="Whether it was itself sent again after a process exit")
+
+
+@pure
+def _sends_the_transcript_does_not_hold(
+    events: list[dict[str, Any]], sends: Sequence[_UnrecordedSend]
+) -> list[_UnrecordedSend]:
+    """The ``sends`` (in the order they were sent) that no new user turn of ``events`` accounts for.
+
+    Each turn accounts for one send only, so of two sends saying the same, a transcript holding one turn
+    for them holds only the first.
+    """
+    claimed_ids: set[str | None] = set()
+    lost: list[_UnrecordedSend] = []
+    for send in sends:
+        new_ids = [
+            event_id
+            for event_id in _ordered_ids_of_user_turns_saying(events, send.text)
+            if event_id not in send.seen_turn_ids and event_id not in claimed_ids
+        ]
+        if new_ids:
+            claimed_ids.add(new_ids[0])
+        else:
+            lost.append(send)
+    return lost
 
 
 class HandoffCapabilities(FrozenModel):
@@ -2340,7 +2369,7 @@ class AgentManager:
             _loguru_logger.info("Not resending {}'s lost messages: its chat is switching or moved on", agent_info.name)
             return
         events = capabilities.ensure_watcher(agent_info).get_all_events()
-        lost = [send for send in sends if not _has_new_user_turn_saying(events, send.text, send.seen_turn_ids)]
+        lost = _sends_the_transcript_does_not_hold(events, sends)
         with resend_lock:
             for send in lost:
                 if send.is_resend:
