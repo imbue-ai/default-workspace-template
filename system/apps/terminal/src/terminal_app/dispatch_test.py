@@ -1,5 +1,6 @@
 import gzip
 import stat
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -122,8 +123,10 @@ if [ -f "$SESSION_ID_FILE" ]; then
     fi
 fi
 
+# A viewer never creates the session; tmux resolves a bare name by unique prefix, so the name is given exactly,
+# or a viewer of a lost terminal-1 would land on terminal-10.
 if [ ${#ATTACH_FLAGS[@]} -gt 0 ]; then
-    exec tmux attach-session "${ATTACH_FLAGS[@]}" -t "$SESSION_NAME"
+    exec tmux attach-session "${ATTACH_FLAGS[@]}" -t "=$SESSION_NAME"
 fi
 
 WORKDIR_ARGS=()
@@ -133,6 +136,38 @@ fi
 
 exec tmux new-session -A -s "$SESSION_NAME" "${WORKDIR_ARGS[@]}" python3 /home/user/workspace/system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l
 """)
+
+
+def _tmux_on(socket_path: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run ``tmux`` against the test's own server, by the socket the script under test resolves to."""
+    return subprocess.run(
+        ["tmux", "-S", str(socket_path), *arguments], capture_output=True, text=True, timeout=15.0
+    )
+
+
+def test_a_viewer_of_a_lost_session_never_lands_on_one_whose_name_merely_starts_the_same(
+    tmp_path: Path, private_tmux_socket: Path
+) -> None:
+    """tmux resolves a bare ``-t`` name by unique prefix, so with only ``terminal-10`` live a viewer of a lost
+    ``terminal-1`` would read somebody else's terminal; the viewer branch names the session exactly and fails
+    instead (it never creates one). Probed on a private tmux server."""
+    script = tmp_path / "session.sh"
+    script.write_text(render_session_script(tmp_path / "sessions", tmp_path / "oom_tag_service.py"))
+    started = _tmux_on(private_tmux_socket, ["new-session", "-d", "-s", "terminal-10", "sleep", "36281"])
+    assert started.returncode == 0, started.stderr
+    try:
+        # The prefix match the exact target guards against: the bare name finds terminal-10, the exact one does not.
+        assert _tmux_on(private_tmux_socket, ["has-session", "-t", "terminal-1"]).returncode == 0
+        assert _tmux_on(private_tmux_socket, ["has-session", "-t", "=terminal-1"]).returncode != 0
+
+        attached = subprocess.run(
+            ["bash", str(script), "terminal-1", "", "view"], capture_output=True, text=True, timeout=15.0
+        )
+    finally:
+        _tmux_on(private_tmux_socket, ["kill-session", "-t", "=terminal-10"])
+    assert attached.returncode != 0
+    assert "can't find session: terminal-1" in attached.stderr
+    assert "terminal-10" not in attached.stderr
 
 
 def test_a_directory_that_needs_shell_quoting_is_refused() -> None:

@@ -119,8 +119,10 @@ if [ -f "$SESSION_ID_FILE" ]; then
     fi
 fi
 
+# A viewer never creates the session; tmux resolves a bare name by unique prefix, so the name is given exactly,
+# or a viewer of a lost terminal-1 would land on terminal-10.
 if [ ${#ATTACH_FLAGS[@]} -gt 0 ]; then
-    exec tmux attach-session "${ATTACH_FLAGS[@]}" -t "$SESSION_NAME"
+    exec tmux attach-session "${ATTACH_FLAGS[@]}" -t "=$SESSION_NAME"
 fi
 
 WORKDIR_ARGS=()
