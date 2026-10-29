@@ -15,6 +15,7 @@
  * the focus off the field leaves the keyboard on screen for its hide animation.
  */
 
+import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { isTextEditingTarget } from "@imbue/workspace-ui/src/hideCursorWhileTyping";
 
 const MIN_KEYBOARD_SHARE = 0.2;
@@ -45,7 +46,7 @@ export function readViewport(): ViewportReading | null {
   const viewport = window.visualViewport;
   if (!viewport) return null;
   return {
-    isCoarsePointer: window.matchMedia("(pointer: coarse)").matches,
+    isCoarsePointer: window.matchMedia(TOUCH_MEDIA_QUERY).matches,
     isTypingFocus: isTypingFocus(document.activeElement),
     layoutWidthPx: document.documentElement.clientWidth,
     layoutHeightPx: document.documentElement.clientHeight,

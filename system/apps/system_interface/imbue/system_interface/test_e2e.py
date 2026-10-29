@@ -2466,9 +2466,9 @@ def test_the_bar_steps_aside_for_a_soft_keyboard_on_a_touch_phone_only(tmp_path:
             _phone_shows(narrow, pinned["id"])
             narrow.locator(f'iframe[data-live-page="{pinned["id"]}"]').focus()
             narrow.evaluate(_SET_KEYBOARD_JS, keyboard_top)
-            # The resize has been handled by the time evaluate returns; give a stray redraw a frame to land.
-            narrow.wait_for_timeout(100)
-            expect(narrow.locator("[data-phone-bar]")).to_be_visible()
+            # The resize is handled by the time evaluate returns, and a redraw it asked for lands within two frames.
+            narrow.evaluate("() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))")
+            assert narrow.locator("[data-phone-bar]").is_visible()
         finally:
             desktop.close()
 
