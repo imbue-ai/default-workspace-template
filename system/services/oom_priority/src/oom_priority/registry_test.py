@@ -206,7 +206,9 @@ def test_the_kill_hook_names_an_agent_from_an_entry_without_a_boot_id(
     runtime: Path, proc: Path
 ) -> None:
     _write_entry_without_a_start_time(4242, "agent-abc")
-    write_fake_process(proc, 1, start_ticks=1)
+    boot_id = fake_boot_id_path(proc)
+    boot_id.parent.mkdir(parents=True)
+    boot_id.write_text("boot-one\n")
 
     assert registry.lookup_agent(4242, proc_dir=proc) is not None
 
