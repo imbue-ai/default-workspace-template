@@ -6389,11 +6389,14 @@ def test_a_stopped_agent_is_not_sent_its_unrecorded_messages_again(broadcaster: 
     assert chat.resent == []
 
 
-def test_messages_let_go_before_the_process_ends_are_not_sent_again(broadcaster: WebSocketBroadcaster) -> None:
+def test_messages_delivered_before_or_during_a_stop_are_not_sent_again(broadcaster: WebSocketBroadcaster) -> None:
     chat = _LostSendChat(broadcaster)
     try:
         chat.send("what is 5+5?")
-        chat.manager.forget_unrecorded_sends(chat.agent_id)
+        with chat.manager.letting_go_of_unrecorded_sends(chat.agent_id):
+            chat.send("and 6+6?")
+            chat.observe(AgentLifecycleState.DONE)
+        chat.observe(AgentLifecycleState.RUNNING)
         chat.observe(AgentLifecycleState.DONE)
     finally:
         chat.manager.stop()

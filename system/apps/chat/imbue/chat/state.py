@@ -331,21 +331,21 @@ class ChatAppState(MutableModel):
         or a restart actually ran. Raises ``AgentRestartError`` when the restart fails.
         """
         watcher = self.get_or_create_watcher(agent_info)
-        self.agent_manager.forget_unrecorded_sends(agent_info.id)
         interrupts = _SentInterrupts(
             restart=restart_process,
             press_chord=lambda: self.agent_manager.press_key_chord_on_agent(
                 AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
             ),
         )
-        block = self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
-            agent_info,
-            watcher,
-            interrupts.restart_process,
-            lambda: self.agent_manager.reset_activity_state(agent_info.id),
-            interrupts.press_cancel_chord,
-            lambda: self.agent_manager.is_compaction_in_flight(agent_info),
-        )
+        with self.agent_manager.letting_go_of_unrecorded_sends(agent_info.id):
+            block = self.agent_manager.get_or_create_session(agent_info).interrupt_to_composer(
+                agent_info,
+                watcher,
+                interrupts.restart_process,
+                lambda: self.agent_manager.reset_activity_state(agent_info.id),
+                interrupts.press_cancel_chord,
+                lambda: self.agent_manager.is_compaction_in_flight(agent_info),
+            )
         if interrupts.is_any_sent:
             self.agent_manager.clear_compaction_after_interrupt(agent_info)
         return block

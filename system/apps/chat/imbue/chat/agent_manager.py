@@ -1316,6 +1316,8 @@ class AgentManager:
     _unrecorded_sends_by_agent: dict[str, list[_UnrecordedSend]]
     # The (agent, text) pairs being sent again after a process exit, so their delivery is kept as a resend.
     _lost_sends_being_resent: set[tuple[str, str]]
+    # How many stops of each agent's turn or process are under way (``letting_go_of_unrecorded_sends``).
+    _letting_go_counts_by_agent: dict[str, int]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1489,6 +1491,7 @@ class AgentManager:
         manager._resend_locks_by_agent = {}
         manager._unrecorded_sends_by_agent = {}
         manager._lost_sends_being_resent = set()
+        manager._letting_go_counts_by_agent = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
@@ -2261,6 +2264,8 @@ class AgentManager:
     def _keep_unrecorded_send(self, agent_id: str, text: str, seen_turn_ids: frozenset[str | None]) -> None:
         now = time.monotonic()
         with self._lock:
+            if agent_id in self._letting_go_counts_by_agent:
+                return
             kept = [
                 send
                 for send in self._unrecorded_sends_by_agent.get(agent_id, [])
@@ -2276,11 +2281,21 @@ class AgentManager:
             )
             self._unrecorded_sends_by_agent[agent_id] = kept
 
-    def forget_unrecorded_sends(self, agent_id: str) -> None:
-        """Let go of the messages delivered to the agent, so its process ending now sends none of them again: Stop
-        is taking its turn and queue back, or the chat app is stopping it."""
+    @contextmanager
+    def letting_go_of_unrecorded_sends(self, agent_id: str) -> Generator[None, None, None]:
+        """Scope a stop of the agent's turn or process (Stop taking its turn and queue back, the chat app stopping
+        it): the messages delivered to it, before and during the scope, are not sent again when its process ends."""
         with self._lock:
+            self._letting_go_counts_by_agent[agent_id] = self._letting_go_counts_by_agent.get(agent_id, 0) + 1
             self._unrecorded_sends_by_agent.pop(agent_id, None)
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._unrecorded_sends_by_agent.pop(agent_id, None)
+                remaining = self._letting_go_counts_by_agent.pop(agent_id) - 1
+                if remaining > 0:
+                    self._letting_go_counts_by_agent[agent_id] = remaining
 
     def _resend_sends_lost_with_exits(self, newly_dead_ids: set[str], states_by_id: Mapping[str, str]) -> None:
         """Send the agents whose processes just exited the messages they took but never wrote down.
@@ -3241,8 +3256,8 @@ class AgentManager:
     def stop_agent_process(self, agent_info: AgentInfo) -> None:
         """``mngr stop`` one agent and reflect the stop at once: its session's live state is reaped and its
         tracked lifecycle reads stopped before the observe stream confirms it. Raises ``AgentStopError``."""
-        self.forget_unrecorded_sends(agent_info.id)
-        self._run_mngr_stop(agent_info.name)
+        with self.letting_go_of_unrecorded_sends(agent_info.id):
+            self._run_mngr_stop(agent_info.name)
         with self._lock:
             session = self._session_by_agent.get(agent_info.id)
             agent_state = self._agents.get(agent_info.id)
