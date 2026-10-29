@@ -283,11 +283,16 @@ export function prependToComposer(chatId: string, block: string): void {
   if (!block) {
     return;
   }
+  const existingDraft = localStorage.getItem(messageTextKey(chatId)) ?? "";
+  // The block already leads the draft (the app-chat button pressed again while its lead-in sits unsent):
+  // prepending it once more would stack identical copies. Checked before staging, which attaches files.
+  if (existingDraft.startsWith(block)) {
+    return;
+  }
   const text = stageElementReferences(chatId, block);
   if (!text) {
     return;
   }
-  const existingDraft = localStorage.getItem(messageTextKey(chatId)) ?? "";
   const merged = existingDraft.trim().length === 0 ? text : `${text}\n\n${existingDraft}`;
   localStorage.setItem(messageTextKey(chatId), merged);
   pendingComposerPrepends.set(chatId, merged);

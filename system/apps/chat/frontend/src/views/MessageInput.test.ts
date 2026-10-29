@@ -1659,6 +1659,12 @@ describe("prependToComposer with an element reference", () => {
     expect(localStorage.getItem("message-text:agent-1")).toBe("my draft");
     expect(stagedFile().file.name).toBe(`${REFERENCE_ID}.json`);
   });
+
+  it("prepends a block once and not again while it still leads the draft (the app-chat button pressed twice)", () => {
+    prependToComposer("agent-1", "Change something about the Docs app: ");
+    prependToComposer("agent-1", "Change something about the Docs app: ");
+    expect(localStorage.getItem("message-text:agent-1")).toBe("Change something about the Docs app: ");
+  });
 });
 
 describe("MessageInput on a chat awaiting its first send with nothing signed in", () => {
