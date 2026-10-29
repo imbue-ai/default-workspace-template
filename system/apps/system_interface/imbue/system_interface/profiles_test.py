@@ -37,7 +37,8 @@ class _Connector:
         return self.response_by_user_id.get(user_id, httpx.Response(404, json={"detail": "no such user"}))
 
 
-def _resolver(tmp_path: Path, connector: _Connector) -> ProfileResolver:
+def _resolver(tmp_path: Path, handle: Callable[[httpx.Request], httpx.Response]) -> ProfileResolver:
+    """A resolver whose transport answers every request (profiles, and pictures too) through ``handle``."""
     share_env_path = tmp_path / "share.env"
     share_env_path.write_text(
         'export SHARE_WORKSPACE_DOMAIN="w.example.test"\nexport SHARE_BROKER_URL="https://broker.example.test/"\n'
@@ -45,7 +46,7 @@ def _resolver(tmp_path: Path, connector: _Connector) -> ProfileResolver:
     return ProfileResolver(
         cache_directory=tmp_path / "profiles",
         share_env_path=share_env_path,
-        transport=httpx.MockTransport(connector.handle),
+        transport=httpx.MockTransport(handle),
     )
 
 
@@ -72,7 +73,7 @@ def test_read_share_broker_url_treats_an_absent_file_as_no_share(tmp_path: Path)
 def test_resolve_fetches_the_profile_from_the_broker_and_caches_it(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json={**_BOB_WIRE, "a_newer_field": 1})
-    resolver = _resolver(tmp_path, connector)
+    resolver = _resolver(tmp_path, connector.handle)
 
     first = resolver.resolve(_BOB, _T0)
     second = resolver.resolve(_BOB, _T0 + PROFILE_CACHE_TTL - timedelta(seconds=1))
@@ -91,7 +92,7 @@ def test_resolve_fetches_the_profile_from_the_broker_and_caches_it(tmp_path: Pat
 def test_resolve_reads_an_empty_picture_url_as_no_picture(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json={**_BOB_WIRE, "profile_picture_url": ""})
-    resolver = _resolver(tmp_path, connector)
+    resolver = _resolver(tmp_path, connector.handle)
 
     assert resolver.resolve(_BOB, _T0) == UserProfile(
         user_id="user-bob-4471", display_name="Bob", profile_picture_url=None
@@ -101,7 +102,7 @@ def test_resolve_reads_an_empty_picture_url_as_no_picture(tmp_path: Path) -> Non
 def test_resolve_asks_again_once_the_cache_entry_is_past_its_ttl(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
-    resolver = _resolver(tmp_path, connector)
+    resolver = _resolver(tmp_path, connector.handle)
     resolver.resolve(_BOB, _T0)
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json={**_BOB_WIRE, "display_name": "Robert"})
 
@@ -114,7 +115,7 @@ def test_resolve_asks_again_once_the_cache_entry_is_past_its_ttl(tmp_path: Path)
 def test_a_failed_fetch_is_cached_as_a_miss_for_the_ttl(tmp_path: Path) -> None:
     connector = _Connector()
     connector.is_unreachable = True
-    resolver = _resolver(tmp_path, connector)
+    resolver = _resolver(tmp_path, connector.handle)
 
     assert resolver.resolve(_BOB, _T0) is None
     assert resolver.resolve(_BOB, _T0 + timedelta(minutes=1)) is None
@@ -128,7 +129,7 @@ def test_a_failed_fetch_is_cached_as_a_miss_for_the_ttl(tmp_path: Path) -> None:
 
 def test_an_error_status_or_an_unreadable_answer_is_a_miss_not_a_crash(tmp_path: Path) -> None:
     connector = _Connector()
-    resolver = _resolver(tmp_path, connector)
+    resolver = _resolver(tmp_path, connector.handle)
 
     assert resolver.resolve(UserId("user-unknown"), _T0) is None
 
@@ -141,7 +142,7 @@ def test_an_error_status_or_an_unreadable_answer_is_a_miss_not_a_crash(tmp_path:
 def test_a_nameless_profile_is_a_profile_with_no_name(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json={"user_id": "user-bob-4471"})
-    resolver = _resolver(tmp_path, connector)
+    resolver = _resolver(tmp_path, connector.handle)
 
     assert resolver.resolve(_BOB, _T0) == UserProfile(
         user_id="user-bob-4471", display_name=None, profile_picture_url=None
@@ -164,7 +165,7 @@ def test_nothing_is_fetched_while_the_workspace_is_not_shared(tmp_path: Path) ->
 def test_a_fresh_cache_entry_answers_even_after_the_share_ended(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
-    resolver = _resolver(tmp_path, connector)
+    resolver = _resolver(tmp_path, connector.handle)
     resolver.resolve(_BOB, _T0)
     resolver.share_env_path.unlink()
 
@@ -177,21 +178,12 @@ def test_a_fresh_cache_entry_answers_even_after_the_share_ended(tmp_path: Path) 
 def test_resolve_many_answers_only_the_users_with_a_profile(tmp_path: Path) -> None:
     connector = _Connector()
     connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
-    resolver = _resolver(tmp_path, connector)
+    resolver = _resolver(tmp_path, connector.handle)
 
     profile_by_user_id = resolver.resolve_many([_BOB, UserId("user-unknown")], _T0)
 
     assert set(profile_by_user_id) == {"user-bob-4471"}
     assert profile_by_user_id["user-bob-4471"].display_name == "Bob"
-
-
-def _picture_resolver(tmp_path: Path, handle: Callable[[httpx.Request], httpx.Response]) -> ProfileResolver:
-    """A resolver whose transport answers profiles and pictures alike through ``handle``."""
-    share_env_path = tmp_path / "share.env"
-    share_env_path.write_text('export SHARE_BROKER_URL="https://broker.example.test/"\n')
-    return ProfileResolver(
-        cache_directory=tmp_path / "profiles", share_env_path=share_env_path, transport=httpx.MockTransport(handle)
-    )
 
 
 def test_resolve_picture_fetches_the_bytes_once_and_again_only_for_a_new_url(tmp_path: Path) -> None:
@@ -207,7 +199,7 @@ def test_resolve_picture_fetches_the_bytes_once_and_again_only_for_a_new_url(tmp
         picture_requests.append(str(request.url))
         return httpx.Response(200, content=b"PNG:" + request.url.path.encode(), headers={"Content-Type": "image/png"})
 
-    resolver = _picture_resolver(tmp_path, handle)
+    resolver = _resolver(tmp_path, handle)
     first = resolver.resolve_picture(UserId("user-bob-4471"), _T0)
     again = resolver.resolve_picture(UserId("user-bob-4471"), _T0 + timedelta(seconds=1))
 
@@ -261,7 +253,7 @@ def test_resolve_picture_answers_none_for_no_picture_a_failed_fetch_or_a_non_ima
             return httpx.Response(404, text="gone")
         return httpx.Response(200, content=b"<html>", headers={"Content-Type": "text/html"})
 
-    resolver = _picture_resolver(tmp_path, handle)
+    resolver = _resolver(tmp_path, handle)
     assert resolver.resolve_picture(UserId("user-bob-4471"), _T0) is None
     assert resolver.resolve_picture(UserId("user-amy-0001"), _T0) is None
     assert resolver.resolve_picture(UserId("user-cal-0002"), _T0) is None
@@ -283,7 +275,7 @@ def test_a_failed_picture_fetch_is_remembered_for_the_ttl_and_a_new_url_asked_at
         picture_requests.append(str(request.url))
         return httpx.Response(picture_status, content=b"PNG", headers={"Content-Type": "image/png"})
 
-    resolver = _picture_resolver(tmp_path, handle)
+    resolver = _resolver(tmp_path, handle)
     assert resolver.resolve_picture(UserId("user-bob-4471"), _T0) is None
     assert resolver.resolve_picture(UserId("user-bob-4471"), _T0 + PROFILE_CACHE_TTL - timedelta(seconds=1)) is None
     assert picture_requests == ["https://a/bob.png"]
