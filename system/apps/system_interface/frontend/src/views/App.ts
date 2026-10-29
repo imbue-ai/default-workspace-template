@@ -868,8 +868,8 @@ export function App(): m.Component<AppAttrs> {
   /** The tray agent entry's right-click menu: the card's actions, the way the floating creature offers its own. */
   function trayAgentMenuRows(current: DesktopStore): MenuRow[] {
     return [
-      { kind: "action", key: "float", label: "Float", onSelect: () => floatAvatar(current) },
       { kind: "action", key: "change-avatar", label: "Change avatar...", onSelect: () => openAvatarChooser(current) },
+      { kind: "action", key: "float", label: "Float", onSelect: () => floatAvatar(current) },
     ];
   }
 
