@@ -84,7 +84,10 @@ done
 python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/tool_env.py" drop-shadowing-mngr
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
-# asserts the lockfile is canonical so the pre-warmed cache is not bypassed.
+# asserts the lockfile is canonical so the pre-warmed cache is not bypassed. .venv is
+# a link to a target beside the uv cache, so uv hardlinks from it (see venv_links.py);
+# on docker the target lands in the image layer.
+python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/venv_links.py" ensure "$REPO_ROOT"
 mngr_git_auth_run uv sync --all-packages --frozen
 
 # Expose the vendored tk ticket tracker on PATH. The target resolves once
