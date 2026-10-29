@@ -34,6 +34,7 @@ from chat_background_tasks.markers import TaskSource
 from loguru import logger as _loguru_logger
 from pydantic import Field
 
+from imbue.chat.account_labels import ACCOUNT_LABEL_KEY
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.activity_state import ActivityState
@@ -1102,7 +1103,7 @@ def created_chat_agent_labels(
     a room, which runs on no account, carries no account label."""
     labels = {"user_created": "true", "display_name": display_name}
     if account_id:
-        labels["account"] = account_id
+        labels[ACCOUNT_LABEL_KEY] = account_id
     if project_label:
         labels["project"] = project_label
     for label in extra_labels:

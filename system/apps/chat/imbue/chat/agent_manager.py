@@ -25,6 +25,7 @@ from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.primitives import ParticipantKey
 
+from imbue.chat.account_labels import ACCOUNT_LABEL_KEY
 from imbue.chat.account_labels import account_id_of
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
@@ -237,7 +238,7 @@ ROOM_CREATE_SETTINGS: Final[tuple[str, ...]] = ("-S", "commands.create.label=", 
 # The labels a chat create sets from what it knows (``_build_chat_create_command`` and the
 # handoff's successor labels); a caller's extra labels may not restate them.
 APP_OWNED_LABEL_KEYS: Final[frozenset[str]] = frozenset(
-    {"user_created", "display_name", "account", "project", "chat_id", "chat_seq", "autocompact"}
+    {"user_created", "display_name", ACCOUNT_LABEL_KEY, "project", "chat_id", "chat_seq", "autocompact"}
 )
 
 # How long a create the caller waits on may run before the wait answers on its own. A
