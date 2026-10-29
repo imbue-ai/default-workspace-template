@@ -2279,15 +2279,19 @@ class AgentManager:
             self._pause(_RESENT_TURN_LANDING_POLL_SECONDS)
 
     def _send_to_harness(self, agent_id: str, harness: HarnessType, text: str) -> bool:
-        """A file session's delivery through mngr. For a harness that can lose a message with its process, the
-        delivered message is kept until then, so it can be sent again. Raises ``SendFailedError`` when refused."""
+        """A file session's delivery (``send_message_kept_until_recorded``). Raises ``SendFailedError`` when refused."""
+        return delivered_or_raise(self.send_message_kept_until_recorded(agent_id, harness, text))
+
+    def send_message_kept_until_recorded(self, agent_id: str, harness: HarnessType, text: str) -> SendFailure | None:
+        """``send_message_to_agent``; for a harness that can lose a message with its process, the delivered message
+        is kept until then, so it can be sent again should the process exit before the transcript holds it."""
         if not get_harness_spec(harness).resends_sends_lost_with_process:
-            return delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text))
+            return self.send_message_to_agent(AgentId(agent_id), text)
         seen_turn_ids = self._user_message_ids_saying(agent_id, text)
-        is_delivered = delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text))
-        if seen_turn_ids is not None:
+        failure = self.send_message_to_agent(AgentId(agent_id), text)
+        if failure is None and seen_turn_ids is not None:
             self._keep_unrecorded_send(agent_id, text, seen_turn_ids)
-        return is_delivered
+        return failure
 
     def _user_message_ids_saying(self, agent_id: str, text: str) -> frozenset[str | None] | None:
         """The ids of the agent's user messages saying ``text`` now; None when its transcript cannot be read here."""

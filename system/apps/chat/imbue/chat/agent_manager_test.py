@@ -6364,6 +6364,19 @@ def test_a_message_the_transcript_holds_is_not_sent_again_when_the_process_exits
     assert chat.resent == []
 
 
+def test_a_message_the_chat_app_sends_outside_a_session_is_kept_for_sending_again(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    """The flush route's queue block goes to a just-restarted agent outside its session, and is kept the same."""
+    chat = _LostSendChat(broadcaster)
+    try:
+        assert chat.manager.send_message_kept_until_recorded(chat.agent_id, HarnessType.CLAUDE, "queued block") is None
+        chat.observe(AgentLifecycleState.DONE)
+        wait_for(lambda: chat.resent == ["queued block"], error_message="the lost block was never sent again")
+    finally:
+        chat.manager.stop()
+
+
 def test_a_send_the_transcript_holds_as_a_machine_line_is_not_sent_again_when_the_process_exits(
     broadcaster: WebSocketBroadcaster,
 ) -> None:

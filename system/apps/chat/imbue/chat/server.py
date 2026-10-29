@@ -1432,7 +1432,7 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
         return error_response(str(e), 500)
 
     if block:
-        resend_failure = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
+        resend_failure = agent_manager.send_message_kept_until_recorded(agent_info.id, agent_info.harness, block)
         if resend_failure is not None:
             # The harness said why; passing that on rather than a generic sentence is the whole
             # point of carrying it this far.
