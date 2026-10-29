@@ -69,7 +69,6 @@ const DOT_CLASS_BY_STATUS: Readonly<Record<string, string>> = {
   background: "chat-rail-dot--dashed",
   attention: "bg-warning",
   error: "bg-danger",
-  idle: "border border-faint bg-transparent",
 };
 
 function displayStatus(row: ChatRow): string {
@@ -251,8 +250,9 @@ function referenceRowsForEvent(attrs: ChatRailAttrs, event: MouseEvent): MenuRow
 
 // The status marks
 
-/** The status mark beside a row: a dot in the status's colour, a check for done, a pause mark
- *  for a stopped chat (paused is what a stop is, since a message resumes it). */
+/** The status mark beside a row: a dot in the status's colour, a check for done, and an empty
+ *  slot of the dot's width for an idle or stopped chat (a stopped row says so by dimming), so
+ *  every title starts at the same place. */
 function statusDot(row: ChatRow, extraClass: string): m.Vnode {
   const status = displayStatus(row);
   if (status === "done") {
@@ -262,24 +262,8 @@ function statusDot(row: ChatRow, extraClass: string): m.Vnode {
       m.trust(icon("check", { size: 12, strokeWidth: 3 })),
     );
   }
-  if (status === "stopped") {
-    return m(
-      "svg",
-      {
-        class: `chat-rail-dot size-2 rounded-full text-faint ${extraClass}`,
-        "data-status": status,
-        viewBox: "0 0 24 24",
-        fill: "currentColor",
-        "aria-hidden": "true",
-      },
-      [
-        m("rect", { x: 4, y: 3, width: 5, height: 18, rx: 1 }),
-        m("rect", { x: 15, y: 3, width: 5, height: 18, rx: 1 }),
-      ],
-    );
-  }
   return m("span", {
-    class: `chat-rail-dot size-2 rounded-full ${DOT_CLASS_BY_STATUS[status] ?? DOT_CLASS_BY_STATUS.idle} ${extraClass}`,
+    class: `chat-rail-dot size-2 rounded-full ${DOT_CLASS_BY_STATUS[status] ?? ""} ${extraClass}`,
     "data-status": status,
   });
 }
@@ -471,7 +455,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       key: row.chatId,
       type: "button",
       class: [
-        "chat-rail-row group flex w-full items-center gap-2 rounded-md py-1.5 text-left",
+        "chat-rail-row group flex w-full items-center gap-1.5 rounded-md py-1.5 text-left",
         // A finger's height in the drawer; the rail's rows stay dense under a pointer.
         attrs.isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "chat-rail-row--nested pr-2 pl-5" : "px-2",
@@ -607,7 +591,7 @@ function renameRow(row: ChatRow, isSelected: boolean, isTouch: boolean): m.Vnode
     {
       key: row.chatId,
       class: [
-        "chat-rail-row chat-rail-row--renaming flex w-full items-center gap-2 rounded-md py-1.5",
+        "chat-rail-row chat-rail-row--renaming flex w-full items-center gap-1.5 rounded-md py-1.5",
         isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "pr-2 pl-5" : "px-2",
         isSelected ? "bg-fill-active text-primary" : "text-primary",
