@@ -133,7 +133,9 @@ LATCHKEY_DISABLE_COUNTING_ENV_VAR = "LATCHKEY_DISABLE_COUNTING"
 _LATCHKEY_GATEWAY_PASSWORD_BYTES = 32
 # A ``NAME=value`` line of the host env file, with or without the ``export``
 # prefix a hand-written file may carry.
-_ENV_FILE_ASSIGNMENT_PATTERN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=")
+_ENV_FILE_ASSIGNMENT_PATTERN = re.compile(
+    r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)="
+)
 
 # Where the bootstrap announces each step it runs, one JSON line per event under
 # the standard event envelope, so the desktop that created this workspace can
@@ -715,7 +717,9 @@ def _sync_workspace_venv() -> None:
 
 def generate_latchkey_gateway_password() -> str:
     """A fresh gateway password: 32 random bytes, base64."""
-    return base64.b64encode(secrets.token_bytes(_LATCHKEY_GATEWAY_PASSWORD_BYTES)).decode("ascii")
+    return base64.b64encode(
+        secrets.token_bytes(_LATCHKEY_GATEWAY_PASSWORD_BYTES)
+    ).decode("ascii")
 
 
 def latchkey_gateway_env(password: str) -> dict[str, str]:
@@ -764,19 +768,27 @@ def _ensure_latchkey_gateway_env(
         logger.warning("Could not read the host env file at {}: {}", host_env_path, e)
         return False
     if _env_file_names(text, LATCHKEY_GATEWAY_ENV_VAR):
-        logger.debug("{} already names a latchkey gateway; leaving it alone", host_env_path)
+        logger.debug(
+            "{} already names a latchkey gateway; leaving it alone", host_env_path
+        )
         return False
     variables = latchkey_gateway_env(password)
-    block = "".join(_format_env_file_line(name, value) for name, value in variables.items())
+    block = "".join(
+        _format_env_file_line(name, value) for name, value in variables.items()
+    )
     separator = "" if not text or text.endswith("\n") else "\n"
     try:
         with host_env_path.open("a") as env_file:
             env_file.write(separator + block)
     except OSError as e:
-        logger.warning("Could not write the latchkey gateway into {}: {}", host_env_path, e)
+        logger.warning(
+            "Could not write the latchkey gateway into {}: {}", host_env_path, e
+        )
         return False
     environ.update(variables)
-    logger.info("Wrote the latchkey gateway address and a fresh password into {}", host_env_path)
+    logger.info(
+        "Wrote the latchkey gateway address and a fresh password into {}", host_env_path
+    )
     return True
 
 
@@ -790,7 +802,9 @@ def _configure_latchkey_gateway_env() -> None:
     if not host_dir:
         logger.debug("MNGR_HOST_DIR is unset; skipping the latchkey gateway env step")
         return
-    _ensure_latchkey_gateway_env(Path(host_dir) / "env", os.environ, generate_latchkey_gateway_password())
+    _ensure_latchkey_gateway_env(
+        Path(host_dir) / "env", os.environ, generate_latchkey_gateway_password()
+    )
 
 
 def _exec_supervisord() -> None:

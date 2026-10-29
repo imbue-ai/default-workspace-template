@@ -1200,14 +1200,19 @@ def test_latchkey_gateway_env_ignores_a_commented_out_gateway(tmp_path: Path) ->
 
     assert _ensure_latchkey_gateway_env(env_path, {}, "fresh") is True
 
-    assert f"\n{LATCHKEY_GATEWAY_ENV_VAR}={LATCHKEY_GATEWAY_URL}\n" in env_path.read_text()
+    assert (
+        f"\n{LATCHKEY_GATEWAY_ENV_VAR}={LATCHKEY_GATEWAY_URL}\n" in env_path.read_text()
+    )
 
 
 def test_latchkey_gateway_env_tolerates_an_unwritable_host_dir(tmp_path: Path) -> None:
     # The boot must reach supervisord even when the host dir is missing (a bare dev run
     # that set MNGR_HOST_DIR to nothing real): nothing is exported, and nothing raises.
     environ: dict[str, str] = {}
-    assert _ensure_latchkey_gateway_env(tmp_path / "missing" / "env", environ, "pw") is False
+    assert (
+        _ensure_latchkey_gateway_env(tmp_path / "missing" / "env", environ, "pw")
+        is False
+    )
     assert environ == {}
 
 
