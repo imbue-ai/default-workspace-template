@@ -1,8 +1,8 @@
 /**
  * The agent's tray entry (the multiplayer spec, section 6.4): the workspace avatar at 36px, in its mood, attending
- * while the pinned chat window is focused. The one avatar creature's docked form: while a client floats the avatar
- * it is drawn above the windows instead, and the tray draws none. A click opens the main chat; hovering opens its
- * card.
+ * while the pinned chat window is focused. The one avatar creature's home in the tray: while a client floats the
+ * avatar it is drawn above the windows instead, and the tray draws none. A click opens the main chat; hovering
+ * opens its card.
  */
 
 import m from "mithril";
