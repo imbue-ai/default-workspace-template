@@ -1,3 +1,3 @@
 The tests that pin `message_chat.py` and `run_in_background.py` constants import them from the `workspace_bare_scripts` package, now a chat dev dependency, instead of loading the files by path, and the one that pins update-self's resume note imports `update_self_skill.update_resume_note` (`update-self-skill` is a chat dev dependency too).
 
-The README and the account index lock's docstring no longer mention `migrate_claude_auth.py`, which this release deletes.
+The README and the account index lock's docstring no longer mention `migrate_claude_auth.py`, which this release deletes. The README and the background-task docs name `run_in_background.py` by its module path, `system/scripts/workspace_bare_scripts/run_in_background.py`, and the secret-request and background-task end-to-end tests run `request_secret.py` and `run_in_background.py` from their modules.

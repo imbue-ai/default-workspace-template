@@ -19,7 +19,7 @@ Exit codes:
           did not go out
 
 Usage:
-    uv run --no-sync .agents/skills/notify-user/scripts/notify_user.py [--title TITLE] MESSAGE
+    uv run --no-sync .agents/skills/notify-user/python/notify_user_skill/notify_user.py [--title TITLE] MESSAGE
 
 Environment:
     MNGR_AGENT_ID              Current runtime agent id, registered with the
@@ -216,3 +216,7 @@ def main(argv: list[str] | None = None) -> int:
     if is_accepted:
         sys.stderr.write("notify-user: notification sent.\n")
     return 0 if is_accepted else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

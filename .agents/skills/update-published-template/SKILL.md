@@ -487,7 +487,7 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
 ```
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the GitHub approval" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the GitHub approval" -- \
     uv run --no-sync --project /home/user/workspace "$PTM/github_access.py" wait --need git-write
 ```
 

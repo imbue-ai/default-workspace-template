@@ -447,7 +447,7 @@ def test_the_plain_uv_run_scan_catches_a_planted_command_and_skips_mentions() ->
             "uv run --no-project --with 'pydantic>=2' python check.py",
             "uv run --frozen --package app-manifest app-manifest footprint",
             "uv run system/scripts/workspace_scripts/verify_app.py todo",
-            "uv run python3 .agents/skills/notify-user/scripts/notify_user.py done",
+            "uv run python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py done",
             "uv run --no-sync system/scripts/workspace_scripts/verify_app.py todo",
             "uv --quiet run pytest; uv --directory /srv run --no-sync tk ls",
             "Check `uv --version` to run the right one.",
@@ -600,10 +600,10 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
     doc.write_text(
         "\n".join(
             [
-                "python3 .agents/skills/notify-user/scripts/notify_user.py 'done'",
+                "python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py 'done'",
                 "python3 system/scripts/forward_port.py --name x --url http://localhost:1",
                 "python3 system/scripts/no_such_script.py",
-                "uv run --no-sync python3 .agents/skills/notify-user/scripts/notify_user.py 'fine'",
+                "uv run --no-sync python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py 'fine'",
                 'command": "python3 \\"$MNGR_AGENT_WORK_DIR/system/scripts/agent_rewrite_bash_command.py\\""',
             ]
         )
@@ -616,7 +616,7 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
     ]
 
     assert offenders == [
-        ".agents/skills/notify-user/scripts/notify_user.py",
+        ".agents/skills/notify-user/python/notify_user_skill/notify_user.py",
         "system/scripts/no_such_script.py",
     ]
 
@@ -639,7 +639,7 @@ def test_the_uv_run_scan_catches_a_moved_script(tmp_path: Path) -> None:
             [
                 "uv run --no-sync .agents/shared/scripts/validate_skill.py .agents/skills/x",
                 "uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/x",
-                'eval "$(uv run --no-sync .agents/shared/scripts/parse_task_frontmatter.py task.md)"',
+                'eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py task.md)"',
                 "uv run --no-sync .agents/skills/<name>/python/<name>_skill/run.py",
                 "uv run --no-sync pytest system/no_such_test.py",
             ]

@@ -82,7 +82,7 @@ def test_error_snippet_keeps_an_ordinary_error_that_merely_mentions_a_hook() -> 
 # the secret request: recognised from the input, lifted from the result
 
 _SECRET_REQUEST_CALL = (
-    "python3 .agents/skills/connect-external-service/scripts/request_secret.py "
+    "python3 .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py "
     "--file svc --var SVC_TOKEN --rationale 'to call the widget API'"
 )
 _SECRET_ECHO = (
@@ -103,7 +103,7 @@ def test_a_secret_request_call_is_recognised_from_its_input_and_renders_as_the_c
     # Naming the script without running it (a Read of its path, a grep for its name) files
     # nothing, so no card: the script's own --file is what marks a filing.
     assert not is_secret_request_call(
-        '{"file_path":".agents/skills/connect-external-service/scripts/request_secret.py"}'
+        '{"file_path":".agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py"}'
     )
     assert not is_secret_request_call('{"pattern":"request_secret.py","path":".agents"}')
     assert is_secret_request_call('{"command":"python3 scripts/request_secret.py \\\n--file svc --var SVC_TOKEN"}')

@@ -2,7 +2,7 @@
 
 Usage, from the repo root, ALONE in its tool call with its output untouched::
 
-    uv run --no-sync .agents/skills/connect-external-service/scripts/request_secret.py \\
+    uv run --no-sync .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py \\
         --file <name> --var NAME [--var NAME ...] --rationale "..."
 
 Files the request with the chat app, which renders a card with one password input
@@ -166,3 +166,7 @@ def main(
         return EXIT_FAILED
     print(json.dumps(answer, indent=2))
     return EXIT_FILED
+
+
+if __name__ == "__main__":
+    sys.exit(main())

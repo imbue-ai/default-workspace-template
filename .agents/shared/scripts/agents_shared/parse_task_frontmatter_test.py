@@ -15,7 +15,7 @@ import pytest
 
 from agents_shared import parse_task_frontmatter
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "parse_task_frontmatter.py"
+_SCRIPT = Path(__file__).resolve().parent / "parse_task_frontmatter.py"
 
 
 _VALID_FRONTMATTER = """---

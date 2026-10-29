@@ -176,7 +176,7 @@ script-centric **skill**):
 1. **Kick off `crystallize-creation`** with `type=skill` and
    `source_artifacts_dir: data/.tasks/fetch-process-show/$SLUG/` in the task
    frontmatter, reusing `$SLUG` as its `$NAME`.
-2. **Launch the lead-proxy poll** (through `system/scripts/run_in_background.py`)
+2. **Launch the lead-proxy poll** (through `system/scripts/workspace_bare_scripts/run_in_background.py`)
    for worker reports, per `crystallize-creation` Step 5 /
    `.agents/shared/references/lead-proxy.md`.
    Do this *before* returning to the user. The poll does not block subsequent

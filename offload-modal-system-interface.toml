@@ -36,7 +36,7 @@ build_inputs = [
     "system/scripts/setup_system.sh",
     "system/scripts/_provision_guard.sh",
     "system/scripts/install_secret_scanners.sh",
-    "system/scripts/agy_install-1.1.22.sh",
+    "system/scripts/agy_install.sh",
     "system/scripts/install_owner_exec.sh",
     "system/scripts/install_earlyoom.sh",
     "system/scripts/install_agent_plugins.sh",
@@ -45,15 +45,13 @@ build_inputs = [
     "system/scripts/build_workspace.sh",
     "system/scripts/_tool_env.sh",
     "system/scripts/install_mngr.py",
-    "system/scripts/list_mngr_plugins.py",
+    "system/scripts/workspace_bare_scripts/list_mngr_plugins.py",
     # Read by those two to pick each tool's mngr plugins.
     "system/config/mngr_plugins.toml",
-    "system/scripts/tool_env.py",
-    # The code those three entry stubs import.
+    "system/scripts/workspace_bare_scripts/tool_env.py",
+    # The code the install_mngr.py entry stub imports.
     "system/scripts/workspace_bare_scripts/__init__.py",
     "system/scripts/workspace_bare_scripts/install_mngr.py",
-    "system/scripts/workspace_bare_scripts/list_mngr_plugins.py",
-    "system/scripts/workspace_bare_scripts/tool_env.py",
     "system/scripts/default_workspace_template_seed.sh",
     "system/scripts/seed_home_skeleton.sh",
     # What the first-boot steps run on top of it.

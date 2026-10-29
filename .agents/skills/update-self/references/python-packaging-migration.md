@@ -15,7 +15,7 @@ How each shows up during the update:
 | `system/test_entry_point_import_cost.py` cannot import a user skill's script (a PEP 723 dependency missing from the root venv) | [A user skill with scripts](#a-user-skill-with-scripts) |
 | `uv lock --check` / `uv sync` fails: "Workspace member `.agents/skills/<name>/python` is missing a `pyproject.toml`", or `system/test_meta_ratchets.py::test_every_skill_python_dir_has_a_pyproject` fails | [A user skill with scripts](#a-user-skill-with-scripts), step 1 |
 | `system/test_python_launch_rules.py::test_no_supervisord_program_runs_under_uv_run` names a user drop-in | [A user service](#a-user-service) |
-| `test_no_plain_uv_run_in_agent_facing_files` or `test_python3_invocations_name_bare_entry_points` names a user file | [Commands in the user's docs](#commands-in-the-users-docs) |
+| `test_no_plain_uv_run_in_agent_facing_files`, `test_python3_invocations_name_bare_entry_points` or `test_uv_run_invocations_name_scripts_that_exist` names a user file | [Commands in the user's docs](#commands-in-the-users-docs) |
 | `system/test_entry_point_import_cost.py` names a user skill's entry | [A user skill with scripts](#a-user-skill-with-scripts), last step |
 | `test_prevent_sys_path_edits` or `test_prevent_loading_modules_by_file_path` fails and lists a user file | [A user skill with scripts](#a-user-skill-with-scripts), step 2 |
 | `system/test_no_type_errors.py` reports errors in a user skill or script, or a user app's own `test_no_type_errors` fails | [Type errors in the user's skills and apps](#type-errors-in-the-users-skills-and-apps) |
@@ -31,11 +31,13 @@ plus `_skill`; a skill whose `scripts/` holds only shell scripts needs none of t
    `packages = ["<name_with_underscores>_skill"]`. Its `dependencies` are the
    union of the scripts' PEP 723 `# /// script` headers; delete those headers.
 2. Move every module into `python/<name_with_underscores>_skill/` (with an empty
-   `__init__.py`), tests included. Leave a thin entry file in `scripts/` at each
-   path the skill's SKILL.md, cron entries or program lines run, importing its
-   module from the package and calling it under `if __name__ == "__main__":`;
-   drop the moved module's own `if __name__ == "__main__":` block, since
-   `validate_skill.py` runs any module that has one by its own path.
+   `__init__.py`), tests included. A script keeps its own
+   `if __name__ == "__main__":` block and now runs by its new path: point the
+   skill's SKILL.md, its routines' commands and every other caller in the
+   workspace at that path. Only where a caller cannot be changed, leave a thin
+   entry file at the old path in `scripts/` that imports the module from the
+   package and calls it under `if __name__ == "__main__":`, with a docstring
+   saying what still runs that path.
    Change sibling imports (`import helpers`) to package imports
    (`from <name_with_underscores>_skill import helpers`), and delete any `sys.path` edit that
    existed to make them work. A test that loads its module from a file
@@ -48,7 +50,8 @@ plus `_skill`; a skill whose `scripts/` holds only shell scripts needs none of t
 4. `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name>`
    must print `ok`, and the skill's tests must pass by path.
 5. If the import-cost test names the entry, move the heavy import into the
-   function that uses it, or declare it as the test's message says.
+   function that uses it; code whose signatures name that library's types goes
+   in a module of its own, imported inside the subcommands that need it.
 
 ## A user service
 
@@ -73,6 +76,13 @@ check sees it; after editing one, re-install it live with
   as it is);
 - `python3 <path>.py` for a script that is not one of the bare entry points the
   check accepts becomes `uv run --no-sync <path>.py`;
+- a path to a built-in script that now runs from its module becomes the
+  module's path, keeping the interpreter the script's tier calls for: a skill's
+  `scripts/<name>.py` is `python/<skill_name>_skill/<name>.py` (for example
+  `.agents/skills/notify-user/python/notify_user_skill/notify_user.py`), a
+  shared one is under `.agents/shared/scripts/agents_shared/`, and
+  `system/scripts/run_in_background.py`, `tool_env.py` and
+  `list_mngr_plugins.py` are under `system/scripts/workspace_bare_scripts/`;
 - `from claude_p import ...` run from the root venv becomes
   `from use_ai_integration_skill.claude_p import ...` (a copy of `claude_p.py`
   inside the user's own app is theirs and stays as it is).

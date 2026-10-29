@@ -12,7 +12,7 @@ Merging the milestone" names plumbing nobody can see. Say what changed, or nothi
 ## Polling for the next report
 
 Poll for the report file with `create_worker.py await`, started through
-`system/scripts/run_in_background.py`. `await` reads `finish_report_path` from
+`system/scripts/workspace_bare_scripts/run_in_background.py`. `await` reads `finish_report_path` from
 the task file's frontmatter, blocks until that file appears, prints its
 contents, and exits 0; on timeout it exits non-zero (code 124).
 `run_in_background.py` returns at once and runs it detached; when `await`
@@ -28,7 +28,7 @@ and wait for one finish report use the same `await` (or the synchronous
 `create_worker.py launch-sync` wrapper) with no gate handling.
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name <WORKER_NAME> \
     --task-file <TASK_FILE>

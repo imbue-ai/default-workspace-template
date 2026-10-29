@@ -1,19 +1,18 @@
 """Where the workspace's Python entry points are, and which interpreter each one runs under.
 
 An entry point is either a module of a package with a top-level ``if __name__ == "__main__":``
-block, run by its own path from the root venv (``uv run --no-sync``), or a stub: a top-level
-``.py`` file in a scripts directory (``system/scripts``, ``.agents/shared/scripts``,
-``.agents/skills/<name>/scripts``) that imports its package, kept where something outside the
-release calls a fixed path or the script runs with no venv. A stub's tier is its package's: a
-stub into a bare package runs under the system ``python3`` with no venv (stdlib only), any other
-stub runs from the root venv. A few standalone stdlib scripts outside the scripts directories
+block, run by its own path, or a stub: a top-level ``.py`` file in a scripts directory
+(``system/scripts``, ``.agents/shared/scripts``, ``.agents/skills/<name>/scripts``) that imports
+its package, kept where something outside the release calls a fixed path or the script runs with
+no venv and imports its own package. Either way the tier is the package's: an entry into a bare
+package runs under the system ``python3`` with no venv (stdlib only), any other runs from the
+root venv (``uv run --no-sync``). A few standalone stdlib scripts outside the scripts directories
 are bare too. See .agents/shared/references/running-python.md.
 """
 
 from __future__ import annotations
 
 import ast
-import tomllib
 from pathlib import Path
 
 from agents_shared.validate_skill import package_entry_modules
@@ -47,9 +46,6 @@ sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 print(json.dumps(sorted({name.split(".")[0] for name in sys.modules})))
 """
-
-# Where an entry point's project declares the heavy modules the entry may load at import.
-ENTRY_POINTS_TABLE = ("workspace-template", "entry-points")
 
 
 def scripts_dirs(repo_root: Path = REPO_ROOT) -> list[Path]:
@@ -128,15 +124,6 @@ def entry_package(entry: Path) -> str | None:
 def is_bare_entry(path: Path) -> bool:
     if path in STANDALONE_BARE_SCRIPTS or path.parent in STANDALONE_BARE_DIRS:
         return path.is_file()
+    if (path.parent / "__init__.py").is_file():
+        return path.is_file() and path.parent.name in BARE_PACKAGES
     return path.is_file() and entry_package(path) in BARE_PACKAGES
-
-
-def declared_heavy_imports(entry: Path) -> frozenset[str]:
-    """The heavy modules the entry's project's pyproject.toml lets it load at import time."""
-    pyproject = project_dir(entry) / "pyproject.toml"
-    if not pyproject.is_file():
-        return frozenset()
-    table = tomllib.loads(pyproject.read_text()).get("tool", {})
-    for key in ENTRY_POINTS_TABLE:
-        table = table.get(key, {})
-    return frozenset(table.get(entry.name, {}).get("heavy-imports", ()))

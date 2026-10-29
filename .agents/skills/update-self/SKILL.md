@@ -895,7 +895,7 @@ down with the preview script and close its window:
 
 ```bash
 uv run --no-sync workspace-layout close <name>-preview
-uv run --no-sync .agents/skills/update-app/scripts/preview_app.py down --app <name>
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
 ```
 
 The close goes first: nothing takes a window away when its app leaves the registry, so

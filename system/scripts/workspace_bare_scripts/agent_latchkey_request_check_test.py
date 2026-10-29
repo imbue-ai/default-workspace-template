@@ -35,9 +35,7 @@ _MULTILINE_REQUEST = (
 
 # A secret request, exactly as the connect-external-service skill documents it: the
 # other kind of filing this gate governs (P10).
-_SECRET_REQUEST_PATH = (
-    ".agents/skills/connect-external-service/scripts/request_secret.py"
-)
+_SECRET_REQUEST_PATH = ".agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py"
 _SECRET_REQUEST_ARGS = (
     f"{_SECRET_REQUEST_PATH} "
     "--file svc --var SVC_TOKEN --rationale 'I need your key to call the widget API'"

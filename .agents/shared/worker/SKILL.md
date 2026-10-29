@@ -25,7 +25,7 @@ address, the report destination, the `operation`, and the `creations` the lead
 set in frontmatter:
 
 ```bash
-eval "$(uv run --no-sync .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
 This sets `TASK_FILE`, `LEAD_AGENT`, `LEAD_WORK_DIR`, `FINISH_REPORT_PATH`,

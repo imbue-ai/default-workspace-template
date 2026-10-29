@@ -191,3 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             f"[tool-env] removed {removed}, which shadowed {tool_home()}/.local\n"
         )
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -4,6 +4,11 @@
 Each guard's ``.sh`` hook runs its check by name; the check, a module of
 :mod:`workspace_bare_scripts`, reads the arguments after the name. Only the named check
 is imported, so a hook pays for one check's imports, as it would running that check alone.
+
+Kept as a stub: the guard hooks run this path, and it puts tk_command_parsing's source on
+sys.path, which only an entry file may do. The system python3 finds workspace_bare_scripts only
+because this file's directory is first on sys.path, so run it as ``python3 <path>``, never with
+-I, -P or PYTHONSAFEPATH set.
 """
 
 import sys

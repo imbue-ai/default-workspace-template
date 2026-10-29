@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a cheap throwaway mock first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a throwaway mock page the app serves first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
 metadata:
   author: imbue
   crystallized: true
@@ -35,8 +35,9 @@ Map of the flow:
 - **Step 0 -- clarify and plan** (skeleton phases 1-3): blocking questions only,
   in business terms; a small plan; wait for approval.
 - **Step 1 -- scaffold + throwaway mock** (skeleton phases 4-6): scaffold the
-  service, put a mock UI in front of the user, loop to explicit confirmation of
-  the look-and-feel. Hard gate.
+  service, serve a mock page from it and put that in front of the user (a page,
+  never a picture of one), loop to explicit confirmation of the look-and-feel.
+  Hard gate.
 - **Step 2-4 -- build to a usable site** (the existing build mechanics, run
   *after* confirmation): implement real routes, verify, surface the window.
 - **Step 5 -- finalize in the background** (skeleton phase 7): once the user
@@ -359,6 +360,12 @@ real window and reacts to the actual look-and-feel.
 
 This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
 
+- The mock is **a page the app serves, never a picture of one.** Do not draw the
+  screen as an image (an SVG, a PNG, a generated image) and show it in chat: a
+  picture cannot be clicked, so it shows none of the interactions the user is
+  judging, and it is thrown away rather than turned into the real page. A
+  served mock costs the same few minutes and is the page the real build grows
+  from.
 - The mock renders **static / hard-coded content** that demonstrates the proposed
   layout and interactions -- no real fetching, no persistence, no backend logic.
   Read the reference `references/frontend-choices.md` for recommended design
@@ -598,7 +605,7 @@ The foreground work stops at a usable, surfaced site. The thorough pass --
 extending Playwright coverage, the full test suite and ratchets over the
 extended tests, review gates -- runs in a **background harden worker**, never
 in the main agent. The test gate AGENTS.md has you run through
-`system/scripts/run_in_background.py` checks the app against the tests it
+`system/scripts/workspace_bare_scripts/run_in_background.py` checks the app against the tests it
 already has, so it is not this pass: run it anyway, since the worker may never
 be dispatched. This is skeleton phase 7: the harden pass
 (`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**

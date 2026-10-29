@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Entry point for :mod:`workspace_bare_scripts.claude_background_task_hooks`."""
+"""Entry point for :mod:`workspace_bare_scripts.claude_background_task_hooks`.
+
+Kept as a stub: claude's hook config runs this path, and it puts oom_priority's and
+chat_background_tasks' sources on sys.path, which only an entry file may do.
+
+The system python3 finds workspace_bare_scripts only because this file's directory is first
+on sys.path, so run it as ``python3 <path>``, never with -I, -P or PYTHONSAFEPATH set.
+"""
 
 import sys
 from pathlib import Path

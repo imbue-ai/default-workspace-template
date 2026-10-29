@@ -141,7 +141,7 @@ closed you can drive it freely on its own port.
 it first, on its own:
 
 ```bash
-uv run --no-sync .agents/skills/update-app/scripts/preview_app.py up \
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \
     --app <name> --worktree "data/.tasks/critical-live/update-$SLUG" \
     [--with <sibling>]... [--instance-key <key>]
 ```
@@ -237,7 +237,7 @@ Then edit, and refresh the preview in place:
   dependency run `uv lock` in the worktree first.
 
   ```bash
-  uv run --no-sync .agents/skills/update-app/scripts/preview_app.py refresh --app <name>
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name>
   ```
 
   If `refresh` exits non-zero the new build did not boot. Fix it and refresh
@@ -280,7 +280,7 @@ worktrees, so before creating the worker, release your hold on it:
 
 ```bash
 uv run --no-sync workspace-layout close <name>-preview
-uv run --no-sync .agents/skills/update-app/scripts/preview_app.py down --app <name>
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
 git worktree remove "data/.tasks/critical-live/update-$SLUG"
 ```
 
@@ -338,7 +338,7 @@ round:
 ```bash
 WORK_DIR=$(mngr ls --include "name == \"update-$SLUG\"" --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
-uv run --no-sync .agents/skills/update-app/scripts/preview_app.py up \
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \
     --app <name> --worktree "$WORK_DIR" [--with <sibling>]... [--instance-key <key>]
 uv run --no-sync workspace-layout open <name>-preview
 ```
@@ -462,7 +462,7 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
 
    ```bash
    uv run --no-sync workspace-layout close <name>-preview
-   uv run --no-sync .agents/skills/update-app/scripts/preview_app.py down --app <name>
+   uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
    ```
 
    The close goes first: nothing takes a window away when its app leaves the

@@ -31,7 +31,7 @@ crystallized skill path. The standard switch is:
 
 | Old reference                                                  | New reference                                            |
 | -------------------------------------------------------------- | -------------------------------------------------------- |
-| `data/.tasks/fetch-process-show/<slug>/fetch.py`                     | `.agents/skills/<name>/scripts/run.py`                   |
+| `data/.tasks/fetch-process-show/<slug>/fetch.py`                     | `.agents/skills/<name>/python/<name_with_underscores>_skill/run.py` |
 | `data/.tasks/fetch-process-show/<slug>/sample.json`                  | run the skill with `--output <path>` to regenerate       |
 | Inline import of the fetch script                              | `from <name_with_underscores>_skill.<module> import ...`, with `<name>-skill` added to the consumer's own `pyproject.toml` dependencies (an app runs from its own environment) and `<name>-skill = { workspace = true }` to the root `pyproject.toml`'s `[tool.uv.sources]`, then `uv lock`, or `subprocess.run(["uv", "run", "--no-sync", ".agents/skills/<name>/scripts/run.py", ...])` |
 

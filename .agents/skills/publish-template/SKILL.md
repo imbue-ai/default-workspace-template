@@ -224,7 +224,7 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
 ```
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name <slug> --task-file data/.tasks/launch-task/<slug>/task.md
 ```
@@ -328,7 +328,7 @@ approval is waiting in Imbue Studio (two, if you filed both), then wait in the
 background and end your turn; the result starts your next one:
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the GitHub approval" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the GitHub approval" -- \
     uv run --no-sync --project /home/user/workspace "$PTM/github_access.py" wait
 ```
 

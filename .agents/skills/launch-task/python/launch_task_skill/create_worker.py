@@ -55,7 +55,7 @@ worker side:
     ``report.md`` wins when both are present. On timeout it returns non-zero so
     the caller drops into the liveness diagnosis described in
     ``.agents/shared/references/lead-proxy.md``. Callers run this through
-    ``system/scripts/run_in_background.py`` and then **end the turn**: when it
+    ``system/scripts/workspace_bare_scripts/run_in_background.py`` and then **end the turn**: when it
     exits, what it printed arrives in the caller's chat as a message that wakes
     the agent, on every harness, so sleeping against it only adds the gap
     between the report landing and the sleep expiring (see the "Never sleep on
@@ -2572,7 +2572,7 @@ def build_parser() -> argparse.ArgumentParser:
         "await",
         help="Block until the worker's report file appears (or an unconsumed "
         "milestone lands beside it), then print it. "
-        "Run it through system/scripts/run_in_background.py, then end the turn -- "
+        "Run it through system/scripts/workspace_bare_scripts/run_in_background.py, then end the turn -- "
         "its result arrives in your chat and wakes you. Re-invoke once per gate cycle.",
     )
     await_parser.add_argument(

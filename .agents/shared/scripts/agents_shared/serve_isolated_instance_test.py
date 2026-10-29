@@ -29,7 +29,7 @@ from workspace_bare_scripts import forward_port
 from agents_shared import preview_wrapper_server as wrapper_mod
 from agents_shared import serve_isolated_instance as mod
 
-_SCRIPT = Path(__file__).resolve().parents[1] / "serve_isolated_instance.py"
+_SCRIPT = Path(__file__).resolve().parent / "serve_isolated_instance.py"
 
 _NAME = "demo"
 _PORT_ENV = "MYSVC_PORT"

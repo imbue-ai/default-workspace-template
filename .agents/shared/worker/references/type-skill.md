@@ -7,6 +7,11 @@ authority on the agentskills.io spec: directory layout, frontmatter, the
 validation, and the scenario template. This reference adds only what that spec
 cheat-sheet and the universal `harden-creation.md` contract don't already cover.
 
+A new skill starts from the scaffold (`spec-summary.md`, "Directory layout"),
+which writes the layout, installs the package and validates it:
+`uv run --no-sync .agents/shared/scripts/agents_shared/scaffold_skill.py <name>
+--description "..." --python --crystallized`.
+
 **Design judgement.** Reliability is the floor; simplicity is the target. Default
 to a subcommand per cleanly-separable step plus a `run all` that chains them; add
 surface beyond that only when a specific invariant demands it. Split into a
@@ -22,8 +27,8 @@ pipeline is part of this skill, not a separate creation:
 
 - All of its modules (`sources.py`, `store.py`, ...) go in the skill's package,
   `.agents/skills/<name>/python/<name_with_underscores>_skill/`, with its
-  dependencies in `python/pyproject.toml` and `scripts/run.py` as its entry
-  point (layout and rules: `spec-summary.md`, "Packaging").
+  dependencies in `python/pyproject.toml` and `run.py` in the package as its
+  entry point (layout and rules: `spec-summary.md`, "Packaging").
 - Its tests go in the package too: where data-pipeline-builder says
   `tests/test_parse.py`, write `.agents/skills/<name>/python/<name_with_underscores>_skill/test_parse.py`.
   pytest imports it as `<name_with_underscores>_skill.test_parse`, so the name cannot collide
@@ -33,7 +38,7 @@ pipeline is part of this skill, not a separate creation:
 ## Where a skill's behavior lives
 
 A skill's behavior is split between its scripts (`[script]` / `[ai-script]`, in
-its `python/` package, run through `.agents/skills/<name>/scripts/`) and its
+its `python/` package) and its
 SKILL.md prose, so a change -- or a
 fix -- may touch either or both. When a wrong behavior traces to an ambiguous
 or incorrect prose instruction, the edit is a SKILL.md edit even if the skill
@@ -89,7 +94,7 @@ belongs to the app itself is that app's own pass.
   checks).
 - Hand-craft and run 2-3 scenarios (template in `spec-summary.md`); they are
   **ephemeral** -- run them in your transcript, never saved as files. For a
-  `[script]` / `[ai-script]` step, invoke `.agents/skills/<name>/scripts/run.py`
+  `[script]` / `[ai-script]` step, invoke `.agents/skills/<name>/python/<name_with_underscores>_skill/run.py`
   on real input and inspect the output (an `[ai-script]` step makes a real
   Claude call -- run it on a small input to note cost). For a `[prose]` step,
   walk the SKILL.md instructions as the executing agent.

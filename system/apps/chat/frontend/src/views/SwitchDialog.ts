@@ -22,7 +22,7 @@ import { fetchAccountModelOptions } from "../models/AccountModelOptions";
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, TransitionKind } from "../models/Chats";
 import { switchChat } from "../models/Handoffs";
-import { effortInEffect, getHarnessCatalog, startingEffort } from "../models/HarnessCatalog";
+import { effortInEffect, startingEffort } from "../models/HarnessCatalog";
 import type { CatalogModelOption } from "../models/HarnessCatalog";
 import type { ModelIdentity } from "../models/ModelSettings";
 import {
@@ -184,10 +184,9 @@ export function closeSwitchDialog(): void {
   m.redraw();
 }
 
-/** The model the chat runs on now, as a pick for a new agent of the same harness and lane; null when it is unknown,
- *  and for a harness whose model the chat app cannot switch, where no pick could be applied. */
+/** The model the chat runs on now, as a pick for a new agent of the same harness and lane; null when it is unknown. */
 function currentModelIdentity(chat: ChatSnapshot | undefined): ModelIdentity | null {
-  if (chat === undefined || getHarnessCatalog(chat.active_agent.harness)?.switch_mode === "read_only") return null;
+  if (chat === undefined) return null;
   const choice = chat.active_agent.model_choice;
   if (choice === null || choice.matched === null) return null;
   return {
@@ -236,15 +235,10 @@ function renderPicker(dialog: OpenDialog): m.Children {
     );
   }
   if (dialog.options.length === 0) {
-    // A harness whose model the chat app cannot switch lands here by having no options at all, so
-    // the usual "change it afterwards" is the one thing it must not say: the bar will refuse too.
-    const isModelReadOnly = getHarnessCatalog(dialog.target.harness)?.switch_mode === "read_only";
     return m(
       "p",
       { class: "switch-dialog-no-models text-(length:--font-size-helper) text-secondary" },
-      isModelReadOnly
-        ? `${whenNothingIsPicked}, which is changed from the agent's terminal, not from the chat.`
-        : `${whenNothingIsPicked}; you can change it once it is running.`,
+      `${whenNothingIsPicked}; you can change it once it is running.`,
     );
   }
   const option = chosenOption(dialog);

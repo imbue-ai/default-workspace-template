@@ -351,7 +351,7 @@ def test_the_messaging_scripts_browser_fleet_tag_is_the_one_this_classifier_stri
 
 
 def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None:
-    """``system/scripts/run_in_background.py`` is standard-library only and cannot import this package,
+    """``system/scripts/workspace_bare_scripts/run_in_background.py`` is standard-library only and cannot import this package,
     so its copy of the tag is pinned here by classifying a report it composed."""
     report = run_in_background.compose_report(
         description="Wait for the background agent",

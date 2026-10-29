@@ -21,6 +21,7 @@ from pathlib import Path
 import pytest
 
 from update_app_skill import preview_app as mod
+from update_app_skill import preview_boot as boot
 
 _ICON = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
 
@@ -152,7 +153,7 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
     worktree = _write_worktree(tmp_path)
     instances = _RecordingInstances(tmp_path)
 
-    code = mod.up(
+    code = boot.up(
         "chat",
         worktree,
         tmp_path,
@@ -165,7 +166,7 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
     # The shared substrate's placeholders pass through untouched.
     assert instances.up_spec("chat-preview") == mod.InstanceSpec(
         name="chat-preview",
-        command=[*mod.LAUNCHER, "chat-app", "--secondary"],
+        command=[*boot.LAUNCHER, "chat-app", "--secondary"],
         cwd=worktree,
         port_env_by_name={"main": None},
         env_overrides={
@@ -200,7 +201,7 @@ def test_the_launcher_syncs_the_worktree_frozen_then_becomes_the_app(
         script.chmod(0o755)
 
     process = subprocess.Popen(
-        [*mod.LAUNCHER, "app", "--port", "1"],
+        [*boot.LAUNCHER, "app", "--port", "1"],
         cwd=worktree,
         env={**os.environ, "PATH": f"{fake_bin}:/usr/bin:/bin"},
         stdout=subprocess.PIPE,
@@ -220,7 +221,7 @@ def test_the_launcher_syncs_the_worktree_frozen_then_becomes_the_app(
 def test_a_preview_that_opens_on_an_instance_needs_its_key(tmp_path: Path) -> None:
     worktree = _write_worktree(tmp_path)
     with pytest.raises(mod.PreviewError, match="--instance-key"):
-        mod.up(
+        boot.up(
             "chat",
             worktree,
             tmp_path,
@@ -236,7 +237,7 @@ def test_an_app_with_no_table_previews_by_the_scaffold_convention(
     instances = _RecordingInstances(tmp_path)
 
     assert (
-        mod.up(
+        boot.up(
             "notes",
             worktree,
             tmp_path,
@@ -255,7 +256,7 @@ def test_an_app_with_no_table_previews_by_the_scaffold_convention(
     assert spec.copy_sources == {"data": "data/.apps/notes"}
     assert spec.health_path == "/health"
     assert spec.inner_path == "/"
-    assert spec.command == [*mod.LAUNCHER, "notes"]
+    assert spec.command == [*boot.LAUNCHER, "notes"]
 
 
 def test_an_app_that_runs_under_secret_files_previews_under_the_same_wrapper(
@@ -272,7 +273,7 @@ def test_an_app_that_runs_under_secret_files_previews_under_the_same_wrapper(
     instances = _RecordingInstances(tmp_path)
 
     assert (
-        mod.up(
+        boot.up(
             "notes",
             worktree,
             tmp_path,
@@ -284,7 +285,7 @@ def test_an_app_that_runs_under_secret_files_previews_under_the_same_wrapper(
 
     wrapper = str(tmp_path / "system" / "scripts" / "with_secrets.py")
     assert instances.up_spec("notes-preview").command == [
-        *mod.LAUNCHER,
+        *boot.LAUNCHER,
         "python3",
         wrapper,
         str(tmp_path / "data" / ".secrets" / "notes-api.env"),
@@ -303,6 +304,7 @@ def test_a_shell_preview_boots_its_siblings_first_and_frames_them_through_a_regi
     worktree = _write_worktree(tmp_path)
     live_registry = tmp_path / "apps.toml"
     monkeypatch.setenv("MINDS_APPS_FILE", str(live_registry))
+
     # The sibling's own registration lands in the live registry when it boots; stand in for it.
     class _RegisteringInstances(_RecordingInstances):
         def up(self, spec: mod.InstanceSpec, repo_root: Path) -> int:
@@ -332,7 +334,7 @@ def test_a_shell_preview_boots_its_siblings_first_and_frames_them_through_a_regi
             return code
 
     instances = _RegisteringInstances(tmp_path)
-    code = mod.up(
+    code = boot.up(
         "system_interface",
         worktree,
         tmp_path,
@@ -368,7 +370,7 @@ def test_another_passs_preview_of_the_same_app_is_refused_and_the_same_worktrees
     worktree = _write_worktree(tmp_path)
     instances = _RecordingInstances(tmp_path)
     assert (
-        mod.up(
+        boot.up(
             "notes",
             worktree,
             tmp_path,
@@ -380,7 +382,7 @@ def test_another_passs_preview_of_the_same_app_is_refused_and_the_same_worktrees
 
     other_worktree = tmp_path / "other"
     assert (
-        mod.up(
+        boot.up(
             "notes",
             other_worktree,
             tmp_path,
@@ -393,7 +395,7 @@ def test_another_passs_preview_of_the_same_app_is_refused_and_the_same_worktrees
     assert instances.ups() == ["notes-preview"]
     # A re-run from the same worktree is the normal retry path.
     assert (
-        mod.up(
+        boot.up(
             "notes",
             worktree,
             tmp_path,
@@ -418,7 +420,7 @@ def test_down_tears_down_the_siblings_it_booted_and_drops_the_registry_copy(
     monkeypatch.setenv("MINDS_APPS_FILE", str(live_registry))
     instances = _RecordingInstances(tmp_path)
     assert (
-        mod.up(
+        boot.up(
             "system_interface",
             worktree,
             tmp_path,
@@ -455,7 +457,7 @@ def test_a_re_up_without_siblings_still_tears_down_the_ones_an_earlier_up_booted
     instances = _RecordingInstances(tmp_path)
     for with_apps in (["chat"], []):
         assert (
-            mod.up(
+            boot.up(
                 "system_interface",
                 worktree,
                 tmp_path,
@@ -478,7 +480,7 @@ def test_a_failed_sibling_stops_the_boot_before_the_app_itself(tmp_path: Path) -
     instances = _RecordingInstances(tmp_path, failing_names=["chat-preview"])
 
     assert (
-        mod.up(
+        boot.up(
             "system_interface",
             worktree,
             tmp_path,
@@ -509,7 +511,7 @@ def test_a_failed_boot_keeps_the_record_of_the_siblings_it_booted(
     )
 
     assert (
-        mod.up(
+        boot.up(
             "system_interface",
             worktree,
             tmp_path,
@@ -549,7 +551,7 @@ def _up_shell_with_chat(
     tmp_path: Path, worktree: Path, instances: _RecordingInstances
 ) -> None:
     assert (
-        mod.up(
+        boot.up(
             "system_interface",
             worktree,
             tmp_path,
@@ -589,7 +591,7 @@ def test_re_upping_a_framed_sibling_on_its_own_moves_the_shells_registry_copy_wi
     assert _shell_registry_rows(tmp_path)["chat"]["url"] == first_chat_url
 
     assert (
-        mod.up(
+        boot.up(
             "chat",
             worktree,
             tmp_path,

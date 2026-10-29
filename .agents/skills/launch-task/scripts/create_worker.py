@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Entry point for :mod:`launch_task_skill.create_worker`."""
+"""Entry point for :mod:`launch_task_skill.create_worker`.
+
+Kept as a stub: minds_evals runs this path in templates of every version.
+"""
 
 import sys
 

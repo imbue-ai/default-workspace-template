@@ -44,7 +44,7 @@ from imbue.imbue_common.pure import pure
 # this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
-# Cross-layer contract: the wrapper ``system/scripts/run_in_background.py`` puts around the
+# Cross-layer contract: the wrapper ``system/scripts/workspace_bare_scripts/run_in_background.py`` puts around the
 # report it sends an agent's own chat when a command it ran for that agent exits. Only its
 # ``<summary>`` line is for the user; ``message_display_test.py`` pins the two tags equal.
 BACKGROUND_TASK_REPORT_TAG = "background-task-report"

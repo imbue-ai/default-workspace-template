@@ -23,7 +23,7 @@ base's version (this guide may not exist there), and everything gitignored is
 deleted, your task file included. So first, from your worktree root:
 
 ```bash
-eval "$(uv run --no-sync .agents/shared/scripts/parse_task_frontmatter.py data/.tasks/launch-task/<slug>/task.md)"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py data/.tasks/launch-task/<slug>/task.md)"
 LEAD_WORKTREE="${LEAD_WORK_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}"
 PT="$LEAD_WORKTREE/.agents/skills/publish-template/scripts"
 echo "PT=$PT LEAD_WORKTREE=$LEAD_WORKTREE FINISH_REPORT_PATH=$FINISH_REPORT_PATH"

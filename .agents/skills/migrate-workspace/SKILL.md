@@ -123,14 +123,14 @@ grep "migrate-workspace" /tmp/migrate-inflight.txt
 
 **Back up both sides -- in the background.** A backup runs for minutes, and
 nothing in Steps 4 and 5 depends on one, so start both through
-`system/scripts/run_in_background.py` and carry on detecting the layout and
+`system/scripts/workspace_bare_scripts/run_in_background.py` and carry on detecting the layout and
 building the inventory while they run:
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Back up this workspace" \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Back up this workspace" \
     --task-dir data/.tasks/migrate-workspace/backup-this -- \
     uv run --no-sync host-backup-now --timeout 600
-python3 system/scripts/run_in_background.py --description "Back up the old workspace" \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Back up the old workspace" \
     --task-dir data/.tasks/migrate-workspace/backup-source -- \
     ssh -i /tmp/mind_key -p <port> <user>@<host> \
     'cd <source-repo-root> && uv run --no-sync host-backup-now --timeout 600'
@@ -322,7 +322,7 @@ BODY_EOF
 
 Write the user's answers to `data/.tasks/migrate-workspace/decisions.md` before
 launching, then launch with the plain `worker` template and background-poll
-(through `system/scripts/run_in_background.py`), re-arming per
+(through `system/scripts/workspace_bare_scripts/run_in_background.py`), re-arming per
 `.agents/shared/references/lead-proxy.md`:
 
 ```bash
@@ -330,7 +330,7 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name migrate-workspace --template worker \
     --runtime-dir data/.tasks/migrate-workspace/ --task-file data/.tasks/migrate-workspace/task.md
 
-python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name migrate-workspace --task-file data/.tasks/migrate-workspace/task.md --timeout 90m
 ```
