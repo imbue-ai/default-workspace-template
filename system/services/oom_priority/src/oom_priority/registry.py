@@ -64,8 +64,8 @@ def _has_process_identity(record: dict) -> bool:
 def _is_recorded_process(pid: int, record: dict, proc_dir: Path) -> bool:
     """Whether ``pid`` still names the process ``record`` was written for.
 
-    It must be a live process that started at the recorded time in this boot,
-    whose id is readable: an unknown boot cannot rule out an earlier one.
+    It must be a live process that started at the recorded time in this boot, and
+    this boot's id must be readable: an unknown boot cannot rule out an earlier one.
     """
     if not _is_live_process(pid, proc_dir):
         return False
