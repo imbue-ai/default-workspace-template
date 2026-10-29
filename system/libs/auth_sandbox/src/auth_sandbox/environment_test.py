@@ -23,6 +23,8 @@ from auth_sandbox.primitives import (
     ("region", "expected"),
     [
         ("us-east-1", RegionGeo(timezone="America/New_York", country="US")),
+        ("us1", RegionGeo(timezone="America/Los_Angeles", country="US")),
+        ("us2", RegionGeo(timezone="America/New_York", country="US")),
         ("us-west", RegionGeo(timezone="America/Los_Angeles", country="US")),
         ("US1", RegionGeo(timezone="America/New_York", country="US")),
         ("eu-west-1", RegionGeo(timezone="Europe/Dublin", country="IE")),

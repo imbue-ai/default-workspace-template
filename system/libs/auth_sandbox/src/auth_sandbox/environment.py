@@ -48,6 +48,9 @@ class RegionGeo(FrozenModel):
 # A region name (a Modal region, or the connector's own region label) is matched by its first letters, longest
 # prefix first; a region none of these match gets UTC and the US, the launcher's own defaults when told nothing.
 _GEO_BY_REGION_PREFIX: Final[tuple[tuple[str, RegionGeo], ...]] = (
+    # The connector's relay regions: us1 is OVH Hillsboro, us2 OVH Vint Hill (apps/share_relay/README.md).
+    ("us1", RegionGeo(timezone="America/Los_Angeles", country="US")),
+    ("us2", RegionGeo(timezone="America/New_York", country="US")),
     ("us-west", RegionGeo(timezone="America/Los_Angeles", country="US")),
     ("us-east", RegionGeo(timezone="America/New_York", country="US")),
     ("us", RegionGeo(timezone="America/New_York", country="US")),
