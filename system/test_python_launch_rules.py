@@ -8,7 +8,11 @@ Each rule is checked against the real tree and against a planted violation:
   a root-venv entry point syncs ``--frozen`` and then runs ``exec .venv/bin/<name>``.
 - A one-off written into an agent-facing file, or into a string or argv in the
   workspace's Python, runs ``uv run --no-sync``, so following an instruction can
-  never relock or sync the workspace behind the agent's back.
+  never relock or sync the workspace behind the agent's back. A one-off of a user
+  package's command names that package's project (``--project``), since the command
+  is installed only in the package's own venv; a user package's own program line
+  syncs that project with ``--locked`` and execs from its ``.venv/bin``, which
+  ``system/test_user_packages_are_standalone.py`` checks.
 - A ``python3 <path>.py`` written into an agent-facing file names a bare entry point: the
   system ``python3`` has no venv, so a venv-tier script run that way fails at its first
   third-party import. A ``uv run <path>.py`` names a script that exists, so a path that
@@ -32,6 +36,7 @@ from entry_points_testing import BARE_SEARCH_PATHS, REPO_ROOT, is_bare_entry
 from imbue.mngr.interfaces.host import NamedCommand
 from inline_snapshot import snapshot
 from vendor_testing import resolves_into_vendor
+from workspace_bare_scripts import user_packages
 
 _SUPERVISORD_DIR = REPO_ROOT / "system"
 _MNGR_SETTINGS = REPO_ROOT / ".mngr" / "settings.toml"
@@ -94,8 +99,14 @@ _DELIBERATE_SYNCS: tuple[tuple[str, str], ...] = (
         "uv run --frozen --package app-manifest app-manifest",
     ),
     # The migration reference quotes the forms an existing workspace's files still use.
-    (".agents/skills/update-self/references/python-packaging-migration.md", "runs `uv run <name>`"),
-    (".agents/skills/update-self/references/python-packaging-migration.md", "a plain `uv run X` becomes"),
+    (
+        ".agents/skills/update-self/references/python-packaging-migration.md",
+        "runs `uv run <name>`",
+    ),
+    (
+        ".agents/skills/update-self/references/python-packaging-migration.md",
+        "a plain `uv run X` becomes",
+    ),
     # Starts Imbue Studio from a source checkout of the mngr repo on the user's machine, which
     # keeps no synced venv of its own; nothing about the workspace's venv applies there.
     (
@@ -321,9 +332,7 @@ def _plain_uv_run_violations() -> list[tuple[str, str]]:
             if path.suffix == ".py"
             else _plain_uv_runs(text)
         )
-        violations.extend(
-            (str(path.relative_to(REPO_ROOT)), line) for _, line in found
-        )
+        violations.extend((str(path.relative_to(REPO_ROOT)), line) for _, line in found)
     return violations
 
 
@@ -497,20 +506,26 @@ def test_scanning_skips_records_and_tests_but_reaches_living_contracts() -> None
 
 def test_a_link_into_vendored_code_is_not_scanned(tmp_path: Path) -> None:
     (tmp_path / "system" / "vendor" / "assets").mkdir(parents=True)
-    (tmp_path / "system" / "vendor" / "assets" / "guide.md").write_text("uv run python scripts/build.py\n")
+    (tmp_path / "system" / "vendor" / "assets" / "guide.md").write_text(
+        "uv run python scripts/build.py\n"
+    )
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "guide.md").symlink_to("../system/vendor/assets/guide.md")
     (tmp_path / "docs" / "own.md").write_text("uv run --no-sync tk ls\n")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
-    scanned = {str(path.relative_to(tmp_path)) for path in _scanned_files(repo_root=tmp_path)}
+    scanned = {
+        str(path.relative_to(tmp_path)) for path in _scanned_files(repo_root=tmp_path)
+    }
 
     assert scanned == {"docs/own.md"}
 
 
 # ``python3 [flags] <path>.py``, the path optionally quoted (JSON escapes its quotes).
-_PYTHON3_SCRIPT_RE = re.compile(r"(?<![\w./-])python3((?:\s+-[A-Za-z]+)*)\s+\\?[\"']?([^\s\"'`)\\]+\.py)\b")
+_PYTHON3_SCRIPT_RE = re.compile(
+    r"(?<![\w./-])python3((?:\s+-[A-Za-z]+)*)\s+\\?[\"']?([^\s\"'`)\\]+\.py)\b"
+)
 # A ``python3`` that ``uv run`` starts runs from the venv, so it is not this rule's concern.
 _UNDER_UV_RUN_RE = re.compile(r"\buv run(?:\s+--[\w-]+)*\s+$")
 # Spellings of the repo root (and of update-self's staged copy of it) in commands.
@@ -544,7 +559,9 @@ def _names_no_tree_file(written: str) -> bool:
     return "<" in written or written.startswith("/tmp/")
 
 
-def _named_python3_scripts(text: str, file_dir: Path, repo_root: Path) -> list[tuple[str, Path | None]]:
+def _named_python3_scripts(
+    text: str, file_dir: Path, repo_root: Path
+) -> list[tuple[str, Path | None]]:
     """Every ``(as written, resolved path)`` a ``python3`` in ``text`` runs; None when it cannot be resolved."""
     found: list[tuple[str, Path | None]] = []
     for line in text.splitlines():
@@ -559,10 +576,14 @@ def _named_python3_scripts(text: str, file_dir: Path, repo_root: Path) -> list[t
 
 
 # ``uv run [options] <path>.py``, the path optionally quoted (JSON escapes its quotes).
-_UV_RUN_SCRIPT_RE = re.compile(r"\buv run((?:\s+--[\w-]+)*)\s+\\?[\"']?([^\s\"'`)\\]+\.py)\b")
+_UV_RUN_SCRIPT_RE = re.compile(
+    r"\buv run((?:\s+--[\w-]+)*)\s+\\?[\"']?([^\s\"'`)\\]+\.py)\b"
+)
 
 
-def _missing_uv_run_scripts(files: list[Path], repo_root: Path) -> list[tuple[Path, str]]:
+def _missing_uv_run_scripts(
+    files: list[Path], repo_root: Path
+) -> list[tuple[Path, str]]:
     """Every ``(file, path as written)`` for a ``uv run <path>.py`` whose script is not in the tree."""
     missing: list[tuple[Path, str]] = []
     for path in files:
@@ -581,13 +602,17 @@ def _python3_violations(files: list[Path], repo_root: Path) -> list[str]:
     return [
         f"{path.relative_to(repo_root)}: python3 {written}"
         for path in files
-        for written, resolved in _named_python3_scripts(path.read_text(errors="replace"), path.parent, repo_root)
+        for written, resolved in _named_python3_scripts(
+            path.read_text(errors="replace"), path.parent, repo_root
+        )
         if resolved is None or not is_bare_entry(resolved)
     ]
 
 
 def test_python3_invocations_name_bare_entry_points() -> None:
-    offenders = _python3_violations(_scanned_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT)
+    offenders = _python3_violations(
+        _scanned_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT
+    )
     assert not offenders, (
         "These run a script with the system python3, but it is not a bare entry point (or does not exist): "
         "the system python3 has no venv. Run it with `uv run --no-sync <path>` instead "
@@ -595,7 +620,9 @@ def test_python3_invocations_name_bare_entry_points() -> None:
     )
 
 
-def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path) -> None:
+def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(
+    tmp_path: Path,
+) -> None:
     doc = tmp_path / "doc.md"
     doc.write_text(
         "\n".join(
@@ -611,7 +638,9 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
 
     offenders = [
         written
-        for written, resolved in _named_python3_scripts(doc.read_text(), doc.parent, REPO_ROOT)
+        for written, resolved in _named_python3_scripts(
+            doc.read_text(), doc.parent, REPO_ROOT
+        )
         if resolved is None or not is_bare_entry(resolved)
     ]
 
@@ -624,7 +653,9 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
 def test_uv_run_invocations_name_scripts_that_exist() -> None:
     offenders = [
         f"{path.relative_to(REPO_ROOT)}: uv run {written}"
-        for path, written in _missing_uv_run_scripts(_scanned_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT)
+        for path, written in _missing_uv_run_scripts(
+            _scanned_files(_PYTHON3_SCANNED_SUFFIXES), REPO_ROOT
+        )
     ]
     assert not offenders, (
         "These run a script that is not in the tree, likely one that moved into its package "
@@ -646,7 +677,9 @@ def test_the_uv_run_scan_catches_a_moved_script(tmp_path: Path) -> None:
         )
     )
 
-    assert _missing_uv_run_scripts([doc], REPO_ROOT) == [(doc, ".agents/shared/scripts/validate_skill.py")]
+    assert _missing_uv_run_scripts([doc], REPO_ROOT) == [
+        (doc, ".agents/shared/scripts/validate_skill.py")
+    ]
 
 
 # Calls that put a directory on the import path without naming ``sys.path``.
@@ -674,27 +707,52 @@ def _edits_sys_path(source: str) -> bool:
         if alias.name == "sys" and alias.asname
     }
     for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.module == "sys" and any(a.name == "path" for a in node.names):
+        if (
+            isinstance(node, ast.ImportFrom)
+            and node.module == "sys"
+            and any(a.name == "path" for a in node.names)
+        ):
             return True
         if isinstance(node, ast.Call):
-            called = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", None)
+            called = (
+                node.func.attr
+                if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", None)
+            )
             if called in _IMPORT_PATH_CALLS or any(
-                keyword.arg == "PYTHONPATH" and _sets_a_path(keyword.value) for keyword in node.keywords
+                keyword.arg == "PYTHONPATH" and _sets_a_path(keyword.value)
+                for keyword in node.keywords
             ):
                 return True
         if isinstance(node, ast.Dict) and any(
-            _is_pythonpath(key) and _sets_a_path(value) for key, value in zip(node.keys, node.values)
+            _is_pythonpath(key) and _sets_a_path(value)
+            for key, value in zip(node.keys, node.values)
         ):
             return True
-        if isinstance(node, ast.Assign) and _sets_a_path(node.value) and any(
-            isinstance(target, ast.Subscript) and _is_pythonpath(target.slice) for target in node.targets
+        if (
+            isinstance(node, ast.Assign)
+            and _sets_a_path(node.value)
+            and any(
+                isinstance(target, ast.Subscript) and _is_pythonpath(target.slice)
+                for target in node.targets
+            )
         ):
             return True
-        target = node.func.value if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) else None
+        target = (
+            node.func.value
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+            else None
+        )
         if isinstance(node, (ast.Assign, ast.AugAssign)):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            target = next((t.value if isinstance(t, ast.Subscript) else t for t in targets), None)
-        if isinstance(target, ast.Attribute) and target.attr == "path" and isinstance(target.value, ast.Name):
+            target = next(
+                (t.value if isinstance(t, ast.Subscript) else t for t in targets), None
+            )
+        if (
+            isinstance(target, ast.Attribute)
+            and target.attr == "path"
+            and isinstance(target.value, ast.Name)
+        ):
             if target.value.id in sys_names:
                 return True
     return False
@@ -706,7 +764,9 @@ def _is_in_unpackaged_skill(relative: str, repo_root: Path) -> bool:
     return (
         parts[:2] == (".agents", "skills")
         and len(parts) > 3
-        and not (repo_root / ".agents" / "skills" / parts[2] / "python" / "pyproject.toml").is_file()
+        and not (
+            repo_root / ".agents" / "skills" / parts[2] / "python" / "pyproject.toml"
+        ).is_file()
     )
 
 
@@ -717,7 +777,11 @@ def _tracked_python_files(repo_root: Path) -> list[str]:
     whose planted cases would count.
     """
     tracked = subprocess.run(
-        ["git", "ls-files", "-z", "--", "*.py"], cwd=repo_root, capture_output=True, text=True, check=True
+        ["git", "ls-files", "-z", "--", "*.py"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.split("\0")
     return sorted(
         relative
@@ -730,14 +794,20 @@ def _tracked_python_files(repo_root: Path) -> list[str]:
     )
 
 
-_PYTEST_CONFIG_NAMES = frozenset({"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"})
+_PYTEST_CONFIG_NAMES = frozenset(
+    {"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"}
+)
 _PYTHONPATH_SETTING_RE = re.compile(r"^\s*pythonpath\s*=", re.MULTILINE)
 
 
 def _pytest_configs_setting_pythonpath(repo_root: Path) -> list[str]:
     """Tracked pytest configs that add to the import path for every test under them."""
     tracked = subprocess.run(
-        ["git", "ls-files", "-z"], cwd=repo_root, capture_output=True, text=True, check=True
+        ["git", "ls-files", "-z"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
     ).stdout.split("\0")
     return sorted(
         relative
@@ -746,7 +816,9 @@ def _pytest_configs_setting_pythonpath(repo_root: Path) -> list[str]:
         and "vendor" not in PurePosixPath(relative).parts
         and not _is_in_unpackaged_skill(relative, repo_root)
         and (repo_root / relative).is_file()
-        and _PYTHONPATH_SETTING_RE.search((repo_root / relative).read_text(errors="replace"))
+        and _PYTHONPATH_SETTING_RE.search(
+            (repo_root / relative).read_text(errors="replace")
+        )
     )
 
 
@@ -771,15 +843,22 @@ def test_a_skill_without_a_python_project_is_not_counted(tmp_path: Path) -> None
     edit = "import sys\nsys.path.insert(0, 'x')\n"
     for skill in ("packaged", "third-party"):
         (tmp_path / ".agents" / "skills" / skill / "scripts").mkdir(parents=True)
-        (tmp_path / ".agents" / "skills" / skill / "scripts" / "run.py").write_text(edit)
+        (tmp_path / ".agents" / "skills" / skill / "scripts" / "run.py").write_text(
+            edit
+        )
     (tmp_path / ".agents" / "skills" / "packaged" / "python").mkdir()
-    (tmp_path / ".agents" / "skills" / "packaged" / "python" / "pyproject.toml").write_text("[project]\n")
+    (
+        tmp_path / ".agents" / "skills" / "packaged" / "python" / "pyproject.toml"
+    ).write_text("[project]\n")
     (tmp_path / "system").mkdir()
     (tmp_path / "system" / "tool.py").write_text(edit)
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
-    assert _sys_path_editors(tmp_path) == [".agents/skills/packaged/scripts/run.py", "system/tool.py"]
+    assert _sys_path_editors(tmp_path) == [
+        ".agents/skills/packaged/scripts/run.py",
+        "system/tool.py",
+    ]
 
 
 def test_the_sys_path_scan_sees_each_form_of_edit() -> None:
@@ -789,21 +868,35 @@ def test_the_sys_path_scan_sees_each_form_of_edit() -> None:
     assert _edits_sys_path("import sys\nsys.path += ['x']\n")
     assert _edits_sys_path("import sys as _sys\n_sys.path.insert(0, 'x')\n")
     assert _edits_sys_path("from sys import path\npath.append('x')\n")
-    assert _edits_sys_path("def test(monkeypatch):\n    monkeypatch.syspath_prepend('x')\n")
+    assert _edits_sys_path(
+        "def test(monkeypatch):\n    monkeypatch.syspath_prepend('x')\n"
+    )
     assert _edits_sys_path("import site\nsite.addsitedir('x')\n")
-    assert _edits_sys_path("import subprocess\nsubprocess.run(['x'], env={'PYTHONPATH': 'x'})\n")
-    assert _edits_sys_path("import os\nenv = dict(os.environ)\nenv['PYTHONPATH'] = 'x'\n")
+    assert _edits_sys_path(
+        "import subprocess\nsubprocess.run(['x'], env={'PYTHONPATH': 'x'})\n"
+    )
+    assert _edits_sys_path(
+        "import os\nenv = dict(os.environ)\nenv['PYTHONPATH'] = 'x'\n"
+    )
     assert _edits_sys_path("import os\nenv = dict(os.environ, PYTHONPATH='x')\n")
     assert not _edits_sys_path("import sys\nprint(sys.path)\n")
-    assert not _edits_sys_path("import os\nenv = dict(os.environ)\nenv.pop('PYTHONPATH', None)\n")
-    assert not _edits_sys_path("import subprocess\nsubprocess.run(['x'], env={'PYTHONPATH': ''})\n")
+    assert not _edits_sys_path(
+        "import os\nenv = dict(os.environ)\nenv.pop('PYTHONPATH', None)\n"
+    )
+    assert not _edits_sys_path(
+        "import subprocess\nsubprocess.run(['x'], env={'PYTHONPATH': ''})\n"
+    )
 
 
 def test_a_pytest_pythonpath_setting_is_counted(tmp_path: Path) -> None:
     (tmp_path / "app").mkdir()
-    (tmp_path / "app" / "pyproject.toml").write_text('[tool.pytest.ini_options]\npythonpath = ["src"]\n')
+    (tmp_path / "app" / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\npythonpath = ["src"]\n'
+    )
     (tmp_path / "lib").mkdir()
-    (tmp_path / "lib" / "pyproject.toml").write_text('[tool.pytest.ini_options]\ntestpaths = ["."]\n')
+    (tmp_path / "lib" / "pyproject.toml").write_text(
+        '[tool.pytest.ini_options]\ntestpaths = ["."]\n'
+    )
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
@@ -825,13 +918,25 @@ _SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS = (
 
 def _file_relative_path(node: ast.expr, file: Path) -> Path | None:
     """Where ``Path(__file__)``-based path arithmetic points, or None for any other expression."""
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and len(node.args) == 1:
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and len(node.args) == 1
+    ):
         if node.func.id == "str":
             return _file_relative_path(node.args[0], file)
-        if node.func.id == "Path" and isinstance(node.args[0], ast.Name) and node.args[0].id == "__file__":
+        if (
+            node.func.id == "Path"
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "__file__"
+        ):
             return file
         return None
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "resolve":
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "resolve"
+    ):
         inner = _file_relative_path(node.func.value, file)
         return inner.resolve() if inner is not None else None
     if isinstance(node, ast.Attribute) and node.attr == "parent":
@@ -846,7 +951,11 @@ def _file_relative_path(node: ast.expr, file: Path) -> Path | None:
     ):
         inner = _file_relative_path(node.value.value, file)
         return inner.parents[node.slice.value] if inner is not None else None
-    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and isinstance(node.right, ast.Constant):
+    if (
+        isinstance(node, ast.BinOp)
+        and isinstance(node.op, ast.Div)
+        and isinstance(node.right, ast.Constant)
+    ):
         inner = _file_relative_path(node.left, file)
         return inner / str(node.right.value) if inner is not None else None
     return None
@@ -872,19 +981,25 @@ def _sys_path_insert_targets(source: str, file: Path) -> list[tuple[int, Path | 
     return targets
 
 
-def _sys_path_edits_outside_the_bare_search_paths(repo_root: Path, allowed: tuple[Path, ...]) -> list[str]:
+def _sys_path_edits_outside_the_bare_search_paths(
+    repo_root: Path, allowed: tuple[Path, ...]
+) -> list[str]:
     resolved_allowed = {path.resolve() for path in allowed}
     return [
         f"{relative}:{line}: adds {target if target is not None else 'a path this check cannot read'}"
         for relative in _tracked_python_files(repo_root)
         if relative not in _SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS
-        for line, target in _sys_path_insert_targets((repo_root / relative).read_text(), repo_root / relative)
+        for line, target in _sys_path_insert_targets(
+            (repo_root / relative).read_text(), repo_root / relative
+        )
         if target not in resolved_allowed
     ]
 
 
 def test_sys_path_edits_only_add_a_bare_search_path() -> None:
-    offenders = _sys_path_edits_outside_the_bare_search_paths(REPO_ROOT, BARE_SEARCH_PATHS)
+    offenders = _sys_path_edits_outside_the_bare_search_paths(
+        REPO_ROOT, BARE_SEARCH_PATHS
+    )
     assert not offenders, (
         "A sys.path edit may only add a bare search path (entry_points_testing.BARE_SEARCH_PATHS: "
         "where the bare packages and the stdlib-only libraries live), written as path arithmetic on "
@@ -898,10 +1013,20 @@ def test_every_named_sys_path_exception_still_edits_sys_path() -> None:
         assert _edits_sys_path((REPO_ROOT / relative).read_text()), relative
 
 
-def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(tmp_path: Path) -> None:
+def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(
+    tmp_path: Path,
+) -> None:
     allowed_dir = tmp_path / "system" / "scripts"
     allowed_dir.mkdir(parents=True)
-    module = tmp_path / ".agents" / "skills" / "probe" / "python" / "probe_skill" / "probe.py"
+    module = (
+        tmp_path
+        / ".agents"
+        / "skills"
+        / "probe"
+        / "python"
+        / "probe_skill"
+        / "probe.py"
+    )
     module.parent.mkdir(parents=True)
     (module.parent.parent / "pyproject.toml").write_text("[project]\n")
     module.write_text(
@@ -931,14 +1056,20 @@ _PATH_LOADING_RE = re.compile(
 
 
 def _path_loading_lines(text: str) -> list[tuple[int, str]]:
-    return [(number, line) for number, line in enumerate(text.splitlines(), start=1) if _PATH_LOADING_RE.search(line)]
+    return [
+        (number, line)
+        for number, line in enumerate(text.splitlines(), start=1)
+        if _PATH_LOADING_RE.search(line)
+    ]
 
 
 def _path_loading_sites(repo_root: Path) -> list[str]:
     return [
         f"{relative}:{number}: {line.strip()}"
         for relative in _tracked_python_files(repo_root)
-        for number, line in _path_loading_lines((repo_root / relative).read_text(errors="replace"))
+        for number, line in _path_loading_lines(
+            (repo_root / relative).read_text(errors="replace")
+        )
     ]
 
 
@@ -966,3 +1097,74 @@ def test_the_path_loading_scan_sees_each_form() -> None:
     )
 
     assert [number for number, _ in _path_loading_lines(text)] == [1, 2, 3, 4, 5, 6]
+
+
+def _user_package_scripts(repo_root: Path) -> dict[str, str]:
+    """Each user package's console scripts, by script name, mapped to its directory."""
+    return {
+        script: relative
+        for relative in user_packages.user_packages(repo_root)
+        for script in user_packages.console_scripts(repo_root / relative)
+    }
+
+
+def _root_venv_runs_of_user_scripts(
+    repo_root: Path, files: list[Path]
+) -> list[tuple[str, str]]:
+    """Every ``(file, line)`` that runs a user package's command with ``uv run`` from the
+    root project: no ``--project`` or ``--directory``, outside the package's own directory."""
+    scripts = _user_package_scripts(repo_root)
+    found: list[tuple[str, str]] = []
+    if not scripts:
+        return found
+    for path in files:
+        relative = path.relative_to(repo_root).as_posix()
+        for line in path.read_text(errors="replace").splitlines():
+            for match in _UV_RUN_RE.finditer(line):
+                if "--project" in match.group(0) or "--directory" in match.group(0):
+                    continue
+                words = [
+                    word.strip("`'\"()*,;:") for word in line[match.end() :].split()
+                ]
+                index = 0
+                while index < len(words) and words[index].startswith("--"):
+                    if words[index] in ("--project", "--directory"):
+                        break
+                    index += 2 if words[index] in _OPTIONS_WITH_VALUES else 1
+                else:
+                    if index < len(words) and words[index] in scripts:
+                        package = scripts[words[index]]
+                        if not relative.startswith(package + "/"):
+                            found.append((relative, line.strip()))
+    return found
+
+
+def test_no_one_off_runs_a_user_packages_command_from_the_root_venv() -> None:
+    assert _root_venv_runs_of_user_scripts(REPO_ROOT, _scanned_files()) == []
+
+
+def test_a_root_venv_run_of_a_user_packages_command_is_caught(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers = ["system/apps/chat"]\n'
+    )
+    widget = tmp_path / "system" / "apps" / "widget"
+    widget.mkdir(parents=True)
+    (widget / "pyproject.toml").write_text(
+        '[project]\nname = "widget"\n\n[project.scripts]\nwidget-report = "widget.cli:main"\n'
+    )
+    readme = widget / "README.md"
+    readme.write_text("Run `uv run --no-sync widget-report` here.\n")
+    skill = tmp_path / ".agents" / "skills" / "report" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text(
+        "Run `uv run --no-sync widget-report --today`.\n"
+        "Or `uv run --no-sync --project system/apps/widget widget-report`.\n"
+        "Or `uv run --no-sync other-tool`.\n"
+    )
+
+    assert _root_venv_runs_of_user_scripts(tmp_path, [readme, skill]) == [
+        (
+            ".agents/skills/report/SKILL.md",
+            "Run `uv run --no-sync widget-report --today`.",
+        )
+    ]
