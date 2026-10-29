@@ -529,7 +529,8 @@ export interface TaskbarEntry {
   /** Pulled out into a desktop window of the chrome's own; the entry shows that window rather than restoring. */
   readonly isDetached: boolean;
   readonly isFocused: boolean;
-  /** The app's pinned window: its entry is always there, and its Close minimizes it rather than closing it. */
+  /** The app's pinned window: its entry is a plain bar entry, absent while this client closed the window, and
+   *  its Close closes the window for this client alone rather than for everyone. */
   readonly isPinned: boolean;
   /** How this client shows the entry; null for an ordinary window's entry. */
   readonly look: EntryLook | null;
