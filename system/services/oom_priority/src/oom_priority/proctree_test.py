@@ -1,12 +1,19 @@
 """Tests for the /proc process-tree walk and identity readers, against a fake ``/proc`` layout."""
 
 import os
+import subprocess
+import sys
 import threading
 from pathlib import Path
 
 import pytest
 
-from oom_priority.proctree import is_thread, list_descendant_pids, read_start_ticks
+from oom_priority.proctree import (
+    is_thread,
+    list_descendant_pids,
+    read_environ_value,
+    read_start_ticks,
+)
 from oom_priority.testing import write_fake_process
 
 
@@ -85,3 +92,19 @@ def test_a_real_process_has_a_start_time_and_its_thread_is_not_a_process() -> No
     finally:
         is_done.set()
         thread.join()
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/environ").exists(), reason="needs a real /proc"
+)
+def test_a_real_processs_environment_is_read_as_it_was_started() -> None:
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()"],
+        stdin=subprocess.PIPE,
+        env={"MNGR_AGENT_ID": "agent-abc", "OTHER": "MNGR_AGENT_ID=agent-def"},
+    )
+    try:
+        assert read_environ_value(child.pid, "MNGR_AGENT_ID") == "agent-abc"
+        assert read_environ_value(child.pid, "MISSING") is None
+    finally:
+        child.communicate()
