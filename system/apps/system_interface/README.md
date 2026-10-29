@@ -75,7 +75,8 @@ supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
   (`/api/client-activity`), the inventory (`/api/inventory`), each client's
   pinned-entry presentation
   (`/api/clients/<client>/entries/<app>`), what a client's phone shows
-  (`/api/clients/<client>/shown`), the avatar (`/api/avatars`,
+  (`/api/clients/<client>/shown`), the backdrop size a client's desktop layout
+  draws in (`/api/clients/<client>/viewport`), the avatar (`/api/avatars`,
   `/api/avatars/<id>/image.svg|source.svg|icon.png`, `/api/avatar-selection`; the
   registration `POST /api/avatars` is loopback-only), the embedder-message
   relay (`/api/embedder-messages`), and the loopback-only op route
