@@ -6,7 +6,7 @@
 import m from "mithril";
 import "./style.css";
 import { getChatAgentId, getChatId, getChatSessionId } from "./document-meta";
-import { addActiveAgentChangedListener, initChats } from "./models/Chats";
+import { addActiveAgentChangedListener, addMentionsUpdatedListener, initChats } from "./models/Chats";
 import { forgetPendingChoice } from "./models/ModelSettings";
 import { trackPendingLaneSettlement } from "./models/PendingLane";
 import { ensureParticipants } from "./models/Participants";
@@ -86,8 +86,10 @@ async function bootstrap(): Promise<void> {
   // The pointer hides while text is typed into the composer.
   installCursorHidingWhileTyping(document);
   void loadAccountsWithRetry();
-  // Who this page is and who everyone else is, so a turn is drawn as the viewer's own or as another person's.
+  // Who this page is and who everyone else is, so a turn is drawn as the viewer's own or as another person's;
+  // read again when someone's mentions change, which is the one push that follows a sender joining.
   void ensureParticipants();
+  addMentionsUpdatedListener(() => void ensureParticipants());
   // A page visited directly follows its own width into and out of the phone layout; a framed one is told.
   window.matchMedia(COMPACT_MEDIA_QUERY).addEventListener("change", () => m.redraw());
   const rootElement = document.getElementById("app");

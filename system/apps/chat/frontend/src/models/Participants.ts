@@ -1,8 +1,10 @@
 /**
  * Who this page is, and who everyone else is (the multiplayer spec, sections 4 and 5.4): the page's own
  * participant key from ``GET /api/me``, and the roster from ``GET /api/participants`` (the shell's, served by the
- * chat app with every picture on this origin). Both load once per page; a transcript turn is drawn as the
- * viewer's own, or as another person's with their picture and name, from these.
+ * chat app with every picture on this origin). Both load as the page boots and again whenever the page comes back
+ * into view or focus, or someone's mentions change (a few seconds of cache folds a burst of those into one read),
+ * so a person who joined after the page loaded, and the owner's key once the workspace is shared, are drawn right;
+ * a transcript turn is drawn as the viewer's own, or as another person's with their picture and name, from these.
  */
 
 import m from "mithril";
@@ -34,7 +36,11 @@ export const WORKSPACE_AGENT_KEY = "workspace-agent";
 let ownParticipant: string | null = null;
 let participants: Participant[] = [];
 let loading: Promise<void> | null = null;
+/** When the roster was last read, so the reads a visibility change, a focus, and a mentions push ask for within
+ *  moments of each other are one. */
+let loadedAt: number | null = null;
 export const RETRY_DELAY_MS = 30_000;
+export const PARTICIPANTS_FRESH_MS = 5_000;
 
 /** The page's own participant key, or null before ``/api/me`` has answered. */
 export function getOwnParticipant(): string | null {
@@ -74,6 +80,12 @@ export function participantName(key: string, fallbackName: string | null): strin
   return getParticipant(key)?.display_name ?? fallbackName ?? key;
 }
 
+/** Whether a key is the owner's, under either of the owner's keys (the spec's S12): the synthetic ``owner`` of an
+ *  unshared workspace, or the roster entry marked as the owner. */
+export function isOwnerKey(key: string): boolean {
+  return key === OWNER_KEY || (getParticipant(key)?.is_owner ?? false);
+}
+
 /** The owner's two keys read as one owner (the multiplayer spec, section 11): an annotation written before the
  *  workspace was shared stays under the synthetic ``owner``, so that key folds to the roster owner's -- itself on
  *  an unshared workspace -- and every other key is its own. */
@@ -90,13 +102,16 @@ function withPictureOnThisOrigin(entry: Participant): Participant {
 }
 
 /**
- * Load the page's own key and the roster once; later calls share the first load. A load that fails is warned
- * about and leaves the page as an owner's page would be (every unannotated turn its own) until the next attempt,
- * which the failure itself schedules after ``RETRY_DELAY_MS``: nothing else asks again once the page has booted.
+ * Load the page's own key and the roster, or read them again once the last read is older than
+ * ``PARTICIPANTS_FRESH_MS``; calls within that window, and calls while a load runs, share the one load. A load
+ * that fails is warned about and leaves the page as it was (an owner's page, every unannotated turn its own,
+ * before any load landed) until the next attempt, which the failure itself schedules after ``RETRY_DELAY_MS``.
  */
 export function ensureParticipants(): Promise<void> {
-  if (ownParticipant !== null) return Promise.resolve();
   if (loading !== null) return loading;
+  if (ownParticipant !== null && loadedAt !== null && Date.now() - loadedAt < PARTICIPANTS_FRESH_MS) {
+    return Promise.resolve();
+  }
   loading = Promise.all([
     m.request<{ participant: string }>({ method: "GET", url: apiUrl("/api/me") }),
     m.request<{ participants: Participant[] }>({ method: "GET", url: apiUrl("/api/participants") }),
@@ -104,6 +119,7 @@ export function ensureParticipants(): Promise<void> {
     .then(([me, roster]) => {
       ownParticipant = me.participant;
       participants = roster.participants.map(withPictureOnThisOrigin);
+      loadedAt = Date.now();
       m.redraw();
     })
     .catch((error: unknown) => {
@@ -121,4 +137,5 @@ export function setParticipantsForTesting(own: string | null, roster: Participan
   ownParticipant = own;
   participants = roster;
   loading = null;
+  loadedAt = own === null ? null : Date.now();
 }

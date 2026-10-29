@@ -83,6 +83,7 @@ from imbue.chat.attachments import delete_upload
 from imbue.chat.attachments import get_uploads_directory
 from imbue.chat.attachments import resolve_upload_path
 from imbue.chat.attachments import store_uploaded_file
+from imbue.chat.authors import AuthorAnnotation
 from imbue.chat.authors import author_prefix
 from imbue.chat.authors import is_unprefixable_input
 from imbue.chat.authors import new_author_annotation
@@ -987,30 +988,71 @@ def _hold_send_for_chat_being_created(
     return model_response(HeldSendResponse(status="held", phase=None), 202)
 
 
-def _attributed_delivery(
-    state: ChatAppState, chat_id: ChatId, message: str, message_id: str, identity: RequestIdentity
-) -> str:
+class _AttributedSend(FrozenModel):
+    """A send as the agent is handed it, and the annotation that records who sent it (None for a sender no proxy
+    vouched for, whose words read as the owner's)."""
+
+    delivered_text: str = Field(description="The words, prefixed with the author when the harness reads one")
+    annotation: AuthorAnnotation | None = Field(description="The chat's record of the sender, written before delivery")
+
+
+def _attributed_send(
+    state: ChatAppState, message: str, message_id: str, identity: RequestIdentity, is_prefixed: bool
+) -> _AttributedSend:
     """The text the agent is handed for the sender ``identity`` vouches for (the multiplayer spec, sections 5.1 and
     5.3): the words as they are for the owner (under either key) and for a slash command or bash input, else prefixed
-    ``[from: <name>] ``; every sender a proxy vouched for is recorded in the chat's annotations before delivery (the
-    owner's never prefixed, and a request with no header -- a script's, the terminal's -- never annotated, so the
-    annotations say who actually wrote here). The identity is read from the request by the caller, since an intake's
-    send may run off the request thread."""
+    ``[from: <name>] `` when the harness the words are for reads a prefix (``is_prefixed``; a room records the
+    author from the annotation alone); every sender a proxy vouched for gets an annotation (the owner's never
+    prefixed, and a request with no header -- a script's, the terminal's -- never annotated, so the annotations say
+    who actually wrote here). The identity is read from the request by the caller, since an intake's send may run
+    off the request thread."""
     sender = participant_key_of(identity)
     display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
     if is_owner_participant(identity):
-        if identity.is_header_present:
-            state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, message))
-        return message
-    is_prefixed = _is_author_prefixed(chat_id) and not is_unprefixable_input(message)
-    delivered = author_prefix(display_name) + message if is_prefixed else message
-    state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, delivered))
-    return delivered
+        annotation = (
+            new_author_annotation(message_id, sender, display_name, message) if identity.is_header_present else None
+        )
+        return _AttributedSend(delivered_text=message, annotation=annotation)
+    delivered = (
+        author_prefix(display_name) + message if is_prefixed and not is_unprefixable_input(message) else message
+    )
+    return _AttributedSend(
+        delivered_text=delivered, annotation=new_author_annotation(message_id, sender, display_name, delivered)
+    )
 
 
-def _is_author_prefixed(chat_id: ChatId) -> bool:
-    """Whether the chat's harness learns a non-owner's author from the delivered text's prefix; a room records the
-    author from the annotation instead. A chat with no agent yet reads as prefixed, like the agent it will get."""
+def _attributed_delivery(
+    state: ChatAppState,
+    chat_id: ChatId,
+    message: str,
+    message_id: str,
+    identity: RequestIdentity,
+    # The kind of chat the words are for when the caller knows it better than the chat's state does (a switch's
+    # target); None reads it off the chat.
+    target_kind: ChatKind | None,
+) -> str:
+    """The text the agent is handed for a send to an existing chat, its annotation recorded before delivery."""
+    attributed = _attributed_send(
+        state, message, message_id, identity, _is_author_prefixed(state, chat_id, target_kind)
+    )
+    if attributed.annotation is not None:
+        state.authors.record(chat_id, attributed.annotation)
+    return attributed.delivered_text
+
+
+def _is_author_prefixed(state: ChatAppState, chat_id: ChatId, target_kind: ChatKind | None) -> bool:
+    """Whether the harness the text is for learns a non-owner's author from the delivered text's prefix: the
+    switch's target while one is in flight (or named by the caller), the room being created for a chat with no
+    agent yet, else the active agent's; a room records the author from the annotation instead. A chat the app
+    knows nothing of reads as prefixed, like the agent it will get."""
+    if target_kind is not None:
+        return target_kind is not ChatKind.ROOM
+    handoff = state.agent_manager.get_handoff_state(chat_id)
+    if handoff is not None:
+        return get_harness_spec(handoff.target_harness).is_author_prefixed
+    provisional = state.agent_manager.get_provisional_chat(str(chat_id))
+    if provisional is not None:
+        return provisional.kind is not ChatKind.ROOM
     agent_info = _find_active_agent(str(chat_id))
     return agent_info is None or get_harness_spec(agent_info.harness).is_author_prefixed
 
@@ -1132,7 +1174,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     send_message_request = parse_request_body(SendMessageRequest)
     message_id = send_message_request.message_id or uuid4().hex
     delivered_text = _attributed_delivery(
-        state, ChatId(chat_id), send_message_request.message, message_id, request_identity()
+        state, ChatId(chat_id), send_message_request.message, message_id, request_identity(), None
     )
     if _find_active_agent(chat_id) is None:
         held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, delivered_text, message_id)
@@ -1705,11 +1747,20 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
         return converging
     switch_request = parse_request_body(SwitchChatRequest)
     message_id = switch_request.message_id or uuid4().hex
+    # The confirming message is the first the chat's next agent receives, so it is attributed for that agent's
+    # harness (the multiplayer spec, section 5.1); the held-send listing shows it without the prefix.
+    delivered_text = (
+        _attributed_delivery(
+            get_state(), ChatId(chat_id), switch_request.message, message_id, request_identity(), switch_request.kind
+        )
+        if switch_request.message
+        else ""
+    )
     try:
         kind, phase, returned_block = agent_manager.begin_switch(
             ChatId(chat_id),
             switch_request.account_id,
-            switch_request.message,
+            delivered_text,
             message_id,
             _held_send_origin(switch_request),
             model_pick=switch_request.model,
@@ -1892,10 +1943,22 @@ def _run_create_chat() -> CreatedChat | Response:
     agent_manager: AgentManager = state.agent_manager
     create_request = parse_request_body(CreateChatRequest)
     identity = request_identity()
-    # The first message's id, which its bubble carries. A room's first message is appended once its agent is up,
-    # by a thread with no identity of its own: who sent it is annotated under this id before the create, and what
-    # its mentions do runs once it has landed.
+    # The first message's id, which its bubble carries. The message rides the create (or follows it, on a thread
+    # with no identity of its own), so who sent it is attributed here: the agent is handed the prefixed words, and
+    # the annotation is recorded under this id as soon as the chat has an id; what a room message's mentions do
+    # runs once it has landed.
     first_message_id = uuid4().hex
+    attributed = (
+        _attributed_send(
+            state,
+            create_request.message,
+            first_message_id,
+            identity,
+            is_prefixed=create_request.kind is not ChatKind.ROOM,
+        )
+        if create_request.message
+        else None
+    )
     on_message_delivered = (
         _room_first_message_hook(state, create_request.message, identity, current_app.app_context())
         if create_request.kind is ChatKind.ROOM
@@ -1910,7 +1973,7 @@ def _run_create_chat() -> CreatedChat | Response:
             project_id=create_request.project_id,
             account_id=create_request.account_id,
             chat_id=create_request.chat_id,
-            message=create_request.message,
+            message=attributed.delivered_text if attributed is not None else "",
             labels=create_request.labels,
             is_installation_check_skipped=create_request.is_installation_check_skipped,
             model_pick=create_request.model,
@@ -1921,9 +1984,9 @@ def _run_create_chat() -> CreatedChat | Response:
     )
     if isinstance(created, Response):
         return created
-    if create_request.kind is ChatKind.ROOM:
-        _record_room_first_message_author(state, created.chat_id, create_request.message, identity, first_message_id)
-    else:
+    if attributed is not None and attributed.annotation is not None:
+        state.authors.record(created.chat_id, attributed.annotation)
+    if create_request.kind is not ChatKind.ROOM:
         _consider_naming_chat(state, created.chat_id, create_request.message)
         _bubble_new_chats_first_message(state, created, create_request.message, identity, first_message_id)
     if not create_request.should_wait:
@@ -1951,19 +2014,6 @@ def _bubble_new_chats_first_message(
     state.tray_feed.post_bubble(
         participant_key_of(identity), created.chat_id, created.display_name, message, message_id, ()
     )
-
-
-def _record_room_first_message_author(
-    state: ChatAppState, chat_id: ChatId, message: str, identity: RequestIdentity, message_id: str
-) -> None:
-    """Record who a new room's first message is from (the multiplayer spec, section 5.1): the message is appended
-    once the room's agent is up, with no identity of its own, so the sender the create's request vouched for is
-    annotated here, under the id the append will carry."""
-    if not message or (is_owner_participant(identity) and not identity.is_header_present):
-        return
-    sender = participant_key_of(identity)
-    display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
-    state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, message))
 
 
 def _act_on_room_first_message(
@@ -2168,7 +2218,7 @@ def _deliver_intake_send(
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
     )
     _consider_naming_chat(state, chat_id, intake.message)
-    delivered_text = _attributed_delivery(state, chat_id, intake.message, message_id, identity)
+    delivered_text = _attributed_delivery(state, chat_id, intake.message, message_id, identity, None)
     accepted = _send_to_chat(
         state,
         chat_id,
@@ -2265,11 +2315,16 @@ def _intake_into_new_chat(state: ChatAppState, intake: IntakeRequest) -> Respons
         return account
     if account is not None and not intake.is_draft:
         message_id = uuid4().hex
+        attributed = _attributed_send(state, intake.message, message_id, request_identity(), is_prefixed=True)
         created = _created_or_refusal(
-            lambda: agent_manager.create_chat("", account_id=account, message=intake.message, message_id=message_id)
+            lambda: agent_manager.create_chat(
+                "", account_id=account, message=attributed.delivered_text, message_id=message_id
+            )
         )
         if isinstance(created, Response):
             return created
+        if attributed.annotation is not None:
+            state.authors.record(created.chat_id, attributed.annotation)
         _consider_naming_chat(state, created.chat_id, intake.message)
         _bubble_new_chats_first_message(state, created, intake.message, request_identity(), message_id)
         return model_response(IntakeResponse(path=intake_path(created.chat_id, None)))

@@ -30,6 +30,7 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import {
   PendingIntakeGoneError,
   addChatsUpdatedListener,
+  addMentionsUpdatedListener,
   applyPendingIntake,
   awaitingChatForEmptyList,
   discardPendingIntake,
@@ -538,8 +539,10 @@ function bootstrap(): void {
   // The rows' ``@`` marks: the viewer's unseen mentions, re-read on every push that changes them.
   void watchPendingMentions().then(() => m.redraw());
   // The rows' participant pictures name and draw their authors off the roster, which this entry loads for itself:
-  // the models are singletons per entry, so the chat page's load does nothing for the root.
+  // the models are singletons per entry, so the chat page's load does nothing for the root. Read again when
+  // someone's mentions change, which is the one push that follows a sender joining.
   void ensureParticipants();
+  addMentionsUpdatedListener(() => void ensureParticipants());
   compactQuery.addEventListener("change", () => {
     pool?.setCompact(compactQuery.matches);
     fillSlot();

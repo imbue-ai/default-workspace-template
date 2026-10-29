@@ -112,9 +112,9 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
 from imbue.chat.server import _agent_switch_options
+from imbue.chat.server import _attributed_send
 from imbue.chat.server import _bubble_new_chats_first_message
 from imbue.chat.server import _open_chat_stream
-from imbue.chat.server import _record_room_first_message_author
 from imbue.chat.server import _revive_and_retry_send
 from imbue.chat.server import _room_first_message_hook
 from imbue.chat.server import _send_room_mention
@@ -6262,25 +6262,29 @@ def test_a_secondary_chat_feeds_no_tray_and_makes_no_lounge(tmp_path: Path) -> N
     assert shell.bubbles == [] and shell.chats_activity == []
 
 
-def test_a_rooms_first_message_from_a_visitor_is_recorded_as_theirs_before_the_room_is_up(tmp_path: Path) -> None:
-    """The create route annotates the first message of a room: the message is appended once the room's agent is
-    up, by a path with no identity of its own, so the annotation is what names its author. A sender no proxy
-    vouched for (an in-container caller reading as the owner) writes nothing."""
+def test_a_first_message_is_attributed_for_the_kind_of_chat_it_starts(tmp_path: Path) -> None:
+    """The create route attributes the first message the way the send route does (the multiplayer spec, section
+    5.1): a room's words ride bare, since a room records the author from the annotation alone, while an agent
+    chat's are prefixed; the owner's page send is annotated and never prefixed, and a sender no proxy vouched for
+    (an in-container caller reading as the owner) gets no annotation."""
     state = state_of(_peopled_app(tmp_path, RecordingMngrMessenger()))
-    room_id = ChatId("agent-00000000000000000000000000000043")
+    visitor = parse_identity_header(_VISITOR.model_dump_json(exclude_none=True))
 
-    _record_room_first_message_author(state, room_id, "first words", _VISITOR, "m-first")
-    _record_room_first_message_author(state, room_id, "", _VISITOR, "m-none")
-    _record_room_first_message_author(state, room_id, "the owner's own", _JOSH, "m-script")
-    _record_room_first_message_author(
-        state, room_id, "the owner's page", parse_identity_header(_JOSH.model_dump_json()), "m-owner"
+    room_words = _attributed_send(state, "first words", "m-first", visitor, is_prefixed=False)
+    agent_words = _attributed_send(state, "first words", "m-agent", visitor, is_prefixed=True)
+    script_words = _attributed_send(state, "the owner's own", "m-script", _JOSH, is_prefixed=True)
+    owner_words = _attributed_send(
+        state, "the owner's page", "m-owner", parse_identity_header(_JOSH.model_dump_json()), is_prefixed=True
     )
 
-    annotations = state.authors.annotations(room_id)
-    assert [
-        (str(annotation.author), annotation.display_name, annotation.message_id) for annotation in annotations
-    ] == [("user:user-bob-4471", "Bob", "m-first"), ("user:user-josh-0001", "Josh", "m-owner")]
-    assert annotations[0].text_sha256 == text_sha256("first words")
+    assert (room_words.delivered_text, agent_words.delivered_text) == ("first words", "[from: Bob] first words")
+    assert (script_words.delivered_text, script_words.annotation) == ("the owner's own", None)
+    assert owner_words.delivered_text == "the owner's page"
+    assert room_words.annotation is not None and agent_words.annotation is not None
+    assert (str(room_words.annotation.author), room_words.annotation.display_name) == ("user:user-bob-4471", "Bob")
+    assert room_words.annotation.text_sha256 == text_sha256("first words")
+    assert agent_words.annotation.text_sha256 == text_sha256("[from: Bob] first words")
+    assert owner_words.annotation is not None and str(owner_words.annotation.author) == "user:user-josh-0001"
 
 
 def test_a_rooms_first_message_acts_on_its_mentions_once_the_room_has_it(tmp_path: Path) -> None:
@@ -6308,3 +6312,118 @@ def test_a_rooms_first_message_acts_on_its_mentions_once_the_room_has_it(tmp_pat
     assert [(str(annotation.author), annotation.message_id) for annotation in annotations] == [
         ("user:user-bob-4471", "m-first")
     ]
+
+
+def _create_line_of(log_path: Path) -> str:
+    return next(line for line in log_path.read_text().splitlines() if line.startswith("create "))
+
+
+def test_a_visitors_create_with_a_message_hands_the_agent_the_prefix_and_annotates_the_chat(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """An agent chat's first message rides ``mngr create --message`` (the multiplayer spec, section 5.1): the
+    visitor's words reach the agent prefixed, and the chat's annotations name the visitor under the message's id
+    before its turn lands."""
+    app, log_path = _recording_app(tmp_path)
+    client = app.test_client()
+
+    response = client.post(
+        "/api/chats/create",
+        json={"account_id": signed_in_account, "message": "please deploy"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 201, response.get_data(as_text=True)
+    chat_id = ChatId(response.get_json()["chat_id"])
+    (annotation,) = state_of(app).authors.annotations(chat_id)
+    assert (str(annotation.author), annotation.display_name) == ("user:user-bob-4471", "bob")
+    assert annotation.text_sha256 == text_sha256("[from: bob] please deploy")
+    wait_until_true(lambda: log_path.exists() and "create " in log_path.read_text(), 10.0, "the create to run")
+    assert "--message [from: bob] please deploy" in _create_line_of(log_path)
+
+
+def test_a_visitors_switch_message_is_attributed_for_the_harness_the_chat_moves_to(tmp_path: Path) -> None:
+    """The confirming message of a switch is the next agent's first (section 5.1): a switch to a room holds the
+    visitor's bare words (a room reads no prefix), annotated as theirs, and the held-send listing shows them."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first = f"agent-{uuid4().hex}"
+    # Stopped, so the switch has nothing to drain off it.
+    _register_agent(app, first, "Chat-1", "STOPPED")
+
+    response = client.post(
+        f"/api/chats/{first}/handoff",
+        json={"kind": "room", "message": "let's make this a room", "message_id": "m-switch"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 202, response.get_data(as_text=True)
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    assert (record.handoff.trigger_text, record.handoff.target_harness) == ("let's make this a room", HarnessType.ROOM)
+    (annotation,) = state_of(app).authors.annotations(ChatId(first))
+    assert (annotation.message_id, str(annotation.author)) == ("m-switch", "user:user-bob-4471")
+    assert annotation.text_sha256 == text_sha256("let's make this a room")
+    listed = [chat for chat in client.get("/api/chats").get_json()["chats"] if chat["chat_id"] == first]
+    assert [held["text"] for held in listed[0]["handoff"]["held_sends"]] == ["let's make this a room"]
+
+
+def test_a_visitors_send_held_into_a_chat_converging_to_a_room_lands_unprefixed(tmp_path: Path) -> None:
+    """A send held while the chat converges is attributed for the harness it will land on (section 5.1): a room
+    reads no prefix, so the held text is the words alone, which the hash join still names the visitor's."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    first, _successor = _converging_claude_chat(app, tmp_path, HandoffPhase.SUMMARIZING)
+    manager: AgentManager = state_of(app).agent_manager
+    record = manager._chat_record_store.read(ChatId(first))
+    assert record is not None and record.handoff is not None
+    to_room = record.handoff.model_copy_update(
+        to_update(record.handoff.field_ref().target_harness, HarnessType.ROOM),
+        to_update(record.handoff.field_ref().target_account_id, ""),
+        to_update(record.handoff.field_ref().target_lane, ""),
+    )
+    manager._chat_record_store.write(record.with_converging(to_room))
+    manager.refresh_chat_records()
+
+    held = client.post(
+        f"/api/chats/{first}/message",
+        json={"message": "and this", "message_id": "m-2"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert held.status_code == 202
+    after = manager._chat_record_store.read(ChatId(first))
+    assert after is not None and after.handoff is not None
+    assert [held_send.text for held_send in after.handoff.held_sends] == ["Carry on in Codex", "and this"]
+    (annotation,) = state_of(app).authors.annotations(ChatId(first))
+    assert annotation.text_sha256 == text_sha256("and this")
+
+
+def test_a_seeded_chat_launched_as_a_room_with_a_message_appends_the_words_alone_as_the_visitors(
+    tmp_path: Path,
+) -> None:
+    """A seeded awaiting chat launched as a room with its first words (section 7.3): the words are appended as
+    a step of their own, with no seed context around them (the page shows the seed as the chat's earlier segment
+    already), stamped with the visitor who typed them."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    seeded = client.post("/api/chats/seed", json=_seed_body()).get_json()["chat_id"]
+
+    response = client.post(
+        "/api/chats/create",
+        json={"chat_id": seeded, "kind": "room", "message": "hello everyone"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 201, response.get_data(as_text=True)
+
+    def room_turns() -> list[dict[str, Any]]:
+        events = client.get(f"/api/chats/{seeded}/events").get_json()["events"]
+        return [event for event in events if event.get("source") == "room"]
+
+    wait_until_true(lambda: len(room_turns()) == 1, 15.0, "the room's first message to land")
+    (turn,) = room_turns()
+    (annotation,) = state_of(app).authors.annotations(ChatId(seeded))
+    assert (turn["content"], turn["message_id"]) == ("hello everyone", annotation.message_id)
+    assert (turn["author"], turn["author_name"]) == ("user:user-bob-4471", "bob")

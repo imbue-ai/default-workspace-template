@@ -98,6 +98,43 @@ describe("ensureParticipants", () => {
   });
 });
 
+describe("ensureParticipants again", () => {
+  it("reads the page's own key and the roster again once the last read is older than the cache", async () => {
+    vi.useFakeTimers();
+    try {
+      const participants = await loadParticipants();
+      answerRequests("user:bob-2", ROSTER);
+      await participants.ensureParticipants();
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+
+      // Within the cache the answer stands; a burst of asks (a focus, a visibility change, a mentions push) is one read.
+      await vi.advanceTimersByTimeAsync(participants.PARTICIPANTS_FRESH_MS - 1);
+      await participants.ensureParticipants();
+      expect(mockRequest).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(1);
+      answerRequests("user:bob-2", [...ROSTER, participant("user:carol-3", { display_name: "Carol" })]);
+      await participants.ensureParticipants();
+      expect(mockRequest).toHaveBeenCalledTimes(4);
+      expect(participants.getParticipant("user:carol-3")?.display_name).toBe("Carol");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("isOwnerKey", () => {
+  it("knows the owner under the unshared key and under the account the roster marks, and no one else", async () => {
+    const participants = await loadParticipants();
+    participants.setParticipantsForTesting("user:bob-2", ROSTER);
+
+    expect(participants.isOwnerKey("owner")).toBe(true);
+    expect(participants.isOwnerKey("user:owner-1")).toBe(true);
+    expect(participants.isOwnerKey("user:bob-2")).toBe(false);
+    expect(participants.isOwnerKey("user:nobody-9")).toBe(false);
+  });
+});
+
 describe("isViewerOwner", () => {
   it("knows the owner under the unshared key and under their account key, and no one else", async () => {
     const participants = await loadParticipants();

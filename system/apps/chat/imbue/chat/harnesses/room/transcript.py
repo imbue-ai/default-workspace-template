@@ -30,6 +30,7 @@ from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 
 from imbue.chat.authors import AUTHOR_FIELD
 from imbue.chat.authors import AUTHOR_NAME_FIELD
+from imbue.chat.authors import split_author_prefix
 from imbue.imbue_common.pure import pure
 from imbue.mngr.agents.common_transcript_records import PINNED_ATIF_SCHEMA_VERSION
 
@@ -111,6 +112,12 @@ def step_as_page_event(record: dict[str, Any]) -> dict[str, Any] | None:
         "content": message,
         "message_uuid": event_id,
     }
+    # A step whose message leads with an author prefix (a send held for the room while it was still an agent's
+    # chat, from before sends were attributed for the harness they land on) is shown without it; the content
+    # stays as written, since the chat's annotations are joined to it by its hash.
+    _author_name, spoken = split_author_prefix(message)
+    if spoken != message:
+        event["display_body"] = spoken
     message_id = extra.get(EXTRA_MESSAGE_ID_KEY)
     if isinstance(message_id, str):
         event["message_id"] = message_id

@@ -849,6 +849,10 @@ class ProvisionalChat(FrozenModel):
     model_pick: ModelPick | None = Field(
         default=None, description="The model chosen for it; None for its harness's default"
     )
+    kind: ChatKind = Field(
+        default=ChatKind.AGENT,
+        description="What it is being created as: an agent's chat, or a room, whose sends are attributed as a room's",
+    )
 
 
 class SetLaunchChoiceRequest(FrozenModel):

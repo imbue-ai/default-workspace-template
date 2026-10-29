@@ -33,6 +33,19 @@ def test_a_persons_step_is_read_back_as_their_turn_with_the_composers_id() -> No
     assert "author" not in event
 
 
+def test_a_step_that_leads_with_an_author_prefix_is_shown_without_it_and_kept_as_written() -> None:
+    """A send held for the room while it was still an agent's chat, from before sends were attributed for the
+    harness they land on, carries the prefix: the page is handed the words behind it, and the content stays whole
+    so the chat's annotations still join to it by its hash."""
+    record = person_step_record("[from: Bob] hello room", "m-18")
+
+    event = step_as_page_event(record)
+    assert event is not None
+    assert (event["content"], event["display_body"]) == ("[from: Bob] hello room", "hello room")
+    plain = step_as_page_event(person_step_record("hello room", "m-19"))
+    assert plain is not None and "display_body" not in plain
+
+
 def test_the_readers_step_is_read_back_as_the_workspace_agents_turn() -> None:
     room_agent = load_room_agent_script()
     author, name, said = room_agent.author_of_typed_text("done, see the file")

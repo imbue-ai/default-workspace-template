@@ -833,7 +833,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # (a fresh start picked from the provider menu) has no confirming message to show.
     others = transition.held_sends_after_trigger()
     trigger = (
-        (_held_send_snapshot(transition.trigger_message_id, transition.trigger_text),)
+        (_held_send_snapshot(transition.trigger_message_id, split_author_prefix(transition.trigger_text)[1]),)
         if transition.trigger_text
         else ()
     )
@@ -4179,6 +4179,7 @@ class AgentManager:
                 is_seeded=seed_record is not None,
                 held_sends=carried_held_sends,
                 model_pick=model_pick,
+                kind=kind,
             )
             self._provisional_chats[launched_chat_id] = provisional
             fast_mode = self._fast_mode_for_launch_locked(launched_chat_id)
@@ -4209,10 +4210,12 @@ class AgentManager:
         # this app renders from a file, which no harness transcript holds, so its launch carries
         # that conversation ahead of the user's own words. The provisional record keeps the words
         # alone, so a retry after a failed create wraps them once. A launch with no words (the
-        # sign-in's) leaves the conversation for the first send to carry.
+        # sign-in's) leaves the conversation for the first send to carry. A room's words ride bare:
+        # a room has no agent to need the context, and its page shows the seeded conversation as the
+        # chat's earlier segment already (the multiplayer spec, section 7.3).
         launch_message = (
             message
-            if seed_record is None or not message
+            if seed_record is None or not message or harness is HarnessType.ROOM
             else seed_context_message(self._chat_files_root / launched_chat_id, message)
         )
 
