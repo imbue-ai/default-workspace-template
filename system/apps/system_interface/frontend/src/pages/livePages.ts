@@ -121,6 +121,8 @@ interface LivePage {
   isCloseChordCapable: boolean;
   /** The desktop the page was last introduced to; null before its first load. */
   greetedDesktopId: string | null;
+  /** Whether the last handshake said the window was being viewed on somebody else's desktop. */
+  greetedIsViewing: boolean;
   lastSentVisibility: boolean | null;
   /** Whether the page is hidden because its app is stopped; it reloads once the app runs again. */
   isHeldForStop: boolean;
@@ -375,7 +377,14 @@ export class LivePagesLayer implements PageDriver {
         return;
       }
       this.show(page, box, index, !this.isGestureActive && !isViewing && window.id === focused);
-      if (page.greetedDesktopId !== null && page.greetedDesktopId !== desktop.id) this.greet(page);
+      // A page is told again when its desktop, or whether that desktop is being viewed, changed since: a terminal
+      // attaches to its session as a viewer or as a user by it.
+      if (
+        page.greetedDesktopId !== null &&
+        (page.greetedDesktopId !== desktop.id || page.greetedIsViewing !== isViewing)
+      ) {
+        this.greet(page);
+      }
     });
     for (const page of this.pages.values()) {
       if (!shownIds.has(page.windowId)) this.hide(page);
@@ -597,6 +606,7 @@ export class LivePagesLayer implements PageDriver {
       isNavigationCapable: false,
       isCloseChordCapable: false,
       greetedDesktopId: null,
+      greetedIsViewing: false,
       lastSentVisibility: null,
       isHeldForStop: false,
     };
@@ -674,6 +684,8 @@ export class LivePagesLayer implements PageDriver {
     const found = findWindow(state, page.windowId);
     const desktopId = found?.desktop.id ?? state.activeDesktopId ?? "";
     const path = found === null ? "" : this.pathSeen(page, found, state);
+    // Viewed means the window's desktop is the active one and not the viewer's own (the multiplayer spec, 8.3).
+    const isViewing = desktopId === state.activeDesktopId && this.store.viewedDesktop() !== null;
     sendToChildFrame(page.frame, SHELL_HANDSHAKE, {
       clientId: state.clientId,
       windowId: page.windowId,
@@ -681,8 +693,10 @@ export class LivePagesLayer implements PageDriver {
       app: page.app,
       path,
       opensLocalFiles: this.store.getOpensLocalFiles(),
+      isViewing,
     });
     page.greetedDesktopId = desktopId;
+    page.greetedIsViewing = isViewing;
     sendToChildFrame(page.frame, SHELL_THEME, this.themeMessageFor(page, currentTheme(), isCurrentThemeRemembered()));
   }
 

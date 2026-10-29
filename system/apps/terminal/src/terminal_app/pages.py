@@ -166,6 +166,10 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   const ctrlKey = keys.querySelector("[data-ctrl]");
   let current = config.session;
   let connection = null;
+  // Whether the shell says this window is being looked at on somebody else's desktop: the pty then attaches as a
+  // viewer (read-only, and never the client tmux sizes the window by), through the path's viewer argument.
+  let isViewing = false;
+  let shownPage = null;
 
   function coordinate(host) {
     const labels = host.split(".");
@@ -234,9 +238,17 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       keys.hidden = false;
       // A navigate to the session already framed re-points at the same target: assigning the
       // same src again would reload the frame and drop the live ttyd connection.
-      pointFrameAt(originFor(page.pty_label) + page.pty_path);
+      pointFrameAt(originFor(page.pty_label) + page.pty_path + (isViewing ? "&arg=view" : ""));
     }
+    shownPage = page;
     connection?.location(pathFor(page.name), page.title);
+  }
+
+  // The shell's word on whether the window is viewed changed: the pty is attached again the other way.
+  function takeViewing(next) {
+    if (next === isViewing) return;
+    isViewing = next;
+    if (shownPage !== null && shownPage.pty_label !== "") show(shownPage);
   }
 
   async function refresh(session) {
@@ -411,6 +423,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       .then(({ connectToShell }) => {
         connection = connectToShell({
           capabilities: { navigation: true, closeChord: false },
+          onHandshake: (handshake) => takeViewing(handshake.isViewing),
           onNavigate: navigate,
           onShown: focusPty,
           onTheme: wearTheme,

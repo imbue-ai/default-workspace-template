@@ -93,6 +93,7 @@ describe("connectToShell", () => {
       app: "chat",
       path: "/?chat=agent-1",
       opensLocalFiles: false,
+      isViewing: false,
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
     expect(handlers.onHidden).toHaveBeenCalledTimes(1);
@@ -120,6 +121,7 @@ describe("connectToShell", () => {
       app: "",
       path: "",
       opensLocalFiles: false,
+      isViewing: false,
     });
   });
 
@@ -130,6 +132,15 @@ describe("connectToShell", () => {
     deliver({ ...HANDSHAKE, opensLocalFiles: true }, parent);
     deliver({ ...HANDSHAKE, opensLocalFiles: "yes" }, parent);
     expect(onHandshake.mock.calls.map((call) => call[0].opensLocalFiles)).toEqual([true, false]);
+  });
+
+  it("reads whether the window is being viewed on somebody else's desktop, and anything but true as no", () => {
+    const parent = framed();
+    const onHandshake = vi.fn();
+    connection = connectToShell({ onHandshake });
+    deliver({ ...HANDSHAKE, isViewing: true }, parent);
+    deliver(HANDSHAKE, parent);
+    expect(onHandshake.mock.calls.map((call) => call[0].isViewing)).toEqual([true, false]);
   });
 
   it("announces its capabilities to the parent once, before anything else", () => {

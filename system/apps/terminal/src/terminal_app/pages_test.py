@@ -13,7 +13,7 @@ from terminal_app.pages import (
     SessionPage,
     render_page,
 )
-from terminal_app.primitives import TerminalTitle, TmuxSessionName
+from terminal_app.primitives import VIEWER_ARGUMENT, TerminalTitle, TmuxSessionName
 from terminal_app.pty_page import PTY_PAGE_SCRIPT
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
@@ -91,7 +91,7 @@ def test_an_unregistered_pty_leaves_the_label_empty(
     assert config["page"] == {
         "name": "terminal-3",
         "title": "Terminal 3",
-        "pty_path": "/?arg=_&arg=session&arg=terminal-3",
+        "pty_path": "/?arg=_&arg=session&arg=terminal-3&arg=",
         "pty_label": "",
     }
     assert session.json == config["page"]
@@ -173,7 +173,7 @@ def test_the_session_api_answers_what_the_page_refreshes_from(
     assert response.json == {
         "name": "terminal-3",
         "title": "Terminal 3",
-        "pty_path": "/?arg=_&arg=session&arg=terminal-3",
+        "pty_path": "/?arg=_&arg=session&arg=terminal-3&arg=",
         "pty_label": TEST_PTY_LABEL,
     }
 
@@ -243,6 +243,17 @@ def test_the_wrapper_hands_the_pty_frames_input_reports_up_to_the_shell(pages_cl
     assert 'window.parent.postMessage({ type: "shell:input" }, "*")' in wrapper
 
 
+def test_the_wrapper_attaches_the_pty_as_a_viewer_when_the_shell_says_the_window_is_viewed(
+    pages_client: FlaskClient,
+) -> None:
+    """A window viewed on somebody else's desktop (the multiplayer spec, section 8.3) frames the pty with the viewer
+    argument the session script reads as a read-only attach that never sizes the window, and attaches again the
+    other way when the shell's word changes."""
+    wrapper = pages_client.get("/?session=terminal-1").text
+    assert "onHandshake: (handshake) => takeViewing(handshake.isViewing)" in wrapper
+    assert f'(isViewing ? "&arg={VIEWER_ARGUMENT}" : "")' in wrapper
+
+
 def test_a_missing_app_contract_module_says_the_shell_is_not_built(
     session_source: TmuxSessionSource, tmp_path: Path
 ) -> None:
@@ -258,7 +269,7 @@ def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_tit
     page = SessionPage(
         name=TmuxSessionName("terminal-1"),
         title=TerminalTitle("R&D <tests>"),
-        pty_path="/?arg=_&arg=session&arg=terminal-1",
+        pty_path="/?arg=_&arg=session&arg=terminal-1&arg=",
         pty_label="</script>",
     )
     page_html = render_page(PageConfig(session=TmuxSessionName("terminal-1"), page=page))

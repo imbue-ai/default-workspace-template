@@ -80,6 +80,10 @@ def test_session_script_attaches_by_recorded_id_and_creates_a_tagged_shell() -> 
 # Args (passed by the ttyd dispatch after the "session" key is consumed):
 #   $1 = session name (e.g. "terminal-1"), the terminal's name
 #   $2 = working directory to anchor a newly-created session in (may be "")
+#   $3 = "view" when the window is being looked at on somebody else's desktop (the
+#        multiplayer spec, section 8.3): the attach is read-only and tmux never sizes the
+#        window by this client, so a viewer neither types into nor resizes the owner's terminal;
+#        a viewer never creates the session
 #
 # The terminal app records the tmux session id and creation time of every
 # terminal it created under the sessions directory, named by terminal; attaching
@@ -94,6 +98,10 @@ def test_session_script_attaches_by_recorded_id_and_creates_a_tagged_shell() -> 
 set -euo pipefail
 SESSION_NAME="${1:-}"
 WORKDIR="${2:-}"
+ATTACH_FLAGS=()
+if [ "${3:-}" = "view" ]; then
+    ATTACH_FLAGS=(-r -f ignore-size)
+fi
 unset TMUX
 
 if [ -z "$SESSION_NAME" ]; then
@@ -109,9 +117,13 @@ if [ -f "$SESSION_ID_FILE" ]; then
     if [ -n "$SESSION_ID" ] && [ -n "$SESSION_CREATED" ] && tmux has-session -t "$SESSION_ID" 2>/dev/null; then
         LIVE_CREATED="$(tmux display-message -p -t "$SESSION_ID" '#{session_created}' 2>/dev/null || true)"
         if [ "$LIVE_CREATED" = "$SESSION_CREATED" ]; then
-            exec tmux attach-session -t "$SESSION_ID"
+            exec tmux attach-session "${ATTACH_FLAGS[@]}" -t "$SESSION_ID"
         fi
     fi
+fi
+
+if [ ${#ATTACH_FLAGS[@]} -gt 0 ]; then
+    exec tmux attach-session "${ATTACH_FLAGS[@]}" -t "$SESSION_NAME"
 fi
 
 WORKDIR_ARGS=()

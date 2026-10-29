@@ -315,6 +315,10 @@ describe("creating and positioning", () => {
     layer.reconcile();
     expect(activeFocusedWindowId(store.getState())).toBe("win-a");
     expect(wrapperOf("win-a").style.pointerEvents).toBe("none");
+    // The page is told it is viewed, so a terminal attaches to its session as a viewer.
+    const spy = spyOnFrame("win-a");
+    load("win-a");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, desktopId: "alice", isViewing: true });
 
     // Back on an own desktop, the focused page is interactive again.
     await store.stopViewing();
@@ -416,6 +420,7 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         opensLocalFiles: false,
+        isViewing: false,
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
@@ -435,6 +440,7 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         opensLocalFiles: false,
+        isViewing: false,
       },
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
       { type: SHELL_HIDDEN },
