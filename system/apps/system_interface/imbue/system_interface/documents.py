@@ -68,7 +68,7 @@ VIEWPORT_META_NAME: Final[str] = "viewport"
 _DEFAULT_VIEWPORT: Final[str] = "width=device-width, initial-scale=1.0"
 # What the shell's viewport always says, whatever the build's carries: draw under a phone's notch and home
 # indicator, and never zoom in on a focused field (iOS Safari zooms into any field set under 16px, in any frame, and
-# stays zoomed after it; it still lets a user pinch-zoom past this cap).
+# stays zoomed after it). The cap also turns off pinch-zoom on the shell.
 _SHELL_VIEWPORT_DIRECTIVES: Final[dict[str, str]] = {"viewport-fit": "cover", "maximum-scale": "1"}
 
 _TITLE_PATTERN: Final[re.Pattern[str]] = re.compile(r"<title>.*?</title>", re.IGNORECASE | re.DOTALL)

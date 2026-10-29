@@ -74,7 +74,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 - The update staleness and update notice banners render above the page host as they do above the desktop, with the same buttons. The replaced-desktop notice is not shown on the phone.
 - Toasts are a shell component on both layouts. Every `alert()` the shell shows today becomes a toast; `confirm()` dialogs stay. On the phone a toast sits above the bar.
-- The page carries `viewport-fit=cover` and `maximum-scale=1` (iOS Safari otherwise zooms into any focused field set under 16px, in any app's frame, and stays zoomed; it still allows pinch-zoom), sizes itself with `100dvh`, respects `env(safe-area-inset-*)`, sets `theme-color`, titles itself with the workspace name, and serves a PNG touch icon rendered from the selected avatar design plus a web manifest, so the home-screen tile is the workspace rather than a screenshot. iOS 26 opens any saved site standalone; the top scroll-edge blur it draws over the status bar cannot be disabled from the page and is accepted.
+- The page carries `viewport-fit=cover` and `maximum-scale=1` (iOS Safari otherwise zooms into any focused field set under 16px, in any app's frame, and stays zoomed; the cap also turns off pinch-zoom, which a shell has no use for), sizes itself with `100dvh`, respects `env(safe-area-inset-*)`, sets `theme-color`, titles itself with the workspace name, and serves a PNG touch icon rendered from the selected avatar design plus a web manifest, so the home-screen tile is the workspace rather than a screenshot. iOS 26 opens any saved site standalone; the top scroll-edge blur it draws over the status bar cannot be disabled from the page and is accepted.
 
 ### The chat app
 
