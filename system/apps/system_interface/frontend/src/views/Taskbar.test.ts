@@ -201,6 +201,15 @@ describe("Taskbar", () => {
     expect(onEntryContextMenu).toHaveBeenCalledWith("win-1", 30, 40, expect.any(Element));
   });
 
+  it("asks for the agent entry's menu on a right click, keeping the browser's own menu away", () => {
+    const onAgentContextMenu = vi.fn();
+    const taskbar = render({ tray: trayAttrs({ onAgentContextMenu }) });
+    const rightClick = new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 50, clientY: 60 });
+    (taskbar.querySelector("[data-tray-agent]") as HTMLElement).dispatchEvent(rightClick);
+    expect(onAgentContextMenu).toHaveBeenCalledWith(50, 60);
+    expect(rightClick.defaultPrevented).toBe(true);
+  });
+
   it("carries the launcher field, the overview button before the entries, and the tray with the agent and nobody else while the roster is empty", () => {
     const onToggle = vi.fn();
     const taskbar = render({ overview: { isOpen: false, onToggle } });
