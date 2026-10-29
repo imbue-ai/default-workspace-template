@@ -236,8 +236,9 @@ def scan(
             None,
         ),
     )
-    # The rest of the disk: the machine's system software (the workspace's tools, measured
-    # without the home tree, which the rows above hold) and whatever else is on the disk.
+    # The rest of the disk: the machine's system software (the workspace's tools and every
+    # venv, which live beside the uv cache off the home tree, measured without the home
+    # tree, which the rows above hold) and whatever else is on the disk.
     other = max(0, disk_used - counted)
     system = measure([root], [home, *SYSTEM_EXCLUDES])
     other_items: list[dict[str, Any]] = []
@@ -246,7 +247,7 @@ def scan(
         other_items.append(
             {
                 "name": "System software",
-                "hint": "the workspace's tools",
+                "hint": "the workspace's tools and installed packages",
                 "bytes": software,
             }
         )

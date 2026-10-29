@@ -8,6 +8,7 @@ skill bootstrap that extracts the target ref's own copy of the flow.
 
 from __future__ import annotations
 
+import configparser
 import fcntl
 import json
 import os
@@ -37,6 +38,7 @@ from update_self_skill import (
     update_runtime,
     update_self,
     update_target,
+    venv_links,
 )
 
 _PACKAGE_DIR = Path(__file__).parent
@@ -1668,11 +1670,7 @@ def _skill_section(heading: str) -> str:
 
     Lines inside fenced blocks are never headings: a bash comment starts with ``#`` too.
     """
-    lines = (
-        (_SKILL_DIR / "SKILL.md")
-        .read_text(encoding="utf-8")
-        .splitlines()
-    )
+    lines = (_SKILL_DIR / "SKILL.md").read_text(encoding="utf-8").splitlines()
     level = len(heading.split(" ", 1)[0])
     start = next(index for index, line in enumerate(lines) if line.startswith(heading))
     is_fenced = False
@@ -1877,7 +1875,9 @@ def test_step_4_ends_a_hold_with_a_decision_keeping_the_worker() -> None:
     )
 
     relanding = _fenced_commands(
-        (_SKILL_DIR / "references" / "resuming-after-a-decision.md").read_text(encoding="utf-8")
+        (_SKILL_DIR / "references" / "resuming-after-a-decision.md").read_text(
+            encoding="utf-8"
+        )
     )
     order = [
         _first_index(relanding, "run-status start"),
@@ -2293,7 +2293,15 @@ def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner.respond(("git", "log", "--topo-order"), _Result(stdout=""))
     runner.respond(("git", "rev-list"), _Result(stdout=_ROLLBACK))
     runner.respond(("git", "describe"), _Result(returncode=128))
+    # The uv cache beside the repo, so the venv targets land under the test's own dir.
+    runner.respond(
+        ("uv", "cache", "dir"), _Result(stdout=f"{_uv_cache_dir(repo_root)}\n")
+    )
     return runner
+
+
+def _uv_cache_dir(repo_root: Path) -> Path:
+    return repo_root.parent / "cache" / "uv"
 
 
 def _apply(
@@ -6253,7 +6261,9 @@ def test_tool_location_declines_a_script_it_cannot_open(tmp_path: Path) -> None:
 # snapshots (real directories)
 
 
-def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> None:
+def test_snapshots_roundtrip_bundles_and_node_modules_but_never_copy_the_venv(
+    tmp_path: Path,
+) -> None:
     repo_root = _make_apply_repo(tmp_path)
     _write_bundle(repo_root)
     (repo_root / update_layout.NPM_ROOT_DIR / "node_modules").mkdir(
@@ -6284,7 +6294,6 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
     assert {record.name for record in snapshots} == {
         *(bundle.snapshot_name for bundle in update_layout.FRONTEND_BUNDLES),
         "node_modules",
-        "venv",
     }
     # Destroy the originals, as the failed forward steps would.
     for bundle in update_layout.FRONTEND_BUNDLES:
@@ -6296,7 +6305,8 @@ def test_snapshots_roundtrip_bundle_envs_and_node_modules(tmp_path: Path) -> Non
 
     assert failed == []
     assert _bundle_exists(repo_root)
-    assert (repo_root / ".venv" / "marker.txt").read_text() == "old-venv"
+    # The venv is the swap's to put back, not a copy's.
+    assert (repo_root / ".venv" / "marker.txt").read_text() == "wrecked"
     assert (
         repo_root / update_layout.NPM_ROOT_DIR / "node_modules" / "left-pad.js"
     ).read_text() == "old"
@@ -9348,3 +9358,291 @@ def test_a_rollback_whose_restored_app_serves_no_page_is_an_emergency_that_keeps
     assert "copies are still kept" in settled.outcome
     assert all(Path(snapshot.copy).exists() for snapshot in record.snapshots)
     assert not _refreshed_the_view(runner, apply_repo)
+
+
+# The root venv's fresh-target swap
+
+
+def _venvs_root(repo_root: Path) -> Path:
+    return venv_links.venvs_root(_uv_cache_dir(repo_root))
+
+
+def _link_live_venv(repo_root: Path) -> Path:
+    """The venv a live workspace runs: ``.venv`` linked to a synced target."""
+    root = _venvs_root(repo_root)
+    target = venv_links.target_for(root, repo_root)
+    venv_links.write_owner(target, repo_root / ".venv")
+    (target / "bin").mkdir(parents=True)
+    (target / "bin" / "marker.txt").write_text("pre-apply venv")
+    venv_links.switch_link(repo_root, target)
+    return target
+
+
+def _venv_target(repo_root: Path) -> Path:
+    return Path(os.path.realpath(repo_root / ".venv"))
+
+
+def _fresh_venv_sync(runner: _RecordingRunner) -> tuple[list[str], dict]:
+    syncs = [
+        (argv, env)
+        for argv, env in zip(runner.calls, runner.envs)
+        if argv[:2] == ["uv", "sync"]
+        and env is not None
+        and "UV_PROJECT_ENVIRONMENT" in env
+    ]
+    assert len(syncs) == 1, syncs
+    argv, env = syncs[0]
+    assert env is not None
+    return argv, env
+
+
+class _RestartWatch:
+    """Records the venv ``.venv`` resolves to at each restart, and which pre-apply
+    target still exists then; ``unhealthy_restarts`` makes the first N restarts fail
+    their health checks."""
+
+    def __init__(
+        self, repo_root: Path, previous: Path | None, unhealthy_restarts: int = 0
+    ):
+        self.repo_root = repo_root
+        self.previous = previous
+        self.unhealthy_restarts = unhealthy_restarts
+        self.restarts = 0
+        self.venv_at_restart: list[Path] = []
+        self.previous_exists_at_restart: list[bool] = []
+
+    def __call__(self, argv: list[str]) -> None:
+        if argv[:3] == ["mngr", "start", "--restart"]:
+            self.restarts += 1
+            self.venv_at_restart.append(_venv_target(self.repo_root))
+            self.previous_exists_at_restart.append(
+                self.previous is not None and self.previous.is_dir()
+            )
+
+    def health(self, url: str) -> int:
+        return 500 if 0 < self.restarts <= self.unhealthy_restarts else 200
+
+
+def test_a_manifest_apply_syncs_a_fresh_target_preflights_it_and_swaps_it_in(
+    apply_repo: Path,
+) -> None:
+    previous = _link_live_venv(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    watch = _RestartWatch(apply_repo, previous)
+    runner.on_command = watch
+    spawner = _FakeSpawner()
+
+    assert _apply(runner, _FakeHttp(watch.health), spawner, apply_repo) == 0
+
+    argv, env = _fresh_venv_sync(runner)
+    new = Path(env["UV_PROJECT_ENVIRONMENT"])
+    assert argv == ["uv", "sync", "--all-packages", "--frozen"]
+    # Its real path, beside the uv cache, so the scripts' #! lines name it.
+    assert new.parent == _venvs_root(apply_repo) and new != previous
+    assert str(new) == os.path.realpath(new)
+    # The pre-flight boots the shell from the new target, not from the live venv.
+    assert spawner.spawns[0][0] == str(new / "bin" / update_layout.TOOL_NAME)
+    # The link moved before the restart, and the old target lived through it.
+    assert watch.venv_at_restart == [Path(os.path.realpath(new))]
+    assert watch.previous_exists_at_restart == [True]
+    # A healthy restart leaves only the new one.
+    assert _venv_target(apply_repo) == Path(os.path.realpath(new))
+    assert not previous.exists()
+    assert venv_links.read_owner(new) == venv_links.Owner(
+        link=str(apply_repo / ".venv"), holder_pid=None
+    )
+    assert update_apply_contract.read_marker(apply_repo) is None
+
+
+def test_a_rolled_back_manifest_apply_switches_the_venv_back(apply_repo: Path) -> None:
+    previous = _link_live_venv(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    watch = _RestartWatch(apply_repo, previous, unhealthy_restarts=1)
+    runner.on_command = watch
+
+    assert _apply(runner, _FakeHttp(watch.health), _FakeSpawner(), apply_repo) == 2
+
+    _, env = _fresh_venv_sync(runner)
+    new = Path(env["UV_PROJECT_ENVIRONMENT"])
+    # The forward restart ran on the new venv, the recovery's on the old one.
+    assert watch.venv_at_restart == [Path(os.path.realpath(new)), previous.resolve()]
+    assert _venv_target(apply_repo) == previous.resolve()
+    assert (previous / "bin" / "marker.txt").read_text() == "pre-apply venv"
+    assert not new.exists() and not venv_links.owner_path(new).exists()
+
+
+def test_a_preflight_failure_drops_the_fresh_target_and_never_moves_the_link(
+    apply_repo: Path,
+) -> None:
+    previous = _link_live_venv(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    spawner = _FakeSpawner(output="ImportError: no module named broken", exited=True)
+
+    # Only the live workspace answers; the pre-flight boot never does.
+    http = _FakeHttp(lambda url: 200 if _is_live(url) else None)
+    assert _apply(runner, http, spawner, apply_repo) == 2
+
+    assert _venv_target(apply_repo) == previous.resolve()
+    assert sorted(path.name for path in _venvs_root(apply_repo).iterdir()) == [
+        previous.name,
+        venv_links.owner_path(previous).name,
+    ]
+    assert runner.argvs_starting("mngr", "start", "--restart") == []
+
+
+def test_the_first_manifest_apply_converts_a_real_venv_into_a_link(
+    apply_repo: Path,
+) -> None:
+    (apply_repo / ".venv" / "bin").mkdir(parents=True)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    aside = apply_repo / update_environment.VENV_ASIDE_NAME
+    aside_at_restart: list[bool] = []
+
+    def watch(argv: list[str]) -> None:
+        if argv[:3] == ["mngr", "start", "--restart"]:
+            aside_at_restart.append(aside.is_dir())
+
+    runner.on_command = watch
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    _, env = _fresh_venv_sync(runner)
+    assert (apply_repo / ".venv").is_symlink()
+    assert _venv_target(apply_repo) == Path(
+        os.path.realpath(env["UV_PROJECT_ENVIRONMENT"])
+    )
+    # The real directory waited aside through the restart, and is gone once it was healthy.
+    assert aside_at_restart == [True]
+    assert not aside.exists()
+
+
+def test_a_rolled_back_first_apply_puts_the_real_venv_back(apply_repo: Path) -> None:
+    (apply_repo / ".venv").mkdir()
+    (apply_repo / ".venv" / "marker.txt").write_text("real venv")
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    watch = _RestartWatch(apply_repo, None, unhealthy_restarts=1)
+    runner.on_command = watch
+
+    assert _apply(runner, _FakeHttp(watch.health), _FakeSpawner(), apply_repo) == 2
+
+    venv = apply_repo / ".venv"
+    assert not venv.is_symlink()
+    assert (venv / "marker.txt").read_text() == "real venv"
+    assert not (apply_repo / update_environment.VENV_ASIDE_NAME).exists()
+    assert [path for path in _venvs_root(apply_repo).iterdir()] == []
+
+
+def test_a_resumed_apply_reuses_its_fresh_target(apply_repo: Path) -> None:
+    previous = _link_live_venv(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    first = update_environment.begin_venv_swap(apply_repo, runner, None)
+
+    again = update_environment.begin_venv_swap(apply_repo, runner, first)
+
+    assert again == first
+    assert first.previous == os.path.realpath(previous)
+    assert venv_links.read_owner(Path(first.new)) == venv_links.Owner(
+        link=str(apply_repo / ".venv"), holder_pid=os.getpid()
+    )
+    assert venv_links.read_owner(previous) == venv_links.Owner(
+        link=str(apply_repo / ".venv"), holder_pid=os.getpid()
+    )
+
+
+def test_an_interrupted_swap_is_switched_back_by_boot_recovery(
+    apply_repo: Path,
+) -> None:
+    previous = _link_live_venv(apply_repo)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    swap = update_environment.begin_venv_swap(apply_repo, runner, None)
+    update_environment.switch_venv(apply_repo, swap)
+    marker = update_apply_contract.ApplyMarker(
+        dri_agent="lead",
+        rollback_to=_ROLLBACK,
+        merge_ref=_MERGE_REF,
+        target_ref=None,
+        ff_only=True,
+        worker_bundles=None,
+        phase=update_apply_contract.PHASE_SNAPSHOTTED,
+        pid=999_999,
+        started_at=1.0,
+        updated_at=1.0,
+        live_service_restarted=True,
+        venv_swap=swap,
+    )
+    update_apply_contract.write_marker(marker, apply_repo, lambda: 1.0)
+    assert update_apply_contract.read_marker(apply_repo) == marker
+
+    assert _recover(runner, _FakeHttp(_all_healthy), apply_repo, no_restart=True) == 0
+
+    assert _venv_target(apply_repo) == previous.resolve()
+    assert not Path(swap.new).exists()
+
+
+def test_rollback_last_resyncs_the_venv_an_update_moved(apply_repo: Path) -> None:
+    _link_live_venv(apply_repo)
+    update_apply_contract.write_last_good(
+        update_apply_contract.LastGoodRecord(
+            merge_sha="fedcba9876543",
+            rollback_to=_ROLLBACK,
+            applied_at=1.0,
+            driven_by="lead",
+            snapshots=[],
+            programs=[],
+            apps=[],
+            needs_system_services_restart=False,
+        ),
+        apply_repo,
+    )
+    runner = _rollback_runner(apply_repo)
+    runner.respond(
+        ("git", "diff", "--name-only"),
+        _Result(stdout=_BACKEND_MANIFEST_DIFF.split("\t")[1]),
+    )
+    runner.respond(
+        ("uv", "cache", "dir"), _Result(stdout=f"{_uv_cache_dir(apply_repo)}\n")
+    )
+
+    assert _rollback(runner, apply_repo) == 0
+
+    syncs = [
+        (argv, env)
+        for argv, env in zip(runner.calls, runner.envs)
+        if argv[:2] == ["uv", "sync"]
+    ]
+    # Through the link, into the venv the restored tree runs.
+    assert syncs == [(["uv", "sync", "--all-packages", "--frozen"], None)]
+
+
+def test_the_preflight_boots_the_entry_points_supervisord_runs() -> None:
+    commands: dict[str, str] = {}
+    for conf in sorted(
+        (_WORKSPACE_ROOT / update_layout.SUPERVISORD_DROPIN_DIR).glob("*.conf")
+    ):
+        parser = configparser.RawConfigParser()
+        parser.read(conf)
+        for section in parser.sections():
+            if section.startswith("program:"):
+                commands[section.removeprefix("program:")] = parser.get(
+                    section, "command"
+                )
+    venv = Path("/venvs/fresh")
+    spawner = _FakeSpawner()
+    http = _FakeHttp(_all_healthy)
+
+    update_probes.preflight(_WORKSPACE_ROOT, http, spawner, _no_sleep, venv=venv)
+    update_probes.preflight_chat(_WORKSPACE_ROOT, http, spawner, _no_sleep, venv=venv)
+
+    for program, spawned in (
+        (update_probes.SHELL_PROGRAM, spawner.spawns[0]),
+        ("chat", spawner.spawns[1]),
+    ):
+        script = Path(spawned[0])
+        assert script.parent == venv / "bin"
+        # supervisord execs that script by name, from .venv/bin first on its PATH.
+        assert re.search(
+            rf"(^|[\s/]){re.escape(script.name)}(\s|\"|$)", commands[program]
+        ), (
+            program,
+            commands[program],
+        )

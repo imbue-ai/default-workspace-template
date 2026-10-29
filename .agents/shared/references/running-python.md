@@ -35,6 +35,13 @@ The venv stays current without those per-call syncs:
 - after you change a dependency yourself, run `uv lock` and then
   `uv sync --all-packages`, and commit the new `uv.lock` with the change.
 
+`.venv` is a symlink to a directory beside the uv cache, so uv hardlinks
+packages instead of copying them. Leave it to the workspace: never replace it
+with a real directory, delete its target, or point it somewhere else. If a sync
+fails with "failed to create directory `.venv`: File exists", the link's target
+is gone; `python3 system/scripts/workspace_bare_scripts/venv_links.py ensure .`
+recreates it, and the sync then refills it.
+
 `--no-sync` is a no-op for a script carrying inline (PEP 723) metadata: uv
 always runs those in their own environment.
 

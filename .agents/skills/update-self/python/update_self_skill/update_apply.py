@@ -45,6 +45,7 @@ from update_self_skill.update_apply_contract import (
     ApplyMarker,
     LastGoodRecord,
     SnapshotRecord,
+    VenvSwap,
     clear_emergency,
     clear_last_good,
     clear_marker,
@@ -77,7 +78,9 @@ from update_self_skill.update_classification import (
 from update_self_skill.update_environment import (
     BACKEND_SNAPSHOT_NAMES,
     ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
+    begin_venv_swap,
     discard_snapshots,
+    finish_venv_swap,
     refresh_app_tools,
     refresh_backend_dependencies,
     remove_shadowing_app_tool_installs,
@@ -85,8 +88,11 @@ from update_self_skill.update_environment import (
     resolve_tool_destinations,
     restore_snapshots,
     run_provisioner,
+    switch_venv,
+    sync_workspace_venv,
     take_snapshots,
     tool_snapshot_name,
+    undo_venv_swap,
 )
 from update_self_skill.update_layout import (
     APPS_DIR,
@@ -761,6 +767,7 @@ def _recover_running_state(
     snapshots: Sequence[SnapshotRecord],
     is_frontend_expected: bool,
     provisioner_ran: bool,
+    venv_swap: VenvSwap | None,
 ) -> RecoveryOutcome:
     """After the tree is restored to known-good, restore the pre-apply state and
     confirm the workspace is healthy.
@@ -771,8 +778,9 @@ def _recover_running_state(
     that works afterwards is still worth knowing about (it is what lets the
     emergency record come down).
 
-    Restores are file copies (no network, no package manager, no ``mngr``);
-    rebuild/refresh fallbacks run only where there is no copy to put back. The
+    Restores are file copies and the venv's link switched back (no network, no
+    package manager, no ``mngr``); rebuild/refresh fallbacks run only where there
+    is no copy to put back. The
     provisioner re-run is best-effort by design: a failure (often no network),
     a hang past its budget, or a spawn failure still counts as recovered, with
     the tools named as left ahead of the tree. Nothing here is tagged
@@ -783,6 +791,7 @@ def _recover_running_state(
     try:
         failed = set(restore_snapshots(snapshots))
         restored = {record.name for record in snapshots} - failed
+        is_venv_restored = venv_swap is None or undo_venv_swap(repo_root, venv_swap)
         if provisioner_ran:
             provisioner_failure = run_provisioner(runner, repo_root)
             if provisioner_failure is not None:
@@ -829,6 +838,8 @@ def _recover_running_state(
                 destinations,
                 is_mngr_source_required=False,
             )
+        elif not is_venv_restored:
+            sync_workspace_venv(repo_root, runner, keep_protected)
         rebuildable_app_tools = _app_tools_to_rebuild(
             plan.app_tools, restored, repo_root
         )
@@ -1202,7 +1213,13 @@ def apply_update(
         marker.snapshots = take_snapshots(
             plan, repo_root, destinations, marker.snapshots
         )
+        # The venv is not copied aside: the merged tree is synced into a fresh target,
+        # pre-flighted from it, and swapped in by link just before the restart, so the
+        # venv the services run stays untouched until then and a rollback switches back.
+        if plan.backend_manifest:
+            marker.venv_swap = begin_venv_swap(repo_root, runner, marker.venv_swap)
         _advance(PHASE_SNAPSHOTTED)
+        fresh_venv = None if marker.venv_swap is None else Path(marker.venv_swap.new)
 
         # Whether the npm manifest *changed* says nothing about whether the
         # dependencies are *installed*: a merge that touches neither
@@ -1231,6 +1248,7 @@ def apply_update(
                 expend,
                 destinations,
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
+                environment=fresh_venv,
             )
         if plan.app_tools:
             refresh_app_tools(
@@ -1284,7 +1302,9 @@ def apply_update(
         # backend that cannot boot is then rejected while the live bundle
         # is still the one that was serving, instead of after ``static/``
         # has been rewritten and must be restored from its snapshot.
-        preflight_output = preflight(repo_root, http, spawner, sleeper, expend)
+        preflight_output = preflight(
+            repo_root, http, spawner, sleeper, expend, venv=fresh_venv
+        )
         if preflight_output is not None:
             raise ApplyFailed(
                 "merged backend failed to boot in a pre-flight check; live "
@@ -1297,7 +1317,7 @@ def apply_update(
         # plugins, so it is where a bad plugin table or a missing dependency fails.
         if has_chat_program(repo_root):
             chat_preflight_output = preflight_chat(
-                repo_root, http, spawner, sleeper, expend
+                repo_root, http, spawner, sleeper, expend, venv=fresh_venv
             )
             if chat_preflight_output is not None:
                 raise ApplyFailed(
@@ -1330,6 +1350,8 @@ def apply_update(
         # and deciding it per path is a list nobody keeps complete.
         # Recorded before the restart is attempted, so a kill anywhere past
         # this line leaves a marker that tells recovery to restart.
+        if marker.venv_swap is not None:
+            switch_venv(repo_root, marker.venv_swap)
         marker.live_service_restarted = True
         write_marker(marker, repo_root, now)
         run_checked(
@@ -1400,6 +1422,10 @@ def apply_update(
         elif plan.provisioner:
             clear_provision_incomplete(repo_root)
         clear_marker(repo_root, landed_at=now())
+        # After the marker: a kill before this leaves the old venv to the next sweep
+        # rather than to a recovery that would switch back to it.
+        if marker.venv_swap is not None:
+            finish_venv_swap(marker.venv_swap)
         if keep_rollback_point and not name_status:
             # A merge that changed nothing landed no commit: ``rollback_to`` is
             # HEAD, and a record naming it would offer to revert whatever merge
@@ -1494,6 +1520,7 @@ def apply_update(
                 snapshots=marker.snapshots,
                 is_frontend_expected=is_frontend_expected,
                 provisioner_ran=marker.provisioner_ran,
+                venv_swap=marker.venv_swap,
             )
         except (subprocess.CalledProcessError, OSError) as rollback_exc:
             sys.stderr.write(f"the rollback itself failed: {rollback_exc}\n")
@@ -1972,6 +1999,16 @@ def _run_rollback(
         failed.append(
             f"files the update left that the previous version does not use ({exc})"
         )
+    changed = git_out(
+        runner, repo_root, ["diff", "--name-only", record.rollback_to, record.merge_sha]
+    ).splitlines()
+    # The venv is never copied aside (the apply swapped a fresh one in and deleted the
+    # old), so an update that re-synced it is undone by syncing the restored tree.
+    if plan_apply(changed, read_provisioner_inputs(repo_root)).backend_manifest:
+        try:
+            sync_workspace_venv(repo_root, runner, keep_protected)
+        except (ApplyFailed, OSError, RuntimeError) as exc:
+            failed.append(f"the workspace's Python environment ({exc})")
     if failed:
         reason = (
             f"The source was reverted, but recovery could not restore: {', '.join(sorted(failed))}. "
@@ -1982,9 +2019,6 @@ def _run_rollback(
         _settle_rollback_record(record, repo_root, reason)
         sys.stderr.write(f"rollback incomplete: {reason}\n")
         return 3
-    changed = git_out(
-        runner, repo_root, ["diff", "--name-only", record.rollback_to, record.merge_sha]
-    ).splitlines()
     if any(
         path == SUPERVISORD_CONF or path.startswith(SUPERVISORD_DROPIN_DIR)
         for path in changed
@@ -2240,6 +2274,9 @@ def recover(
 
     if no_restart:
         failed = restore_snapshots(marker.snapshots)
+        # A venv that cannot be switched back is re-synced by the boot that follows.
+        if marker.venv_swap is not None:
+            undo_venv_swap(repo_root, marker.venv_swap)
         _remove_outputs_the_restored_tree_does_not_produce(
             repo_root, _restored_frontend_layout(repo_root)
         )
@@ -2296,6 +2333,7 @@ def recover(
         snapshots=marker.snapshots,
         is_frontend_expected=bool(marker.frontend_expected),
         provisioner_ran=marker.provisioner_ran,
+        venv_swap=marker.venv_swap,
     )
     if outcome.is_recovered:
         clear_marker(repo_root)

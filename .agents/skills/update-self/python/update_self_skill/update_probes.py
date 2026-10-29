@@ -375,14 +375,18 @@ def preflight(
     spawner: Spawner,
     sleeper: Callable[[float], None],
     expend: ExpendWrapper = as_expendable,
+    venv: Path | None = None,
 ) -> str | None:
     """Boot the merged shell backend on a throwaway port and probe it, without
     touching the live service. Returns ``None`` iff it serves a healthy
     response; otherwise what went wrong -- the tail of what the throwaway boot
-    wrote, or, for a boot that could not be spawned at all, a line saying so."""
+    wrote, or, for a boot that could not be spawned at all, a line saying so.
+
+    ``venv`` is the fresh target the apply synced the merged tree into, which the
+    boot runs from: the venv the services run once the link is switched to it."""
     port = find_free_port()
     return _preflight_boot(
-        argv=[TOOL_NAME],
+        argv=[_entry_point(TOOL_NAME, venv)],
         cwd=repo_root / SYSTEM_INTERFACE_DIR,
         env_overrides={
             "SYSTEM_INTERFACE_HOST": "127.0.0.1",
@@ -403,6 +407,7 @@ def preflight_chat(
     spawner: Spawner,
     sleeper: Callable[[float], None],
     expend: ExpendWrapper = as_expendable,
+    venv: Path | None = None,
 ) -> str | None:
     """Boot the merged chat app on a throwaway port in its side-effect-free mode and
     probe it, the way :func:`preflight` boots the shell. The chat is the process that
@@ -412,7 +417,7 @@ def preflight_chat(
     from reconciling the live account store, starting ``mngr observe``, or registering."""
     port = find_free_port()
     return _preflight_boot(
-        argv=[CHAT_TOOL_NAME, "--preflight"],
+        argv=[_entry_point(CHAT_TOOL_NAME, venv), "--preflight"],
         # The repo root, where supervisord runs the chat from (its paths are relative to it).
         cwd=repo_root,
         env_overrides={"CHAT_HOST": "127.0.0.1", "CHAT_PORT": str(port)},
@@ -426,6 +431,10 @@ def preflight_chat(
         sleeper=sleeper,
         expend=expend,
     )
+
+
+def _entry_point(script: str, venv: Path | None) -> str:
+    return script if venv is None else str(venv / "bin" / script)
 
 
 def _preflight_boot(

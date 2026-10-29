@@ -135,6 +135,37 @@ class SnapshotRecord:
 
 
 @dataclass
+class VenvSwap:
+    """The root venv's replacement: synced into a fresh target, then swapped in by link.
+
+    ``previous`` is the target ``.venv`` linked to before the apply (``None`` when it was
+    a real directory or missing), ``new`` the fresh target the merged tree is synced
+    into, and ``aside`` where a real ``.venv`` directory is moved when the link replaces
+    it. A rollback points the link back at ``previous`` (or moves ``aside`` back); a
+    healthy apply deletes them.
+    """
+
+    previous: str | None
+    new: str
+    aside: str | None = None
+
+    def to_payload(self) -> dict[str, str | None]:
+        return {"previous": self.previous, "new": self.new, "aside": self.aside}
+
+    @classmethod
+    def from_payload(cls, raw: object) -> VenvSwap | None:
+        if not isinstance(raw, dict) or not isinstance(raw.get("new"), str):
+            return None
+        previous = raw.get("previous")
+        aside = raw.get("aside")
+        return cls(
+            previous=previous if isinstance(previous, str) else None,
+            new=raw["new"],
+            aside=aside if isinstance(aside, str) else None,
+        )
+
+
+@dataclass
 class ApplyMarker:
     """The full-information record of an in-flight apply.
 
@@ -170,6 +201,7 @@ class ApplyMarker:
     # When each phase was reached (epoch seconds), so every apply yields
     # per-phase durations and an interrupted one names the phase it hung in.
     phase_timings: dict[str, float] = field(default_factory=dict)
+    venv_swap: VenvSwap | None = None
 
     def to_json(self) -> str:
         payload = {
@@ -187,6 +219,9 @@ class ApplyMarker:
             "live_service_restarted": self.live_service_restarted,
             "frontend_expected": self.frontend_expected,
             "phase_timings": dict(self.phase_timings),
+            "venv_swap": None
+            if self.venv_swap is None
+            else self.venv_swap.to_payload(),
             "snapshots": [
                 {"name": s.name, "source": s.source, "copy": s.copy}
                 for s in self.snapshots
@@ -223,6 +258,7 @@ class ApplyMarker:
                 )
                 for s in raw.get("snapshots", [])
             ],
+            venv_swap=VenvSwap.from_payload(raw.get("venv_swap")),
         )
 
 

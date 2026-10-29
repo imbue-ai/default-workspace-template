@@ -16,8 +16,12 @@ from pathlib import Path
 from typing import Collection, Mapping, NamedTuple, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from update_self_skill import tool_env
-from update_self_skill.update_apply_contract import SnapshotRecord, snapshots_root
+from update_self_skill import tool_env, venv_links
+from update_self_skill.update_apply_contract import (
+    SnapshotRecord,
+    VenvSwap,
+    snapshots_root,
+)
 from update_self_skill.update_banding import ExpendWrapper
 from update_self_skill.update_classification import ApplyPlan, AppTool
 from update_self_skill.update_layout import (
@@ -104,8 +108,8 @@ def snapshot_targets(
 
     Every entry is a directory restored by a plain copy: the built bundles
     (the shell's and the chat's) and the npm workspace's ``node_modules`` (the
-    build and ``npm ci`` both delete before they produce), the root venv
-    (``uv sync`` rewrites it), the mngr tool environment, and the tool
+    build and ``npm ci`` both delete before they produce), the mngr tool
+    environment, and the tool
     environment of every *critical* app the plan
     reinstalls (``uv tool install --reinstall`` rebuilds them from scratch). A
     non-critical app's tool is not copied aside: a rollback reinstalls it from
@@ -123,7 +127,6 @@ def snapshot_targets(
         targets.append(("node_modules", repo_root / NPM_ROOT_DIR / "node_modules"))
     tool_names: list[str] = []
     if plan.backend_manifest:
-        targets.append(("venv", repo_root / ".venv"))
         tool_names.append(MNGR_TOOL_NAME)
     tool_names.extend(app.tool_name for app in plan.app_tools if app.is_critical)
     for tool_name in tool_names:
@@ -140,14 +143,16 @@ def tool_snapshot_name(tool_name: str) -> str:
     return f"tool-{tool_name}"
 
 
-# The snapshot names that together cover the backend environments a manifest
-# change rebuilds. A rollback that could not put both of them back has to
-# re-resolve both from the restored tree: a restored venv over a tool
-# environment still built from the rolled-back-away tree is the
-# ModuleNotFoundError-on-``mngr`` state that reads as recovered while nothing
-# works. An app's tool environment stands on its own (it resolves from the
-# app's pyproject, not the venv), so each is judged by its own snapshot name.
-BACKEND_SNAPSHOT_NAMES = frozenset({"venv", tool_snapshot_name(MNGR_TOOL_NAME)})
+# The snapshot of the mngr tool environment a manifest change rebuilds. A
+# rollback that could not put it back re-resolves it, and the venv with it, from
+# the restored tree: a restored venv over a tool environment still built from
+# the rolled-back-away tree is the ModuleNotFoundError-on-``mngr`` state that
+# reads as recovered while nothing works. The venv itself is never copied: the
+# apply syncs the merged tree into a fresh target and swaps it in by link
+# (:class:`VenvSwap`). An app's tool environment stands on its own (it resolves
+# from the app's pyproject, not the venv), so each is judged by its own
+# snapshot name.
+BACKEND_SNAPSHOT_NAMES = frozenset({tool_snapshot_name(MNGR_TOOL_NAME)})
 
 
 def take_snapshots(
@@ -857,12 +862,14 @@ def refresh_backend_dependencies(
     destinations: Mapping[str, ToolDestination],
     timeout: float | None = None,
     is_mngr_source_required: bool = True,
+    environment: Path | None = None,
 ) -> None:
     """Re-resolve the two shared backend environments from the current tree,
     mirroring ``build_workspace.sh``: the ``mngr`` tool from the source
     pyproject.toml gives it, the assets that pin carries, and the workspace venv
-    (``uv sync``). ``timeout`` bounds each (the forward apply's budget; recovery
-    passes none).
+    (``uv sync``, into ``environment`` when the apply swaps in a fresh target; see
+    :func:`sync_workspace_venv`). ``timeout`` bounds each (the forward apply's budget;
+    recovery passes none).
 
     ``is_mngr_source_required`` is the recovery path's opt-out: a tree restored from
     before the pin gives ``imbue-mngr`` a source this cannot re-resolve, and the
@@ -884,14 +891,143 @@ def refresh_backend_dependencies(
             f"refresh: {PYPROJECT_PATH} does not give {MNGR_TOOL_NAME} a source this can "
             "re-resolve; keeping the mngr tool the restored tree was running.\n"
         )
+    sync_workspace_venv(repo_root, runner, expend, timeout, environment)
+    _fetch_mngr_assets(repo_root, runner, expend, timeout)
+
+
+def sync_workspace_venv(
+    repo_root: Path,
+    runner: Runner,
+    expend: ExpendWrapper,
+    timeout: float | None = None,
+    environment: Path | None = None,
+) -> None:
+    """Sync the workspace venv to the current tree, as ``build_workspace.sh`` does.
+
+    ``environment`` is a fresh target to sync into instead of the one ``.venv`` links
+    to. It is named by its real path, so the console scripts' ``#!`` lines name it too
+    and run from it before and after the link is switched to it. Without one the sync
+    goes through ``.venv``, after making sure a link has a target to sync into; a real
+    ``.venv`` directory is synced as it is.
+    """
+    env: dict[str, str] | None = None
+    link = repo_root / venv_links.VENV_NAME
+    if environment is not None:
+        env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(environment)}
+    elif link.is_symlink() or not link.exists():
+        venv_links.ensure_link(
+            repo_root,
+            _venvs_root(repo_root, runner),
+            venv_links.ROOT_SYNC,
+            _link_runner(runner),
+        )
     run_checked(
         runner,
         expend(["uv", "sync", "--all-packages", "--frozen"]),
         repo_root,
         "uv sync --all-packages --frozen",
+        env=env,
         timeout=timeout,
     )
-    _fetch_mngr_assets(repo_root, runner, expend, timeout)
+
+
+def _link_runner(runner: Runner) -> venv_links.Run:
+    def run(command: Sequence[str], /, *, cwd: Path) -> venv_links.Completed:
+        return runner.run(
+            list(command), cwd=str(cwd), capture_output=True, text=True, check=False
+        )
+
+    return run
+
+
+def _venvs_root(repo_root: Path, runner: Runner) -> Path:
+    return venv_links.venvs_root(
+        venv_links.uv_cache_dir(_link_runner(runner), repo_root)
+    )
+
+
+# Where a real ``.venv`` directory waits while the link that replaces it is proved.
+VENV_ASIDE_NAME = ".venv-previous"
+
+
+def begin_venv_swap(
+    repo_root: Path, runner: Runner, existing: VenvSwap | None
+) -> VenvSwap:
+    """A fresh target for the merged tree's venv, held by this process with the one
+    ``.venv`` names now, so no sweep removes either before the apply settles.
+
+    ``existing`` is a resumed apply's swap, reused while its target is still there.
+    """
+    root = _venvs_root(repo_root, runner)
+    pid = os.getpid()
+    if existing is not None and Path(existing.new).is_dir():
+        venv_links.hold(Path(existing.new), pid)
+        if existing.previous is not None:
+            venv_links.hold(Path(existing.previous), pid)
+        return existing
+    link = repo_root / venv_links.VENV_NAME
+    previous: str | None = None
+    aside: str | None = None
+    if link.is_symlink():
+        resolved = os.path.realpath(link)
+        if os.path.isdir(resolved):
+            previous = resolved
+            venv_links.hold(Path(resolved), pid)
+    elif link.is_dir():
+        aside = str(repo_root / VENV_ASIDE_NAME)
+    new = venv_links.fresh_target(root, repo_root, pid)
+    venv_links.sweep(root)
+    venv_links.check_same_filesystem(
+        root, venv_links.uv_cache_dir(_link_runner(runner), repo_root)
+    )
+    return VenvSwap(previous=previous, new=str(new), aside=aside)
+
+
+def switch_venv(repo_root: Path, swap: VenvSwap) -> None:
+    """Point ``.venv`` at the swap's new target, moving a real ``.venv`` aside first."""
+    link = repo_root / venv_links.VENV_NAME
+    if swap.aside is not None and link.is_dir() and not link.is_symlink():
+        aside = Path(swap.aside)
+        if aside.exists():
+            shutil.rmtree(aside)
+        os.rename(link, aside)
+    venv_links.switch_link(repo_root, Path(swap.new))
+
+
+def undo_venv_swap(repo_root: Path, swap: VenvSwap) -> bool:
+    """Put back the venv the apply began with and delete the new target. Returns whether
+    that venv is in place; when it is not, the caller re-syncs one for the restored tree.
+    """
+    link = repo_root / venv_links.VENV_NAME
+    restored = False
+    try:
+        if swap.aside is not None and Path(swap.aside).is_dir():
+            if link.is_symlink():
+                link.unlink()
+            if not link.exists():
+                os.rename(swap.aside, link)
+            restored = True
+        elif swap.previous is not None and Path(swap.previous).is_dir():
+            venv_links.switch_link(repo_root, Path(swap.previous))
+            venv_links.hold(Path(swap.previous), None)
+            restored = True
+    except OSError as exc:
+        sys.stderr.write(f"recovery: could not put the previous venv back ({exc}).\n")
+    if os.path.realpath(link) != os.path.realpath(swap.new):
+        venv_links.remove_target(Path(swap.new))
+    return restored
+
+
+def finish_venv_swap(swap: VenvSwap) -> None:
+    """Delete what the swap replaced, once the merged tree is live and healthy."""
+    if swap.aside is not None:
+        shutil.rmtree(swap.aside, ignore_errors=True)
+    if (
+        swap.previous is not None
+        and venv_links.read_owner(Path(swap.previous)) is not None
+    ):
+        venv_links.remove_target(Path(swap.previous))
+    venv_links.hold(Path(swap.new), None)
 
 
 def refresh_app_tools(
