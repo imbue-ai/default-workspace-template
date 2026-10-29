@@ -25,6 +25,7 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Final
+from typing import Self
 
 import httpx
 from loguru import logger
@@ -32,11 +33,13 @@ from pydantic import AwareDatetime
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
+from pydantic import model_validator
 from workspace_layout.primitives import UserId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.state_files import read_json_object
 from imbue.system_interface.shell.state_files import write_json_atomic
@@ -96,12 +99,31 @@ class _CachedPicture(FrozenModel):
     media_type: str | None = Field(default=None, description="The image's media type; None for a failure")
     content_base64: str | None = Field(default=None, description="The image bytes, base64; None for a failure")
 
+    @model_validator(mode="after")
+    def _check_bytes_follow_the_outcome(self) -> Self:
+        has_bytes = self.media_type is not None and self.content_base64 is not None
+        if has_bytes == self.is_fetch_failed:
+            raise InvalidShellValueError("a picture cache entry holds bytes exactly when its fetch succeeded")
+        return self
+
 
 @pure
 def picture_version_of(profile_picture_url: str) -> str:
     """The version a picture URL carries in the shell's own picture route: a digest of the connector's URL, which
     changes with the picture's content hash, so a page's cached copy is never shown for a newer picture."""
     return hashlib.sha256(profile_picture_url.encode()).hexdigest()[:_PICTURE_VERSION_LENGTH]
+
+
+@pure
+def _picture_of(cached: _CachedPicture) -> ProfilePicture:
+    """The picture a successful cache entry holds."""
+    if cached.media_type is None or cached.content_base64 is None:
+        raise InvalidShellValueError("a failed picture cache entry holds no picture")
+    return ProfilePicture(
+        media_type=cached.media_type,
+        content=base64.b64decode(cached.content_base64),
+        version=picture_version_of(cached.url),
+    )
 
 
 class _ProfileWire(FrozenModel):
@@ -212,12 +234,8 @@ class ProfileResolver(MutableModel):
         url = profile.profile_picture_url
         cached = self._read_cached_picture(user_id)
         if cached is not None and cached.url == url:
-            if cached.media_type is not None and cached.content_base64 is not None:
-                return ProfilePicture(
-                    media_type=cached.media_type,
-                    content=base64.b64decode(cached.content_base64),
-                    version=picture_version_of(url),
-                )
+            if not cached.is_fetch_failed:
+                return _picture_of(cached)
             if now - cached.fetched_at < self.cache_ttl:
                 return None
         fetched = self._fetch_picture(url, user_id)
