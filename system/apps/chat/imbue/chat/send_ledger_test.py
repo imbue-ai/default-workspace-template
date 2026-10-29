@@ -3,6 +3,7 @@ import threading
 from flask import Response
 
 from imbue.chat.send_ledger import SendLedger
+from imbue.mngr.utils.polling import wait_for
 
 
 def _answer(status: int, body: bytes = b'{"status": "ok"}') -> Response:
@@ -13,30 +14,41 @@ def _replay(data: bytes, status: int) -> Response:
     return _answer(status, data)
 
 
-def test_a_repeat_while_the_send_is_under_way_gets_its_answer_without_sending() -> None:
-    ledger = SendLedger()
+def _send_and_repeat_while_the_first_is_under_way(
+    ledger: SendLedger, first_answer: Response, repeat_answer: Response
+) -> tuple[list[str], list[Response]]:
+    """Send under one key, repeat it while the first send is held, then let the first finish.
+
+    Returns which sends ran and the two answers, in the order they came back.
+    """
     release = threading.Event()
     sends: list[str] = []
 
-    def slow_send() -> Response:
+    def first_send() -> Response:
         sends.append("first")
         release.wait(timeout=10)
-        return _answer(200)
+        return first_answer
 
     def repeat_send() -> Response:
         sends.append("repeat")
-        return _answer(200)
+        return repeat_answer
 
     answers: list[Response] = []
-    first = threading.Thread(target=lambda: answers.append(ledger.send_once("chat:m-1", slow_send, _replay)))
+    first = threading.Thread(target=lambda: answers.append(ledger.send_once("chat:m-1", first_send, _replay)))
     first.start()
-    while not sends:
-        threading.Event().wait(0.01)
+    wait_for(lambda: sends == ["first"], error_message="the first send never started")
     repeat = threading.Thread(target=lambda: answers.append(ledger.send_once("chat:m-1", repeat_send, _replay)))
     repeat.start()
+    repeat.join(timeout=0.2)
+    assert repeat.is_alive(), "the repeat did not wait for the send under way"
     release.set()
     first.join(timeout=10)
     repeat.join(timeout=10)
+    return sends, answers
+
+
+def test_a_repeat_while_the_send_is_under_way_gets_its_answer_without_sending() -> None:
+    sends, answers = _send_and_repeat_while_the_first_is_under_way(SendLedger(), _answer(200), _answer(200))
 
     assert sends == ["first"]
     assert [answer.get_data() for answer in answers] == [b'{"status": "ok"}', b'{"status": "ok"}']
@@ -72,33 +84,9 @@ def test_a_taken_send_is_answered_again_from_the_ledger() -> None:
 
 
 def test_a_repeat_waiting_on_a_send_that_is_refused_sends_itself() -> None:
-    ledger = SendLedger()
-    release = threading.Event()
-    sends: list[str] = []
-
-    def refused_send() -> Response:
-        sends.append("first")
-        release.wait(timeout=10)
-        return _answer(500, b'{"detail": "failed"}')
-
-    def repeat_send() -> Response:
-        sends.append("repeat")
-        return _answer(200)
-
-    answers: list[int] = []
-    first = threading.Thread(
-        target=lambda: answers.append(ledger.send_once("chat:m-1", refused_send, _replay).status_code)
+    sends, answers = _send_and_repeat_while_the_first_is_under_way(
+        SendLedger(), _answer(500, b'{"detail": "failed"}'), _answer(200)
     )
-    first.start()
-    while not sends:
-        threading.Event().wait(0.01)
-    repeat = threading.Thread(
-        target=lambda: answers.append(ledger.send_once("chat:m-1", repeat_send, _replay).status_code)
-    )
-    repeat.start()
-    release.set()
-    first.join(timeout=10)
-    repeat.join(timeout=10)
 
     assert sends == ["first", "repeat"]
-    assert sorted(answers) == [200, 500]
+    assert sorted(answer.status_code for answer in answers) == [200, 500]
