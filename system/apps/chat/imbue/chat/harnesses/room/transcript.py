@@ -112,9 +112,9 @@ def step_as_page_event(record: dict[str, Any]) -> dict[str, Any] | None:
         "content": message,
         "message_uuid": event_id,
     }
-    # A step whose message leads with an author prefix (a send held for the room while it was still an agent's
-    # chat, from before sends were attributed for the harness they land on) is shown without it; the content
-    # stays as written, since the chat's annotations are joined to it by its hash.
+    # A room learns the author from the chat's annotations, never from a prefix, so a step whose message still
+    # leads with one is shown without it; the content stays as written, since the annotations are joined to it by
+    # its hash.
     _author_name, spoken = split_author_prefix(message)
     if spoken != message:
         event["display_body"] = spoken

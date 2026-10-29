@@ -34,9 +34,9 @@ def test_a_persons_step_is_read_back_as_their_turn_with_the_composers_id() -> No
 
 
 def test_a_step_that_leads_with_an_author_prefix_is_shown_without_it_and_kept_as_written() -> None:
-    """A send held for the room while it was still an agent's chat, from before sends were attributed for the
-    harness they land on, carries the prefix: the page is handed the words behind it, and the content stays whole
-    so the chat's annotations still join to it by its hash."""
+    """A room learns the author from the chat's annotations, never from a prefix, so a step whose message still
+    leads with one is handed to the page as the words behind it, and the content stays whole so the annotations
+    still join to it by its hash."""
     record = person_step_record("[from: Bob] hello room", "m-18")
 
     event = step_as_page_event(record)
