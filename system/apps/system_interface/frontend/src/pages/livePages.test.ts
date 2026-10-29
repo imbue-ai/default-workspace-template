@@ -40,7 +40,7 @@ import {
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import { LivePagesLayer } from "./livePages";
+import { LivePagesLayer, DESKTOP_ROOT_ATTRIBUTE } from "./livePages";
 
 const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
@@ -54,6 +54,7 @@ let store: DesktopStore;
 let backdrop: HTMLElement;
 let host: HTMLElement;
 let windows: HTMLElement;
+let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
 
 /** Stand in for the window chrome the views render: one content box per shown window at a fixed spot. */
@@ -168,7 +169,13 @@ beforeEach(async () => {
   host = document.createElement("div");
   host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 }) as DOMRect;
   windows = document.createElement("div");
-  backdrop.append(host, windows);
+  // As the Backdrop nests them: the pages host and the windows layer inside the desktop's stage, the overview's
+  // tiles beside the stage under the backdrop's root.
+  backdrop.setAttribute(DESKTOP_ROOT_ATTRIBUTE, "home");
+  const stage = document.createElement("div");
+  stage.append(host, windows);
+  overviewTiles = document.createElement("div");
+  backdrop.append(stage, overviewTiles);
   document.body.appendChild(backdrop);
   resetEmbedderRelayForTesting();
   initEmbedderRelay();
@@ -1075,7 +1082,9 @@ describe("the phone's mount policy", () => {
 describe("the overview (the multiplayer spec, section 8.2)", () => {
   /** Stand in for the overview's tiles: one content box per window of the desktop, minimized ones included. */
   function renderTiles(): void {
+    // The windows layer is gone while the overview is up; its tiles stand in, outside the stage.
     windows.innerHTML = "";
+    overviewTiles.innerHTML = "";
     for (const [windowId, left] of [
       ["win-1", 40],
       ["win-2", 340],
@@ -1087,7 +1096,7 @@ describe("the overview (the multiplayer spec, section 8.2)", () => {
       content.setAttribute("data-window-content", "");
       content.getBoundingClientRect = () => ({ left, top: 100, width: 250, height: 200 }) as DOMRect;
       tile.appendChild(content);
-      windows.appendChild(tile);
+      overviewTiles.appendChild(tile);
     }
   }
 

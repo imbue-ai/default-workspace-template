@@ -27,6 +27,7 @@ import type { TaskbarEntry } from "../reducers/desktopState";
 import type { DesktopStore } from "../store/DesktopStore";
 import { DetachedWindowGhost } from "./DetachedWindowGhost";
 import { FloatingEntries } from "./FloatingEntries";
+import { DESKTOP_ROOT_ATTRIBUTE } from "../pages/livePages";
 import { Overview } from "./Overview";
 import type { OverviewAttrs } from "./Overview";
 import { ShortcutIcon } from "./ShortcutIcon";
@@ -116,7 +117,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
       return m(
         "div",
         {
-          "data-desktop-id": desktop.id,
+          [DESKTOP_ROOT_ATTRIBUTE]: desktop.id,
           // The wallpaper is the app layout's, painted across the whole viewport so the taskbar has
           // something to blur; this layer stays clear of it, except for the band around a letterboxed desktop,
           // whose wallpaper is the stage's.

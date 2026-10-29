@@ -79,6 +79,9 @@ export const LIVE_PAGE_ATTRIBUTE = "data-live-page";
 export const WINDOW_CONTENT_ATTRIBUTE = "data-window-content";
 /** The element of a window's chrome that carries its id; the gestures bind by it too. */
 export const WINDOW_ID_ATTRIBUTE = "data-window-id";
+/** The backdrop's root, which carries the active desktop's id: every content box a page lies over (a window's
+ *  chrome inside the desktop's stage, an overview tile outside it) is somewhere under it. */
+export const DESKTOP_ROOT_ATTRIBUTE = "data-desktop-id";
 
 // App pages are cross-origin iframes (each app owns its own origin), so allow-same-origin only
 // lets the framed app be a normal page on ITS origin; it grants nothing on the shell's. An app
@@ -574,7 +577,10 @@ export class LivePagesLayer implements PageDriver {
    *  drawn in a letterbox (the multiplayer spec, section 8.3), the host and the chrome lie under one scale, and a
    *  page's position and size are in the host's unscaled pixels, so the box is divided by that scale. */
   private contentBox(windowId: string): HostRect | null {
-    const content = this.host.parentElement?.querySelector<HTMLElement>(
+    // Searched from the backdrop's root, not the host's parent: the overview's tiles lie outside the desktop's
+    // stage the host sits in.
+    const root = this.host.closest<HTMLElement>(`[${DESKTOP_ROOT_ATTRIBUTE}]`) ?? this.host.parentElement;
+    const content = root?.querySelector<HTMLElement>(
       `[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"] [${WINDOW_CONTENT_ATTRIBUTE}]`,
     );
     if (content === undefined || content === null) return null;
