@@ -2660,6 +2660,32 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
     mock_send.assert_not_called()
 
 
+@pytest.mark.parametrize("route", ["interrupt", "flush-queue"])
+def test_a_restart_route_lets_go_of_the_sends_kept_for_resending(app: Flask, client: FlaskClient, route: str) -> None:
+    """Both routes restart the agent on purpose, so what it took before is not sent again when its process ends."""
+    agent_info = _agent_info()
+    manager = state_of(app).agent_manager
+    manager._keep_unrecorded_send(agent_info.id, "what is 5+5?", frozenset())
+    letting_go_during_restart: list[bool] = []
+
+    def restart(**_kwargs: Any) -> FinishedProcess:
+        letting_go_during_restart.append(agent_info.id in manager._letting_go_counts_by_agent)
+        return _restart_ok()
+
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("queued text")),
+        patch("imbue.chat.server.run_local_command_modern_version", side_effect=restart),
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=None),
+    ):
+        response = client.post(f"/api/chats/{agent_info.id}/{route}")
+
+    assert response.status_code == 200
+    assert letting_go_during_restart == [True]
+    assert agent_info.id not in manager._unrecorded_sends_by_agent
+
+
 def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) -> None:
     with patch("imbue.chat.server._find_active_agent", return_value=None):
         response = client.post("/api/chats/nonexistent/shoulder-tap-atomic")
