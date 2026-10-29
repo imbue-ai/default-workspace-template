@@ -341,7 +341,10 @@ class RosterSource(MutableModel):
 
 class RosterAnnouncer(MutableModel):
     """How the roster reaches every window: computed afresh and pushed as ``roster_updated``, unless it is the very
-    document last pushed, which every window already holds."""
+    document last pushed, which every window already holds. One announcement at a time, computed and pushed under
+    the one lock: the heartbeat route, the sweep, and the watch announce from threads of their own, and a document
+    computed earlier must never go out after a newer one, which the skip of an equal document would then leave
+    standing."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
@@ -354,12 +357,12 @@ class RosterAnnouncer(MutableModel):
 
     def announce(self) -> None:
         """Push the roster as it is now, when it differs from the one last pushed."""
-        document = self.roster.document(self.now()).model_dump(mode="json")
         with self._lock:
+            document = self.roster.document(self.now()).model_dump(mode="json")
             if document == self._last_announced:
                 return
             self._last_announced = document
-        self.broadcaster.broadcast_roster_updated(document)
+            self.broadcaster.broadcast_roster_updated(document)
 
 
 def build_roster_announcer(

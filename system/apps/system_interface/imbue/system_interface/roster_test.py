@@ -1,8 +1,10 @@
 import json
+import threading
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
+from typing import Any
 
 import httpx
 from workspace_layout.identity import RequestIdentity
@@ -250,6 +252,47 @@ def test_the_announcer_pushes_a_roster_once_until_it_changes(tmp_path: Path) -> 
         announcer.announce()
         (second,) = drain_messages(client_queue)
         assert [entry["key"] for entry in second["participants"]] == ["user:user-owner-9c21", "workspace-agent"]
+    finally:
+        broadcaster.unregister(client_queue)
+
+
+def test_the_announcer_pushes_documents_in_the_order_they_are_computed(tmp_path: Path) -> None:
+    """Two announces racing from threads of their own (a heartbeat's and the sweep's) never leave an older document
+    as the last one pushed, which the skip of an equal document would then leave standing: the second announce,
+    begun while the first is still computing, gets to compute only once the first has pushed the connected roster,
+    and pushes the disconnected one (its clock says the owner's heartbeats have stopped) last."""
+    source = _source(tmp_path)
+    source.presence.heartbeat(_OWNER, _T0)
+    broadcaster = WebSocketBroadcaster()
+    client_queue = broadcaster.register()
+    clocks = iter((_T0, _T0 + PRESENCE_CONNECTED_WINDOW + timedelta(minutes=1)))
+    is_second_started = threading.Event()
+    pushed_before_the_second_computed: list[list[dict[str, Any]]] = []
+
+    def owner_connected_in(messages: list[dict[str, Any]]) -> list[bool]:
+        return [
+            next(entry for entry in message["participants"] if entry["is_owner"])["is_connected"]
+            for message in messages
+        ]
+
+    def now() -> datetime:
+        moment = next(clocks)
+        if not is_second_started.is_set():
+            is_second_started.set()
+            second.start()
+        else:
+            pushed_before_the_second_computed.append(drain_messages(client_queue))
+        return moment
+
+    announcer = build_roster_announcer(source, broadcaster, now)
+    second = threading.Thread(target=announcer.announce)
+    try:
+        announcer.announce()
+        second.join(timeout=5.0)
+        assert not second.is_alive()
+        (first_pushed,) = pushed_before_the_second_computed
+        assert owner_connected_in(first_pushed) == [True]
+        assert owner_connected_in(drain_messages(client_queue)) == [False]
     finally:
         broadcaster.unregister(client_queue)
 
