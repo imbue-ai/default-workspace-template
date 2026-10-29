@@ -377,9 +377,21 @@ the same id, marked `is_repeat`, and the repeat gets the first send's answer, a
 refusal included (waiting for it while it is still under way), rather than a
 second delivery. A Retry under the same id gets a taken send's answer, but is
 sent afresh after a refusal. A send mngr reports
-`agent_not_found` (the agent moved) is sent again once, by discovery; one mngr
-could not confirm (`submission_unconfirmed`) is never sent again by the chat
-app, and the page says it may already have arrived.
+`agent_not_found` (the agent moved) or `not_submitted` (Claude never took it, and
+mngr cleared it from the input box) is sent again once, by discovery or at the
+same place; one mngr could not confirm (`submission_unconfirmed`) is never sent
+again by the chat app, and the page says it may already have arrived. Since mngr
+counts a Claude message as delivered once Claude shows it, which during its
+startup hooks is before it is written down, the chat app keeps each delivered
+Claude send until the agent's process ends: when the process exits (lifecycle
+`DONE`, a crash or a kill), the sends made after the last user message its final
+transcript recorded are sent again, once. This goes by recording order, not by
+text, since Claude records messages in the order it took them but in its own
+words (a bash-mode command, a notice, queued messages merged into one turn); a
+user message with no timestamp counts as recorded after every send. The cost is
+that of two messages taken together, a crash between recording them loses the
+second. A deliberate stop, Stop taking the turn back, the agent's removal, or
+half an hour lets them go.
 
 The intake route is how a text enters a chat from outside a chat page
 (`docs/system/blueprint/post-launch-paths/`): `POST /api/chats/intake` takes the
