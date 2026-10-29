@@ -964,13 +964,15 @@ def test_a_registered_windows_disconnect_broadcasts_clients_updated_and_an_unreg
                 poll_interval=0.05,
                 error_message="the window never registered",
             )
-            drain_messages(observer_queue)
+            # The unregistered socket's close, handled by now, announced nothing.
+            assert "clients_updated" not in [message["type"] for message in drain_messages(observer_queue)]
             close_ws(registered)
+            # The broadcast follows the unregister, so the message is what is waited for, not the client's leaving.
             wait_for(
-                lambda: "c-leaving" not in broadcaster.connected_client_ids(),
+                lambda: not observer_queue.empty(),
                 timeout=5.0,
                 poll_interval=0.05,
-                error_message="the window never unregistered",
+                error_message="the window's disconnect was never announced",
             )
         assert [message["type"] for message in drain_messages(observer_queue)] == ["clients_updated"]
     finally:
