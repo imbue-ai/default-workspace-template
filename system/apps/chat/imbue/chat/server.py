@@ -1023,19 +1023,11 @@ def _attributed_send(
 
 
 def _attributed_delivery(
-    state: ChatAppState,
-    chat_id: ChatId,
-    message: str,
-    message_id: str,
-    identity: RequestIdentity,
-    target_kind: ChatKind | None,
+    state: ChatAppState, chat_id: ChatId, message: str, message_id: str, identity: RequestIdentity
 ) -> str:
-    """The text the agent is handed for a send to an existing chat, its annotation recorded before delivery.
-    ``target_kind`` is the kind of chat the words are for when the caller knows it better than the chat's state
-    does (a switch's target); None reads it off the chat."""
-    attributed = _attributed_send(
-        state, message, message_id, identity, _is_author_prefixed(state, chat_id, target_kind)
-    )
+    """The text the agent is handed for a send to an existing chat, its annotation recorded before delivery, for
+    the harness the chat's state says the words are for."""
+    attributed = _attributed_send(state, message, message_id, identity, _is_author_prefixed(state, chat_id, None))
     if attributed.annotation is not None:
         state.authors.record(chat_id, attributed.annotation)
     return attributed.delivered_text
@@ -1185,9 +1177,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
     ) is not None and provisional.phase is ProvisionalChatPhase.CREATING
     if _find_active_agent(chat_id) is None and not is_being_created:
         return _chat_not_found_response(chat_id)
-    delivered_text = _attributed_delivery(
-        state, parsed, send_message_request.message, message_id, request_identity(), None
-    )
+    delivered_text = _attributed_delivery(state, parsed, send_message_request.message, message_id, request_identity())
     if _find_active_agent(chat_id) is None:
         held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, delivered_text, message_id)
         if held is not None:
@@ -1745,7 +1735,8 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
     while the chat is already converging, 404 when it has no active agent, and 400 when the
     account is unknown or the chat's own.
     """
-    agent_manager: AgentManager = get_state().agent_manager
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     agent_info = _find_active_agent(chat_id)
@@ -1760,19 +1751,24 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
     switch_request = parse_request_body(SwitchChatRequest)
     message_id = switch_request.message_id or uuid4().hex
     # The confirming message is the first the chat's next agent receives, so it is attributed for that agent's
-    # harness (the multiplayer spec, section 5.1); the held-send listing shows it without the prefix.
-    delivered_text = (
-        _attributed_delivery(
-            get_state(), ChatId(chat_id), switch_request.message, message_id, request_identity(), switch_request.kind
+    # harness (the multiplayer spec, section 5.1); the held-send listing shows it without the prefix. The annotation
+    # is recorded once the switch has begun, since the manager may still refuse it.
+    attributed = (
+        _attributed_send(
+            state,
+            switch_request.message,
+            message_id,
+            request_identity(),
+            _is_author_prefixed(state, ChatId(chat_id), switch_request.kind),
         )
         if switch_request.message
-        else ""
+        else None
     )
     try:
         kind, phase, returned_block = agent_manager.begin_switch(
             ChatId(chat_id),
             switch_request.account_id,
-            delivered_text,
+            attributed.delivered_text if attributed is not None else "",
             message_id,
             _held_send_origin(switch_request),
             model_pick=switch_request.model,
@@ -1782,7 +1778,9 @@ def _switch_chat_endpoint(chat_id: str) -> Response:
         return error_response(str(e), 409)
     except HandoffError as e:
         return error_response(str(e), 400)
-    record_client_message_activity(get_state().shell, ChatId(chat_id), switch_request, get_state().is_secondary)
+    if attributed is not None and attributed.annotation is not None:
+        state.authors.record(ChatId(chat_id), attributed.annotation)
+    record_client_message_activity(state.shell, ChatId(chat_id), switch_request, state.is_secondary)
     agent_manager.record_message_sent(ChatId(chat_id))
     response = SwitchChatResponse(status="converging", kind=kind, phase=phase, returned_block=returned_block)
     return model_response(response, 202)
@@ -2230,7 +2228,7 @@ def _deliver_intake_send(
         message=intake.message, message_id=message_id, client_id=intake.client_id, desktop_id=intake.desktop_id
     )
     _consider_naming_chat(state, chat_id, intake.message)
-    delivered_text = _attributed_delivery(state, chat_id, intake.message, message_id, identity, None)
+    delivered_text = _attributed_delivery(state, chat_id, intake.message, message_id, identity)
     accepted = _send_to_chat(
         state,
         chat_id,

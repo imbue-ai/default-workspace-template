@@ -6455,6 +6455,24 @@ def test_a_visitors_switch_message_is_attributed_for_the_harness_the_chat_moves_
     assert [held["text"] for held in listed[0]["handoff"]["held_sends"]] == ["let's make this a room"]
 
 
+def test_a_switch_the_manager_refuses_annotates_nothing(tmp_path: Path) -> None:
+    """The annotation follows the switch's validation, as a send's follows its chat's (section 5.1): a room asked
+    to become a room again is refused, and the message that would have confirmed it is nobody's record."""
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    room = f"agent-{uuid4().hex}"
+    seed_agent_state(state_of(app).agent_manager, room, name="Lounge", state="STOPPED", harness=HarnessType.ROOM)
+
+    response = client.post(
+        f"/api/chats/{room}/handoff",
+        json={"kind": "room", "message": "again?", "message_id": "m-refused"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert response.status_code == 400, response.get_data(as_text=True)
+    assert state_of(app).authors.annotations(ChatId(room)) == ()
+
+
 def test_a_visitors_send_held_into_a_chat_converging_to_a_room_lands_unprefixed(tmp_path: Path) -> None:
     """A send held while the chat converges is attributed for the harness it will land on (section 5.1): a room
     reads no prefix, so the held text is the words alone, which the hash join still names the visitor's."""
