@@ -148,11 +148,12 @@ Under `data/.state/system_interface/`, written atomically under one process-wide
 
 ### 4.3 `clients.json`
 
-`{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>", "user_id": "<user_id>" | null, "participant": "<participant key>" | null, "entries": {"<app>": {"mode": "bar" | "floating", "style": "plain" | "avatar", "position": {"x": 0.9, "y": 0.85} | null, "is_window_shown": true}}, "shown_history": ["<window_id>" | "home", ...], "desktop_revision": 0, "desktop_moved_by": "<page_id>" | null}}}`.
+`{"version": 2, "clients": {"<client_id>": {"active_desktop": "<desktop_id>", "last_seen": "<RFC 3339>", "user_id": "<user_id>" | null, "participant": "<participant key>" | null, "entries": {"<app>": {"mode": "bar" | "floating", "style": "plain" | "avatar", "position": {"x": 0.9, "y": 0.85} | null, "is_window_shown": true}}, "shown_history": ["<window_id>" | "home", ...], "desktop_revision": 0, "desktop_moved_by": "<page_id>" | null, "viewport": {"width": 1440, "height": 823.5} | null}}}`.
 `user_id` is the signed-in visitor the client last arrived as (section 5.5), null for the owner or an anonymous client; an entry without the key reads as null. `participant` is who the client last arrived as under the multiplayer spec's keys (`user:<user_id>`, or `owner` for the owner of a workspace that has not shared; the spec's section 4.1), null for a record from before the key was kept. `entries` (default `{}`) is how the client shows each pinned entry.
 `desktop_revision` (default `0`) counts the moves of `active_desktop`: every write that changes it adds one, as does a report the shell lands off a deleted desktop (section 6) even when the stored desktop stays, under the same lock as the write, so the revisions order the moves as they were written.
 `desktop_moved_by` (default null) is the page whose report wrote the current revision, null when an op or an arrival did; the shell keeps it to order a page's reports against the moves it had not heard of (section 6), and does not answer it.
 `shown_history` (default `[]`) is what the client's phone layout showed (`plan-phone-interface.md`), most recent last: window ids, and `"home"` for the home grid, each at most once and at most 20; a close drops the window from every client's history.
+`viewport` (default null) is the backdrop size the client's desktop layout last reported (`POST /api/clients/<client_id>/viewport`, section 5.4), in CSS pixels: the box its window frames are fractions of, which a window viewing one of the client's desktops draws the layout at (the multiplayer spec, section 8.3); null for a client that never reported one (a phone, a pulled-out window, an older shell).
 A version-1 file (with `device_kind` and `active_view`) is read with `active_view` taken as the active desktop when a desktop of that id exists, else the first desktop, and rewritten at version 2 on the next write.
 
 ### 4.3a `users.json`
@@ -237,7 +238,7 @@ A location that changes nothing writes and broadcasts nothing.
 
 | Route | Request | Response |
 |---|---|---|
-| `GET /api/placements/<desktop_id>?client=<client_id>` | | `200 layout` (the client's own, else `{"version": 1, "updated_at": null, "placements": []}`) with `window_paths`, the client's stored `{path, title}` by window id for the desktop's independent windows |
+| `GET /api/placements/<desktop_id>?client=<client_id>` | | `200 layout` (the client's own, else `{"version": 1, "updated_at": null, "placements": []}`) with `window_paths`, the client's stored `{path, title}` by window id for the desktop's independent windows; with `?of=owner` in place of `client`, the desktop as its owner last arranged it (the multiplayer spec, section 8.3): the layout of the owner's most recently seen client that has written one (else the defaults), with `viewport` beside it, that client's reported backdrop size (section 4.3) or null |
 | `POST /api/placements/<desktop_id>` | `{"client_id", "save_id", "base_updated_at", "placements"}` | `200 {"updated_at"}`; `null` when the body equalled the stored layout and nothing was written; `409` when the stored `updated_at` is newer than `base_updated_at` |
 
 `layout` is the object of section 4.2.
@@ -249,6 +250,7 @@ A save whose placements name windows the desktop does not hold is accepted with 
 |---|---|
 | `GET /api/clients` | `{"clients": [client, ...]}`, the inventory's client objects below (with `shown` and `popped_out`), so a reader of either route sees what each client is looking at |
 | `POST /api/clients/<client_id>/shown` | takes `{"window_id": "<id>" \| null}` (null for the home grid) and records it at the end of the client's `shown_history` (section 4.3); answers the client record; `404` for a window no desktop holds or an unknown client |
+| `POST /api/clients/<client_id>/viewport` | takes `{"width", "height"}` (positive numbers, CSS pixels), the backdrop size the client's desktop layout draws its frames in, and records it as the client's `viewport` (section 4.3); answers the client record; `404` for an unknown client, `400` for a size that is not two positive numbers |
 | `POST /api/clients/<client_id>/arrive` | `{"desktop_id", "created_desktop": desktop \| null, "replaced_desktop_name": string \| null}` |
 | `POST /api/clients/<client_id>/entries/<app>` | takes `{"mode", "style", "position", "is_window_shown"}` (section 4.3), for a pinned non-internal app, the style `plain` or the pin's; answers the client record and announces `client_entries_changed` to that client's windows |
 | `GET /api/avatars` | `{"designs": [{"id", "label", "source_path"}], "selected", "default"}` |
