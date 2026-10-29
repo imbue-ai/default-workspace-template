@@ -209,6 +209,7 @@ export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}):
     desktop_revision: 0,
     participant: null,
     shown: [],
+    viewport: null,
     ...overrides,
   };
 }

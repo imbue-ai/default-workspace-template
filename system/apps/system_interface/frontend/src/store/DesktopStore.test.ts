@@ -33,6 +33,7 @@ import {
   OTHER_WORKSPACE_LINK_NOTICE,
   SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
   TRAY_HOP_MS,
+  VIEWPORT_REPORT_DEBOUNCE_MS,
   chooseInitialDesktopId,
 } from "./DesktopStore";
 import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
@@ -3320,6 +3321,79 @@ describe("the tray's hops", () => {
   });
 });
 
+describe("the backdrop size report (the multiplayer spec, section 8.3)", () => {
+  const reports = (): string[] => api.calls.filter((call) => call.startsWith("reportViewport:"));
+
+  it("reports the measured backdrop once the arrival has settled, and a resize where it settles", async () => {
+    const store = makeStore();
+    expect(reports()).toEqual([]);
+    await store.start(NO_LINK);
+    expect(reports()).toEqual([`reportViewport:${CLIENT}:1000x800`]);
+    expect(api.viewports.get(CLIENT)).toEqual({ width: 1000, height: 800 });
+
+    // A resize reports only once it has settled, and only the size it settled at.
+    store.setBackdropSize({ width: 900, height: 800 });
+    store.setBackdropSize({ width: 800, height: 700 });
+    vi.advanceTimersByTime(VIEWPORT_REPORT_DEBOUNCE_MS - 1);
+    expect(reports()).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(reports()).toEqual([`reportViewport:${CLIENT}:1000x800`, `reportViewport:${CLIENT}:800x700`]);
+    // A resize back to the size last reported reports nothing.
+    store.setBackdropSize({ width: 820, height: 700 });
+    store.setBackdropSize({ width: 800, height: 700 });
+    vi.advanceTimersByTime(VIEWPORT_REPORT_DEBOUNCE_MS);
+    expect(reports()).toHaveLength(2);
+  });
+
+  it("reports the backdrop measured after the arrival as soon as it is", async () => {
+    const store = new DesktopStore({
+      clientId: CLIENT,
+      api,
+      socket,
+      metrics: METRICS,
+      modes: MODES,
+      redraw: () => undefined,
+      reloadInterface: () => undefined,
+    });
+    stores.push(store);
+    await store.start(NO_LINK);
+    expect(reports()).toEqual([]);
+    store.setBackdropSize({ width: 1200, height: 700 });
+    expect(reports()).toEqual([`reportViewport:${CLIENT}:1200x700`]);
+  });
+
+  it("reports nothing from the phone layout or a pulled-out window's shell, and resumes on the desktop layout", async () => {
+    const phone = await startedStore();
+    const before = reports().length;
+    phone.setThemeMetrics(METRICS, { isPhone: true, isTouch: true });
+    phone.setBackdropSize({ width: 390, height: 700 });
+    vi.advanceTimersByTime(VIEWPORT_REPORT_DEBOUNCE_MS);
+    expect(reports()).toHaveLength(before);
+    // Back on the desktop layout, the size it has now goes out once it settles.
+    phone.setThemeMetrics(METRICS, MODES);
+    vi.advanceTimersByTime(VIEWPORT_REPORT_DEBOUNCE_MS);
+    expect(last(reports())).toBe(`reportViewport:${CLIENT}:390x700`);
+
+    api.calls.length = 0;
+    const solo = makeStore(() => undefined, { soloWindowId: "win-1" });
+    await solo.start(NO_LINK);
+    solo.setBackdropSize({ width: 640, height: 480 });
+    vi.advanceTimersByTime(VIEWPORT_REPORT_DEBOUNCE_MS);
+    expect(reports()).toEqual([]);
+  });
+
+  it("goes on without a report the shell refused", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.refusal = "no such client";
+    const store = makeStore();
+    await store.start(NO_LINK);
+    await settle();
+    expect(reports()).toEqual([`reportViewport:${CLIENT}:1000x800`]);
+    expect(warn.mock.calls.some((call) => String(call[0]).includes("backdrop size"))).toBe(true);
+    warn.mockRestore();
+  });
+});
+
 describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => {
   const alices = desktopRecord("alice", { owner: "user:user-alice-0001" });
   const josh = rosterParticipantRecord("user:user-josh-0001", { display_name: "Josh", is_owner: true });
@@ -3381,6 +3455,71 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     // Back on an own desktop, the layout read is this client's own again.
     await store.stopViewing();
     expect(api.calls[api.calls.length - 1]).toBe("fetchPlacements:home");
+  });
+
+  it("draws a viewed desktop at its owner's backdrop size, scaled down to fit and centred, never up", async () => {
+    const withWindow = desktopRecord("alice", {
+      owner: "user:user-alice-0001",
+      windows: [windowRecord("win-a", "docs", "/a")],
+    });
+    api.desktops = [...api.desktops, withWindow];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    api.ownerLayoutClientId = "alice-laptop";
+    api.ownerViewport = { width: 2000, height: 1600 };
+    const placement = placementRecord("win-a", { frame: { x: 0.1, y: 0.1, width: 0.5, height: 0.5 } });
+    api.writeLayout("alice", "alice-laptop", { updated_at: "2026-10-29T00:00:00Z", placements: [placement] });
+    const store = await startedStore();
+    socket.deliver().onRosterUpdated([josh, alice]);
+    expect(store.viewingLetterbox()).toBeNull();
+
+    // Alice arranged the desktop on a 2000x1600 backdrop: here (1000x800) it is drawn at half size, and her
+    // frames are fractions of her backdrop, so her window lands where she has it.
+    await store.switchDesktop("alice");
+    expect(store.viewingLetterbox()).toEqual({
+      size: { width: 2000, height: 1600 },
+      scale: 0.5,
+      offset: { x: 0, y: 0 },
+    });
+    expect(store.renderedRect(placement)).toEqual({ x: 200, y: 160, width: 1000, height: 800 });
+    expect(store.windowRect("win-a")).toEqual({ x: 200, y: 160, width: 1000, height: 800 });
+    // A bigger backdrop here never scales her desktop up: it is centred as it is.
+    store.setBackdropSize({ width: 3000, height: 3000 });
+    expect(store.viewingLetterbox()).toEqual({
+      size: { width: 2000, height: 1600 },
+      scale: 1,
+      offset: { x: 500, y: 700 },
+    });
+    expect(store.getBackdropSize()).toEqual({ width: 3000, height: 3000 });
+
+    // Her client reports a new size: it comes with the next read of her layout, which her save pushes.
+    api.ownerViewport = { width: 1500, height: 1500 };
+    api.writeLayout("alice", "alice-laptop", { updated_at: "2026-10-29T00:01:00Z", placements: [placement] });
+    socket.deliver().onPlacementsUpdated({ desktopId: "alice", clientId: "alice-laptop", saveId: "save-alices" });
+    await settle();
+    expect(store.viewingLetterbox()?.size).toEqual({ width: 1500, height: 1500 });
+    expect(store.renderedRect(placement)).toEqual({ x: 150, y: 150, width: 750, height: 750 });
+
+    // With no size on record the desktop is drawn at this backdrop's size, as before there was one.
+    api.ownerViewport = null;
+    api.writeLayout("alice", "alice-laptop", { updated_at: "2026-10-29T00:02:00Z", placements: [placement] });
+    socket.deliver().onPlacementsUpdated({ desktopId: "alice", clientId: "alice-laptop", saveId: "save-again" });
+    await settle();
+    expect(store.viewingLetterbox()).toBeNull();
+    expect(store.renderedRect(placement)).toEqual({ x: 300, y: 300, width: 1500, height: 1500 });
+
+    // Back on an own desktop there is no letterbox, whatever the last read said.
+    api.ownerViewport = { width: 2000, height: 1600 };
+    socket.deliver().onPlacementsUpdated({ desktopId: "alice", clientId: "alice-laptop", saveId: "save-more" });
+    await settle();
+    expect(store.viewingLetterbox()).not.toBeNull();
+    await store.stopViewing();
+    expect(store.viewingLetterbox()).toBeNull();
+    expect(store.renderedRect(placement)).toEqual({ x: 300, y: 300, width: 1500, height: 1500 });
   });
 
   it("tells its own desktops from the ones it views, remembers the way back, and stops viewing onto it", async () => {

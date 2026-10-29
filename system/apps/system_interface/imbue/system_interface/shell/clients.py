@@ -23,6 +23,7 @@ from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.records import ClientRecord
 from workspace_layout.records import EntryPresentation
+from workspace_layout.records import Viewport
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -78,6 +79,9 @@ class _StoredClient(FrozenModel):
         default=None,
         description="The page whose report wrote the current desktop revision; None when an op or an arrival did",
     )
+    viewport: Viewport | None = Field(
+        default=None, description="The backdrop size the client's desktop layout last reported; None until it has"
+    )
 
 
 class ClientsDocument(FrozenModel):
@@ -110,6 +114,7 @@ def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
         entries=stored.entries,
         shown_history=stored.shown_history,
         desktop_revision=stored.desktop_revision,
+        viewport=stored.viewport,
     )
 
 
@@ -222,6 +227,7 @@ class ClientStore(MutableModel):
                     participant=previous.participant if previous is not None else None,
                     entries=previous.entries if previous is not None else {},
                     shown_history=previous.shown_history if previous is not None else (),
+                    viewport=previous.viewport if previous is not None else None,
                 ),
                 is_revised_regardless=is_redirected,
                 mover=report.page_id,
@@ -266,6 +272,7 @@ class ClientStore(MutableModel):
                 participant=participant,
                 entries=previous.entries if previous is not None else {},
                 shown_history=previous.shown_history if previous is not None else (),
+                viewport=previous.viewport if previous is not None else None,
             ),
             is_revised_regardless=False,
             mover=None,
@@ -337,6 +344,17 @@ class ClientStore(MutableModel):
             client_id,
             lambda previous: previous.model_copy_update(
                 to_update(previous.field_ref().shown_history, with_shown_entry(previous.shown_history, entry)),
+                to_update(previous.field_ref().last_seen, stamped),
+            ),
+        )
+
+    def set_viewport(self, client_id: ClientId, viewport: Viewport, now: datetime) -> ClientRecord:
+        """Store the backdrop size a recorded client's desktop layout reported; raises ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        return self._update_recorded_client(
+            client_id,
+            lambda previous: previous.model_copy_update(
+                to_update(previous.field_ref().viewport, viewport),
                 to_update(previous.field_ref().last_seen, stamped),
             ),
         )

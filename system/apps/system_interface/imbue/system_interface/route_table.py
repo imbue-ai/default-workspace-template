@@ -26,6 +26,7 @@ from workspace_layout.ops import ClientActivityReport
 from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopView
 from workspace_layout.records import EntryPresentation
+from workspace_layout.records import Viewport
 from workspace_layout.records import WindowView
 from workspace_layout.roster import RosterDocument
 from workspace_layout.shell_url import BUBBLES_ROUTE
@@ -56,6 +57,7 @@ from imbue.system_interface.shell.api_models import DesktopDeletedResponse
 from imbue.system_interface.shell.api_models import EmbedderMessageRelayResponse
 from imbue.system_interface.shell.api_models import LaunchResponse
 from imbue.system_interface.shell.api_models import LayoutOpRequest
+from imbue.system_interface.shell.api_models import OwnerLayoutView
 from imbue.system_interface.shell.api_models import PendingUpdateResponse
 from imbue.system_interface.shell.api_models import PlacementsSavedResponse
 from imbue.system_interface.shell.api_models import UpdateRollbackStarted
@@ -163,7 +165,10 @@ SHELL_ROUTE_TABLE: RouteTable = {
         request_model=WindowLocationReport, response_model=WindowView
     ),
     # Section 5.4: placements
-    ("GET", "/api/placements/{desktop_id}"): RouteModels(response_model=DesktopLayoutView),
+    ("GET", "/api/placements/{desktop_id}"): RouteModels(
+        response_model=DesktopLayoutView,
+        alternate_responses=(AlternateResponse(status=200, model=OwnerLayoutView),),
+    ),
     ("POST", "/api/placements/{desktop_id}"): RouteModels(
         request_model=PlacementsSaveRequest, response_model=PlacementsSavedResponse
     ),
@@ -176,6 +181,7 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("POST", "/api/clients/{client_id}/shown"): RouteModels(
         request_model=ClientShownRequest, response_model=ClientView
     ),
+    ("POST", "/api/clients/{client_id}/viewport"): RouteModels(request_model=Viewport, response_model=ClientView),
     ("POST", "/api/clients/{client_id}/show"): RouteModels(request_model=PageShowRequest, response_model=ShowAnswer),
     ("GET", INVENTORY_ROUTE): RouteModels(response_model=InventoryDocument),
     ("GET", "/api/wallpapers"): RouteModels(response_model=WallpapersListing),

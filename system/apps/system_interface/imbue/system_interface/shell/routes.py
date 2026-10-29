@@ -23,6 +23,7 @@ from workspace_layout.ops import parse_op_body
 from workspace_layout.primitives import ClientActivityKind
 from workspace_layout.primitives import ClientId
 from workspace_layout.records import EntryPresentation
+from workspace_layout.records import Viewport
 from workspace_layout.shell_url import BUBBLES_ROUTE
 from workspace_layout.shell_url import CHATS_ACTIVITY_ROUTE
 from workspace_layout.shell_url import CLIENTS_ROUTE
@@ -330,6 +331,15 @@ def record_client_shown(client_id: str) -> ResponseReturnValue:
     return model_response(client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()))
 
 
+def record_client_viewport(client_id: str) -> ResponseReturnValue:
+    """The backdrop size a client's desktop layout reports (the multiplayer spec, section 8.3): what a window
+    viewing one of the client's desktops draws its layout at; answers the client record."""
+    body = parse_request_body(Viewport)
+    shell = _shell()
+    record = shell.record_client_viewport(ClientId(client_id), body)
+    return model_response(client_view(record, str(record.id) in shell.broadcaster.connected_client_ids()))
+
+
 # Section 5.6: the embedder-message relay
 
 
@@ -510,6 +520,12 @@ def register_shell_routes(application: Flask) -> None:
         view_func=record_client_shown,
         methods=["POST"],
         endpoint="record_client_shown",
+    )
+    application.add_url_rule(
+        "/api/clients/<client_id>/viewport",
+        view_func=record_client_viewport,
+        methods=["POST"],
+        endpoint="record_client_viewport",
     )
     application.add_url_rule(
         INVENTORY_ROUTE,

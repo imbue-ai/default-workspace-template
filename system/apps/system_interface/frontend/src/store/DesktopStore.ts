@@ -68,6 +68,7 @@ import type {
   LaunchPath,
   Layout,
   MessageRelay,
+  OwnerLayout,
   Placement,
   PresentUser,
   RosterParticipant,
@@ -94,6 +95,8 @@ import {
   unsnapFrame,
 } from "../geometry/frames";
 import type { PixelPoint, PixelRect, PixelSize, ResizeEdge } from "../geometry/frames";
+import { letterboxFor } from "../geometry/letterbox";
+import type { Letterbox } from "../geometry/letterbox";
 import { defaultFloatingPosition, floatingEntryRect, floatingPositionFromPixels } from "../geometry/floating";
 import {
   cellAtPoint,
@@ -169,6 +172,10 @@ const SAVE_DEBOUNCE_MS = 300;
  *  push has arrived (the multiplayer spec, section 8.3): the pushes are the live signal, this the backstop. */
 const VIEWING_REFRESH_INTERVAL_MS = 10_000;
 
+/** How long after the backdrop last changed size the desktop layout reports it: a window being resized changes
+ *  size many times a second, and only where it settles matters to a window viewing this client's desktop. */
+export const VIEWPORT_REPORT_DEBOUNCE_MS = 300;
+
 /** Why a window switches desktops: the user chose one ("user"), the bootstrap lands it ("landing"), or it follows the
  *  client's stored desktop, pushed or re-read ("follow"). The first two move the client; a follow moves nothing. */
 export type SwitchCause = "user" | "landing" | "follow";
@@ -212,13 +219,16 @@ export interface DesktopApi {
     title: string,
   ): Promise<WindowRecord>;
   fetchPlacements(desktopId: string, clientId: string): Promise<Layout>;
-  /** The desktop as its owner last arranged it (the multiplayer spec, section 8.3), for a window viewing it. */
-  fetchOwnerPlacements(desktopId: string): Promise<Layout>;
+  /** The desktop as its owner last arranged it (the multiplayer spec, section 8.3), for a window viewing it, with
+   *  the backdrop size their client arranged it in. */
+  fetchOwnerPlacements(desktopId: string): Promise<OwnerLayout>;
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
   arriveClient(clientId: string): Promise<ClientArrival>;
   fetchClients(): Promise<ClientRecord[]>;
   /** Record what this client's phone layout shows: a window, or the home grid for null. */
   recordShown(clientId: string, windowId: string | null): Promise<ClientRecord>;
+  /** Record the backdrop size this client's desktop layout draws its frames in (section 8.3). */
+  reportViewport(clientId: string, viewport: PixelSize): Promise<ClientRecord>;
   quitApp(appName: string): Promise<void>;
   setEntryPresentation(clientId: string, app: string, presentation: EntryPresentation): Promise<ClientRecord>;
   fetchAvatars(): Promise<AvatarCatalog>;
@@ -571,6 +581,14 @@ export class DesktopStore {
   /** The viewed desktop's fallback refresh, running only while viewing: the owner's saves push
    *  ``placements_updated``, so this covers a missed push alone. */
   private viewingRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  /** The backdrop size the viewed desktop's owner arranged it in, from the last owner-layout read; null while not
+   *  viewing, or when their client never reported one (the layout is then drawn at this backdrop's size). */
+  private viewedViewport: PixelSize | null = null;
+  /** The backdrop size report (section 8.3): whether the arrival has settled (the record it writes to exists only
+   *  then), the size last reported, and the debounce of the next report. */
+  private isArrivalSettled = false;
+  private lastReportedViewport: PixelSize | null = null;
+  private viewportReportTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly deps: StoreDependencies) {
     this.state = initialDesktopState(deps.clientId, deps.modes);
@@ -713,6 +731,20 @@ export class DesktopStore {
     return this.backdrop;
   }
 
+  /** The letterbox a viewed desktop is drawn in (the multiplayer spec, section 8.3): the owner's backdrop scaled
+   *  down to fit this one and centred, or null while this window views nothing, or views a desktop whose owner's
+   *  client never reported its size (drawn at this backdrop's size then, as before). */
+  viewingLetterbox(): Letterbox | null {
+    if (this.viewedViewport === null || this.viewedDesktop() === null) return null;
+    return letterboxFor(this.viewedViewport, this.backdrop);
+  }
+
+  /** The backdrop the frames are fractions of: the owner's while a viewed desktop is drawn in a letterbox, else
+   *  this one. */
+  private frameBackdrop(): PixelSize {
+    return this.viewingLetterbox()?.size ?? this.backdrop;
+  }
+
   getGesture(): ActiveGesture | null {
     return this.gesture;
   }
@@ -732,7 +764,7 @@ export class DesktopStore {
   }
 
   gridDimensions(): GridDimensions {
-    return gridDimensions(this.backdrop, this.metrics);
+    return gridDimensions(this.frameBackdrop(), this.metrics);
   }
 
   /** Whether this shell can stop and start the app: supervised, not critical, not inside a critical program, and
@@ -743,7 +775,7 @@ export class DesktopStore {
 
   /** The rectangle a placement renders at, in backdrop pixels (the fit applied). */
   renderedRect(placement: Placement): PixelRect {
-    return fitFrameToBackdrop(frameForState(placement.frame, placement.state), this.backdrop, this.metrics);
+    return fitFrameToBackdrop(frameForState(placement.frame, placement.state), this.frameBackdrop(), this.metrics);
   }
 
   subscribe(listener: Listener): () => void {
@@ -937,7 +969,39 @@ export class DesktopStore {
   setBackdropSize(size: PixelSize): void {
     if (size.width === this.backdrop.width && size.height === this.backdrop.height) return;
     this.backdrop = size;
+    this.scheduleViewportReport();
     this.notifyListeners();
+  }
+
+  /** Report the backdrop's size to the shell (the multiplayer spec, section 8.3), so a window viewing one of this
+   *  client's desktops can draw the layout at it. Only the desktop layout's: a phone's or a pulled-out window's
+   *  host is no desktop's backdrop. The first report goes as soon as the backdrop is measured and the arrival has
+   *  settled; a resize reports where it settles. */
+  private scheduleViewportReport(): void {
+    if (this.viewportReportTimer !== null) {
+      clearTimeout(this.viewportReportTimer);
+      this.viewportReportTimer = null;
+    }
+    if (!this.isArrivalSettled || this.isPhoneLayout() || this.soloWindowId !== null) return;
+    if (this.backdrop.width <= 0 || this.backdrop.height <= 0) return;
+    if (this.lastReportedViewport === null) {
+      this.reportViewport();
+      return;
+    }
+    this.viewportReportTimer = setTimeout(() => {
+      this.viewportReportTimer = null;
+      this.reportViewport();
+    }, VIEWPORT_REPORT_DEBOUNCE_MS);
+  }
+
+  private reportViewport(): void {
+    const size = this.backdrop;
+    const last = this.lastReportedViewport;
+    if (last !== null && last.width === size.width && last.height === size.height) return;
+    this.lastReportedViewport = size;
+    void this.deps.api.reportViewport(this.deps.clientId, size).catch((error: unknown) => {
+      console.warn("[si] could not report the backdrop size", error);
+    });
   }
 
   setThemeMetrics(metrics: ThemeMetrics, modes: RenderModes): void {
@@ -947,6 +1011,8 @@ export class DesktopStore {
     // The modes event always yields a new state, so the dispatch notifies and redraws.
     this.dispatch({ type: "render_modes_changed", modes });
     this.landPhone();
+    // A report waiting when the phone layout came must not go out; one that is due goes once it is gone.
+    this.scheduleViewportReport();
   }
 
   /** Resolves once the app list has landed, with the bootstrap's inventory read or the socket's first
@@ -999,6 +1065,9 @@ export class DesktopStore {
       console.warn("[si] the shell could not settle where this client lands", error);
       arrival = null;
     }
+    // The arrival wrote this client's record, which the backdrop size report (measured already, as a rule) needs.
+    this.isArrivalSettled = true;
+    this.scheduleViewportReport();
     let inventory: Inventory;
     try {
       inventory = await this.deps.api.fetchInventory();
@@ -1925,6 +1994,8 @@ export class DesktopStore {
     this.cancelGesture();
     this.closeOverview();
     this.rememberReturnDesktop(previous, desktopId);
+    // The size the desktop left was arranged in says nothing about the next one; its own read brings its own.
+    this.viewedViewport = null;
     this.dispatch({ type: "desktop_activated", desktopId });
     switch (cause) {
       case "user":
@@ -2990,16 +3061,23 @@ export class DesktopStore {
     if (desktopId === null) return;
     const sequence = ++this.layoutFetchSequence;
     let layout: Layout;
+    let viewport: PixelSize | null = null;
     try {
-      layout =
-        this.viewedDesktop() !== null
-          ? await this.deps.api.fetchOwnerPlacements(desktopId)
-          : await this.deps.api.fetchPlacements(desktopId, this.deps.clientId);
+      if (this.viewedDesktop() !== null) {
+        const owners = await this.deps.api.fetchOwnerPlacements(desktopId);
+        layout = owners.layout;
+        viewport = owners.viewport;
+      } else {
+        layout = await this.deps.api.fetchPlacements(desktopId, this.deps.clientId);
+      }
     } catch (error) {
       console.warn(`[si] could not fetch the layout of ${desktopId}`, error);
       return;
     }
     if (sequence !== this.layoutFetchSequence || desktopId !== this.state.activeDesktopId) return;
+    // The size the owner arranged the desktop in comes with every read of their layout, so it follows their
+    // window as the layout does; every branch below redraws, which lays the letterbox out at the new size.
+    this.viewedViewport = viewport;
     // An unchanged stamp says the placements file did not move (this window's own save, or a broadcast that
     // carried nothing new for it): only the client's window paths, which change without moving the stamp, are
     // taken, and a gesture still waiting to be saved is kept rather than thrown away with a reload.

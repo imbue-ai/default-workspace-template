@@ -435,6 +435,40 @@ describe("Escape", () => {
     pressEscape();
   });
 
+  it("draws a viewed desktop on a stage at its owner's size, scaled and centred, in a band of their colour", async () => {
+    setOwnIdentityForTesting({ owner: true, user_id: null, email: null, participant: "owner" });
+    socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("alice", { owner: "user:user-alice-0001" })]);
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const stage = (): HTMLElement => document.querySelector(".desktop-stage") as HTMLElement;
+    const host = document.querySelector(".live-pages") as HTMLElement;
+    expect(stage().hasAttribute("data-viewing-letterbox")).toBe(false);
+    expect([stage().style.width, stage().style.transform]).toEqual(["100%", ""]);
+
+    // Alice's client arranged her desktop on 2000x1000: here it is drawn at half size, centred top to bottom.
+    api.ownerViewport = { width: 2000, height: 1000 };
+    await store.switchDesktop("alice");
+    m.redraw.sync();
+    expect(stage().getAttribute("data-viewing-letterbox")).toBe("0.5");
+    expect([stage().style.width, stage().style.height]).toEqual(["2000px", "1000px"]);
+    expect(stage().style.transform).toBe("translate(0px, 150px) scale(0.5)");
+    expect(stage().style.transformOrigin).toBe("top left");
+    // The pages' host is the same element, on the stage: no page was reloaded by the letterbox.
+    expect(document.querySelector(".live-pages")).toBe(host);
+    expect(stage().contains(host)).toBe(true);
+    // The band around the stage is the backdrop's own ground; the floating entries stay outside the stage.
+    const backdrop = document.querySelector(".backdrop") as HTMLElement;
+    expect(backdrop.getAttribute("style") ?? "").toContain("color-mix");
+    expect(stage().querySelector(".floating-entries, [data-pinned-entry]")).toBeNull();
+
+    // Stop viewing: the stage is the whole backdrop again.
+    await store.stopViewing();
+    m.redraw.sync();
+    expect(stage().hasAttribute("data-viewing-letterbox")).toBe(false);
+    expect([stage().style.width, stage().style.transform]).toEqual(["100%", ""]);
+    expect(document.querySelector(".live-pages")).toBe(host);
+  });
+
   it("closes the overview before the launcher", () => {
     store.openLauncher();
     store.openOverview();

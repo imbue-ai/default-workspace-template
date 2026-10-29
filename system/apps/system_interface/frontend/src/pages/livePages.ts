@@ -570,6 +570,9 @@ export class LivePagesLayer implements PageDriver {
     }
   }
 
+  /** A window's content box in the host's own pixels. The measurement is in screen pixels: while a viewed desktop is
+   *  drawn in a letterbox (the multiplayer spec, section 8.3), the host and the chrome lie under one scale, and a
+   *  page's position and size are in the host's unscaled pixels, so the box is divided by that scale. */
   private contentBox(windowId: string): HostRect | null {
     const content = this.host.parentElement?.querySelector<HTMLElement>(
       `[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"] [${WINDOW_CONTENT_ATTRIBUTE}]`,
@@ -578,7 +581,13 @@ export class LivePagesLayer implements PageDriver {
     const box = content.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) return null;
     const origin = this.host.getBoundingClientRect();
-    return { left: box.left - origin.left, top: box.top - origin.top, width: box.width, height: box.height };
+    const scale = this.store.viewingLetterbox()?.scale ?? 1;
+    return {
+      left: (box.left - origin.left) / scale,
+      top: (box.top - origin.top) / scale,
+      width: box.width / scale,
+      height: box.height / scale,
+    };
   }
 
   private create(window: WindowRecord, app: AppRecord): LivePage {

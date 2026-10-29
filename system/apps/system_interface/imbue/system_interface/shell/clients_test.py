@@ -14,6 +14,7 @@ from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.records import EntryPresentation
 from workspace_layout.records import FloatingPosition
+from workspace_layout.records import Viewport
 
 from imbue.system_interface.shell.clients import CLIENTS_FILENAME
 from imbue.system_interface.shell.clients import CLIENT_RETENTION
@@ -56,6 +57,7 @@ def test_reports_are_recorded_and_listed_newest_first(tmp_path: Path) -> None:
         "entries": {},
         "shown_history": [],
         "desktop_revision": 2,
+        "viewport": None,
     }
     assert json.loads((tmp_path / CLIENTS_FILENAME).read_text())["version"] == 2
 
@@ -177,7 +179,32 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
         "shown_history",
         "desktop_revision",
         "desktop_moved_by",
+        "viewport",
     }
+
+
+def test_set_viewport_stores_a_recorded_clients_backdrop_size_which_its_reports_and_arrivals_keep(
+    tmp_path: Path,
+) -> None:
+    store = ClientStore(state_directory=tmp_path)
+    store.record_report(client_report("c1", "home"), TEST_NOW, is_redirected=False)
+    assert store.list_clients()[0].viewport is None
+
+    recorded = store.set_viewport(ClientId("c1"), Viewport(width=1280, height=720), TEST_NOW + timedelta(minutes=1))
+    assert recorded.viewport == Viewport(width=1280, height=720)
+    assert recorded.last_seen == TEST_NOW + timedelta(minutes=1)
+    reported = store.record_report(client_report("c1", "work"), TEST_NOW + timedelta(minutes=2), is_redirected=False)
+    assert reported.record.viewport == Viewport(width=1280, height=720)
+    arrived = store.record_arrival(
+        ClientId("c1"), None, ParticipantKey(OWNER_PARTICIPANT_KEY), DesktopId("home"), TEST_NOW + timedelta(minutes=3)
+    )
+    assert arrived.record.viewport == Viewport(width=1280, height=720)
+    # The newest size replaces the one before, and the record survives a fresh read of the file.
+    store.set_viewport(ClientId("c1"), Viewport(width=1440.5, height=900), TEST_NOW + timedelta(minutes=4))
+    reread = ClientStore(state_directory=tmp_path).get_client("c1")
+    assert reread is not None and reread.viewport == Viewport(width=1440.5, height=900)
+    with pytest.raises(ClientNotFoundError):
+        store.set_viewport(ClientId("missing"), Viewport(width=1, height=1), TEST_NOW)
 
 
 def test_a_file_of_an_unknown_version_or_shape_is_treated_as_empty(tmp_path: Path) -> None:

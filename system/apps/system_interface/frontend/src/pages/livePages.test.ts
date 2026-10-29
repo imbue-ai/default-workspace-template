@@ -327,6 +327,54 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-1").style.pointerEvents).toBe("auto");
   });
 
+  it("lays a page over its content box in the stage's own pixels while a viewed desktop is drawn scaled down", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a")],
+      }),
+    ];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    api.ownerViewport = { width: 2000, height: 1600 };
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-a")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+    await store.switchDesktop("alice");
+    expect(store.viewingLetterbox()?.scale).toBe(0.5);
+
+    // The chrome and the host lie under the letterbox's half scale, so the box measures at half its size and
+    // offset on screen; the page's position and size are in the host's unscaled pixels, so both are doubled back.
+    renderChrome("win-a");
+    const content = windows.querySelector('[data-window-id="win-a"] [data-window-content]') as HTMLElement;
+    content.getBoundingClientRect = () => ({ left: 150, top: 80, width: 250, height: 200 }) as DOMRect;
+    host.getBoundingClientRect = () => ({ left: 100, top: 20, width: 1000, height: 800 }) as DOMRect;
+    layer.reconcile();
+    const wrapper = wrapperOf("win-a");
+    expect([wrapper.style.left, wrapper.style.top, wrapper.style.width, wrapper.style.height]).toEqual([
+      "100px",
+      "120px",
+      "500px",
+      "400px",
+    ]);
+    expect(wrapper.style.transform).toBe("");
+
+    // Back on an own desktop, a box measures as it is.
+    host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 }) as DOMRect;
+    await store.stopViewing();
+    renderChrome();
+    layer.reconcile();
+    expect([wrapperOf("win-1").style.left, wrapperOf("win-1").style.width]).toEqual(["100px", "500px"]);
+  });
+
   it("hides a page when its window is minimized, keeping the same frame, and destroys it on close", async () => {
     const frame = frameOf("win-1");
     store.minimizeWindow("win-1");

@@ -17,6 +17,7 @@ import {
   parseInventory,
   parseLayout,
   parseMessageRelay,
+  parseOwnerLayout,
   parseWallpaperListings,
   parseWindow,
 } from "./records";
@@ -33,7 +34,9 @@ import type {
   Inventory,
   Layout,
   MessageRelay,
+  OwnerLayout,
   Placement,
+  Viewport,
   Wallpaper,
   WallpaperListing,
   WindowRecord,
@@ -268,9 +271,9 @@ export async function fetchPlacements(desktopId: string, clientId: string): Prom
 }
 
 /** The desktop as its owner last arranged it (the multiplayer spec, section 8.3): what a window viewing a desktop
- *  that is not the viewer's own shows in place of its own layout. */
-export async function fetchOwnerPlacements(desktopId: string): Promise<Layout> {
-  return parseLayout(await getJson(apiUrl(`/api/placements/${encodeURIComponent(desktopId)}?of=owner`)));
+ *  that is not the viewer's own shows in place of its own layout, with the backdrop size it was arranged at. */
+export async function fetchOwnerPlacements(desktopId: string): Promise<OwnerLayout> {
+  return parseOwnerLayout(await getJson(apiUrl(`/api/placements/${encodeURIComponent(desktopId)}?of=owner`)));
 }
 
 export interface PlacementsSaveRequest {
@@ -314,6 +317,17 @@ export async function fetchInventory(): Promise<Inventory> {
 export async function recordShown(clientId: string, windowId: string | null): Promise<ClientRecord> {
   return parseClientRecord(
     await postJson<unknown>(apiUrl(`/api/clients/${encodeURIComponent(clientId)}/shown`), { window_id: windowId }),
+  );
+}
+
+/** Tell the shell the backdrop size this client's desktop layout draws its frames in, so a window viewing one of
+ *  its desktops can draw the layout at that size; answers the client record. */
+export async function reportViewport(clientId: string, viewport: Viewport): Promise<ClientRecord> {
+  return parseClientRecord(
+    await postJson<unknown>(apiUrl(`/api/clients/${encodeURIComponent(clientId)}/viewport`), {
+      width: viewport.width,
+      height: viewport.height,
+    }),
   );
 }
 

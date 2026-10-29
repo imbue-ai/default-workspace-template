@@ -53,3 +53,6 @@ Every window gets "Chat about this app" (the mngr repo's `specs/multiplayer-refi
 - A person's card marks the desktop they are on ("There now", with a dot in their colour) beside the "Viewing" mark of the one you are on, read off their newest connected client as the card opens.
 
 - The overview's live tile pages step aside while a desktop's deletion is being confirmed, since the confirmation hangs up into the grid and the pages, laid above the overview's scrim, covered it.
+
+- A viewed desktop is drawn as its owner sees it: every desktop layout reports its backdrop size to the shell (`POST /api/clients/<id>/viewport`, on boot once the backdrop is measured and after each resize settles; never from the phone layout or a pulled-out window), the clients listing and the inventory carry each client's `viewport`, and the `?of=owner` placements read answers the chosen client's beside the layout. A window viewing a desktop whose owner's size is known lays the wallpaper, the shortcut grid, the windows, and their pages out in a box of that size, scaled down to fit this backdrop (never up) and centred, with a band in the owner's colour around it; the taskbar and the floating entries stay the viewer's own. With no size on record the desktop is drawn at this backdrop's size, as before.
+

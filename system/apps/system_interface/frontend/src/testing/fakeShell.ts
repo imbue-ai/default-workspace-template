@@ -28,7 +28,9 @@ import type {
   Layout,
   MessageDelivery,
   MessageRelay,
+  OwnerLayout,
   StoredWindowPath,
+  Viewport,
   Wallpaper,
   WindowRecord,
 } from "../model/records";
@@ -508,11 +510,14 @@ export class FakeDesktopApi implements DesktopApi {
   /** The client whose layout the owner view answers (``?of=owner``); a client with none stored answers defaults. */
   ownerLayoutClientId = "owner-client";
 
-  async fetchOwnerPlacements(desktopId: string): Promise<Layout> {
+  /** The backdrop size the owner-layout read answers beside the layout: what the owner's client reported. */
+  ownerViewport: Viewport | null = null;
+
+  async fetchOwnerPlacements(desktopId: string): Promise<OwnerLayout> {
     this.calls.push(`fetchOwnerPlacements:${desktopId}`);
     this.refuse();
     if (this.readGate !== null) await this.readGate;
-    return this.layoutOf(desktopId, this.ownerLayoutClientId);
+    return { layout: this.layoutOf(desktopId, this.ownerLayoutClientId), viewport: this.ownerViewport };
   }
 
   async savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null> {
@@ -560,6 +565,21 @@ export class FakeDesktopApi implements DesktopApi {
     const existing = this.clients.find((client) => client.id === clientId) ?? clientRecord(clientId);
     const recorded = { ...existing, shown_history: withShownRecorded(existing.shown_history, windowId ?? SHOWN_HOME) };
     this.clients = [...this.clients.filter((client) => client.id !== clientId), recorded];
+    return recorded;
+  }
+
+  /** The backdrop size each client last reported, by client id. */
+  readonly viewports = new Map<string, Viewport>();
+
+  /** As the shell does: the size goes on the client's record; a client the listing does not carry is only noted. */
+  async reportViewport(clientId: string, viewport: Viewport): Promise<ClientRecord> {
+    this.calls.push(`reportViewport:${clientId}:${viewport.width}x${viewport.height}`);
+    this.refuse();
+    this.viewports.set(clientId, viewport);
+    const existing = this.clients.find((client) => client.id === clientId);
+    const recorded = { ...(existing ?? clientRecord(clientId)), viewport };
+    if (existing !== undefined)
+      this.clients = this.clients.map((client) => (client.id === clientId ? recorded : client));
     return recorded;
   }
 

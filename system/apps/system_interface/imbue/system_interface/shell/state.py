@@ -40,6 +40,7 @@ from workspace_layout.records import DesktopLayout
 from workspace_layout.records import DesktopView
 from workspace_layout.records import EntryPresentation
 from workspace_layout.records import StoredWindowPath
+from workspace_layout.records import Viewport
 from workspace_layout.records import Window
 from workspace_layout.records import WindowView
 from workspace_themes.catalog import CachingThemeCatalogLoader
@@ -906,6 +907,11 @@ class ShellState(MutableModel):
             ):
                 raise WindowNotFoundError(str(window_id))
             return self.clients.record_shown(client_id, window_id, datetime.now(timezone.utc))
+
+    def record_client_viewport(self, client_id: ClientId, viewport: Viewport) -> ClientRecord:
+        """Record the backdrop size a client's desktop layout reported (the multiplayer spec, section 8.3); raises
+        ClientNotFoundError."""
+        return self.clients.set_viewport(client_id, viewport, datetime.now(timezone.utc))
 
     def active_desktop_of_client(self, client_id: str) -> DesktopId | None:
         """The desktop a client is on by the rule of desktop contracts.md section 4.3; None with no desktops."""

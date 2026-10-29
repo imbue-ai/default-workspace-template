@@ -205,6 +205,13 @@ class EntryPresentation(FrozenModel):
     )
 
 
+class Viewport(FrozenModel):
+    """A client's backdrop area in CSS pixels: the box its window frames are fractions of."""
+
+    width: float = Field(gt=0, description="The backdrop's width in CSS pixels")
+    height: float = Field(gt=0, description="The backdrop's height in CSS pixels")
+
+
 class ClientRecord(FrozenModel):
     """What the shell keeps about one browser context (desktop contracts.md section 4.3)."""
 
@@ -233,6 +240,12 @@ class ClientRecord(FrozenModel):
         ge=0,
         description="Counts the moves of the stored active desktop and the reports redirected off a deleted desktop: "
         "orders the client's desktop news",
+    )
+    viewport: Viewport | None = Field(
+        default=None,
+        description="The backdrop size the client's desktop layout last reported, which a window viewing one of its "
+        "desktops draws the layout at (the multiplayer spec, section 8.3); None for a client that never reported "
+        "one (a phone, a pulled-out window, or an older shell)",
     )
 
 

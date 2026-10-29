@@ -14,6 +14,7 @@ import {
   parseDesktop,
   parseInventory,
   parseLayout,
+  parseOwnerLayout,
   parseMessageRelay,
   parsePresentUsers,
   parseRoster,
@@ -152,6 +153,17 @@ describe("parseLayout", () => {
       placements: [],
       window_paths: {},
     });
+  });
+
+  it("reads the owner-layout answer's viewport beside the layout, absent or null as none", () => {
+    const raw = { version: 1, updated_at: null, placements: [], window_paths: {} };
+    expect(parseOwnerLayout({ ...raw, viewport: { width: 1920, height: 1017.5 } })).toEqual({
+      layout: { updated_at: null, placements: [], window_paths: {} },
+      viewport: { width: 1920, height: 1017.5 },
+    });
+    expect(parseOwnerLayout({ ...raw, viewport: null }).viewport).toBeNull();
+    expect(parseOwnerLayout(raw).viewport).toBeNull();
+    expect(() => parseOwnerLayout({ ...raw, viewport: { width: "wide" } })).toThrow(/viewport\.width/);
   });
 
   it("reads the client's stored paths for independent windows, and tells two sets apart", () => {
@@ -315,6 +327,7 @@ describe("the small helpers", () => {
       desktop_revision: 0,
       participant: null,
       shown: [],
+      viewport: null,
     });
     expect(
       parseClientRecord({
@@ -324,8 +337,13 @@ describe("the small helpers", () => {
         is_connected: true,
         participant: "user:user-bob-4471",
         shown: ["win-2", "win-1"],
+        viewport: { width: 1440, height: 823.5 },
       }),
-    ).toMatchObject({ participant: "user:user-bob-4471", shown: ["win-2", "win-1"] });
+    ).toMatchObject({
+      participant: "user:user-bob-4471",
+      shown: ["win-2", "win-1"],
+      viewport: { width: 1440, height: 823.5 },
+    });
     expect(
       parseClientRecord({
         id: "c1",

@@ -71,6 +71,7 @@ import type { DesktopStore } from "../store/DesktopStore";
 import type { TourController } from "../model/tour";
 import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog";
 import { Backdrop } from "./Backdrop";
+import type { BackdropLetterbox } from "./Backdrop";
 import { THEME_DESIGN_PROMPT, THEME_PREVIEW_APP, ThemeChooserDialog } from "./ThemeChooserDialog";
 import { LauncherMenu } from "./LauncherMenu";
 import { GRID_SHARE, gridFor, overviewPresentationOf } from "./Overview";
@@ -1008,6 +1009,13 @@ export function App(): m.Component<AppAttrs> {
     };
   }
 
+  /** The letterbox a viewed desktop is drawn in (section 8.3), in the owner's colour, or null when the desktop is
+   *  the viewer's own or its owner's backdrop size is unknown. */
+  function letterboxAttrs(current: DesktopStore, viewing: ViewingChipAttrs | null): BackdropLetterbox | null {
+    const box = current.viewingLetterbox();
+    return viewing === null || box === null ? null : { box, color: viewing.color };
+  }
+
   function openAvatarChooser(current: DesktopStore): void {
     const opened: AvatarChooserState = { designs: null, loadError: null };
     avatarChooser = opened;
@@ -1389,6 +1397,7 @@ export function App(): m.Component<AppAttrs> {
                       );
                     },
                     overview: overviewTiling === null ? null : overviewAttrs(current, desktop, overviewTiling),
+                    letterbox: letterboxAttrs(current, viewing),
                     onWindowControl: (windowId, control, event) => onWindowControl(current, windowId, control, event),
                     onShowDetachedWindow: (windowId) => current.showDetachedWindow(windowId),
                     onHideWindowGhost: (windowId) => current.minimizeWindow(windowId),

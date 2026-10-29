@@ -452,6 +452,7 @@ def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_
         "entries",
         "shown_history",
         "desktop_revision",
+        "viewport",
     }
     assert (record["id"], record["is_connected"], record["shown_history"]) == ("c1", True, [first, "home", second])
     document = client.get("/api/inventory").get_json()
@@ -461,6 +462,36 @@ def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_
     assert by_id["c2"]["shown_history"] == []
     listed = {entry["id"]: entry for entry in client.get("/api/clients").get_json()["clients"]}
     assert listed["c1"]["shown_history"] == [first, "home", second]
+
+
+def test_a_client_records_its_backdrop_size_and_the_listing_and_the_inventory_carry_it(
+    client: FlaskClient, app: Flask
+) -> None:
+    """``POST /api/clients/<id>/viewport`` (the multiplayer spec, section 8.3): the desktop layout's backdrop size,
+    kept on the record through the client's later reports; an unknown client is a 404, and a size that is not two
+    positive numbers a 400."""
+    _register_client(app, "c1", "home")
+    _record_client(app, "c2", "home")
+
+    answer = client.post("/api/clients/c1/viewport", json={"width": 1440, "height": 823.5}, environ_base=_NOT_LOOPBACK)
+    assert answer.status_code == 200
+    assert answer.get_json()["viewport"] == {"width": 1440.0, "height": 823.5}
+    listed = {entry["id"]: entry for entry in client.get("/api/clients").get_json()["clients"]}
+    assert listed["c1"]["viewport"] == {"width": 1440.0, "height": 823.5}
+    assert listed["c2"]["viewport"] is None
+    by_id = {entry["id"]: entry for entry in client.get("/api/inventory").get_json()["clients"]}
+    assert by_id["c1"]["viewport"] == {"width": 1440.0, "height": 823.5}
+    # A later report of the client keeps the size it reported.
+    _register_client(app, "c1", "home")
+    recorded = _shell(app).clients.get_client("c1")
+    assert recorded is not None and recorded.viewport is not None
+    assert (recorded.viewport.width, recorded.viewport.height) == (1440.0, 823.5)
+
+    assert client.post("/api/clients/nobody/viewport", json={"width": 10, "height": 10}).status_code == 404
+    assert client.post("/api/clients/c1/viewport", json={"width": 0, "height": 10}).status_code == 400
+    assert client.post("/api/clients/c1/viewport", json={"width": 10}).status_code == 400
+    recorded_after = _shell(app).clients.get_client("c1")
+    assert recorded_after is not None and recorded_after.viewport == recorded.viewport
 
 
 def test_recording_a_window_no_desktop_holds_or_an_unknown_client_is_a_404_and_records_nothing(
@@ -940,7 +971,14 @@ def test_a_clients_entry_presentation_is_written_announced_to_that_client_and_ch
         {
             "type": "client_entries_changed",
             "client_id": "c1",
-            "entries": {"buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}, "is_window_shown": True}},
+            "entries": {
+                "buddy": {
+                    "mode": "floating",
+                    "style": "avatar",
+                    "position": {"x": 0.25, "y": 0.5},
+                    "is_window_shown": True,
+                }
+            },
         }
     ]
     assert drain_messages(second_queue) == []
@@ -2550,6 +2588,9 @@ def test_viewing_a_desktop_reads_its_owners_newest_written_layout(client: FlaskC
     )
     assert newer.status_code == 200
     _arrive(client, "c-owner-new", None)
+    # Each of the owner's clients reported its own backdrop size; the viewer draws the chosen layout at its client's.
+    assert client.post("/api/clients/c-owner-old/viewport", json={"width": 800, "height": 600}).status_code == 200
+    assert client.post("/api/clients/c-owner-new/viewport", json={"width": 1920, "height": 1080}).status_code == 200
 
     # Alice's view of the owner's desktop is the owner's newest client's layout, not her own (which is unwritten).
     # The owner read names no client, as a viewing window sends it.
@@ -2557,14 +2598,16 @@ def test_viewing_a_desktop_reads_its_owners_newest_written_layout(client: FlaskC
     (viewed_placement,) = viewed["placements"]
     assert viewed_placement["frame"] == {"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6}
     assert viewed["updated_at"] == newer.get_json()["updated_at"]
+    assert viewed["viewport"] == {"width": 1920.0, "height": 1080.0}
     # Her own read of the same desktop stays her own, untouched by the owner's.
     assert client.get("/api/placements/home?client=c-alice").get_json()["placements"] == []
-    # A desktop whose owner has written no layout answers the defaults a fresh client reads.
+    # A desktop whose owner has written no layout answers the defaults a fresh client reads, and no size.
     assert client.get("/api/placements/alice?of=owner").get_json() == {
         "version": 1,
         "updated_at": None,
         "placements": [],
         "window_paths": {},
+        "viewport": None,
     }
 
 

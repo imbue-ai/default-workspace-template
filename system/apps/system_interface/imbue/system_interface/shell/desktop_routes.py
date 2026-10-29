@@ -91,6 +91,7 @@ from imbue.system_interface.presence import utc_now
 from imbue.system_interface.shell.api_models import ClientArrivalResponse
 from imbue.system_interface.shell.api_models import DesktopDeletedResponse
 from imbue.system_interface.shell.api_models import LaunchResponse
+from imbue.system_interface.shell.api_models import OwnerLayoutView
 from imbue.system_interface.shell.api_models import PlacementsSavedResponse
 from imbue.system_interface.shell.api_models import WindowOpenedResponse
 from imbue.system_interface.shell.client_activity import summarize_client_activity
@@ -389,15 +390,16 @@ def get_placements(desktop_id: str) -> ResponseReturnValue:
     return model_response(_layout_view(shell, desktop, client_id))
 
 
-def _owner_layout_view(shell: ShellState, desktop: Desktop) -> DesktopLayoutView:
+def _owner_layout_view(shell: ShellState, desktop: Desktop) -> OwnerLayoutView:
     """The desktop as its owner last arranged it: the newest-seen client of the desktop's owner with a written
-    layout; with none written, the defaults every client starts from (each window minimized)."""
+    layout, with the backdrop size that client reported; with none written, the defaults every client starts from
+    (each window minimized) and no size."""
     owner_key = get_state().roster.owner_key(utc_now())
     for client in owners_clients_newest_first(desktop, owner_key, shell.clients.list_clients()):
         view = _layout_view(shell, desktop, client.id)
         if view.updated_at is not None:
-            return view
-    return _layout_view(shell, desktop, ClientId("nobody"))
+            return OwnerLayoutView.model_validate({**dict(view), "viewport": client.viewport})
+    return OwnerLayoutView.model_validate({**dict(_layout_view(shell, desktop, ClientId("nobody"))), "viewport": None})
 
 
 def save_placements(desktop_id: str) -> ResponseReturnValue:

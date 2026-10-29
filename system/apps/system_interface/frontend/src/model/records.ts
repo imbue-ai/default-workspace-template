@@ -118,6 +118,21 @@ export const EMPTY_LAYOUT: Layout = Object.freeze({
   window_paths: Object.freeze({}),
 });
 
+/** A client's backdrop area in CSS pixels: the box its frames are fractions of (the multiplayer spec, section
+ *  8.3). */
+export interface Viewport {
+  readonly width: number;
+  readonly height: number;
+}
+
+/** The desktop as its owner last arranged it: their client's layout, and the backdrop size that client reported
+ *  (null when none wrote a layout, or the one that did never reported a size), which a viewing window draws the
+ *  layout at. */
+export interface OwnerLayout {
+  readonly layout: Layout;
+  readonly viewport: Viewport | null;
+}
+
 /** How the shell runs a launch path: opens a window at the path, or posts to it for the path of the page to open
  *  (post-launch-paths plan section 3.1). */
 export type LaunchPathMethod = "GET" | "POST";
@@ -243,6 +258,9 @@ export interface ClientRecord {
   /** The windows of its active desktop its layout does not minimize, top of the stack first: what the client is
    *  looking at. */
   readonly shown: readonly string[];
+  /** The backdrop size the client's desktop layout last reported; null for one that never has (a phone, a
+   *  pulled-out window, or an older shell). */
+  readonly viewport: Viewport | null;
 }
 
 /** The ``shown_history`` entry that stands for the phone's home grid rather than a window. */
@@ -523,6 +541,18 @@ export function parseLayout(raw: unknown): Layout {
   };
 }
 
+/** A viewport as a client record or the owner-layout answer carries it; absent (an older shell) reads as none. */
+function parseViewport(raw: unknown): Viewport | null {
+  if (raw === undefined || raw === null) return null;
+  const record = asObject(raw, "viewport");
+  return { width: asNumber(record.width, "viewport.width"), height: asNumber(record.height, "viewport.height") };
+}
+
+/** The ``?of=owner`` placements answer: a layout with the chosen client's viewport beside it. */
+export function parseOwnerLayout(raw: unknown): OwnerLayout {
+  return { layout: parseLayout(raw), viewport: parseViewport(asObject(raw, "layout").viewport) };
+}
+
 function parsePresets(raw: unknown): Record<string, string> {
   if (raw === undefined || raw === null) return {};
   const record = asObject(raw, "launch_path.presets");
@@ -657,6 +687,7 @@ export function parseClientRecord(raw: unknown): ClientRecord {
     shown: asArray(record.shown ?? [], "client.shown").map((entry, index) =>
       asString(entry, `client.shown[${index}]`),
     ),
+    viewport: parseViewport(record.viewport),
   };
 }
 
