@@ -3636,6 +3636,7 @@ class AgentManager:
             self._match_by_agent_id.pop(agent_id, None)
             self._pending_permission_ids_by_agent.pop(agent_id, None)
             self._unrecorded_sends_by_agent.pop(agent_id, None)
+            self._resend_locks_by_agent.pop(agent_id, None)
             is_own_chat = not self._is_recorded_member_locked(agent_id)
         if is_own_chat:
             self._forget_chat(ChatId(agent_id))
@@ -5159,6 +5160,8 @@ class AgentManager:
             self._evict_removed_agent(agent_id)
             with self._lock:
                 self._pending_permission_ids_by_agent.pop(agent_id, None)
+                self._unrecorded_sends_by_agent.pop(agent_id, None)
+                self._resend_locks_by_agent.pop(agent_id, None)
                 is_own_chat = not self._is_recorded_member_locked(agent_id)
             # An agent that is its own chat takes the chat's per-chat records with it; a
             # member of a recorded chat (its first agent included) leaves the chat standing.

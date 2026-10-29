@@ -6418,6 +6418,17 @@ def test_messages_delivered_before_or_during_a_stop_are_not_sent_again(broadcast
     assert chat.resent == []
 
 
+def test_an_agent_the_stream_reports_removed_takes_its_kept_sends_with_it(broadcaster: WebSocketBroadcaster) -> None:
+    chat = _LostSendChat(broadcaster)
+    try:
+        chat.send("what is 5+5?")
+        details = _agent_details("Lost-Send-Chat", agent_id=MngrAgentId(chat.agent_id))
+        chat.manager._handle_observe_event(make_agent_removed_event(details.id, details.name, details.host.id))
+    finally:
+        chat.manager.stop()
+    assert chat.agent_id not in chat.manager._unrecorded_sends_by_agent
+
+
 def test_a_message_lost_twice_is_not_sent_a_third_time(broadcaster: WebSocketBroadcaster) -> None:
     chat = _LostSendChat(broadcaster, is_resend_routed=True)
     try:
