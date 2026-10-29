@@ -10,3 +10,6 @@
 
 - `ClientRecord` (and so the client objects of the clients listing and the inventory) gains `viewport`: a `Viewport` (width and height in CSS pixels) of the backdrop the client's desktop layout last reported its frames as fractions of, or `None` for a client that never has (the mngr repo's `specs/multiplayer-refinements/spec.md`, section 8.3); a window viewing one of the client's desktops draws the layout at that size.
 
+- `ParticipantKey` is filename-safe in every form: an `email:` key admits no whitespace, slash, `#`, `?`, or `%`, and a `name:` key no slash or control character, so a key names a mentions file and sits in a route's path without escaping.
+
+- `parse_identity_header` raises `InvalidIdentityHeaderError` (an `InvalidLayoutValueError`) for a present, non-blank header that does not parse, instead of logging it and answering the anonymous owner (the multiplayer spec, section 4.2); a missing or blank header still does, so an in-container caller reads as the owner and a visitor behind a buggy proxy never does.

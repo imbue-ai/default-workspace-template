@@ -320,12 +320,16 @@ Every request that reaches the shell carries the requester's identity in the
 `mngr forward` or the share gateway (the header contract is in
 `system/services/share_gateway/README.md`): `owner`, on a shared
 workspace the account's `user_id` and `email`, and for a visiting agent its
-`agent_id`, `agent_name`, and `granter`. Nothing more: what to call an
+`agent_id`, `agent_name`, and `granter`. A present header that does not
+parse is refused with 400 on every route; only a missing or blank one reads as
+the owner of a workspace that has not shared. Nothing more: what to call an
 account and what it looks like is its profile, which the shell fetches from
 imbue_cloud (below). The shell page posts `/api/presence/heartbeat` every 30
 seconds while the tab is visible, once immediately when it becomes visible,
-and nothing when it goes away, carrying when the page last saw keyboard or
-pointer input. The page sends nothing about who it is; the heartbeat's answer
+and nothing when it goes away, carrying how long ago the page last saw
+keyboard or pointer input (an age, never a moment by the page's own clock: the
+shell stamps it, so a skewed clock pins nobody active or idle). The page sends
+nothing about who it is; the heartbeat's answer
 is the requester's own identity record and the participant key its entries
 carry (the multiplayer spec's section 4.1: `user:<user_id>`, or `owner` for
 the owner of a workspace that has not shared, who reveals no account until
@@ -356,8 +360,10 @@ are in one app, not in the workspace.
 
 **The roster.** Everyone who may be here, whether or not they are, is the
 roster (`roster.py`; `GET /api/roster`, and `roster_updated` on the socket on
-connect, with every `presence_updated`, and whenever one of its files
-changes): the owner first, then every account the workspace-level grants of
+connect, with every `presence_updated`, whenever a heartbeat moves a person's
+newest input time, and whenever one of its files changes -- a burst of file
+events announced once, a second later, and a document equal to the last one
+pushed never pushed again): the owner first, then every account the workspace-level grants of
 `data/.secrets/share_grants.toml` name, then every invited email still in
 them, then every visiting agent of `data/.secrets/agent_access/grants.toml`
 (both parsed by the `share_grants` library the gateway parses them with), and
