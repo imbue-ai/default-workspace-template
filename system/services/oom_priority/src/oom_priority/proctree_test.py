@@ -101,7 +101,7 @@ def test_a_real_processs_environment_is_read_as_it_was_started() -> None:
     child = subprocess.Popen(
         [sys.executable, "-c", "import sys; sys.stdin.read()"],
         stdin=subprocess.PIPE,
-        env={"MNGR_AGENT_ID": "agent-abc", "OTHER": "MNGR_AGENT_ID=agent-def"},
+        env={"OTHER": "MNGR_AGENT_ID=agent-def", "MNGR_AGENT_ID": "agent-abc"},
     )
     try:
         assert read_environ_value(child.pid, "MNGR_AGENT_ID") == "agent-abc"
