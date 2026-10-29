@@ -11,7 +11,9 @@ connector outage costs one failed fetch per user per five minutes and never a hu
 The picture itself is served from the shell's own origin (the multiplayer spec, section 4.2): the pages'
 content security policy admits images from the workspace alone, so the roster points at the shell's
 picture route and the shell fetches the bytes from the profile's URL once, keeping them beside the
-profile under ``profiles/<user_id>.picture.json`` until the profile names another URL.
+profile under ``profiles/<user_id>.picture.json`` until the profile names another URL; a fetch that
+fails is remembered there for the same five minutes, so a dead picture host costs one fetch per
+person per five minutes too.
 """
 
 import base64
@@ -85,11 +87,14 @@ class ProfilePicture(FrozenModel):
 
 
 class _CachedPicture(FrozenModel):
-    """The on-disk form of a fetched picture: the URL it came from, so a new picture is fetched afresh."""
+    """One ``profiles/<user_id>.picture.json``: the last fetch of the URL the profile named, its bytes or its failure,
+    so a new picture is fetched afresh and a failed one not before the TTL."""
 
-    url: str = Field(description="The profile picture URL the bytes were fetched from")
-    media_type: str = Field(description="The image's media type")
-    content_base64: str = Field(description="The image bytes, base64")
+    url: str = Field(description="The profile picture URL that was asked")
+    fetched_at: AwareDatetime = Field(description="When that URL was last asked")
+    is_fetch_failed: bool = Field(description="Whether that ask failed (the entry then holds no bytes)")
+    media_type: str | None = Field(default=None, description="The image's media type; None for a failure")
+    content_base64: str | None = Field(default=None, description="The image bytes, base64; None for a failure")
 
 
 @pure
@@ -200,26 +205,30 @@ class ProfileResolver(MutableModel):
     def resolve_picture(self, user_id: UserId, now: datetime) -> ProfilePicture | None:
         """The user's profile picture, or None when their profile names none (or cannot be resolved): the cached
         bytes while the profile still names the URL they came from, else fetched from that URL and cached. A fetch
-        that fails is not cached: the page falls back to a monogram and the next load tries again."""
+        that fails is cached as a miss for the TTL, as a profile fetch is: the page draws a monogram meanwhile."""
         profile = self.resolve(user_id, now)
         if profile is None or profile.profile_picture_url is None:
             return None
+        url = profile.profile_picture_url
         cached = self._read_cached_picture(user_id)
-        if cached is not None and cached.url == profile.profile_picture_url:
-            return ProfilePicture(
-                media_type=cached.media_type,
-                content=base64.b64decode(cached.content_base64),
-                version=picture_version_of(cached.url),
-            )
-        fetched = self._fetch_picture(profile.profile_picture_url, user_id)
-        if fetched is None:
-            return None
+        if cached is not None and cached.url == url:
+            if cached.media_type is not None and cached.content_base64 is not None:
+                return ProfilePicture(
+                    media_type=cached.media_type,
+                    content=base64.b64decode(cached.content_base64),
+                    version=picture_version_of(url),
+                )
+            if now - cached.fetched_at < self.cache_ttl:
+                return None
+        fetched = self._fetch_picture(url, user_id)
         self._write_cached_picture(
             user_id,
             _CachedPicture(
-                url=profile.profile_picture_url,
-                media_type=fetched.media_type,
-                content_base64=base64.b64encode(fetched.content).decode(),
+                url=url,
+                fetched_at=now,
+                is_fetch_failed=fetched is None,
+                media_type=fetched.media_type if fetched is not None else None,
+                content_base64=base64.b64encode(fetched.content).decode() if fetched is not None else None,
             ),
         )
         return fetched
@@ -244,7 +253,7 @@ class ProfileResolver(MutableModel):
         # A cache that cannot be written costs a fetch per request, not the request itself.
         try:
             write_json_atomic(self._picture_cache_path(user_id), cached.model_dump(mode="json"))
-        except OSError as e:
+        except ShellStateError as e:
             logger.warning("Could not cache the profile picture of {}: {}", user_id, e)
 
     def _fetch_picture(self, url: str, user_id: UserId) -> ProfilePicture | None:

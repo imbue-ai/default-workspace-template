@@ -385,7 +385,9 @@ admits no outside image: the roster points at
 `GET /api/roster/<key>/picture?v=<version>`, which fetches the bytes once from
 the profile's URL (5 second bound) and keeps them under
 `data/.state/presence/profiles/<user_id>.picture.json` until the profile names
-another URL; `v` is a digest of that URL, so a newer picture is a newer address
+another URL (a fetch that fails is remembered there for the same 5 minutes, so
+a dead picture host costs one fetch per person per 5 minutes too); `v` is a
+digest of that URL, so a newer picture is a newer address
 and an answer under the current version is cached by the page for good (one
 under an older version, or none, is the same bytes uncached).
 

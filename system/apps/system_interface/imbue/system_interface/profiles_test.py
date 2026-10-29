@@ -265,7 +265,50 @@ def test_resolve_picture_answers_none_for_no_picture_a_failed_fetch_or_a_non_ima
     assert resolver.resolve_picture(UserId("user-bob-4471"), _T0) is None
     assert resolver.resolve_picture(UserId("user-amy-0001"), _T0) is None
     assert resolver.resolve_picture(UserId("user-cal-0002"), _T0) is None
-    assert not (tmp_path / "profiles" / "user-amy-0001.picture.json").exists()
+    assert not (tmp_path / "profiles" / "user-bob-4471.picture.json").exists()
+    assert json.loads((tmp_path / "profiles" / "user-amy-0001.picture.json").read_text())["is_fetch_failed"] is True
+
+
+def test_a_failed_picture_fetch_is_remembered_for_the_ttl_and_a_new_url_asked_at_once(tmp_path: Path) -> None:
+    """A dead picture host costs one fetch per person per TTL, as a dead connector does for the profile; a profile
+    that comes to name another URL is asked for it without waiting out the failure."""
+    connector = _Connector()
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
+    picture_requests: list[str] = []
+    picture_status = 503
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/users/"):
+            return connector.handle(request)
+        picture_requests.append(str(request.url))
+        return httpx.Response(picture_status, content=b"PNG", headers={"Content-Type": "image/png"})
+
+    resolver = _picture_resolver(tmp_path, handle)
+    assert resolver.resolve_picture(UserId("user-bob-4471"), _T0) is None
+    assert resolver.resolve_picture(UserId("user-bob-4471"), _T0 + PROFILE_CACHE_TTL - timedelta(seconds=1)) is None
+    assert picture_requests == ["https://a/bob.png"]
+
+    # Past the TTL the URL is asked again, and a picture that is there now is kept.
+    picture_status = 200
+    recovered = resolver.resolve_picture(UserId("user-bob-4471"), _T0 + PROFILE_CACHE_TTL)
+    assert recovered is not None and recovered.content == b"PNG"
+    assert picture_requests == ["https://a/bob.png", "https://a/bob.png"]
+
+    # A failure under one URL says nothing about another: a profile read before the picture failed comes to name a
+    # new URL, which is asked at once although the failure is fresh.
+    later = _T0 + 2 * PROFILE_CACHE_TTL
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(
+        200, json={**_BOB_WIRE, "profile_picture_url": "https://a/bob-2.png"}
+    )
+    assert resolver.resolve(UserId("user-bob-4471"), later) is not None
+    picture_status = 503
+    assert resolver.resolve_picture(UserId("user-bob-4471"), later + PROFILE_CACHE_TTL - timedelta(minutes=1)) is None
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(
+        200, json={**_BOB_WIRE, "profile_picture_url": "https://a/bob-3.png"}
+    )
+    picture_status = 200
+    assert resolver.resolve_picture(UserId("user-bob-4471"), later + PROFILE_CACHE_TTL) is not None
+    assert picture_requests[2:] == ["https://a/bob-2.png", "https://a/bob-3.png"]
 
 
 def test_picture_version_of_follows_the_url() -> None:
