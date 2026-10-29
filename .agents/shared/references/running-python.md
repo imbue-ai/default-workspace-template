@@ -98,6 +98,7 @@ importing pydantic and building models took about 450-560 ms of a CLI's
 startup, against the 40 ms that uv adds. So in a script or CLI entry point,
 import only what every invocation needs at the top of the module, and import
 heavy libraries (pydantic, loguru, click, httpx, ...) inside the function or
-subcommand that uses them. A test holds every entry point to this; an entry that
-really needs one at import declares it in its project's `pyproject.toml` under
-`[tool.workspace-template.entry-points."<entry>.py"]` as `heavy-imports`.
+subcommand that uses them. A test holds every entry point to this, with no
+exceptions. When code whose signatures name a heavy library's types serves only
+some subcommands, give it a module of its own and import that module inside
+those subcommands.

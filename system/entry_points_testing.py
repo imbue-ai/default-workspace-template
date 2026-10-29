@@ -13,7 +13,6 @@ are bare too. See .agents/shared/references/running-python.md.
 from __future__ import annotations
 
 import ast
-import tomllib
 from pathlib import Path
 
 from agents_shared.validate_skill import package_entry_modules
@@ -31,9 +30,6 @@ STANDALONE_BARE_SCRIPTS = (
     REPO_ROOT / "catalog" / "build_catalog_from_export.py",
     REPO_ROOT / "system" / "apps" / "datalib" / "launch_datalib_http.py",
 )
-
-# Where a scripts directory declares the heavy modules an entry point may load at import.
-ENTRY_POINTS_TABLE = ("workspace-template", "entry-points")
 
 
 def scripts_dirs(repo_root: Path = REPO_ROOT) -> list[Path]:
@@ -99,14 +95,3 @@ def is_bare_entry(path: Path) -> bool:
     if path in STANDALONE_BARE_SCRIPTS or path.parent in STANDALONE_BARE_DIRS:
         return path.is_file()
     return path.is_file() and entry_package(path) in BARE_PACKAGES
-
-
-def declared_heavy_imports(entry: Path) -> frozenset[str]:
-    """The heavy modules the entry's project's pyproject.toml lets it load at import time."""
-    pyproject = project_dir(entry) / "pyproject.toml"
-    if not pyproject.is_file():
-        return frozenset()
-    table = tomllib.loads(pyproject.read_text()).get("tool", {})
-    for key in ENTRY_POINTS_TABLE:
-        table = table.get(key, {})
-    return frozenset(table.get(entry.name, {}).get("heavy-imports", ()))

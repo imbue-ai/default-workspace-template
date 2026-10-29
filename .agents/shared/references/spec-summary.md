@@ -188,10 +188,8 @@ the one workspace lock and its package installs into the root venv:
   only what every invocation needs at the top, and each subcommand imports its
   implementation (and any heavy library -- pydantic, loguru, click, httpx, ...)
   inside the function that runs it. A test fails an entry that loads one of
-  those at import time; one that truly needs it at import declares it in
-  `python/pyproject.toml` under
-  `[tool.workspace-template.entry-points."run.py"]` as
-  `heavy-imports = ["pydantic"]`.
+  those at import time. Code whose signatures name a heavy library's types
+  goes in a module of its own, imported inside the subcommands that need it.
 - A dependency must co-resolve with the rest of the workspace, the same as an
   app's. After adding or changing one, run `uv lock` and then
   `uv sync --all-packages`, and commit `uv.lock` with the change; a clash
