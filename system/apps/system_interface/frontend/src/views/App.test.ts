@@ -617,7 +617,7 @@ describe("the element menu", () => {
     expect(document.body.querySelector(".element-menu")).toBeNull();
   });
 
-  it("ends an overview thumbnail's menu with the reference rows, after its own delete row", () => {
+  it("ends an overview thumbnail's menu with the reference rows, after its own rename and delete rows", () => {
     store.openOverview();
     m.redraw.sync();
     const thumbnail = document.querySelector('[data-overview-desktop="home"]') as HTMLElement;
@@ -626,7 +626,7 @@ describe("the element menu", () => {
     );
     m.redraw.sync();
     const keys = menuRowKeys();
-    expect(keys[0]).toBe("delete");
+    expect(keys.slice(0, 2)).toEqual(["rename", "delete"]);
     expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
     pressEscape();
     expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();

@@ -165,6 +165,10 @@ import type {
 // an op that follows a gesture has to see the gesture in the file.
 const SAVE_DEBOUNCE_MS = 300;
 
+/** How often a window viewing somebody else's desktop re-reads the owner's layout when no ``placements_updated``
+ *  push has arrived (the multiplayer spec, section 8.3): the pushes are the live signal, this the backstop. */
+const VIEWING_REFRESH_INTERVAL_MS = 10_000;
+
 /** Why a window switches desktops: the user chose one ("user"), the bootstrap lands it ("landing"), or it follows the
  *  client's stored desktop, pushed or re-read ("follow"). The first two move the client; a follow moves nothing. */
 export type SwitchCause = "user" | "landing" | "follow";
@@ -208,6 +212,8 @@ export interface DesktopApi {
     title: string,
   ): Promise<WindowRecord>;
   fetchPlacements(desktopId: string, clientId: string): Promise<Layout>;
+  /** The desktop as its owner last arranged it (the multiplayer spec, section 8.3), for a window viewing it. */
+  fetchOwnerPlacements(desktopId: string): Promise<Layout>;
   savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null>;
   arriveClient(clientId: string): Promise<ClientArrival>;
   fetchClients(): Promise<ClientRecord[]>;
@@ -562,6 +568,9 @@ export class DesktopStore {
   /** While this window views a desktop that is not the viewer's own, the desktop it was on, to go back to; null
    *  when it came from nowhere of its own (section 8.3). */
   private returnDesktopId: string | null = null;
+  /** The viewed desktop's fallback refresh, running only while viewing: the owner's saves push
+   *  ``placements_updated``, so this covers a missed push alone. */
+  private viewingRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(private readonly deps: StoreDependencies) {
     this.state = initialDesktopState(deps.clientId, deps.modes);
@@ -1274,6 +1283,27 @@ export class DesktopStore {
     return this.isOwnDesktop(desktop) ? null : desktop;
   }
 
+  /** Start or stop the viewed desktop's fallback refresh, to match whether this window is viewing one. */
+  private syncViewingRefresh(): void {
+    const isViewing = this.viewedDesktop() !== null;
+    if (isViewing && this.viewingRefreshTimer === null) {
+      this.viewingRefreshTimer = setInterval(() => {
+        if (this.viewedDesktop() !== null) void this.refetchLayout();
+      }, VIEWING_REFRESH_INTERVAL_MS);
+    } else if (!isViewing && this.viewingRefreshTimer !== null) {
+      clearInterval(this.viewingRefreshTimer);
+      this.viewingRefreshTimer = null;
+    }
+  }
+
+  /** The first heartbeat has said who the viewer is (or who they are changed): until then the active desktop read
+   *  as the viewer's own, so a window that landed straight on somebody else's desktop re-reads its layout as the
+   *  owner's now (the multiplayer spec, section 8.3). */
+  takeViewerIdentityKnown(): void {
+    if (this.viewedDesktop() !== null) void this.refetchLayout();
+    else this.syncViewingRefresh();
+  }
+
   /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop. */
   stopViewing(): Promise<void> {
     const back = this.returnDesktopId;
@@ -1503,7 +1533,13 @@ export class DesktopStore {
   }
 
   private takePlacementsUpdated(event: PlacementsUpdatedEvent): void {
-    if (event.clientId !== this.deps.clientId || event.desktopId !== this.state.activeDesktopId) return;
+    if (event.desktopId !== this.state.activeDesktopId) return;
+    if (event.clientId !== this.deps.clientId) {
+      // Another client's layout is normally not this window's business; while this window is viewing the
+      // desktop, the owner's saves are exactly what it shows, so any client's save of it refreshes the view.
+      if (this.viewedDesktop() !== null) void this.refetchLayout();
+      return;
+    }
     if (this.saveIds.isOwn(event.saveId)) return;
     void this.refetchLayout();
   }
@@ -2910,6 +2946,9 @@ export class DesktopStore {
 
   private save(): Promise<void> {
     if (this.saveInFlight !== null) return this.saveInFlight.then(() => this.save());
+    // A viewed desktop's layout is the owner's, read-only: nothing a viewing window holds is this client's to
+    // save (the multiplayer spec, section 8.3), and the next refresh resets anything that slipped through.
+    if (this.viewedDesktop() !== null) return Promise.resolve();
     if (!isLayoutDirty(this.state) || !this.state.isLayoutLoaded || this.state.activeDesktopId === null) {
       return Promise.resolve();
     }
@@ -2942,14 +2981,20 @@ export class DesktopStore {
     return inFlight;
   }
 
-  /** Take the shell's layout of the active desktop when it differs from the one this window holds. */
+  /** Take the shell's layout of the active desktop when it differs from the one this window holds. While the
+   *  window is viewing a desktop that is not the viewer's own (the multiplayer spec, section 8.3), the layout
+   *  shown is the desktop owner's -- their windows as they have them -- rather than this client's own. */
   async refetchLayout(): Promise<void> {
+    this.syncViewingRefresh();
     const desktopId = this.state.activeDesktopId;
     if (desktopId === null) return;
     const sequence = ++this.layoutFetchSequence;
     let layout: Layout;
     try {
-      layout = await this.deps.api.fetchPlacements(desktopId, this.deps.clientId);
+      layout =
+        this.viewedDesktop() !== null
+          ? await this.deps.api.fetchOwnerPlacements(desktopId)
+          : await this.deps.api.fetchPlacements(desktopId, this.deps.clientId);
     } catch (error) {
       console.warn(`[si] could not fetch the layout of ${desktopId}`, error);
       return;

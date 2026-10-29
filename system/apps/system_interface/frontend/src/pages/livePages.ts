@@ -351,6 +351,9 @@ export class LivePagesLayer implements PageDriver {
     const desktop = activeDesktop(state);
     const placements = desktop === null ? [] : activePlacements(state);
     const focused = activeFocusedWindowId(state);
+    // A viewed desktop is read-only (the multiplayer spec, section 8.3): every page on it is inert, the way the
+    // overview's tiles are, so the owner's windows can be looked at but not typed into.
+    const isViewing = this.store.viewedDesktop() !== null;
     const shownIds = new Set<string>();
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
@@ -371,7 +374,7 @@ export class LivePagesLayer implements PageDriver {
         this.hide(page);
         return;
       }
-      this.show(page, box, index, !this.isGestureActive && window.id === focused);
+      this.show(page, box, index, !this.isGestureActive && !isViewing && window.id === focused);
       if (page.greetedDesktopId !== null && page.greetedDesktopId !== desktop.id) this.greet(page);
     });
     for (const page of this.pages.values()) {

@@ -63,7 +63,11 @@ export const Taskbar: m.Component<TaskbarAttrs> = {
             // square at the strip's edge. The vertical room is the bar's own; the horizontal is
             // borrowed back with a negative margin, so the first entry keeps its distance from the
             // field beside it.
-            class: "taskbar-entries -mx-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-1 py-1.5",
+            // While a desktop that is not the viewer's own is viewed (section 8.3), the entries mirror the
+            // owner's windows and take no press: the viewed desktop is read-only.
+            class:
+              "taskbar-entries -mx-1 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto px-1 py-1.5" +
+              (attrs.viewing === null ? "" : " pointer-events-none"),
           },
           attrs.entries.map((entry) =>
             m(TaskbarEntry, {

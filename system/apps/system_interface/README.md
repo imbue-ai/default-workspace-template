@@ -438,8 +438,13 @@ in the owner's colour around the whole desktop, the taskbar included, and a
 chip in that colour with their picture, "<Name> · <Desktop name>", and "Stop
 viewing" in place of the tray, the overview button hidden meanwhile (and the
 backdrop menu's "Show all desktops" disabled). Stop viewing goes back to the
-desktop the window came from, else the viewer's first. Viewing is a
-convention: every window verb works there. On every other client the owner of
+desktop the window came from, else the viewer's first. A viewed desktop is
+shown as its owner has it, live: the layout read is the owner's newest
+client's written one (`?of=owner` on the placements read), refreshed on every
+`placements_updated` push for the desktop and by a slow backstop poll, and it
+is read-only -- the pages are inert, the windows take no press, the taskbar's
+entries mirror theirs without acting, and nothing a viewing window holds is
+saved as the viewer's layout. On every other client the owner of
 a desktop somebody else is on wears a ring in their colour in the tray, read
 off the clients and the desktop moves the socket announces; a move by a client
 the last read did not list, and a change in who is here, read the clients

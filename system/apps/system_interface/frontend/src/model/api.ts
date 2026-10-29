@@ -267,6 +267,12 @@ export async function fetchPlacements(desktopId: string, clientId: string): Prom
   return parseLayout(await getJson(apiUrl(`/api/placements/${encodeURIComponent(desktopId)}?${query}`)));
 }
 
+/** The desktop as its owner last arranged it (the multiplayer spec, section 8.3): what a window viewing a desktop
+ *  that is not the viewer's own shows in place of its own layout. */
+export async function fetchOwnerPlacements(desktopId: string): Promise<Layout> {
+  return parseLayout(await getJson(apiUrl(`/api/placements/${encodeURIComponent(desktopId)}?of=owner`)));
+}
+
 export interface PlacementsSaveRequest {
   readonly clientId: string;
   readonly saveId: string;

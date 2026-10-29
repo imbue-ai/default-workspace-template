@@ -2513,6 +2513,60 @@ def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_cl
     ]
 
 
+def test_viewing_a_desktop_reads_its_owners_newest_written_layout(client: FlaskClient, app: Flask) -> None:
+    """``?of=owner`` on the placements read (the multiplayer spec, section 8.3): the desktop as its owner last
+    arranged it -- the layout of the owner's most recently seen client that has written one, whoever asks; the
+    workspace owner's clients fold under either of their keys; a desktop whose owner never wrote one answers the
+    defaults."""
+    _arrive(client, "c-owner-old", None)
+    _arrive(client, "c-owner-new", None)
+    _arrive(client, "c-alice", _ALICE)
+    window = _open_window(client, "terminal", "/?session=terminal-1", client_id="c-owner-old").get_json()["window"]
+    placement = {
+        "window_id": window["id"],
+        "frame": {"x": 0.1, "y": 0.1, "width": 0.5, "height": 0.5},
+        "state": "NORMAL",
+        "is_minimized": False,
+    }
+    # Opening the window wrote the opener's placement at once, so its save names that layout as its base.
+    opened_stamp = client.get("/api/placements/home?client=c-owner-old").get_json()["updated_at"]
+    old = client.post(
+        "/api/placements/home",
+        json={
+            "client_id": "c-owner-old",
+            "save_id": "save-00000000000000aa",
+            "base_updated_at": opened_stamp,
+            "placements": [placement],
+        },
+    )
+    assert old.status_code == 200
+    newer = client.post(
+        "/api/placements/home",
+        json={
+            "client_id": "c-owner-new",
+            "save_id": "save-00000000000000ab",
+            "placements": [{**placement, "frame": {"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6}}],
+        },
+    )
+    assert newer.status_code == 200
+    _arrive(client, "c-owner-new", None)
+
+    # Alice's view of the owner's desktop is the owner's newest client's layout, not her own (which is unwritten).
+    viewed = client.get("/api/placements/home?client=c-alice&of=owner", headers=identity_headers(_ALICE)).get_json()
+    (viewed_placement,) = viewed["placements"]
+    assert viewed_placement["frame"] == {"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6}
+    assert viewed["updated_at"] == newer.get_json()["updated_at"]
+    # Her own read of the same desktop stays her own, untouched by the owner's.
+    assert client.get("/api/placements/home?client=c-alice").get_json()["placements"] == []
+    # A desktop whose owner has written no layout answers the defaults a fresh client reads.
+    assert client.get("/api/placements/alice?client=c-owner-new&of=owner").get_json() == {
+        "version": 1,
+        "updated_at": None,
+        "placements": [],
+        "window_paths": {},
+    }
+
+
 def test_a_visitors_desktops_carry_their_key_and_the_order_route_moves_only_the_requesters_own(
     client: FlaskClient, app: Flask
 ) -> None:

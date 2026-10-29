@@ -37,6 +37,13 @@ let ownIdentity: OwnIdentity | null = null;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 let isStarted = false;
 let lastInputAt: Date | null = null;
+const identityListeners = new Set<() => void>();
+
+/** Hear when a heartbeat changes who this page is (the first answer, or a new account): the viewing chrome and
+ *  the viewed layout both read the identity, and until the first answer the page is nobody. */
+export function onOwnIdentityChanged(listener: () => void): void {
+  identityListeners.add(listener);
+}
 
 export function getPresentUsers(): PresentUser[] {
   return presentUsers;
@@ -104,7 +111,11 @@ async function sendHeartbeat(): Promise<void> {
     console.warn(`[si-presence] heartbeat answered HTTP ${response.status}`);
     return;
   }
+  const before = ownIdentity?.participant ?? null;
   ownIdentity = parseOwnIdentity(await response.json());
+  if ((ownIdentity?.participant ?? null) !== before) {
+    for (const listener of identityListeners) listener();
+  }
   m.redraw();
 }
 
@@ -155,4 +166,5 @@ export function resetPresenceForTesting(): void {
   ownIdentity = null;
   presentUsers = [];
   lastInputAt = null;
+  identityListeners.clear();
 }

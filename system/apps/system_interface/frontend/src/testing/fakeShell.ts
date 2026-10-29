@@ -505,6 +505,16 @@ export class FakeDesktopApi implements DesktopApi {
     return this.layoutOf(desktopId, clientId);
   }
 
+  /** The client whose layout the owner view answers (``?of=owner``); a client with none stored answers defaults. */
+  ownerLayoutClientId = "owner-client";
+
+  async fetchOwnerPlacements(desktopId: string): Promise<Layout> {
+    this.calls.push(`fetchOwnerPlacements:${desktopId}`);
+    this.refuse();
+    if (this.readGate !== null) await this.readGate;
+    return this.layoutOf(desktopId, this.ownerLayoutClientId);
+  }
+
   async savePlacements(desktopId: string, request: PlacementsSaveRequest): Promise<string | null> {
     this.calls.push(`savePlacements:${desktopId}:${request.saveId}`);
     if (this.writeGate !== null) await this.writeGate;

@@ -139,7 +139,13 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                 "div",
                 // Inert down to the parts that take a press (title bar, resize edges, shield, placeholders): each
                 // window's chrome sits over its own page in the stacking order, and the page must get the rest.
-                { class: "windows absolute inset-0 pointer-events-none" },
+                // While a desktop that is not the viewer's own is viewed, the whole layer is inert instead
+                // (``windows-viewing``, style.css): the owner's windows are looked at, never arranged.
+                {
+                  class:
+                    "windows absolute inset-0 pointer-events-none" +
+                    (store.viewedDesktop() !== null ? " windows-viewing" : ""),
+                },
                 // A keyed list tolerates no holes: a minimized or unknown window contributes nothing (a pulled-out
                 // window's hidden ghost included).
                 placements.flatMap((placement, index): m.Children[] => {

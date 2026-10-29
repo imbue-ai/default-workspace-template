@@ -3338,6 +3338,51 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     return store;
   }
 
+  it("shows a viewed desktop as its owner arranged it, read-only, refreshed by any client's save of it", async () => {
+    const withWindow = desktopRecord("alice", {
+      owner: "user:user-alice-0001",
+      windows: [windowRecord("win-a", "docs", "/a")],
+    });
+    api.desktops = [...api.desktops, withWindow];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    api.ownerLayoutClientId = "alice-laptop";
+    api.writeLayout("alice", "alice-laptop", {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-a", { state: "MAXIMIZED", is_minimized: false })],
+    });
+    const store = await startedStore();
+    socket.deliver().onRosterUpdated([josh, alice]);
+
+    // The viewed layout is the owner's client's, not this client's own (which never arranged it).
+    await store.switchDesktop("alice");
+    expect(api.calls).toContain("fetchOwnerPlacements:alice");
+    expect(store.getState().layout.placements).toMatchObject([{ window_id: "win-a", state: "MAXIMIZED" }]);
+
+    // The owner rearranges on their own client: their save's push refreshes the view here.
+    api.writeLayout("alice", "alice-laptop", {
+      updated_at: "2026-10-29T00:01:00Z",
+      placements: [placementRecord("win-a", { state: "NORMAL", is_minimized: true })],
+    });
+    const fetchesBefore = api.calls.filter((call) => call === "fetchOwnerPlacements:alice").length;
+    socket.deliver().onPlacementsUpdated({ desktopId: "alice", clientId: "alice-laptop", saveId: "save-alices" });
+    await Promise.resolve();
+    expect(api.calls.filter((call) => call === "fetchOwnerPlacements:alice").length).toBe(fetchesBefore + 1);
+
+    // Nothing a viewing window holds is this client's to save.
+    store.minimizeWindow("win-a");
+    await store.flushPendingSave();
+    expect(api.calls.some((call) => call.startsWith("savePlacements:alice"))).toBe(false);
+
+    // Back on an own desktop, the layout read is this client's own again.
+    await store.stopViewing();
+    expect(api.calls[api.calls.length - 1]).toBe("fetchPlacements:home");
+  });
+
   it("tells its own desktops from the ones it views, remembers the way back, and stops viewing onto it", async () => {
     const store = await viewerStore();
     expect(store.ownDesktops().map((desktop) => desktop.id)).toEqual(["home", "work"]);

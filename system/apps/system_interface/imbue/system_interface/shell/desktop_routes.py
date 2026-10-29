@@ -87,6 +87,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.system_interface.app_context import get_state
+from imbue.system_interface.presence import utc_now
 from imbue.system_interface.shell.api_models import ClientArrivalResponse
 from imbue.system_interface.shell.api_models import DesktopDeletedResponse
 from imbue.system_interface.shell.api_models import LaunchResponse
@@ -126,6 +127,7 @@ from imbue.system_interface.shell.errors import NoRequesterWindowError
 from imbue.system_interface.shell.errors import WallpaperNotFoundError
 from imbue.system_interface.shell.errors import WindowNotFoundError
 from imbue.system_interface.shell.errors import WindowPoppedOutError
+from imbue.system_interface.shell.ownership import owners_clients_newest_first
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
@@ -374,10 +376,27 @@ def _layout_view(shell: ShellState, desktop: Desktop, client_id: ClientId) -> De
 
 
 def get_placements(desktop_id: str) -> ResponseReturnValue:
-    """Where one client (``?client=``) has placed a desktop's windows: frames, order, minimized and popped-out state."""
+    """Where one client (``?client=``) has placed a desktop's windows: frames, order, minimized and popped-out
+    state. With ``?of=owner``, the desktop as its owner last arranged it instead (the multiplayer spec, section
+    8.3): the layout of the owner's most recently seen client that has written one, which is what a window viewing
+    a desktop that is not the viewer's own shows."""
     client_id = ClientId(request.args.get("client", ""))
     shell = _shell()
-    return model_response(_layout_view(shell, shell.get_desktop(desktop_id), client_id))
+    desktop = shell.get_desktop(desktop_id)
+    if request.args.get("of") == "owner":
+        return model_response(_owner_layout_view(shell, desktop))
+    return model_response(_layout_view(shell, desktop, client_id))
+
+
+def _owner_layout_view(shell: ShellState, desktop: Desktop) -> DesktopLayoutView:
+    """The desktop as its owner last arranged it: the newest-seen client of the desktop's owner with a written
+    layout; with none written, the defaults every client starts from (each window minimized)."""
+    owner_key = get_state().roster.owner_key(utc_now())
+    for client in owners_clients_newest_first(desktop, owner_key, shell.clients.list_clients()):
+        view = _layout_view(shell, desktop, client.id)
+        if view.updated_at is not None:
+            return view
+    return _layout_view(shell, desktop, ClientId("nobody"))
 
 
 def save_placements(desktop_id: str) -> ResponseReturnValue:
