@@ -733,8 +733,10 @@ export class DesktopStore {
 
   /** The letterbox a viewed desktop is drawn in (the multiplayer spec, section 8.3): the owner's backdrop scaled
    *  down to fit this one and centred, or null while this window views nothing, or views a desktop whose owner's
-   *  client never reported its size (drawn at this backdrop's size then, as before). */
+   *  client never reported its size (drawn at this backdrop's size then, as before). The desktop layout's alone:
+   *  the phone layout and a pulled-out window's shell draw no stage to scale. */
   viewingLetterbox(): Letterbox | null {
+    if (this.isPhoneLayout() || this.soloWindowId !== null) return null;
     if (this.viewedViewport === null || this.viewedDesktop() === null) return null;
     return letterboxFor(this.viewedViewport, this.backdrop);
   }

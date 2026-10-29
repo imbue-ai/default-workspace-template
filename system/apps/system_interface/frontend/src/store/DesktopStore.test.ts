@@ -3517,6 +3517,12 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     socket.deliver().onPlacementsUpdated({ desktopId: "alice", clientId: "alice-laptop", saveId: "save-more" });
     await settle();
     expect(store.viewingLetterbox()).not.toBeNull();
+    // The phone layout draws no stage to scale: a window resized narrow while viewing keeps the desktop and the
+    // size read, and draws no letterbox until it is wide again.
+    store.setThemeMetrics(METRICS, { isPhone: true, isTouch: true });
+    expect(store.viewingLetterbox()).toBeNull();
+    store.setThemeMetrics(METRICS, MODES);
+    expect(store.viewingLetterbox()).not.toBeNull();
     await store.stopViewing();
     expect(store.viewingLetterbox()).toBeNull();
     expect(store.renderedRect(placement)).toEqual({ x: 300, y: 300, width: 1500, height: 1500 });
