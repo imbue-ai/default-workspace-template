@@ -275,19 +275,10 @@ class ProfileResolver(MutableModel):
             logger.warning("Could not cache the profile picture of {}: {}", user_id, e)
 
     def _fetch_picture(self, url: str, user_id: UserId) -> ProfilePicture | None:
-        started_at = time.monotonic()
-        client = httpx.Client(transport=self.transport, timeout=PICTURE_REQUEST_TIMEOUT_SECONDS)
-        with client:
-            try:
-                response = client.get(url)
-            except httpx.HTTPError as e:
-                logger.warning("Failed to fetch the profile picture of {} from {}: {}", user_id, url, e)
-                return None
-        elapsed_seconds = time.monotonic() - started_at
-        if elapsed_seconds > _SLOW_PICTURE_FETCH_SECONDS:
-            logger.warning("Fetched the profile picture of {} slowly ({:.1f}s)", user_id, elapsed_seconds)
-        if response.status_code != httpx.codes.OK:
-            logger.warning("Fetching the profile picture of {} answered HTTP {}", user_id, response.status_code)
+        response = self._get(
+            url, user_id, "profile picture", PICTURE_REQUEST_TIMEOUT_SECONDS, _SLOW_PICTURE_FETCH_SECONDS
+        )
+        if response is None:
             return None
         if len(response.content) > MAX_PROFILE_PICTURE_BYTES:
             logger.warning("Refused the profile picture of {}: {} bytes", user_id, len(response.content))
@@ -315,21 +306,32 @@ class ProfileResolver(MutableModel):
         except ShellStateError as e:
             logger.warning("Could not cache the profile of {}: {}", cached.user_id, e)
 
-    def _fetch(self, broker_url: str, user_id: UserId) -> UserProfile | None:
-        url = f"{broker_url}/users/{user_id}/profile"
+    def _get(
+        self, url: str, user_id: UserId, subject: str, timeout_seconds: float, slow_seconds: float
+    ) -> httpx.Response | None:
+        """The answer ``url`` gives for a user's ``subject`` (their profile, their picture), or None, warned about,
+        when the request fails or answers anything but 200; an answer slower than ``slow_seconds`` is warned about
+        too, since the host is degrading before it is down."""
         started_at = time.monotonic()
-        client = httpx.Client(transport=self.transport, timeout=self.request_timeout_seconds)
+        client = httpx.Client(transport=self.transport, timeout=timeout_seconds)
         with client:
             try:
                 response = client.get(url)
             except httpx.HTTPError as e:
-                logger.warning("Failed to fetch the profile of {} from {}: {}", user_id, url, e)
+                logger.warning("Failed to fetch the {} of {} from {}: {}", subject, user_id, url, e)
                 return None
         elapsed_seconds = time.monotonic() - started_at
-        if elapsed_seconds > _SLOW_PROFILE_FETCH_SECONDS:
-            logger.warning("Fetched the profile of {} slowly ({:.1f}s)", user_id, elapsed_seconds)
+        if elapsed_seconds > slow_seconds:
+            logger.warning("Fetched the {} of {} slowly ({:.1f}s)", subject, user_id, elapsed_seconds)
         if response.status_code != httpx.codes.OK:
-            logger.warning("Fetching the profile of {} answered HTTP {}", user_id, response.status_code)
+            logger.warning("Fetching the {} of {} answered HTTP {}", subject, user_id, response.status_code)
+            return None
+        return response
+
+    def _fetch(self, broker_url: str, user_id: UserId) -> UserProfile | None:
+        url = f"{broker_url}/users/{user_id}/profile"
+        response = self._get(url, user_id, "profile", self.request_timeout_seconds, _SLOW_PROFILE_FETCH_SECONDS)
+        if response is None:
             return None
         try:
             wire = _ProfileWire.model_validate_json(response.content)
