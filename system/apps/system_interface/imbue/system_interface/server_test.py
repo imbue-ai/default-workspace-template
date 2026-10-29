@@ -682,8 +682,9 @@ def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_versio
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     """``GET /api/roster/<key>/picture`` (the multiplayer spec, section 4.2) relays the bytes the profile's URL
-    serves, immutably cacheable under its version; a key that is not a person's, or a person with no picture, is a
-    404."""
+    serves, immutably cacheable under its version; a key that is not a listed person's (an account the roster does
+    not name, a key with no id, the agent's), or a person with no picture, is a 404, and nothing is fetched for it."""
+    pictures_fetched: list[str] = []
 
     def connector(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/users/user-owner-9c21/profile":
@@ -692,7 +693,12 @@ def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_versio
             )
         if request.url.path == "/users/user-bob-4471/profile":
             return httpx.Response(200, json={"user_id": "user-bob-4471", "display_name": "Bob"})
-        if str(request.url) == "https://a/b":
+        if request.url.path == "/users/user-carol-1138/profile":
+            return httpx.Response(
+                200, json={"user_id": "user-carol-1138", "display_name": "Carol", "profile_picture_url": "https://a/c"}
+            )
+        if request.url.host == "a":
+            pictures_fetched.append(str(request.url))
             return httpx.Response(200, content=b"\x89PNG...", headers={"Content-Type": "image/png"})
         return httpx.Response(404, json={"detail": "no such user"})
 
@@ -711,7 +717,11 @@ def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_versio
     unversioned = client.get("/api/roster/user:user-owner-9c21/picture")
     assert (unversioned.status_code, unversioned.headers["Cache-Control"]) == (200, "no-cache")
     assert client.get("/api/roster/user:user-bob-4471/picture").status_code == 404
+    assert client.get("/api/roster/user:user-carol-1138/picture").status_code == 404
+    assert client.get("/api/roster/user:/picture").status_code == 404
     assert client.get("/api/roster/workspace-agent/picture").status_code == 404
+    assert pictures_fetched == ["https://a/b"]
+    assert not (tmp_path / "profiles" / "user-carol-1138.picture.json").exists()
 
 
 def test_presence_heartbeat_records_the_requester_and_answers_their_identity(client: FlaskClient) -> None:

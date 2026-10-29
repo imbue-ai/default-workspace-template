@@ -31,6 +31,7 @@ from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.identity import participant_key_of
+from workspace_layout.primitives import ParticipantKind
 from workspace_layout.primitives import UserId
 
 from imbue.system_interface.api_models import HeartbeatRequest
@@ -515,10 +516,17 @@ _USER_KEY_PREFIX: Final[str] = "user:"
 def _participant_picture_endpoint(key: str) -> ResponseReturnValue:
     """A person's profile picture from the shell's own origin (the multiplayer spec, section 4.2): fetched from the
     profile's URL once and kept, so the pages, whose policy admits no outside image, can show it. 404 for a key that
-    is not a person's, or a person with no picture."""
-    if not key.startswith(_USER_KEY_PREFIX):
-        return error_response("Only a person has a profile picture here", HTTP_NOT_FOUND)
-    picture = get_state().roster.profiles.resolve_picture(UserId(key.removeprefix(_USER_KEY_PREFIX)), utc_now())
+    is not a person's the roster lists, or a person with no picture."""
+    now = utc_now()
+    roster = get_state().roster
+    # Only a person the roster lists by account has a picture here: no id a page names is parsed, fetched, or
+    # cached unless the roster built the key from a valid one.
+    is_listed_person = key.startswith(_USER_KEY_PREFIX) and any(
+        str(entry.key) == key and entry.kind == ParticipantKind.PERSON for entry in roster.document(now).participants
+    )
+    if not is_listed_person:
+        return error_response("Only a person listed in the roster has a profile picture here", HTTP_NOT_FOUND)
+    picture = roster.profiles.resolve_picture(UserId(key.removeprefix(_USER_KEY_PREFIX)), now)
     if picture is None:
         return error_response("No profile picture", HTTP_NOT_FOUND)
     response = Response(picture.content, mimetype=picture.media_type)
