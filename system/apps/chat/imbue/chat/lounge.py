@@ -22,6 +22,7 @@ from workspace_layout.roster import RosterDocument
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import ChatSnapshot
+from imbue.chat.naming import is_name_conflict
 from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.roster_client import RosterClient
@@ -35,9 +36,11 @@ ROSTER_POLL_INTERVAL_SECONDS: Final[float] = 60.0
 
 @pure
 def find_lounge(snapshots: Sequence[ChatSnapshot]) -> ChatId | None:
-    """The chat titled "Lounge", of either kind, when there is one."""
+    """The chat titled "Lounge", of either kind, when there is one: matched by the rule a create refuses a taken
+    name by (canonical forms, case-insensitively), so a chat called "lounge" is the Lounge rather than a name the
+    keeper's create would be refused beside."""
     for snapshot in snapshots:
-        if snapshot.title == LOUNGE_TITLE:
+        if is_name_conflict(LOUNGE_TITLE, (snapshot.title,)):
             return snapshot.chat_id
     return None
 

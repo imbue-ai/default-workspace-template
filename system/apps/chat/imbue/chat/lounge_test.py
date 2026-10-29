@@ -63,6 +63,18 @@ def test_the_lounge_is_the_chat_so_titled_of_either_kind() -> None:
     assert find_lounge([other_room, make_chat_snapshot("agent-4", name="Lounge-2")]) is None
 
 
+def test_the_lounge_is_found_by_the_rule_a_create_refuses_a_taken_name_by() -> None:
+    """A chat called "lounge" or "Lounge " is the Lounge: the keeper's create of another would be refused as a
+    taken name, so the title is matched the way the create matches it, not by the exact string."""
+    lowercase = make_chat_snapshot("agent-1", name="lounge")
+    padded = make_chat_snapshot("agent-2", name="Lounge ")
+    plural = make_chat_snapshot("agent-3", name="Lounges")
+
+    assert find_lounge((plural, lowercase)) == ChatId("agent-1")
+    assert find_lounge((plural, padded)) == ChatId("agent-2")
+    assert find_lounge((plural,)) is None
+
+
 def test_anyone_invited_counts_but_the_owner_and_the_workspace_agent_do_not() -> None:
     assert not has_anyone_besides_the_owner(_owner_only())
     assert has_anyone_besides_the_owner(_with(ParticipantKind.PERSON, "user:user-bob-4471"))
