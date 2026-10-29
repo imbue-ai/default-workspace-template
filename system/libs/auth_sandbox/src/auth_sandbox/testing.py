@@ -90,6 +90,38 @@ def read_browser_state(
     return json.loads(text)
 
 
+def _run_latchkey(
+    latchkey_binary: str,
+    arguments: list[str],
+    directory: Path,
+    key: SecretStr,
+    what: str,
+) -> str:
+    """Run the CLI against the store in ``directory`` under ``key`` and answer its stdout.
+
+    Raises:
+        LatchkeyCommandError: on a non-zero exit, naming ``what`` (the subcommand) and its stderr.
+    """
+    completed = subprocess.run(
+        [latchkey_binary, *arguments],
+        env={
+            **os.environ,
+            "LATCHKEY_DIRECTORY": str(directory),
+            "LATCHKEY_ENCRYPTION_KEY": key.get_secret_value(),
+            "LATCHKEY_DISABLE_COUNTING": "1",
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=60,
+    )
+    if completed.returncode != 0:
+        raise LatchkeyCommandError(
+            f"latchkey {what} exited {completed.returncode}: {completed.stderr.strip()}"
+        )
+    return completed.stdout
+
+
 def store_credential(
     latchkey_binary: str,
     directory: Path,
@@ -98,51 +130,20 @@ def store_credential(
     account: str | None,
 ) -> None:
     """``latchkey auth set`` a raw header credential into ``directory`` under ``key``, as the harness does."""
-    argv = [latchkey_binary]
+    arguments: list[str] = []
     if account is not None:
-        argv.extend(["--account", account])
-    argv.extend(
+        arguments.extend(["--account", account])
+    arguments.extend(
         ["auth", "set", service, "-H", f"Authorization: Bearer {service}-token"]
     )
-    completed = subprocess.run(
-        argv,
-        env={
-            **os.environ,
-            "LATCHKEY_DIRECTORY": str(directory),
-            "LATCHKEY_ENCRYPTION_KEY": key.get_secret_value(),
-            "LATCHKEY_DISABLE_COUNTING": "1",
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
-    )
-    if completed.returncode != 0:
-        raise LatchkeyCommandError(
-            f"latchkey auth set exited {completed.returncode}: {completed.stderr.strip()}"
-        )
+    _run_latchkey(latchkey_binary, arguments, directory, key, "auth set")
 
 
 def list_accounts(
     latchkey_binary: str, directory: Path, key: SecretStr
 ) -> dict[str, list[str]]:
     """The accounts per service a store holds, read with ``latchkey auth list`` under ``key``."""
-    completed = subprocess.run(
-        [latchkey_binary, "auth", "list"],
-        env={
-            **os.environ,
-            "LATCHKEY_DIRECTORY": str(directory),
-            "LATCHKEY_ENCRYPTION_KEY": key.get_secret_value(),
-            "LATCHKEY_DISABLE_COUNTING": "1",
-        },
-        capture_output=True,
-        text=True,
-        check=False,
-        timeout=60,
+    listed = json.loads(
+        _run_latchkey(latchkey_binary, ["auth", "list"], directory, key, "auth list")
     )
-    if completed.returncode != 0:
-        raise LatchkeyCommandError(
-            f"latchkey auth list exited {completed.returncode}: {completed.stderr.strip()}"
-        )
-    listed = json.loads(completed.stdout)
     return {service: sorted(accounts) for service, accounts in listed.items()}
