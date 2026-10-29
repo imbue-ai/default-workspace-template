@@ -958,9 +958,11 @@ terminal view shows the pane as it is.
 The page draws its own turns on the right and another person's on the left under
 their name and picture, from two routes: `GET /api/me` answers the page's own
 participant key, and `GET /api/participants` relays the shell's roster
-(`GET /api/roster` there; `roster_client.py` caches it briefly), with the
-workspace agent's picture rewritten to `GET /api/participants/workspace-agent/picture`,
-which the chat app proxies from the shell so the page needs no second origin.
+(`GET /api/roster` there; `roster_client.py` caches it briefly), with every
+picture the shell serves from its own origin (a person's profile picture, the
+workspace agent's avatar icon) rewritten to `GET /api/participants/<key>/picture`
+(the shell URL's query kept, so a versioned picture stays cached), which the chat
+app proxies from the shell with its caching, so the page needs no second origin.
 The agent's prose is drawn as bubbles under that picture and the workspace's name,
 one per reply (tool chips and cards sit between them, outside the bubbles).
 
