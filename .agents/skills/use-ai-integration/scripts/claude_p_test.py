@@ -569,3 +569,37 @@ def test_snapshot_is_read_from_a_different_cwd_than_it_was_written(
     monkeypatch.chdir(elsewhere)
 
     assert module.read_workspace_ai_credentials().api_key == "sk-fake-pinned"
+
+
+def test_snapshot_from_a_worktree_lands_in_the_main_checkout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A worker's worktree saves the key where services in the main checkout read it."""
+    main = tmp_path / "main"
+    (main / "system" / "scripts").mkdir(parents=True)
+    (main / "system" / "scripts" / "keep").write_text("")
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com"]
+    subprocess.run([*git, "init", "-q", str(main)], check=True)
+    subprocess.run([*git, "-C", str(main), "add", "."], check=True)
+    subprocess.run([*git, "-C", str(main), "commit", "-qm", "init"], check=True)
+    worktree = tmp_path / "worker"
+    subprocess.run(
+        [*git, "-C", str(main), "worktree", "add", "-q", str(worktree)], check=True
+    )
+    copy = worktree / "system" / "scripts" / "claude_p.py"
+    copy.write_text(_SCRIPT.read_text())
+    spec = importlib.util.spec_from_file_location("claude_p_worktree_copy", copy)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    _clear_credential_env_vars(monkeypatch)
+    (tmp_path / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-fake-key"}}'
+    )
+    monkeypatch.chdir(worktree)
+
+    written = module.write_anthropic_env_snapshot()
+
+    assert Path(written) == main.resolve() / "data" / ".secrets" / "anthropic.env"

@@ -112,17 +112,43 @@ def _workspace_root() -> str:
     the key outside the root ``data/`` that git ignores, and make a service
     started elsewhere miss the snapshot. Walked up rather than counted, because
     this file is copied into services at any depth; ``system/scripts`` marks the
-    root, as in the template's other root finders. Outside a workspace (local
+    root, as in the template's other root finders. A git worktree resolves to
+    its main checkout (see ``_main_checkout``). Outside a workspace (local
     development) the cwd is the root.
     """
     here = os.path.dirname(os.path.abspath(__file__))
     while True:
         if os.path.isdir(os.path.join(here, "system", "scripts")):
-            return here
+            return _main_checkout(here)
         parent = os.path.dirname(here)
         if parent == here:
             return os.getcwd()
         here = parent
+
+
+def _main_checkout(root: str) -> str:
+    """The main checkout the git worktree at ``root`` belongs to; ``root`` itself otherwise.
+
+    A background worker runs in its own worktree with its own ``data/``, but
+    services run from the main checkout, so a key saved or read in a worktree
+    must use the main checkout's ``data/``. Read from the worktree's ``.git``
+    file, the same way as ``main_checkout`` in
+    ``system/libs/chat_background_tasks/src/chat_background_tasks/markers.py``;
+    repeated here because this file is copied around standalone.
+    """
+    try:
+        with open(os.path.join(root, ".git"), encoding="utf-8") as f:
+            git_file = f.read()
+    except OSError:
+        # No .git, or a directory: a main checkout or none.
+        return root
+    git_dir = os.path.join(root, git_file.strip().removeprefix("gitdir:").strip())
+    try:
+        with open(os.path.join(git_dir, "commondir"), encoding="utf-8") as f:
+            common_dir = os.path.realpath(os.path.join(git_dir, f.read().strip()))
+    except OSError:
+        return root
+    return os.path.dirname(common_dir)
 
 
 def _anthropic_env_snapshot_path() -> str:
