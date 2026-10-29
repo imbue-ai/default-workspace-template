@@ -872,6 +872,17 @@ def test_a_scaffolded_app_is_a_standalone_project_that_boots_from_its_own_venv(
     finally:
         booted.terminate()
         booted.wait(timeout=10)
+    # Its tests run from the same venv, which the sync gave the dev group (the ratchets
+    # list files through git, so the workspace is committed first).
+    init_git_repository(root)
+    commit_everything(root, "the scaffolded workspace")
+    tests = subprocess.run(
+        ["uv", "run", "--no-sync", "pytest", "-q", "-p", "no:cacheprovider"],
+        cwd=app,
+        capture_output=True,
+        text=True,
+    )
+    assert tests.returncode == 0, tests.stdout + tests.stderr
 
 
 def _scaffold_for_real(

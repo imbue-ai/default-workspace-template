@@ -263,11 +263,19 @@ packages = ["src/{package}"]
 
 [dependency-groups]
 dev = [
+    # The app's tests run from its own venv, which its sync gives the dev group: pytest
+    # and what the ratchets check with.
+    "imbue-common[testing]",
     # What runner_test.py asserts the API document with.
     "app-schema[testing]",
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
     "ty==0.0.85",
 ]
+
+# Makes this directory the tests' own pytest root, so they run against this app's venv
+# rather than the workspace's root configuration.
+[tool.pytest.ini_options]
+testpaths = ["."]
 
 # The workspace's shared code, live and editable. app-schema's own workspace sources
 # apply in this lock, so imbue-common comes from the root's mngr pin; a source for it
