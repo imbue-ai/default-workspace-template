@@ -2368,10 +2368,9 @@ class AgentManager:
         if (chat is not None and chat.transition is not None) or is_archived_member:
             _loguru_logger.info("Not resending {}'s lost messages: its chat is switching or moved on", agent_info.name)
             return
-        events = capabilities.ensure_watcher(agent_info).get_all_events()
-        lost = _sends_the_transcript_does_not_hold(events, sends)
         with resend_lock:
-            for send in lost:
+            events = capabilities.ensure_watcher(agent_info).get_all_events()
+            for send in _sends_the_transcript_does_not_hold(events, sends):
                 if send.is_resend:
                     _loguru_logger.warning(
                         "{}'s process exited again before writing down a resent message; it is not sent again",
