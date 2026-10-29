@@ -859,6 +859,25 @@ class BrowserFleet(MutableModel):
         """Checkpoint the tabs while Chromium can still be asked (spec section 9.3)."""
         self.checkpoint()
 
+    def _register_saved_locked(self, saved: BrowserManifest | None) -> None:
+        """Register every saved browser not yet known, stopped: the manifest's entries with their tabs, or with
+        no manifest the profiles on disk (tabs unknown, kept stopped). The caller holds the lock."""
+        if saved is not None:
+            for entry in sorted(saved.browsers, key=lambda e: e.id):
+                if str(entry.id) in self._browsers:
+                    continue
+                browser = self._register_locked(entry.id)
+                browser.lifecycle = BrowserLifecycle.STOPPED
+                browser.last_known_tabs = list(entry.tabs)
+                browser.last_known_active_tab = entry.active_tab
+                browser.is_stopped_by_user = entry.stopped
+        else:
+            for name in self.scan_profile_names():
+                if name not in self._browsers:
+                    browser = self._register_locked(BrowserName(name))
+                    browser.lifecycle = BrowserLifecycle.STOPPED
+                    browser.is_stopped_by_user = True
+
     def load_saved(self) -> None:
         """Register the saved browsers as stopped at service start, before any stack runs, so a launch that arrives
         while the stack is still down starts the saved browser instead of minting a fresh name beside it -- whose
@@ -866,21 +885,7 @@ class BrowserFleet(MutableModel):
         profile (its logins with it). What relaunches when the stack comes up stays ``restore``'s decision."""
         saved = self.manifest_store.read()
         with self._lock:
-            if saved is not None:
-                for entry in sorted(saved.browsers, key=lambda e: e.id):
-                    if str(entry.id) in self._browsers:
-                        continue
-                    browser = self._register_locked(entry.id)
-                    browser.lifecycle = BrowserLifecycle.STOPPED
-                    browser.last_known_tabs = list(entry.tabs)
-                    browser.last_known_active_tab = entry.active_tab
-                    browser.is_stopped_by_user = entry.stopped
-            else:
-                for name in self.scan_profile_names():
-                    if name not in self._browsers:
-                        browser = self._register_locked(BrowserName(name))
-                        browser.lifecycle = BrowserLifecycle.STOPPED
-                        browser.is_stopped_by_user = True
+            self._register_saved_locked(saved)
         self.on_changed()
 
     def restore(self) -> None:
@@ -891,26 +896,12 @@ class BrowserFleet(MutableModel):
         saved = self.manifest_store.read()
         wanted: list[Browser] = []
         with self._lock:
+            self._register_saved_locked(saved)
             if saved is not None:
                 for entry in sorted(saved.browsers, key=lambda e: e.id):
-                    browser = self._browsers.get(str(entry.id))
-                    if browser is None:
-                        browser = self._register_locked(entry.id)
-                        browser.lifecycle = BrowserLifecycle.STOPPED
-                        browser.last_known_tabs = list(entry.tabs)
-                        browser.last_known_active_tab = entry.active_tab
-                        browser.is_stopped_by_user = entry.stopped
-                        browser.is_launch_wanted = not entry.stopped
-                    elif browser.lifecycle == BrowserLifecycle.STOPPED and not browser.is_stopped_by_user:
+                    browser = self._browsers[str(entry.id)]
+                    if browser.lifecycle == BrowserLifecycle.STOPPED and not browser.is_stopped_by_user:
                         browser.is_launch_wanted = True
-                    else:
-                        pass
-            else:
-                for name in self.scan_profile_names():
-                    if name not in self._browsers:
-                        browser = self._register_locked(BrowserName(name))
-                        browser.lifecycle = BrowserLifecycle.STOPPED
-                        browser.is_stopped_by_user = True
             wanted = [browser for _, browser in sorted(self._browsers.items()) if browser.is_launch_wanted]
             for browser in wanted:
                 browser.is_launch_wanted = False
