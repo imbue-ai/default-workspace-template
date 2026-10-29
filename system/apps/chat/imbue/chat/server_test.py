@@ -5668,6 +5668,11 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
     unpictured = app_over(_shell_with_bob_and_the_agent(None))
     assert unpictured.get("/api/participants/user:user-nobody/picture").status_code == 404
     assert unpictured.get("/api/participants/not%20a%20key/picture").status_code == 404
+    # A query the listing never handed out (one that is not ASCII) names no picture either, rather than failing.
+    garbled = pictured.get(
+        "/api/participants/user:user-bob-4471/picture", environ_overrides={"QUERY_STRING": "v=\xe9"}
+    )
+    assert garbled.status_code == 404
     assert unpictured.get("/api/participants/workspace-agent/picture").status_code == 404
 
     # A shell that does not answer the picture with a success is a bad gateway, not this app's failure.

@@ -1092,6 +1092,9 @@ def _participant_picture_endpoint(key: str) -> Response:
     if entry is None or entry.profile_picture_url is None or not entry.profile_picture_url.startswith("/"):
         return error_response(f"{key} has no picture here", 404)
     picture_path = entry.profile_picture_url.partition("?")[0]
+    # The listing hands out ASCII queries alone (the shell's version, the icon's size): any other names no picture.
+    if not request.query_string.isascii():
+        return error_response(f"{key} has no picture under that query", 404)
     query = request.query_string.decode()
     try:
         answer = state.http_client.get(
