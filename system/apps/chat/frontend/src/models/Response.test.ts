@@ -916,6 +916,10 @@ describe("a send that got no answer", () => {
       await vi.runAllTimersAsync();
       expect(await sent).toBe("ok");
       expect(sentIds()).toEqual(["m-1", "m-1", "m-1"]);
+      const repeatFlags = mockRequest.mock.calls.map(
+        (call) => (call[0] as { body: { is_repeat: boolean } }).body.is_repeat,
+      );
+      expect(repeatFlags).toEqual([false, true, true]);
     } finally {
       vi.useRealTimers();
       vi.unstubAllGlobals();

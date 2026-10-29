@@ -1131,6 +1131,7 @@ export async function sendMessage(chatId: string, message: string, messageId?: s
   // attribute a request to a client via `workspace-layout context`. The message_id is
   // the stable send-time id the backend reconciles delivery against (A4), and answers a
   // repeat under it as it answered the first, so a send that got no answer is sent again.
+  // A repeat says it is one, so it gets the first send's refusal too rather than a send of its own.
   for (let attempt = 0; ; attempt++) {
     try {
       const response = await m.request<{ status: SendStatus }>({
@@ -1142,6 +1143,7 @@ export async function sendMessage(chatId: string, message: string, messageId?: s
           message_id: id,
           client_id: getClientId(),
           desktop_id: getActiveDesktopId(),
+          is_repeat: attempt > 0,
         },
       });
       return response.status;

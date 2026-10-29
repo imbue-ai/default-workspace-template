@@ -965,6 +965,7 @@ def _send_message_endpoint(chat_id: str) -> Response:
             f"{chat_id}:{message_id}",
             lambda: _send_message(state, chat_id, send_message_request, message_id),
             _replay_send_answer,
+            send_message_request.is_repeat,
         )
     except SendStillUnderWayError:
         return error_response("The message is still on its way.", 503)

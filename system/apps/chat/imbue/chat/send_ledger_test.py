@@ -34,10 +34,10 @@ def _send_and_repeat_while_the_first_is_under_way(
         return repeat_answer
 
     answers: list[Response] = []
-    first = threading.Thread(target=lambda: answers.append(ledger.send_once("chat:m-1", first_send, _replay)))
+    first = threading.Thread(target=lambda: answers.append(ledger.send_once("chat:m-1", first_send, _replay, False)))
     first.start()
     wait_for(lambda: sends == ["first"], error_message="the first send never started")
-    repeat = threading.Thread(target=lambda: answers.append(ledger.send_once("chat:m-1", repeat_send, _replay)))
+    repeat = threading.Thread(target=lambda: answers.append(ledger.send_once("chat:m-1", repeat_send, _replay, True)))
     repeat.start()
     repeat.join(timeout=0.2)
     assert repeat.is_alive(), "the repeat did not wait for the send under way"
@@ -54,7 +54,7 @@ def test_a_repeat_while_the_send_is_under_way_gets_its_answer_without_sending() 
     assert [answer.get_data() for answer in answers] == [b'{"status": "ok"}', b'{"status": "ok"}']
 
 
-def test_a_refused_send_can_be_sent_again() -> None:
+def test_a_refused_send_can_be_sent_again_by_a_send_that_is_not_a_repeat() -> None:
     ledger = SendLedger()
     results = iter([_answer(500, b'{"detail": "failed"}'), _answer(200)])
     sends: list[int] = []
@@ -64,8 +64,8 @@ def test_a_refused_send_can_be_sent_again() -> None:
         sends.append(answer.status_code)
         return answer
 
-    assert ledger.send_once("chat:m-1", send, _replay).status_code == 500
-    assert ledger.send_once("chat:m-1", send, _replay).status_code == 200
+    assert ledger.send_once("chat:m-1", send, _replay, False).status_code == 500
+    assert ledger.send_once("chat:m-1", send, _replay, False).status_code == 200
     assert sends == [500, 200]
 
 
@@ -77,8 +77,8 @@ def test_a_taken_send_is_answered_again_from_the_ledger() -> None:
         sends.append("sent")
         return _answer(202, b'{"status": "held"}')
 
-    assert ledger.send_once("chat:m-1", send, _replay).status_code == 202
-    repeat = ledger.send_once("chat:m-1", send, _replay)
+    assert ledger.send_once("chat:m-1", send, _replay, False).status_code == 202
+    repeat = ledger.send_once("chat:m-1", send, _replay, False)
     assert (repeat.status_code, repeat.get_data()) == (202, b'{"status": "held"}')
     assert sends == ["sent"]
 
@@ -91,3 +91,21 @@ def test_a_repeat_waiting_on_a_send_that_is_refused_gets_the_refusal_without_sen
 
     assert sends == ["first"]
     assert [(answer.status_code, answer.get_data()) for answer in answers] == [(500, refusal), (500, refusal)]
+
+
+def test_a_repeat_arriving_after_its_send_was_refused_gets_the_refusal_without_sending() -> None:
+    """The page repeats a send that got no answer some seconds later; by then the first send can have ended refused
+    (mngr could not confirm it, so it may have been typed), and the repeat must not type it again."""
+    ledger = SendLedger()
+    refusal = b'{"detail": "unconfirmed", "kind": "submission_unconfirmed"}'
+    sends: list[int] = []
+
+    def send() -> Response:
+        sends.append(500)
+        return _answer(500, refusal)
+
+    assert ledger.send_once("chat:m-1", send, _replay, False).status_code == 500
+    repeat = ledger.send_once("chat:m-1", send, _replay, True)
+
+    assert (repeat.status_code, repeat.get_data()) == (500, refusal)
+    assert sends == [500]

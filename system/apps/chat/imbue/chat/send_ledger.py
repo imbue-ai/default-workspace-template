@@ -2,10 +2,11 @@
 
 A page whose request got no answer (the connection dropped, a proxy gave up on a long send) cannot
 tell whether the chat app delivered the message, but the chat app can. The page sends it again
-with the same id; the ledger hands the repeat the first send's answer, waiting for it while it is
-still under way, instead of delivering it again. A repeat that waited gets that answer even when it
-is a refusal, since a refused send can still have been typed into the agent (mngr could not confirm
-it). A refused send leaves no entry once it is answered, so a later Retry under its id is sent afresh.
+with the same id, marked as a repeat; the ledger hands the repeat the first send's answer, waiting
+for it while it is still under way, instead of delivering it again. A repeat gets that answer even
+when it is a refusal, since a refused send can still have been typed into the agent (mngr could not
+confirm it). A send under the same id that is not a repeat (the user's Retry or Send again) gets a
+taken send's answer too, but after a refusal it is sent afresh.
 """
 
 import threading
@@ -34,6 +35,10 @@ class _Answer(MutableModel):
     status: int = Field(description="The first send's HTTP status")
     answered_at: float = Field(description="When it was answered (monotonic seconds)")
 
+    @property
+    def is_taken(self) -> bool:
+        return self.status < 400
+
 
 class _Entry(MutableModel):
     model_config = {"arbitrary_types_allowed": True}
@@ -48,15 +53,24 @@ class SendLedger(MutableModel):
     _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
     _entries: dict[str, _Entry] = PrivateAttr(default_factory=dict)
 
-    def send_once(self, key: str, send: Callable[[], Response], replay: Callable[[bytes, int], Response]) -> Response:
-        """Run ``send`` for ``key`` unless a send for it is under way or was taken; then answer as that one did.
+    def send_once(
+        self,
+        key: str,
+        send: Callable[[], Response],
+        replay: Callable[[bytes, int], Response],
+        is_repeat: bool,
+    ) -> Response:
+        """Run ``send`` for ``key`` unless a send for it is under way or answered; then answer as that one did.
 
-        ``replay`` rebuilds the answer, from its body and status, for the request repeating it: a taken send's, or
-        the refusal of the send a repeat waited on.
+        ``is_repeat`` is the page sending again a request that got no answer: it gets the answer of the send it
+        repeats, a refusal included. Any other send gets a taken send's answer, and after a refusal is sent afresh.
+        ``replay`` rebuilds the answer, from its body and status, for the request repeating it.
         """
         with self._lock:
             self._forget_old_answers_locked()
             entry = self._entries.get(key)
+            if entry is not None and not is_repeat and entry.answer is not None and not entry.answer.is_taken:
+                entry = None
             is_first = entry is None
             if entry is None:
                 entry = _Entry()
@@ -68,17 +82,15 @@ class SendLedger(MutableModel):
         if entry.answer is not None:
             return replay(entry.answer.data, entry.answer.status)
         # The send this one waited on raised before it had an answer, so this one is a send of its own.
-        return self.send_once(key, send, replay)
+        return self.send_once(key, send, replay, is_repeat)
 
     def _send_first(self, key: str, entry: _Entry, send: Callable[[], Response]) -> Response:
-        is_taken = False
         try:
             response = send()
-            is_taken = response.status_code < 400
             entry.answer = _Answer(data=response.get_data(), status=response.status_code, answered_at=time.monotonic())
             return response
         finally:
-            if not is_taken:
+            if entry.answer is None:
                 with self._lock:
                     if self._entries.get(key) is entry:
                         del self._entries[key]
