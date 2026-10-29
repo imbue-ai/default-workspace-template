@@ -11,7 +11,7 @@ from loguru import logger
 
 from terminal_app.data_types import TerminalPaths
 from terminal_app.errors import ClientHasNoBodyCloseError, UnsafeDispatchPathError
-from terminal_app.primitives import TERMINAL_SESSION_BAND_KEY
+from terminal_app.primitives import TERMINAL_SESSION_BAND_KEY, VIEWER_ARGUMENT
 from terminal_app.pty_page import add_pty_page_script
 
 # The dispatch scripts the ttyd dispatch snippet runs by URL key: ``?arg=_&arg=<key>&arg=...``
@@ -77,7 +77,7 @@ _SESSION_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
 # Args (passed by the ttyd dispatch after the "session" key is consumed):
 #   $1 = session name (e.g. "terminal-1"), the terminal's name
 #   $2 = working directory to anchor a newly-created session in (may be "")
-#   $3 = "view" when the window is being looked at on somebody else's desktop (the
+#   $3 = "{viewer_argument}" when the window is being looked at on somebody else's desktop (the
 #        multiplayer spec, section 8.3): the attach is read-only and tmux never sizes the
 #        window by this client, so a viewer neither types into nor resizes the owner's terminal;
 #        a viewer never creates the session
@@ -96,7 +96,7 @@ set -euo pipefail
 SESSION_NAME="${1:-}"
 WORKDIR="${2:-}"
 ATTACH_FLAGS=()
-if [ "${3:-}" = "view" ]; then
+if [ "${3:-}" = "{viewer_argument}" ]; then
     ATTACH_FLAGS=(-r -f ignore-size)
 fi
 unset TMUX
@@ -184,8 +184,10 @@ def build_session_command(oom_tag_script: Path) -> list[str]:
 @pure
 def render_session_script(sessions_dir: Path, oom_tag_script: Path) -> str:
     """The named-session dispatch script: session ids under ``sessions_dir``, and the tagged shell."""
-    return _SESSION_SCRIPT_TEMPLATE.replace("{sessions_dir}", _shell_verbatim_path(sessions_dir)).replace(
-        "{session_command}", " ".join(build_session_command(oom_tag_script))
+    return (
+        _SESSION_SCRIPT_TEMPLATE.replace("{sessions_dir}", _shell_verbatim_path(sessions_dir))
+        .replace("{session_command}", " ".join(build_session_command(oom_tag_script)))
+        .replace("{viewer_argument}", VIEWER_ARGUMENT)
     )
 
 

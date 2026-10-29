@@ -51,6 +51,7 @@ from terminal_app.errors import (
 )
 from terminal_app.primitives import (
     SESSION_QUERY_KEY,
+    VIEWER_ARGUMENT,
     TerminalTitle,
     TmuxSessionName,
     Workdir,
@@ -83,7 +84,7 @@ _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 # The template's placeholders, filled in one pass so that a title or a config carrying a
 # placeholder's text is not itself filled.
-_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME)__")
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME|VIEWER_ARGUMENT)__")
 
 # xterm's theme keys for the contract's terminal tokens, in TERMINAL_TOKENS' order.
 _XTERM_THEME_KEYS: Final[tuple[str, ...]] = (
@@ -238,7 +239,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       keys.hidden = false;
       // A navigate to the session already framed re-points at the same target: assigning the
       // same src again would reload the frame and drop the live ttyd connection.
-      pointFrameAt(originFor(page.pty_label) + page.pty_path + (isViewing ? "&arg=view" : ""));
+      pointFrameAt(originFor(page.pty_label) + page.pty_path + (isViewing ? "&arg=__VIEWER_ARGUMENT__" : ""));
     }
     shownPage = page;
     connection?.location(pathFor(page.name), page.title);
@@ -529,6 +530,7 @@ def render_page(config: PageConfig) -> str:
         "CONFIG": encoded,
         "CONTRACT_PATH": APP_CONTRACT_ROUTE,
         "THEME": _THEME_SCRIPT_CONFIG,
+        "VIEWER_ARGUMENT": VIEWER_ARGUMENT,
     }
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
 
