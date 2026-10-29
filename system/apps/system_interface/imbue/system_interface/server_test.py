@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 from collections.abc import Callable
+from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -802,6 +803,42 @@ def test_presence_heartbeat_keeps_the_pages_newest_input_time(client: FlaskClien
     (user,) = client.get("/api/presence").get_json()["users"]
     assert user["last_input_at"] == "2026-09-19T10:00:20.000000000Z"
     assert _heartbeat(client, _VISITOR_IDENTITY, {"last_input_at": "yesterday"}).status_code == 400
+    assert _heartbeat(client, _VISITOR_IDENTITY, {"input_age_seconds": -1}).status_code == 400
+
+
+def test_presence_heartbeat_stamps_an_input_age_on_the_shells_clock(client: FlaskClient) -> None:
+    before = utc_now()
+    _heartbeat(client, _VISITOR_IDENTITY, {"input_age_seconds": 90})
+    after = utc_now()
+
+    (user,) = client.get("/api/presence").get_json()["users"]
+    stamped = datetime.fromisoformat(user["last_input_at"][:26] + "+00:00")
+    assert before - timedelta(seconds=90) <= stamped <= after - timedelta(seconds=90)
+
+
+def test_a_heartbeat_that_moves_the_input_time_announces_the_roster_and_one_that_does_not_is_silent(
+    app: Flask,
+) -> None:
+    client = app.test_client()
+    broadcaster = state_of(app).shell.broadcaster
+    client_queue = broadcaster.register()
+    try:
+        _heartbeat(client, _OWNER_IDENTITY, {"input_age_seconds": 60})
+        drain_messages(client_queue)
+
+        _heartbeat(client, _OWNER_IDENTITY, {"input_age_seconds": 5})
+        (announced,) = drain_messages(client_queue)
+        assert announced["type"] == "roster_updated"
+        (owner,) = [entry for entry in announced["participants"] if entry["key"] == "user:user-owner-9c21"]
+        (listed,) = client.get("/api/presence").get_json()["users"]
+        assert owner["last_input_at"] == listed["last_input_at"]
+
+        # An older age, and no input at all: the stored time stands, and nothing is pushed.
+        _heartbeat(client, _OWNER_IDENTITY, {"input_age_seconds": 120})
+        _heartbeat(client, _OWNER_IDENTITY)
+        assert drain_messages(client_queue) == []
+    finally:
+        broadcaster.unregister(client_queue)
 
 
 def test_the_leave_route_is_gone(client: FlaskClient) -> None:

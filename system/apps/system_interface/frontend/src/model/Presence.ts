@@ -3,9 +3,11 @@
  *
  * The page posts `/api/presence/heartbeat` every `HEARTBEAT_INTERVAL_MS` while the tab is
  * visible, once immediately when it becomes visible, and nothing when it goes away: the shell
- * counts a user as gone once their heartbeats stop. The body carries when the page last saw
- * keyboard or pointer input (`last_input_at`), which is what tells an active person from an idle
- * one. The proxy in front of the shell stamps the request's identity, so the page sends nothing
+ * counts a user as gone once their heartbeats stop. The body carries how long ago the page last
+ * saw keyboard or pointer input (`input_age_seconds`), never a moment by this clock, so a clock
+ * ahead of or behind the shell's cannot pin anyone active or idle; the shell stamps the moment
+ * itself, which is what tells an active person from an idle one. The proxy in front of the shell
+ * stamps the request's identity, so the page sends nothing
  * about who it is; the heartbeat's answer is the requester's own identity record and participant
  * key (the owner of an unshared workspace is `owner`; a visiting agent gets 204), which is how the
  * tray tells the viewer's own entries from the rest. The connected set itself arrives as
@@ -89,9 +91,15 @@ export function applyPresence(users: PresentUser[]): void {
   presentUsers = users;
 }
 
+/** How long ago this page last saw input, in seconds, as the heartbeat reports it; null for none. */
+function inputAgeSeconds(): number | null {
+  if (lastInputAt === null) return null;
+  return Math.max(0, (Date.now() - lastInputAt.getTime()) / 1000);
+}
+
 async function sendHeartbeat(): Promise<void> {
   let response: Response;
-  const body = { last_input_at: lastInputAt === null ? null : lastInputAt.toISOString() };
+  const body = { input_age_seconds: inputAgeSeconds() };
   try {
     response = await fetch(apiUrl("/api/presence/heartbeat"), {
       method: "POST",

@@ -23,9 +23,11 @@ accounts; the roster carries it instead. A visiting agent never heartbeats:
 its presence is the last-seen record the share gateway keeps, which the roster
 reads beside these files.
 
-Each heartbeat may also carry when the page last saw keyboard or pointer input
-(``last_input_at``), kept in the file beside the identity snapshot, which is what
-tells an active person from an idle one.
+Each heartbeat may also carry how long ago the page last saw keyboard or pointer
+input, which the store stamps against its own clock and keeps in the file beside the
+identity snapshot (``last_input_at``), never moving it backwards; it is what tells an
+active person from an idle one. A heartbeat that moves it is reported as such, so the
+shell can announce the roster that carries it (the multiplayer spec, section 4.3).
 """
 
 import os
@@ -115,11 +117,16 @@ class _StoredPresence(FrozenModel):
 
 
 class PresenceOutcome(FrozenModel):
-    """What a heartbeat or a sweep found: the connected set now, and whether it differs from the last one announced."""
+    """What a heartbeat or a sweep found: the connected set now, whether it differs from the last one announced, and
+    whether the heartbeat moved the requester's newest input time."""
 
     users: tuple[PresentUser, ...] = Field(description="Every connected user now, by user id")
     is_membership_changed: bool = Field(
         description="Whether the connected set differs from the one last reported as changed (what the shell broadcasts on)"
+    )
+    is_input_changed: bool = Field(
+        default=False,
+        description="Whether the heartbeat moved the requester's stored newest input time (a sweep never does)",
     )
 
 
@@ -185,7 +192,8 @@ class PresenceStore(MutableModel):
     ) -> PresenceOutcome:
         """Record one heartbeat: write the user's file on first sight (or when their email, owner flag, or newest
         input changed), and touch its mtime to ``now``. The owner of a workspace that has not shared is recorded
-        under the ``owner`` key."""
+        under the ``owner`` key. The input time is taken no later than ``now`` (a page's clock is not the shell's)
+        and never moves backwards; the outcome says whether it moved."""
         user_id = _require_user_id(identity)
         with self._lock:
             path = self._user_path(str(user_id))
@@ -195,12 +203,13 @@ class PresenceStore(MutableModel):
                 email=identity.email or "",
                 owner=identity.owner,
                 first_seen=existing.first_seen if existing is not None else _format_timestamp(now),
-                last_input_at=_newest_input(existing, last_input_at),
+                last_input_at=_newest_input(existing, _no_later_than(last_input_at, now)),
             )
             if snapshot != existing:
                 write_json_atomic(path, snapshot.model_dump())
             self._touch(path, now)
-            return self._outcome(now)
+            is_input_changed = snapshot.last_input_at != (existing.last_input_at if existing is not None else None)
+            return self._outcome(now, is_input_changed)
 
     def sweep(self, now: datetime) -> PresenceOutcome:
         """The connected set now, flagged changed when someone has silently gone (or come) since the last report."""
@@ -242,13 +251,15 @@ class PresenceStore(MutableModel):
                     users.append(user)
             return users
 
-    def _outcome(self, now: datetime) -> PresenceOutcome:
+    def _outcome(self, now: datetime, is_input_changed: bool = False) -> PresenceOutcome:
         connected = tuple(self.connected_users(now))
         connected_user_ids = frozenset(user.user_id for user in connected)
         is_membership_changed = connected_user_ids != self._announced_user_ids
         if is_membership_changed:
             self._announced_user_ids = connected_user_ids
-        return PresenceOutcome(users=connected, is_membership_changed=is_membership_changed)
+        return PresenceOutcome(
+            users=connected, is_membership_changed=is_membership_changed, is_input_changed=is_input_changed
+        )
 
     def _user_path(self, user_id: str) -> Path:
         return self.users_directory / f"{user_id}.json"
@@ -304,6 +315,26 @@ def _require_user_id(identity: RequestIdentity) -> UserId:
     if identity.user_id is not None:
         return UserId(identity.user_id)
     return UserId(OWNER_PARTICIPANT_KEY_VALUE)
+
+
+@pure
+def reported_input_moment(
+    now: datetime, input_age_seconds: float | None, last_input_at: datetime | None
+) -> datetime | None:
+    """When a heartbeat says the page last saw input, on the shell's clock: ``now`` less the age the page reported,
+    which no clock skew can move; a page from before the age was sent reports a moment by its own clock instead,
+    which is taken as it is (the store clamps it to ``now``); None when the page has seen none."""
+    if input_age_seconds is not None:
+        return now - timedelta(seconds=input_age_seconds)
+    return last_input_at
+
+
+@pure
+def _no_later_than(moment: datetime | None, now: datetime) -> datetime | None:
+    """A reported moment, clamped to the shell's now: a clock ahead of the shell's cannot pin a person active."""
+    if moment is None:
+        return None
+    return min(moment, now)
 
 
 @pure

@@ -18,6 +18,7 @@ from imbue.system_interface.presence import PresenceSweep
 from imbue.system_interface.presence import PresentUser
 from imbue.system_interface.presence import present_user_wire_json
 from imbue.system_interface.presence import present_users_wire_json
+from imbue.system_interface.presence import reported_input_moment
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
@@ -210,6 +211,37 @@ def test_a_heartbeat_keeps_the_newest_input_time_and_a_late_one_never_moves_it_b
     presence = store.presence_by_participant(_T0 + timedelta(seconds=60))[ParticipantKey("user:user-bob-4471")]
     assert presence.last_input_at == "2026-09-19T10:00:20.000000000Z"
     assert presence.is_connected is True and presence.email == "bob@example.com"
+
+
+def test_an_input_age_is_stamped_on_the_shells_clock_and_a_pages_moment_ahead_of_it_is_clamped(
+    tmp_path: Path,
+) -> None:
+    # The age is what a page reports; the moment is what the store keeps, so no page clock reaches the record.
+    assert reported_input_moment(_T0, 12.5, None) == _T0 - timedelta(seconds=12.5)
+    # A page from before the age was sent reports its own clock's moment, taken as it is until the store clamps it.
+    assert reported_input_moment(_T0, None, _T0 + timedelta(minutes=5)) == _T0 + timedelta(minutes=5)
+    assert reported_input_moment(_T0, None, None) is None
+
+    store = _store(tmp_path)
+    (user,) = store.heartbeat(_BOB, _T0, last_input_at=_T0 + timedelta(minutes=5)).users
+    assert user.last_input_at == "2026-09-19T10:00:00.000000000Z"
+
+
+def test_a_heartbeat_reports_an_input_change_exactly_when_the_stored_time_moved(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    assert store.heartbeat(_BOB, _T0).is_input_changed is False
+    assert store.heartbeat(_BOB, _T0, last_input_at=_T0 - timedelta(seconds=5)).is_input_changed is True
+    # The same moment again, and an older one: the record stands, and nothing is announced for it.
+    assert store.heartbeat(_BOB, _T0, last_input_at=_T0 - timedelta(seconds=5)).is_input_changed is False
+    assert (
+        store.heartbeat(_BOB, _T0 + timedelta(seconds=30), last_input_at=_T0 - timedelta(seconds=20)).is_input_changed
+        is False
+    )
+    assert (
+        store.heartbeat(_BOB, _T0 + timedelta(seconds=30), last_input_at=_T0 + timedelta(seconds=20)).is_input_changed
+        is True
+    )
+    assert store.sweep(_T0 + timedelta(seconds=30)).is_input_changed is False
 
 
 def test_an_unreadable_user_file_is_skipped_and_replaced_on_the_next_heartbeat(tmp_path: Path) -> None:

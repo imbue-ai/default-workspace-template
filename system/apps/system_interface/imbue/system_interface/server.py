@@ -59,6 +59,7 @@ from imbue.system_interface.documents import inject_meta_tag
 from imbue.system_interface.presence import PresenceOutcome
 from imbue.system_interface.presence import PresentUser
 from imbue.system_interface.presence import present_users_wire_json
+from imbue.system_interface.presence import reported_input_moment
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.route_table import PRESENCE_HEARTBEAT_PATH
@@ -498,8 +499,12 @@ def _roster_wire_json() -> dict[str, Any]:
 
 
 def _broadcast_presence_if_changed(outcome: PresenceOutcome) -> None:
+    """Announce what a heartbeat or a sweep changed: the connected set and the roster when someone came or went,
+    the roster alone when a person's newest input time moved (the multiplayer spec, section 4.3), since every other
+    window reads "Active" or "Idle" off the roster it was last pushed."""
     if outcome.is_membership_changed:
         _shell().broadcaster.broadcast_presence_updated(_present_users_wire_json(outcome.users))
+    if outcome.is_membership_changed or outcome.is_input_changed:
         _shell().broadcaster.broadcast_roster_updated(_roster_wire_json())
 
 
@@ -564,8 +569,11 @@ def _presence_heartbeat_endpoint() -> Response:
     heartbeat = _parse_heartbeat()
     if identity.agent_id is not None:
         return Response(status=204)
+    now = utc_now()
     try:
-        outcome = get_state().presence.heartbeat(identity, utc_now(), heartbeat.last_input_at)
+        outcome = get_state().presence.heartbeat(
+            identity, now, reported_input_moment(now, heartbeat.input_age_seconds, heartbeat.last_input_at)
+        )
     except (InvalidShellValueError, InvalidLayoutValueError) as e:
         return error_response(str(e), 400)
     _broadcast_presence_if_changed(outcome)

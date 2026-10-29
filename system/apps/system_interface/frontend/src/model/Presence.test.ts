@@ -58,7 +58,7 @@ afterEach(() => {
 });
 
 describe("startPresenceHeartbeat", () => {
-  it("posts a heartbeat at once, then every interval while visible, carrying the newest input it saw", async () => {
+  it("posts a heartbeat at once, then every interval while visible, carrying how long ago it saw input", async () => {
     const requests = stubFetch(() =>
       jsonResponse(200, { identity: { owner: true, user_id: "u1", email: "a@b" }, participant: "user:u1" }),
     );
@@ -68,13 +68,14 @@ describe("startPresenceHeartbeat", () => {
     expect(requests).toHaveLength(1);
     expect(requests[0].url).toContain("/api/presence/heartbeat");
     expect(requests[0].method).toBe("POST");
-    expect(JSON.parse(requests[0].body)).toEqual({ last_input_at: null });
+    expect(JSON.parse(requests[0].body)).toEqual({ input_age_seconds: null });
 
     vi.setSystemTime(new Date("2026-10-22T10:00:05Z"));
     window.dispatchEvent(new Event("keydown"));
     await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
     expect(requests).toHaveLength(2);
-    expect(JSON.parse(requests[1].body)).toEqual({ last_input_at: "2026-10-22T10:00:05.000Z" });
+    // The age, not the moment: the shell stamps the moment by its own clock, so this page's clock cannot skew it.
+    expect(JSON.parse(requests[1].body)).toEqual({ input_age_seconds: HEARTBEAT_INTERVAL_MS / 1000 });
     expect(getOwnIdentity()).toEqual({ owner: true, user_id: "u1", email: "a@b", participant: "user:u1" });
     expect(getOwnParticipant()).toBe("user:u1");
   });
@@ -88,7 +89,7 @@ describe("startPresenceHeartbeat", () => {
     notePageInput();
     await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
 
-    expect(JSON.parse(requests[1].body)).toEqual({ last_input_at: "2026-10-22T11:00:00.000Z" });
+    expect(JSON.parse(requests[1].body)).toEqual({ input_age_seconds: HEARTBEAT_INTERVAL_MS / 1000 });
   });
 
   it("knows the owner of an unshared workspace by the owner key, with no account", async () => {

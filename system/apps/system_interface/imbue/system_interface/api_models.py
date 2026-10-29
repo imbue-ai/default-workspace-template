@@ -1,5 +1,7 @@
 """What the shell's own routes answer: the health probe, who is here, and a heartbeat's identity."""
 
+from typing import Annotated
+
 from pydantic import AwareDatetime
 from pydantic import ConfigDict
 from pydantic import Field
@@ -38,13 +40,20 @@ class PresenceListing(FrozenModel):
 
 
 class HeartbeatRequest(FrozenModel):
-    """What a shell page's heartbeat may carry: when the page last saw keyboard or pointer input. An older page
-    sends other fields, or none, which are ignored."""
+    """What a shell page's heartbeat may carry: how long ago the page last saw keyboard or pointer input (the
+    multiplayer spec, section 4.3). A page from before the age was sent reports the moment by its own clock instead,
+    which is taken no later than the shell's now; an older page still sends other fields, or none, which are
+    ignored."""
 
     model_config = ConfigDict(extra="ignore")
 
+    input_age_seconds: Annotated[float, Field(ge=0)] | None = Field(
+        default=None,
+        description="How many seconds ago the page last saw keyboard or pointer input; absent when it has seen none",
+    )
     last_input_at: AwareDatetime | None = Field(
-        default=None, description="When the page last saw keyboard or pointer input; absent when it has seen none"
+        default=None,
+        description="When the page last saw input by its own clock, as a page from before the age was sent reports it",
     )
 
 
