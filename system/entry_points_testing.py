@@ -4,10 +4,11 @@ An entry point is either a module of a package with a top-level ``if __name__ ==
 block, run by its own path, or a stub: a top-level ``.py`` file in a scripts directory
 (``system/scripts``, ``.agents/shared/scripts``, ``.agents/skills/<name>/scripts``) that imports
 its package, kept where something outside the release calls a fixed path or the script runs with
-no venv and imports its own package. Either way the tier is the package's: an entry into a bare
+no venv and imports its own package. An entry's tier is its package's -- an entry into a bare
 package runs under the system ``python3`` with no venv (stdlib only), any other runs from the
-root venv (``uv run --no-sync``). A few standalone stdlib scripts outside the scripts directories
-are bare too. See .agents/shared/references/running-python.md.
+root venv (``uv run --no-sync``) -- except for the bare modules of venv packages listed below,
+a bare skill's single script, and a few standalone stdlib scripts outside the scripts
+directories. See .agents/shared/references/running-python.md.
 """
 
 from __future__ import annotations
@@ -15,12 +16,62 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from agents_shared.validate_skill import package_entry_modules
+from agents_shared.validate_skill import bare_skill_module, package_entry_modules
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SYSTEM_SCRIPTS = REPO_ROOT / "system" / "scripts"
+UPDATE_SELF_SCRIPTS = REPO_ROOT / ".agents" / "skills" / "update-self" / "scripts"
 
 # The packages the system python3 runs: stdlib only, no venv.
 BARE_PACKAGES = frozenset({"workspace_bare_scripts", "update_self_skill"})
+
+# Modules of venv packages that import only the standard library and the bare packages, so
+# they run under the system python3 too. One that needs a bare package puts its root on
+# sys.path itself when it runs by its path.
+BARE_MODULES = (
+    REPO_ROOT
+    / ".agents"
+    / "skills"
+    / "notify-user"
+    / "python"
+    / "notify_user_skill"
+    / "notify_user.py",
+    REPO_ROOT
+    / ".agents"
+    / "skills"
+    / "connect-external-service"
+    / "python"
+    / "connect_external_service_skill"
+    / "request_secret.py",
+    REPO_ROOT
+    / ".agents"
+    / "shared"
+    / "scripts"
+    / "agents_shared"
+    / "serve_isolated_instance.py",
+    REPO_ROOT
+    / ".agents"
+    / "shared"
+    / "scripts"
+    / "agents_shared"
+    / "resolve_template_base.py",
+    REPO_ROOT
+    / ".agents"
+    / "shared"
+    / "scripts"
+    / "agents_shared"
+    / "preview_wrapper_server.py",
+)
+
+# The only directories bare code may put on sys.path: where the bare packages and the
+# stdlib-only libraries live. The bare type check searches exactly these.
+BARE_SEARCH_PATHS = (
+    SYSTEM_SCRIPTS,
+    UPDATE_SELF_SCRIPTS.parent / "python",
+    REPO_ROOT / "system" / "libs" / "tk_command_parsing" / "src",
+    REPO_ROOT / "system" / "services" / "oom_priority" / "src",
+    REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src",
+)
 
 # Bare scripts that are not package stubs: oom_priority's own entry scripts, a
 # stdlib-only maintenance script, and the Datalib app's launcher (the app is not a
@@ -91,9 +142,22 @@ def entry_package(entry: Path) -> str | None:
     return None
 
 
+def bare_skill_modules(repo_root: Path = REPO_ROOT) -> list[Path]:
+    """Every bare skill's single script."""
+    return [
+        module
+        for skill_dir in sorted((repo_root / ".agents" / "skills").glob("*/"))
+        if (module := bare_skill_module(skill_dir)) is not None
+    ]
+
+
 def is_bare_entry(path: Path) -> bool:
     if path in STANDALONE_BARE_SCRIPTS or path.parent in STANDALONE_BARE_DIRS:
         return path.is_file()
+    if path in BARE_MODULES:
+        return path.is_file()
+    if path.parent.name == "scripts" and bare_skill_module(path.parent.parent) == path:
+        return True
     if (path.parent / "__init__.py").is_file():
         return path.is_file() and path.parent.name in BARE_PACKAGES
     return path.is_file() and entry_package(path) in BARE_PACKAGES

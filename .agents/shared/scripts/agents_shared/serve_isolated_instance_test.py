@@ -200,7 +200,7 @@ def _state_path(tmp_path: Path) -> Path:
 
 
 def test_the_self_hint_still_names_where_this_script_actually_lives() -> None:
-    # ``up``'s boot-success hint prints ``uv run --no-sync <_SELF_HINT> refresh|down
+    # ``up``'s boot-success hint prints ``python3 <_SELF_HINT> refresh|down
     # --name ...`` as commands the agent copies, and the system-interface flow
     # learns its instance name from that hint -- so the spelling has to stay
     # runnable. A move or rename would leave the hardcoded constant naming a path
@@ -484,7 +484,7 @@ def test_up_preview_boots_wrapper_registers_both_and_reports_tab(
     # Two detached servers: the instance, then the wrapper chrome page.
     assert spawner.detached_spawns[0] == _LAUNCH
     wrapper_argv = spawner.detached_spawns[1]
-    assert wrapper_argv[1:3] == ["-m", wrapper_mod.__name__]
+    assert wrapper_argv[1] == str(Path(wrapper_mod.__file__).resolve())
     assert "--inner-service" in wrapper_argv
     assert "demo-app" in wrapper_argv
     assert "my change" in wrapper_argv

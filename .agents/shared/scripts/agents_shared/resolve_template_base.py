@@ -18,7 +18,7 @@ merged nothing from upstream, so it is not a marker.
 
 Usage (cwd = the repo, or pass ``--repo``):
 
-    uv run --no-sync .agents/shared/scripts/agents_shared/resolve_template_base.py [--repo DIR] [--origin]
+    python3 .agents/shared/scripts/agents_shared/resolve_template_base.py [--repo DIR] [--origin]
 
 Prints the resolved sha on stdout and exits 0; exits 1 with a message on
 stderr when HEAD's first-parent history has no marker, and 2 when git could

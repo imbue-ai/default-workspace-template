@@ -172,6 +172,121 @@ def test_a_shell_only_scripts_dir_needs_no_python_project(tmp_path: Path) -> Non
     assert "python/pyproject.toml is missing" in error
 
 
+_BARE_SCRIPT = (
+    "import argparse\nimport json\n\n\ndef main() -> None:\n"
+    "    argparse.ArgumentParser().parse_args()\n    print(json.dumps({}))\n\n\n"
+    'if __name__ == "__main__":\n    main()\n'
+)
+
+
+def _write_bare_skill(base: Path, name: str, script: str = _BARE_SCRIPT) -> Path:
+    """A skill whose Python is one standard-library script named for the skill."""
+    skill = _write_skill(base, name)
+    (skill / "scripts").mkdir()
+    (skill / "scripts" / f"{name.replace('-', '_')}.py").write_text(script)
+    return skill
+
+
+def test_a_single_standard_library_script_named_for_the_skill_is_a_valid_bare_skill(
+    tmp_path: Path,
+) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report")
+
+    assert validate_skill.validate(skill) is None
+    assert (
+        validate_skill.bare_skill_module(skill) == skill / "scripts" / "fruit_report.py"
+    )
+
+
+def test_a_bare_skill_may_carry_its_own_test(tmp_path: Path) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report")
+    (skill / "scripts" / "fruit_report_test.py").write_text(
+        "import pytest\n\nimport fruit_report\n\n\ndef test_main() -> None:\n"
+        "    with pytest.raises(SystemExit):\n        fruit_report.main()\n"
+    )
+
+    assert validate_skill.validate(skill) is None
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "import yaml\n",
+        "def main() -> None:\n    import rich\n",
+        "from pydantic import BaseModel\n",
+    ],
+    ids=["top-level", "inside-a-function", "from-import"],
+)
+def test_a_bare_script_importing_outside_the_standard_library_is_invalid(
+    tmp_path: Path, script: str
+) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report", script)
+
+    error = validate_skill.validate(skill)
+
+    assert error is not None
+    assert "imports outside the standard library" in error
+
+
+def test_a_bare_script_keeping_a_pep_723_header_is_invalid(tmp_path: Path) -> None:
+    header = '# /// script\n# requires-python = ">=3.12"\n# dependencies = []\n# ///\n'
+    skill = _write_bare_skill(tmp_path, "fruit-report", header + _BARE_SCRIPT)
+
+    error = validate_skill.validate(skill)
+
+    assert error is not None
+    assert "PEP 723" in error
+
+
+def test_a_bare_script_named_like_a_standard_library_module_is_invalid(
+    tmp_path: Path,
+) -> None:
+    skill = _write_bare_skill(tmp_path, "json")
+
+    error = validate_skill.validate(skill)
+
+    assert error is not None
+    assert "shadow" in error
+
+
+def test_a_second_module_beside_a_bare_script_needs_a_python_project(
+    tmp_path: Path,
+) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report")
+    (skill / "scripts" / "helpers.py").write_text("")
+
+    error = validate_skill.validate(skill)
+
+    assert error is not None
+    assert "python/pyproject.toml is missing" in error
+    assert validate_skill.bare_skill_module(skill) is None
+
+
+def test_check_runnable_runs_a_bare_skill_script_without_site_packages(
+    tmp_path: Path,
+) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report")
+    runner = _RecordingRunner()
+
+    assert validate_skill.check_runnable(skill, runner=runner) is None
+    module = (skill / "scripts" / "fruit_report.py").resolve()
+    assert runner.calls == [["python3", "-S", "-s", str(module), "--help"]]
+
+
+def test_a_real_bare_skill_runs_under_python3_without_site_packages(
+    tmp_path: Path,
+) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report")
+    assert validate_skill.check_runnable(skill) is None
+
+    broken = _write_bare_skill(
+        tmp_path / "broken", "fruit-report", "raise SystemExit(3)\n"
+    )
+    error = validate_skill.check_runnable(broken)
+    assert error is not None
+    assert "exit 3" in error
+
+
 def test_missing_frontmatter(tmp_path: Path) -> None:
     skill = tmp_path / "s"
     skill.mkdir()

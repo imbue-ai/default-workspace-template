@@ -13,13 +13,36 @@ How each shows up during the update:
 | Symptom | Section |
 |---|---|
 | `system/test_entry_point_import_cost.py` cannot import a user skill's script (a PEP 723 dependency missing from the root venv) | [A user skill with scripts](#a-user-skill-with-scripts) |
-| `uv lock --check` / `uv sync` fails: "Workspace member `.agents/skills/<name>/python` is missing a `pyproject.toml`", or `system/test_meta_ratchets.py::test_every_skill_python_dir_has_a_pyproject` fails | [A user skill with scripts](#a-user-skill-with-scripts), step 1 |
+| `uv lock --check` / `uv sync` fails: "Workspace member `.agents/skills/<name>/python` is missing a `pyproject.toml`", or `system/test_meta_ratchets.py::test_every_skill_python_dir_has_a_pyproject` fails | [A packaged skill](#a-packaged-skill), step 1 |
 | `system/test_python_launch_rules.py::test_no_supervisord_program_runs_under_uv_run` names a user drop-in | [A user service](#a-user-service) |
 | `test_no_plain_uv_run_in_agent_facing_files`, `test_python3_invocations_name_bare_entry_points` or `test_uv_run_invocations_name_scripts_that_exist` names a user file | [Commands in the user's docs](#commands-in-the-users-docs) |
-| `system/test_entry_point_import_cost.py` names a user skill's entry | [A user skill with scripts](#a-user-skill-with-scripts), last step |
-| `test_prevent_sys_path_edits` or `test_prevent_loading_modules_by_file_path` fails and lists a user file | [A user skill with scripts](#a-user-skill-with-scripts), step 2 |
+| `system/test_entry_point_import_cost.py` names a user skill's entry | [A packaged skill](#a-packaged-skill), last step |
+| `test_prevent_sys_path_edits` or `test_prevent_loading_modules_by_file_path` fails and lists a user file | [A packaged skill](#a-packaged-skill), step 2 |
 
 ## A user skill with scripts
+
+First decide which layout the skill takes. Its Python's imports decide, the
+same rule `running-python.md` states for built-in code:
+
+- **One script, standard library only** (its PEP 723 header lists no
+  dependencies, or it has none, and it imports nothing else of the skill's or the
+  workspace's): make it a bare skill, below.
+- **Anything else** (a dependency, or more than one module besides a test): the
+  `python/` project, the numbered steps after that.
+
+### A bare skill
+
+1. Rename the script to `scripts/<name_with_underscores>.py` (`<name>` with
+   hyphens turned to underscores; a `run.py` becomes this) and its test, if it
+   has one, to `scripts/<name_with_underscores>_test.py`, importing the script
+   by that name. Delete the PEP 723 header and any `sys.path` edit.
+2. Point the skill's SKILL.md, its routines' commands and every other caller at
+   `python3 .agents/skills/<name>/scripts/<name_with_underscores>.py`.
+3. `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name>`
+   must print `ok`, and the skill's test must pass
+   (`uv run --no-sync pytest .agents/skills/<name>/scripts`).
+
+### A packaged skill
 
 For a skill with Python in `.agents/skills/<name>/scripts/` (package name
 `<name_with_underscores>_skill`: `<name>` with hyphens turned to underscores,
@@ -75,7 +98,10 @@ In the user's own SKILL.md files, references, prompts and scripts:
 - a path to a built-in script that now runs from its module becomes the
   module's path, keeping the interpreter the script's tier calls for: a skill's
   `scripts/<name>.py` is `python/<skill_name>_skill/<name>.py` (for example
-  `.agents/skills/notify-user/python/notify_user_skill/notify_user.py`), a
+  `python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py`;
+  `notify_user.py`, `request_secret.py`, `serve_isolated_instance.py`,
+  `resolve_template_base.py` and `preview_wrapper_server.py` are bare and run
+  under `python3`, the rest under `uv run --no-sync`), a
   shared one is under `.agents/shared/scripts/agents_shared/`, and
   `system/scripts/run_in_background.py`, `tool_env.py` and
   `list_mngr_plugins.py` are under `system/scripts/workspace_bare_scripts/`;
