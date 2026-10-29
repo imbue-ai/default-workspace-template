@@ -349,6 +349,27 @@ def test_a_message_the_agent_never_took_is_sent_there_once_more(
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_message_the_agent_never_took_at_a_discovered_location_is_sent_there_once_more() -> None:
+    """With no known location the agent is looked up, and an untaken send there gets its one more send too."""
+    discovered = _make_match(host="host-b")
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    results = [_not_submitted()]
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        return (discovered,)
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        if results:
+            return results.pop()
+        return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
+
+    messenger = MngrMessenger(discover=_discover, send=_send)
+    assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is None
+    assert send_calls == [(discovered,), (discovered,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
 def test_returns_a_reason_when_nothing_reachable() -> None:
     """A send that reaches no agent reports why, since the reason is what the user can act on."""
 
