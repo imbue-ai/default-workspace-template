@@ -83,10 +83,11 @@ def test_a_taken_send_is_answered_again_from_the_ledger() -> None:
     assert sends == ["sent"]
 
 
-def test_a_repeat_waiting_on_a_send_that_is_refused_sends_itself() -> None:
-    sends, answers = _send_and_repeat_while_the_first_is_under_way(
-        SendLedger(), _answer(500, b'{"detail": "failed"}'), _answer(200)
-    )
+def test_a_repeat_waiting_on_a_send_that_is_refused_gets_the_refusal_without_sending() -> None:
+    """A refused send may still have been typed into the agent (mngr could not confirm it), so the repeat it was
+    waiting on does not send it again."""
+    refusal = b'{"detail": "unconfirmed", "kind": "submission_unconfirmed"}'
+    sends, answers = _send_and_repeat_while_the_first_is_under_way(SendLedger(), _answer(500, refusal), _answer(200))
 
-    assert sends == ["first", "repeat"]
-    assert sorted(answer.status_code for answer in answers) == [200, 500]
+    assert sends == ["first"]
+    assert [(answer.status_code, answer.get_data()) for answer in answers] == [(500, refusal), (500, refusal)]

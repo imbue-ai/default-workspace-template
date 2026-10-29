@@ -971,7 +971,10 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
 
 def _replay_send_answer(data: bytes, status: int) -> Response:
-    """A taken send's answer again, for the request that repeated it: held (202) or delivered."""
+    """A send's answer again, for the request that repeated it: held (202), delivered, or the refusal of the send
+    the repeat waited on (already the route's own answer, so its body goes back as it was)."""
+    if status >= 400:
+        return Response(data, status=status, mimetype="application/json")
     if status == 202:
         return model_response(HeldSendResponse.model_validate_json(data), 202)
     return model_response(SendMessageResponse.model_validate_json(data), status)
