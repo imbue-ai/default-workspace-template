@@ -2552,14 +2552,15 @@ def test_viewing_a_desktop_reads_its_owners_newest_written_layout(client: FlaskC
     _arrive(client, "c-owner-new", None)
 
     # Alice's view of the owner's desktop is the owner's newest client's layout, not her own (which is unwritten).
-    viewed = client.get("/api/placements/home?client=c-alice&of=owner", headers=identity_headers(_ALICE)).get_json()
+    # The owner read names no client, as a viewing window sends it.
+    viewed = client.get("/api/placements/home?of=owner", headers=identity_headers(_ALICE)).get_json()
     (viewed_placement,) = viewed["placements"]
     assert viewed_placement["frame"] == {"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6}
     assert viewed["updated_at"] == newer.get_json()["updated_at"]
     # Her own read of the same desktop stays her own, untouched by the owner's.
     assert client.get("/api/placements/home?client=c-alice").get_json()["placements"] == []
     # A desktop whose owner has written no layout answers the defaults a fresh client reads.
-    assert client.get("/api/placements/alice?client=c-owner-new&of=owner").get_json() == {
+    assert client.get("/api/placements/alice?of=owner").get_json() == {
         "version": 1,
         "updated_at": None,
         "placements": [],

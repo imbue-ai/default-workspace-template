@@ -380,11 +380,12 @@ def get_placements(desktop_id: str) -> ResponseReturnValue:
     state. With ``?of=owner``, the desktop as its owner last arranged it instead (the multiplayer spec, section
     8.3): the layout of the owner's most recently seen client that has written one, which is what a window viewing
     a desktop that is not the viewer's own shows."""
-    client_id = ClientId(request.args.get("client", ""))
     shell = _shell()
     desktop = shell.get_desktop(desktop_id)
+    # The owner view names no client: a viewing window asks for the desktop's owner's layout, not its own.
     if request.args.get("of") == "owner":
         return model_response(_owner_layout_view(shell, desktop))
+    client_id = ClientId(request.args.get("client", ""))
     return model_response(_layout_view(shell, desktop, client_id))
 
 
