@@ -1388,26 +1388,31 @@ export class DesktopStore {
    *  as the viewer's own, so a window that landed straight on somebody else's desktop re-reads its layout as the
    *  owner's now (the multiplayer spec, section 8.3). */
   takeViewerIdentityKnown(): void {
-    if (this.viewedDesktop() !== null) void this.refetchLayout();
-    else this.syncViewingRefresh();
+    if (this.viewedDesktop() !== null) {
+      // An overview opened before the answer landed would keep its tiles outside the stage the viewing
+      // transforms, and the live-page layer could not lay their pages over them.
+      this.closeOverview();
+      void this.refetchLayout();
+    } else {
+      this.syncViewingRefresh();
+    }
   }
 
-  /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop. */
-  stopViewing(): Promise<void> {
-    const back = this.returnDesktopId;
-    const target =
-      back !== null && this.state.desktops.some((desktop) => desktop.id === back)
-        ? back
-        : (this.ownDesktops()[0]?.id ?? null);
-    return target === null ? Promise.resolve() : this.switchDesktop(target);
+  /** Stop viewing: back to the desktop this window was on, else the viewer's first desktop, else the desktop the
+   *  shell seeds for a visitor who has none left. */
+  async stopViewing(): Promise<void> {
+    const target = await this.wayBackOrOwnDesktop();
+    if (target !== null) await this.switchDesktop(target);
   }
 
   isOverviewOpen(): boolean {
     return this.isOverviewOpenNow;
   }
 
+  /** Open the overview, unless this window is viewing somebody else's desktop (the multiplayer spec, section
+   *  8.3): the button is hidden then, and the keyboard's way in is refused here. */
   openOverview(): void {
-    if (this.isOverviewOpenNow) return;
+    if (this.isOverviewOpenNow || this.viewedDesktop() !== null) return;
     this.isOverviewOpenNow = true;
     this.notifyListeners();
   }
@@ -1610,15 +1615,59 @@ export class DesktopStore {
 
   private takeDesktops(desktops: readonly Desktop[]): void {
     const previous = this.state.activeDesktopId;
+    const wasViewing = this.viewedDesktop() !== null;
     this.desktopsRevision += 1;
     this.dispatch({ type: "desktops_updated", desktops });
-    if (this.state.activeDesktopId !== previous) {
-      // The active desktop was deleted and the reducer landed on the fallback: the window reports that landing as
-      // a move, as the page's own landing does, so the client's record names the desktop the user now sees.
-      this.cancelGesture();
-      this.reportMove("");
-      void this.refetchLayout();
+    if (this.state.activeDesktopId === previous) return;
+    // The active desktop was deleted and the reducer landed on the fallback (the first desktop listed).
+    this.cancelGesture();
+    if (wasViewing) void this.landAfterViewedDesktopDeleted();
+    else this.landOnFallback();
+  }
+
+  /** The window reports the reducer's landing as a move, as the page's own landing does, so the client's record
+   *  names the desktop the user now sees. */
+  private landOnFallback(): void {
+    this.reportMove("");
+    void this.refetchLayout();
+  }
+
+  /** The viewed desktop was deleted under this window (the multiplayer spec, section 8.3): the first desktop
+   *  listed, where the reducer landed, is as likely somebody else's, so the window lands on the way back when it
+   *  still exists, else on the viewer's first own desktop, else, for a visitor with no desktop of their own, on
+   *  the one the shell seeds when they arrive again. The overview, the letterbox, and the way back are cleared
+   *  with the viewing. */
+  private async landAfterViewedDesktopDeleted(): Promise<void> {
+    this.closeOverview();
+    this.viewedViewport = null;
+    const target = await this.wayBackOrOwnDesktop();
+    if (target === null || target === this.state.activeDesktopId) this.landOnFallback();
+    else await this.switchDesktop(target, "landing");
+  }
+
+  /** Where a window stops viewing lands: the desktop it left for the viewed one when it still exists, else the
+   *  viewer's first own desktop, else the desktop the shell seeds for a visitor with none when they arrive again;
+   *  null when there is nowhere to go. The way back is forgotten either way. */
+  private async wayBackOrOwnDesktop(): Promise<string | null> {
+    const back = this.returnDesktopId;
+    this.returnDesktopId = null;
+    if (back !== null && desktopById(this.state, back) !== null) return back;
+    return this.ownDesktops()[0]?.id ?? (await this.arriveAgain());
+  }
+
+  /** Arrive as the page did at its start: the shell seeds a desktop for a visitor who has none (contracts.md section
+   *  5.5) and says where the client lands; null when it could not. */
+  private async arriveAgain(): Promise<string | null> {
+    let arrival: ClientArrival;
+    try {
+      arrival = await this.deps.api.arriveClient(this.deps.clientId);
+    } catch (error) {
+      console.warn("[si] the shell could not settle where this client lands", error);
+      return null;
     }
+    if (arrival.created_desktop !== null) this.takeDesktop(arrival.created_desktop);
+    this.replacedDesktop = replacedDesktopOf(arrival);
+    return arrival.desktop_id;
   }
 
   private takePlacementsUpdated(event: PlacementsUpdatedEvent): void {
