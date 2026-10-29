@@ -1,3 +1,1 @@
 `launch-custom-agent`'s worktree-mode test now expects claude's trust to be recorded under the work dir's realpath, and passes in imbue_cloud workspaces and on macOS. It used to expect `/home/user/worktrees/my-task` as written. Claude checks a folder's trust against the realpath of its cwd, and in an imbue_cloud workspace `/home/user` is a symlink to `/mngr-vol/home`, so the launcher was already writing the key claude reads. The test was the part that was wrong.
-
-The `test-offload` CI sandboxes now give `/home/user` the same layout: a symlink to `/mngr-vol/home` instead of the plain directory the image ships. Before this, a test that compared a written path against a resolved one passed in CI and failed only in users' workspaces.

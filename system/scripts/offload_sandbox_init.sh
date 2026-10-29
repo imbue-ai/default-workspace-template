@@ -17,9 +17,11 @@ readonly REPO_ROOT="/home/user/workspace"
 # (mngr_vps's container setup), not the directory the image ships, so the kernel
 # and claude report its paths resolved. Give the tests that layout too.
 readonly VOLUME_HOME="/mngr-vol/home"
-mkdir -p "$(dirname "$VOLUME_HOME")"
-mv /home/user "$VOLUME_HOME"
-ln -s "$VOLUME_HOME" /home/user
+if [ ! -L /home/user ]; then
+    mkdir -p "$(dirname "$VOLUME_HOME")"
+    mv /home/user "$VOLUME_HOME"
+    ln -s "$VOLUME_HOME" /home/user
+fi
 
 cd "$REPO_ROOT"
 
