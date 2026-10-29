@@ -5572,13 +5572,13 @@ _AGENT_PICTURE_PATH = "/api/avatars/imbue-character/icon.png?size=64"
 _BOB_PICTURE_PATH = "/api/roster/user:user-bob-4471/picture?v=0123456789abcdef"
 
 
-def _shell_with_workspace_agent(picture_url: str | None) -> FakeShell:
+def _shell_with_bob_and_the_agent(agent_picture_url: str | None) -> FakeShell:
     agent = roster_participant(
         ParticipantKey("workspace-agent"),
         kind=ParticipantKind.WORKSPACE_AGENT,
         display_name="Atlas",
         handle="agent",
-        profile_picture_url=picture_url,
+        profile_picture_url=agent_picture_url,
     )
     bob = roster_participant(
         ParticipantKey("user:user-bob-4471"), display_name="Bob", profile_picture_url=_BOB_PICTURE_PATH
@@ -5591,7 +5591,7 @@ def test_participants_are_the_shells_roster_with_every_picture_on_this_origin(
 ) -> None:
     """Every picture the shell serves from its own origin (a person's, the agent's) is pointed at this app's picture
     route, keeping the shell URL's query, so the page, whose policy admits no outside image, can show them all."""
-    shell = _shell_with_workspace_agent(_AGENT_PICTURE_PATH)
+    shell = _shell_with_bob_and_the_agent(_AGENT_PICTURE_PATH)
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
     client = create_application(build_test_state(config=config, agent_manager=manager, shell=shell)).test_client()
 
@@ -5639,7 +5639,7 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
         return create_application(state).test_client()
 
     # The page asks under the addresses the participants listing hands out: the roster's path with its query.
-    pictured = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH))
+    pictured = app_over(_shell_with_bob_and_the_agent(_AGENT_PICTURE_PATH))
     relayed = pictured.get("/api/participants/workspace-agent/picture?size=64")
     assert (relayed.status_code, relayed.mimetype, relayed.data) == (200, "image/png", b"\x89PNG...")
     assert asked == [f"{shell_base_url()}{_AGENT_PICTURE_PATH}"]
@@ -5665,13 +5665,13 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
         f"{shell_base_url()}/api/roster/user:user-bob-4471/picture",
     ]
     # A key that is nobody's, or not a key at all, has no picture here, and neither has a roster that names none.
-    unpictured = app_over(_shell_with_workspace_agent(None))
+    unpictured = app_over(_shell_with_bob_and_the_agent(None))
     assert unpictured.get("/api/participants/user:user-nobody/picture").status_code == 404
     assert unpictured.get("/api/participants/not%20a%20key/picture").status_code == 404
     assert unpictured.get("/api/participants/workspace-agent/picture").status_code == 404
 
     # A shell that does not answer the picture with a success is a bad gateway, not this app's failure.
-    refused = app_over(_shell_with_workspace_agent("/api/avatars/other/missing.svg")).get(
+    refused = app_over(_shell_with_bob_and_the_agent("/api/avatars/other/missing.svg")).get(
         "/api/participants/workspace-agent/picture"
     )
     assert refused.status_code == 502
