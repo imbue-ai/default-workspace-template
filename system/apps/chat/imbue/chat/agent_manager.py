@@ -2326,8 +2326,11 @@ class AgentManager:
         A message lost a second time is left, or a process that keeps exiting would take it again and again.
         """
         capabilities = self._handoff_capabilities
+        if capabilities is None:
+            return
         agent_info = self.get_agent_info_by_id(agent_id)
-        if capabilities is None or agent_info is None:
+        if agent_info is None:
+            _loguru_logger.info("Not resending agent {}'s lost messages: it is no longer known", agent_id)
             return
         with self._lock:
             chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent_id))
