@@ -151,6 +151,47 @@ _RESTART_TIMEOUT_SECONDS = 600.0
 
 _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
 
+# The services restart a moment earlier re-runs the one-shot env-converge program,
+# and an update that advances a unit's pins (a browser engine, a desktop stack) can
+# keep it installing -- and holding the dpkg lock -- for many minutes.
+_BOOT_CONVERGE_WAIT_SECONDS = 900.0
+_BOOT_CONVERGE_POLL_SECONDS = 10.0
+
+
+def _wait_for_boot_converge(
+    runner: Runner,
+    repo_root: Path,
+    sleeper: Callable[[float], None],
+    now: Callable[[], float],
+) -> None:
+    """Wait (bounded) for the one-shot env-converge program to finish before the
+    upgrade's apt steps, so they do not contend with its installs for the dpkg
+    lock; apt's own lock timeout backstops whatever this cannot see."""
+    deadline = now() + _BOOT_CONVERGE_WAIT_SECONDS
+    while True:
+        try:
+            status = runner.run(
+                ["supervisorctl", "status", "env-converge"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except OSError:
+            # No supervisorctl to ask: nothing observable to wait on, and apt's
+            # own lock timeout still guards the upgrade's steps.
+            return
+        stdout = getattr(status, "stdout", "") or ""
+        if not any(state in stdout for state in ("RUNNING", "STARTING")):
+            return
+        if now() >= deadline:
+            sys.stderr.write(
+                f"warning: env-converge was still running after {_BOOT_CONVERGE_WAIT_SECONDS:g}s; "
+                "the upgrade's apt steps rely on apt's own lock timeout.\n"
+            )
+            return
+        sleeper(_BOOT_CONVERGE_POLL_SECONDS)
+
 
 def _restore_tree(
     name_status: Sequence[tuple[str, str]],
@@ -1565,6 +1606,7 @@ def apply_update(
         # The one moment package versions are allowed to move. Post-success
         # only, so a failed apply never moved apt state; a failure here is
         # reported but does not un-apply the update.
+        _wait_for_boot_converge(runner, repo_root, sleeper, now)
         try:
             converge = runner.run(
                 ["uv", "run", "env-converge", "upgrade"],

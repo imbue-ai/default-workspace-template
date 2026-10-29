@@ -1990,6 +1990,12 @@ def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner = _RecordingRunner(repo_root=repo_root)
     # A live stack that has settled: the same pid on every status call.
     runner.respond(("supervisorctl", "status"), _supervisor_status(4242))
+    # The one-shot boot converge has already finished, so the post-success
+    # apt-upgrade wait falls straight through.
+    runner.respond(
+        ("supervisorctl", "status", "env-converge"),
+        _Result(stdout="env-converge   EXITED   Oct 28 11:00 PM"),
+    )
     # Clean for the precondition check. The rollback's own "is anything staged
     # to commit" question is the index diff, and by then the restore has
     # staged the reverted paths.
@@ -7041,6 +7047,41 @@ def test_a_failed_apply_never_writes_the_ledger_or_moves_apt_state(
     assert code == 2
     assert not (apply_repo / "docs/VERSION_HISTORY.md").exists()
     assert not runner.ran("uv", "run", "env-converge")
+
+
+def test_the_apt_upgrade_waits_for_a_still_running_boot_converge(
+    apply_repo: Path,
+) -> None:
+    # The services restart re-runs the one-shot env-converge program, whose unit
+    # installs can hold the dpkg lock for minutes; the post-success upgrade polls
+    # it to EXITED before its own apt steps run.
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.respond(
+        ("supervisorctl", "status", "env-converge"),
+        [
+            _Result(stdout="env-converge   RUNNING   pid 610, uptime 0:00:05"),
+            _Result(stdout="env-converge   RUNNING   pid 610, uptime 0:00:15"),
+            _Result(stdout="env-converge   EXITED   Oct 28 11:29 PM"),
+        ],
+    )
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    status_indices = [
+        index
+        for index, call in enumerate(runner.calls)
+        if call[:3] == ["supervisorctl", "status", "env-converge"]
+    ]
+    converge_index = runner.calls.index(["uv", "run", "env-converge", "upgrade"])
+    assert len(status_indices) == 3
+    assert status_indices[-1] < converge_index
 
 
 def test_env_converge_failure_is_a_warning_not_a_rollback(
