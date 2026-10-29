@@ -177,9 +177,13 @@ def _wait_for_boot_converge(
                 text=True,
                 check=False,
             )
-        except OSError:
+        except OSError as exc:
             # No supervisorctl to ask: nothing observable to wait on, and apt's
             # own lock timeout still guards the upgrade's steps.
+            sys.stderr.write(
+                f"warning: could not ask supervisorctl about the boot env-converge ({exc}); "
+                "skipping the wait -- the upgrade's apt steps rely on apt's own lock timeout.\n"
+            )
             return
         stdout = getattr(status, "stdout", "") or ""
         if not any(state in stdout for state in ("RUNNING", "STARTING")):
