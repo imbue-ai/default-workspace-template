@@ -1171,10 +1171,21 @@ def _send_message_endpoint(chat_id: str) -> Response:
     # a chat-app boot would route messages around the app instead of waiting for it.
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
+    parsed = parse_chat_ref(chat_id)
+    if parsed is None:
+        return _chat_not_found_response(chat_id)
     send_message_request = parse_request_body(SendMessageRequest)
     message_id = send_message_request.message_id or uuid4().hex
+    # Attributed only once the chat is known to be an agent's or one being created: the annotation is a file under
+    # the chat's folder, which a send must not leave behind for a chat that is not there (nor write beside the
+    # chats' folders for an id that is no chat's, such as ``..``).
+    is_being_created = (
+        provisional := agent_manager.get_provisional_chat(chat_id)
+    ) is not None and provisional.phase is ProvisionalChatPhase.CREATING
+    if _find_active_agent(chat_id) is None and not is_being_created:
+        return _chat_not_found_response(chat_id)
     delivered_text = _attributed_delivery(
-        state, ChatId(chat_id), send_message_request.message, message_id, request_identity(), None
+        state, parsed, send_message_request.message, message_id, request_identity(), None
     )
     if _find_active_agent(chat_id) is None:
         held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, delivered_text, message_id)

@@ -5579,6 +5579,25 @@ def test_the_owners_messages_are_never_prefixed_and_only_a_pages_are_annotated(
     ]
 
 
+def test_a_visitors_send_to_a_chat_the_app_does_not_know_is_refused_with_nothing_written(app: Flask) -> None:
+    """The annotation is a file under the chat's folder, so it is written only once the chat is known to exist
+    (the multiplayer spec, section 5.1): a send to an id of the right shape that names no chat, and one to an id of
+    the wrong shape (``..``, which would name a folder beside the chats'), both answer 404 and leave nothing."""
+    client = app.test_client()
+    authors_root = state_of(app).authors.root
+    unknown_id = "agent-00000000000000000000000000000099"
+
+    unknown = client.post(
+        f"/api/chats/{unknown_id}/message", json={"message": "hello?"}, headers=_identity_header(_VISITOR)
+    )
+    dotted = client.post("/api/chats/../message", json={"message": "hello?"}, headers=_identity_header(_VISITOR))
+
+    assert (unknown.status_code, dotted.status_code) == (404, 404)
+    assert not (authors_root / unknown_id).exists()
+    assert not (authors_root.parent / "authors.jsonl").exists()
+    assert sorted(path.name for path in authors_root.glob("*")) == []
+
+
 def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
     client = app.test_client()
     assert client.get("/api/me").get_json() == {"participant": "owner"}
