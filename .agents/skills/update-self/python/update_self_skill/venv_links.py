@@ -66,9 +66,14 @@ _KEY_HASH_LENGTH = 10
 
 
 class Completed(Protocol):
-    returncode: int
-    stdout: str
-    stderr: str
+    @property
+    def returncode(self) -> int: ...
+
+    @property
+    def stdout(self) -> str: ...
+
+    @property
+    def stderr(self) -> str: ...
 
 
 class Run(Protocol):
