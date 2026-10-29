@@ -398,14 +398,6 @@ def _match_local_command_output(content: str) -> MessageDisplay | None:
     return MessageDisplay(display=DisplayKind.HIDDEN)
 
 
-@pure
-def bash_mode_command(content: str) -> str | None:
-    """The command of a bash-mode input record (a message sent as ``!cmd``, recorded as one ``<bash-input>`` block),
-    or None for any other message."""
-    match = _BASH_INPUT_RE.fullmatch(content.strip())
-    return None if match is None else match.group(1).strip()
-
-
 def _match_bash_block(content: str) -> MessageDisplay | None:
     """A bash-mode command or its output, shown as a chip rather than as prose.
 

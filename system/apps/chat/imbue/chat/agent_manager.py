@@ -118,7 +118,6 @@ from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
-from imbue.chat.harnesses.message_display import bash_mode_command
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.model import InvalidModelPickError
 from imbue.chat.harnesses.model import ModelAxis
@@ -713,16 +712,7 @@ def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, .
 
 @pure
 def _is_user_message_saying(event: dict[str, Any], text: str) -> bool:
-    """Whether ``event`` is a user message recording ``text`` as it was sent. Claude records a message sent as
-    ``!cmd`` as a bash-mode input, which says that command."""
-    if event.get("type") != "user_message":
-        return False
-    content = str(event.get("content") or "").strip()
-    sent = text.strip()
-    command = bash_mode_command(content)
-    if command is not None:
-        return sent.startswith("!") and sent[1:].strip() == command
-    return content == sent
+    return event.get("type") == "user_message" and str(event.get("content") or "").strip() == text.strip()
 
 
 @pure
@@ -732,21 +722,6 @@ def _ids_of_user_turns_saying(events: list[dict[str, Any]], text: str) -> frozen
         for event in events
         if is_genuine_user_turn(event) and _is_user_message_saying(event, text)
     )
-
-
-@pure
-def _ordered_ids_of_user_messages_saying_since(
-    events: list[dict[str, Any]], text: str, since: float
-) -> list[str | None]:
-    """Every user message saying ``text`` recorded at ``since`` or later, machine lines included: a slash command or a
-    notice the chat app sent is recorded as a user message with a display decision of its own, not as a turn of the
-    user's. One with no timestamp counts as recorded since, so a message it cannot place is never sent twice."""
-    return [
-        event.get("event_id")
-        for event in events
-        if _is_user_message_saying(event, text)
-        and ((recorded_at := parse_iso_timestamp_to_epoch(event.get("timestamp"))) is None or recorded_at >= since)
-    ]
 
 
 @pure
