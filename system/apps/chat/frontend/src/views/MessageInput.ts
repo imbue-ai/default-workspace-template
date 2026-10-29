@@ -41,7 +41,11 @@ import {
   dropOutgoingNoTurnWillRetire,
   getOutgoingMessages,
 } from "../models/OutgoingMessages";
-import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
+import {
+  describeRequestError,
+  describeRequestErrorKind,
+  isUnansweredRequest,
+} from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
   areAccountsLoaded,
@@ -442,8 +446,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   const authCommandNotice = makeNoticeDialog();
   // mngr's classification of the failure, which decides which recoveries are worth offering.
   let actionFailureKind: SendFailureKind = "unknown";
-  // A send mngr typed into the agent but could not confirm: its text went back to the composer
-  // like any failed send's, but the agent may still take it. Once its turn reaches the transcript
+  // A send mngr typed into the agent but could not confirm, or one the chat app never answered
+  // (it may have delivered it before the answer was lost): its text went back to the composer
+  // like any failed send's, but the agent may have it. Once its turn reaches the transcript
   // the copy comes back out and its notice closes, so the user does not send it a second time.
   // Kept past Cancel, which leaves the copy in the composer just the same. One per send, across
   // every chat this composer serves.
@@ -453,7 +458,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     // A Send again that is unconfirmed too keeps the first watch: the turns read before the
     // first send let a landing of either one count.
     if (
-      describeRequestErrorKind(err) === "submission_unconfirmed" &&
+      (describeRequestErrorKind(err) === "submission_unconfirmed" || isUnansweredRequest(err)) &&
       !unconfirmedSends.some((watched) => watched.recovery === recovery)
     ) {
       unconfirmedSends = [...unconfirmedSends, { recovery, priorTurnIds }];
