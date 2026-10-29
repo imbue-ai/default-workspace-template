@@ -303,3 +303,16 @@ def git_work_dir(tmp_path: Path) -> Path:
         },
     )
     return tmp_path
+
+
+@pytest.fixture
+def isolated_tmux(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """A tmux server of the test's own (the one an agent a real ``mngr create`` makes lands on), killed afterwards. A
+    short directory under ``/tmp``, since a socket path is held to about a hundred bytes."""
+    tmux_tmpdir = Path(tempfile.mkdtemp(prefix="chat-tmux-", dir="/tmp"))
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_tmpdir))
+    monkeypatch.delenv("TMUX", raising=False)
+    yield
+    socket_path = tmux_tmpdir / f"tmux-{os.getuid()}" / "default"
+    subprocess.run(["tmux", "-S", str(socket_path), "kill-server"], capture_output=True, timeout=30)
+    shutil.rmtree(tmux_tmpdir, ignore_errors=True)

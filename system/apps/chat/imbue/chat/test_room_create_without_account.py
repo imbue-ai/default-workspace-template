@@ -10,8 +10,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
-from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -40,19 +38,6 @@ def _mngr_env(host_dir: Path, project_dir: Path) -> dict[str, str]:
     environment["MNGR_HOST_DIR"] = str(host_dir)
     environment["MNGR_PROJECT_CONFIG_DIR"] = str(project_dir / ".mngr")
     return environment
-
-
-@pytest.fixture
-def isolated_tmux(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
-    """A tmux server of the test's own (the one the created agent's session lands on), killed afterwards. A short
-    directory under ``/tmp``, since a socket path is held to about a hundred bytes."""
-    tmux_tmpdir = Path(tempfile.mkdtemp(prefix="chat-tmux-", dir="/tmp"))
-    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_tmpdir))
-    monkeypatch.delenv("TMUX", raising=False)
-    yield
-    socket_path = tmux_tmpdir / f"tmux-{os.getuid()}" / "default"
-    subprocess.run(["tmux", "-S", str(socket_path), "kill-server"], capture_output=True, timeout=30)
-    shutil.rmtree(tmux_tmpdir, ignore_errors=True)
 
 
 @pytest.mark.timeout(120)
