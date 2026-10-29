@@ -941,12 +941,22 @@ agent, off the request thread).
 Every request reaches the chat app with the shell's `X-Imbue-Identity` header
 (`identity.py`; the keys are `workspace_layout.identity`): the owner, a signed-in
 person the workspace is shared with (`user:<id>`), or a visiting agent
-(`agent:<id>`). A send from anyone but the owner is delivered to the harness as
-`[from: <name>] <text>` (`authors.py`; never for a slash command or bash-mode
-input, which the harness would not understand prefixed), and the send is recorded
-in the chat's `authors.jsonl` beside its transcript: the message id, the sender's
-key and name, and the hash of the delivered text. The owner's sends are delivered
-as typed and recorded nowhere. When the transcript's `user_message` events are
+(`agent:<id>`). A present header that does not parse is refused with 400; only a
+missing one reads as the owner (an in-workspace caller, such as a script). Every
+route that delivers a person's words attributes them the same way: the message
+route, a new chat's first message (the create's and the new-chat intake's), and
+the message that confirms a switch. A send from anyone but the owner is delivered
+to the harness as `[from: <name>] <text>` when the harness the words are for reads
+a prefix (`authors.py`; an agent's chat does, a room does not, the harness being the
+switch's target while one is in flight, the room being created for a chat with no
+agent yet, else the active agent's; never for a slash command or bash-mode input,
+which the harness would not understand prefixed), and every sender a proxy vouched
+for, the owner's page included, is recorded in the chat's `authors.jsonl` beside
+its transcript: the message id, the sender's key and name, and the hash of the
+delivered text. The owner's sends are never prefixed, and a request with no header
+is delivered as typed and recorded nowhere. A send to an id the app does not know
+(no listed agent, no chat being created) answers 404 before anything is written.
+When the transcript's `user_message` events are
 read (the backlog, the live stream, `GET /api/chats/<chat-id>/events`), each is
 stamped `author` and `author_name` from the nearest annotation whose hash matches
 its text, else from a `[from: <name>]` prefix the harness kept (a turn merged from
