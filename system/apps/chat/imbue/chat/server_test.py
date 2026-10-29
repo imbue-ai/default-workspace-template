@@ -1229,7 +1229,11 @@ def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
 
 
 def _client_with_account_labeled_chat(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_id: str, account_id: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent_id: str,
+    account_id: str,
+    harness: HarnessType = HarnessType.CLAUDE,
 ) -> tuple[FlaskClient, RecordingMngrMessenger]:
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     messenger = RecordingMngrMessenger()
@@ -1237,8 +1241,9 @@ def _client_with_account_labeled_chat(
     manager.note_agent_list_known()
     with manager._lock:
         manager._agents[agent_id] = AgentStateItem(
-            id=agent_id, name="Chat-7", state="RUNNING", labels={"account": account_id}, work_dir=None
+            id=agent_id, name="Chat-7", state="RUNNING", labels={"account": account_id}, work_dir=None, harness=harness
         )
+    agent_state_dir(tmp_path, agent_id).mkdir(parents=True, exist_ok=True)
     return create_application(build_test_state(agent_manager=manager)).test_client(), messenger
 
 
@@ -1254,6 +1259,25 @@ def test_a_chat_whose_account_was_signed_out_takes_no_more_messages(
     assert response.status_code == 409
     assert response.get_json()["kind"] == "account_signed_out"
     assert messenger.sent == []
+
+
+def test_a_room_stamped_with_a_signed_out_accounts_label_still_takes_messages(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A room runs on no account whatever its labels say (the multiplayer spec, section 7.3): the create defaults
+    stamped the account's label onto a room created before its create cleared them, and the account signing out
+    must not close the room, while an agent chat on the same label is refused."""
+    room_id = "agent-00000000000000000000000000000737"
+    client, messenger = _client_with_account_labeled_chat(
+        tmp_path, monkeypatch, room_id, "signed-out-account-8815", harness=HarnessType.ROOM
+    )
+
+    response = client.post(f"/api/chats/{room_id}/message", json={"message": "anyone here?", "message_id": "m-1"})
+
+    assert response.status_code == 200
+    assert messenger.sent == []
+    events = client.get(f"/api/chats/{room_id}/events").get_json()["events"]
+    assert [event["content"] for event in events] == ["anyone here?"]
 
 
 def test_a_secret_request_notice_still_reaches_a_chat_whose_account_was_signed_out(

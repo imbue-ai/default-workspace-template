@@ -1078,15 +1078,20 @@ def deliver_held_send(
 # The environment a room's ``mngr create`` carries, which the workspace's create guard
 # (``system/scripts/require_create_account.py``) honors: the one create that runs on no account.
 CREATE_WITHOUT_ACCOUNT_ENV: Final[str] = "MINDS_CREATE_WITHOUT_ACCOUNT"
+# mngr's opt-in for a ``-S`` that assigns over a list the local settings filled: a room's create clears the create
+# defaults' account label and environment on purpose (``ROOM_CREATE_SETTINGS``), and mngr refuses the clear as a
+# narrowing without it.
+ALLOW_SETTINGS_NARROWING_ENV: Final[str] = "MNGR__ALLOW_SETTINGS_KEY_ASSIGNMENT_NARROWING"
 
 
 @pure
 def create_command_env(harness: HarnessType, environ: Mapping[str, str]) -> dict[str, str]:
     """The environment a chat's ``mngr create`` runs with, for the manager's create and the handoff's: the
-    process's own, plus the no-account mark for a room."""
+    process's own, plus, for a room, the no-account mark and the opt-in its create needs to clear the create
+    defaults' account."""
     if harness is not HarnessType.ROOM:
         return dict(environ)
-    return {**environ, CREATE_WITHOUT_ACCOUNT_ENV: "1"}
+    return {**environ, CREATE_WITHOUT_ACCOUNT_ENV: "1", ALLOW_SETTINGS_NARROWING_ENV: "true"}
 
 
 @pure

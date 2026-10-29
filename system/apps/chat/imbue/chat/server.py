@@ -61,6 +61,7 @@ from imbue.chat import focus_chat
 from imbue.chat import latchkey_endpoints
 from imbue.chat import mentions_endpoints
 from imbue.chat import secret_requests_endpoints
+from imbue.chat.account_labels import account_id_of
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import account_exists
 from imbue.chat.activity_state import ActivityState
@@ -821,12 +822,13 @@ NO_PROVIDER_ACCOUNT_CREATE_REFUSAL_KIND: Final[str] = "no_provider_account"
 
 
 def _is_account_signed_out(agent_info: AgentInfo) -> bool:
-    """Whether the agent's ``account`` label names an account no longer signed in (a chat from before accounts has none).
+    """Whether the agent's ``account`` label names an account no longer signed in (a chat from before accounts has
+    none, and a room runs on none whatever its labels say).
 
     An index that cannot be read says nothing about this account, so the send goes through.
     """
-    account_id = agent_info.labels.get("account", "")
-    if account_id == "":
+    account_id = account_id_of(agent_info.harness, agent_info.labels)
+    if account_id is None:
         return False
     try:
         return not account_exists(account_id)

@@ -21,6 +21,7 @@ from oom_priority import bands
 from workspace_layout.testing import FakeShell
 from workspace_layout.testing import connected_client
 
+from imbue.chat.account_labels import account_id_of
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import commit_account
@@ -38,6 +39,7 @@ from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LE
 from imbue.chat.agent_manager import FirstMessage
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
+from imbue.chat.agent_manager import ROOM_CREATE_SETTINGS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _FINISHED_TASK_TURN_GRACE_PASSES
@@ -60,6 +62,7 @@ from imbue.chat.chat_autocompact import read_autocompact_state
 from imbue.chat.chat_autocompact import write_autocompact_state
 from imbue.chat.chat_fast_mode import ChatFastModeState
 from imbue.chat.chat_fast_mode import read_fast_mode_state
+from imbue.chat.chat_handoffs import ALLOW_SETTINGS_NARROWING_ENV
 from imbue.chat.chat_handoffs import CREATE_WITHOUT_ACCOUNT_ENV
 from imbue.chat.chat_handoffs import SuccessorCreateSpec
 from imbue.chat.chat_handoffs import create_command_env
@@ -8146,9 +8149,34 @@ def test_a_rooms_create_argv_names_the_room_type_starts_it_on_boot_and_stacks_no
     assert_mngr_argv_valid(argv)
 
 
-def test_only_a_rooms_create_carries_the_no_account_mark_in_its_environment() -> None:
-    assert create_command_env(HarnessType.ROOM, {"PATH": "/bin"}) == {"PATH": "/bin", CREATE_WITHOUT_ACCOUNT_ENV: "1"}
+def test_a_rooms_create_argv_clears_the_create_defaults_account_label_and_environment() -> None:
+    """A room runs on no account (the multiplayer spec, section 7.3): its create clears the label and the
+    environment the workspace's create defaults would stamp on it, and an agent chat's create carries no clear."""
+    room_argv = _chat_create_argv(harness=HarnessType.ROOM)
+    agent_argv = _chat_create_argv(harness=HarnessType.CLAUDE)
+    assert " ".join(ROOM_CREATE_SETTINGS) in " ".join(room_argv)
+    assert ROOM_CREATE_SETTINGS == ("-S", "commands.create.label=", "-S", "commands.create.env=")
+    assert "commands.create.label=" not in agent_argv and "commands.create.env=" not in agent_argv
+    assert_mngr_argv_valid(room_argv)
+
+
+def test_only_a_rooms_create_carries_the_no_account_mark_and_the_narrowing_opt_in_in_its_environment() -> None:
+    assert create_command_env(HarnessType.ROOM, {"PATH": "/bin"}) == {
+        "PATH": "/bin",
+        CREATE_WITHOUT_ACCOUNT_ENV: "1",
+        ALLOW_SETTINGS_NARROWING_ENV: "true",
+    }
     assert create_command_env(HarnessType.CLAUDE, {"PATH": "/bin"}) == {"PATH": "/bin"}
+
+
+def test_account_id_of_answers_none_for_a_room_whatever_its_labels_say() -> None:
+    """Every reader of the ``account`` label goes through one helper: a room created before its create cleared the
+    create defaults still carries the default account's label, and must never answer to it."""
+    assert account_id_of(HarnessType.ROOM, {"account": "acct-stamped-7731"}) is None
+    assert account_id_of(HarnessType.CLAUDE, {"account": "acct-stamped-7731"}) == "acct-stamped-7731"
+    assert account_id_of(HarnessType.CLAUDE, {"account": " acct-padded-7732 "}) == "acct-padded-7732"
+    assert account_id_of(HarnessType.CLAUDE, {"account": ""}) is None
+    assert account_id_of(HarnessType.CODEX, {}) is None
 
 
 def test_a_switch_to_a_room_is_a_fresh_start_handoff_to_the_room_harness_on_no_account(
@@ -8223,7 +8251,9 @@ def test_the_main_chat_switches_to_a_room_like_any_chat(broadcaster: WebSocketBr
     manager.note_agent_list_known()
     assert manager.make_main_chat(ChatId(main))
     try:
-        kind, phase, _block = manager.begin_switch(ChatId(main), "", "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM)
+        kind, phase, _block = manager.begin_switch(
+            ChatId(main), "", "", "m-1", HeldSendOrigin.CLIENT, kind=ChatKind.ROOM
+        )
         assert (kind, phase) == (TransitionKind.HANDOFF, HandoffPhase.SUMMARIZING)
 
         record = _wait_until_settled(store, ChatId(main))

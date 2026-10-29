@@ -25,6 +25,7 @@ from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 from workspace_layout.primitives import ParticipantKey
 
+from imbue.chat.account_labels import account_id_of
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import NoAccountsError
@@ -225,6 +226,10 @@ CHAT_ROLE_TEMPLATE: Final[str] = "chat"
 # refuses every claude create on a pin mismatch, including the update run that would fix
 # it, so ``message_chat.py --create`` asks for it on every chat it makes from outside.
 SKIP_CLAUDE_INSTALLATION_CHECK_SETTING: Final[str] = "agent_types.claude.check_installation=false"
+# The ``-S`` settings a room's create carries, clearing the create defaults' account label and environment for that
+# invocation (an empty value clears a list-valued config default); mngr refuses the clear as a narrowing of the
+# local settings unless the create's environment opts in (``create_command_env``).
+ROOM_CREATE_SETTINGS: Final[tuple[str, ...]] = ("-S", "commands.create.label=", "-S", "commands.create.env=")
 
 # The labels a chat create sets from what it knows (``_build_chat_create_command`` and the
 # handoff's successor labels); a caller's extra labels may not restate them.
@@ -397,9 +402,11 @@ def _build_chat_create_command(
         harness,
         # A room's agent is its reader (the multiplayer spec, section 7.3): the chat template's output style and
         # role, and every role template stacked on it, are an AI agent's, and a room should be up whenever the
-        # host is, since every message appends to its transcript.
+        # host is, since every message appends to its transcript. The workspace's create defaults stamp the
+        # default account's label and environment onto every create; a room runs on no account, so its create
+        # clears both for this one invocation (the room's own labels below are restored on top by mngr).
         *(
-            ("--start-on-boot",)
+            ("--start-on-boot", *ROOM_CREATE_SETTINGS)
             if harness is HarnessType.ROOM
             else (
                 "--template",
@@ -881,7 +888,7 @@ def is_rebind_target(agent_state: AgentStateItem, target: _SwitchTarget) -> bool
     """
     if target.account is None or agent_state.harness is not target.harness or not is_rebind_supported(target.harness):
         return False
-    return _lane_of_account_label(agent_state.labels.get("account", "")) == target.account.lane
+    return _lane_of_account_label(account_id_of(agent_state.harness, agent_state.labels) or "") == target.account.lane
 
 
 @pure
@@ -949,11 +956,7 @@ def chat_snapshot_for_active_agent(
             agent_id=agent.id,
             name=agent.name,
             harness=agent.harness,
-            # A room runs on no account by definition (the multiplayer spec, section 7.3), whatever its
-            # labels say: the workspace's create defaults (``.mngr/settings.local.toml``) stamp the
-            # default account's label onto every create, a room's included, and surfacing it would
-            # dress the room as an agent chat on that account (its chip would read the provider).
-            account_id=None if agent.harness is HarnessType.ROOM else agent.labels.get("account"),
+            account_id=account_id_of(agent.harness, agent.labels),
             state=agent.state,
             activity_state=agent.activity_state,
             # The manager keeps a cause until the compaction's event arrives, which can be after
@@ -2114,12 +2117,8 @@ class AgentManager:
             names = [
                 agent.name
                 for agent in self._agents.values()
-                if agent.labels.get("account") == account_id
+                if account_id_of(agent.harness, agent.labels) == account_id
                 and agent.labels.get("is_primary") != "true"
-                # A room runs on no account whatever its labels say: the workspace's create defaults
-                # (``.mngr/settings.local.toml``) stamp the default account's label onto every create,
-                # a room's included, and a sign-in must not bounce the rooms.
-                and agent.harness is not HarnessType.ROOM
                 and not self._is_archived_member_locked(agent.id)
                 and not is_lifecycle_dead(agent.state)
             ]
@@ -2386,13 +2385,7 @@ class AgentManager:
             raise HandoffError("The workspace's services agent is not a chat")
         if target.account is None and agent_state.harness is HarnessType.ROOM:
             raise HandoffError(f"Chat '{chat_id}' is a room already")
-        # A room runs on no account whatever its labels say (the workspace's create defaults stamp the default
-        # account's label onto every create, a room's included), so its switch onto that account is not "its own".
-        if (
-            target.account is not None
-            and agent_state.harness is not HarnessType.ROOM
-            and agent_state.labels.get("account") == target.account.id
-        ):
+        if target.account is not None and account_id_of(agent_state.harness, agent_state.labels) == target.account.id:
             raise HandoffError(f"Chat '{chat_id}' already runs on account {target.account.id}")
         return agent_state
 
@@ -2453,7 +2446,7 @@ class AgentManager:
         first held send; a chat that is still its one agent gets its record here. Lock held."""
         existing = self._chat_record_by_id.get(chat_id)
         record = existing if existing is not None else self._first_record_locked(chat_id, agent_state, now)
-        previous_account_id = agent_state.labels.get("account", "")
+        previous_account_id = account_id_of(agent_state.harness, agent_state.labels) or ""
         rebind = ChatRebindRecord(
             rebind_id=uuid4().hex,
             phase=HandoffPhase.DRAINING,
@@ -2477,7 +2470,7 @@ class AgentManager:
 
     def _first_record_locked(self, chat_id: ChatId, agent_state: AgentStateItem, now: datetime) -> ChatRecord:
         """The record a chat gets at its first switch: its one agent so far, as seq 1. Lock held."""
-        account_label = agent_state.labels.get("account", "")
+        account_label = account_id_of(agent_state.harness, agent_state.labels) or ""
         details = self._agent_details_by_id.get(agent_state.id)
         return ChatRecord(
             chat_id=chat_id,
@@ -3605,8 +3598,8 @@ class AgentManager:
         agent_info = self.get_active_agent_info(chat_id)
         if agent_info is None:
             return None
-        account_id = agent_info.labels.get("account", "")
-        if not account_id:
+        account_id = account_id_of(agent_info.harness, agent_info.labels)
+        if account_id is None:
             # A chat from before accounts runs on the config dir its env file names.
             return ChatAccountBinding(harness=agent_info.harness, account_dir=agent_info.claude_config_dir)
         return self._account_binding(chat_id, account_id)
@@ -4438,7 +4431,7 @@ class AgentManager:
                                 renamed_while_created = settled_provisional.name
                             # The account and model chosen while it was created, which the chat runs on.
                             model_pick = settled_provisional.model_pick
-                            if settled_provisional.account_id not in ("", labels.get("account")):
+                            if settled_provisional.account_id not in ("", account_id_of(harness, labels)):
                                 account_chosen_while_created = settled_provisional.account_id
                         self._track_created_agent_locked(
                             AgentStateItem(
