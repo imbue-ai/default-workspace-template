@@ -6357,9 +6357,9 @@ def test_a_message_the_transcript_holds_is_not_sent_again_when_the_process_exits
     chat = _LostSendChat(broadcaster)
     try:
         chat.send("what is 5+5?")
-        chat.transcript._events.append(_typed_turn("what is 5+5?"))
+        chat.transcript._events.append(_typed_turn("what is 5+5?", at=_recorded_at(time.time())))
         chat.send("and 6+6?")
-        chat.transcript._events.append(_typed_turn("and 6+6?"))
+        chat.transcript._events.append(_typed_turn("and 6+6?", at=_recorded_at(time.time())))
         chat.observe(AgentLifecycleState.DONE)
     finally:
         chat.manager.stop()
@@ -6392,7 +6392,7 @@ def test_a_send_the_transcript_holds_as_a_machine_line_is_not_sent_again_when_th
     chat = _LostSendChat(broadcaster)
     try:
         chat.send(sent)
-        chat.transcript._events.append(_typed_turn(recorded, display="chip"))
+        chat.transcript._events.append(_typed_turn(recorded, display="chip", at=_recorded_at(time.time())))
         chat.observe(AgentLifecycleState.DONE)
     finally:
         chat.manager.stop()
