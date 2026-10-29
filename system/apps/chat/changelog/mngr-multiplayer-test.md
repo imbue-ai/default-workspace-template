@@ -6,7 +6,7 @@ Chats know who said what (the mngr repo's `specs/multiplayer-refinements/spec.md
 
 - The page draws your own messages on the right as before, and another person's on the left under their name and picture. The agent's replies are drawn as bubbles, one per reply, under the workspace's picture and name.
 
-- New routes: `GET /api/me` (the page's own participant key), `GET /api/participants` (the shell's roster, with the workspace agent's picture served from this app at `GET /api/participants/workspace-agent/picture`).
+- New routes: `GET /api/me` (the page's own participant key), `GET /api/participants` (the shell's roster, every picture the shell serves -- a person's profile picture, the workspace agent's avatar icon -- pointed at this app's `GET /api/participants/<key>/picture`, which relays it with the shell's caching, since the page's policy admits no outside image).
 
 - The chat list's rows show a kebab beside the rename pencil on hover, opening the row's context menu.
 
@@ -46,6 +46,4 @@ The chat about an app (the mngr repo's `specs/multiplayer-refinements/spec.md`, 
 
 - The chat root's relay forwards its nested pages' `shell:input` activity reports up to the shell, like their focus.
 
-- The chat root loads the roster for itself, so the rows' participant pictures draw the people's real pictures and names rather than the first letter of their keys (the models are singletons per entry, and only the chat page had loaded them).
-
-- Every participant's picture is served from this app's own origin: `GET /api/participants/<key>/picture` relays the picture the shell serves for the key (a person's profile picture, the workspace agent's avatar icon) with the shell's caching, and `/api/participants` points every shell-served picture at it. A monogram (a person with no picture, or one whose picture would not load) sits on the person's roster colour, as the desktop's tray draws it.
+- A monogram (a person with no picture, or one whose picture would not load) sits on the person's roster colour, as the desktop's tray draws it.
