@@ -79,6 +79,7 @@ from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import Frame
 from workspace_layout.records import GridCell
 from workspace_layout.records import ShortcutTarget
+from workspace_layout.records import Viewport
 from workspace_layout.records import Wallpaper
 from workspace_layout.records import Window
 from workspace_layout.shell_url import DESKTOPS_ROUTE
@@ -398,8 +399,14 @@ def _owner_layout_view(shell: ShellState, desktop: Desktop) -> OwnerLayoutView:
     for client in owners_clients_newest_first(desktop, owner_key, shell.clients.list_clients()):
         view = _layout_view(shell, desktop, client.id)
         if view.updated_at is not None:
-            return OwnerLayoutView.model_validate({**dict(view), "viewport": client.viewport})
-    return OwnerLayoutView.model_validate({**dict(_layout_view(shell, desktop, ClientId("nobody"))), "viewport": None})
+            return _owner_layout_of(view, client.viewport)
+    return _owner_layout_of(_layout_view(shell, desktop, ClientId("nobody")), None)
+
+
+@pure
+def _owner_layout_of(view: DesktopLayoutView, viewport: Viewport | None) -> OwnerLayoutView:
+    """A client's layout view with the backdrop size that client reported beside it."""
+    return OwnerLayoutView.model_validate({**dict(view), "viewport": viewport})
 
 
 def save_placements(desktop_id: str) -> ResponseReturnValue:
