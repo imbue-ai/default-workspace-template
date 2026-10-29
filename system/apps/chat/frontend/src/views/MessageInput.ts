@@ -1348,8 +1348,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
         // The text was typed and Enter sent but nothing confirmed the agent took it, or the chat app
         // never answered the send, so it may already be in the agent's input or turn and a resend
-        // can deliver it twice. mngr's reason
-        // here is its diagnostics (the whole pane included), not something to show the user.
+        // can deliver it twice. The notice shows its own sentence: mngr's reason for this kind is its
+        // diagnostics (the whole pane included), and an unanswered send has no reason at all.
         const isUnconfirmed = actionFailureKind === "submission_unconfirmed";
         const retryWording = isUnconfirmed
           ? { label: "Send again", inFlight: "Sending…", tooltip: "Sends the message again, even if the agent has it" }
