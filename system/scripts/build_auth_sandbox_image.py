@@ -36,7 +36,7 @@ from auth_sandbox.image_build import (
     run_build,
 )
 from modal.stream_type import StreamType
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DOCKERFILE = _REPO_ROOT / "system" / "Dockerfile"
@@ -51,6 +51,9 @@ _BUILD_MEMORY_MB = 4096
 
 class ModalBuildSandbox(BuildSandboxInterface):
     """A Modal sandbox as the build's target: commands over ``exec``, the snapshot through the SDK."""
+
+    # ``modal.Sandbox`` is not a pydantic type; without this the class cannot be defined.
+    model_config = ConfigDict(arbitrary_types_allowed=True)
 
     sandbox: modal.Sandbox = Field(
         frozen=True, description="The sandbox made from the product image"
