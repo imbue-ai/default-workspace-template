@@ -14,9 +14,10 @@
  * step decoration on stdout, which buildSections parses); there is no
  * side-channel enrichment. `isTailSettled` settles the frontier spinner on the
  * tail turn (see `isTailTurnSettled`), and `liveCompaction` places the start
- * chip of a compaction still running (see `liveCompactionOf`). The pre-login
- * auth-error prefix is hidden here (a no-op for a subagent, which never has
- * one) so the two views stay byte-identical.
+ * chip of a compaction still running (see `liveCompactionOf`). A message a
+ * sign-in failure refused, and the failure, are hidden here once it was sent
+ * again right after the failure (a no-op for a subagent, which never has one)
+ * so the two views stay byte-identical.
  */
 
 import m from "mithril";
@@ -28,9 +29,9 @@ import {
   isChipOnlyEvent,
   renderPermissionItem,
   buildToolResultsWithSkillExpansions,
-  computeAuthErrorHiddenEventIds,
   type RunPart,
 } from "./message-renderers";
+import { computeAuthErrorHiddenEventIds } from "./auth-recovery";
 import { isHiddenUserMessage } from "./message-classification";
 import type { CompactionPart } from "./compaction-chips";
 import { buildSections, type LiveCompaction, type SectionView } from "./turn-grouping";
@@ -278,7 +279,8 @@ function runAnchorEventId(head: RunPart): string | null {
 
 /**
  * The full events -> virtualized rows pipeline shared by both conversation
- * views: hide the pre-login auth-error prefix, walk the transcript into turn
+ * views: hide the refused messages that were sent again (and their sign-in
+ * failures), walk the transcript into turn
  * sections, then flatten into top-level rows. The structure and decoration --
  * which steps exist, their order, grouping, titles, summaries -- come purely
  * from the transcript walk.

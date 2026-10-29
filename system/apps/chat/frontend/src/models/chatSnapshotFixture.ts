@@ -30,6 +30,7 @@ export function chatSnapshotFixture(
       queued_messages: [],
       shoulder_tap_available: false,
       is_connecting: false,
+      is_resending_after_sign_in: false,
       is_busy: false,
       background_tasks: [],
       ...agentOverrides,
