@@ -2,7 +2,8 @@
  * The agent's card (the multiplayer spec, section 6.4): the face, the workspace name, "Working" or "Idle", then
  * "Working on" (the chats whose status is working or background) and "Needs you" (the chats whose status is
  * attention), one row each with the chat's status dot and title, a click opening that chat; then the actions --
- * "Change avatar..." and "Float" (the card only shows while the avatar is docked, so Float is always the way out).
+ * "Change avatar..." and "Float" (the card only shows while the avatar is in the tray, so Float is always the
+ * way out).
  */
 
 import m from "mithril";

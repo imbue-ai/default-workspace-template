@@ -690,6 +690,7 @@ def test_presence_heartbeat_records_the_requester_and_answers_their_identity(cli
             "agent_id": None,
             "agent_name": None,
             "granter": None,
+            "is_header_present": True,
         },
         "participant": "user:user-bob-4471",
     }
