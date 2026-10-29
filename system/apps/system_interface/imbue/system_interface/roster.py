@@ -75,6 +75,13 @@ ROSTER_WATCH_COALESCE_SECONDS: Final[float] = 1.0
 _GrantsDocument = tuple[Path, int | None]
 
 
+class _WarnedEntries(MutableModel):
+    """The grants entries of one document already warned about, under the version they were seen in."""
+
+    version: int | None = Field(frozen=True, description="The document's version (mtime) the entries were seen in")
+    entries: set[str] = Field(default_factory=set, description="The refused entries warned about under it")
+
+
 class _Entry(FrozenModel):
     """One roster entry before its handle is assigned."""
 
@@ -181,9 +188,11 @@ class RosterSource(MutableModel):
         default=PRESENCE_CONNECTED_WINDOW, frozen=True, description="How long a sighting counts as connected"
     )
 
-    # The grants entries already warned about, per document (its path) and version of it, so a hand-edited entry
-    # the key refuses is warned about once rather than on every roster build.
-    _warned_entries_by_document: dict[_GrantsDocument, set[str]] = PrivateAttr(default_factory=dict)
+    # The grants entries already warned about, per document (its path), under the version of it they were seen in,
+    # so a hand-edited entry the key refuses is warned about once rather than on every roster build. One record per
+    # path, replaced whole when the version moves: the roster is built from several threads at once and this
+    # source carries no lock, so the bookkeeping never iterates what another build may be adding to.
+    _warned_entries_by_path: dict[Path, _WarnedEntries] = PrivateAttr(default_factory=dict)
 
     def owner_key(self, now: datetime) -> ParticipantKey:
         """The owner's key as the presence records say it (the multiplayer spec, section 4.4): the account whose
@@ -305,15 +314,14 @@ class RosterSource(MutableModel):
         try:
             return ParticipantKey(value)
         except InvalidLayoutValueError as e:
-            warned = self._warned_entries_by_document.setdefault(document, set())
-            if value not in warned:
-                warned.add(value)
+            path, version = document
+            warned = self._warned_entries_by_path.get(path)
+            if warned is None or warned.version != version:
                 # The document's older versions are forgotten; the other document's record stands.
-                self._warned_entries_by_document = {
-                    kept_document: entries
-                    for kept_document, entries in self._warned_entries_by_document.items()
-                    if kept_document[0] != document[0] or kept_document == document
-                }
+                warned = _WarnedEntries(version=version)
+                self._warned_entries_by_path[path] = warned
+            if value not in warned.entries:
+                warned.entries.add(value)
                 logger.warning("Left a grants entry out of the roster: {}", e)
             return None
 
