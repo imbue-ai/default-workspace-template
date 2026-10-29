@@ -5639,16 +5639,13 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
         return create_application(state).test_client()
 
     # The page asks under the addresses the participants listing hands out: the roster's path with its query.
-    relayed = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
-        "/api/participants/workspace-agent/picture?size=64"
-    )
+    pictured = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH))
+    relayed = pictured.get("/api/participants/workspace-agent/picture?size=64")
     assert (relayed.status_code, relayed.mimetype, relayed.data) == (200, "image/png", b"\x89PNG...")
     assert asked == [f"{shell_base_url()}{_AGENT_PICTURE_PATH}"]
     # A person's picture comes with the shell's caching, so a versioned one is kept by the page for good, and with
     # the shell's image hardening.
-    bobs = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
-        "/api/participants/user:user-bob-4471/picture?v=0123456789abcdef"
-    )
+    bobs = pictured.get("/api/participants/user:user-bob-4471/picture?v=0123456789abcdef")
     assert (bobs.status_code, bobs.mimetype, bobs.data, bobs.headers["Cache-Control"]) == (
         200,
         "image/jpeg",
@@ -5661,31 +5658,23 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
     )
     assert asked[-1] == f"{shell_base_url()}{_BOB_PICTURE_PATH}"
     # A stale page asks under an older version, or none: the shell is asked under that, not the roster's.
-    app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
-        "/api/participants/user:user-bob-4471/picture?v=old"
-    )
-    app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get("/api/participants/user:user-bob-4471/picture")
+    pictured.get("/api/participants/user:user-bob-4471/picture?v=old")
+    pictured.get("/api/participants/user:user-bob-4471/picture")
     assert asked[-2:] == [
         f"{shell_base_url()}/api/roster/user:user-bob-4471/picture?v=old",
         f"{shell_base_url()}/api/roster/user:user-bob-4471/picture",
     ]
-    # A key that is nobody's, or not a key at all, has no picture here.
-    assert (
-        app_over(_shell_with_workspace_agent(None)).get("/api/participants/user:user-nobody/picture").status_code
-        == 404
-    )
-    assert (
-        app_over(_shell_with_workspace_agent(None)).get("/api/participants/not%20a%20key/picture").status_code == 404
-    )
+    # A key that is nobody's, or not a key at all, has no picture here, and neither has a roster that names none.
+    unpictured = app_over(_shell_with_workspace_agent(None))
+    assert unpictured.get("/api/participants/user:user-nobody/picture").status_code == 404
+    assert unpictured.get("/api/participants/not%20a%20key/picture").status_code == 404
+    assert unpictured.get("/api/participants/workspace-agent/picture").status_code == 404
 
     # A shell that does not answer the picture with a success is a bad gateway, not this app's failure.
     refused = app_over(_shell_with_workspace_agent("/api/avatars/other/missing.svg")).get(
         "/api/participants/workspace-agent/picture"
     )
     assert refused.status_code == 502
-    # A roster that names no picture has nothing to relay.
-    unpictured = app_over(_shell_with_workspace_agent(None)).get("/api/participants/workspace-agent/picture")
-    assert unpictured.status_code == 404
 
 
 # Rooms and mentions (the multiplayer spec, section 7).
