@@ -5986,8 +5986,9 @@ def test_an_app_chat_intake_opens_the_chat_titled_for_the_app_and_makes_it_on_th
     app: Flask, client: FlaskClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A window's "Chat about this app" (the multiplayer spec, section 9.2): the chat titled "<display name> Chat" is
-    created on the default account when there is none, never auto-named, and the intake is held with the composer's
-    hint even with nothing to send; a second press lands in the same chat while it is still being made."""
+    created on the default account when there is none, never auto-named, and the intake is held as a draft that
+    prefills the composer with the lead-in naming the app, beside the hint; a second press lands in the same chat
+    while it is still being made."""
     monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
     monkeypatch.setenv("MNGR_AGENT_ID", "agent-00000000000000000000000000000123")
     _register_agent(app, "agent-00000000000000000000000000000123", "primary", "RUNNING")
@@ -6005,7 +6006,12 @@ def test_an_app_chat_intake_opens_the_chat_titled_for_the_app_and_makes_it_on_th
     assert provisional.message == ""
     token = _token_of(path)
     held = client.get(f"/api/chats/intakes/{token}").get_json()
-    assert (held["chat_id"], held["message"], held["hint"]) == (chat_id, "", "How do you want to change Docs?")
+    assert (held["chat_id"], held["message"], held["is_draft"], held["hint"]) == (
+        chat_id,
+        "Change something about the Docs app: ",
+        True,
+        "How do you want to change Docs?",
+    )
     again = _intake(client, target="app_chat", app="docs", app_display_name="Docs")
     assert _chat_id_of(again.get_json()["path"]) == chat_id
     applied = client.post(f"/api/chats/intakes/{token}/apply", json={})
@@ -6013,7 +6019,7 @@ def test_an_app_chat_intake_opens_the_chat_titled_for_the_app_and_makes_it_on_th
     assert applied.get_json() == {
         "path": f"/?chat={chat_id}",
         "chat_id": chat_id,
-        "composer_text": None,
+        "composer_text": "Change something about the Docs app: ",
         "first_message": None,
         "hint": "How do you want to change Docs?",
     }
@@ -6093,6 +6099,8 @@ def test_an_app_chat_intake_with_nothing_signed_in_mints_the_titled_chat_awaitin
     )
     applied = test_client.post(f"/api/chats/intakes/{_token_of(path)}/apply", json={})
     assert applied.get_json()["hint"] == "How do you want to change Docs?"
+    # The prefill is a draft, never the first message: it must not launch the awaiting chat by itself.
+    assert applied.get_json()["composer_text"] == "Change something about the Docs app: "
     assert applied.get_json()["first_message"] is None
 
 

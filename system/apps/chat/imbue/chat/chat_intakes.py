@@ -82,6 +82,13 @@ def app_chat_hint(app_display_name: str) -> str:
 
 
 @pure
+def app_chat_prefill(app_display_name: str) -> str:
+    """The draft the composer is prefilled with when the chat about an app opens from its window's button: the
+    lead-in that tells the agent which app the message is about, for the user to finish."""
+    return f"Change something about the {app_display_name} app: "
+
+
+@pure
 def intake_path(chat_id: ChatId | None, token: str | None) -> str:
     """The root path an intake answers: the selection, with the pending intake's token when one is held."""
     params: dict[str, str] = {}

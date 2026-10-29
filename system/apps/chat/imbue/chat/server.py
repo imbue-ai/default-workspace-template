@@ -92,6 +92,7 @@ from imbue.chat.chat_handoffs import converging_detail
 from imbue.chat.chat_handoffs import is_genuine_user_turn
 from imbue.chat.chat_intakes import APP_CHAT_LABEL
 from imbue.chat.chat_intakes import app_chat_hint
+from imbue.chat.chat_intakes import app_chat_prefill
 from imbue.chat.chat_intakes import app_chat_title
 from imbue.chat.chat_intakes import chat_id_selected_by_window_path
 from imbue.chat.chat_intakes import intake_path
@@ -2199,9 +2200,14 @@ def _intake_chat() -> Response:
     if resolved.chat_id is None:
         return _intake_into_new_chat(state, intake)
     if intake.target is IntakeTarget.APP_CHAT:
-        # Held even with nothing to send: the root applies it to set the composer's hint and focus it.
+        # Held even with nothing sent: the root applies it to prefill the composer with the lead-in that names
+        # the app (the agent otherwise cannot tell what "make it blue" is about), set its hint, and focus it.
+        prefilled = intake.model_copy_update(
+            to_update(intake.field_ref().message, app_chat_prefill(intake.app_display_name)),
+            to_update(intake.field_ref().is_draft, True),
+        )
         hint = app_chat_hint(intake.app_display_name)
-        token = state.pending_intakes.mint(intake, resolved.chat_id, needs_pick=False, hint=hint)
+        token = state.pending_intakes.mint(prefilled, resolved.chat_id, needs_pick=False, hint=hint)
         return model_response(IntakeResponse(path=intake_path(resolved.chat_id, token)))
     return _intake_into_listed_chat(state, resolved.chat_id, intake)
 
