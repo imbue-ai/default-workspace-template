@@ -18,14 +18,17 @@ _DESKTOP_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,
 # A value that names a file on disk is held to one filename-safe alphabet.
 FILENAME_SAFE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _WINDOW_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^win-[0-9a-f]{16}$")
-# A name known only from a hand-typed author prefix may hold anything but a line break; its key form holds it to
-# at most this many characters, which is what the chat app truncates such a name to.
+# A name known only from a hand-typed author prefix may hold any printable text; its key form holds it to at most
+# this many characters, which is what the chat app truncates such a name to.
 MAX_PARTICIPANT_NAME_LENGTH: Final[int] = 60
 # A participant key (the multiplayer spec, section 4.1): the owner of an unshared workspace, the workspace's own
 # agent, a signed-in person, an invited email, a visiting agent, or a name known only from a hand-typed prefix.
+# Every form is filename-safe and URL-path-safe, since a key names a mentions file and sits in a picture path: no
+# slash anywhere, no control character, and no "#", "?", or "%" in an address.
 _PARTICIPANT_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^(?:owner|workspace-agent|user:[A-Za-z0-9][A-Za-z0-9._-]{0,127}|email:[^\s:@]+@[^\s@]+|agent:[A-Za-z0-9][A-Za-z0-9._-]{0,127}"
-    rf"|name:[^\n]{{1,{MAX_PARTICIPANT_NAME_LENGTH}}})$"
+    r"^(?:owner|workspace-agent|user:[A-Za-z0-9][A-Za-z0-9._-]{0,127}|email:[^\s/#?%:@]+@[^\s/#?%@]+"
+    r"|agent:[A-Za-z0-9][A-Za-z0-9._-]{0,127}"
+    rf"|name:[^\n/\x00-\x1f]{{1,{MAX_PARTICIPANT_NAME_LENGTH}}})$"
 )
 # The keys that name a presence file (``data/.state/presence/users/<id>.json``), by their id part.
 OWNER_PARTICIPANT_KEY_VALUE: Final[str] = "owner"
@@ -95,7 +98,8 @@ class UserId(NonEmptyStr):
 
 class ParticipantKey(NonEmptyStr):
     """Who a message, a desktop, a client, or a roster entry belongs to (the multiplayer spec, section 4.1):
-    ``owner``, ``workspace-agent``, ``user:<user_id>``, ``email:<address>``, ``agent:<agent_id>``, or ``name:<name>``."""
+    ``owner``, ``workspace-agent``, ``user:<user_id>``, ``email:<address>``, ``agent:<agent_id>``, or ``name:<name>``,
+    each filename-safe (no slash, no control character)."""
 
     def __new__(cls, value: str) -> Self:
         if not _PARTICIPANT_KEY_PATTERN.fullmatch(value):
