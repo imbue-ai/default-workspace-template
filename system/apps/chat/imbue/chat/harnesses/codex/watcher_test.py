@@ -598,3 +598,142 @@ def test_a_loader_reads_the_rollout_without_watching_or_touching_the_model_bar(t
     watcher, _broadcast = _build_watcher(tmp_path)
     assert [event["event_id"] for event in watcher.get_all_events()] == [event["event_id"] for event in events]
     assert model_state_path(tmp_path, CODEX_STATE_RELATIVE_PATH).exists()
+
+
+def _token_count_line(last: dict[str, int], total: dict[str, int], timestamp: str) -> dict[str, Any]:
+    return {
+        "timestamp": timestamp,
+        "type": "event_msg",
+        "payload": {"type": "token_count", "info": {"total_token_usage": total, "last_token_usage": last}},
+    }
+
+
+def _task_line(kind: str, turn_id: str, timestamp: str) -> dict[str, Any]:
+    return {"timestamp": timestamp, "type": "event_msg", "payload": {"type": kind, "turn_id": turn_id}}
+
+
+def _output_line(call_id: str, output: str, timestamp: str) -> dict[str, Any]:
+    return {
+        "timestamp": timestamp,
+        "type": "response_item",
+        "payload": {"type": "function_call_output", "call_id": call_id, "output": output},
+    }
+
+
+# Two responses' usage and the running totals codex reports after each.
+_FIRST_USAGE = {"input_tokens": 1000, "cached_input_tokens": 0, "cache_write_input_tokens": 990, "output_tokens": 50}
+_FIRST_TOTAL = dict(_FIRST_USAGE)
+_SECOND_USAGE = {
+    "input_tokens": 1100,
+    "cached_input_tokens": 990,
+    "cache_write_input_tokens": 100,
+    "output_tokens": 20,
+}
+_SECOND_TOTAL = {
+    "input_tokens": 2100,
+    "cached_input_tokens": 990,
+    "cache_write_input_tokens": 1090,
+    "output_tokens": 70,
+}
+
+
+def _usage_by_event_id(watcher: CodexSessionWatcher) -> dict[str, Any]:
+    return {e["event_id"]: e["usage"] for e in watcher.get_all_events() if e["type"] == "assistant_message"}
+
+
+def test_each_response_usage_lands_on_its_last_assistant_event(tmp_path: Path) -> None:
+    """One turn, two responses: text plus a tool call, then a final answer. Each response's
+    usage lands on its last assistant event only, so the chat's usage sums to codex's total;
+    the repeat codex writes partway through the next response is not counted again."""
+    _write_rollout(
+        tmp_path,
+        [
+            _task_line("task_started", "t1", "2026-08-03T00:00:00Z"),
+            _turn_context_line("gpt-6-sol", "medium", "2026-08-03T00:00:00Z"),
+            _user_line("list the files", "2026-08-03T00:00:01Z"),
+            _assistant_line("m1", "looking", "2026-08-03T00:00:02Z"),
+            _tool_call_line("c1", "exec", '{"cmd":"ls"}', "2026-08-03T00:00:03Z"),
+            _output_line("c1", "a b", "2026-08-03T00:00:04Z"),
+            _token_count_line(_FIRST_USAGE, _FIRST_TOTAL, "2026-08-03T00:00:05Z"),
+            _assistant_line("m2", "two files", "2026-08-03T00:00:06Z"),
+            _token_count_line(_FIRST_USAGE, _FIRST_TOTAL, "2026-08-03T00:00:07Z"),
+            _token_count_line(_SECOND_USAGE, _SECOND_TOTAL, "2026-08-03T00:00:08Z"),
+            _task_line("task_complete", "t1", "2026-08-03T00:00:09Z"),
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+
+    assert _usage_by_event_id(watcher) == {
+        "codex-m1": None,
+        "codex-call-c1": {"input_tokens": 10, "output_tokens": 50, "cache_read_tokens": 0, "cache_write_tokens": 990},
+        "codex-m2": {"input_tokens": 10, "output_tokens": 20, "cache_read_tokens": 990, "cache_write_tokens": 100},
+    }
+
+
+def test_a_rollout_without_token_counts_keeps_usage_unknown(tmp_path: Path) -> None:
+    _write_rollout(
+        tmp_path,
+        [
+            _assistant_line("m1", "hi", "2026-08-03T00:00:01Z"),
+            _task_line("task_complete", "t1", "2026-08-03T00:00:02Z"),
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+    assert _usage_by_event_id(watcher) == {"codex-m1": None}
+
+
+def test_a_token_count_after_a_new_user_turn_measures_nothing_before_it(tmp_path: Path) -> None:
+    """A response that never got its token_count (an interrupted one) is not handed the next
+    turn's first usage: the user turn opens a new window."""
+    _write_rollout(
+        tmp_path,
+        [
+            _assistant_line("m1", "partial", "2026-08-03T00:00:01Z"),
+            _user_line("never mind", "2026-08-03T00:00:02Z"),
+            _token_count_line(_FIRST_USAGE, _FIRST_TOTAL, "2026-08-03T00:00:03Z"),
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+    assert _usage_by_event_id(watcher) == {"codex-m1": None}
+
+
+def test_usage_landing_after_the_broadcast_is_rebroadcast(tmp_path: Path) -> None:
+    """The message goes out as soon as it is written, without waiting for its usage; the
+    token_count then re-sends it with the usage stamped."""
+    watcher, broadcast = _build_watcher(tmp_path)
+    rollout = _write_rollout(tmp_path, [_assistant_line("m1", "done", "2026-08-03T00:00:01Z")])
+    watcher._emit_cycle()
+    assert [(e["event_id"], e["usage"]) for e in broadcast] == [("codex-m1", None)]
+
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_token_count_line(_FIRST_USAGE, _FIRST_TOTAL, "2026-08-03T00:00:02Z")) + "\n")
+    watcher._emit_cycle()
+
+    assert broadcast[-1]["event_id"] == "codex-m1"
+    assert broadcast[-1]["usage"] == {
+        "input_tokens": 10,
+        "output_tokens": 50,
+        "cache_read_tokens": 0,
+        "cache_write_tokens": 990,
+    }
+
+
+def test_a_reserialised_copy_keeps_the_stamped_usage(tmp_path: Path) -> None:
+    """Codex re-serialises history under the same ids; the copy carries no usage of its own
+    and must not erase the usage already stamped, nor be measured by a later token_count."""
+    rollout = _write_rollout(
+        tmp_path,
+        [
+            _assistant_line("m1", "done", "2026-08-03T00:00:01Z"),
+            _token_count_line(_FIRST_USAGE, _FIRST_TOTAL, "2026-08-03T00:00:02Z"),
+        ],
+    )
+    watcher, _ = _build_watcher(tmp_path)
+    stamped = _usage_by_event_id(watcher)["codex-m1"]
+    assert stamped is not None
+
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(_assistant_line("m1", "done", "2026-08-03T00:00:03Z")) + "\n")
+        handle.write(json.dumps(_token_count_line(_SECOND_USAGE, _SECOND_TOTAL, "2026-08-03T00:00:04Z")) + "\n")
+
+    assert _usage_by_event_id(watcher) == {"codex-m1": stamped}
