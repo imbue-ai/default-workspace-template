@@ -557,6 +557,8 @@ export class DesktopStore {
   private readonly overviewLayoutReads = new Set<string>();
   /** The desktop whose deletion the overview is confirming in place, or null. */
   private overviewDeletingId: string | null = null;
+  /** The desktop whose name the overview is editing in place, or null. */
+  private overviewRenamingId: string | null = null;
   /** While this window views a desktop that is not the viewer's own, the desktop it was on, to go back to; null
    *  when it came from nowhere of its own (section 8.3). */
   private returnDesktopId: string | null = null;
@@ -1298,6 +1300,7 @@ export class DesktopStore {
     this.overviewLayouts.clear();
     this.overviewLayoutReads.clear();
     this.overviewDeletingId = null;
+    this.overviewRenamingId = null;
     if (!this.isOverviewOpenNow) return;
     this.isOverviewOpenNow = false;
     this.notifyListeners();
@@ -1347,6 +1350,17 @@ export class DesktopStore {
   /** The desktop whose deletion the overview confirms in place, or null once it is confirmed or kept. */
   setOverviewDeletingId(desktopId: string | null): void {
     this.overviewDeletingId = desktopId;
+    this.deps.redraw();
+  }
+
+  getOverviewRenamingId(): string | null {
+    return this.overviewRenamingId;
+  }
+
+  /** The desktop whose name the overview edits in place (a double-click or the thumbnail menu's Rename row), or
+   *  null once the edit is committed or abandoned. */
+  setOverviewRenamingId(desktopId: string | null): void {
+    this.overviewRenamingId = desktopId;
     this.deps.redraw();
   }
 

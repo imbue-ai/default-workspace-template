@@ -796,17 +796,28 @@ export function App(): m.Component<AppAttrs> {
     ];
   }
 
-  /** A thumbnail's menu in the overview: the deletion, confirmed in place under the thumbnail. */
+  /** A thumbnail's menu in the overview: a rename for the viewer's own desktops, and the deletion, confirmed in
+   *  place over the thumbnail. */
   function rowsOfOverviewDesktopMenu(current: DesktopStore, desktopId: string): MenuRow[] {
-    return [
-      {
-        kind: "action",
-        key: "delete",
-        label: "Delete desktop...",
-        tone: "danger",
-        onSelect: () => current.setOverviewDeletingId(desktopId),
-      },
-    ];
+    const isOwn = current.ownDesktops().some((desktop) => desktop.id === desktopId);
+    const rows: MenuRow[] = isOwn
+      ? [
+          {
+            kind: "action",
+            key: "rename",
+            label: "Rename",
+            onSelect: () => current.setOverviewRenamingId(desktopId),
+          },
+        ]
+      : [];
+    rows.push({
+      kind: "action",
+      key: "delete",
+      label: "Delete desktop...",
+      tone: "danger",
+      onSelect: () => current.setOverviewDeletingId(desktopId),
+    });
+    return rows;
   }
 
   /** The rows of whichever menu is open, or null once what it was opened for has gone. */
@@ -943,8 +954,11 @@ export function App(): m.Component<AppAttrs> {
       apps: state.apps,
       layoutOf: (desktopId) => current.overviewLayoutOf(desktopId),
       confirmingDeleteId: current.getOverviewDeletingId(),
+      renamingId: current.getOverviewRenamingId(),
       onRaiseWindow: (windowId) => current.restoreWindow(windowId),
       onSwitchDesktop: (desktopId) => void current.switchDesktop(desktopId),
+      onBeginRename: (desktopId) => current.setOverviewRenamingId(desktopId),
+      onEndRename: () => current.setOverviewRenamingId(null),
       onRename: (desktopId, name) => void current.renameDesktop(desktopId, name),
       onReorder: (desktopIds) => void current.reorderDesktops(desktopIds),
       onDesktopContextMenu: (desktopId, x, y, target) => {

@@ -13,7 +13,8 @@
  * (``data-window-id`` and ``data-window-content`` mark the box, as a window's chrome marks its own): clicking one
  * raises the window and closes the overview; a minimized window's tile is drawn at 60%. A thumbnail is drawn from
  * the desktop's wallpaper and this client's placements of it: click to switch (the overview closes), double-click
- * the name to rename, drag sideways to reorder, right-click for "Delete desktop...", which is confirmed in place.
+ * the name (or its menu's Rename row) to rename, drag sideways to reorder, right-click for "Rename" and "Delete
+ * desktop...", the deletion confirmed in place over the thumbnail (the row sits against the bottom of the screen).
  * The plus makes a new desktop. Escape or a click on the bare backdrop closes it; both are the App's.
  */
 
@@ -131,8 +132,14 @@ export interface OverviewAttrs {
   readonly layoutOf: (desktopId: string) => Layout | null;
   /** The desktop whose deletion is being confirmed in place, if any. */
   readonly confirmingDeleteId: string | null;
+  /** The desktop whose name is being edited in place, if any. */
+  readonly renamingId: string | null;
   readonly onRaiseWindow: (windowId: string) => void;
   readonly onSwitchDesktop: (desktopId: string) => void;
+  /** Start editing the desktop's name (a double-click, or the thumbnail menu's Rename row). */
+  readonly onBeginRename: (desktopId: string) => void;
+  /** The name edit is over, committed or abandoned. */
+  readonly onEndRename: () => void;
   readonly onRename: (desktopId: string, name: string) => void;
   /** The viewer's own desktops in their new order (every one of them). */
   readonly onReorder: (desktopIds: readonly string[]) => void;
@@ -151,15 +158,17 @@ function closeOnBareClick(onClose: () => void): (event: MouseEvent) => void {
 }
 
 export function Overview(): m.Component<OverviewAttrs> {
-  /** The desktop whose name is being edited. */
-  let renamingId: string | null = null;
+  /** What the rename input holds while an edit is on: kept here, not as the input's attribute, so the constant
+   *  redraws around the overview (presence pushes, live tiles) never reset what was typed. */
+  let renameDraft: { desktopId: string; text: string } | null = null;
   /** A thumbnail being dragged to a new place, and the gap it would land in. */
   let drag: ThumbnailDrag | null = null;
 
-  function commitRename(attrs: OverviewAttrs, desktopId: string, input: HTMLInputElement): void {
-    if (renamingId !== desktopId) return;
-    renamingId = null;
-    const name = input.value.trim();
+  function commitRename(attrs: OverviewAttrs, desktopId: string): void {
+    if (attrs.renamingId !== desktopId) return;
+    const name = (renameDraft?.desktopId === desktopId ? renameDraft.text : "").trim();
+    renameDraft = null;
+    attrs.onEndRename();
     const current = attrs.ownDesktops.find((desktop) => desktop.id === desktopId);
     if (name !== "" && current !== undefined && name !== current.name) attrs.onRename(desktopId, name);
   }
@@ -291,7 +300,8 @@ export function Overview(): m.Component<OverviewAttrs> {
     isReorderable: boolean,
   ): m.Vnode {
     const isActive = desktop.id === attrs.desktop.id;
-    const isRenaming = renamingId === desktop.id;
+    const isRenaming = attrs.renamingId === desktop.id;
+    if (isRenaming && renameDraft?.desktopId !== desktop.id) renameDraft = { desktopId: desktop.id, text: desktop.name };
     const isConfirmingDelete = attrs.confirmingDeleteId === desktop.id;
     const landing =
       isReorderable &&
@@ -377,7 +387,7 @@ export function Overview(): m.Component<OverviewAttrs> {
               "data-overview-rename": desktop.id,
               "aria-label": "Desktop name",
               type: "text",
-              value: desktop.name,
+              value: renameDraft?.text ?? desktop.name,
               class:
                 "w-36 rounded-md border-0 bg-white/90 px-1.5 py-0.5 text-center text-(length:--font-size-helper) " +
                 "text-black outline-none",
@@ -386,13 +396,18 @@ export function Overview(): m.Component<OverviewAttrs> {
                 input.focus();
                 input.select();
               },
-              onblur: (event: FocusEvent) => commitRename(attrs, desktop.id, event.target as HTMLInputElement),
+              oninput: (event: InputEvent) => {
+                renameDraft = { desktopId: desktop.id, text: (event.target as HTMLInputElement).value };
+              },
+              onblur: () => commitRename(attrs, desktop.id),
               onkeydown: (event: KeyboardEvent) => {
                 // The overview's own Escape and the document's stay out of a rename in progress.
                 event.stopPropagation();
                 if (event.key === "Enter") (event.target as HTMLInputElement).blur();
                 if (event.key === "Escape") {
-                  renamingId = null;
+                  // Ending the edit first makes the blur that follows commit nothing.
+                  renameDraft = null;
+                  attrs.onEndRename();
                 }
               },
             })
@@ -408,7 +423,7 @@ export function Overview(): m.Component<OverviewAttrs> {
                   (isActive ? "font-semibold text-white" : "text-white/80"),
                 ...hoverTooltipAttrs(isReorderable ? "Double-click to rename" : null, "above"),
                 ondblclick: () => {
-                  if (isReorderable) renamingId = desktop.id;
+                  if (isReorderable) attrs.onBeginRename(desktop.id);
                 },
               },
               desktop.name,
@@ -418,8 +433,10 @@ export function Overview(): m.Component<OverviewAttrs> {
               "div",
               {
                 "data-overview-delete-confirmation": desktop.id,
+                // Above the thumbnail: the desktops row sits against the bottom of the screen, so a confirmation
+                // hung below it would clip past the viewport, buttons first.
                 class:
-                  "absolute top-full left-1/2 z-(--z-popover) mt-1 flex w-56 -translate-x-1/2 flex-col gap-2 rounded-xl " +
+                  "absolute bottom-full left-1/2 z-(--z-popover) mb-1 flex w-56 -translate-x-1/2 flex-col gap-2 rounded-xl " +
                   "border border-default bg-surface p-3 text-(length:--font-size-row) text-primary shadow-overlay",
               },
               [

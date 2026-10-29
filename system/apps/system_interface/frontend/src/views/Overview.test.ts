@@ -36,6 +36,8 @@ function tile(windowId: string, title: string, isMinimized = false): OverviewTil
 
 function render(overrides: Partial<OverviewAttrs> = {}): OverviewAttrs {
   const tiles = overrides.tiles ?? [tile("win-1", "Plan"), tile("win-2", "Docs", true)];
+  // The rename state lives with the caller (the App's store), so the fixture plays that part: begin and end
+  // mutate the attrs the next redraw reads, the way the store's setter redraws the App.
   const attrs: OverviewAttrs = {
     desktop: home,
     tiles,
@@ -52,8 +54,15 @@ function render(overrides: Partial<OverviewAttrs> = {}): OverviewAttrs {
     apps: [docs],
     layoutOf: (desktopId) => (desktopId === "home" ? layoutRecord([placementRecord("win-1")]) : null),
     confirmingDeleteId: null,
+    renamingId: null,
     onRaiseWindow: vi.fn(),
     onSwitchDesktop: vi.fn(),
+    onBeginRename: vi.fn((desktopId: string) => {
+      (attrs as { renamingId: string | null }).renamingId = desktopId;
+    }),
+    onEndRename: vi.fn(() => {
+      (attrs as { renamingId: string | null }).renamingId = null;
+    }),
     onRename: vi.fn(),
     onReorder: vi.fn(),
     onDesktopContextMenu: vi.fn(),
@@ -65,6 +74,12 @@ function render(overrides: Partial<OverviewAttrs> = {}): OverviewAttrs {
   };
   mountView(() => m(Overview, attrs));
   return attrs;
+}
+
+/** Type into a rename input the way a person does: set the value and let the input event carry it. */
+function typeInto(input: HTMLInputElement, text: string): void {
+  input.value = text;
+  input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
 function query<T extends Element>(selector: string): T {
@@ -150,7 +165,7 @@ describe("Overview", () => {
     );
     m.redraw.sync();
     const input = query<HTMLInputElement>('[data-overview-rename="work"]');
-    input.value = "  Research ";
+    typeInto(input, "  Research ");
     const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
     const onDocumentKeyDown = vi.fn();
     document.addEventListener("keydown", onDocumentKeyDown);
@@ -166,7 +181,7 @@ describe("Overview", () => {
     );
     m.redraw.sync();
     const again = query<HTMLInputElement>('[data-overview-rename="work"]');
-    again.value = "  Research ";
+    typeInto(again, "  Research ");
     again.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     again.dispatchEvent(new FocusEvent("blur"));
     m.redraw.sync();
@@ -178,6 +193,25 @@ describe("Overview", () => {
     m.redraw.sync();
     query<HTMLInputElement>('[data-overview-rename="work"]').dispatchEvent(new FocusEvent("blur"));
     expect(attrs.onRename).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps what was typed into the rename input through a redraw, and an Escape after typing commits nothing", () => {
+    const attrs = render();
+    query<HTMLElement>('[data-overview-desktop-name="work"]').dispatchEvent(
+      new MouseEvent("dblclick", { bubbles: true }),
+    );
+    m.redraw.sync();
+    const input = query<HTMLInputElement>('[data-overview-rename="work"]');
+    typeInto(input, "Research");
+    // The shell redraws constantly (presence pushes, live tiles); the draft must survive every one of them.
+    m.redraw.sync();
+    expect(query<HTMLInputElement>('[data-overview-rename="work"]').value).toBe("Research");
+    const after = query<HTMLInputElement>('[data-overview-rename="work"]');
+    after.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    after.dispatchEvent(new FocusEvent("blur"));
+    m.redraw.sync();
+    expect(attrs.onRename).not.toHaveBeenCalled();
+    expect(attrs.onEndRename).toHaveBeenCalled();
   });
 
   it("reorders the own desktops on a drop, naming every one of them in the new order", () => {
@@ -206,6 +240,9 @@ describe("Overview", () => {
     expect(attrs.onDesktopContextMenu).toHaveBeenCalledWith("work", 30, 40, expect.any(Element));
     const confirmation = query<HTMLElement>('[data-overview-delete-confirmation="work"]');
     expect(confirmation.textContent).toContain("Delete Work? Its windows close for everyone.");
+    // Above the thumbnail: the desktops row sits against the bottom of the screen, so hanging below would clip.
+    expect(confirmation.className).toContain("bottom-full");
+    expect(confirmation.className).not.toContain("top-full");
     (confirmation.querySelector("[data-overview-keep]") as HTMLElement).click();
     expect(attrs.onKeepDesktop).toHaveBeenCalledTimes(1);
     (confirmation.querySelector("[data-overview-confirm-delete]") as HTMLElement).click();
@@ -213,7 +250,7 @@ describe("Overview", () => {
   });
 
   it("lists the desktops left behind after the plus, under their own rule, not renameable or draggable", () => {
-    render({ leftBehind: [gone] });
+    const attrs = render({ leftBehind: [gone] });
     const leftBehind = query<HTMLElement>("[data-overview-left-behind]");
     expect(leftBehind.textContent).toContain("Left behind");
     expect(leftBehind.querySelector('[data-overview-desktop="gone"]')).not.toBeNull();
@@ -223,6 +260,7 @@ describe("Overview", () => {
       new MouseEvent("dblclick", { bubbles: true }),
     );
     m.redraw.sync();
+    expect(attrs.onBeginRename).not.toHaveBeenCalled();
     expect(document.querySelector("[data-overview-rename]")).toBeNull();
     expect(
       query("[data-overview-new-desktop]").compareDocumentPosition(leftBehind) & Node.DOCUMENT_POSITION_FOLLOWING,
