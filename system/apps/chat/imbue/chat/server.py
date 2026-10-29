@@ -1084,7 +1084,9 @@ def _participant_picture_endpoint(key: str) -> Response:
     if entry is None or entry.profile_picture_url is None or not entry.profile_picture_url.startswith("/"):
         return error_response(f"{key} has no picture here", 404)
     try:
-        answer = state.http_client.get(f"{shell_base_url()}{entry.profile_picture_url}", timeout=_PICTURE_TIMEOUT_SECONDS)
+        answer = state.http_client.get(
+            f"{shell_base_url()}{entry.profile_picture_url}", timeout=_PICTURE_TIMEOUT_SECONDS
+        )
     except httpx.HTTPError as e:
         logger.debug("Could not fetch the picture of {} from the shell: {}", key, e)
         return error_response("The picture could not be fetched", 502)
