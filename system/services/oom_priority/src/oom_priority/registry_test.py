@@ -110,7 +110,7 @@ def test_an_entry_without_a_start_time_counts_while_its_pid_is_a_process_of_its_
 def test_an_entry_without_a_start_time_is_not_counted_once_its_pid_is_another_agents(
     runtime: Path, proc: Path
 ) -> None:
-    # The incident: the chat's pid now belongs to the chat app, which runs as the services agent.
+    # The chat's pid now belongs to the chat app, which runs as the services agent.
     _write_entry_without_a_start_time(4242, "agent-abc")
     write_fake_process(
         proc,
