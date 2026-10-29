@@ -2,7 +2,7 @@
 
 Usage, from the repo root (every skill's cwd)::
 
-    python3 system/scripts/run_in_background.py --description "Wait for the worker" -- <command> [args...]
+    python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the worker" -- <command> [args...]
 
 The script returns at once: the command runs in a detached process of its own, so the
 caller's tool call ends and the agent can end its turn. When the command exits, its exit
@@ -669,3 +669,7 @@ def main(
     )
     print(f"Output: {task_dir / OUTPUT_FILE_NAME}")
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(Path(__file__).resolve()))

@@ -129,7 +129,7 @@ assumed to be `mngr/$NAME`.
 ## 3. Background-poll for the worker's report
 
 Poll with `create_worker.py await`, started through
-`system/scripts/run_in_background.py`, and continue with whatever else you were
+`system/scripts/workspace_bare_scripts/run_in_background.py`, and continue with whatever else you were
 doing. `await` reads `finish_report_path` from the task file
 (`data/.tasks/launch-task/$NAME/reports/report.md`), blocks until the worker writes
 it back, then prints the report. `--name $NAME` is required so the poll also
@@ -138,7 +138,7 @@ pressure (so it will never report until revived), the poll surfaces that
 promptly and actionably (exit code 75) instead of waiting out the full timeout.
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name $NAME \
     --task-file data/.tasks/launch-task/$NAME/task.md

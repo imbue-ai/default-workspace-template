@@ -29,7 +29,7 @@ from oom_priority import bands
 from workspace_bare_scripts import run_in_background
 
 _CHAT_ID = "agent-0123456789abcdef0123456789abcdef"
-_SCRIPT = Path(__file__).resolve().parents[1] / "run_in_background.py"
+_SCRIPT = Path(__file__).resolve().parent / "run_in_background.py"
 _DELIVERY_DEADLINE_SECONDS = 8.0
 
 

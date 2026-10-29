@@ -152,7 +152,7 @@ uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
 ```
 
 Then background-poll (`create_worker.py await --name heal-$SLUG --task-file ...
---timeout 90m`, started through `system/scripts/run_in_background.py`) and follow
+--timeout 90m`, started through `system/scripts/workspace_bare_scripts/run_in_background.py`) and follow
 `.agents/shared/references/lead-proxy.md`.
 Flow-specific substitutions:
 

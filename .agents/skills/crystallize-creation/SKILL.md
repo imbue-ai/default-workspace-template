@@ -190,13 +190,13 @@ extra flag.
 
 ## Step 5: Background-poll for worker reports
 
-Start the poll through `system/scripts/run_in_background.py`, which returns at
+Start the poll through `system/scripts/workspace_bare_scripts/run_in_background.py`, which returns at
 once, then continue with other work (subsequent skill steps, interface design,
 other user requests). Each report arrives in your chat as a message that starts
 your next turn; handle it then.
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
     uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name crystallize-$NAME \
     --task-file data/.tasks/harden/crystallize-$NAME/task.md \

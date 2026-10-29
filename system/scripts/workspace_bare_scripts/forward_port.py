@@ -633,11 +633,7 @@ def _read_manifest(
     if theming is not None:
         mode = theming.get("mode", "tokens") if isinstance(theming, dict) else None
         if not isinstance(mode, str):
-            return (
-                {},
-                None,
-                f"manifest {str(path)!r}: theming must be a table whose mode is a string",
-            )
+            return {}, None, f"manifest {str(path)!r}: theming must be a table whose mode is a string"
         fields["theming_mode"] = mode
 
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:

@@ -3,7 +3,7 @@
 Usage, from the repo root::
 
     uv run --no-sync .agents/skills/datalib/python/datalib_skill/sync_request.py open slack/ingest
-    python3 system/scripts/run_in_background.py --description "Sync Slack into datalib" -- \\
+    python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Sync Slack into datalib" -- \\
         uv run --no-sync .agents/skills/datalib/python/datalib_skill/sync_request.py wait <request-id>...
 
 ``open`` files the sync with ``datalib-http`` and prints one request id per line. The sync then

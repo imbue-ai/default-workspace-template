@@ -97,10 +97,7 @@ def test_legacy_underscore_label_survives_re_registration(tmp_path: Path) -> Non
     apps_file.write_text(
         '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\nlabel = "system_interface-abcd1234"\n'
     )
-    result = _run(
-        ["--name", "system_interface", "--url", "http://localhost:8001", "--no-icon"],
-        apps_file,
-    )
+    result = _run(["--name", "system_interface", "--url", "http://localhost:8001", "--no-icon"], apps_file)
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
     assert len(rows) == 1
@@ -872,26 +869,17 @@ def test_manifest_registration_copies_only_the_pin_keys_the_manifest_wrote(
     assert _read_apps(apps_file)[0]["pin"] == {"path": "/inbox"}
 
 
-def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_without_one(
-    tmp_path: Path,
-) -> None:
+def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_without_one(tmp_path: Path) -> None:
     apps_file = tmp_path / "apps.toml"
     (tmp_path / "chat").mkdir()
     (tmp_path / "notes").mkdir()
     themed = _write_manifest(
-        tmp_path / "chat",
-        'name = "chat"\ndisplay_name = "Chat"\nicon = "icon.svg"\n\n[theming]\nmode = "parts"\n',
+        tmp_path / "chat", 'name = "chat"\ndisplay_name = "Chat"\nicon = "icon.svg"\n\n[theming]\nmode = "parts"\n'
     )
-    plain = _write_manifest(
-        tmp_path / "notes",
-        'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n',
-    )
+    plain = _write_manifest(tmp_path / "notes", 'name = "notes"\ndisplay_name = "Notes"\nicon = "icon.svg"\n')
 
     for manifest, port in ((themed, 8010), (plain, 8090)):
-        result = _run(
-            ["--manifest", str(manifest), "--url", f"http://localhost:{port}"],
-            apps_file,
-        )
+        result = _run(["--manifest", str(manifest), "--url", f"http://localhost:{port}"], apps_file)
         assert result.returncode == 0, result.stderr
 
     rows = {row["name"]: row for row in _read_apps(apps_file)}

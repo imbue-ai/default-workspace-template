@@ -598,7 +598,7 @@ The foreground work stops at a usable, surfaced site. The thorough pass --
 extending Playwright coverage, the full test suite and ratchets over the
 extended tests, review gates -- runs in a **background harden worker**, never
 in the main agent. The test gate AGENTS.md has you run through
-`system/scripts/run_in_background.py` checks the app against the tests it
+`system/scripts/workspace_bare_scripts/run_in_background.py` checks the app against the tests it
 already has, so it is not this pass: run it anyway, since the worker may never
 be dispatched. This is skeleton phase 7: the harden pass
 (`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**
