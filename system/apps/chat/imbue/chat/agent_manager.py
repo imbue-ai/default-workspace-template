@@ -709,17 +709,24 @@ def user_turns_refused_for_sign_in(events: list[dict[str, Any]]) -> tuple[str, .
 
 
 @pure
-def _ids_of_user_turns_saying(events: list[dict[str, Any]], text: str) -> frozenset[str | None]:
-    return frozenset(_ordered_ids_of_user_turns_saying(events, text))
+def _is_user_message_saying(event: dict[str, Any], text: str) -> bool:
+    return event.get("type") == "user_message" and str(event.get("content") or "").strip() == text.strip()
 
 
 @pure
-def _ordered_ids_of_user_turns_saying(events: list[dict[str, Any]], text: str) -> list[str | None]:
-    return [
+def _ids_of_user_turns_saying(events: list[dict[str, Any]], text: str) -> frozenset[str | None]:
+    return frozenset(
         event.get("event_id")
         for event in events
-        if is_genuine_user_turn(event) and str(event.get("content") or "").strip() == text.strip()
-    ]
+        if is_genuine_user_turn(event) and _is_user_message_saying(event, text)
+    )
+
+
+@pure
+def _ordered_ids_of_user_messages_saying(events: list[dict[str, Any]], text: str) -> list[str | None]:
+    """Every user message saying ``text``, machine lines included: a slash command or a notice the chat app sent is
+    recorded as a user message with a display decision of its own, not as a turn of the user's."""
+    return [event.get("event_id") for event in events if _is_user_message_saying(event, text)]
 
 
 @pure
@@ -1054,7 +1061,7 @@ class _UnrecordedSend(FrozenModel):
 
     text: str = Field(frozen=True, description="The message as it was sent")
     seen_turn_ids: frozenset[str | None] = Field(
-        frozen=True, description="The ids of the transcript's user turns saying the same before it was sent"
+        frozen=True, description="The ids of the transcript's user messages saying the same before it was sent"
     )
     sent_at: float = Field(frozen=True, description="When it was delivered (monotonic seconds)")
     is_resend: bool = Field(frozen=True, description="Whether it was itself sent again after a process exit")
@@ -1064,17 +1071,17 @@ class _UnrecordedSend(FrozenModel):
 def _sends_the_transcript_does_not_hold(
     events: list[dict[str, Any]], sends: Sequence[_UnrecordedSend]
 ) -> list[_UnrecordedSend]:
-    """The ``sends`` (in the order they were sent) that no new user turn of ``events`` accounts for.
+    """The ``sends`` (in the order they were sent) that no new user message of ``events`` accounts for.
 
-    Each turn accounts for one send only, so of two sends saying the same, a transcript holding one turn
-    for them holds only the first.
+    Each message accounts for one send only, so of two sends saying the same, a transcript holding one
+    message for them holds only the first.
     """
     claimed_ids: set[str | None] = set()
     lost: list[_UnrecordedSend] = []
     for send in sends:
         new_ids = [
             event_id
-            for event_id in _ordered_ids_of_user_turns_saying(events, send.text)
+            for event_id in _ordered_ids_of_user_messages_saying(events, send.text)
             if event_id not in send.seen_turn_ids and event_id not in claimed_ids
         ]
         if new_ids:
@@ -2276,19 +2283,20 @@ class AgentManager:
         delivered message is kept until then, so it can be sent again. Raises ``SendFailedError`` when refused."""
         if not get_harness_spec(harness).resends_sends_lost_with_process:
             return delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text))
-        seen_turn_ids = self._user_turn_ids_saying(agent_id, text)
+        seen_turn_ids = self._user_message_ids_saying(agent_id, text)
         is_delivered = delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text))
         if seen_turn_ids is not None:
             self._keep_unrecorded_send(agent_id, text, seen_turn_ids)
         return is_delivered
 
-    def _user_turn_ids_saying(self, agent_id: str, text: str) -> frozenset[str | None] | None:
-        """The ids of the agent's user turns saying ``text`` now; None when its transcript cannot be read here."""
+    def _user_message_ids_saying(self, agent_id: str, text: str) -> frozenset[str | None] | None:
+        """The ids of the agent's user messages saying ``text`` now; None when its transcript cannot be read here."""
         capabilities = self._handoff_capabilities
         agent_info = self.get_agent_info_by_id(agent_id)
         if capabilities is None or agent_info is None:
             return None
-        return _ids_of_user_turns_saying(capabilities.ensure_watcher(agent_info).get_all_events(), text)
+        events = capabilities.ensure_watcher(agent_info).get_all_events()
+        return frozenset(_ordered_ids_of_user_messages_saying(events, text))
 
     def _keep_unrecorded_send(self, agent_id: str, text: str, seen_turn_ids: frozenset[str | None]) -> None:
         now = time.monotonic()

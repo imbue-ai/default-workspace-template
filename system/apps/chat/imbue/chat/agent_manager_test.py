@@ -6364,6 +6364,19 @@ def test_a_message_the_transcript_holds_is_not_sent_again_when_the_process_exits
     assert chat.resent == []
 
 
+def test_a_send_the_transcript_holds_as_a_machine_line_is_not_sent_again_when_the_process_exits(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    chat = _LostSendChat(broadcaster)
+    try:
+        chat.send("/model opus")
+        chat.transcript._events.append(_typed_turn("/model opus", display="chip"))
+        chat.observe(AgentLifecycleState.DONE)
+    finally:
+        chat.manager.stop()
+    assert chat.resent == []
+
+
 def test_an_earlier_turn_saying_the_same_does_not_count_as_the_lost_message(
     broadcaster: WebSocketBroadcaster,
 ) -> None:
