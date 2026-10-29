@@ -378,11 +378,12 @@ def _isolate_credential_sources(
 ) -> Path:
     """Point every credential source at an empty tmp dir; return a settings path.
 
-    chdir isolates the data/.secrets/anthropic.env snapshot (a repo-root
-    relative path); CLAUDE_CONFIG_DIR points at the tmp dir for settings; the
-    process-env credential vars are cleared.
+    The workspace root (which holds the data/.secrets/anthropic.env snapshot) is
+    the tmp dir, so no test reads or writes this checkout's real snapshot;
+    CLAUDE_CONFIG_DIR points at the tmp dir for settings; the process-env
+    credential vars are cleared.
     """
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(claude_p, "_workspace_root", lambda: str(tmp_path))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     _clear_credential_env_vars(monkeypatch)
     return tmp_path / "settings.json"
@@ -393,7 +394,7 @@ def _isolate_credential_sources_in_home(
 ) -> None:
     """Like ``_isolate_credential_sources``, but as a service sees it: no
     CLAUDE_CONFIG_DIR, and HOME (so ~/.claude and ~/.minds) is the tmp dir."""
-    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(claude_p, "_workspace_root", lambda: str(tmp_path))
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     _clear_credential_env_vars(monkeypatch)
@@ -494,7 +495,7 @@ def test_write_snapshot_captures_key_and_base_url_only(
 
     written = claude_p.write_anthropic_env_snapshot()
 
-    snapshot = tmp_path / written
+    snapshot = Path(written)
     content = snapshot.read_text()
     assert (
         content == "ANTHROPIC_API_KEY=sk-live-key\nANTHROPIC_BASE_URL=https://proxy/\n"
@@ -512,3 +513,59 @@ def test_write_snapshot_raises_without_a_key(
     with pytest.raises(claude_p.ClaudeCLIError, match="nothing to snapshot"):
         claude_p.write_anthropic_env_snapshot()
     assert not (tmp_path / "data" / ".secrets" / "anthropic.env").exists()
+
+
+def _load_copy_in_fake_workspace(tmp_path: Path) -> tuple[object, Path]:
+    """Copy claude_p.py into an app folder of a fake workspace and import that copy.
+
+    Returns the module and the fake workspace root. The real root finder runs,
+    so these tests cover where a copied helper puts the snapshot.
+    """
+    root = tmp_path / "workspace"
+    (root / "system" / "scripts").mkdir(parents=True)
+    app_dir = root / "system" / "apps" / "demo"
+    app_dir.mkdir(parents=True)
+    copy = app_dir / "claude_p.py"
+    copy.write_text(_SCRIPT.read_text())
+    spec = importlib.util.spec_from_file_location("claude_p_copy", copy)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module, root
+
+
+def test_write_snapshot_lands_in_workspace_data_from_any_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Run from the helper's own folder, the writer still targets the root data/."""
+    module, root = _load_copy_in_fake_workspace(tmp_path)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    _clear_credential_env_vars(monkeypatch)
+    (tmp_path / "settings.json").write_text(
+        '{"env": {"ANTHROPIC_API_KEY": "sk-fake-key"}}'
+    )
+    monkeypatch.chdir(root / "system" / "apps" / "demo")
+
+    written = module.write_anthropic_env_snapshot()
+
+    assert Path(written) == root / "data" / ".secrets" / "anthropic.env"
+
+
+def test_snapshot_is_read_from_a_different_cwd_than_it_was_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A service started outside the workspace root still finds the pinned key."""
+    module, root = _load_copy_in_fake_workspace(tmp_path)
+    settings = tmp_path / "settings.json"
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
+    _clear_credential_env_vars(monkeypatch)
+    settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-fake-pinned"}}')
+    monkeypatch.chdir(root)
+    module.write_anthropic_env_snapshot()
+    settings.write_text('{"env": {"ANTHROPIC_API_KEY": "sk-fake-later"}}')
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    monkeypatch.chdir(elsewhere)
+
+    assert module.read_workspace_ai_credentials().api_key == "sk-fake-pinned"
