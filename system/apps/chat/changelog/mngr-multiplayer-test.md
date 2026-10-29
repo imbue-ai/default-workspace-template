@@ -45,3 +45,5 @@ The chat about an app (the mngr repo's `specs/multiplayer-refinements/spec.md`, 
 - The send route annotates every sender a proxy vouched for -- the owner's page sends included, while a request with no identity header (a script's, the terminal's) still writes nothing -- and each chat's snapshot gains `participants`, the distinct annotated senders in order of first message (never the workspace agent). The chat list's rows show their pictures when two or more have written, stepping aside under the pointer where the pencil and the kebab come out.
 
 - The chat root's relay forwards its nested pages' `shell:input` activity reports up to the shell, like their focus.
+
+- The chat root loads the roster for itself, so the rows' participant pictures draw the people's real pictures and names rather than the first letter of their keys (the models are singletons per entry, and only the chat page had loaded them).

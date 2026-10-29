@@ -66,6 +66,7 @@ import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
+import { ensureParticipants } from "../models/Participants";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
@@ -536,6 +537,9 @@ function bootstrap(): void {
   addChatsUpdatedListener(onChatsUpdated);
   // The rows' ``@`` marks: the viewer's unseen mentions, re-read on every push that changes them.
   void watchPendingMentions().then(() => m.redraw());
+  // The rows' participant pictures name and draw their authors off the roster, which this entry loads for itself:
+  // the models are singletons per entry, so the chat page's load does nothing for the root.
+  void ensureParticipants();
   compactQuery.addEventListener("change", () => {
     pool?.setCompact(compactQuery.matches);
     fillSlot();
