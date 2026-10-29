@@ -2059,7 +2059,7 @@ class AgentManager:
             ]
 
     def restart_agents_on_account_in_background(self, account_id: str) -> None:
-        """Kick off `restart_agents_on_account` on its own thread and return at once.
+        """Restart the account's agents as `restart_agents_on_account` does, on its own thread, and return at once.
 
         The restart is `mngr start --restart` per bound agent, SERIALLY, with a 60s timeout
         each -- so an account with eight chats is eight minutes. The sign-in that triggers it
