@@ -61,10 +61,10 @@ from imbue.chat.harnesses.claude.session_parser import finished_task_id
 from imbue.chat.harnesses.claude.session_parser import parse_line_detail
 from imbue.chat.harnesses.claude.session_parser import parse_lines
 from imbue.chat.harnesses.claude.session_parser import parse_queue_signals
-from imbue.chat.harnesses.session_watcher import CapturePaneCallback
 from imbue.chat.harnesses.session_watcher import FinishedTasksCallback
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import ReplyDraft
+from imbue.chat.harnesses.session_watcher import ReplyDraftSources
 from imbue.chat.harnesses.transcript_store import EventSource
 from imbue.chat.harnesses.transcript_store import StoreBackedTranscriptLoader
 from imbue.chat.harnesses.transcript_store import StoreBackedWatcher
@@ -79,10 +79,6 @@ logger = _loguru_logger
 _MISSING_SESSION_FIRST_SCAN_DELAY_SECONDS: Final[float] = 1.0
 _MISSING_SESSION_MAX_SCAN_DELAY_SECONDS: Final[float] = 60.0
 
-# How far back a reply draft is compared with the replies that landed: the latest few, so the
-# last block of the previous turn, and the block that landed just before a tool call, both count.
-_LANDED_REPLIES_COMPARED: Final[int] = 3
-_LANDED_REPLY_LOOKBACK_EVENTS: Final[int] = 60
 # A pause in reply-draft reads longer than this means the poller skipped the agent for a while.
 _REPLY_DRAFT_READ_GAP_SECONDS: Final[float] = 2.0
 
@@ -619,7 +615,7 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
             return cursor.file_path
         return None
 
-    def read_reply_draft(self, capture_pane: CapturePaneCallback) -> ReplyDraft | None:
+    def read_reply_draft(self, sources: ReplyDraftSources) -> ReplyDraft | None:
         """The reply Claude is streaming to its terminal, read back from the pane while a turn runs.
 
         Claude writes a text block to the session file only once the block is finished. Outside
@@ -635,16 +631,14 @@ class ClaudeSessionWatcher(ClaudeTranscriptLoader, StoreBackedWatcher):
         # a reply that has since finished, and stitching onto it could splice the two.
         if is_after_a_gap:
             self._reply_draft.reset()
-        pane_text = capture_pane()
-        with self._lock:
-            recent_events = self._store.tail(self._selected_lane_ids_locked(None), _LANDED_REPLY_LOOKBACK_EVENTS)
-        after_event_id = recent_events[-1]["event_id"] if recent_events else ""
+        pane_text = sources.capture_pane()
+        baseline = self._reply_draft_baseline()
         if pane_text is None:
-            return ReplyDraft(after_event_id=after_event_id, text="")
-        landed_reply_texts = [
-            event["text"] for event in recent_events if event["type"] == "assistant_message" and event.get("text")
-        ][-_LANDED_REPLIES_COMPARED:]
-        return ReplyDraft(after_event_id=after_event_id, text=self._reply_draft.read(pane_text, landed_reply_texts))
+            return ReplyDraft(after_event_id=baseline.after_event_id, text="")
+        return ReplyDraft(
+            after_event_id=baseline.after_event_id,
+            text=self._reply_draft.read(pane_text, baseline.landed_reply_texts),
+        )
 
     def set_queue_snapshot_callback(self, callback: Callable[[list[dict[str, Any]]], None]) -> None:
         """Register the sink the watcher pushes each new queued-message snapshot to."""

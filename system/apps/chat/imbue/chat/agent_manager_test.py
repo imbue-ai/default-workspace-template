@@ -36,7 +36,6 @@ from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
-from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _FINISHED_TASK_TURN_GRACE_PASSES
 from imbue.chat.agent_manager import _SwitchTarget
@@ -75,6 +74,9 @@ from imbue.chat.compaction_status import COMPACTION_REQUEST_FILENAME
 from imbue.chat.compaction_status import read_compaction_request
 from imbue.chat.compaction_status import write_compaction_request
 from imbue.chat.create_defaults import create_defaults_path
+from imbue.chat.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
+from imbue.chat.harnesses.antigravity.queue_tracker import drop_tracker
+from imbue.chat.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.chat.harnesses.codex.activity import CodexActivityTracker
 from imbue.chat.harnesses.codex.model import codex_models_to_options
 from imbue.chat.harnesses.codex.model import get_codex_model_options_path
@@ -1751,7 +1753,6 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
         "account_id": signed_in.id,
         "message": "",
         "labels": {},
-        "is_installation_check_skipped": False,
         "phase": "creating",
         "error": None,
         "is_seeded": False,
@@ -1784,8 +1785,8 @@ def test_create_chat_relaunches_a_failed_chat_with_the_sends_it_kept(agent_manag
 def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
     agent_manager: AgentManager, broadcaster: WebSocketBroadcaster
 ) -> None:
-    """An update chat whose create failed on the claude pin is retried from the page with the same
-    waiver and labels, or the retry fails the same way; the record carries them like the message."""
+    """A chat whose create failed is retried from the page with the labels it was minted with
+    (``auto_open``, say); the record carries them like the message."""
     (signed_in,) = read_index().accounts
     seed_failed_chat(
         agent_manager,
@@ -1794,7 +1795,6 @@ def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
         account_id=signed_in.id,
         message="/update-self",
         labels={"auto_open": "true"},
-        is_installation_check_skipped=True,
     )
     q = broadcaster.register()
 
@@ -1806,7 +1806,6 @@ def test_create_chat_relaunches_a_failed_chat_on_the_terms_it_was_minted_with(
     pushed = json.loads(raw)
     assert pushed["phase"] == "creating"
     assert pushed["labels"] == {"auto_open": "true"}
-    assert pushed["is_installation_check_skipped"] is True
     assert pushed["message"] == "/update-self"
 
 
@@ -1824,13 +1823,11 @@ def test_create_chat_refuses_a_label_the_app_sets_itself(agent_manager: AgentMan
     assert agent_manager.get_provisional_chats() == []
 
 
-def test_create_chat_refuses_labels_and_the_waiver_beside_a_minted_id(agent_manager: AgentManager) -> None:
+def test_create_chat_refuses_labels_beside_a_minted_id(agent_manager: AgentManager) -> None:
     (signed_in,) = read_index().accounts
     seed_failed_chat(agent_manager, ChatId("failed-3"), "Chat 1", account_id=signed_in.id)
     with pytest.raises(AgentCreationError, match="relabel"):
         agent_manager.create_chat("", chat_id="failed-3", labels={"auto_open": "true"})
-    with pytest.raises(AgentCreationError, match="relabel"):
-        agent_manager.create_chat("", chat_id="failed-3", is_installation_check_skipped=True)
 
 
 def _write_flaky_create_mngr_binary(tmp_path: Path, failed_creates: int) -> tuple[str, Path]:
@@ -2750,17 +2747,13 @@ def test_chat_create_argv_carries_no_launch_settings() -> None:
     assert not any("fastMode" in token for token in argv)
 
 
-def test_chat_create_argv_carries_a_callers_labels_and_the_version_check_waiver() -> None:
+def test_chat_create_argv_carries_a_callers_labels() -> None:
     """A create from outside the workspace (the Imbue Studio app's assist and update chats, through
-    ``message_chat.py --create``) rides its labels and the claude version-check waiver on the
-    same argv the app's own creates use."""
-    argv = _chat_create_argv(
-        extra_labels=["auto_open=true", "assist=true"], settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING]
-    )
+    ``message_chat.py --create``) rides its labels on the same argv the app's own creates use."""
+    argv = _chat_create_argv(extra_labels=["auto_open=true", "assist=true"])
     assert_mngr_argv_valid(argv)
     labels = [argv[i + 1] for i, tok in enumerate(argv) if tok == "--label"]
     assert labels[-2:] == ["auto_open=true", "assist=true"]
-    assert argv[argv.index("-S") + 1] == SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 
 
 def test_chat_create_argv_stacks_extra_role_templates_after_chat() -> None:
@@ -5329,16 +5322,17 @@ def test_a_codex_pick_checked_only_against_the_set_its_agent_last_had_is_not_rej
         agent_manager.apply_model_pick(claude_info, ModelPick(model_id="gpt-5.6-terra", effort="high"))
 
 
-def test_a_pick_for_a_harness_whose_model_the_chat_cannot_switch_is_rejected_for_good(
-    agent_manager: AgentManager,
-) -> None:
-    """Antigravity's model is changed from its terminal, so a pick for one (from a stale page, or any other caller
-    of the switch route) fails at once rather than being tried again for a rebind's whole budget."""
+def test_a_pick_for_an_antigravity_agent_is_held_for_its_worker_to_type(agent_manager: AgentManager) -> None:
+    """A new antigravity chat's pick is applied like any other harness's, by the command its worker types."""
     _seed_agent(agent_manager, "agent-agy", harness=HarnessType.ANTIGRAVITY)
     agy_info = agent_manager.get_agent_info_by_id("agent-agy")
     assert agy_info is not None
-    with pytest.raises(ModelPickRejectedError, match="changed from the agent's terminal"):
-        agent_manager.apply_model_pick(agy_info, ModelPick(model_id="gemini-3.7-flash-high"))
+    drop_tracker(agy_info.id)
+
+    agent_manager.apply_model_pick(agy_info, ModelPick(model_id="gemini-3.8-flash", effort="low"))
+
+    tracker = get_tracker(agy_info.id, agy_info.agent_state_dir / OUTBOX_FILENAME, "")
+    assert tracker.model_command() == "/model gemini-3.8-flash-low"
 
 
 def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> list[tuple[int, int]]:

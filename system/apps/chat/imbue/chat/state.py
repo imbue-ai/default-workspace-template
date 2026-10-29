@@ -276,6 +276,7 @@ class ChatAppState(MutableModel):
             self._reply_draft_publisher = ReplyDraftPublisher(
                 list_watched_agents=self.list_watched_agents,
                 capture_agent_pane=self.capture_agent_pane,
+                read_agent_streamed_reply=self.agent_manager.read_streamed_reply,
                 broadcast_to_chat=self.event_queues.broadcast,
             )
         self._reply_draft_publisher.start()

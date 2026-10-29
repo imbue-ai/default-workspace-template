@@ -1,67 +1,103 @@
-"""Unit tests for antigravity's read-only model bar."""
+"""Unit tests for antigravity's model catalog and resolver."""
 
 import json
 from pathlib import Path
 from typing import NoReturn
 
+import pytest
+
+from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.antigravity.model import ANTIGRAVITY_CATALOG
 from imbue.chat.harnesses.antigravity.model import AntigravityModelResolver
-from imbue.chat.harnesses.antigravity.model import derived_option
+from imbue.chat.harnesses.antigravity.model import model_command
+from imbue.chat.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
+from imbue.chat.harnesses.antigravity.queue_tracker import drop_tracker
+from imbue.chat.harnesses.antigravity.queue_tracker import get_tracker
 from imbue.chat.harnesses.antigravity.session import AntigravityHarnessSession
+from imbue.chat.harnesses.antigravity.testing import build_agent_info
+from imbue.chat.harnesses.antigravity.testing import refuse_to_type
 from imbue.chat.harnesses.harness_type import HarnessType
+from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
-from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import match_option
+from imbue.chat.harnesses.model import validate_model_pick
 from imbue.chat.harnesses.session import SessionDeps
 
 
-def test_the_bar_is_read_only() -> None:
-    """agy's `/model` is an interactive TUI picker with no scriptable one-shot form, so the
-    bar reflects and never drives. The frontend renders the slots non-interactive off this."""
-    assert ANTIGRAVITY_CATALOG.switch_mode is SwitchMode.READ_ONLY
+@pytest.mark.parametrize(
+    ("recorded_model", "recorded_effort", "expected_option_id"),
+    [
+        # What the statusline records for each listed model, as captured from agy 1.4.7.
+        ("Gemini 3.8 Flash", "high", "gemini-3.8-flash"),
+        ("Gemini 3.8 Flash", "low", "gemini-3.8-flash"),
+        ("Claude Sonnet 4.6 (Thinking)", None, "claude-sonnet-4-6"),
+        ("Claude Opus 4.6 (Thinking)", None, "claude-opus-4-6-thinking"),
+        ("GPT-OSS 120B (Medium)", None, "gpt-oss-120b-medium"),
+    ],
+)
+def test_each_recorded_model_state_matches_its_catalog_option(
+    recorded_model: str, recorded_effort: str | None, expected_option_id: str
+) -> None:
+    identity = ModelIdentity(model_id=recorded_model, effort=recorded_effort, fast=False)
+    matched = match_option(identity, ANTIGRAVITY_CATALOG.options)
+    assert matched is not None
+    assert matched.id == expected_option_id
 
 
-def test_the_harness_credit_is_declared_whole() -> None:
-    """The harness declares the ENTIRE credit string, prefix included -- the frontend renders
-    it verbatim and adds nothing. It is a pure function of the harness, so it shows even
-    while the model bar has no slots to render (before agy's first statusline fire)."""
-    assert ANTIGRAVITY_CATALOG.powered_by_text == "Powered by Antigravity"
+@pytest.mark.parametrize(
+    ("model_id", "effort", "expected_command"),
+    [
+        ("gemini-3.8-flash", "low", "/model gemini-3.8-flash-low"),
+        ("gemini-3.8-flash", "high", "/model gemini-3.8-flash-high"),
+        # A bare base slug starts the model at agy's default effort.
+        ("gemini-3.8-flash", None, "/model gemini-3.8-flash"),
+        ("claude-sonnet-4-6", None, "/model claude-sonnet-4-6"),
+        ("gpt-oss-120b-medium", None, "/model gpt-oss-120b-medium"),
+    ],
+)
+def test_model_command_names_the_model_at_its_effort(model_id: str, effort: str | None, expected_command: str) -> None:
+    assert model_command(ModelIdentity(model_id=model_id, effort=effort, fast=False)) == expected_command
 
 
-def test_every_model_is_one_slot() -> None:
-    """agy bakes the tier into the model id and has no fast mode, so the bar shows the model
-    chip alone -- the shown slots are decided purely by the matched option's data."""
-    assert ANTIGRAVITY_CATALOG.options
-    for option in ANTIGRAVITY_CATALOG.options:
-        assert option.efforts == (), option.id
-        assert option.supports_fast is False, option.id
+def test_every_offered_pick_passes_validation() -> None:
+    """Each model at each of its efforts is a pick the model bar's route accepts."""
+    options = ANTIGRAVITY_CATALOG.options
+    for option in options:
+        for effort in option.efforts:
+            validate_model_pick(options, option.id, effort.level, fast=False)
+        if not option.efforts:
+            validate_model_pick(options, option.id, None, fast=False)
 
 
-def test_every_catalog_id_matches_itself() -> None:
-    """The ids are agy's own, so a live read of any of them resolves to its display name
-    rather than the unrecognized shrug."""
-    for option in ANTIGRAVITY_CATALOG.options:
-        matched = match_option(ModelIdentity(model_id=option.id, effort=None, fast=False), ANTIGRAVITY_CATALOG.options)
-        assert matched is not None, option.id
-        assert matched.label == option.label
+def _agent_info(tmp_path: Path) -> AgentInfo:
+    agent_info = build_agent_info(tmp_path)
+    drop_tracker(agent_info.id)
+    return agent_info
 
 
-def test_switch_is_refused_rather_than_silently_ignored() -> None:
-    resolver = AntigravityModelResolver()
-    result = resolver.switch(ModelIdentity(model_id="x", effort=None, fast=False), frozenset(), lambda text: True)
-    assert result.ok is False
-    assert result.detail
+def _held_command(agent_info: AgentInfo) -> str | None:
+    tracker = get_tracker(agent_info.id, agent_info.agent_state_dir / OUTBOX_FILENAME, "")
+    return tracker.model_command()
 
 
-def test_derived_option_reconstructs_a_gemini_style_name() -> None:
-    """The staleness fallback: a model newer than the hand-written list still renders a
-    readable name. Rebuilt from the id by rule -- see the banner in model.py."""
-    assert derived_option("gemini-3.8-flash-high").label == "Gemini 3.8 Flash (High)"
-    assert derived_option("gemini-4.0-pro-low").label == "Gemini 4.0 Pro (Low)"
-    # No tier suffix -> no parenthesised tier.
-    assert derived_option("claude-sonnet-5").label == "Claude Sonnet 5"
-    # Never offered as a pick: it is a rendering fallback, not a catalog entry.
-    assert derived_option("gemini-3.8-flash-high").in_picker is False
+def test_a_switch_holds_its_command_for_the_worker(tmp_path: Path) -> None:
+    agent_info = _agent_info(tmp_path)
+    result = AntigravityModelResolver.build(agent_info).switch(
+        ModelIdentity(model_id="gemini-3.8-flash", effort="medium", fast=False),
+        frozenset({ModelAxis.EFFORT}),
+        refuse_to_type,
+    )
+    assert result.ok
+    assert _held_command(agent_info) == "/model gemini-3.8-flash-medium"
+
+
+def test_a_switch_that_changes_neither_model_nor_effort_holds_nothing(tmp_path: Path) -> None:
+    agent_info = _agent_info(tmp_path)
+    result = AntigravityModelResolver.build(agent_info).switch(
+        ModelIdentity(model_id="claude-sonnet-4-6", effort=None, fast=False), frozenset(), refuse_to_type
+    )
+    assert result.ok
+    assert _held_command(agent_info) is None
 
 
 def _session(model_state_path: Path) -> AntigravityHarnessSession:
@@ -90,53 +126,56 @@ def _session(model_state_path: Path) -> AntigravityHarnessSession:
 
 def test_a_known_model_does_not_add_a_derived_option(tmp_path: Path) -> None:
     state = tmp_path / "model_state.json"
-    state.write_text(json.dumps({"model": "gemini-3.7-flash-high"}))
+    state.write_text(json.dumps({"model": "Gemini 3.8 Flash", "effort": "medium"}))
     assert _session(state).switch_options() == ANTIGRAVITY_CATALOG.options
 
 
-def test_an_unknown_model_is_rendered_instead_of_shrugged(tmp_path: Path) -> None:
-    """The whole point of the fallback: when Google ships a model newer than the list --
-    worst case, a new DEFAULT -- every agy agent would otherwise show the shrug."""
+@pytest.mark.parametrize(
+    ("recorded_state", "expected_efforts"),
+    [
+        # A model newer than the list, at an adjustable effort: its one effort is declared so the
+        # live read matches, and no effort control is offered for levels nobody listed.
+        ({"model": "Gemini 9.9 Flash", "effort": "high"}, ("high",)),
+        ({"model": "Gemini 4 Argon (Thinking)"}, ()),
+    ],
+)
+def test_an_unknown_model_is_rendered_instead_of_shrugged(
+    tmp_path: Path, recorded_state: dict[str, str], expected_efforts: tuple[str, ...]
+) -> None:
+    """When Google ships a model newer than the list -- worst case, a new default -- every agy
+    agent would otherwise show the shrug, and the shrug offers no picker to switch away with."""
     state = tmp_path / "model_state.json"
-    state.write_text(json.dumps({"model": "gemini-9.9-flash-high"}))
-    options = _session(state).switch_options()
-    assert len(options) == len(ANTIGRAVITY_CATALOG.options) + 1
-    identity = ModelIdentity(model_id="gemini-9.9-flash-high", effort=None, fast=False)
-    # Without the appended option this is None, which is the shrug.
+    state.write_text(json.dumps(recorded_state))
+    identity = ModelIdentity(model_id=recorded_state["model"], effort=recorded_state.get("effort"), fast=False)
     assert match_option(identity, ANTIGRAVITY_CATALOG.options) is None
+
+    options = _session(state).switch_options()
     matched = match_option(identity, options)
+
     assert matched is not None
-    assert matched.label == "Gemini 9.9 Flash (High)"
+    assert matched.label == recorded_state["model"]
+    assert tuple(effort.level for effort in matched.efforts) == expected_efforts
+    assert matched.in_picker is False
+    assert options[: len(ANTIGRAVITY_CATALOG.options)] == ANTIGRAVITY_CATALOG.options
+
+
+def test_a_carried_pick_of_an_unlisted_model_types_nothing(tmp_path: Path) -> None:
+    """A rebind carries the chat's model, which can be one newer than the list. The restarted agent
+    still reports it, so the pick validates against its derived option, but its id is a display
+    name `/model` does not take, and the agent is already on it."""
+    state = tmp_path / "model_state.json"
+    state.write_text(json.dumps({"model": "Gemini 9.9 Flash", "effort": "high"}))
+    agent_info = _agent_info(tmp_path)
+    validate_model_pick(_session(state).switch_options(), "Gemini 9.9 Flash", "high", fast=False)
+
+    result = AntigravityModelResolver.build(agent_info).switch(
+        ModelIdentity(model_id="Gemini 9.9 Flash", effort="high", fast=False), frozenset(ModelAxis), refuse_to_type
+    )
+
+    assert result.ok
+    assert _held_command(agent_info) is None
 
 
 def test_no_model_state_leaves_the_catalog_alone(tmp_path: Path) -> None:
-    """Before agy's first statusline fire there is no file, so the bar renders no slots.
-
-    The "Powered by Antigravity" credit is unaffected -- it is a pure function of the
-    harness and deliberately does not vanish when the model bar has nothing to show.
-    """
+    """Before agy's first statusline fire there is no file, so the bar renders no slots."""
     assert _session(tmp_path / "absent.json").switch_options() == ANTIGRAVITY_CATALOG.options
-
-
-def test_the_reported_display_name_matches_the_catalog() -> None:
-    """agy reports a DISPLAY NAME, not its slug: a live 1.1.19 statusline payload carries
-    ``"model":{"id":"Gemini 3.7 Flash (High)",...}``. Matching on that is the whole reason the
-    options set ``harness_reported_model_id``; without it every agy model shrugs."""
-    identity = ModelIdentity(model_id="Gemini 3.7 Flash (High)", effort=None, fast=False)
-    matched = match_option(identity, ANTIGRAVITY_CATALOG.options)
-    assert matched is not None
-    assert matched.id == "gemini-3.7-flash-high"
-
-
-def test_an_effort_would_shrug_which_is_why_none_is_written() -> None:
-    """The payload also carries ``"effort":"high"``, and the statusline deliberately does not
-    write it: agy's options declare no efforts, and match_option rejects an effort its matched
-    option does not declare. Pinned so nobody "helpfully" starts writing it."""
-    identity = ModelIdentity(model_id="Gemini 3.7 Flash (High)", effort="high", fast=False)
-    assert match_option(identity, ANTIGRAVITY_CATALOG.options) is None
-
-
-def test_an_unknown_display_name_is_used_verbatim() -> None:
-    """A model newer than the list is already human-readable as reported, so it needs no
-    reconstruction -- unlike a slug."""
-    assert derived_option("Gemini 4.2 Ultra (High)").label == "Gemini 4.2 Ultra (High)"

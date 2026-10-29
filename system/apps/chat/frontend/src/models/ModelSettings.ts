@@ -129,8 +129,7 @@ export function changedAxes(prev: ModelIdentity, next: ModelIdentity): string[] 
  *  model/effort/fast to actually send (see changedAxes).
  *
  *  `optimistic` follows the harness's switch mode: an EAGER_THEN_RECONCILE harness
- *  (all three -- claude, codex, pi) shows the pick immediately and reconciles from
- *  the pushed live choice. */
+ *  shows the pick immediately and reconciles from the pushed live choice. */
 export function setModelChoice(
   chatId: string,
   identity: ModelIdentity,
