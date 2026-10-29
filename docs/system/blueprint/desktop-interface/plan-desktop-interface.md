@@ -216,7 +216,7 @@ Close removes the window from the desktop for every client: the shell drops it f
 The close button, the window menu, a taskbar entry's context menu, an agent's `close`, and the minds chrome's close chord (`minds:close-active-tab`, which closes the focused window after sending it `shell:close-request`) all do this.
 The shell itself has no notion of stopping or deleting what the window showed; what the window showed is the app's to keep or collect, and the terminal and the browser collect it once no window shows it, told of the close through the manifest's `window_closed_path` and sweeping the shell's windows regardless (`docs/system/specs/window-bound-resources.md`).
 The app's *process* is another matter: an app whose manifest declares `stop_when_no_windows` is stopped by the shell a minute after its last window closes, and comes back on the next request for it, the shell holding its port meanwhile (`docs/system/specs/stop-when-no-windows.md`).
-A pinned window is never closed: the route answers `409`, the op is refused with "minimize it instead", and its close control, its menus' Close, and the close chord all minimize it instead (pinned-taskbar-entries plan section 3.2).
+A pinned window is never closed for everyone: the route answers `409`, the op is refused with "minimize it instead", and its close control, its menus' Close, and the close chord close it for this client alone -- minimized, and its entry out of this client's bar until something shows the window again (pinned-taskbar-entries plan section 3.2).
 
 ### 4.6 Following the URL
 
@@ -251,7 +251,7 @@ Adding a shortcut: the right-click menu of the launcher row of an app's default 
 Left to right: the launcher field; one entry per window of the active desktop in opening order (icon and title, minimized entries dimmed, the focused entry marked); the system tray.
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
-A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu's Close minimizes it rather than closing it, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
+A pinned window's entry is a plain bar entry (gone from this client's bar after its Close, until something shows the window), and the client may float the app's creature above the windows beside it; its menu's Close closes the window for this client alone rather than for everyone, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
 The tray's widgets are Presence (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and Desktops (concepts.md 2.8); each is one component with one popover, and adding another is adding a component to a list.
 The taskbar is always visible on the desktop layout; auto-hide is deferred. A phone draws its own bar instead (`plan-phone-interface.md`).
 
