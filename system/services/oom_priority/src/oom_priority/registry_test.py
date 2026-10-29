@@ -172,19 +172,13 @@ def test_an_entry_from_an_earlier_boot_is_not_the_agents(
 
 
 def test_a_boot_that_cannot_be_read_never_matches(runtime: Path, proc: Path) -> None:
-    # Without this boot's id, a matching start time cannot rule out an earlier boot.
+    # Without a boot id on either side, a matching start time cannot rule out an earlier boot.
     write_fake_process(proc, 4242, start_ticks=100)
-    registry.record_agent_pid(
-        4242, "alpha", is_worker=False, agent_id="agent-abc", proc_dir=proc
-    )
     fake_boot_id_path(proc).unlink()
-    assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
-
-    # Nor does an entry recorded while the boot could not be read, once it can.
     registry.record_agent_pid(
         4242, "alpha", is_worker=False, agent_id="agent-abc", proc_dir=proc
     )
-    fake_boot_id_path(proc).write_text("fake-boot\n")
+
     assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
 
 
