@@ -73,23 +73,32 @@ A mixed flow of all three kinds is the norm for useful skills.
 ```
 .agents/skills/<name>/
   SKILL.md                  # required; body <= 500 lines (progressive disclosure)
-  scripts/                  # optional; include when there are deterministic steps
-    run.py                  # the entry point: a thin dispatcher into the package
-    *.sh                    # any shell scripts
+  scripts/                  # optional; any shell scripts
+    *.sh
   python/                   # the skill's uv project, whenever it has Python (see Packaging)
     pyproject.toml
     <name_with_underscores>_skill/
       __init__.py           # empty
+      run.py                # the entry point, run by its own path
       *.py                  # the implementation, one module per concern
       *_test.py             # tests, beside the modules they cover
   references/*.md           # optional long-form docs; load on demand
   assets/...                # optional static resources (templates, samples)
 ```
 
-A skill's scripts live in the skill's own `scripts/` directory, i.e.
-`.agents/skills/<name>/scripts/`, and the Python code behind them in its
-`python/` project. The repo-root `system/scripts/` is an unrelated place, for
-workspace provisioning and utility scripts.
+A skill's Python lives in its own `python/` project, and any shell scripts in
+its `scripts/` directory, i.e. `.agents/skills/<name>/scripts/`. The repo-root
+`system/scripts/` is an unrelated place, for workspace provisioning and utility
+scripts.
+
+Start a new skill with the scaffold, which writes this layout, installs the
+package and validates the result (`--python` for a skill with scripted steps;
+`--crystallized` for one this lifecycle produces):
+
+```bash
+uv run --no-sync .agents/shared/scripts/agents_shared/scaffold_skill.py <name> \
+    --description "<what-and-when>" --python --crystallized
+```
 
 The `name` used in `.agents/skills/<name>/` must match the `name` field in
 SKILL.md frontmatter (1-64 chars, lowercase letters/digits + single hyphens,
@@ -123,7 +132,7 @@ secrets:
     note: an Example API key from the account's settings page
 ```
 
-## .agents/skills/<name>/scripts/run.py (optional)
+## The entry point, `run.py` (optional)
 
 Include `run.py` when the skill has `[script]` or `[ai-script]` steps that
 benefit from automation. A skill can be pure SKILL.md prose with no scripts
@@ -131,7 +140,9 @@ only when every step is `[prose]` executor meta-work; if any flow step is
 deterministic or model-driven, it belongs in a script. Use scripts where
 they earn their keep; don't force a script for genuine executor meta-work.
 
-When you do include `run.py`, write the flow's logic as small helper
+`run.py` is a module of the skill's package
+(`python/<name_with_underscores>_skill/run.py`) with its own
+`if __name__ == "__main__":` block. When you do include it, write the flow's logic as small helper
 functions (one per step) in the skill's package (see Packaging below), and
 have `run.py` expose them two ways:
 
@@ -179,11 +190,13 @@ the one workspace lock and its package installs into the root venv:
   member directory without one, and that breaks every `uv` command in the
   workspace. A skill whose `scripts/` holds only shell scripts needs no
   `python/` at all.
-- The code lives in the package; `run.py` (and any other entry file at the top
-  of `scripts/`) is a thin dispatcher that imports it through the root venv,
-  so a new skill's package is importable once `uv sync --all-packages` has
-  installed it. Tests sit in the package beside their modules and import them
-  normally (`from <name_with_underscores>_skill.parse import parse_rows`).
+- The code lives in the package, `run.py` included, and runs by its path from
+  the root venv; it imports its siblings through the package
+  (`from <name_with_underscores>_skill.parse import parse_rows`), so a new
+  skill runs once `uv sync --all-packages` has installed it (the scaffold
+  does). Tests sit in the package beside their modules and import them the
+  same way. A new skill gets no entry stub in `scripts/`: everything that runs
+  it is in the workspace and names the module's path from the start.
 - Keep the entry cheap to start: it runs on every call, so its module imports
   only what every invocation needs at the top, and each subcommand imports its
   implementation (and any heavy library -- pydantic, loguru, click, httpx, ...)
@@ -207,20 +220,19 @@ For [ai-script] steps, make sure to read and follow the instructions in the **`u
   unilaterally.
 - Fail loudly: exit non-zero on error, write the error to stderr.
 - Document the invocation in SKILL.md:
-  `uv run --no-sync .agents/skills/<name>/scripts/run.py <args>`
+  `uv run --no-sync .agents/skills/<name>/python/<name_with_underscores>_skill/run.py <args>`
 
 ## Validation
 
 `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py <skill_dir>` checks SKILL.md
 frontmatter, the kebab-case name rules, directory-name match, description
-length and the 500-line body limit. When the skill has Python (entry files in
-`scripts/`, or a `python/` dir) it also checks that `python/pyproject.toml`
+length and the 500-line body limit. When the skill has Python (a `python/`
+dir, or a built-in skill's entry stub in `scripts/`) it also checks that `python/pyproject.toml`
 exists and names the project
 `<name>-skill` and the package `<name_with_underscores>_skill`, that `uv lock
 --check` passes (the workspace lock includes the skill's dependencies), and
-that `uv run --no-sync <entry> --help` exits 0 for every entry file at the top
-of `scripts/` and every package module with its own `if __name__ == "__main__":`
-block -- so a broken import or a missing dependency fails validation
+that `uv run --no-sync <entry> --help` exits 0 for every package module with
+its own `if __name__ == "__main__":` block (and any entry stub in `scripts/`) -- so a broken import or a missing dependency fails validation
 here rather than only at scenario time. (This is a shallow import check:
 `--help` exercises top-level imports and the argparse wiring, not imports done
 lazily inside subcommand bodies -- those are left to scenario testing.) Prints
@@ -234,7 +246,7 @@ Record each scenario in the transcript in this form:
 
 ```
 ### Scenario: <one-line description>
-- Command: `uv run --no-sync .agents/skills/<name>/scripts/run.py <args>`
+- Command: `uv run --no-sync .agents/skills/<name>/python/<name_with_underscores>_skill/run.py <args>`
 - Input: <stdin / files / env / CLI args>
 - Expected: <exit code + stdout/file contents assertion>
 - Actual: <observed>

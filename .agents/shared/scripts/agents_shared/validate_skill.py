@@ -49,7 +49,7 @@ _MIN_DESC_LEN = 1
 _MAX_DESC_LEN = 1024
 _MIN_NAME_LEN = 1
 _MAX_NAME_LEN = 64
-_NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+NAME_PATTERN = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 
 # Generous enough to cover a cold `uv lock --check` (resolving git sources);
 # warm-cache runs are near-instant.
@@ -85,7 +85,7 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], list[str]]:
     return parsed, body_lines
 
 
-def _package_name(skill_name: str) -> str:
+def package_name(skill_name: str) -> str:
     return skill_name.replace("-", "_") + "_skill"
 
 
@@ -179,7 +179,7 @@ def _validate_python_project(skill_dir: Path, skill_name: str) -> str | None:
     expected_project = f"{skill_name}-skill"
     if project_name != expected_project:
         return f"{pyproject} names the project {project_name!r}; it must be {expected_project!r}"
-    expected_package = _package_name(skill_name)
+    expected_package = package_name(skill_name)
     packages = (
         config.get("tool", {})
         .get("hatch", {})
@@ -291,7 +291,7 @@ def validate(skill_dir: Path) -> str | None:
             f"frontmatter.name length must be {_MIN_NAME_LEN}-{_MAX_NAME_LEN} "
             f"characters, got {len(name)}"
         )
-    if not _NAME_PATTERN.fullmatch(name):
+    if not NAME_PATTERN.fullmatch(name):
         return (
             f"frontmatter.name ({name!r}) must match "
             f"^[a-z0-9]+(?:-[a-z0-9]+)*$ -- lowercase letters/digits "

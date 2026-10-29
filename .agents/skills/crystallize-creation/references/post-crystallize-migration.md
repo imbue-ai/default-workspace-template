@@ -31,7 +31,7 @@ crystallized skill path. The standard switch is:
 
 | Old reference                                                  | New reference                                            |
 | -------------------------------------------------------------- | -------------------------------------------------------- |
-| `data/.tasks/fetch-process-show/<slug>/fetch.py`                     | `.agents/skills/<name>/scripts/run.py`                   |
+| `data/.tasks/fetch-process-show/<slug>/fetch.py`                     | `.agents/skills/<name>/python/<name_with_underscores>_skill/run.py` |
 | `data/.tasks/fetch-process-show/<slug>/sample.json`                  | run the skill with `--output <path>` to regenerate       |
 | Inline import of the fetch script                              | `from <name_with_underscores>_skill.<module> import ...` (the skill's package, installed in the root venv) |
 

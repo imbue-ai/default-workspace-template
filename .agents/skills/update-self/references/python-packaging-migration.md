@@ -30,11 +30,13 @@ plus `_skill`; a `scripts/` dir of shell scripts only needs nothing):
    `packages = ["<name_with_underscores>_skill"]`. Its `dependencies` are the
    union of the scripts' PEP 723 `# /// script` headers; delete those headers.
 2. Move every module into `python/<name_with_underscores>_skill/` (with an empty
-   `__init__.py`), tests included. Leave a thin entry file in `scripts/` at each
-   path the skill's SKILL.md, cron entries or program lines run, importing its
-   module from the package and calling it under `if __name__ == "__main__":`;
-   drop the moved module's own `if __name__ == "__main__":` block, since
-   `validate_skill.py` runs any module that has one by its own path.
+   `__init__.py`), tests included. A script keeps its own
+   `if __name__ == "__main__":` block and now runs by its new path: point the
+   skill's SKILL.md, its routines' commands and every other caller in the
+   workspace at that path. Only where a caller cannot be changed, leave a thin
+   entry file at the old path in `scripts/` that imports the module from the
+   package and calls it under `if __name__ == "__main__":`, with a docstring
+   saying what still runs that path.
    Change sibling imports (`import helpers`) to package imports
    (`from <name_with_underscores>_skill import helpers`), and delete any `sys.path` edit that
    existed to make them work. A test that loads its module from a file
@@ -47,7 +49,8 @@ plus `_skill`; a `scripts/` dir of shell scripts only needs nothing):
 4. `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py .agents/skills/<name>`
    must print `ok`, and the skill's tests must pass by path.
 5. If the import-cost test names the entry, move the heavy import into the
-   function that uses it, or declare it as the test's message says.
+   function that uses it; code whose signatures name that library's types goes
+   in a module of its own, imported inside the subcommands that need it.
 
 ## A user service
 
