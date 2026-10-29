@@ -2,7 +2,7 @@
 
 Usage, from the repo root, ALONE in its tool call with its output untouched::
 
-    uv run --no-sync .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py \\
+    python3 .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py \\
         --file <name> --var NAME [--var NAME ...] --rationale "..."
 
 Files the request with the chat app, which renders a card with one password input
@@ -23,7 +23,7 @@ app there is no card; the skill's last resort is to ask the user to place the fi
 from a terminal.
 
 Standard library only, like ``workspace_bare_scripts.message_chat``, which this reuses
-to find the chat app.
+to find the chat app, so it runs under the system ``python3`` with no venv.
 """
 
 from __future__ import annotations
@@ -38,6 +38,11 @@ import time
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
+
+# Run by its path, the module puts the bare packages' directory on sys.path; imported as
+# part of its package, the venv already has it.
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "system" / "scripts"))
 
 from workspace_bare_scripts import message_chat
 

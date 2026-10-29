@@ -152,7 +152,7 @@ In `/home/user/workspace`, with no network (never fetch or pull upstream for
 this):
 
 ```bash
-BASE_REF=$(uv run --no-sync .agents/shared/scripts/agents_shared/resolve_template_base.py)
+BASE_REF=$(python3 .agents/shared/scripts/agents_shared/resolve_template_base.py)
 SOURCE_SHA=$(git rev-parse HEAD)
 ```
 

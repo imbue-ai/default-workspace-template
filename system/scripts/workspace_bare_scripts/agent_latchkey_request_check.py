@@ -227,7 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         "    -H 'Content-Type: application/json' \\\n"
         '    -d \'{"agent_id": "\'"${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"\'", ...}\'\n'
         "or\n"
-        "  uv run --no-sync .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py "
+        "  python3 .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py "
         '--file <name> --var NAME --rationale "..."\n\n'
         "Filing another request straight after this one is fine -- it just needs a "
         "tool call of its own.\n"

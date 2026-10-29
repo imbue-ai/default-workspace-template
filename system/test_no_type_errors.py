@@ -6,7 +6,12 @@ runs its own ``test_no_type_errors``).
 
 The bare tier -- what the system ``python3`` runs with no venv -- is checked a second time
 against an environment with no third-party packages at all, so an import it cannot make at
-runtime is an ``unresolved-import`` here, at the workspace's floor Python version.
+runtime is an ``unresolved-import`` here, at the workspace's floor Python version. Its search
+paths are the only directories a bare file may put on ``sys.path``
+(``entry_points_testing.BARE_SEARCH_PATHS``), so what it resolves is what the runtime imports.
+
+A bare skill's test imports its script by name, so the root check leaves it out and it is
+checked against the root venv with that skill's ``scripts/`` on the search path.
 """
 
 from __future__ import annotations
@@ -18,12 +23,15 @@ from pathlib import Path
 
 import pytest
 from entry_points_testing import (
+    BARE_MODULES,
     BARE_PACKAGES,
+    BARE_SEARCH_PATHS,
     REPO_ROOT,
     STANDALONE_BARE_SCRIPTS,
     SYSTEM_SCRIPTS,
     UPDATE_SELF_SCRIPTS,
     all_entry_points,
+    bare_skill_modules,
     entry_package,
     is_bare_entry,
     is_test_file,
@@ -40,18 +48,6 @@ _OOM_PRIORITY_SRC = REPO_ROOT / "system" / "services" / "oom_priority" / "src"
 _CHAT_BACKGROUND_TASKS_SRC = (
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src"
 )
-
-# Where the bare tier's imports resolve from at runtime: system/scripts (the stubs' own
-# directory), update-self's python/ and the stdlib-only library trees, which the stubs and
-# update-self put on sys.path.
-_BARE_SEARCH_PATHS = (
-    SYSTEM_SCRIPTS,
-    _UPDATE_SELF_PYTHON,
-    _TK_COMMAND_PARSING_SRC,
-    _OOM_PRIORITY_SRC,
-    _CHAT_BACKGROUND_TASKS_SRC,
-)
-
 
 # The first-party modules each bare runtime context has on sys.path. update-self runs as a
 # staged copy that puts only its own python/ there (and loads oom_priority off the target
@@ -172,8 +168,10 @@ def test_the_bare_tier_type_checks_against_the_standard_library_alone(
     assert SYSTEM_SCRIPTS / "forward_port.py" in files
     assert UPDATE_SELF_SCRIPTS / "update_self.py" in files
     assert set(STANDALONE_BARE_SCRIPTS) <= set(files)
+    assert set(BARE_MODULES) <= set(files)
+    assert set(bare_skill_modules()) <= set(files)
 
-    result = _check_bare(files, _BARE_SEARCH_PATHS, tmp_path)
+    result = _check_bare(files, BARE_SEARCH_PATHS, tmp_path)
 
     assert result.returncode == 0, (
         "The bare tier (run by the system python3 with no venv) has type errors, or imports "
@@ -207,6 +205,56 @@ def test_the_bare_check_rejects_a_third_party_import_and_holds_to_the_floor(
     assert "leaky.py" in result.stdout
     assert "modern.py" not in result.stdout
     assert "has no member `z85encode`" in result.stdout
+
+
+def _check_bare_skill_test(test_file: Path) -> subprocess.CompletedProcess[str]:
+    """ty on a bare skill's test, against the root venv, with the skill's scripts/ searched."""
+    return _run_ty(["--extra-search-path", str(test_file.parent), str(test_file)])
+
+
+def _bare_skill_tests() -> list[Path]:
+    return [
+        test_file
+        for module in bare_skill_modules()
+        if (test_file := module.with_name(f"{module.stem}_test.py")).is_file()
+    ]
+
+
+@pytest.mark.timeout(600)
+def test_every_bare_skill_test_type_checks_beside_its_script() -> None:
+    failures = {
+        str(test_file.relative_to(REPO_ROOT)): result.stdout
+        for test_file in _bare_skill_tests()
+        if (result := _check_bare_skill_test(test_file)).returncode != 0
+    }
+    assert not failures, "\n".join(
+        f"{name}:\n{output}" for name, output in failures.items()
+    )
+
+
+@pytest.mark.timeout(600)
+def test_a_bare_skill_is_type_checked_in_its_script_and_its_test(
+    tmp_path: Path,
+) -> None:
+    scripts = tmp_path / ".agents" / "skills" / "fruit-report" / "scripts"
+    scripts.mkdir(parents=True)
+    script = scripts / "fruit_report.py"
+    script.write_text(
+        "def total(counts: dict[str, int]) -> int:\n    return sum(counts.values())\n\n\n"
+        "def label(counts: dict[str, int]) -> str:\n    return total(counts)\n"
+    )
+    test_file = scripts / "fruit_report_test.py"
+    test_file.write_text(
+        "import fruit_report\n\n\ndef test_total() -> None:\n"
+        '    name: str = fruit_report.total({"apples": 4})\n    assert name\n'
+    )
+
+    script_result = _check_bare([script], BARE_SEARCH_PATHS, tmp_path)
+    test_result = _check_bare_skill_test(test_file)
+
+    assert "fruit_report.py:6:12: error[invalid-return-type]" in script_result.stdout
+    assert "fruit_report_test.py:5:17: error[invalid-assignment]" in test_result.stdout
+    assert "unresolved-import" not in test_result.stdout
 
 
 def test_the_bare_tier_imports_only_the_stdlib_and_bare_code() -> None:

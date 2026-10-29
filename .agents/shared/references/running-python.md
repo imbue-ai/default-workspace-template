@@ -50,9 +50,9 @@ import.
 
 ## The two tiers, and how scripts are laid out
 
-Every Python script here is a module of a package. A skill keeps its code in
-its own uv project, `python/` (`python/pyproject.toml`, package
-`python/<skill_name>_skill/`), and any shell scripts in `scripts/`.
+Every Python script here is a module of a package, with one exception below. A
+skill keeps its code in its own uv project, `python/` (`python/pyproject.toml`,
+package `python/<skill_name>_skill/`), and any shell scripts in `scripts/`.
 `.agents/shared/scripts` (package `agents_shared`) and `system/scripts` are a
 project each. A script's module has its own `if __name__ == "__main__":` block
 and runs by its path
@@ -68,18 +68,37 @@ a directory on `sys.path`; each stub says which. A stub run by the system
 first on `sys.path`, so it is run as `python3 <path>`, never with `-I`, `-P`
 or `PYTHONSAFEPATH` set.
 
-The code runs under one of two interpreters:
+The code runs under one of two interpreters, and what it imports decides which:
 
-- **Venv tier** (the default): runs from the root venv, through
+- **Bare tier**: code whose imports are all standard library -- the bare
+  packages (`workspace_bare_scripts`, update-self's) count as standard library
+  here -- runs under the system `python3` with no venv. It pays nothing for an
+  environment it does not use. This also covers code that must work when the
+  venv is missing or broken, that something outside this release calls by
+  path, or that sits in a long-running program's launch chain: the agent
+  hooks, the bug-report collector, the pre-sync build steps, the scripts the
+  Imbue Studio app calls, update-self, `system/scripts/workspace_bare_scripts/`
+  (`forward_port.py`, `with_secrets.py`, `run_in_background.py`, ...), and
+  stdlib-only modules of other packages such as `notify_user.py` and
+  `request_secret.py`.
+- **Venv tier**: code that imports a third-party package, or a venv-tier
+  package of this workspace, runs from the root venv through
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`
-  declares. Every skill script you write belongs here.
-- **Bare tier**: runs under the system `python3` with no venv, so it imports
-  only the standard library. It exists for code that must work when the venv
-  is missing or broken, that something outside this release calls by path, or
-  that sits in a long-running program's launch chain: the agent hooks, the
-  bug-report collector, the pre-sync build steps, the scripts the Imbue Studio
-  app calls, update-self, and `system/scripts/workspace_bare_scripts/`
-  (`forward_port.py`, `with_secrets.py`, `run_in_background.py`, ...).
+  declares.
+
+A bare module that imports a bare package it does not sit beside puts that
+package's directory on `sys.path` itself, only when it runs by its path
+(`if not __package__:`), as path arithmetic on `Path(__file__)`. A test holds
+every such edit to the directories the bare type check searches, so what
+the checker resolves is what the runtime imports.
+
+A skill whose Python is one standard-library-only script is the exception to
+the package layout: a **bare skill** keeps it as `scripts/<skill_name>.py`
+(underscores for hyphens), optionally with its test beside it as
+`scripts/<skill_name>_test.py`, and no `python/` project. It runs as
+`python3 .agents/skills/<name>/scripts/<skill_name>.py`, and is type-checked
+like the rest. A skill that needs a dependency, or a second module, uses the
+`python/` project instead.
 
 You never need to know which tier a script is in: follow the rule at the top
 (`uv run --no-sync`, unless the instruction says `python3`).

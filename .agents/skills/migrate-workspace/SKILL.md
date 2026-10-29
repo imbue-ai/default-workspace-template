@@ -165,7 +165,7 @@ auto-resolved.
 
 ```bash
 git log --first-parent --format='%H %s' HEAD
-git diff --name-status "$(uv run --no-sync .agents/shared/scripts/agents_shared/resolve_template_base.py)"
+git diff --name-status "$(python3 .agents/shared/scripts/agents_shared/resolve_template_base.py)"
 ```
 
 **Pin the source's state.** If the source has uncommitted work, ask, then commit

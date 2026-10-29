@@ -19,7 +19,10 @@ Exit codes:
           did not go out
 
 Usage:
-    uv run --no-sync .agents/skills/notify-user/python/notify_user_skill/notify_user.py [--title TITLE] MESSAGE
+    python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py [--title TITLE] MESSAGE
+
+It imports only the standard library and the bare ``workspace_bare_scripts``, so it runs
+under the system ``python3`` with no venv.
 
 Environment:
     MNGR_AGENT_ID              Current runtime agent id, registered with the
@@ -53,6 +56,11 @@ import sys
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+# Run by its path, the module puts the bare packages' directory on sys.path; imported as
+# part of its package, the venv already has it.
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "system" / "scripts"))
 
 from workspace_bare_scripts import message_chat
 

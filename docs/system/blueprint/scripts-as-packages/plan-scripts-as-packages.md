@@ -51,7 +51,7 @@
 ## Overview
 
 - **Why.** Skill scripts and `system/scripts` were written as standalone files on the theory that each is an isolated unit. In practice that theory is worked around everywhere: 11 files with `sys.path` inserts (plus 6 in `oom_priority/bin`), about 33 test files loading scripts by path, 8 PEP 723 scripts with private environments, and nothing type-checks any of it (114 ty errors at #831's tip `1f5697934`, after its main merge). Packaging the scripts removes the workarounds and makes them checkable.
-- **The real constraint is the environment, not the layout.** Some code must run when the venv is missing or broken, or is called by path from another release, or sits in a long-running process's launch chain. That is the **bare tier**: system `python3`, stdlib only. Everything else is the **venv tier**. Both are packages; only the interpreter differs.
+- **The real constraint is the environment, not the layout.** A script's imports decide its interpreter. Code that imports only the standard library (the bare packages count as standard library) runs under the system `python3` with no venv: the **bare tier**. That covers code that must run when the venv is missing or broken, is called by path from another release, or sits in a long-running process's launch chain, and also any other stdlib-only module, such as `notify_user.py`. Code that imports a third-party or venv-tier package runs from the root venv: the **venv tier**. Both are packages (a bare skill's single script aside); only the interpreter differs. See "Decided 2026-10-29" below.
 - **Startup cost: imports matter more than uv.** 23f0b3f3 measured this on workspace-1 (gVisor) on 2026-10-08, against the earlier, pydantic-based `workspace-layout` CLI:
   - `python3 layout.py` (the old script): 135 ms.
   - `.venv/bin/workspace-layout`: 582 ms.
@@ -63,6 +63,7 @@
     - top-level imports (pydantic, model building) were the dominant cost, at about 450-560 ms.
   - A resident `uv run` parent also costs about 19 MB per long-running process (commit `4824214bd`).
   - A plain `uv run` rewrote workspace-1's `uv.lock` on 10-07.
+  - Measured on the stack itself (2026-10-29, dev-tier slice, median of 15, `--help`): moving a stdlib-only script from `python3` to `uv run --no-sync` made it slower, not faster -- `notify_user.py` 61 -> 120 ms, `request_secret.py` 55 -> 122 ms. Of `notify_user`'s 120 ms, about 30 ms is uv's wrapper (no `uv run` flag trims it), about 13 ms is `site` processing the venv's 40 editable `.pth` files, and its imports run about 23 ms slower across a 44-entry `sys.path`. Hence the rule above: a script that does not use the venv does not pay for it.
 - **Launch principles.** Long-running processes `exec` their entry point directly (after a `--frozen` sync). One-offs use `uv run --no-sync`, and keep their top-level imports light.
 - **Layout decisions:**
   - A skill's `scripts/` dir is its uv project (`scripts/pyproject.toml`, package `scripts/<skill_name>_skill/`). The workspace glob `.agents/skills/*/scripts` picks it up, because uv requires every glob-matched dir to have a `pyproject.toml` ([uv workspaces docs](https://github.com/astral-sh/uv/blob/main/docs/concepts/projects/workspaces.md)).
@@ -79,7 +80,8 @@
 - One-off commands in docs, skills and prompts read `uv run --no-sync ...`. None of them can trigger a relock or sync, so a drifted lock no longer gets silently rewritten mid-task.
 - Skill scripts keep their paths: `.agents/skills/launch-task/scripts/create_worker.py` still exists and still works.
   - Venv-tier skills run as `uv run --no-sync <path>`.
-  - Bare scripts still run as `python3 <path>` where config or docs call them.
+  - Bare scripts still run as `python3 <path>` where config or docs call them. That includes the stdlib-only modules of venv packages: `notify_user.py`, `request_secret.py`, `serve_isolated_instance.py`, `resolve_template_base.py` and `preview_wrapper_server.py`.
+  - A **bare skill** -- one stdlib-only script, `scripts/<name_with_underscores>.py`, its optional test beside it, no `python/` -- runs as `python3 .agents/skills/<name>/scripts/<name_with_underscores>.py`.
 - An agent facing an arbitrary script doesn't need to know its tier. It runs `uv run --no-sync <path>` unless the instruction it follows says `python3`:
   - a bare script also runs under uv (stdlib only), at about 40 ms more;
   - `python3` on a venv-tier script fails loudly at its first third-party import;
@@ -92,7 +94,7 @@
   - a skill with scripts gets `scripts/pyproject.toml`;
   - entry modules import only light modules at top level;
   - subcommands import their implementation lazily.
-- `validate_skill.py` fails a skill that:
+- `validate_skill.py` accepts a bare skill when its script imports only the standard library, carries no PEP 723 header, does not shadow a standard-library module, and runs under `python3 -S -s ... --help`. Otherwise it fails a skill that:
   - is missing `scripts/pyproject.toml`;
   - has the wrong project/package name;
   - has a lock that doesn't include its dependencies;
@@ -114,12 +116,13 @@
 
 ### For updates of existing workspaces
 - An update into this stack's release changes the root `pyproject.toml`. That triggers the worker's environment gate (`uv lock --check`, then `uv sync --all-packages`) and the full root suite.
-  - A user skill with `scripts/` but no `pyproject.toml` makes `uv sync` fail. The worker reads the migration reference and fixes it.
+  - A user skill with `scripts/` but no `pyproject.toml` makes `uv sync` fail. The worker reads the migration reference and fixes it: a single script with no dependencies becomes a bare skill (renamed to the skill's name, header dropped), anything else gets the `python/` project.
   - Plain `uv run` in user docs, `uv run` program lines in user services, and ty errors in user scripts fail root checks the same way.
 - On a pre-2026-09-14 local Lima workspace (system Python 3.11), the staged `update_self.py` exits with a distinct code at Step 3a. The lead reports the update as impossible and offers `migrate-workspace`. Nothing is applied.
 
 ### For developers of the template
-- The root suite type-checks `.agents`, `system/scripts`, the tests at the top of `system/`, and `conftest.py`, plus a bare-tier check.
+- The root suite type-checks `.agents`, `system/scripts`, the tests at the top of `system/`, and `conftest.py`, plus a bare-tier check. The bare check covers the bare packages, the bare modules of venv packages and every bare skill's script; a bare skill's test is checked against the venv with its own `scripts/` on the search path.
+- A `sys.path` edit may only add one of `entry_points_testing.BARE_SEARCH_PATHS` (the bare packages' and stdlib-only libraries' directories), written as path arithmetic on `Path(__file__)`. The bare type check searches exactly that list, so what it resolves is what the runtime imports. publish-template's two `uv run --no-project` stubs and `update_banding.py`'s runtime import are named exceptions.
 - Each project's `test_no_type_errors` is unchanged.
 
 ## Implementation plan
@@ -194,6 +197,8 @@
   - `stdlib_only_scripts_test.py` stays until PR 3 replaces it; extend its list to the bare package.
 - **`oom_priority/bin`**: entry stubs unchanged; they keep their inserts into `src/`. `script_import_paths_test.py` keeps validating them.
 - **Stub path-edit ratchet**: a root test fails on `sys.path` edits anywhere except a declared list of bare stub files and `update_banding.py`. Extend `script_import_paths_test.py` or add to `test_python_launch_rules.py`.
+- **Bare modules of venv packages** (added 2026-10-29): `notify_user.py`, `request_secret.py`, `serve_isolated_instance.py`, `resolve_template_base.py` and `preview_wrapper_server.py` are listed in `entry_points_testing.BARE_MODULES` and documented as `python3 <path>`. The three that import a bare package put `system/scripts` on `sys.path` only when run by their path (`if not __package__:`). `serve_isolated_instance` starts the preview wrapper by its path under its own interpreter, not with `-m`.
+- **Bare skills** (added 2026-10-29): `validate_skill.py` and `entry_points_testing.is_bare_entry` recognise a skill whose only Python is `scripts/<name_with_underscores>.py` (plus its test).
 - **Invocation rewrites**:
   - Venv-tier skill and system script calls become `uv run --no-sync <path>`: `create_worker.py` (29 sites), `preview_app.py`, `request_secret.py`, `notify_user.py`, `serve_isolated_instance.py`, `migrate_workspace.py`, `scaffold_flask_lib.py`, `validate_skill.py`, `parse_task_frontmatter.py`, `refresh_workspace_view.py` (update-app `SKILL.md`), etc.
   - Bare calls stay `python3 <path>`.
@@ -239,6 +244,7 @@
   - root check: `check_no_type_errors` from the repo root;
   - bare check: create an empty venv (`python3.12 -m venv --without-pip` in tmp), then `ty check --python <empty venv> --python-version 3.12 --extra-search-path <bare roots>` over the bare package, update-self's package, `oom_priority/bin` and the `tk_command_parsing` / `oom_priority` `src/` trees. Bare roots: `system/scripts`, `.agents/skills/update-self/python`, `system/libs/tk_command_parsing/src`, `system/services/oom_priority/src`.
   - Delete `system/scripts/stdlib_only_scripts_test.py`.
+  - (2026-10-29) The bare check's search paths are `entry_points_testing.BARE_SEARCH_PATHS`, shared with the `sys.path` target test. It also covers `BARE_MODULES` and each bare skill's script; each bare skill's test runs through a separate check against the root venv with that skill's `scripts/` as an extra search path, and the root check excludes those test files.
 - **Fix the 114 errors** measured at #831's tip (`1f5697934`: `.agents` 20 plus 1 warning, `system/scripts` 19, `system/*.py` 75, `conftest.py` 0), plus anything the restructure moved or exposed. No suppressions unless the code is correct and ty can't express it.
   - The main group is `system/test_app_manifests.py`'s `dict[AppName, ...]` indexed with string literals (about 70).
   - The rest are scattered `invalid-argument-type` / `unresolved-attribute` / `not-subscriptable` / `invalid-method-override` errors.
@@ -326,6 +332,8 @@
   - the stub run with a faked `sys.version_info < (3, 12)` (e.g. via `-c` with a patched `sys`, or a 3.11 interpreter if available) exits with the dedicated code and the message naming `migrate-workspace`;
   - the existing `launcher_contract_test.py` / `staged_runner_test.py` still pass.
 - **Meta ratchet**: fails on a tmp skill with `scripts/*.py` and no `pyproject.toml`, and on a bash-only `scripts/` with no `pyproject.toml`.
+- **`sys.path` targets** (2026-10-29): a planted edit adding a directory outside `BARE_SEARCH_PATHS`, or one the check cannot read, fails; every named exception still edits `sys.path`.
+- **Bare skills** (2026-10-29): `validate_skill.py` accepts a single stdlib script with or without its test, and rejects a third-party import (top level or inside a function), a PEP 723 header, a name that shadows a standard-library module, and a second module; the runnability check runs it under `python3 -S -s`. In PR 3, a planted type error in a bare skill's script and in its test fails the type checks.
 - **`validate_skill.py`**:
   - `ok` on every built-in skill;
   - fails on a missing pyproject, a wrong package name, a stale lock, or an entry that can't import.
@@ -358,6 +366,11 @@
   - The entry-point table is `[tool.workspace-template.entry-points."<entry>.py"]` with `heavy-imports = [...]`.
   - The test-filename-collision rule is dropped: pytest imports a test inside `<skill>_skill/` as `<skill>_skill.<test>`, and two same-named tests in two skill packages collect together (two flat `scripts/` dirs still collide).
   - With the project in `scripts/`, a stub run through the `.claude/skills` symlink was not recognised as a workspace member; with it in `python/`, uv walks up to the workspace root and the symlinked path works.
+- Decided 2026-10-29, after the stack's first update test (0.9.4 -> stack, dev-tier slice):
+  - The tier follows the imports. A stdlib-only script runs bare even when nothing forces it to, so the five stdlib-only modules of venv packages listed under PR 2 moved back to `python3` (`migrate_workspace.py`, stdlib-only but importing `agents_shared` and rarely run, stays venv tier).
+  - `sys.path` edits stay, but only to `BARE_SEARCH_PATHS`, checked by target rather than only counted. Type checking is unaffected: ty never reads a runtime edit; the root check resolves through the editable installs and the bare check through the shared search paths (verified with planted `reveal_type` and type errors behind edited paths).
+  - Rejected alternatives: a `.pth` in the system interpreter (one absolute checkout, so a worker in its worktree would import the main checkout's bare code), a relative `PYTHONPATH` in the agent environment (every interpreter, cwd-dependent), hatchling's `dev-mode-exact` editables to shorten `sys.path` (not supported by static analysis tools, which would undercut the type checks), and running one-offs from `.venv/bin` instead of `uv run --no-sync` (saves the wrapper's ~30 ms but changes which `mngr` spawned children find on `PATH`).
+  - A user skill whose Python is one stdlib-only script may stay a single file (a bare skill); one module per name keeps pytest's prepend imports and ty's resolution from colliding across skills.
 - **Expensive-stdlib list for the bare tier**: start with `asyncio`, then measure on the scratch workspace before fixing the list.
 - **Does update-self's apply health probe cover every program?** If a bare wrapper broke after an apply, would the probes catch it? Relevant only to the safety margin. The 3.12 guard makes it moot for the version case.
 - **Follow-ups outside this stack**: MIND-485 (guard dispatcher and the rewrite hook's `Bash` matcher, on main after this merges); MIND-486 (migration-doc system that reshapes the migration reference).

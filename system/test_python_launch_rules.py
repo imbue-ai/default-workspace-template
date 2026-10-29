@@ -28,7 +28,7 @@ import subprocess
 import tomllib
 from pathlib import Path, PurePosixPath
 
-from entry_points_testing import REPO_ROOT, is_bare_entry
+from entry_points_testing import BARE_SEARCH_PATHS, REPO_ROOT, is_bare_entry
 from imbue.mngr.interfaces.host import NamedCommand
 from inline_snapshot import snapshot
 from vendor_testing import resolves_into_vendor
@@ -600,10 +600,10 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
     doc.write_text(
         "\n".join(
             [
-                "python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py 'done'",
+                "python3 .agents/shared/scripts/agents_shared/validate_skill.py skill-dir",
                 "python3 system/scripts/forward_port.py --name x --url http://localhost:1",
                 "python3 system/scripts/no_such_script.py",
-                "uv run --no-sync python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py 'fine'",
+                "uv run --no-sync python3 .agents/shared/scripts/agents_shared/validate_skill.py skill-dir",
                 'command": "python3 \\"$MNGR_AGENT_WORK_DIR/system/scripts/agent_rewrite_bash_command.py\\""',
             ]
         )
@@ -616,7 +616,7 @@ def test_the_python3_scan_catches_a_venv_script_and_a_stale_path(tmp_path: Path)
     ]
 
     assert offenders == [
-        ".agents/skills/notify-user/python/notify_user_skill/notify_user.py",
+        ".agents/shared/scripts/agents_shared/validate_skill.py",
         "system/scripts/no_such_script.py",
     ]
 
@@ -760,7 +760,7 @@ def _sys_path_editors(repo_root: Path) -> list[str]:
 
 def test_prevent_sys_path_edits() -> None:
     offenders = _sys_path_editors(REPO_ROOT)
-    assert len(offenders) <= snapshot(19), (
+    assert len(offenders) <= snapshot(22), (
         "These edit the import path (sys.path, PYTHONPATH, or a pytest pythonpath setting). Import the package instead: a skill's modules live in its python/ "
         "project and a system script's beside it, all importable from the root venv:\n"
         + "\n".join(offenders)
@@ -808,6 +808,119 @@ def test_a_pytest_pythonpath_setting_is_counted(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
     assert _sys_path_editors(tmp_path) == ["app/pyproject.toml"]
+
+
+# Files whose sys.path edit adds a directory outside the bare search paths, each for a reason
+# no import can replace.
+_SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS = (
+    # publish-template's two tools run under `uv run --no-project` (pydantic via --with, no
+    # venv) and import their own package from the skill's python/.
+    ".agents/skills/publish-template/scripts/validate_template.py",
+    ".agents/skills/publish-template/scripts/write_template_manifest.py",
+    # The update's apply loads oom_priority's bands from the target release's tree, a path
+    # known only at run time.
+    ".agents/skills/update-self/python/update_self_skill/update_banding.py",
+)
+
+
+def _file_relative_path(node: ast.expr, file: Path) -> Path | None:
+    """Where ``Path(__file__)``-based path arithmetic points, or None for any other expression."""
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and len(node.args) == 1:
+        if node.func.id == "str":
+            return _file_relative_path(node.args[0], file)
+        if node.func.id == "Path" and isinstance(node.args[0], ast.Name) and node.args[0].id == "__file__":
+            return file
+        return None
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "resolve":
+        inner = _file_relative_path(node.func.value, file)
+        return inner.resolve() if inner is not None else None
+    if isinstance(node, ast.Attribute) and node.attr == "parent":
+        inner = _file_relative_path(node.value, file)
+        return inner.parent if inner is not None else None
+    if (
+        isinstance(node, ast.Subscript)
+        and isinstance(node.value, ast.Attribute)
+        and node.value.attr == "parents"
+        and isinstance(node.slice, ast.Constant)
+        and isinstance(node.slice.value, int)
+    ):
+        inner = _file_relative_path(node.value.value, file)
+        return inner.parents[node.slice.value] if inner is not None else None
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div) and isinstance(node.right, ast.Constant):
+        inner = _file_relative_path(node.left, file)
+        return inner / str(node.right.value) if inner is not None else None
+    return None
+
+
+def _sys_path_insert_targets(source: str, file: Path) -> list[tuple[int, Path | None]]:
+    """``(line, directory)`` for each ``sys.path.insert``/``append``; None where it cannot be read."""
+    targets: list[tuple[int, Path | None]] = []
+    for node in ast.walk(ast.parse(source)):
+        if not (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in ("insert", "append")
+            and isinstance(node.func.value, ast.Attribute)
+            and node.func.value.attr == "path"
+            and isinstance(node.func.value.value, ast.Name)
+            and node.func.value.value.id == "sys"
+            and node.args
+        ):
+            continue
+        added = _file_relative_path(node.args[-1], file)
+        targets.append((node.lineno, added.resolve() if added is not None else None))
+    return targets
+
+
+def _sys_path_edits_outside_the_bare_search_paths(repo_root: Path, allowed: tuple[Path, ...]) -> list[str]:
+    resolved_allowed = {path.resolve() for path in allowed}
+    return [
+        f"{relative}:{line}: adds {target if target is not None else 'a path this check cannot read'}"
+        for relative in _tracked_python_files(repo_root)
+        if relative not in _SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS
+        for line, target in _sys_path_insert_targets((repo_root / relative).read_text(), repo_root / relative)
+        if target not in resolved_allowed
+    ]
+
+
+def test_sys_path_edits_only_add_a_bare_search_path() -> None:
+    offenders = _sys_path_edits_outside_the_bare_search_paths(REPO_ROOT, BARE_SEARCH_PATHS)
+    assert not offenders, (
+        "A sys.path edit may only add a bare search path (entry_points_testing.BARE_SEARCH_PATHS: "
+        "where the bare packages and the stdlib-only libraries live), written as path arithmetic on "
+        "Path(__file__) so the bare type check, which searches exactly those directories, resolves "
+        "what the runtime imports:\n" + "\n".join(offenders)
+    )
+
+
+def test_every_named_sys_path_exception_still_edits_sys_path() -> None:
+    for relative in _SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS:
+        assert _edits_sys_path((REPO_ROOT / relative).read_text()), relative
+
+
+def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(tmp_path: Path) -> None:
+    allowed_dir = tmp_path / "system" / "scripts"
+    allowed_dir.mkdir(parents=True)
+    module = tmp_path / ".agents" / "skills" / "probe" / "python" / "probe_skill" / "probe.py"
+    module.parent.mkdir(parents=True)
+    (module.parent.parent / "pyproject.toml").write_text("[project]\n")
+    module.write_text(
+        "import sys\nfrom pathlib import Path\n\n"
+        "if not __package__:\n"
+        '    sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "system" / "scripts"))\n'
+        'sys.path.append(str(Path(__file__).resolve().parent / "elsewhere"))\n'
+        "sys.path.insert(0, computed_somewhere)\n"
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+
+    offenders = _sys_path_edits_outside_the_bare_search_paths(tmp_path, (allowed_dir,))
+
+    relative = ".agents/skills/probe/python/probe_skill/probe.py"
+    assert offenders == [
+        f"{relative}:6: adds {(module.parent / 'elsewhere').resolve()}",
+        f"{relative}:7: adds a path this check cannot read",
+    ]
 
 
 # The ways to run a module from a file instead of importing it: each one sidesteps the

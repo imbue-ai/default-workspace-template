@@ -10,21 +10,29 @@ Static structural checks (in order, short-circuit on first failure per check):
 - SKILL.md body (after frontmatter) is at most 500 lines.
 - If the skill has Python (entry files in `scripts/`, or a `python/` dir --
   optional even for crystallized skills: a skill may be pure SKILL.md prose, and
-  a `scripts/` dir of shell scripts needs nothing), `python/pyproject.toml`
-  exists and names the project `<name>-skill` and its one package
-  `<name_with_underscores>_skill` (a directory beside it with an `__init__.py`).
+  a `scripts/` dir of shell scripts needs nothing), it is either:
+  - a bare skill: one standard-library-only script, `scripts/<name_with_underscores>.py`
+    (plus, optionally, its test `scripts/<name_with_underscores>_test.py`), with no
+    PEP 723 header and no `python/` dir; or
+  - a packaged skill: `python/pyproject.toml` exists and names the project
+    `<name>-skill` and its one package `<name_with_underscores>_skill` (a directory
+    beside it with an `__init__.py`).
 
 Runnability checks (only when the static checks pass and the skill has Python):
 
-- `uv lock --check` passes: the workspace lock includes the skill's
-  dependencies, so `uv sync --all-packages` installs them.
-- `uv run --no-sync <entry> --help` exits 0 for every entry file -- each module of
+- A bare skill's script: `python3 -S -s <script> --help` exits 0, run with no
+  site-packages, the way the system `python3` runs it.
+- A packaged skill: `uv lock --check` passes (the workspace lock includes the
+  skill's dependencies, so `uv sync --all-packages` installs them), and
+  `uv run --no-sync <entry> --help` exits 0 for every entry file -- each module of
   the package with a top-level `if __name__ == "__main__":` block, and any stub at
   the top of `scripts/` -- so a broken import or a missing dependency is caught here rather
   than only at scenario time. A package with a module run by its path holds no
-  module named like a standard-library one, which that run would import instead. `--help` is a shallow import check: it exercises
-  the top-level imports and argparse wiring, not imports done lazily inside
-  subcommand bodies -- those are left to scenario testing.
+  module named like a standard-library one, which that run would import instead.
+
+`--help` is a shallow import check: it exercises the top-level imports and argparse
+wiring, not imports done lazily inside subcommand bodies -- those are left to
+scenario testing.
 
 Exits 0 and prints `ok` when valid; exits 1 with a human-readable error to
 stderr otherwise.
@@ -156,19 +164,92 @@ def _entry_files(skill_dir: Path) -> list[Path]:
     return [*modules, *_script_stubs(skill_dir)]
 
 
+def bare_skill_module(skill_dir: Path) -> Path | None:
+    """The script of a bare skill: one ``scripts/<name_with_underscores>.py``, no ``python/``.
+
+    Its own test, ``scripts/<name_with_underscores>_test.py``, may sit beside it; any other
+    ``.py`` there makes the skill a packaged one.
+    """
+    scripts_dir = skill_dir / "scripts"
+    if (skill_dir / "python").exists() or not scripts_dir.is_dir():
+        return None
+    module_name = skill_dir.name.replace("-", "_")
+    python_files = {path.name for path in scripts_dir.glob("*.py")}
+    if f"{module_name}.py" not in python_files or not python_files <= {
+        f"{module_name}.py",
+        f"{module_name}_test.py",
+    }:
+        return None
+    return scripts_dir / f"{module_name}.py"
+
+
+def _imported_top_level_names(source: str, filename: str) -> set[str]:
+    """Every module a source imports, at any depth, by its top-level name.
+
+    A relative import has no package to resolve against in a bare script, so it is
+    reported as ``.``.
+    """
+    names: set[str] = set()
+    for node in ast.walk(ast.parse(source, filename=filename)):
+        if isinstance(node, ast.Import):
+            names |= {alias.name.split(".")[0] for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            names.add("." if node.level else (node.module or "").split(".")[0])
+    return names
+
+
+def _validate_bare_skill(module: Path) -> str | None:
+    """A bare script imports only the standard library and carries no PEP 723 header."""
+    if module.stem in sys.stdlib_module_names:
+        return (
+            f"{module} would shadow the standard-library module {module.stem!r} when it "
+            "runs by its own path; rename the skill"
+        )
+    source = module.read_text(encoding="utf-8")
+    if re.search(r"^# /// script\s*$", source, re.MULTILINE):
+        return (
+            f"{module} has a PEP 723 header: a bare skill's script runs under the system "
+            "python3 with no environment of its own, so drop the header (a script that "
+            "needs dependencies belongs in a python/ project instead)"
+        )
+    try:
+        imported = _imported_top_level_names(source, str(module))
+    except SyntaxError as exc:
+        return f"{module} cannot be parsed: {exc}"
+    outside = sorted(
+        name
+        for name in imported
+        if name not in sys.stdlib_module_names and name != "__future__"
+    )
+    if outside:
+        return (
+            f"{module} imports outside the standard library ({', '.join(outside)}): a "
+            "bare skill's script runs under the system python3 with no venv. Move the "
+            "skill's Python into a python/ project (see "
+            ".agents/shared/references/spec-summary.md, Packaging)"
+        )
+    return None
+
+
 def _validate_python_project(skill_dir: Path, skill_name: str) -> str | None:
-    """If the skill has Python, require its ``python/`` uv project to be named for the skill.
+    """If the skill has Python, require it to be a bare skill or a ``python/`` uv project
+    named for the skill.
 
     A skill with no entry files in ``scripts/`` and no ``python/`` dir is OK.
     """
     project_dir = skill_dir / "python"
     if not _script_stubs(skill_dir) and not project_dir.is_dir():
         return None
+    bare_module = bare_skill_module(skill_dir)
+    if bare_module is not None:
+        return _validate_bare_skill(bare_module)
     pyproject = project_dir / "pyproject.toml"
     if not pyproject.is_file():
+        module_name = skill_name.replace("-", "_")
         return (
             f"{pyproject} is missing: a skill's Python lives in its python/ uv project, "
-            "a workspace member that needs one (see "
+            "a workspace member that needs one, unless it is a single standard-library "
+            f"script, scripts/{module_name}.py (see "
             ".agents/shared/references/spec-summary.md, Packaging)"
         )
     try:
@@ -218,7 +299,7 @@ def _run_checked(
     except subprocess.TimeoutExpired:
         return f"{what} did not finish within {_UV_TIMEOUT_SECONDS}s"
     except FileNotFoundError:
-        return f"`uv` was not found on PATH; cannot run {what}"
+        return f"`{argv[0]}` was not found on PATH; cannot run {what}"
     if result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip()
         return f"{what} failed (exit {result.returncode}):\n{detail}"
@@ -228,11 +309,22 @@ def _run_checked(
 def check_runnable(skill_dir: Path, runner: CommandRunner = _run_via_uv) -> str | None:
     """Confirm the skill's dependencies are locked and every entry imports and builds its CLI.
 
-    Runs ``uv lock --check`` and then ``uv run --no-sync <entry> --help`` for each
-    entry file, via ``runner`` (injectable for testing). Returns an
-    error message on the first failure, otherwise ``None``. A skill with no
-    ``python/`` project is trivially runnable.
+    A bare skill's script runs as ``python3 -S -s <script> --help``. A packaged skill
+    runs ``uv lock --check`` and then ``uv run --no-sync <entry> --help`` for each
+    entry file. Commands go through ``runner`` (injectable for testing). Returns an
+    error message on the first failure, otherwise ``None``. A skill with neither is
+    trivially runnable.
     """
+    bare_module = bare_skill_module(skill_dir)
+    if bare_module is not None:
+        module = bare_module.resolve()
+        return _run_checked(
+            ["python3", "-S", "-s", str(module), "--help"],
+            module.parent,
+            runner,
+            f"`python3 {module} --help` with no site-packages (it may import something "
+            "outside the standard library, or be broken)",
+        )
     project_dir = (skill_dir / "python").resolve()
     if not project_dir.is_dir():
         return None

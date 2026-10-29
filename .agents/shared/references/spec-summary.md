@@ -208,8 +208,22 @@ the one workspace lock and its package installs into the root venv:
   `uv sync --all-packages`, and commit `uv.lock` with the change; a clash
   surfaces at `uv lock`.
 
+A skill whose whole Python is one script that imports only the standard
+library may instead be a **bare skill**: the script is
+`scripts/<name_with_underscores>.py`, its test (if any) sits beside it as
+`scripts/<name_with_underscores>_test.py` and imports it by that name, and there
+is no `python/` dir and no PEP 723 header. It runs under the system `python3`
+with no venv:
+
+```bash
+python3 .agents/skills/<name>/scripts/<name_with_underscores>.py <args>
+```
+
+It needs no `uv lock` or sync, and starts faster. The moment it needs a
+dependency or a second module, move it into the `python/` project above.
+
 See `.agents/shared/references/running-python.md` for why, and for the bare
-tier (scripts the system `python3` runs) that only built-in code uses.
+tier (code the system `python3` runs) in general.
 
 For [ai-script] steps, make sure to read and follow the instructions in the **`use-ai-integration`** skill.
 
@@ -226,9 +240,11 @@ For [ai-script] steps, make sure to read and follow the instructions in the **`u
 
 `uv run --no-sync .agents/shared/scripts/agents_shared/validate_skill.py <skill_dir>` checks SKILL.md
 frontmatter, the kebab-case name rules, directory-name match, description
-length and the 500-line body limit. When the skill has Python (a `python/`
-dir, or a built-in skill's entry stub in `scripts/`) it also checks that `python/pyproject.toml`
-exists and names the project
+length and the 500-line body limit. For a bare skill it checks that the one
+script imports only the standard library, carries no PEP 723 header, and that
+`python3 -S -s <script> --help` (no site-packages) exits 0. When the skill has
+Python otherwise (a `python/` dir, or a built-in skill's entry stub in
+`scripts/`) it checks that `python/pyproject.toml` exists and names the project
 `<name>-skill` and the package `<name_with_underscores>_skill`, that `uv lock
 --check` passes (the workspace lock includes the skill's dependencies), and
 that `uv run --no-sync <entry> --help` exits 0 for every package module with

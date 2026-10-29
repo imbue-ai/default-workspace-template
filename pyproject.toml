@@ -227,6 +227,9 @@ addopts = [
 # under system/ is its own ty project with its own test_no_type_errors.
 [tool.ty.src]
 include = [".agents", "system/scripts", "system/*.py", "conftest.py"]
+# A bare skill's test imports its script by name, which only that skill's scripts/ dir
+# resolves; system/test_no_type_errors.py checks each one with that dir on the search path.
+exclude = [".agents/skills/*/scripts/*_test.py"]
 
 # Workspaces run on Linux; without this ty would judge platform-specific stdlib calls
 # (os.waitid, ...) by whichever machine runs the check.
