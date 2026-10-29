@@ -8165,16 +8165,24 @@ def test_a_rooms_wait_on_a_chat_is_dropped_once_it_is_older_than_the_timeout(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """An agent that never posts back must not leave the room's row working for good (the multiplayer spec,
-    section 7.4): the chat-list recompute drops a wait older than the timeout and keeps a younger one."""
+    section 7.4): the chat-list recompute drops a wait older than the timeout and keeps a younger one, and a chat
+    asked again waits afresh from that ask."""
     manager, main, lounge, _attic = _rooms_and_main(broadcaster, tmp_path)
-    try:
-        manager.note_chat_awaiting(lounge, main)
-        assert _awaiting(manager, lounge) == (main,)
+
+    def age_the_wait() -> None:
         with manager._lock:
             manager._awaiting_by_chat[lounge] = (
                 _AwaitedChat(chat_id=main, since=time.monotonic() - AWAITING_CHAT_TIMEOUT_SECONDS - 1.0),
             )
 
+    try:
+        manager.note_chat_awaiting(lounge, main)
+        assert _awaiting(manager, lounge) == (main,)
+        age_the_wait()
+        manager.note_chat_awaiting(lounge, main)
+        assert _awaiting(manager, lounge) == (main,)
+
+        age_the_wait()
         assert _awaiting(manager, lounge) == ()
         assert lounge not in manager._awaiting_by_chat
     finally:

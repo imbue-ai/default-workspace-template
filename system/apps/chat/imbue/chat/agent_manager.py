@@ -1784,14 +1784,13 @@ class AgentManager:
             self._awaiting_by_chat.pop(chat_id, None)
 
     def note_chat_awaiting(self, chat_id: ChatId, asked_chat_id: ChatId) -> None:
-        """A mention from ``chat_id`` went to ``asked_chat_id``; the chat waits for its answer, and its row says so."""
+        """A mention from ``chat_id`` went to ``asked_chat_id``; the chat waits for its answer, and its row says so.
+        Asked again, the chat waits afresh: the timeout runs from the newest ask."""
         with self._lock:
-            waiting = self._awaiting_by_chat.get(chat_id, ())
-            if all(awaited.chat_id != asked_chat_id for awaited in waiting):
-                self._awaiting_by_chat[chat_id] = (
-                    *waiting,
-                    _AwaitedChat(chat_id=asked_chat_id, since=time.monotonic()),
-                )
+            others = tuple(
+                awaited for awaited in self._awaiting_by_chat.get(chat_id, ()) if awaited.chat_id != asked_chat_id
+            )
+            self._awaiting_by_chat[chat_id] = (*others, _AwaitedChat(chat_id=asked_chat_id, since=time.monotonic()))
         self._broadcast_chats_updated()
 
     def forget_chat_awaiting(self, chat_id: ChatId, asked_chat_id: ChatId) -> None:
