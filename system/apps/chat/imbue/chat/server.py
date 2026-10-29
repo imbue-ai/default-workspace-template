@@ -146,6 +146,7 @@ from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.mention_parser import MentionTarget
 from imbue.chat.mentions import BackgroundMentionDeliverer
 from imbue.chat.mentions import MentionHandler
+from imbue.chat.mentions_endpoints import requester_mention_keys
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentListItem
@@ -2525,6 +2526,10 @@ def _destroy_chat(chat_id: str) -> Response:
         agent_manager.destroy_chat(ChatId(chat_id))
     except AgentDestroyError as e:
         return error_response(str(e), 500)
+    # Nobody is left to look at what mentioned them there (section 7.4).
+    state = get_state()
+    if state.mentions.clear_chat(ChatId(chat_id)):
+        state.broadcaster.broadcast_mentions_updated()
     return model_response(DestroyAgentResponse(status="ok"))
 
 
@@ -2637,7 +2642,7 @@ def _presence_endpoint(chat_id: str) -> Response:
     state.agent_manager.record_presence(ChatId(chat_id), report)
     # A page of theirs looking at the chat is the person having seen what mentioned them (section 7.4).
     if report.state is PresenceState.VISIBLE and report.is_focused:
-        if state.mentions.clear(request_participant(), ChatId(chat_id)):
+        if state.mentions.clear_for(requester_mention_keys(), ChatId(chat_id)):
             state.broadcaster.broadcast_mentions_updated()
     return model_response(OkResponse())
 

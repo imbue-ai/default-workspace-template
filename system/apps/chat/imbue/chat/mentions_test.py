@@ -2,6 +2,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from pydantic import Field
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
@@ -15,6 +16,7 @@ from imbue.chat.mentions import MentionDeliverer
 from imbue.chat.mentions import MentionHandler
 from imbue.chat.mentions import MentionStore
 from imbue.chat.mentions import PendingMention
+from imbue.chat.mentions import mention_keys_of
 from imbue.chat.mentions import mentions_filename
 from imbue.chat.primitives import ChatId
 from imbue.chat.roster_client import RosterClient
@@ -55,8 +57,55 @@ def test_looking_at_a_chat_clears_only_that_chats_mentions(tmp_path: Path) -> No
     assert store.pending(_BOB) == () and not (tmp_path / mentions_filename(_BOB)).exists()
 
 
-def test_the_file_is_named_after_the_key_with_no_path_separator() -> None:
-    assert mentions_filename(ParticipantKey("email:a/b@example.com")) == "email:a_b@example.com.jsonl"
+def test_the_file_is_named_after_the_key_itself() -> None:
+    # A participant key is filename-safe, so the file needs no other name.
+    assert mentions_filename(ParticipantKey("email:a.b@example.com")) == "email:a.b@example.com.jsonl"
+    assert mentions_filename(_BOB) == "user:user-bob-4471.jsonl"
+
+
+def test_a_requesters_mentions_are_read_and_cleared_under_every_key_of_theirs(tmp_path: Path) -> None:
+    """The owner's mentions are recorded under the roster's key for them and asked for under ``owner`` by a page
+    whose header carries no user id (the multiplayer spec, S12): both keys are read, and both are cleared."""
+    store = MentionStore(root=tmp_path)
+    store.record(_JOSH, _LOUNGE, "m-1", _BOB)
+    store.record(ParticipantKey("owner"), _LOUNGE, "m-2", _BOB)
+    store.record(ParticipantKey("owner"), _MAIN, "m-3", _BOB)
+
+    both = (ParticipantKey("owner"), _JOSH)
+    assert [mention.message_id for mention in store.pending_for(both)] == ["m-2", "m-3", "m-1"]
+    assert store.clear_for(both, _LOUNGE) is True
+    assert [mention.message_id for mention in store.pending_for(both)] == ["m-3"]
+    assert store.clear_for(both, _LOUNGE) is False
+
+
+def test_destroying_a_chat_drops_its_mentions_from_every_file(tmp_path: Path) -> None:
+    store = MentionStore(root=tmp_path)
+    store.record(_BOB, _LOUNGE, "m-1", _JOSH)
+    store.record(_JOSH, _LOUNGE, "m-2", _BOB)
+    store.record(_JOSH, _MAIN, "m-3", _BOB)
+
+    assert store.clear_chat(_LOUNGE) is True
+    assert store.pending(_BOB) == () and not (tmp_path / mentions_filename(_BOB)).exists()
+    assert [mention.chat_id for mention in store.pending(_JOSH)] == [_MAIN]
+    assert store.clear_chat(_LOUNGE) is False
+    assert MentionStore(root=tmp_path / "never-written").clear_chat(_LOUNGE) is False
+
+
+def test_the_owner_asks_under_both_of_their_keys_and_a_visitor_under_their_own() -> None:
+    roster = RosterDocument(
+        participants=(
+            roster_participant(_JOSH, display_name="Josh", is_owner=True),
+            roster_participant(_BOB, display_name="Bob"),
+        )
+    )
+    anonymous_owner = RequestIdentity(owner=True)
+    shared_owner = RequestIdentity(owner=True, user_id="user-josh-0001", email="josh@example.com")
+    visitor = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
+
+    assert mention_keys_of(anonymous_owner, roster) == (ParticipantKey("owner"), _JOSH)
+    assert mention_keys_of(shared_owner, roster) == (_JOSH, ParticipantKey("owner"))
+    assert mention_keys_of(visitor, roster) == (_BOB,)
+    assert mention_keys_of(anonymous_owner, RosterDocument(participants=())) == (ParticipantKey("owner"),)
 
 
 class _RefusingSomeDeliverer(MentionDeliverer):

@@ -4,7 +4,8 @@ the mentions each person has not looked at yet.
 A mention acts only in a room. A mentioned person is marked: the chat app appends ``{"chat_id", "message_id",
 "sender"}`` to ``data/.apps/chat/mentions/<key>.jsonl``, ``GET /api/mentions/pending`` answers the requester their
 own, so the chat list's row wears an ``@`` badge until they have looked, and a page of theirs watching the chat
-clears that chat's entries; the owner is told through the Imbue Studio app's feed as well. The workspace's agent
+clears that chat's entries (the owner's under both of the owner's keys), as does the chat's destruction for
+everyone's; the owner is told through the Imbue Studio app's feed as well. The workspace's agent
 (``@agent``) or an agent chat by its title is sent the room's message, prefixed with who said it and where, through
 the ordinary send path on a thread of its own; the room is marked as waiting on that chat until an agent posts into
 it. In an agent chat a handle is a word the agent reads like any other.
@@ -25,8 +26,13 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import ValidationError
+from workspace_layout.identity import RequestIdentity
+from workspace_layout.identity import is_owner_participant
+from workspace_layout.identity import participant_key_of
+from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
+from workspace_layout.roster import RosterDocument
 
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.authors import AuthorStore
@@ -68,9 +74,21 @@ class PendingMentionsResponse(FrozenModel):
 
 @pure
 def mentions_filename(key: ParticipantKey) -> str:
-    """The file a participant's mentions are kept in: the key, with the one character a key may carry that a
-    file name may not."""
-    return f"{str(key).replace('/', '_')}.jsonl"
+    """The file a participant's mentions are kept in: the key, which is filename-safe."""
+    return f"{key}.jsonl"
+
+
+@pure
+def mention_keys_of(identity: RequestIdentity, roster: RosterDocument) -> tuple[ParticipantKey, ...]:
+    """The keys a requester's mentions are kept under: their own, and for the owner both of the owner's keys (the
+    multiplayer spec, S12), since a mention is recorded under the roster's key for them (``user:<id>`` once the
+    workspace is shared) while an owner page whose header carries no user id asks under ``owner``."""
+    own = participant_key_of(identity)
+    if not is_owner_participant(identity):
+        return (own,)
+    roster_owner = next((entry.key for entry in roster.participants if entry.is_owner), None)
+    keys = [own, OWNER_PARTICIPANT_KEY, *([roster_owner] if roster_owner is not None else [])]
+    return tuple(dict.fromkeys(keys))
 
 
 class MentionStore(MutableModel):
@@ -96,30 +114,54 @@ class MentionStore(MutableModel):
         with self._lock:
             return self._read_locked(key)
 
+    def pending_for(self, keys: Sequence[ParticipantKey]) -> tuple[PendingMention, ...]:
+        """The mentions kept under any of ``keys`` (a requester's own keys), each file's oldest first."""
+        with self._lock:
+            return tuple(mention for key in keys for mention in self._read_locked(key))
+
     def clear(self, key: ParticipantKey, chat_id: ChatId) -> bool:
         """Drop the participant's mentions in ``chat_id``; whether any was dropped."""
         with self._lock:
-            pending = self._read_locked(key)
-            kept = tuple(mention for mention in pending if mention.chat_id != chat_id)
-            if len(kept) == len(pending):
+            return self._clear_locked(key, chat_id)
+
+    def clear_for(self, keys: Sequence[ParticipantKey], chat_id: ChatId) -> bool:
+        """Drop the mentions in ``chat_id`` kept under any of ``keys``; whether any was dropped."""
+        with self._lock:
+            return any([self._clear_locked(key, chat_id) for key in keys])
+
+    def clear_chat(self, chat_id: ChatId) -> bool:
+        """Drop every participant's mentions in ``chat_id`` (the chat was destroyed); whether any was dropped."""
+        with self._lock:
+            if not self.root.is_dir():
                 return False
-            path = self._path(key)
-            if not kept:
-                path.unlink(missing_ok=True)
-                return True
-            temp_path = path.with_suffix(".jsonl.tmp")
-            temp_path.write_text("".join(mention.model_dump_json() + "\n" for mention in kept), encoding="utf-8")
-            temp_path.replace(path)
+            return any([self._clear_file_locked(path, chat_id) for path in sorted(self.root.glob("*.jsonl"))])
+
+    def _clear_locked(self, key: ParticipantKey, chat_id: ChatId) -> bool:
+        return self._clear_file_locked(self._path(key), chat_id)
+
+    def _clear_file_locked(self, path: Path, chat_id: ChatId) -> bool:
+        pending = self._read_file_locked(path)
+        kept = tuple(mention for mention in pending if mention.chat_id != chat_id)
+        if len(kept) == len(pending):
+            return False
+        if not kept:
+            path.unlink(missing_ok=True)
             return True
+        temp_path = path.with_suffix(".jsonl.tmp")
+        temp_path.write_text("".join(mention.model_dump_json() + "\n" for mention in kept), encoding="utf-8")
+        temp_path.replace(path)
+        return True
 
     def _read_locked(self, key: ParticipantKey) -> tuple[PendingMention, ...]:
-        path = self._path(key)
+        return self._read_file_locked(self._path(key))
+
+    def _read_file_locked(self, path: Path) -> tuple[PendingMention, ...]:
         try:
             lines = path.read_text(encoding="utf-8").splitlines()
         except FileNotFoundError:
             return ()
         except OSError as e:
-            logger.warning("Could not read the mentions of {}: {}", key, e)
+            logger.warning("Could not read the mentions in {}: {}", path.name, e)
             return ()
         mentions: list[PendingMention] = []
         for line in lines:
@@ -128,7 +170,7 @@ class MentionStore(MutableModel):
             try:
                 mentions.append(PendingMention.model_validate(json.loads(line)))
             except (ValueError, ValidationError) as e:
-                logger.warning("Skipped an unreadable mention line of {}: {}", key, e)
+                logger.warning("Skipped an unreadable mention line of {}: {}", path.name, e)
         return tuple(mentions)
 
 

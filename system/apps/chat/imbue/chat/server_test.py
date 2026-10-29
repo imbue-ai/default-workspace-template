@@ -5458,6 +5458,7 @@ def _identity_header(identity: RequestIdentity) -> dict[str, str]:
 
 
 _VISITOR = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
+_VISITOR_KEY = "user:user-bob-4471"
 _VISITING_AGENT = RequestIdentity(
     owner=False, agent_id="va-0123456789abcdef0123456789abcdef", agent_name="Josh's Claude", granter="user:8c0f"
 )
@@ -5891,6 +5892,69 @@ def test_a_mention_of_a_person_in_a_room_is_pending_until_a_page_of_theirs_watch
         headers=_identity_header(_JOSH),
     )
     assert client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()["mentions"] == []
+
+
+def test_an_owner_page_under_the_owner_key_reads_and_clears_a_mention_recorded_under_their_account(
+    tmp_path: Path,
+) -> None:
+    """A mention is recorded under the roster's key for the owner (``user:<id>`` on a shared workspace) while an
+    owner page whose header carries no user id asks under ``owner`` (the multiplayer spec, S12): both of the
+    owner's keys are read, and looking at the chat clears under both."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    client = app.test_client()
+    state = state_of(app)
+    anonymous_owner = {IDENTITY_HEADER: '{"owner": true}'}
+    state.mentions.record(
+        ParticipantKey("user:user-josh-0001"), ChatId(_LOUNGE_ID), "m-1", ParticipantKey(_VISITOR_KEY)
+    )
+    state.mentions.record(ParticipantKey("owner"), ChatId(_LOUNGE_ID), "m-2", ParticipantKey(_VISITOR_KEY))
+
+    pending = client.get("/api/mentions/pending", headers=anonymous_owner).get_json()["mentions"]
+    assert [mention["message_id"] for mention in pending] == ["m-2", "m-1"]
+    assert client.get("/api/mentions/pending", headers=_identity_header(_VISITOR)).get_json()["mentions"] == []
+    client.post(
+        f"/api/chats/{_LOUNGE_ID}/presence",
+        json=_presence_body("visible", "page-owner", is_focused=True),
+        headers=anonymous_owner,
+    )
+    assert client.get("/api/mentions/pending", headers=anonymous_owner).get_json()["mentions"] == []
+    assert client.get("/api/mentions/pending", headers=_identity_header(_JOSH)).get_json()["mentions"] == []
+
+
+def test_destroying_a_room_drops_its_mentions_from_everyones_file(tmp_path: Path) -> None:
+    app, _log_path = _recording_app(tmp_path)
+    client = app.test_client()
+    state = state_of(app)
+    room_id = f"agent-{uuid4().hex}"
+    other_id = f"agent-{uuid4().hex}"
+    seed_agent_state(state.agent_manager, room_id, name="Lounge", harness=HarnessType.ROOM)
+    state.mentions.record(ParticipantKey("user:user-josh-0001"), ChatId(room_id), "m-1", ParticipantKey(_VISITOR_KEY))
+    state.mentions.record(ParticipantKey(_VISITOR_KEY), ChatId(room_id), "m-2", ParticipantKey("user:user-josh-0001"))
+    state.mentions.record(ParticipantKey(_VISITOR_KEY), ChatId(other_id), "m-3", ParticipantKey("user:user-josh-0001"))
+
+    assert client.post(f"/api/chats/{room_id}/destroy").status_code == 200
+
+    assert state.mentions.pending(ParticipantKey("user:user-josh-0001")) == ()
+    assert [mention.chat_id for mention in state.mentions.pending(ParticipantKey(_VISITOR_KEY))] == [other_id]
+
+
+def test_the_agents_earlier_post_into_a_room_nobody_had_open_answers_what_the_room_asked(tmp_path: Path) -> None:
+    """A room's wait on a chat is cleared by the agent's post into it when the room's watcher is first built (the
+    backlog scan), not only by a post the live watcher sees (the multiplayer spec, section 7.4)."""
+    app = _peopled_app(tmp_path, RecordingMngrMessenger())
+    state = state_of(app)
+    manager = state.agent_manager
+    manager.note_chat_awaiting(ChatId(_LOUNGE_ID), ChatId(_MAIN_ID))
+    _post_into_room_as_the_agent("Done, see the file.")
+    waiting = manager.get_chat_snapshot(_LOUNGE_ID)
+    assert waiting is not None and waiting.awaiting_chat_ids == (ChatId(_MAIN_ID),)
+    lounge = manager.get_active_agent_info(ChatId(_LOUNGE_ID))
+    assert lounge is not None
+
+    state.get_or_create_watcher(lounge)
+
+    answered = manager.get_chat_snapshot(_LOUNGE_ID)
+    assert answered is not None and answered.awaiting_chat_ids == ()
 
 
 def test_a_mention_of_the_owner_in_a_room_is_told_to_the_imbue_studio_app_as_the_rooms_own_agent(

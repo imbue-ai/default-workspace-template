@@ -8,11 +8,13 @@ from app_schema.api_schema import RouteTable
 from app_schema.routes import model_response
 from flask import Flask
 from flask import Response
+from workspace_layout.primitives import ParticipantKey
 
-from imbue.chat.identity import request_participant
+from imbue.chat.identity import request_identity
 from imbue.chat.mention_parser import MentionTable
 from imbue.chat.mentions import MentionHandler
 from imbue.chat.mentions import PendingMentionsResponse
+from imbue.chat.mentions import mention_keys_of
 from imbue.chat.state import ChatAppStateError
 from imbue.chat.state import get_state
 
@@ -32,9 +34,15 @@ def _mentions_table() -> Response:
     return model_response(MentionTable(handles=mention_handler().table()))
 
 
+def requester_mention_keys() -> tuple[ParticipantKey, ...]:
+    """The keys the current request's sender's mentions are kept under (both of the owner's for the owner)."""
+    state = get_state()
+    return mention_keys_of(request_identity(), state.roster.document())
+
+
 def _pending_mentions() -> Response:
     """``GET /api/mentions/pending``: the requester's mentions they have not looked at, oldest first."""
-    return model_response(PendingMentionsResponse(mentions=get_state().mentions.pending(request_participant())))
+    return model_response(PendingMentionsResponse(mentions=get_state().mentions.pending_for(requester_mention_keys())))
 
 
 ROUTE_TABLE: Final[RouteTable] = {
