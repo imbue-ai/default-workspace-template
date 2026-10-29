@@ -424,6 +424,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     text: string;
     sentText: string;
     attachments: readonly ComposerAttachment[];
+    /** The failed send's id: a retry goes under it, so the chat app answers it as it answered the
+     *  first when the first was delivered after all, rather than delivering it twice. */
+    messageId: string;
   };
   let actionFailureDetail: string | null = null;
   // A failed Stop shares this notice, and telling the user their message could not be sent when
@@ -871,7 +874,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
           restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
-          const recovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
+          const recovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments, messageId };
           watchForUnconfirmedTurn(err, recovery, priorTurnIds);
           catchUpOnSignedOutAccount(err);
           // Notices only if they are still on the agent that failed -- this catch runs after an
@@ -1234,7 +1237,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       async function repeatFailedSend(recovery: SendRecovery): Promise<void> {
         // Paint the same optimistic bubble the normal send path paints, so a retried message is
         // not simply absent from the transcript until the backend catches up.
-        const messageId = mintMessageId();
+        const messageId = recovery.messageId;
         const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
         let priorTurnIds: ReadonlySet<string> = new Set();
         try {

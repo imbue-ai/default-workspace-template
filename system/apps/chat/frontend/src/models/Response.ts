@@ -8,7 +8,7 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { getActiveDesktopId, getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { isHandoffPromptChip } from "./handoffPrompt";
 import { dropOutgoingByMessageId, noteBackendArrivals } from "./OutgoingMessages";
-import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { describeRequestError, isUnansweredRequest } from "@imbue/workspace-ui/src/models/request-error";
 
 export interface SubagentMetadata {
   agent_type: string;
@@ -1129,20 +1129,32 @@ export async function sendMessage(chatId: string, message: string, messageId?: s
   // The client identity rides along so the server can record which browser
   // (and which named layout) the message came from -- that is how agents
   // attribute a request to a client via `workspace-layout context`. The message_id is
-  // the stable send-time id the backend reconciles delivery against (A4).
-  const response = await m.request<{ status: SendStatus }>({
-    method: "POST",
-    url: apiUrl("/api/chats/:chatId/message"),
-    params: { chatId },
-    body: {
-      message: trimmed,
-      message_id: id,
-      client_id: getClientId(),
-      desktop_id: getActiveDesktopId(),
-    },
-  });
-  return response.status;
+  // the stable send-time id the backend reconciles delivery against (A4), and answers a
+  // repeat under it as it answered the first, so a send that got no answer is sent again.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const response = await m.request<{ status: SendStatus }>({
+        method: "POST",
+        url: apiUrl("/api/chats/:chatId/message"),
+        params: { chatId },
+        body: {
+          message: trimmed,
+          message_id: id,
+          client_id: getClientId(),
+          desktop_id: getActiveDesktopId(),
+        },
+      });
+      return response.status;
+    } catch (error) {
+      const delayMs = UNANSWERED_SEND_RETRY_DELAYS_MS[attempt];
+      if (!isUnansweredRequest(error) || delayMs === undefined) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
 }
+
+/** How long a send that got no answer waits before each repeat under its id: about half a minute in all. */
+const UNANSWERED_SEND_RETRY_DELAYS_MS: readonly number[] = [1000, 2000, 4000, 8000, 15000];
 
 export async function interruptAgent(chatId: string): Promise<void> {
   await m.request({
