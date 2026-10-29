@@ -232,6 +232,13 @@ def test_one_hand_edited_grants_entry_costs_one_roster_entry_and_is_warned_about
     source.document(_T0)
     assert len([record for record in loguru_records if record.startswith("WARNING")]) == 3
 
+    # Each document keeps its own record: a refused agent entry (which the agent grants parser admits through no
+    # file, so it is handed to the helper) is warned about once beside the share grants' entry, build after build.
+    for _ in range(2):
+        assert source._key_or_none("agent:not an id", source._agent_grants_document()) is None
+        source.document(_T0)
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 4
+
 
 def test_the_announcer_pushes_a_roster_once_until_it_changes(tmp_path: Path) -> None:
     source = _source(tmp_path)

@@ -71,6 +71,8 @@ _AVATAR_ICON_SIZE: Final[int] = 64
 ROSTER_WATCH_RETRY_SECONDS: Final[float] = 10.0
 # How long the watch waits after a file event for the rest of its burst before announcing once.
 ROSTER_WATCH_COALESCE_SECONDS: Final[float] = 1.0
+# A grants document as the roster read it: its path and the version (mtime) on disk, None while there is none.
+_GrantsDocument = tuple[Path, int | None]
 
 
 class _Entry(FrozenModel):
@@ -179,9 +181,9 @@ class RosterSource(MutableModel):
         default=PRESENCE_CONNECTED_WINDOW, frozen=True, description="How long a sighting counts as connected"
     )
 
-    # The grants entries already warned about, per version of the document they came from, so a hand-edited entry
+    # The grants entries already warned about, per document (its path) and version of it, so a hand-edited entry
     # the key refuses is warned about once rather than on every roster build.
-    _warned_entries_by_version: dict[int | None, set[str]] = PrivateAttr(default_factory=dict)
+    _warned_entries_by_document: dict[_GrantsDocument, set[str]] = PrivateAttr(default_factory=dict)
 
     def owner_key(self, now: datetime) -> ParticipantKey:
         """The owner's key as the presence records say it (the multiplayer spec, section 4.4): the account whose
@@ -205,8 +207,8 @@ class RosterSource(MutableModel):
         """The owner first, then every account the grants name, each named and pictured from its profile."""
         owner_key = self._owner_key(presence_by_key)
         granted_ids = sorted(grants.workspace.users) if grants is not None else []
-        grants_version = self.share_grants.document_version()
-        granted_keys = [self._key_or_none(f"user:{user_id}", grants_version) for user_id in granted_ids]
+        document = self._share_grants_document()
+        granted_keys = [self._key_or_none(f"user:{user_id}", document) for user_id in granted_ids]
         keys = [owner_key, *(key for key in granted_keys if key is not None)]
         # The owner may be granted too; they are listed once, first.
         ordered = list(dict.fromkeys(keys))
@@ -257,10 +259,8 @@ class RosterSource(MutableModel):
         """Every email the grants still name: invited, not yet signed up, with no profile and no presence."""
         if grants is None:
             return []
-        grants_version = self.share_grants.document_version()
-        keyed = [
-            (email, self._key_or_none(f"email:{email}", grants_version)) for email in sorted(grants.workspace.emails)
-        ]
+        document = self._share_grants_document()
+        keyed = [(email, self._key_or_none(f"email:{email}", document)) for email in sorted(grants.workspace.emails)]
         return [
             _Entry(
                 key=key,
@@ -281,9 +281,9 @@ class RosterSource(MutableModel):
     def _visiting_agents(self, now: datetime) -> list[_Entry]:
         """Every unexpired agent grant, connected while the gateway saw it within the window."""
         last_seen_by_id = read_agent_last_seen_times(self.agent_last_seen_path)
-        grants_version = self.agent_grants.document_version()
+        document = self._agent_grants_document()
         keyed = [
-            (grant, self._key_or_none(f"agent:{grant.agent_id}", grants_version))
+            (grant, self._key_or_none(f"agent:{grant.agent_id}", document))
             for grant in self.agent_grants.read_active_grants(now)
         ]
         return [
@@ -292,17 +292,28 @@ class RosterSource(MutableModel):
             if key is not None
         ]
 
-    def _key_or_none(self, value: str, grants_version: int | None) -> ParticipantKey | None:
+    def _share_grants_document(self) -> _GrantsDocument:
+        return (self.share_grants.share_grants_path, self.share_grants.document_version())
+
+    def _agent_grants_document(self) -> _GrantsDocument:
+        return (self.agent_grants.agent_grants_path, self.agent_grants.document_version())
+
+    def _key_or_none(self, value: str, document: _GrantsDocument) -> ParticipantKey | None:
         """The participant key of a grants entry, or None for an entry the key's alphabet refuses (a hand-edited
         file: the desktop validates what it writes), which is left out of the roster and warned about once per
-        version of the document, so one bad entry costs one entry rather than the whole roster."""
+        version of the document it came from, so one bad entry costs one entry rather than the whole roster."""
         try:
             return ParticipantKey(value)
         except InvalidLayoutValueError as e:
-            warned = self._warned_entries_by_version.setdefault(grants_version, set())
+            warned = self._warned_entries_by_document.setdefault(document, set())
             if value not in warned:
                 warned.add(value)
-                self._warned_entries_by_version = {grants_version: warned}
+                # The document's older versions are forgotten; the other document's record stands.
+                self._warned_entries_by_document = {
+                    kept_document: entries
+                    for kept_document, entries in self._warned_entries_by_document.items()
+                    if kept_document[0] != document[0] or kept_document == document
+                }
                 logger.warning("Left a grants entry out of the roster: {}", e)
             return None
 
