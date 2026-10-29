@@ -2850,14 +2850,21 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
     """With a visitor granted the workspace and arrived (so a desktop of theirs exists), the owner's card of them
     lists it (the multiplayer spec, section 6.3); a click switches the owner onto it with the viewing chrome on
     (section 8.3): the outline in the visitor's colour, the chip naming them and the desktop in place of the tray,
-    and no overview button. On the visitor's own client their picture is ringed in their colour while the owner
-    looks at their desktop. Stop viewing goes back to Home, and the ring goes with it."""
+    and no overview button. The viewed desktop is read-only from the keyboard too: Tab reaches nothing on it, so
+    Tab-and-Enter aimed at their window's Close changes nothing for them. On the visitor's own client their picture
+    is ringed in their colour while the owner looks at their desktop. Stop viewing goes back to Home, and the ring
+    goes with it."""
     grants_path = e2e_server.repo_root / DEFAULT_SHARE_GRANTS_PATH
     grants_path.parent.mkdir(parents=True, exist_ok=True)
     (e2e_server.repo_root / DEFAULT_SHARE_ENV_PATH).write_text("SHARE_BROKER_URL=https://broker.example\n")
     grants_path.write_text('[workspace]\nusers = ["user-alice"]\n')
     _land(page, e2e_server)
+    # A window on Home before the visitor arrives, so their seeded desktop carries a copy for them to show.
+    _open_via_shortcut(page, e2e_server)
     with _visiting_client(page, e2e_server, "user-alice", "alice", "alice") as visitor:
+        (copied,) = _windows(e2e_server.base_url, "alice")
+        _taskbar_entry(visitor, copied["id"]).click()
+        expect(_window(visitor, copied["id"])).to_be_visible(timeout=15000)
         entry = page.locator('[data-tray-person="user:user-alice"]')
         expect(entry).to_be_visible(timeout=15000)
         entry.hover()
@@ -2877,6 +2884,23 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
         participants = _get_json(f"{e2e_server.base_url}/api/roster")["participants"]
         (alice_entry,) = [participant for participant in participants if participant["key"] == "user:user-alice"]
         assert outline.evaluate("(el) => getComputedStyle(el).borderTopColor") == _css_rgb(alice_entry["color"])
+        # Their window is shown as they have it, on an inert stage: Tab never lands on it (nor on anything else of
+        # the desktop), so Enter, aimed at its Close, closes nothing.
+        viewed_window = _window(page, copied["id"])
+        expect(viewed_window).to_be_visible(timeout=15000)
+        expect(page.locator(".desktop-stage[inert]")).to_have_count(1)
+        close_control = viewed_window.locator('[data-window-control="close"]')
+        close_control.focus()
+        assert not page.evaluate("() => document.activeElement?.closest('.desktop-stage') !== null")
+        for _ in range(12):
+            page.keyboard.press("Tab")
+            assert not page.evaluate("() => document.activeElement?.closest('.desktop-stage') !== null"), (
+                "Tab reached something on the viewed desktop"
+            )
+        page.keyboard.press("Enter")
+        assert [window["id"] for window in _windows(e2e_server.base_url, "alice")] == [copied["id"]]
+        expect(_window(visitor, copied["id"])).to_be_visible()
+        expect(viewed_window).to_be_visible()
         # The visitor's own client sees their picture ringed while the owner looks at their desktop.
         expect(visitor.locator('[data-tray-person="user:user-alice"][data-tray-ringed="true"]')).to_be_visible(
             timeout=15000

@@ -765,10 +765,12 @@ export class LivePagesLayer implements PageDriver {
 
   /** ``shell:focused`` from a page: its window is raised. A page that is not shown (minimized, pulled out into the
    *  chrome's own window, or being pulled out) cannot have been chosen by the user, and a raise would bring its
-   *  window back onto the desktop. */
+   *  window back onto the desktop. A viewed page's focus raises nothing either (the multiplayer spec, section
+   *  8.3): the stage is inert, so the focus is the page's own doing (a composer focused on load), nobody's
+   *  gesture, and nothing to tell the user about. */
   private takeFocused(frame: HTMLIFrameElement): void {
     const page = this.pageOfFrame(frame);
-    if (page === undefined || !this.isShown(page)) return;
+    if (page === undefined || !this.isShown(page) || this.store.viewedDesktop() !== null) return;
     this.store.raiseWindow(page.windowId);
   }
 

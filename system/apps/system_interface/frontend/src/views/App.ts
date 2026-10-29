@@ -759,10 +759,12 @@ export function App(): m.Component<AppAttrs> {
     store?.closeOverview();
   }
 
-  /** The bare backdrop's menu (the multiplayer spec, section 8.2): a new desktop, the overview (not while viewing
-   *  somebody else's desktop, when the overview button is hidden too, section 8.3), the wallpaper, and the theme. */
+  /** The bare backdrop's menu (the multiplayer spec, section 8.2): a new desktop, the overview, the wallpaper, and
+   *  the theme. While viewing somebody else's desktop (section 8.3) only the new desktop stays: the overview button
+   *  is hidden too, and the wallpaper and the theme are the viewed desktop's, not the viewer's to change. */
   function rowsOfBackdropMenu(current: DesktopStore): MenuRow[] {
     const active = current.getState().activeDesktopId;
+    const isViewing = current.viewedDesktop() !== null;
     return [
       {
         kind: "action",
@@ -774,7 +776,7 @@ export function App(): m.Component<AppAttrs> {
         kind: "action",
         key: "show-all-desktops",
         label: "Show all desktops",
-        isDisabled: current.viewedDesktop() !== null,
+        isDisabled: isViewing,
         onSelect: () => current.openOverview(),
       },
       { kind: "divider" },
@@ -782,14 +784,14 @@ export function App(): m.Component<AppAttrs> {
         kind: "action",
         key: "change-wallpaper",
         label: "Change wallpaper...",
-        isDisabled: active === null,
+        isDisabled: active === null || isViewing,
         onSelect: () => openWallpaperChooser(active),
       },
       {
         kind: "action",
         key: "change-theme",
         label: "Change theme...",
-        isDisabled: active === null,
+        isDisabled: active === null || isViewing,
         onSelect: () => {
           if (active !== null) themeDialogDesktopId = active;
         },
@@ -1115,6 +1117,7 @@ export function App(): m.Component<AppAttrs> {
   function launcherMenu(current: DesktopStore): LauncherMenuRows {
     return launcherRowsOf(current.getState(), launcherQuery, {
       ownership: { roster: getRoster(), identity: getOwnIdentity() },
+      isViewing: current.viewedDesktop() !== null,
     });
   }
 

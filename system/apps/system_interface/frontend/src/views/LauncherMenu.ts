@@ -146,6 +146,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
         {
           ...rowAttrs(row, index, attrs),
           "data-launch": shortcutKey(row.app.name, row.launchPath.id),
+          ...hoverTooltipAttrs(row.disabledReason),
           oncontextmenu:
             onAppShortcutContextMenu !== null && appShortcutOf(row.app)?.launch === row.launchPath.id
               ? (event: MouseEvent) => {
@@ -168,6 +169,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
           ...rowAttrs(row, index, attrs),
           "data-launcher-window": row.window.id,
           "data-minimized": row.isMinimized ? "true" : "false",
+          ...hoverTooltipAttrs(row.disabledReason),
         },
         [
           glyphCell(appGlyph(row.app, appSize), attrs.isSheet),

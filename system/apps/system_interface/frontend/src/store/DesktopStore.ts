@@ -260,6 +260,8 @@ export const NO_MENTION_APP_REASON = "No app in this workspace can open a chat w
 export const NO_APP_CHAT_REASON = "No app in this workspace can open a chat about an app";
 /** Why a chat could not be shown: no app takes the message that shows one. */
 export const NO_CHAT_APP_REASON = "No app in this workspace shows a chat";
+/** What a change refused while this window views somebody else's desktop gets (the multiplayer spec, section 8.3). */
+export const STOP_VIEWING_FIRST_NOTICE = "Stop viewing first";
 /** How long a tray entry wears its hop class: a little past style.css's 420ms ``tray-hop``, so the class outlives
  *  the animation. */
 export const TRAY_HOP_MS = 450;
@@ -606,6 +608,19 @@ export class DesktopStore {
   /** Tell the user about a refusal. */
   private toast(message: string): void {
     this.toasts.show(message);
+  }
+
+  /** Whether this window is viewing somebody else's desktop, in which case the change named by ``action`` is
+   *  refused (the multiplayer spec, section 8.3: a viewed desktop is looked at, never arranged) and the user told
+   *  once per gesture: a note already up covers the rest of the gesture (a restore that raises, a close that
+   *  minimizes), so the refusals of one press raise one note. */
+  private refuseWhileViewing(action: string): boolean {
+    if (this.viewedDesktop() === null) return false;
+    console.info(`[si] refused to ${action} while viewing somebody else's desktop`);
+    if (!this.toasts.current().some((toast) => toast.message === STOP_VIEWING_FIRST_NOTICE)) {
+      this.toast(STOP_VIEWING_FIRST_NOTICE);
+    }
+    return true;
   }
 
   /** The one window this shell shows alone, or null for the whole desktop. */
@@ -1268,6 +1283,8 @@ export class DesktopStore {
   openBubble(speaker: string): void {
     const bubble = this.bubbles.find((candidate) => candidate.speaker === speaker);
     if (bubble === undefined) return;
+    // The chat would be shown on the viewed desktop; the bubble stays up for after the viewing.
+    if (this.refuseWhileViewing("open a chat")) return;
     void this.showChat(bubble.chatId);
   }
 
@@ -1512,6 +1529,7 @@ export class DesktopStore {
    *  launch path of the machine that is about an app, whose page is put on screen by the show rule and laid out
    *  beside the window; with no such launch path the user is told. False when nothing was shown. */
   async openAppChat(windowId: string): Promise<boolean> {
+    if (this.refuseWhileViewing("open the chat about an app")) return false;
     const found = findWindow(this.state, windowId);
     const about = found === null ? undefined : appByName(this.state, found.window.app);
     if (found === null || about === undefined) return false;
@@ -1834,6 +1852,7 @@ export class DesktopStore {
    *  following step moves the page there (a page's own report is the one thing the following never bounces back,
    *  and applying it that way would leave the page where it was). False when the shell refused. */
   async navigateOwnWindow(windowId: string, path: string): Promise<boolean> {
+    if (this.refuseWhileViewing("move a window to a page")) return false;
     const found = findWindow(this.state, windowId);
     if (found === null) return false;
     const title = effectiveWindowTitle(this.state, found.window, appByName(this.state, found.window.app));
@@ -2071,11 +2090,13 @@ export class DesktopStore {
   }
 
   async setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<void> {
+    if (this.refuseWhileViewing("change the wallpaper")) return;
     this.takeDesktop(await this.deps.api.setDesktopWallpaper(desktopId, wallpaper));
   }
 
   /** The theme a desktop wears by its own choice; null wears the workspace's default. */
   async setDesktopTheme(desktopId: string, theme: string | null): Promise<void> {
+    if (this.refuseWhileViewing("change the theme")) return;
     this.takeDesktop(await this.deps.api.setDesktopTheme(desktopId, theme));
   }
 
@@ -2248,6 +2269,7 @@ export class DesktopStore {
     cell: GridCell,
     shown: readonly PlacedShortcut[],
   ): Promise<void> {
+    if (this.refuseWhileViewing("move a shortcut")) return;
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
     // What the room made moved, against the cells the shortcuts were already drawn in: a drop that moved
@@ -2287,6 +2309,7 @@ export class DesktopStore {
    *  only while the shell has said nothing of the desktops since: a broadcast in the meantime is the shell's word on
    *  whether it is still there, and stands. */
   async removeShortcut(app: string, launch: string): Promise<void> {
+    if (this.refuseWhileViewing("remove a shortcut")) return;
     const desktop = activeDesktop(this.state);
     if (desktop === null) return;
     const removed = findShortcut(desktop, app, launch);
@@ -2326,6 +2349,7 @@ export class DesktopStore {
   }
 
   runShortcut(shortcut: DesktopShortcut): Promise<void> {
+    if (this.refuseWhileViewing("run a shortcut")) return Promise.resolve();
     return this.runLaunch(shortcut.target.app, shortcut.target.launch, shortcut.mode);
   }
 
@@ -2464,6 +2488,7 @@ export class DesktopStore {
     params: Readonly<Record<string, string>>,
     target: LaunchTarget,
   ): Promise<string | null> {
+    if (this.refuseWhileViewing(`open ${app}`)) return null;
     // A launch into a named window runs on that window's desktop, a show beside one on that window's; any other on
     // the desktop an open goes to.
     const named =
@@ -2514,6 +2539,7 @@ export class DesktopStore {
   }
 
   async closeWindow(windowId: string): Promise<void> {
+    if (this.refuseWhileViewing("close a window")) return;
     const found = findWindow(this.state, windowId);
     if (found === null) return;
     // The shell drops the window from this client's stored layout and stamps the rewrite, and the refetch
@@ -2553,6 +2579,7 @@ export class DesktopStore {
    *  its entry out of this client's bar until something shows it again), so the habit of reaching for the control
    *  holds. */
   async closeOrMinimizeWindow(windowId: string): Promise<void> {
+    if (this.refuseWhileViewing("close a window")) return;
     if (findWindow(this.state, windowId)?.window.is_pinned === true) {
       this.closePinnedWindowHere(windowId);
       return;
@@ -2573,6 +2600,7 @@ export class DesktopStore {
    *  focus as the chrome window's focus comes back mid-drag) is not the user choosing that window. Dropped
    *  rather than deferred, since the gesture's end raises its own window again. */
   raiseWindow(windowId: string): void {
+    if (this.refuseWhileViewing("raise a window")) return;
     if (this.isAnotherWindowGestured(windowId)) return;
     // Raising shows the window, so a pinned entry a close took out of the bar is listed back.
     if (!this.isPinnedEntryShown(windowId)) this.setPinnedEntryShown(windowId, true);
@@ -2586,6 +2614,7 @@ export class DesktopStore {
   }
 
   minimizeWindow(windowId: string): void {
+    if (this.refuseWhileViewing("minimize a window")) return;
     // Minimizing is not closing: a pinned window whose entry a close took out of the bar, revealed again since
     // (a launch, the shell's show op), is relisted here, so the minimize dims its entry instead of vanishing it.
     if (!this.isPinnedEntryShown(windowId)) this.setPinnedEntryShown(windowId, true);
@@ -2594,6 +2623,7 @@ export class DesktopStore {
 
   /** Restore a minimized window (the taskbar's verb): raised; on a phone, shown. */
   restoreWindow(windowId: string): void {
+    if (this.refuseWhileViewing("restore a window")) return;
     if (this.isPhoneLayout()) {
       this.showOnPhone({ kind: "window", windowId });
       return;
@@ -2602,6 +2632,7 @@ export class DesktopStore {
   }
 
   setWindowState(windowId: string, state: WindowState): void {
+    if (this.refuseWhileViewing("resize a window")) return;
     this.dispatch({ type: "window_state_set", windowId, state });
   }
 
@@ -2707,6 +2738,9 @@ export class DesktopStore {
    *  meanwhile must not read the report as a move to follow). Answers whether the shell took the report (or had
    *  nothing to take); false when it refused. */
   async reportLocation(windowId: string, path: string, title: string): Promise<boolean> {
+    // A viewed window's location is its owner's to write: the report is refused quietly (a page reports on every
+    // load, which is nobody's gesture), and the page follows the stored path again.
+    if (this.viewedDesktop() !== null) return false;
     const found = findWindow(this.state, windowId);
     if (found === null) return false;
     const seen = effectiveWindow(this.state, found.window);
@@ -3082,8 +3116,11 @@ export class DesktopStore {
     this.viewedViewport = viewport;
     // An unchanged stamp says the placements file did not move (this window's own save, or a broadcast that
     // carried nothing new for it): only the client's window paths, which change without moving the stamp, are
-    // taken, and a gesture still waiting to be saved is kept rather than thrown away with a reload.
-    if (this.state.isLayoutLoaded && layout.updated_at === this.state.layout.updated_at) {
+    // taken, and a gesture still waiting to be saved is kept rather than thrown away with a reload. A viewed
+    // desktop's layout is reloaded whole on every answer instead: nothing this window holds of it is a gesture
+    // worth keeping, and whatever slipped past the guards is reset by the next poll.
+    const isViewing = this.viewedDesktop() !== null;
+    if (!isViewing && this.state.isLayoutLoaded && layout.updated_at === this.state.layout.updated_at) {
       this.layoutLoadsRevision += 1;
       if (isSameWindowPaths(layout.window_paths, this.state.layout.window_paths)) {
         // Nothing to take, but the pages still follow: the shell handing back the paths this window already

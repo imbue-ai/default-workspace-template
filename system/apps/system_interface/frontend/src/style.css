@@ -126,9 +126,9 @@
   }
 }
 
-/* A viewed desktop is read-only (the multiplayer spec, section 8.3): the windows layer's parts that usually
-   take a press (title bars, resize edges, shields) are inert along with everything else, so the owner's
-   windows can be looked at but never arranged from here. */
+/* A viewed desktop is read-only (the multiplayer spec, section 8.3): the stage the windows sit on is inert, and
+   the windows layer's parts that usually take a press (title bars, resize edges, shields) lose their pointer
+   cursors along with everything else, so the owner's windows read as looked at, never arranged from here. */
 .windows-viewing * {
   pointer-events: none !important;
 }

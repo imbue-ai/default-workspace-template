@@ -14,6 +14,7 @@ import { desktopStateWithApps } from "../testing/states";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 import {
+  VIEWING_ROW_DISABLED_REASON,
   defaultHighlightIndex,
   isMessageText,
   isRowEnabled,
@@ -87,6 +88,29 @@ describe("the launcher's rows", () => {
     expect(keys(justBroken.rows)).toEqual(["text:chatty:new", "text:chatty:send", "text:chatty:draft"]);
     expect(justBroken.isNoMatch).toBe(false);
     expect(justBroken.textRows[0].text).toBe("term");
+  });
+
+  it("stands every row that opens something down while the window views somebody else's desktop (section 8.3)", () => {
+    const menu = launcherRowsOf(state(), "", { isViewing: true });
+    expect(keys(menu.rows)).toEqual(["launch:chatty:root", "launch:terminal:new", "tour", "text:chatty:new"]);
+    expect(menu.launchRows.map((row) => row.disabledReason)).toEqual([
+      VIEWING_ROW_DISABLED_REASON,
+      VIEWING_ROW_DISABLED_REASON,
+    ]);
+    expect(menu.textRows[0].disabledReason).toBe(VIEWING_ROW_DISABLED_REASON);
+    expect(menu.rows.map(isRowEnabled)).toEqual([false, false, true, false]);
+    // Enter runs nothing that opens: the tour, which opens nothing, is the only row left to it.
+    expect(defaultHighlightIndex(menu.rows)).toBe(2);
+    expect(secondaryTextRow(launcherRowsOf(state(), "hello", { isViewing: true }).rows)).toBeNull();
+    const typed = launcherRowsOf(state(), "term", { isViewing: true });
+    expect(typed.windowRows.map((row) => row.disabledReason)).toEqual([
+      VIEWING_ROW_DISABLED_REASON,
+      VIEWING_ROW_DISABLED_REASON,
+    ]);
+    expect(defaultHighlightIndex(typed.rows)).toBe(-1);
+    // Not viewing, the same rows run as before.
+    const own = launcherRowsOf(state(), "term", { isViewing: false });
+    expect(own.rows.every(isRowEnabled)).toBe(true);
   });
 
   it("names the owner of a desktop that is not the viewer's on its window rows (the multiplayer spec, section 8.2)", () => {

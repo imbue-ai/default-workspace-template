@@ -8,9 +8,10 @@
  * menu (the multiplayer spec, section 8.2). While the overview is up it stands in for the windows layer, so
  * the live-page layer lays the pages over its tiles.
  *
- * The grid, the pages' host, and the windows sit on one stage. Viewing a desktop whose owner's backdrop size is
- * known (section 8.3) draws the stage at that size, scaled down to fit and centred, with the desktop's wallpaper
- * on it and a band in the owner's colour around it; the floating entries stay the viewer's own, outside it.
+ * The grid, the pages' host, and the windows sit on one stage, which is inert while a desktop that is not the
+ * viewer's own is viewed (section 8.3): nothing on it takes a press, a key, or focus. Viewing a desktop whose
+ * owner's backdrop size is known draws the stage at that size, scaled down to fit and centred, with the desktop's
+ * wallpaper on it and a band in the owner's colour around it; the floating entries stay the viewer's own, outside it.
  */
 
 import m from "mithril";
@@ -113,6 +114,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
       const windowsById = new Map(desktop.windows.map((window) => [window.id, window]));
       const snapRect = store.snapPreviewRect();
       const letterbox = attrs.letterbox;
+      const isViewing = store.viewedDesktop() !== null;
 
       return m(
         "div",
@@ -138,6 +140,12 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   : " bg-(--desk-backdrop) bg-cover bg-center bg-(image:--desk-default-wallpaper)"),
               style: stageStyle(desktop, letterbox),
               "data-viewing-letterbox": letterbox === null ? undefined : String(letterbox.box.scale),
+              // A viewed desktop is looked at, never arranged (the multiplayer spec, section 8.3): the stage holds
+              // the grid, the pages, the windows, and the ghosts, and inert takes the pointer, the keyboard, and
+              // focus from all of them at once; the band, the chip, the tray, and the taskbar lie outside it, so
+              // "Stop viewing" stays reachable. A boolean, so mithril sets the property where the browser has one
+              // and the attribute where it does not.
+              inert: isViewing,
             },
             [
               m(
@@ -192,12 +200,11 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                     "div",
                     // Inert down to the parts that take a press (title bar, resize edges, shield, placeholders): each
                     // window's chrome sits over its own page in the stacking order, and the page must get the rest.
-                    // While a desktop that is not the viewer's own is viewed, the whole layer is inert instead
-                    // (``windows-viewing``, style.css): the owner's windows are looked at, never arranged.
+                    // While a desktop that is not the viewer's own is viewed, the stage is inert and the layer
+                    // wears ``windows-viewing`` (style.css) for the look of it: the owner's windows are looked at,
+                    // never arranged.
                     {
-                      class:
-                        "windows absolute inset-0 pointer-events-none" +
-                        (store.viewedDesktop() !== null ? " windows-viewing" : ""),
+                      class: "windows absolute inset-0 pointer-events-none" + (isViewing ? " windows-viewing" : ""),
                     },
                     // A keyed list tolerates no holes: a minimized or unknown window contributes nothing (a pulled-out
                     // window's hidden ghost included).
