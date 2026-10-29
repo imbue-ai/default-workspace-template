@@ -8264,8 +8264,16 @@ def test_a_switch_off_a_room_takes_the_rooms_transcript_as_its_summary(
     sent: list[tuple[str, str, str]] = []
     manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, sent)
     room = f"agent-{uuid4().hex}"
-    seed_agent_state(manager, room, name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
     account = _openai_account()
+    # The room wears the target account's own label (the workspace's create defaults stamp it onto every
+    # create), but it runs on no account, so the switch is not refused as the chat's own account.
+    seed_agent_state(
+        manager,
+        room,
+        name="Lounge",
+        harness=HarnessType.ROOM,
+        labels={"display_name": "Lounge", "account": account},
+    )
     try:
         kind, _phase, _block = manager.begin_switch(ChatId(room), account, "Carry on", "m-1", HeldSendOrigin.CLIENT)
         assert kind is TransitionKind.HANDOFF

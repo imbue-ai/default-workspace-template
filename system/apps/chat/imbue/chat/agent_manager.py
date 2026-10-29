@@ -2370,7 +2370,13 @@ class AgentManager:
             raise HandoffError("The workspace's services agent is not a chat")
         if target.account is None and agent_state.harness is HarnessType.ROOM:
             raise HandoffError(f"Chat '{chat_id}' is a room already")
-        if target.account is not None and agent_state.labels.get("account") == target.account.id:
+        # A room runs on no account whatever its labels say (the workspace's create defaults stamp the default
+        # account's label onto every create, a room's included), so its switch onto that account is not "its own".
+        if (
+            target.account is not None
+            and agent_state.harness is not HarnessType.ROOM
+            and agent_state.labels.get("account") == target.account.id
+        ):
             raise HandoffError(f"Chat '{chat_id}' already runs on account {target.account.id}")
         return agent_state
 
