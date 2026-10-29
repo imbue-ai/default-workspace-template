@@ -57,6 +57,7 @@ _PICTURE_CACHE_SUFFIX: Final[str] = ".picture.json"
 _PICTURE_VERSION_LENGTH: Final[int] = 16
 # A fetch slower than this is logged: the connector is degrading before it is down.
 _SLOW_PROFILE_FETCH_SECONDS: Final[float] = 1.0
+_SLOW_PICTURE_FETCH_SECONDS: Final[float] = 2.0
 
 # One ``KEY=value`` line of share.env, with or without a leading ``export`` and with optional quotes.
 _ENV_LINE_PATTERN: Final[re.Pattern[str]] = re.compile(
@@ -239,6 +240,7 @@ class ProfileResolver(MutableModel):
             logger.warning("Could not cache the profile picture of {}: {}", user_id, e)
 
     def _fetch_picture(self, url: str, user_id: UserId) -> ProfilePicture | None:
+        started_at = time.monotonic()
         client = httpx.Client(transport=self.transport, timeout=PICTURE_REQUEST_TIMEOUT_SECONDS)
         with client:
             try:
@@ -246,6 +248,9 @@ class ProfileResolver(MutableModel):
             except httpx.HTTPError as e:
                 logger.warning("Failed to fetch the profile picture of {} from {}: {}", user_id, url, e)
                 return None
+        elapsed_seconds = time.monotonic() - started_at
+        if elapsed_seconds > _SLOW_PICTURE_FETCH_SECONDS:
+            logger.warning("Fetched the profile picture of {} slowly ({:.1f}s)", user_id, elapsed_seconds)
         if response.status_code != httpx.codes.OK:
             logger.warning("Fetching the profile picture of {} answered HTTP {}", user_id, response.status_code)
             return None
