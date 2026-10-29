@@ -2513,7 +2513,8 @@ def _destroy_chat(chat_id: str) -> Response:
     A chat that is not an agent yet is discarded, its seed with it; one still being created leaves every page
     at once and loses its agent as the create lands.
     """
-    agent_manager: AgentManager = get_state().agent_manager
+    state = get_state()
+    agent_manager: AgentManager = state.agent_manager
     agent_info = _find_active_agent(chat_id)
     if agent_info is None:
         if not agent_manager.discard_provisional_chat(chat_id):
@@ -2527,7 +2528,6 @@ def _destroy_chat(chat_id: str) -> Response:
     except AgentDestroyError as e:
         return error_response(str(e), 500)
     # Nobody is left to look at what mentioned them there (section 7.4).
-    state = get_state()
     if state.mentions.clear_chat(ChatId(chat_id)):
         state.broadcaster.broadcast_mentions_updated()
     return model_response(DestroyAgentResponse(status="ok"))
