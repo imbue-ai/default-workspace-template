@@ -1,6 +1,6 @@
 # Pinned taskbar entries and the chat avatar
 
-This is the spec for three additions to the desktop interface: a pinned taskbar entry that an app declares in its manifest and that stands for one window of that app on every desktop, a per-client presentation of that entry that can pop it out of the bar as an always-on-top avatar, and a per-window location scope that lets such a window keep a separate path for every client.
+This is the spec for three additions to the desktop interface: a pinned taskbar entry that an app declares in its manifest and that stands for one window of that app on every desktop, a per-client presentation that can draw the app's creature (the avatar) floating always-on-top beside that entry, and a per-window location scope that lets such a window keep a separate path for every client.
 Together they give the chat app a floating creature in the corner of the desktop whose click opens and hides the chat, whose image says whether any agent is working, and whose chooser lets the workspace pick its design, without the shell learning anything about chats or agents.
 It is written for the people and agents implementing it, and it is the reference the implementation is judged against.
 It builds on the desktop interface V1 ([plan-desktop-interface.md](../desktop-interface/plan-desktop-interface.md), [concepts.md](../desktop-interface/concepts.md), [contracts.md](../desktop-interface/contracts.md)) and amends those documents where section 9 says.
@@ -9,7 +9,7 @@ The prototype it draws its art and its chooser from is Kanjun's `desktop-mode` t
 ## 1. Purpose and principles
 
 The desktop's taskbar has one entry per window of the active desktop, and pressing an entry restores, minimizes, or raises its window.
-The chat avatar is that entry, made permanent and made fun: it is always present, whether or not a chat window has been opened yet, it can float above the windows instead of sitting in the bar, and it draws itself as a creature whose posture follows the agents.
+The chat avatar rides on that entry's window, made permanent and made fun: the window is always present, whether or not a chat has been opened yet, and the avatar draws itself as a creature whose posture follows the agents, docked in the taskbar's tray or floating above the windows while the window's own entry stays a plain one in the bar.
 Everything it does is something the taskbar already does.
 Nothing in this design is a new kind of thing on the desktop.
 
@@ -137,7 +137,7 @@ There is no badge dot and no third image state in this version.
 | A linked window's path and title | Shell, shared (V1) |
 | An independent window's path and title | Shell, per client |
 | A pinned window's frame, state, minimized flag, stack position | Shell, per client (a V1 placement) |
-| A pinned entry's mode, style, and floating position | Shell, per client, on the client record |
+| A pinned entry's mode, style, floating position, and `is_window_shown` | Shell, per client, on the client record |
 | The avatar designs and the workspace's selected design | Shell, shared |
 | The mood | Derived in the shell from mngr's observe events; never stored |
 | Which windows have a pinned entry, and where each is drawn | Derived in the browser |
@@ -155,10 +155,9 @@ There is no badge dot and no third image state in this version.
 
 ### 4.1 The entry in the bar
 
-A pinned entry in `bar` mode occupies its window's place among the taskbar entries, in opening order like every other.
-In `plain` style it is the V1 entry: icon and title, dimmed while minimized, marked while focused.
-In `avatar` style the app's icon is replaced by the avatar image at entry size, wearing the current mood, beside the title; in compact mode the image alone.
-Dimming and the focused mark apply in both styles.
+A pinned window's bar entry occupies its window's place among the taskbar entries, in opening order like every other, and is always the V1 plain entry: icon and title, dimmed while minimized, marked while focused.
+The style moves only the creature: in `avatar` style the app's creature is the workspace avatar (in the tray while docked, wearing the current mood when floated), in `plain` style the floating form is the app's icon on a raised tile.
+A pinned window this client closed (section 3.4's `is_window_shown`) has no bar entry while it stays minimized; showing the window lists it back.
 
 ### 4.2 The floating entry
 
@@ -188,16 +187,15 @@ The pinned entry's context menu is the taskbar entry menu with the presentation 
 1. Restore or Minimize
 2. Maximize or Restore size (absent in compact mode)
 3. divider
-4. Float or Move to taskbar (absent in compact mode)
-5. Show as plain entry or Show as <style>, when the pin declares a style
-6. Change avatar..., when the current style is `avatar`
-7. divider
-8. Add to desktop or Remove from desktop, when the app has a desktop shortcut (desktop-interface plan section 4.9)
-9. divider
-10. Close, which minimizes the pinned window
+4. Float or Move to taskbar (absent in compact mode), which moves the app's creature between the tray and the backdrop
+5. Change avatar..., when the pin declares the `avatar` style
+6. divider
+7. Add to desktop or Remove from desktop, when the app has a desktop shortcut (desktop-interface plan section 4.9)
+8. divider
+9. Close, which closes the pinned window for this client alone: minimized, and its entry out of this client's bar until something shows the window again
 
-The pinned window's own menu is the V1 window menu: Refresh, Share, Quit, Close; its Close minimizes.
-Its title bar has minimize, maximize, and close; the close control minimizes too.
+The pinned window's own menu is the V1 window menu: Refresh, Share, Quit, Close; its Close closes for this client the same way.
+Its title bar has minimize, maximize, and close; the close control does the same.
 Taking the control away was tried and confused people, who reached for maximize by habit instead.
 There are no keyboard shortcuts for any of this in this version.
 
@@ -272,7 +270,7 @@ Touch mode uses long press for the menus, as elsewhere; the floating entry has t
 ### 5.1 State files
 
 - `desktops.json` (version 1, unchanged): each window gains `is_pinned` and `scope`, both with defaults.
-- `clients.json` (version 2, unchanged): each client gains `entries`, a map from app name to `{mode, style, position}`, with `position` `{x, y}` in fractions or `null`; absent means the defaults.
+- `clients.json` (version 2, unchanged): each client gains `entries`, a map from app name to `{mode, style, position, is_window_shown}`, with `position` `{x, y}` in fractions or `null`; absent means the defaults.
 - `window_paths/<client_id>.json`, new: `{"version": 1, "windows": {"<window_id>": {"path", "title"}}}`, the client's paths and titles for independent windows.
   Entries naming a window no longer on any desktop are dropped on read; the file is deleted with the client's layouts when the client is pruned.
 - `avatar_selection.json`, new: `{"version": 1, "design": "<id>"}`; absent means the default design.
@@ -294,7 +292,7 @@ New or changed routes:
 | `POST /api/desktops/<id>/windows/<window>/location` | body gains `client_id`; for an independent window the report is stored per client and the answer's `path` and `title` are the client's |
 | `GET /api/placements/<desktop>?client=` | the layout answer gains `window_paths`, the client's stored `{path, title}` by window id for the desktop's independent windows; the save body carries no such field |
 | `GET /api/desktops` and every `desktops_updated` | each window gains `client_paths`, every client's stored path for an independent window by client id (`{}` for a linked one), so the agent listing and the window-bound-resource sweeps see what each client shows |
-| `POST /api/clients/<client>/entries/<app>` | new: `{mode, style, position}`; answers the client record |
+| `POST /api/clients/<client>/entries/<app>` | new: `{mode, style, position, is_window_shown}`; answers the client record |
 | `GET /api/avatars` | new: `{designs: [{id, label, source_path}], selected, default}` |
 | `POST /api/avatars` | new, loopback only: register a design |
 | `GET /api/avatars/<id>/image.svg?mood=&preview=` | new: the rendered image |
@@ -336,11 +334,10 @@ Following the V1 layering (theme, model, geometry, reducers, store, pages, gestu
 - `model/records.ts`: `is_pinned` and `scope` on `WindowRecord`; `pin` on `AppRecord`; `entries` on `ClientRecord`; `window_paths` on `Layout`; the parsers, refusing a malformed document as V1 does.
 - `model/api.ts`: the routes of 5.3.
 - `geometry/floating.ts`: the clamp of a floating position into the backdrop and the default position, pure.
-- `reducers/desktopState.ts`: `taskbarEntries` gains `isPinned`, the effective title of an independent window, and the entry's effective presentation; `barEntries` and `floatingEntries` split the entries by effective mode and compact mode; `avatarStatus`, `avatarSelection`, and `entries` on the state with their events.
-- `store/DesktopStore.ts`: the presentation write, the drag of a floating entry (begin, update, end), `closeFocusedWindow` minimizing a pinned window, and the new socket handlers.
+- `reducers/desktopState.ts`: `taskbarEntries` gains `isPinned`, the effective title of an independent window, and the entry's effective presentation; `barEntries` keeps every window's entry (dropping a closed pinned window's while it is minimized) and `floatingEntries` holds the floated creatures; `avatarStatus`, `avatarSelection`, and `entries` on the state with their events.
+- `store/DesktopStore.ts`: the presentation write, the drag of a floating entry (begin, update, end), `closeFocusedWindow` closing a pinned window for this client, and the new socket handlers.
 - `gestures/pointerGestures.ts`: a `floating-entry` binding by `data-pinned-entry`.
 - `views/FloatingEntries.ts`: the layer and its entries.
-- `views/TaskbarEntry.ts`: the `avatar` style.
 - `views/AvatarChooserDialog.ts`: the chooser.
 - `views/WindowMenu.ts`: the pinned variants of the window and entry menus.
 
@@ -358,12 +355,11 @@ A failed load falls back to the default design at the same mood, as the prototyp
 path = "/"
 style = "avatar"
 scope = "independent"
-default_mode = "floating"
 ```
 
 ### 7.2 Registry row and inventory `app`
 
-`"pin": {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "floating"}` or `"pin": null`.
+`"pin": {"path": "/", "style": "avatar", "scope": "independent", "default_mode": "bar"}` or `"pin": null`.
 
 ### 7.3 Window
 
@@ -371,17 +367,17 @@ default_mode = "floating"
 
 ### 7.4 Client record (wire and file)
 
-`{"id", "active_desktop", "last_seen", "is_connected", "entries": {"<app>": {"mode": "bar" | "floating", "style": "plain" | "avatar", "position": {"x": 0.9, "y": 0.85} | null}}}`.
+`{"id", "active_desktop", "last_seen", "is_connected", "entries": {"<app>": {"mode": "bar" | "floating", "style": "plain" | "avatar", "position": {"x": 0.9, "y": 0.85} | null, "is_window_shown": true}}}`.
 
 ### 7.5 Selectors shared with tests
 
 | Attribute | On |
 |---|---|
-| `data-pinned-entry="<app>"`, `data-entry-mode="bar\|floating"`, `data-entry-style="plain\|avatar"` | each pinned entry, in the bar or floating |
+| `data-pinned-entry="<app>"`, `data-entry-mode="bar\|floating"` | each pinned entry: the bar entry (always mode `bar`) and the floating creature, which alone carries `data-entry-style="plain\|avatar"` |
 | `data-floating-entries` | the floating layer |
 | `data-mood="working\|idle"`, `data-stale="true\|false"` | each avatar image's button |
 | `data-avatar-chooser`, `data-avatar-design="<id>"` | the chooser and its cells |
-| `data-menu-item="float\|move-to-taskbar\|style-plain\|style-avatar\|change-avatar"` | the menu rows |
+| `data-menu-item="float\|move-to-taskbar\|change-avatar"` | the menu rows |
 
 ### 7.6 Theme tokens
 
@@ -398,8 +394,8 @@ Nothing else in the chat app changes: its root page keeps reporting the selected
 Landed with the implementation:
 
 - concepts.md 2.2: path and title are shared for a linked window; an independent window keeps them per client, with the home path shared.
-- concepts.md 2.7: a pinned window's close control and Close rows minimize it.
-- concepts.md 2.8 and plan 4.10: the taskbar shows one entry per window; a pinned window's entry may be drawn in the bar with a style or floating above the windows.
+- concepts.md 2.7: a pinned window's close control and Close rows close it for that client alone (minimized, its entry out of that client's bar); the shared window is never closed.
+- concepts.md 2.8 and plan 4.10: the taskbar shows one entry per window; a pinned window's entry is a plain bar entry, and the app's creature may float above the windows beside it.
 - concepts.md decision 6 gains the same sentence; decision 14 names the independent scope as its exception.
 - plan 4.5: close is refused for a pinned window.
 - plan 8 and contracts.md 2, 3, 4, 5, 6, 11, 12: the manifest table, the row field, the files, the routes, the messages, the tokens, and the selectors above.
