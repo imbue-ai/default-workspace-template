@@ -186,6 +186,8 @@ export interface ProvisionalChat {
   name: string;
   // The account it launches on; empty while it waits for one.
   account_id: string;
+  // What it launches as: an agent chat, or a room.
+  kind: ChatKind;
   phase: ProvisionalChatPhase;
   // Why the create failed, in the failed phase.
   error: string | null;
