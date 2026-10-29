@@ -334,6 +334,60 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-1").style.pointerEvents).toBe("auto");
   });
 
+  it("raises nothing for a viewed page's focus, and greets a page again on its capabilities, viewed or not", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a"), windowRecord("win-b", "docs", "/b")],
+      }),
+    ];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-a"), placementRecord("win-b")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+    await store.switchDesktop("alice");
+    renderChrome("win-a", "win-b");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+
+    // The page under win-a focuses itself (a composer on load): the owner's stack is not this window's to change,
+    // and nothing is said about it.
+    messageFromPage("win-a", { type: SHELL_FOCUSED });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+    expect(store.toasts.current()).toEqual([]);
+
+    // The page's contract module is up before its frame has loaded: it is greeted at once, viewed, so a terminal
+    // attaches as a viewer from its first attach.
+    const spy = spyOnFrame("win-a");
+    messageFromPage("win-a", { type: SHELL_CAPABILITIES, navigation: true });
+    expect(spy.mock.calls.map((call) => call[0])).toMatchObject([
+      { type: SHELL_HANDSHAKE, windowId: "win-a", desktopId: "alice", isViewing: true },
+      { type: SHELL_THEME },
+    ]);
+
+    // Back on an own desktop, a page's focus raises its window again, and its capabilities greet it unviewed.
+    await store.stopViewing();
+    renderChrome();
+    layer.reconcile();
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    messageFromPage("win-1", { type: SHELL_FOCUSED });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    const ownSpy = spyOnFrame("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: true });
+    expect(ownSpy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, desktopId: "home", isViewing: false });
+  });
+
   it("tells a shown page again when whether its desktop is viewed changes, and only then", async () => {
     api.desktops = [
       ...api.desktops,

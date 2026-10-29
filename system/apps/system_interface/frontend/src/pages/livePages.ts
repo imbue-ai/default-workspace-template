@@ -736,11 +736,16 @@ export class LivePagesLayer implements PageDriver {
     return windowId === null ? undefined : this.pages.get(windowId);
   }
 
+  /** ``shell:capabilities`` from a page: what it can do, and the handshake again. The contract module is up
+   *  before the frame's load (which waits for the page's own frames, a terminal's pty among them), so greeting it
+   *  here tells a page whether it is viewed as soon as it can listen, and a viewed terminal attaches as a viewer
+   *  from its first attach rather than after its load; the page takes a repeated handshake as it is. */
   private takeCapabilities(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
     const page = this.pageOfFrame(frame);
     if (page === undefined) return;
     page.isNavigationCapable = payload.navigation === true;
     page.isCloseChordCapable = payload.closeChord === true;
+    this.greet(page);
   }
 
   private takeLocation(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
