@@ -55,6 +55,13 @@ function noteInput(): void {
   lastInputAt = new Date();
 }
 
+/** Count input a page of this client reported (``shell:input``): typing and clicking happen inside the app
+ *  frames, whose events never bubble to this window, so the pages say so themselves (the multiplayer spec,
+ *  section 4.3). */
+export function notePageInput(): void {
+  noteInput();
+}
+
 function parseOwnIdentity(body: unknown): OwnIdentity | null {
   if (body === null || typeof body !== "object") return null;
   const record = body as { identity?: unknown; participant?: unknown };

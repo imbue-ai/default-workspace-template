@@ -12,6 +12,7 @@ import {
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
+  SHELL_INPUT,
   SHELL_LOCATION,
   SHELL_MESSAGE,
   SHELL_NAVIGATE,
@@ -243,6 +244,36 @@ describe("connectToShell", () => {
     live.disconnect();
     deliver({ type: SHELL_SHOWN }, parent);
     expect(onShown).not.toHaveBeenCalled();
+  });
+});
+
+describe("a framed page's input reports", () => {
+  it("posts shell:input on a pointer press or a key, at most once per interval", () => {
+    vi.useFakeTimers();
+    try {
+      const parent = shellFramed();
+      const inputs = (): unknown[][] =>
+        sentAfterConnect(parent).filter(([message]) => (message as { type?: string }).type === SHELL_INPUT);
+
+      window.dispatchEvent(new Event("pointerdown"));
+      window.dispatchEvent(new Event("keydown"));
+      expect(inputs()).toEqual([[{ type: SHELL_INPUT }, "*"]]);
+
+      // Past the throttle the next touch reports again; activity is measured in minutes, so this loses nothing.
+      vi.setSystemTime(Date.now() + 21_000);
+      window.dispatchEvent(new Event("keydown"));
+      expect(inputs()).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reports no input from an unframed page, which the shell's own window already hears", () => {
+    connection = connectToShell({});
+    const posted = vi.spyOn(window, "postMessage");
+    window.dispatchEvent(new Event("pointerdown"));
+    expect(posted).not.toHaveBeenCalled();
+    posted.mockRestore();
   });
 });
 

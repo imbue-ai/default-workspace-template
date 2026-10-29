@@ -9,6 +9,7 @@ import {
   getOwnIdentity,
   getOwnParticipant,
   getPresentUsers,
+  notePageInput,
   resetPresenceForTesting,
   startPresenceHeartbeat,
 } from "./Presence";
@@ -76,6 +77,18 @@ describe("startPresenceHeartbeat", () => {
     expect(JSON.parse(requests[1].body)).toEqual({ last_input_at: "2026-10-22T10:00:05.000Z" });
     expect(getOwnIdentity()).toEqual({ owner: true, user_id: "u1", email: "a@b", participant: "user:u1" });
     expect(getOwnParticipant()).toBe("user:u1");
+  });
+
+  it("counts input a page reported (shell:input) like the window's own, since app frames never bubble here", async () => {
+    const requests = stubFetch(() => jsonResponse(200, { identity: { owner: true }, participant: "owner" }));
+    startPresenceHeartbeat();
+    await vi.advanceTimersByTimeAsync(0);
+
+    vi.setSystemTime(new Date("2026-10-22T11:00:00Z"));
+    notePageInput();
+    await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS);
+
+    expect(JSON.parse(requests[1].body)).toEqual({ last_input_at: "2026-10-22T11:00:00.000Z" });
   });
 
   it("knows the owner of an unshared workspace by the owner key, with no account", async () => {

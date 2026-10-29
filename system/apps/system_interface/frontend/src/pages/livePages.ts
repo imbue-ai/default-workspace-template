@@ -36,6 +36,7 @@ import {
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
+  SHELL_INPUT,
   SHELL_LOCATION,
   SHELL_MESSAGE,
   SHELL_NAVIGATE,
@@ -48,6 +49,7 @@ import {
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { OVERVIEW_PAGE_Z_INDEX, windowPageZIndex } from "../geometry/stacking";
 import { windowPageUrl } from "../model/pageUrl";
+import { notePageInput } from "../model/Presence";
 import type { AppRecord, Desktop, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
 import type { PageReport } from "../reducers/following";
@@ -181,6 +183,9 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_CAPABILITIES, (frame, payload) => this.takeCapabilities(frame, payload));
     setChildFrameMessageHandler(SHELL_LOCATION, (frame, payload) => this.takeLocation(frame, payload));
     setChildFrameMessageHandler(SHELL_FOCUSED, (frame) => this.takeFocused(frame));
+    // Input inside an app's frame never bubbles to the shell's window, so the pages report it (the multiplayer
+    // spec, section 4.3) and the heartbeat's activity reads it as this client's own.
+    setChildFrameMessageHandler(SHELL_INPUT, () => notePageInput());
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
