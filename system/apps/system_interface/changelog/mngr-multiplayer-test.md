@@ -56,3 +56,7 @@ Every window gets "Chat about this app" (the mngr repo's `specs/multiplayer-refi
 
 - A viewed desktop is drawn as its owner sees it: every desktop layout reports its backdrop size to the shell (`POST /api/clients/<id>/viewport`, on boot once the backdrop is measured and after each resize settles; never from the phone layout or a pulled-out window), the clients listing and the inventory carry each client's `viewport`, and the `?of=owner` placements read answers the chosen client's beside the layout. A window viewing a desktop whose owner's size is known lays the wallpaper, the shortcut grid, the windows, and their pages out in a box of that size, scaled down to fit this backdrop (never up) and centred, with a band in the owner's colour around it; the taskbar and the floating entries stay the viewer's own. With no size on record the desktop is drawn at this backdrop's size, as before.
 
+
+- A person's profile picture is served from the shell's own origin: the roster points at `GET /api/roster/<key>/picture?v=<version>`, which answers bytes the shell fetches once from the profile's URL and keeps beside the profile cache (versioned by that URL, so a newer picture is a newer address, cached by the page for good). The pages' content security policy admits no outside image, so the tray showed a monogram for everyone with a picture before.
+
+- The handshake to a page carries `isViewing`, whether its window is being looked at on somebody else's desktop, and is sent again when that changes; a terminal attaches to its session as a viewer by it.
