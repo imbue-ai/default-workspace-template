@@ -20,7 +20,8 @@ was read in (the registry lives on the volume, so it outlives a restart), and a
 reader counts an entry only while the pid names a process (not a thread) with
 that start time in this boot. A re-tag through a stale entry would otherwise
 land on whatever holds the pid now, and a write to a thread's ``oom_score_adj``
-re-bands its whole process.
+re-bands its whole process. The kill hook reads an entry after its process is
+gone, so it can check only the boot.
 
 One agent can register more than one pid: codex runs both a visible ``--remote`` TUI
 and an ``app-server`` daemon from the same launch command, so both are recorded under
@@ -34,11 +35,17 @@ import json
 from pathlib import Path
 
 from oom_priority.paths import agent_pids_dir
-from oom_priority.proctree import is_thread, read_boot_id, read_start_ticks
+from oom_priority.proctree import (
+    is_thread,
+    read_boot_id,
+    read_environ_value,
+    read_start_ticks,
+)
 
 _PROC_DIR = Path("/proc")
 _START_TICKS_KEY = "start_ticks"
 _BOOT_ID_KEY = "boot_id"
+_AGENT_ID_ENV_VAR = "MNGR_AGENT_ID"
 
 
 def _entry_path(pid: int) -> Path:
@@ -57,14 +64,25 @@ def _has_process_identity(record: dict) -> bool:
 def _is_recorded_process(pid: int, record: dict, proc_dir: Path) -> bool:
     """Whether ``pid`` still names the process ``record`` was written for.
 
-    It must be a live process that started at the recorded time in the recorded
-    boot. An entry with no start time, written before they were recorded, never
-    matches: its pid alone cannot tell its agent from whatever reused the pid.
+    It must be a live process that started at the recorded time in this boot,
+    whose id is readable: an unknown boot cannot rule out an earlier one.
     """
-    if not _has_process_identity(record) or not _is_live_process(pid, proc_dir):
+    if not _is_live_process(pid, proc_dir):
         return False
+    # CLEANUP: an entry with no start time was written before they were recorded, so
+    # it counts only while its pid is a process of the agent it names. Its agent may
+    # run for days before it relaunches and records its start time. Drop this branch
+    # one release after start times shipped, once every such agent has relaunched.
+    if not _has_process_identity(record):
+        agent_id = record.get("agent_id")
+        return (
+            isinstance(agent_id, str)
+            and bool(agent_id)
+            and read_environ_value(pid, _AGENT_ID_ENV_VAR, proc_dir) == agent_id
+        )
+    boot_id = read_boot_id(proc_dir)
     is_same_start = read_start_ticks(pid, proc_dir) == record[_START_TICKS_KEY]
-    return is_same_start and read_boot_id(proc_dir) == record.get(_BOOT_ID_KEY)
+    return is_same_start and boot_id is not None and record.get(_BOOT_ID_KEY) == boot_id
 
 
 def _is_current_entry(pid: int, record: dict | None, proc_dir: Path) -> bool:
@@ -74,12 +92,6 @@ def _is_current_entry(pid: int, record: dict | None, proc_dir: Path) -> bool:
     while its pid is a live process.
     """
     if record is None:
-        return _is_live_process(pid, proc_dir)
-    # CLEANUP: an entry with no start time was written before they were recorded. It
-    # is kept while its pid is a live process so the kill hook can still name its
-    # agent, though no reader counts it. Drop this branch one release after start
-    # times shipped, once every such agent has relaunched.
-    if not _has_process_identity(record):
         return _is_live_process(pid, proc_dir)
     return _is_recorded_process(pid, record, proc_dir)
 
@@ -136,17 +148,25 @@ def record_agent_pid(
     _entry_path(pid).write_text(json.dumps(record))
 
 
-def lookup_agent(pid: int) -> dict | None:
+def lookup_agent(pid: int, proc_dir: Path = _PROC_DIR) -> dict | None:
     """Return ``{"agent_name", "is_worker"}`` for ``pid``, or None if not an
-    agent main process (or the entry is missing/unreadable).
+    agent main process (or the entry is missing/unreadable, or from an earlier boot).
 
-    Called after the process is gone, so its identity cannot be checked."""
+    Called after the process is gone, so only its boot can be checked: an entry
+    left from before a restart likely names an early pid the new boot reuses. An
+    entry with no boot id, or a boot id that cannot be read now, is trusted, since
+    dropping it would lose a real shed record."""
     try:
         data = json.loads(_entry_path(pid).read_text())
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(data, dict) or "agent_name" not in data:
         return None
+    recorded_boot_id = data.get(_BOOT_ID_KEY)
+    if isinstance(recorded_boot_id, str):
+        boot_id = read_boot_id(proc_dir)
+        if boot_id is not None and boot_id != recorded_boot_id:
+            return None
     return data
 
 
@@ -154,8 +174,8 @@ def live_pids_by_agent_id(proc_dir: Path = _PROC_DIR) -> dict[str, list[int]]:
     """Every registered pid that still names its process, grouped by the ``agent_id`` recorded with it.
 
     An agent can hold more than one (codex's TUI and its app-server daemon). Entries
-    recorded without an ``agent_id`` or a start time, unreadable ones, and ones whose
-    pid no longer names the recorded process are left out.
+    recorded without an ``agent_id``, unreadable ones, and ones whose pid no longer
+    names the recorded process are left out.
     """
     pids_by_agent_id: dict[str, list[int]] = {}
     for _entry, pid, data in _read_entries(agent_pids_dir()):

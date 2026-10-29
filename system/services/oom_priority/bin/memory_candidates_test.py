@@ -20,7 +20,7 @@ from chat_background_tasks.testing import runner_task
 from imbue.mngr.cli.field_catalog import FieldContext, build_list_field_catalog
 from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority.meminfo import HOST_MEMINFO_MAX_AGE_SECONDS
-from oom_priority.testing import write_fake_process
+from oom_priority.testing import FAKE_BOOT_ID, write_fake_process
 
 _SCRIPT = Path(__file__).parent / "memory_candidates.py"
 _spec = importlib.util.spec_from_file_location("memory_candidates", _SCRIPT)
@@ -107,7 +107,7 @@ def _render_like_mngr(template: str, record: Mapping[str, Any]) -> str:
 
 
 def _register_pid(runtime_dir: Path, pid: int, agent_id: str) -> None:
-    """Register ``pid`` for ``agent_id`` as started at tick ``pid``, matching ``_fake_process``."""
+    """Register ``pid`` for ``agent_id`` as started at tick ``pid`` in this boot, matching ``_fake_process``."""
     directory = runtime_dir / "agent_pids"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{pid}.json").write_text(
@@ -117,6 +117,7 @@ def _register_pid(runtime_dir: Path, pid: int, agent_id: str) -> None:
                 "is_worker": False,
                 "agent_id": agent_id,
                 "start_ticks": pid,
+                "boot_id": FAKE_BOOT_ID,
             }
         )
     )

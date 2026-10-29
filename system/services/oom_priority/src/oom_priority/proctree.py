@@ -97,3 +97,17 @@ def read_start_ticks(pid: int, proc_dir: Path = _PROC_DIR) -> int | None:
     if len(fields) < 20 or not fields[19].isdigit():
         return None
     return int(fields[19])
+
+
+def read_environ_value(pid: int, name: str, proc_dir: Path = _PROC_DIR) -> str | None:
+    """The value ``pid`` was started with for environment variable ``name`` (from
+    ``/proc/<pid>/environ``); None when it has none, is gone, or its environment cannot be read."""
+    try:
+        environ = (proc_dir / str(pid) / "environ").read_bytes()
+    except OSError:
+        return None
+    prefix = f"{name}=".encode()
+    for entry in environ.split(b"\0"):
+        if entry.startswith(prefix):
+            return entry[len(prefix) :].decode(errors="replace")
+    return None

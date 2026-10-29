@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 import pytest
-from oom_priority.testing import write_fake_process
+from oom_priority.testing import FAKE_BOOT_ID, write_fake_process
 
 from system_monitor import programs
 
@@ -141,6 +141,7 @@ def test_chats_on_any_harness_are_found_through_the_agent_registry(
                     "is_worker": False,
                     "agent_id": agent_id,
                     "start_ticks": pid,
+                    "boot_id": FAKE_BOOT_ID,
                 }
             )
         )

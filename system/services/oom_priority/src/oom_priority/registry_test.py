@@ -1,11 +1,12 @@
 import json
 import os
+import shutil
 from pathlib import Path
 
 import pytest
 
 from oom_priority import registry
-from oom_priority.testing import write_fake_process
+from oom_priority.testing import fake_boot_id_path, write_fake_process
 
 _HAS_PROC = Path("/proc/self/stat").exists()
 
@@ -82,25 +83,71 @@ def test_an_id_that_is_now_another_processs_thread_is_not_the_agents(
     assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
 
 
-def test_an_entry_without_a_start_time_is_never_counted_but_kept_while_its_pid_lives(
+def _write_entry_without_a_start_time(pid: int, agent_id: str) -> None:
+    # The format written before start times were recorded.
+    directory = registry.agent_pids_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / f"{pid}.json").write_text(
+        json.dumps({"agent_name": "alpha", "is_worker": False, "agent_id": agent_id})
+    )
+
+
+def test_an_entry_without_a_start_time_counts_while_its_pid_is_a_process_of_its_agent(
     runtime: Path, proc: Path
 ) -> None:
-    # Written before start times were recorded: its pid alone cannot tell its agent from
-    # whatever reused the pid, so no reader counts it, but the kill hook can still name it.
-    directory = registry.agent_pids_dir()
-    directory.mkdir(parents=True)
-    (directory / "4242.json").write_text(
-        json.dumps({"agent_name": "alpha", "agent_id": "agent-abc"})
+    # An agent that registered before start times were recorded may run for days before it
+    # relaunches; until then its own environment is what ties the pid to it.
+    _write_entry_without_a_start_time(4242, "agent-abc")
+    write_fake_process(
+        proc, 4242, start_ticks=100, environ={"MNGR_AGENT_ID": "agent-abc"}
     )
-    (directory / "5000.json").write_text(
-        json.dumps({"agent_name": "beta", "agent_id": "agent-def"})
+
+    assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == [4242]
+    registry.prune_stale_entries(proc_dir=proc)
+    assert registry.lookup_agent(4242, proc_dir=proc) is not None
+
+
+def test_an_entry_without_a_start_time_is_not_counted_once_its_pid_is_another_agents(
+    runtime: Path, proc: Path
+) -> None:
+    # The incident: the chat's pid now belongs to the chat app, which runs as the services agent.
+    _write_entry_without_a_start_time(4242, "agent-abc")
+    write_fake_process(
+        proc,
+        4242,
+        start_ticks=100,
+        comm="chat-app",
+        environ={"MNGR_AGENT_ID": "agent-services"},
     )
-    write_fake_process(proc, 4242, start_ticks=100)
 
     assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
     registry.prune_stale_entries(proc_dir=proc)
-    assert sorted(path.name for path in directory.iterdir()) == ["4242.json"]
-    assert registry.lookup_agent(4242) is not None
+    assert registry.lookup_agent(4242, proc_dir=proc) is None
+
+
+def test_an_entry_without_a_start_time_is_not_counted_on_a_thread(
+    runtime: Path, proc: Path
+) -> None:
+    # Even a thread whose process carries the agent's id is not the agent's main process.
+    _write_entry_without_a_start_time(4242, "agent-abc")
+    write_fake_process(proc, 849, start_ticks=5, environ={"MNGR_AGENT_ID": "agent-abc"})
+    write_fake_process(
+        proc, 4242, start_ticks=100, tgid=849, environ={"MNGR_AGENT_ID": "agent-abc"}
+    )
+
+    assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
+
+
+def test_an_entry_without_a_start_time_is_not_counted_when_its_environment_cannot_be_read(
+    runtime: Path, proc: Path
+) -> None:
+    _write_entry_without_a_start_time(4242, "agent-abc")
+    write_fake_process(
+        proc, 4242, start_ticks=100, environ={"MNGR_AGENT_ID": "agent-abc"}
+    )
+    (proc / "4242" / "environ").unlink()
+
+    assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
 
 
 def test_an_entry_from_an_earlier_boot_is_not_the_agents(
@@ -108,7 +155,7 @@ def test_an_entry_from_an_earlier_boot_is_not_the_agents(
 ) -> None:
     # The registry outlives a container restart, and a start time only counts from boot, so a
     # new process can hold an old entry's pid and start time.
-    boot_id = proc / "sys" / "kernel" / "random" / "boot_id"
+    boot_id = fake_boot_id_path(proc)
     boot_id.parent.mkdir(parents=True)
     boot_id.write_text("boot-one\n")
     write_fake_process(proc, 4242, start_ticks=100)
@@ -121,7 +168,53 @@ def test_an_entry_from_an_earlier_boot_is_not_the_agents(
 
     assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
     registry.prune_stale_entries(proc_dir=proc)
-    assert registry.lookup_agent(4242) is None
+    assert registry.lookup_agent(4242, proc_dir=proc) is None
+
+
+def test_a_boot_that_cannot_be_read_never_matches(runtime: Path, proc: Path) -> None:
+    # Without this boot's id, a matching start time cannot rule out an earlier boot.
+    write_fake_process(proc, 4242, start_ticks=100)
+    registry.record_agent_pid(
+        4242, "alpha", is_worker=False, agent_id="agent-abc", proc_dir=proc
+    )
+    fake_boot_id_path(proc).unlink()
+    assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
+
+    # Nor does an entry recorded while the boot could not be read, once it can.
+    registry.record_agent_pid(
+        4242, "alpha", is_worker=False, agent_id="agent-abc", proc_dir=proc
+    )
+    fake_boot_id_path(proc).write_text("fake-boot\n")
+    assert registry.lookup_pids_by_agent_id("agent-abc", proc_dir=proc) == []
+
+
+def test_the_kill_hook_does_not_name_an_agent_from_an_earlier_boot(
+    runtime: Path, proc: Path
+) -> None:
+    # The killed process is gone, so the boot is all the hook can check.
+    boot_id = fake_boot_id_path(proc)
+    boot_id.parent.mkdir(parents=True)
+    boot_id.write_text("boot-one\n")
+    write_fake_process(proc, 4242, start_ticks=100)
+    registry.record_agent_pid(4242, "alpha", is_worker=False, proc_dir=proc)
+    shutil.rmtree(proc / "4242")
+    assert registry.lookup_agent(4242, proc_dir=proc) is not None
+
+    boot_id.write_text("boot-two\n")
+    assert registry.lookup_agent(4242, proc_dir=proc) is None
+
+    # A boot that cannot be read now is no evidence of a restart, so the record stands.
+    boot_id.unlink()
+    assert registry.lookup_agent(4242, proc_dir=proc) is not None
+
+
+def test_the_kill_hook_names_an_agent_from_an_entry_without_a_boot_id(
+    runtime: Path, proc: Path
+) -> None:
+    _write_entry_without_a_start_time(4242, "agent-abc")
+    write_fake_process(proc, 1, start_ticks=1)
+
+    assert registry.lookup_agent(4242, proc_dir=proc) is not None
 
 
 def test_lookup_ignores_entries_without_an_id(runtime: Path, proc: Path) -> None:

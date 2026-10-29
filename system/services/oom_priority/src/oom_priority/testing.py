@@ -32,24 +32,42 @@ def write_fake_cgroup(
     )
 
 
+FAKE_BOOT_ID = "fake-boot"
+
+
+def fake_boot_id_path(proc_dir: Path) -> Path:
+    return proc_dir / "sys" / "kernel" / "random" / "boot_id"
+
+
 def write_fake_process(
     proc_dir: Path,
     pid: int,
     start_ticks: int,
     tgid: int | None = None,
     comm: str = "claude",
+    environ: dict[str, str] | None = None,
 ) -> None:
-    """Lay out ``/proc/<pid>`` with the ``stat`` and ``status`` a process's identity is read from.
+    """Lay out ``/proc/<pid>`` with the ``stat``, ``status`` and ``environ`` a process's identity is
+    read from, and the boot id every ``/proc`` has, unless the test already wrote one.
 
     ``tgid`` names the process ``pid`` is a thread of (default: itself). ``comm`` sits in
     parentheses in ``stat``, the way the kernel writes it, so it may hold spaces or parentheses.
     """
+    boot_id = fake_boot_id_path(proc_dir)
+    if not boot_id.exists():
+        boot_id.parent.mkdir(parents=True, exist_ok=True)
+        boot_id.write_text(f"{FAKE_BOOT_ID}\n")
     entry = proc_dir / str(pid)
     entry.mkdir(parents=True, exist_ok=True)
     after_comm = ["S", *(["0"] * 18), str(start_ticks), "0", "0"]
     (entry / "stat").write_text(f"{pid} ({comm}) {' '.join(after_comm)}\n")
     (entry / "status").write_text(
         f"Name:\t{comm}\nTgid:\t{tgid if tgid is not None else pid}\nPid:\t{pid}\n"
+    )
+    (entry / "environ").write_bytes(
+        b"".join(
+            f"{key}={value}\0".encode() for key, value in (environ or {}).items()
+        )
     )
 
 
