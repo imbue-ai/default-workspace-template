@@ -235,6 +235,31 @@ def lock_check(repo_root: Path, relative: str) -> str | None:
     return (result.stderr or result.stdout).strip() or f"exit {result.returncode}"
 
 
+def sync_all(repo_root: Path) -> list[str]:
+    """``uv sync --locked`` every user package; returns the ones whose sync failed.
+
+    Each failure is reported and the rest carry on: a broken user package stops only
+    itself. Their venv links must exist first (``venv_links.py ensure``).
+    """
+    failed: list[str] = []
+    for relative in user_packages(repo_root):
+        result = subprocess.run(
+            ["uv", "sync", "--locked", "--project", relative],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            failed.append(relative)
+            sys.stderr.write(
+                f"warning: `uv sync --locked --project {relative}` failed "
+                f"(exit {result.returncode}); its program will fail to start until it is "
+                f"fixed:\n{(result.stderr or result.stdout).strip()}\n"
+            )
+    return failed
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="List the user packages under system/ and check they are standalone."
@@ -243,6 +268,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser(
         "list", help="print each user package's directory, repo-relative"
+    )
+    commands.add_parser(
+        "sync", help="`uv sync --locked` every user package, reporting failures"
     )
     check = commands.add_parser(
         "check", help="report every user package that is not standalone"
@@ -257,6 +285,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         for relative in packages:
             print(relative)
         return 0
+    if args.command == "sync":
+        return 1 if sync_all(repo_root) else 0
     failed = False
     for relative in packages:
         problems = standalone_problems(repo_root, relative)

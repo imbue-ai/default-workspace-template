@@ -78,8 +78,13 @@ python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/tool_env.py" drop-shad
 # asserts the lockfile is canonical so the pre-warmed cache is not bypassed. .venv is
 # a link to a target beside the uv cache, so uv hardlinks from it (see venv_links.py);
 # on docker the target lands in the image layer.
-python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/venv_links.py" ensure "$REPO_ROOT"
+# shellcheck disable=SC2046 # one argument per user package directory
+python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/venv_links.py" ensure "$REPO_ROOT" $(python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/user_packages.py" --repo-root "$REPO_ROOT" list)
 mngr_git_auth_run uv sync --all-packages --frozen
+# Every user package is a standalone project with its own lock: sync each, so a workspace
+# built from a template that carries some comes up with their venvs ready. A failure is
+# reported and stops only that package.
+mngr_git_auth_run python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/user_packages.py" --repo-root "$REPO_ROOT" sync || true
 
 # Expose the vendored tk ticket tracker on PATH. The target resolves once
 # /home/user/workspace is in place (on docker, after the first-boot seed).
