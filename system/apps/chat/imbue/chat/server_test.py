@@ -5973,6 +5973,47 @@ def test_a_persons_send_raises_a_bubble_over_their_entry_naming_the_people_it_me
     ]
 
 
+def test_a_send_no_proxy_vouched_for_raises_no_bubble_and_its_mentions_act_on_nothing(tmp_path: Path) -> None:
+    """A send with no identity header (a script's: the background-task report, a routine's) is nobody's speech
+    (the multiplayer spec, section 6.5): no bubble rises for it, and an ``@agent`` in a room send of that kind
+    sends the main chat nothing; the same sends under a visitor's header do both."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+    shell = _fake_shell_of(app)
+    report = "<background-task-report>the build is green</background-task-report>"
+
+    headerless_agent = client.post(f"/api/chats/{_MAIN_ID}/message", json={"message": report, "message_id": "m-1"})
+    headerless_room = client.post(
+        f"/api/chats/{_LOUNGE_ID}/message", json={"message": "@agent is it green?", "message_id": "m-2"}
+    )
+    visitor_agent = client.post(
+        f"/api/chats/{_MAIN_ID}/message",
+        json={"message": "thanks", "message_id": "m-3"},
+        headers=_identity_header(_VISITOR),
+    )
+    visitor_room = client.post(
+        f"/api/chats/{_LOUNGE_ID}/message",
+        json={"message": "@agent is it green?", "message_id": "m-4"},
+        headers=_identity_header(_VISITOR),
+    )
+
+    assert [r.status_code for r in (headerless_agent, headerless_room, visitor_agent, visitor_room)] == [200] * 4
+    wait_until_true(lambda: len(messenger.sent) == 3, 10.0, "the visitor's mention to reach the main chat")
+    assert messenger.sent == [
+        (_MAIN_ID, report),
+        (_MAIN_ID, author_prefix("Bob") + "thanks"),
+        (_MAIN_ID, author_prefix("Bob", "Lounge") + "@agent is it green?"),
+    ]
+    wait_until_true(lambda: len(shell.bubbles) == 2, 10.0, "the visitor's bubbles to reach the shell")
+    assert [(str(bubble.speaker), bubble.message_id) for bubble in shell.bubbles] == [
+        ("user:user-bob-4471", "m-3"),
+        ("user:user-bob-4471", "m-4"),
+    ]
+    lounge = state_of(app).agent_manager.get_chat_snapshot(_LOUNGE_ID)
+    assert lounge is not None and lounge.awaiting_chat_ids == (ChatId(_MAIN_ID),)
+
+
 def test_the_agents_turns_raise_a_bubble_with_their_first_paragraph(tmp_path: Path) -> None:
     """An assistant turn of the chat's live agent, and the agent's post into a room, each raise a bubble over the
     agent's entry; a retired agent's words raise none."""
@@ -6189,8 +6230,11 @@ def test_a_new_agent_chats_first_message_raises_a_bubble_as_the_create_is_accept
         chat_id=ChatId("agent-00000000000000000000000000000044"), name="Chat-2", display_name="Chat 2"
     )
 
-    _bubble_new_chats_first_message(state, created, "", _VISITOR, "m-none")
-    _bubble_new_chats_first_message(state, created, "first words", _VISITOR, "m-first")
+    visitor = parse_identity_header(_VISITOR.model_dump_json(exclude_none=True))
+
+    _bubble_new_chats_first_message(state, created, "", visitor, "m-none")
+    _bubble_new_chats_first_message(state, created, "a script's words", _VISITOR, "m-script")
+    _bubble_new_chats_first_message(state, created, "first words", visitor, "m-first")
 
     wait_until_true(lambda: len(shell.bubbles) == 1, 10.0, "the first message's bubble to reach the shell")
     assert [
@@ -6247,7 +6291,12 @@ def test_a_rooms_first_message_acts_on_its_mentions_once_the_room_has_it(tmp_pat
     app = _peopled_app(tmp_path, messenger)
     state = state_of(app)
     with app.app_context():
-        hook = _room_first_message_hook(state, "@agent is the build green?", _VISITOR, app.app_context())
+        hook = _room_first_message_hook(
+            state,
+            "@agent is the build green?",
+            parse_identity_header(_VISITOR.model_dump_json(exclude_none=True)),
+            app.app_context(),
+        )
 
     hook(ChatId(_LOUNGE_ID), "m-first")
 

@@ -1021,8 +1021,12 @@ def _act_on_accepted_send(
     """What a person's or a visiting agent's send does once it was accepted (the multiplayer spec, sections 6.5 and
     7.4): their speech bubble is raised over their tray entry, naming the people a room message mentions so their
     clients mark it; and in a room the mentions act, people marked and the agent or a chat sent the message. In an
-    agent chat a handle is a word the agent reads like any other. Takes the sender's ``identity`` rather than reading
-    the request's, since an intake nobody waits on and a room's first message land on threads of their own."""
+    agent chat a handle is a word the agent reads like any other. A send no proxy stamped (a script's, the
+    terminal's) is nobody's speech: it raises no bubble and its mentions act on nothing. Takes the sender's
+    ``identity`` rather than reading the request's, since an intake nobody waits on and a room's first message land
+    on threads of their own."""
+    if not identity.is_header_present:
+        return
     snapshot = state.agent_manager.get_chat_snapshot(str(chat_id))
     if snapshot is None:
         return
@@ -1940,8 +1944,9 @@ def _bubble_new_chats_first_message(
     """Raise the bubble a new agent chat's first message is due (the multiplayer spec, section 6.5): the message
     rides or follows the create rather than a send, so it is posted here, under the chat's minted title, as the
     create is accepted; its mentions act on nothing, since the chat is an agent's. A room's first message raises
-    its bubble once it has landed (``_act_on_room_first_message``), with its mentions."""
-    if not message or state.tray_feed is None:
+    its bubble once it has landed (``_act_on_room_first_message``), with its mentions. A create no proxy stamped
+    (a script's ``--create``) raises none."""
+    if not message or state.tray_feed is None or not identity.is_header_present:
         return
     state.tray_feed.post_bubble(
         participant_key_of(identity), created.chat_id, created.display_name, message, message_id, ()

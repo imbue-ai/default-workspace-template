@@ -9,7 +9,11 @@ Usage, from the repo root (every skill's cwd)::
     python3 system/scripts/message_chat.py <chat-id> --browser-fleet -m "a browser-fleet nudge"
     python3 system/scripts/message_chat.py --create --name "assist-1a2b3c" --label auto_open=true -m "/assist ..."
 
-This is the in-workspace replacement for ``mngr message <agent>``. A chat is
+This is the in-workspace replacement for ``mngr message <agent>``, for a chat with an
+agent. A chat room (a chat among the people here, with no agent of its own) is answered
+with ``mngr message --start <room>`` and never through this script: a send no proxy
+vouched for is nobody's speech, so it would raise no bubble in anyone's tray and its
+``@mentions`` would act on nothing. A chat is
 addressed by its chat id (``$MINDS_CHAT_ID`` on an agent the chat app created; the
 id of its first agent, so ``$MNGR_AGENT_ID`` for an agent that is its own chat),
 never by its mngr name: a rename changes the name mid-task, and once a chat can
