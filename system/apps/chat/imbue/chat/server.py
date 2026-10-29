@@ -973,9 +973,11 @@ def _send_message_endpoint(chat_id: str) -> Response:
 
 def _replay_send_answer(data: bytes, status: int) -> Response:
     """A send's answer again, for the request that repeated it: held (202), delivered, or the refusal of the send
-    it repeats (already the route's own answer, so its body goes back as it was)."""
+    it repeats: an ``ErrorResponse``, or a ``SendFailureResponse`` where the refusal carried its kind."""
     if status >= 400:
-        return Response(data, status=status, mimetype="application/json")
+        body = json.loads(data)
+        refusal = SendFailureResponse.model_validate(body) if "kind" in body else ErrorResponse.model_validate(body)
+        return model_response(refusal, status)
     if status == 202:
         return model_response(HeldSendResponse.model_validate_json(data), 202)
     return model_response(SendMessageResponse.model_validate_json(data), status)
