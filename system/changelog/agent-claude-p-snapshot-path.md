@@ -1,0 +1,1 @@
+`.gitignore` now ignores the contents of a `data/.secrets/` folder at any depth, not only the one at the workspace root, so a secret file written under a subfolder is never committed. `data/.secrets/README.md` stays tracked.

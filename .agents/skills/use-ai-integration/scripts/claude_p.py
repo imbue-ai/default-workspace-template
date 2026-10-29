@@ -98,11 +98,62 @@ class WorkspaceAICredentials:
 
 # Where a keyed integration's snapshot of the workspace API key lives, written
 # at integration-setup time by ``write_anthropic_env_snapshot``. Relative to
-# the repo root, which is every service's working directory (supervisord runs
-# them from /home/user/workspace). Holds ONLY ANTHROPIC_API_KEY (+ ANTHROPIC_BASE_URL): the
-# subscription oauth token cannot authenticate direct API calls, so it is
-# never written here.
-ANTHROPIC_ENV_SNAPSHOT_PATH = "data/.secrets/anthropic.env"
+# the workspace root (see ``_workspace_root``). Holds ONLY ANTHROPIC_API_KEY (+
+# ANTHROPIC_BASE_URL): the subscription oauth token cannot authenticate direct
+# API calls, so it is never written here.
+ANTHROPIC_ENV_SNAPSHOT_RELATIVE_PATH = os.path.join("data", ".secrets", "anthropic.env")
+
+
+def _workspace_root() -> str:
+    """The workspace checkout holding this copy of the file, else the current directory.
+
+    Found from this file's location, not the cwd: callers run from any folder (a
+    skill's scripts folder, an app's package), and a cwd-relative path would put
+    the key outside the root ``data/`` that git ignores, and make a service
+    started elsewhere miss the snapshot. Walked up rather than counted, because
+    this file is copied into services at any depth; ``system/scripts`` marks the
+    root, as in the template's other root finders. A git worktree resolves to
+    its main checkout (see ``_main_checkout``). Outside a workspace (local
+    development) the cwd is the root.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    while True:
+        if os.path.isdir(os.path.join(here, "system", "scripts")):
+            return _main_checkout(here)
+        parent = os.path.dirname(here)
+        if parent == here:
+            return os.getcwd()
+        here = parent
+
+
+def _main_checkout(root: str) -> str:
+    """The main checkout the git worktree at ``root`` belongs to; ``root`` itself otherwise.
+
+    A background worker runs in its own worktree with its own ``data/``, but
+    services run from the main checkout, so a key saved or read in a worktree
+    must use the main checkout's ``data/``. Read from the worktree's ``.git``
+    file, the same way as ``main_checkout`` in
+    ``system/libs/chat_background_tasks/src/chat_background_tasks/markers.py``;
+    repeated here because this file is copied around standalone.
+    """
+    try:
+        with open(os.path.join(root, ".git"), encoding="utf-8") as f:
+            git_file = f.read()
+    except OSError:
+        # No .git, or a directory: a main checkout or none.
+        return root
+    git_dir = os.path.join(root, git_file.strip().removeprefix("gitdir:").strip())
+    try:
+        with open(os.path.join(git_dir, "commondir"), encoding="utf-8") as f:
+            common_dir = os.path.realpath(os.path.join(git_dir, f.read().strip()))
+    except OSError:
+        return root
+    return os.path.dirname(common_dir)
+
+
+def _anthropic_env_snapshot_path() -> str:
+    """Absolute path of the key snapshot, the same whatever the caller's cwd."""
+    return os.path.join(_workspace_root(), ANTHROPIC_ENV_SNAPSHOT_RELATIVE_PATH)
 
 
 def _default_account_dir() -> str:
@@ -177,7 +228,7 @@ def read_workspace_ai_credentials() -> WorkspaceAICredentials:
     a workspace (e.g. local development with an exported key). The oauth token
     never comes from the snapshot (it is never written there).
     """
-    snapshot_env = _read_env_file(ANTHROPIC_ENV_SNAPSHOT_PATH)
+    snapshot_env = _read_env_file(_anthropic_env_snapshot_path())
     settings_env: dict[str, object] = {}
     config_dir = _account_config_dir() or os.path.expanduser("~/.claude")
     settings_path = os.path.join(config_dir, "settings.json")
@@ -219,7 +270,7 @@ def write_anthropic_env_snapshot() -> str:
     writes ``CLAUDE_CODE_OAUTH_TOKEN`` -- a subscription token cannot
     authenticate direct API calls. Raises when the workspace has no API key
     configured (the integration should use the keyless ``claude -p`` path
-    instead). Returns the path written.
+    instead). Returns the absolute path written, under the workspace root.
     """
     creds = read_workspace_ai_credentials()
     if not creds.api_key:
@@ -230,14 +281,12 @@ def write_anthropic_env_snapshot() -> str:
     lines = [f"ANTHROPIC_API_KEY={creds.api_key}"]
     if creds.base_url:
         lines.append(f"ANTHROPIC_BASE_URL={creds.base_url}")
-    directory = os.path.dirname(ANTHROPIC_ENV_SNAPSHOT_PATH)
-    os.makedirs(directory, exist_ok=True)
-    fd = os.open(
-        ANTHROPIC_ENV_SNAPSHOT_PATH, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600
-    )
+    path = _anthropic_env_snapshot_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write("\n".join(lines) + "\n")
-    return ANTHROPIC_ENV_SNAPSHOT_PATH
+    return path
 
 
 @dataclass(frozen=True)

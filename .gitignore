@@ -45,6 +45,9 @@ data/.state/*
 !data/.state/README.md
 !data/.secrets/
 data/.secrets/*
+# A data/.secrets/ at any depth holds secrets too: a helper run from a
+# subfolder can write one there, and it must never be committed.
+**/data/.secrets/*
 !data/.secrets/README.md
 !data/.tasks/
 data/.tasks/*
