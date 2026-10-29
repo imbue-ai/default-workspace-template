@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import m from "mithril";
 
 import { appRecord, clientRecord, desktopRecord, rosterParticipantRecord, windowRecord } from "../../testing/records";
-import { PersonCard, lookingAtOf } from "./PersonCard";
+import { PersonCard, desktopOfPerson, lookingAtOf } from "./PersonCard";
 import type { PersonCardAttrs } from "./PersonCard";
 
 const NOW = new Date("2026-10-25T12:00:00Z");
@@ -73,7 +73,51 @@ describe("lookingAtOf", () => {
   });
 });
 
+describe("desktopOfPerson", () => {
+  it("reads the active desktop of their newest connected client, and none while no client of theirs is connected", () => {
+    const stale = clientRecord("bob-phone", {
+      participant: bob.key,
+      active_desktop: "home",
+      last_seen: "2026-10-25T11:30:00Z",
+      is_connected: false,
+    });
+    const live = clientRecord("bob-laptop", {
+      participant: bob.key,
+      active_desktop: "work",
+      last_seen: "2026-10-25T11:00:00Z",
+      is_connected: true,
+    });
+    expect(desktopOfPerson(bob, [stale, live])).toBe("work");
+    expect(desktopOfPerson(bob, [stale])).toBeNull();
+    expect(desktopOfPerson(josh, [live])).toBeNull();
+  });
+});
+
 describe("PersonCard", () => {
+  it("marks the desktop they are on, beside the viewer's own mark when both apply, and marks none on your own card", () => {
+    const bobs = desktopRecord("bob", { name: "Bob's desk", owner: bob.key });
+    const other = desktopRecord("bob-2", { name: "Bob's other desk", owner: bob.key });
+    const onBobs = clientRecord("bob-laptop", { participant: bob.key, active_desktop: "bob", shown: [] });
+    const root = render({ desktops: [home, bobs, other], clients: [onBobs], activeDesktopId: "bob-2" });
+    expect(root.querySelector("[data-tray-card-there='bob']")?.textContent).toBe("There now");
+    expect(root.querySelector("[data-tray-card-there='bob-2']")).toBeNull();
+    expect(root.querySelector("[data-tray-card-desktop='bob-2']")?.textContent).toContain("Viewing");
+    unmountViews();
+    const both = render({ desktops: [home, bobs], clients: [onBobs], activeDesktopId: "bob" });
+    const row = both.querySelector("[data-tray-card-desktop='bob']");
+    expect(row?.textContent).toContain("There now");
+    expect(row?.textContent).toContain("Viewing");
+    unmountViews();
+    const own = render({
+      entry: josh,
+      isOwn: true,
+      clients: [clientRecord("laptop", { participant: josh.key, active_desktop: "home", shown: [] })],
+      desktops: [home, work],
+      activeDesktopId: "work",
+    });
+    expect(own.querySelector("[data-tray-card-there]")).toBeNull();
+  });
+
   it("shows the name, the status, what they are looking at with its app icon, and no desktops while they own none", () => {
     const root = render();
     expect(root.querySelector("[data-tray-card-name]")?.textContent).toBe("Bob");

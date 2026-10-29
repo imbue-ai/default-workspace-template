@@ -1,11 +1,11 @@
 /**
  * A person's card (the multiplayer spec, section 6.3): the picture, the name ("(you)", "(owner)"), the status line
  * with its dot, then, when connected, what they are looking at (the window at the top of the stack on the active
- * desktop of their newest client), then their desktops (the ones they own, section 8.1), one row each, the one the
- * viewer is on marked "Viewing", a click viewing it (section 8.3); your own card lists your own desktops (a click
- * switches) and ends with "New desktop". A visiting agent's card shows its name, "Visiting agent", and the status
- * line, and no desktops. On an unshared workspace the owner's own entry is a neutral silhouette and the card reads
- * "You".
+ * desktop of their newest client), then their desktops (the ones they own, section 8.1), one row each, the one they
+ * are on marked "There now" and the one the viewer is on marked "Viewing", a click viewing it (section 8.3); your
+ * own card lists your own desktops (a click switches) and ends with "New desktop". A visiting agent's card shows
+ * its name, "Visiting agent", and the status line, and no desktops. On an unshared workspace the owner's own entry
+ * is a neutral silhouette and the card reads "You".
  */
 
 import m from "mithril";
@@ -30,16 +30,29 @@ export interface LookingAt {
   readonly desktop: Desktop;
 }
 
+/** A person's newest client: the most recently seen connected one, else the most recently seen; undefined when no
+ *  client of theirs is known. */
+function newestClientOf(entry: RosterParticipant, clients: readonly ClientRecord[]): ClientRecord | undefined {
+  const own = clients
+    .filter((client) => isClientOf(entry, client))
+    .sort((left, right) => right.last_seen.localeCompare(left.last_seen));
+  return own.find((client) => client.is_connected) ?? own[0];
+}
+
+/** The desktop a person is on: their newest connected client's active desktop; null when no connected client of
+ *  theirs is known. */
+export function desktopOfPerson(entry: RosterParticipant, clients: readonly ClientRecord[]): string | null {
+  const newest = newestClientOf(entry, clients);
+  return newest === undefined || !newest.is_connected ? null : newest.active_desktop;
+}
+
 export function lookingAtOf(
   entry: RosterParticipant,
   clients: readonly ClientRecord[],
   desktops: readonly Desktop[],
   apps: readonly AppRecord[],
 ): LookingAt | null {
-  const own = clients
-    .filter((client) => isClientOf(entry, client))
-    .sort((left, right) => right.last_seen.localeCompare(left.last_seen));
-  const newest = own.find((client) => client.is_connected) ?? own[0];
+  const newest = newestClientOf(entry, clients);
   if (newest === undefined || newest.active_desktop === null) return null;
   const desktop = desktops.find((candidate) => candidate.id === newest.active_desktop);
   if (desktop === undefined) return null;
@@ -88,6 +101,9 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
         ? null
         : lookingAtOf(entry, attrs.clients, attrs.desktops, attrs.apps);
     const desktops = isVisitingAgent || entry.kind === "invited" ? [] : desktopsOf(entry, attrs.desktops);
+    // Where they are now, as the clients were read when the card opened; your own card says where you are
+    // through "Viewing" alone.
+    const theirDesktopId = isOwn || state === "offline" ? null : desktopOfPerson(entry, attrs.clients);
     return m(TrayCardFrame, { anchor: attrs.anchor, label: name, onEnter: attrs.onEnter, onLeave: attrs.onLeave }, [
       m("div", { class: "flex items-center gap-2" }, [
         m(TrayAvatar, { entry, sizePx: CARD_PICTURE_SIZE_PX, isFaded: false }),
@@ -150,6 +166,22 @@ export const PersonCard: m.Component<PersonCardAttrs> = {
                     m.trust(icon("columns", { size: MONITOR_GLYPH_SIZE })),
                   ),
                   m("span", { class: "min-w-0 flex-1 truncate" }, desktop.name),
+                  desktop.id === theirDesktopId
+                    ? m(
+                        "span",
+                        {
+                          class: "flex items-center gap-1 text-(length:--font-size-helper) text-faint",
+                          "data-tray-card-there": desktop.id,
+                        },
+                        [
+                          m("span", {
+                            class: "inline-block size-1.5 shrink-0 rounded-full",
+                            style: { backgroundColor: entry.color },
+                          }),
+                          "There now",
+                        ],
+                      )
+                    : null,
                   desktop.id === attrs.activeDesktopId
                     ? m("span", { class: "text-(length:--font-size-helper) text-faint" }, "Viewing")
                     : null,
