@@ -44,7 +44,7 @@ and `recover` both fail. Confirm there is a recent one; this reads the
 service's log and waits for nothing:
 
 ```bash
-uv run host-backup-now --check
+uv run --no-sync host-backup-now --check
 ```
 
 Exit 0 means a recent `restic_backup_succeeded`; 3 (not configured), 1 (no
@@ -267,12 +267,31 @@ reasons, and what an edit must preserve, are in
 PINNED_CEILING=""
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
     resolve-target --local-tags --override "$REF" \
-    ${PINNED_CEILING:+--app-version "$PINNED_CEILING"} > /tmp/update-self-recheck.json || exit 1
+    ${PINNED_CEILING:+--app-version "$PINNED_CEILING"} > /tmp/update-self-recheck.json || exit $?
 cat /tmp/update-self-recheck.json
 ```
 
 Set `PINNED_CEILING` as Step 2 does: the `Ceiling:` of a message that pinned
 the update, else empty, so a pinned pass never asks the app here either.
+
+**If it exits with code 75**, this workspace's system Python is older than the
+one the target release needs (a local workspace created before 2026-09-14), and
+it cannot be updated in place. Stop here: apply nothing and dispatch no worker.
+Record the verdict with the workspace's own copy, the one Step 1 ran -- the
+staged copy exits 75 on every subcommand under this Python:
+
+```bash
+python3 .agents/skills/update-self/scripts/update_self.py \
+    run-status verdict NEEDS_RECREATION --detail "System Python too old to update in place."
+```
+
+A copy older than minds-v0.4.3 has no `run-status` subcommand and rejects it
+as an invalid choice; it recorded no run in Step 1 either, so skip the verdict
+then.
+
+Then tell the user as "Migration-required updates" below says, and release the
+`updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
+finished."`). There is no history bridge or tracking ticket to clean up yet.
 
 This is the only ceiling check that runs on a workspace updating *into* the
 ceiling for the first time (its local copy may predate the check). If
@@ -374,7 +393,7 @@ stays reachable for bug reports). A worker of that name in state `STOPPED` or
 conflict, resolved per the lease check in Step 1, never forced past. Plain
 `mngr` and `git` commands on purpose: this prose runs from the target's copy
 but launches with the workspace's own, possibly older, `create_worker.py`
-(`scripts/launcher_contract_test.py` pins what it may ask of it):
+(`python/update_self_skill/launcher_contract_test.py` pins what it may ask of it):
 
 ```bash
 mngr list --format "{name}	{state}" 2>/dev/null | grep -P "^update-self\t"
@@ -422,7 +441,7 @@ to this chat as a message that starts your next turn, whatever your harness. Run
 the staged skill's copy of it: this workspace's own tree may predate the script.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name update-self --template worker \
     --runtime-dir data/.tasks/update-self/ --task-file data/.tasks/update-self/task.md
 ```
@@ -435,7 +454,7 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```bash
 python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/run_in_background.py \
     --description "Wait for the update's background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name update-self --task-file data/.tasks/update-self/task.md --timeout 90m
 ```
 
@@ -876,7 +895,7 @@ down with the preview script and close its window:
 
 ```bash
 uv run --no-sync workspace-layout close <name>-preview
-uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
 ```
 
 The close goes first: nothing takes a window away when its app leaves the registry, so

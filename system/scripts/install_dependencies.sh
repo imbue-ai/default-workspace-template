@@ -16,7 +16,7 @@ export PATH="/root/.local/bin:$PATH"
 # baked warm uv/npm caches). Only setup_system (global-only effects) is skipped.
 
 # Pin uv to Python 3.12 for the venv below. The Docker base ships 3.12; on other
-# bases setup_system.sh fetched a uv-managed 3.12. Pinned on every base, because
+# bases uv downloads a managed 3.12. Pinned on every base, because
 # uv's default for an open-ended request moves with the uv release. Build-time
 # only: the runtime env (.mngr/settings.toml host_env__extend) does not set it.
 export UV_PYTHON=3.12

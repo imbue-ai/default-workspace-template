@@ -19,7 +19,7 @@ from typing import Any
 
 import pytest
 from chat_background_tasks import markers
-from script_modules_testing import message_chat
+from workspace_bare_scripts import message_chat
 
 
 @pytest.fixture(autouse=True)
@@ -162,6 +162,13 @@ class _FakeChatAppHandler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
+class _FakeChatAppServer(ThreadingHTTPServer):
+    answers: list[tuple[int, Any]]
+    get_answers: dict[str, tuple[int, Any]]
+    posted: list[tuple[str, Any]]
+    drop_connections: bool
+
+
 @pytest.fixture
 def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     """A chat app over loopback, registered under the ``chat`` row of a registry the script reads.
@@ -171,7 +178,7 @@ def fake_chat_app(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
     is every ``(path, body)`` it received; ``server.drop_connections``
     makes it read each request and then close the connection without answering.
     """
-    server = ThreadingHTTPServer(("127.0.0.1", 0), _FakeChatAppHandler)
+    server = _FakeChatAppServer(("127.0.0.1", 0), _FakeChatAppHandler)
     server.answers = [(200, {"status": "ok"})]
     server.get_answers = {}
     server.posted = []

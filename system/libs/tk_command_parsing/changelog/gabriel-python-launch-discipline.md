@@ -1,0 +1,1 @@
+New `tk_command_parsing.uv_run.unwrap_uv_run` returns the program a `uv run` command starts, past the options that leave it unchanged (`--no-sync`, `--frozen`, `--quiet`); the secrets guard and the chat's tk-lifecycle detection both use it, so they agree on which `uv run` forms they see through.

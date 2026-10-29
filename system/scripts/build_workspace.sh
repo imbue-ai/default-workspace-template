@@ -39,7 +39,7 @@ tool_env_pin
 export OPENSSL_armcap=0
 
 # Pin uv to Python 3.12 for the tool installs and the venv below. The Docker base
-# ships 3.12; on other bases setup_system.sh fetched a uv-managed 3.12. Pinned on
+# ships 3.12; on other bases uv downloads a managed 3.12. Pinned on
 # every base, because uv's default for an open-ended request moves with the uv
 # release. Build-time only: the runtime env (.mngr/settings.toml host_env__extend)
 # does not set it, so a user's own uv commands are unaffected.
@@ -66,13 +66,13 @@ mngr_git_auth_run python3 "$REPO_ROOT/system/scripts/install_mngr.py" --repo-roo
 
 # Every Python app runs from the workspace venv the sync below writes, its only
 # install. Drop any per-app uv tool an older image still carries (see tool_env.py).
-python3 "$REPO_ROOT/system/scripts/tool_env.py" drop-app-tools --repo-root "$REPO_ROOT"
+python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/tool_env.py" drop-app-tools --repo-root "$REPO_ROOT"
 
 # Drop an mngr install left under a different $HOME by a create that ran before the pin
 # above: it shadows the pinned one on every login shell's PATH and no update refreshes it.
 # Shared with the update apply, which does the same for workspaces whose update can still
 # run -- see tool_env.py. Runs after the install, so it always has a confirmed copy to keep.
-python3 "$REPO_ROOT/system/scripts/tool_env.py" drop-shadowing-mngr
+python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/tool_env.py" drop-shadowing-mngr
 
 # Sync the workspace venv (registers the editable workspace + path deps). --frozen
 # asserts the lockfile is canonical so the pre-warmed cache is not bypassed.

@@ -36,23 +36,27 @@ target release's own copy (or the local one, when the ref predates the skill).
   `.agents/skills/update-self/scripts/update_self.py` resolves to the
   workspace's own copy, which may predate a subcommand the prose relies on --
   the `run-status` writes in particular fail exactly on the first update into
-  the release that ships them.
+  the release that ships them. The one exception is Step 3a's verdict after the
+  staged copy exits 75 (system Python older than the target's floor): the
+  staged copy exits 75 on every subcommand there, so that verdict goes through
+  the local copy, and is skipped when the local copy predates `run-status`.
 - **The task-file template keeps `lead_agent` and `finish_report_path`** (a
   test holds this too): an older workspace's lead follows the staged prose but
   launches with its own `launch-task/create_worker.py`, which may predate
   launch-time `lead_agent` stamping; under an old launcher the line is the
   only thing that gives the worker a report address.
 - **The prose asks of `create_worker.py` only what every supported launcher
-  provides** (`scripts/launcher_contract_test.py` pins that set to the oldest
+  provides** (`python/update_self_skill/launcher_contract_test.py` pins that set to the oldest
   release the app updates from). Clearing the previous pass's worker uses
   plain `mngr list` / `mngr destroy` for this reason.
 - **The report poll runs the staged skill's own `scripts/run_in_background.py`**,
-  a byte-identical mirror of `system/scripts/run_in_background.py` (a test
-  holds the two equal), not the workspace's `system/scripts/` copy, which an
+  whose code (`python/update_self_skill/run_in_background.py`) is a
+  byte-identical mirror of `system/scripts/workspace_bare_scripts/run_in_background.py`
+  (a test holds the two equal), not the workspace's `system/scripts/` copy, which an
   older tree lacks. It is standard-library only, wraps the floor launcher's
   `await`, and looks up its messenger in the workspace's tree:
   `system/scripts/message_chat.py` where there is one (minds-v0.6.1 on), else
-  `mngr message`. `scripts/staged_runner_test.py` holds what it asks of each
+  `mngr message`. `python/update_self_skill/staged_runner_test.py` holds what it asks of each
   to the oldest release that has it.
 
 ## The scheduled entry: a pinned target and ceiling
@@ -85,9 +89,10 @@ take effect for the very update that ships them, which also means the apply
 must keep tolerating older pre-merge trees: guarded imports (the
 `oom_priority` bands module is loaded off the pre-merge tree and refused
 wholesale when it lacks any attribute the apply reads), no assumptions about
-the pre-merge layout, and a `scripts/` directory that is staged and run as one
-unit (the entry script imports its sibling modules by name from its own
-directory).
+the pre-merge layout, and a skill directory that is staged and run as one unit
+(the entry scripts put the skill's own `python/` on `sys.path` and import the
+`update_self_skill` package from there, so the staged copy's own code never
+resolves from the workspace's tree or venv).
 
 A caught-up pass (SKILL.md 5b, the worker guide's §7) lands a catch-up merge
 whose first parent is the worker's line and whose second parent is the

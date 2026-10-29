@@ -2,7 +2,7 @@
 name = "default-workspace-template"
 version = "0.1.0"
 description = "Template repo for a persistent Claude agent"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # Built-in services and apps whose console scripts supervisord runs must be
     # listed here: a `uv sync` without --all-packages prunes members outside the
@@ -30,7 +30,7 @@ dependencies = [
     # Agents run `uv run --no-sync workspace-layout` from the repo root, so its console script
     # must survive a sync of the root closure.
     "workspace-layout",
-    # Agents run `uv run workspace-themes` from the repo root (the create-theme, make-theme-icon, and build-app
+    # Agents run `uv run --no-sync workspace-themes` from the repo root (the create-theme, make-theme-icon, and build-app
     # skills), so its console script must survive a sync of the root closure too.
     "workspace-themes",
     # The cron tick, the boot migration, the Caretaker's check and the skills run
@@ -61,7 +61,7 @@ dev = [
     "imbue-mngr",
     # imbue-mngr-claude isn't imported by any /home/user/workspace/ python -- it's here so
     # `uv sync --all-packages` registers it in /home/user/workspace/.venv. Without it,
-    # `uv run mngr ...` (e.g. from the bootstrap window) resolves to
+    # `uv run --no-sync mngr ...` resolves to
     # /home/user/workspace/.venv/bin/mngr but pluggy can't discover the claude plugin via
     # entry points, so settings.toml fields like `isolate_local_config_dir`,
     # `auto_allow_permissions`, etc. fail to parse as "Unknown fields".
@@ -70,11 +70,11 @@ dev = [
     # avoids a cwd-dependent divergence.
     "imbue-mngr-claude",
     # imbue-mngr-codex: same rationale as imbue-mngr-claude above -- registers the
-    # codex plugin in the workspace root .venv so `uv run mngr` parses agent_types.codex
+    # codex plugin in the workspace root .venv so `uv run --no-sync mngr` parses agent_types.codex
     # config fields instead of rejecting them as "Unknown fields".
     "imbue-mngr-codex",
     # imbue-mngr-pi-coding: same rationale -- register the pi-coding plugin in the
-    # root .venv so `uv run mngr` parses its agent_types fields instead of
+    # root .venv so `uv run --no-sync mngr` parses its agent_types fields instead of
     # rejecting them as "Unknown fields".
     "imbue-mngr-pi-coding",
     # imbue-mngr-opencode / imbue-mngr-antigravity: same rationale as the three
@@ -92,6 +92,8 @@ dev = [
     # Fails a test that skips where the environment is meant to be complete
     # (the CI job that runs the suites inside the workspace image).
     "pytest-workspace-env",
+    # system/test_no_type_errors.py, pinned to the version every project's ratchet uses.
+    "ty==0.0.85",
 ]
 
 [tool.uv]
@@ -105,7 +107,20 @@ package = false
 # supervisord program execs its entry point from .venv/bin. One lockfile keeps
 # every package on the same versions, and a user-built app never has to edit
 # this file.
-members = ["system/libs/*", "system/services/*", "system/apps/*"]
+# A skill's Python lives in its own project, .agents/skills/<name>/python/
+# (pyproject.toml plus the <skill_name>_skill package), so a skill's dependencies
+# join the same lock; its scripts/ dir keeps only entry files and shell scripts.
+# uv refuses a glob-matched directory with no pyproject.toml, and scripts/ is the
+# standard Agent Skills dir name, so the glob names a dir only this layout uses.
+# The shared skill scripts and system/scripts are a project each too.
+members = [
+    "system/libs/*",
+    "system/services/*",
+    "system/apps/*",
+    "system/scripts",
+    ".agents/shared/scripts",
+    ".agents/skills/*/python",
+]
 # system/libs/workspace_ui is a JavaScript library (the frontends' shared code), not a Python
 # package; system/apps/terminal_pty is a manifest alone (the terminal's pty origin), whose
 # program is an entry point of system/apps/terminal. system/apps/datalib is a manifest and a
@@ -138,6 +153,10 @@ routines-app = { workspace = true }
 system-interface = { workspace = true }
 system-monitor = { workspace = true }
 terminal-app = { workspace = true }
+# The workspace's own scripts, and the skill packages other projects import.
+workspace-scripts = { workspace = true }
+agents-shared = { workspace = true }
+update-self-skill = { workspace = true }
 imbue-common = { git = "https://github.com/imbue-ai/mngr", rev = "6460339e8b7469295844aaafdd627b18f4b37e96", subdirectory = "libs/imbue_common" }
 imbue-mngr = { git = "https://github.com/imbue-ai/mngr", rev = "6460339e8b7469295844aaafdd627b18f4b37e96", subdirectory = "libs/mngr" }
 imbue-mngr-claude = { git = "https://github.com/imbue-ai/mngr", rev = "6460339e8b7469295844aaafdd627b18f4b37e96", subdirectory = "libs/mngr_claude" }
@@ -160,7 +179,7 @@ norecursedirs = [
     # Runtime scratch, never part of the suite. Flow-internal state under
     # data/.tasks/ can stage copies of skill test files (update-self stages
     # update_self_test.py under data/.tasks/update-self/skill-at-target/), and
-    # collecting one alongside the in-tree copy kills a bare `uv run pytest`
+    # collecting one alongside the in-tree copy kills a bare `uv run --no-sync pytest`
     # with an import-file basename collision.
     "data",
     # Test scratch, never part of the suite, and the same collision as above when
@@ -214,8 +233,22 @@ addopts = [
     "--ignore=skills",
 ]
 
+# The root project's type check (system/test_no_type_errors.py): the agent skills and
+# their shared scripts, system/scripts, and the root-level tests. Every other package
+# under system/ is its own ty project with its own test_no_type_errors.
+[tool.ty.src]
+include = [".agents", "system/scripts", "system/*.py", "conftest.py"]
+# A bare skill's test imports its script by name, which only that skill's scripts/ dir
+# resolves; system/test_no_type_errors.py checks each one with that dir on the search path.
+exclude = [".agents/skills/*/scripts/*_test.py"]
+
+# Workspaces run on Linux; without this ty would judge platform-specific stdlib calls
+# (os.waitid, ...) by whichever machine runs the check.
+[tool.ty.environment]
+python-platform = "linux"
+
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 exclude = ["system/vendor/tk", "system/apps/system_interface", "system/apps/chat"]
 
 [tool.ruff.lint]

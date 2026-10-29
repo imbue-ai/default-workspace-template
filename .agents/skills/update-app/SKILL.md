@@ -170,7 +170,7 @@ keep the service up: it is a routine with `--app <name>`, made with the
 `manage-routines` skill, never a thread or scheduler inside the service.
 The reverse holds: an app that no longer does anything between
 requests can go back to `true`. The field is read at registration, so the
-restart in step 2 is what applies it; `uv run app-manifest validate-manifest
+restart in step 2 is what applies it; `uv run --no-sync app-manifest validate-manifest
 system/apps/<package>/app.toml` checks the file.
 
 An app with an `api_schema_path` in its manifest describes its own API there:
@@ -201,7 +201,7 @@ process restarts:
   window:
 
   ```bash
-  python3 system/scripts/verify_app.py <name> --restart --marker "<text unique to your change>" --refresh
+  uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<text unique to your change>" --refresh
   ```
 
   With no window open yet, pass `--open` instead of `--refresh`: the call
@@ -223,7 +223,7 @@ process restarts:
 
   ```bash
   uv sync --all-packages
-  python3 system/scripts/verify_app.py <name> --restart --marker "<text>" --refresh
+  uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<text>" --refresh
   ```
 
   (Background services under `system/services/` run from the same venv:
@@ -243,7 +243,7 @@ process restarts:
   path for landing an `update-self` merge -- that restarts the whole services
   agent (`mngr start --restart system-services`) so `bootstrap` re-runs too,
   and must be followed by
-  `python3 system/scripts/refresh_workspace_view.py` (see step 3).
+  `uv run --no-sync system/scripts/refresh_workspace_view.py` (see step 3).
 
 If it doesn't come back `RUNNING`, read
 `/var/log/supervisor/<name>-stderr.log` or
@@ -279,7 +279,7 @@ window refresh is not enough -- the workspace shell itself was bounced. Rebuild
 the user's whole view instead:
 
 ```bash
-python3 system/scripts/refresh_workspace_view.py
+uv run --no-sync system/scripts/refresh_workspace_view.py
 ```
 
 Nothing else does this for you. The Imbue Studio app only intervenes when a workspace
@@ -346,7 +346,7 @@ where the data dies. Encode these, cheapest first:
   point it at the live store.** Boot a throwaway instance against a *copy* of
   the store on a *spare* port, exercise it there, then tear it down with its
   copy. The shared
-  [`serve_isolated_instance.py`](../../shared/scripts/serve_isolated_instance.py)
+  [`serve_isolated_instance.py`](../../shared/scripts/agents_shared/serve_isolated_instance.py)
   script owns all of it -- `--copy` copies the store into the instance's own
   space on disk, it picks a free port, injects it (via the
   `<PACKAGE_UPPER>_PORT` override) plus your data-dir override pointed at the
@@ -354,15 +354,15 @@ where the data dies. Encode these, cheapest first:
   and deletes the copy:
 
   ```bash
-  URL=$(python3 .agents/shared/scripts/serve_isolated_instance.py up \
+  URL=$(python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
       --copy data=data/.apps/<name> \
       --env '<PACKAGE_UPPER>_DATA_DIR={copy:data}' \
       --health-path /health \
-      -- uv run <name>)
+      -- .venv/bin/<name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
-  python3 .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
+  python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <name>-test
   ```
 
   **Never copy app data into `/tmp`.** In the workspace container `/tmp` is a
@@ -379,7 +379,7 @@ where the data dies. Encode these, cheapest first:
   port, leaving the port, the service registration, and any window untouched:
 
   ```bash
-  python3 .agents/shared/scripts/serve_isolated_instance.py refresh --name <name>-test
+  python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py refresh --name <name>-test
   ```
 
   A change that only alters files the running process reads from disk on each
@@ -398,19 +398,21 @@ where the data dies. Encode these, cheapest first:
   names, surfaced as the labeled `<name>-preview` app:
 
   ```bash
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \
       --app <name> --worktree <dir>          # prints <name>-preview
   uv run --no-sync workspace-layout open <name>-preview   # puts a window of it in front of the user
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>   # after a rebuild, in place
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name>   # after a rebuild, in place
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
   ```
 
-  The worktree needs its own environment before the first `up`. A fresh
-  `git worktree add` has no `.venv`, and without one the app's command
-  resolves to the live install, so the preview silently serves the live code.
-  Run `uv sync --all-packages` in the worktree first, and again before
-  `refresh` after changing a dependency or entry point. If the app has a
-  frontend, build it there too.
+  Every `up` and `refresh` runs `uv sync --all-packages --frozen` in the
+  worktree and then starts the app from the worktree's own `.venv`, so the
+  preview serves the worktree's code. That boot sync counts against the
+  preview's health wait, so on a fresh `git worktree add` run
+  `uv sync --all-packages --frozen` there once before the first `up`. The
+  sync never relocks: after changing a dependency in the worktree, run
+  `uv lock` there before `refresh`, or the preview boots without the change.
+  If the app has a frontend, build it in the worktree too.
 
   `--with <sibling>` boots a sibling app's preview from the same worktree first
   and points the app's copied registry at it: a shell preview frames the

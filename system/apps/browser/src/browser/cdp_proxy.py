@@ -73,7 +73,7 @@ _FOLLOW_DEBOUNCE_S = 0.25
 
 _LEASE_LOST = (
     "browser is not yours right now -- the human took control, or your lease expired. "
-    "Run `uv run agentic-browser-fleet ls` to see who holds it."
+    "Run `uv run --no-sync agentic-browser-fleet ls` to see who holds it."
 )
 
 
@@ -164,7 +164,7 @@ class BrowserProxy:
         if not await self._is_allowed(token):
             # Refuse before opening an upstream socket or spending the one-shot pane
             # surfacing on somebody who cannot drive.
-            await client.send(_error(None, None, "this browser is not yours -- run `uv run agentic-browser-fleet ls`"))
+            await client.send(_error(None, None, "this browser is not yours -- run `uv run --no-sync agentic-browser-fleet ls`"))
             return
         upstream_url = await asyncio.to_thread(
             lambda: json.loads(urllib.request.urlopen(f"{self._upstream_http}/json/version", timeout=5).read())[
@@ -240,7 +240,7 @@ class BrowserProxy:
             if last_page:
                 return (
                     f"{method} would close the browser's last page. Use "
-                    "`uv run agentic-browser-fleet close` to end the browser instead."
+                    "`uv run --no-sync agentic-browser-fleet close` to end the browser instead."
                 )
         return None
 

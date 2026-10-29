@@ -6,7 +6,6 @@ repo root, which is what checks that its declared references still exist where i
 """
 
 import ast
-import configparser
 import re
 import tomllib
 from pathlib import Path
@@ -21,6 +20,7 @@ from app_manifest.scope import (
     compute_app_scope,
 )
 from oom_priority import bands
+from oom_priority.supervisord_testing import supervisord_commands
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _APPS_DIR = _REPO_ROOT / "system" / "apps"
@@ -60,25 +60,8 @@ def _every_manifest_path() -> list[Path]:
     return sorted(_APPS_DIR.glob(f"*/{MANIFEST_FILENAME}"))
 
 
-def _command_by_program() -> dict[str, str]:
-    """Every program the config declares: the main file, plus the drop-ins beside it.
-
-    ``configparser`` does not follow supervisord's ``[include]``, and the template declares its
-    programs one per file under ``system/supervisord.conf.d/``, so a bare read of the main config
-    finds none of them. The drop-ins are read after the main config, which reproduces
-    supervisord's precedence; ``test_supervisord_layout.py`` pins that directory as the one the
-    include glob names.
-    """
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.read(_SUPERVISORD_CONF)
-    parser.read(
-        sorted((_SUPERVISORD_CONF.parent / "supervisord.conf.d").glob("*.conf"))
-    )
-    return {
-        section.partition(":")[2]: parser[section].get("command", "")
-        for section in parser.sections()
-        if section.startswith("program:")
-    }
+def _program_commands() -> dict[str, str]:
+    return supervisord_commands(_SUPERVISORD_CONF, ("program",))
 
 
 def _manifest_path_constant(module_file: Path) -> str | None:
@@ -90,13 +73,15 @@ def _manifest_path_constant(module_file: Path) -> str | None:
     for node in ast.walk(ast.parse(module_file.read_text())):
         if isinstance(node, ast.AnnAssign) and node.value is not None:
             target: ast.expr = node.target
+            value: ast.expr = node.value
         elif isinstance(node, ast.Assign) and len(node.targets) == 1:
             target = node.targets[0]
+            value = node.value
         else:
             continue
         if not (isinstance(target, ast.Name) and target.id == "MANIFEST_PATH"):
             continue
-        for literal in ast.walk(node.value):
+        for literal in ast.walk(value):
             if isinstance(literal, ast.Constant) and isinstance(literal.value, str):
                 return literal.value
     return None
@@ -232,7 +217,7 @@ def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(
 
 
 def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
-    command_by_program = _command_by_program()
+    command_by_program = _program_commands()
     for manifest_path in _every_manifest_path():
         for program in load_manifest(
             manifest_path, repo_root=_REPO_ROOT
@@ -252,7 +237,7 @@ def test_the_first_label_of_every_standalone_program_is_a_reserved_app_name() ->
     }
     standalone_labels = {
         program.partition("-")[0]
-        for program in _command_by_program()
+        for program in _program_commands()
         if "-" in program and program not in app_programs
     }
     unreserved = sorted(standalone_labels - RESERVED_APP_NAMES)
@@ -274,7 +259,7 @@ def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
     # claiming app's own package runs: ``terminal_pty`` is only the manifest of an origin
     # the ``terminal`` package registers and runs (its ``terminal-pty`` console script), so
     # ``program:terminal-pty`` is the terminal's sidecar in fact as well as by name.
-    command_by_program = _command_by_program()
+    command_by_program = _program_commands()
     manifest_by_package = {
         path.parent: load_manifest(path, repo_root=_REPO_ROOT)
         for path in _every_manifest_path()
@@ -353,7 +338,7 @@ def test_built_in_manifest_validates_and_matches_its_program(
     manifest_path: Path,
 ) -> None:
     manifest = load_manifest(manifest_path)
-    command_by_program = _command_by_program()
+    command_by_program = _program_commands()
 
     assert manifest.program in command_by_program, (
         f"{manifest_path} names program {manifest.program!r}, which supervisord.conf does not define"
@@ -393,7 +378,7 @@ def test_built_in_app_runs_its_entry_point_from_the_workspace_venv(
     # ``.venv/bin/<script>``; a bare entry point is resolved through PATH, which can reach
     # some other install.
     manifest = load_manifest(manifest_path)
-    command = _command_by_program()[manifest.program]
+    command = _program_commands()[manifest.program]
     script = _entry_point_script(command)
 
     assert script is not None, (
@@ -439,7 +424,7 @@ def test_every_built_in_preview_boots_its_programs_entry_point(
         if manifest.preview.command
         else str(manifest.program)
     )
-    program_script = _entry_point_script(_command_by_program()[manifest.program])
+    program_script = _entry_point_script(_program_commands()[manifest.program])
 
     assert launched == program_script, (
         f"{manifest.name}'s preview runs {launched!r}, but its program runs {program_script!r}"
@@ -448,7 +433,7 @@ def test_every_built_in_preview_boots_its_programs_entry_point(
 
 def test_built_in_manifests_agree_with_the_contract_table() -> None:
     by_name = {
-        manifest.name: manifest
+        str(manifest.name): manifest
         for manifest in map(load_manifest, _built_in_manifest_paths())
     }
 
@@ -558,14 +543,10 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     ]
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead
     # (docs/system/specs/window-bound-resources.md section 3.1).
-    for name, mode in (
-        ("chat", "new"),
-        ("terminal", "new"),
-        ("files", "new"),
-        ("browser", "focus"),
-    ):
-        assert by_name[name].default_shortcut is not None
-        assert by_name[name].default_shortcut.mode == mode, name
+    for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
+        shortcut = by_name[name].default_shortcut
+        assert shortcut is not None
+        assert shortcut.mode == mode, name
     # The desktop interface's launch paths (desktop-interface contracts.md section 2; the POST ones are the
     # post-launch-paths plan's section 7 and 8).
     assert by_name["system_interface"].launch_paths == ()
@@ -581,17 +562,13 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     ]
     assert by_name["chat"].default_shortcut is not None
     assert by_name["chat"].default_shortcut.launch == "root"
-    for name, launch_path, method in (
-        ("terminal", "/new", "POST"),
-        ("files", "/home/user/workspace/", "GET"),
-        ("browser", "/new", "POST"),
-    ):
-        assert [
-            (entry.id, entry.path, entry.method.value)
-            for entry in by_name[name].launch_paths
-        ] == [("new", launch_path, method)], name
-        assert by_name[name].default_shortcut is not None
-        assert by_name[name].default_shortcut.launch == "new", name
+    for name, launch_path, method in (("terminal", "/new", "POST"), ("files", "/home/user/workspace/", "GET"), ("browser", "/new", "POST")):
+        assert [(entry.id, entry.path, entry.method.value) for entry in by_name[name].launch_paths] == [
+            ("new", launch_path, method)
+        ], name
+        shortcut = by_name[name].default_shortcut
+        assert shortcut is not None
+        assert shortcut.launch == "new", name
     assert [param.name for param in by_name["chat"].launch_paths[0].params] == []
     assert [param.name for param in by_name["chat"].launch_paths[1].params] == [
         "message"

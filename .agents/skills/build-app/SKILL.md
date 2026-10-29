@@ -138,7 +138,7 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
 ## Step 1: Run the scaffolder (canonical path)
 
 ```bash
-uv run .agents/skills/build-app/scripts/scaffold_flask_lib.py \
+uv run --no-sync .agents/skills/build-app/python/build_app_skill/scaffold_flask_lib.py \
     --name <service-name> \
     --description "<one-liner>" \
     --icon-file <path-to-svg> \
@@ -203,7 +203,7 @@ What gets generated:
   shows and the user can run, pause and retime. A stopped app runs nothing until its next
   request, and the wake serves that request, not the work that was in
   flight. `forward_port.py --manifest`
-  reads it on every start; the scaffold checks it with `uv run app-manifest
+  reads it on every start; the scaffold checks it with `uv run --no-sync app-manifest
   validate-manifest system/apps/<package>/app.toml` (run that yourself after
   editing it). Anything you build for this app outside `system/apps/<package>/`
   -- a skill that drives it, a script, a doc -- is registered in the same file
@@ -281,11 +281,11 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   FATAL rather than restarting a broken app several times a second for the life
   of the workspace. Built-in services deliberately retry forever instead.
 
-  The command ends in `exec .venv/bin/<name>`, not `uv run <name>`, so the
-  app is the process supervisord tagged rather than a child of a wrapper. That
-  is the console script `uv sync --all-packages` writes into the workspace venv,
-  the one install of the app (and of every Python app). So always sync with
-  `--all-packages`: a root-closure-scoped `uv sync` prunes the member (a
+  The command ends in `exec .venv/bin/<name>`, not the name under `uv run`, so
+  the app is the process supervisord tagged rather than a child of a wrapper.
+  That is the console script `uv sync --all-packages` writes into the workspace
+  venv, the one install of the app (and of every Python app). So always sync
+  with `--all-packages`: a root-closure-scoped `uv sync` prunes the member (a
   scaffolded app is not a root dependency), deletes that script, and the next
   restart is a spawn error with nothing to recover it.
 
@@ -530,10 +530,10 @@ Two cases, two patterns:
 
 Both paths use the same verification recipe, and in a chat turn it is a single
 tool call. See [references/verify.md](references/verify.md) -- use
-`system/scripts/verify_app.py`:
+`system/scripts/workspace_scripts/verify_app.py`:
 
 ```bash
-python3 system/scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app.png --open
+uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/app.png --open
 ```
 
 `--open` is Step 4 folded in; for an app already on the user's screen, use
@@ -603,7 +603,7 @@ The foreground work stops at a usable, surfaced site. The thorough pass --
 extending Playwright coverage, the full test suite and ratchets over the
 extended tests, review gates -- runs in a **background harden worker**, never
 in the main agent. The test gate AGENTS.md has you run through
-`system/scripts/run_in_background.py` checks the app against the tests it
+`system/scripts/workspace_bare_scripts/run_in_background.py` checks the app against the tests it
 already has, so it is not this pass: run it anyway, since the worker may never
 be dispatched. This is skeleton phase 7: the harden pass
 (`.agents/shared/worker/references/harden-creation.md`), here the **crystallize**

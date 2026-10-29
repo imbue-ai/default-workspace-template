@@ -47,7 +47,7 @@ App specifics:
   chat's suites are their own pytest roots, run from their own directories):
 
   ```bash
-  uv run pytest system/apps/<package>    # primary, plus test_<package>_ratchets.py
+  uv run --no-sync pytest system/apps/<package>    # primary, plus test_<package>_ratchets.py
   ```
 
   Its pages import the shell's built modules, which a fresh worktree lacks
@@ -85,7 +85,7 @@ What differs for you:
   both hold sockets open for as long as they run, so the wait never returns.
   Wait for the element you are about to read instead.
 - **Verify against your own instance.** Boot it with `preview_app.py`
-  (`.agents/skills/update-app/scripts/preview_app.py up --app <name> --worktree
+  (`.agents/skills/update-app/python/update_app_skill/preview_app.py up --app <name> --worktree
   <your work_dir>`) or the raw isolated-instance script; the live app and its
   windows are the user's.
 - The go-live is the lead's: the atomic update apply, after your `done`. You

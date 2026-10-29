@@ -9,9 +9,9 @@ command, logs) or adds/removes a program, rather than only its code.
 Background services are defined as `[program:<name>]` sections, one program
 per file under `system/supervisord.conf.d/`, pulled in by an `[include]` glob
 in `system/supervisord.conf` at the repo root (which otherwise holds only the
-daemon's own config). `uv run bootstrap` runs first-boot
-setup and then `exec`s `supervisord` in the foreground (in the `bootstrap`
-tmux window); supervisord starts and supervises every program. supervisord
+daemon's own config). The `bootstrap` tmux window syncs the venv and runs
+`bootstrap`, which does first-boot setup and then `exec`s `supervisord` in the
+foreground; supervisord starts and supervises every program. supervisord
 does **not** watch the config file -- you apply changes with
 `supervisorctl`.
 
@@ -19,7 +19,7 @@ does **not** watch the config file -- you apply changes with
 
 ```ini
 [program:my-service]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user .venv/bin/my-service
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "uv sync --all-packages --frozen && exec .venv/bin/my-service"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -38,7 +38,10 @@ stderr_logfile_backups=3
 
 Key fields:
 
-- `command` -- the program to run. **supervisord exec's this directly (no
+- `command` -- the program to run. Never run a long-running program under
+  `uv run`: sync `--frozen`, then `exec` the entry point, so no `uv` process
+  stays resident as its parent (see
+  [running-python.md](running-python.md)). **supervisord exec's this directly (no
   shell)**, so anything that chains with `&&`, sets an inline env var, or uses
   other shell syntax must be wrapped in `bash -c "..."`:
 
@@ -81,7 +84,7 @@ Key fields:
   is unusable without them, so retrying forever beats giving up. Note that a
   program with `startsecs=30` sits in `STARTING` for its first 30 seconds, and
   `supervisorctl start`/`restart` block for that long although the app answers
-  within a second; bounce an app with `python3 system/scripts/verify_app.py
+  within a second; bounce an app with `uv run --no-sync system/scripts/workspace_scripts/verify_app.py
   <name> --restart ...` instead, which starts it through supervisord's RPC
   without waiting and reads readiness from the port. Only `BACKOFF` or `FATAL`
   means it failed.
@@ -162,7 +165,7 @@ For an app, also drop its `data/.state/apps.toml` entry with
 1. Change the program's `command` (or other fields) in its `system/supervisord.conf.d/<name>.conf`.
 2. `supervisorctl reread && supervisorctl update` applies the change (it
    restarts the program when its definition changed). To bounce a program
-   without editing its config, use `python3 system/scripts/verify_app.py
+   without editing its config, use `uv run --no-sync system/scripts/workspace_scripts/verify_app.py
    <name> --restart` for an app (no 30 s wait) or `supervisorctl restart <name>`
    for a daemon.
 

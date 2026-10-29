@@ -54,7 +54,7 @@ command refuses a creation that is not there:
 ```bash
 LEAD_HEAD=$(git -C "${LEAD_WORK_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}" \
     rev-parse HEAD) || exit 1
-uv run app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) \
+uv run --no-sync app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) \
     --diff-base "$DIFF_BASE" --lead-ref "$LEAD_HEAD" --out "$SCOPE_FILE"
 ```
 
@@ -330,7 +330,7 @@ From the repo root, after committing everything, regenerate the scope file
 with the command in "The scope file" above, then:
 
 ```bash
-uv run app-manifest select-tests --scope-file "$SCOPE_FILE"
+uv run --no-sync app-manifest select-tests --scope-file "$SCOPE_FILE"
 ```
 
 The change it selects for is what the pass is responsible for: the changed
@@ -406,7 +406,7 @@ or the one you add), check whether the selector picks that test for the
 earlier change:
 
 ```bash
-uv run app-manifest select-tests --diff-base <breaking commit>^ --diff-ref <breaking commit>
+uv run --no-sync app-manifest select-tests --diff-base <breaking commit>^ --diff-ref <breaking commit>
 ```
 
 If the test's suite is not among the lines, declare the coupling that would
@@ -494,9 +494,9 @@ starting over.
    LEAD_HEAD=$(git -C "${LEAD_WORK_DIR:-$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")}" \
        rev-parse HEAD) || exit 1
    CATCH_UP_SCOPE="$(dirname "$SCOPE_FILE")/catch-up-scope.json"
-   uv run app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) \
+   uv run --no-sync app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) \
        --diff-base "$PRE" --lead-ref "$LEAD_HEAD" --out "$CATCH_UP_SCOPE" || exit 1
-   uv run app-manifest select-tests --scope-file "$CATCH_UP_SCOPE"
+   uv run --no-sync app-manifest select-tests --scope-file "$CATCH_UP_SCOPE"
    ```
 
    The commit you merged is the fork point now, so what came in with it is
