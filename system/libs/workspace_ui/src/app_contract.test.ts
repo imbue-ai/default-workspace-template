@@ -18,6 +18,7 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   ShellContractError,
   connectToShell,
@@ -234,6 +235,14 @@ describe("connectToShell", () => {
     deliver({ type: SHELL_SHOWN }, window);
     expect(onShown).not.toHaveBeenCalled();
     expect(parentSpy).toBeNull();
+  });
+
+  it("re-fetch request on a keybindings change reaches the handler", () => {
+    const parent = framed();
+    const onKeybindingsChanged = vi.fn();
+    connection = connectToShell({ onKeybindingsChanged });
+    deliver({ type: SHELL_KEYBINDINGS_CHANGED }, parent);
+    expect(onKeybindingsChanged).toHaveBeenCalledTimes(1);
   });
 
   it("stops listening once disconnected", () => {

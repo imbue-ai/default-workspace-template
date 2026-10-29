@@ -1,0 +1,1 @@
+The terminal answers the keybindings route pair every built-in app serves (user-profile-state spec, phase 3C): `GET /api/keybindings/actions` and `GET /api/keybindings/me`, with a deliberately empty manifest -- xterm owns the page's keystrokes, so there is nothing to re-bind yet.

@@ -40,12 +40,16 @@ from files_app.connections import SYNCED_FOLDERS
 from files_app.connections_cache import ConnectionsCache
 from files_app.device_files import DeviceFiles
 from files_app.gateway import Gateway
+from files_app.keybindings import FILES_KEYBINDINGS_MANIFEST
 from files_app.local_files import LocalFiles
 from files_app.local_files import content_disposition
 from files_app.sources import FileSource
 from files_app.sources import FilesError
 from files_app.sources import FolderStamps
 from files_app.sources import PageData
+from workspace_profile.identity import IDENTITY_HEADER, parse_identity_header
+from workspace_profile.manifest import KeybindingsActionsResponse, KeybindingsMeResponse, resolve_keybindings_me_response
+from workspace_profile.snapshot import load_workspace_profile_snapshot
 
 API_PREFIX: Final[str] = "/__files/api"
 APP_DISPLAY_NAME: Final[str] = "Files"
@@ -81,6 +85,8 @@ _FILE_VERBS: Final[dict[str, str]] = {
 ROUTE_TABLE: RouteTable = {
     ("GET", f"{API_PREFIX}/connections"): RouteModels(response_model=Connections),
     ("GET", f"{API_PREFIX}/stamps"): RouteModels(response_model=FolderStamps),
+    ("GET", f"{API_PREFIX}/keybindings/actions"): RouteModels(response_model=KeybindingsActionsResponse),
+    ("GET", f"{API_PREFIX}/keybindings/me"): RouteModels(response_model=KeybindingsMeResponse),
     ("GET", f"{ASSETS_PREFIX}/{{name}}"): SchemalessRoute(reason="a file of the frontend's build"),
     **{
         (method, path): SchemalessRoute(reason=reason)
@@ -216,6 +222,24 @@ def create_app(
             return error_response(f"Couldn't read your shares: {error}", 502)
         device_paths.update({device.id: device.has_device_paths for device in listed.devices})
         return model_response(listed)
+
+    @app.get(f"{API_PREFIX}/keybindings/actions")
+    def keybindings_actions() -> Response:
+        """The Files keybindings manifest: every browser action a keystroke can trigger."""
+        return model_response(FILES_KEYBINDINGS_MANIFEST)
+
+    @app.get(f"{API_PREFIX}/keybindings/me")
+    def keybindings_me() -> Response:
+        """The requesting user's resolved chords for the Files actions."""
+        workspace_root = Path.cwd()
+        return model_response(
+            resolve_keybindings_me_response(
+                FILES_KEYBINDINGS_MANIFEST,
+                snapshot=load_workspace_profile_snapshot(workspace_root),
+                identity=parse_identity_header(request.headers.get(IDENTITY_HEADER)),
+                workspace_root=workspace_root,
+            )
+        )
 
     @app.get(f"{API_PREFIX}/stamps")
     def stamps() -> Response:

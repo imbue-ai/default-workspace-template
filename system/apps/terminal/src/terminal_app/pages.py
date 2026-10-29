@@ -36,6 +36,13 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import ConfigDict, Field, field_validator
 from workspace_layout.windows import WindowClosedHint, window_query_value
+from workspace_profile.identity import IDENTITY_HEADER, parse_identity_header
+from workspace_profile.manifest import (
+    KeybindingsActionsResponse,
+    KeybindingsMeResponse,
+    resolve_keybindings_me_response,
+)
+from workspace_profile.snapshot import load_workspace_profile_snapshot
 from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
 from workspace_themes.flask_routes import (
     THEME_STATIC_ROUTE_TABLE,
@@ -62,6 +69,8 @@ from terminal_app.sessions import TmuxSessionSource
 
 BLUEPRINT_NAME: Final[str] = "terminal_pages"
 NEW_PATH: Final[str] = "/new"
+KEYBINDINGS_ACTIONS_PATH: Final[str] = "/api/keybindings/actions"
+KEYBINDINGS_ME_PATH: Final[str] = "/api/keybindings/me"
 HEALTH_PATH: Final[str] = "/api/health"
 APP_DISPLAY_NAME: Final[str] = "Terminal"
 APP_DESCRIPTION: Final[str] = "Web terminals inside the workspace, one per window."
@@ -466,12 +475,20 @@ class HealthResponse(FrozenModel):
     status: str = Field(description="Always 'ok'")
 
 
+# The terminal's keystrokes go to the program inside it (xterm owns the page), so the manifest
+# declares no rebindable actions; the routes exist so every built-in app answers the same pair.
+TERMINAL_KEYBINDINGS_MANIFEST: Final[KeybindingsActionsResponse] = KeybindingsActionsResponse(
+    app="terminal", actions=()
+)
+
 # What every route exchanges, which the app's API document publishes and every parse and answer is checked against.
 ROUTE_TABLE: RouteTable = {
     ("GET", "/"): SchemalessRoute(reason="the page framing one terminal"),
     ("POST", NEW_PATH): RouteModels(request_model=NewTerminalRequest, response_model=NewTerminalResponse),
     ("GET", flask_rule_to_openapi_path(SESSION_API_PATH)): RouteModels(response_model=SessionPage),
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
+    ("GET", KEYBINDINGS_ACTIONS_PATH): RouteModels(response_model=KeybindingsActionsResponse),
+    ("GET", KEYBINDINGS_ME_PATH): RouteModels(response_model=KeybindingsMeResponse),
     ("POST", WINDOW_CLOSED_PATH): RouteModels(request_model=WindowClosedHint, success_status=HTTP_NO_CONTENT),
     ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the app contract module, a JavaScript file"),
     **THEME_STATIC_ROUTE_TABLE,
@@ -572,6 +589,24 @@ def build_pages_blueprint(
     def health() -> ResponseReturnValue:
         """Whether the app is up."""
         return model_response(HealthResponse(status="ok"))
+
+    @blueprint.get(KEYBINDINGS_ACTIONS_PATH)
+    def keybindings_actions() -> ResponseReturnValue:
+        """The terminal's keybindings manifest (it declares no rebindable actions)."""
+        return model_response(TERMINAL_KEYBINDINGS_MANIFEST)
+
+    @blueprint.get(KEYBINDINGS_ME_PATH)
+    def keybindings_me() -> ResponseReturnValue:
+        """The requesting user's resolved chords (none: the manifest declares no actions)."""
+        workspace_root = Path.cwd()
+        return model_response(
+            resolve_keybindings_me_response(
+                TERMINAL_KEYBINDINGS_MANIFEST,
+                snapshot=load_workspace_profile_snapshot(workspace_root),
+                identity=parse_identity_header(request.headers.get(IDENTITY_HEADER)),
+                workspace_root=workspace_root,
+            )
+        )
 
     @blueprint.post(WINDOW_CLOSED_PATH)
     def window_closed() -> ResponseReturnValue:

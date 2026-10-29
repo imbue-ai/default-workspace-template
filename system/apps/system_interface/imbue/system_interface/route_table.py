@@ -77,6 +77,23 @@ from imbue.system_interface.shell.theme_routes import ThemeChoiceRequest
 from imbue.system_interface.shell.theme_wire import THEME_ICON_ROUTE
 from imbue.system_interface.shell.theme_wire import ThemeCatalogWire
 from imbue.system_interface.shell.tour import TOUR_ROUTE
+from workspace_profile.manifest import KeybindingsActionsResponse
+from workspace_profile.manifest import KeybindingsMeResponse
+
+from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryOutcome
+from imbue.system_interface.shell.keybindings_routes import DeliverKeybindingsRequest
+from imbue.system_interface.shell.keybindings_routes import DiscardKeybindingRequest
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_ACTIONS_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_CATALOG_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_DELIVER_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_DISCARD_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_ME_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_RESET_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_SAVE_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KeybindingsCatalogResponse
+from imbue.system_interface.shell.keybindings_routes import ResetKeybindingRequest
+from imbue.system_interface.shell.keybindings_routes import SaveKeybindingRequest
+from imbue.system_interface.shell.keybindings_routes import SaveKeybindingResponse
 from imbue.system_interface.shell.tour import TourProgress
 from imbue.system_interface.shell.wallpapers import WALLPAPER_ROUTE_PREFIX
 from imbue.system_interface.shell.wallpapers import WallpapersListing
@@ -210,4 +227,20 @@ SHELL_ROUTE_TABLE: RouteTable = {
     # The show-around tour
     ("GET", TOUR_ROUTE): RouteModels(response_model=TourProgress),
     ("POST", TOUR_ROUTE): RouteModels(request_model=TourProgress, response_model=TourProgress),
+    # Keybindings (user-profile-state spec, sections 9.3 and 10.3)
+    ("GET", KEYBINDINGS_ACTIONS_ROUTE): RouteModels(response_model=KeybindingsActionsResponse),
+    ("GET", KEYBINDINGS_ME_ROUTE): RouteModels(response_model=KeybindingsMeResponse),
+    ("GET", KEYBINDINGS_CATALOG_ROUTE): RouteModels(response_model=KeybindingsCatalogResponse),
+    ("POST", KEYBINDINGS_SAVE_ROUTE): RouteModels(
+        request_model=SaveKeybindingRequest, response_model=SaveKeybindingResponse
+    ),
+    ("POST", KEYBINDINGS_DISCARD_ROUTE): RouteModels(
+        request_model=DiscardKeybindingRequest, response_model=KeybindingsDeliveryOutcome
+    ),
+    ("POST", KEYBINDINGS_RESET_ROUTE): RouteModels(
+        request_model=ResetKeybindingRequest, response_model=KeybindingsDeliveryOutcome
+    ),
+    ("POST", KEYBINDINGS_DELIVER_ROUTE): RouteModels(
+        request_model=DeliverKeybindingsRequest, response_model=KeybindingsDeliveryOutcome
+    ),
 }

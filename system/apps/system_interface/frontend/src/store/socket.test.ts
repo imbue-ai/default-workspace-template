@@ -68,6 +68,7 @@ beforeEach(() => {
     onAvatarSelectionChanged: vi.fn(),
     onUpdateNoticeChanged: vi.fn(),
     onThemesChanged: vi.fn(),
+    onKeybindingsChanged: vi.fn(),
     onLayoutOp: vi.fn(),
     onPresenceUpdated: vi.fn(),
     onConnected: vi.fn(),

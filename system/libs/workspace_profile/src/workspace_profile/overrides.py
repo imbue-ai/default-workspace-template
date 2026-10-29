@@ -13,10 +13,15 @@ Reads are tolerant: an absent, unreadable, or non-object file is an empty map.
 """
 
 import json
+import os
+import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Final
 
 from loguru import logger
+
+from workspace_profile.errors import ProfileWriteError
 
 PROFILE_DIR_RELATIVE_PATH: Final[str] = "data/system/profile"
 USER_OVERRIDES_RELATIVE_DIR: Final[str] = f"{PROFILE_DIR_RELATIVE_PATH}/overrides/users"
@@ -65,3 +70,37 @@ def load_unsent_change_values(workspace_root: Path) -> dict[str, object]:
     """The shell's not-yet-delivered account changes, by setting key (empty when none)."""
     path = workspace_root / UNSENT_CHANGES_RELATIVE_PATH
     return _load_flat_value_map(path, "unsent profile changes file")
+
+
+def _write_flat_value_map(path: Path, value_by_key: Mapping[str, object]) -> None:
+    """Atomically replace one flat map file. Raises ``ProfileWriteError``."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+        try:
+            with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                json.dump(dict(value_by_key), handle, indent=2, sort_keys=True)
+                handle.write("\n")
+            os.replace(temp_name, path)
+        except OSError:
+            os.unlink(temp_name)
+            raise
+    except (OSError, TypeError) as e:
+        raise ProfileWriteError(f"Could not write {path}: {e}") from e
+
+
+def write_user_override_values(workspace_root: Path, user_id: str, value_by_key: Mapping[str, object]) -> None:
+    """Replace the given user's override file whole. Raises ``ProfileWriteError``.
+
+    A path-shaped user id is refused the way the loader refuses it, so a write
+    can never land outside the overrides directory.
+    """
+    if not _is_plain_filename_user_id(user_id):
+        raise ProfileWriteError(f"Refusing a profile override write for a path-shaped user id: {user_id!r}")
+    path = workspace_root / USER_OVERRIDES_RELATIVE_DIR / f"{user_id}.json"
+    _write_flat_value_map(path, value_by_key)
+
+
+def write_unsent_change_values(workspace_root: Path, value_by_key: Mapping[str, object]) -> None:
+    """Replace the shell's unsent account changes file whole. Raises ``ProfileWriteError``."""
+    _write_flat_value_map(workspace_root / UNSENT_CHANGES_RELATIVE_PATH, value_by_key)
