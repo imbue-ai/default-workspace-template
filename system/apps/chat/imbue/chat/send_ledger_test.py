@@ -2,6 +2,7 @@ import threading
 
 from flask import Response
 
+from imbue.chat.send_ledger import RepeatedSendOutcomeUnknownError
 from imbue.chat.send_ledger import SendLedger
 from imbue.mngr.utils.polling import wait_for
 
@@ -109,3 +110,46 @@ def test_a_repeat_arriving_after_its_send_was_refused_gets_the_refusal_without_s
 
     assert (repeat.status_code, repeat.get_data()) == (500, refusal)
     assert sends == [500]
+
+
+def test_a_repeat_waiting_on_a_send_that_failed_without_an_answer_reports_it_unknown_without_sending() -> None:
+    """A send that raised may still have typed the message into the agent, so its waiting repeat sends nothing."""
+    ledger = SendLedger()
+    release = threading.Event()
+    sends: list[str] = []
+    outcomes: list[str] = []
+
+    def first_send() -> Response:
+        sends.append("first")
+        release.wait(timeout=10)
+        raise ConnectionError("the agent's host went away mid-send")
+
+    def repeat_send() -> Response:
+        sends.append("repeat")
+        return _answer(200)
+
+    def run_first() -> None:
+        try:
+            ledger.send_once("chat:m-1", first_send, _replay, False)
+        except ConnectionError:
+            outcomes.append("first raised")
+
+    def run_repeat() -> None:
+        try:
+            ledger.send_once("chat:m-1", repeat_send, _replay, True)
+        except RepeatedSendOutcomeUnknownError:
+            outcomes.append("repeat unknown")
+
+    first = threading.Thread(target=run_first)
+    first.start()
+    wait_for(lambda: sends == ["first"], error_message="the first send never started")
+    repeat = threading.Thread(target=run_repeat)
+    repeat.start()
+    repeat.join(timeout=0.2)
+    assert repeat.is_alive(), "the repeat did not wait for the send under way"
+    release.set()
+    first.join(timeout=10)
+    repeat.join(timeout=10)
+
+    assert sends == ["first"]
+    assert sorted(outcomes) == ["first raised", "repeat unknown"]

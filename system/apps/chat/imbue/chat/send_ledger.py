@@ -30,6 +30,10 @@ class SendStillUnderWayError(Exception):
     """A repeated send outwaited the send it repeats."""
 
 
+class RepeatedSendOutcomeUnknownError(Exception):
+    """The send a repeat waited on failed without an answer, so whether it reached the agent is unknown."""
+
+
 class _Answer(MutableModel):
     data: bytes = Field(description="The first send's response body")
     status: int = Field(description="The first send's HTTP status")
@@ -79,10 +83,10 @@ class SendLedger(MutableModel):
             return self._send_first(key, entry, send)
         if not entry.settled.wait(timeout=_REPEAT_WAIT_SECONDS):
             raise SendStillUnderWayError(f"The send {key} is still on its way")
-        if entry.answer is not None:
-            return replay(entry.answer.data, entry.answer.status)
-        # The send this one waited on raised before it had an answer, so this one is a send of its own.
-        return self.send_once(key, send, replay, is_repeat)
+        if entry.answer is None:
+            # It may still have typed the message into the agent, so this one does not send it again.
+            raise RepeatedSendOutcomeUnknownError(f"The send {key} failed without an answer")
+        return replay(entry.answer.data, entry.answer.status)
 
     def _send_first(self, key: str, entry: _Entry, send: Callable[[], Response]) -> Response:
         try:

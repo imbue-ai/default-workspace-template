@@ -199,6 +199,7 @@ from imbue.chat.request_helpers import require_loopback
 from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import NoticeDeliveryError
 from imbue.chat.secret_requests import SecretRequestChatBridge
+from imbue.chat.send_ledger import RepeatedSendOutcomeUnknownError
 from imbue.chat.send_ledger import SendStillUnderWayError
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import attach_state
@@ -211,6 +212,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
 
 logger = _loguru_logger
@@ -969,6 +971,13 @@ def _send_message_endpoint(chat_id: str) -> Response:
         )
     except SendStillUnderWayError:
         return error_response("The message is still on its way.", 503)
+    except RepeatedSendOutcomeUnknownError:
+        return model_response(
+            SendFailureResponse(
+                detail="Couldn't confirm your message arrived.", kind=SendFailureKind.SUBMISSION_UNCONFIRMED.value
+            ),
+            500,
+        )
 
 
 def _replay_send_answer(data: bytes, status: int) -> Response:
