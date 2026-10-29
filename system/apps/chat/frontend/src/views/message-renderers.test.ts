@@ -891,6 +891,27 @@ describe("the auth-error note's switch link", () => {
       expect(findButton(children, "Send again")).not.toBeNull();
     });
 
+    it("reads a resend that got no answer as unconfirmed, and sends it again under the same id", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      transcript.sendMessage.mockRejectedValueOnce({ code: 0, response: null });
+      vi.spyOn(console, "error").mockImplementationOnce(() => {});
+      const bubblesBefore = getOutgoingMessages("chat-1").length;
+
+      findButton(
+        renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"),
+        "Send your message again",
+      )!.attrs.onclick();
+      await vi.waitFor(() => expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore));
+
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+      expect(allText(children)).toContain("Couldn't confirm your message arrived");
+      expect(findButton(children, "Try again")).toBeNull();
+      findButton(children, "Send again")!.attrs.onclick();
+      await vi.waitFor(() => expect(transcript.sendMessage).toHaveBeenCalledTimes(2));
+      const [first, second] = transcript.sendMessage.mock.calls as unknown as [string, string, string][];
+      expect(second[2]).toBe(first[2]);
+    });
+
     it("offers nothing to send once the user has written since", () => {
       transcript.events = [
         PROMPT,

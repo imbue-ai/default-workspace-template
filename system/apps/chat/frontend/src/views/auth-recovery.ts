@@ -17,7 +17,11 @@
  */
 
 import m from "mithril";
-import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
+import {
+  describeRequestError,
+  describeRequestErrorKind,
+  isUnansweredRequest,
+} from "@imbue/workspace-ui/src/models/request-error";
 import { getChatById } from "../models/Chats";
 import { addOutgoing, dropOutgoing, dropOutgoingNoTurnWillRetire } from "../models/OutgoingMessages";
 import { accountForAgent } from "../models/Providers";
@@ -192,8 +196,8 @@ export function messagesToSendAgain(
   return prompts.length > 0 ? prompts : null;
 }
 
-/** "unconfirmed": mngr typed the message and sent Enter but could not confirm the agent took it, so
- *  the agent may already have it and sending it again can deliver it twice. */
+/** "unconfirmed": mngr typed the message and sent Enter but could not confirm the agent took it, or
+ *  the chat app never answered the send, so the agent may already have it. */
 export type ResendState = "sending" | "sent" | "failed" | "unconfirmed";
 
 interface ResendRecord {
@@ -205,6 +209,18 @@ interface ResendRecord {
 // Keyed by the failed turn's event id. Once the message lands in the transcript the failed turn
 // is hidden, whatever its state here.
 const resendStates = new Map<string, ResendRecord>();
+
+// Keyed by the refused prompt's event id: each press sends it under the id its first press used, so
+// the chat app answers a repeat of a send it took (one whose answer was lost) as it answered that one.
+const resendMessageIds = new Map<string, string>();
+
+function resendMessageIdOf(prompt: UserMessageEvent): string {
+  const existing = resendMessageIds.get(prompt.event_id);
+  if (existing !== undefined) return existing;
+  const minted = mintMessageId();
+  resendMessageIds.set(prompt.event_id, minted);
+  return minted;
+}
 
 /** How the page's send of the turn's messages went, given the messages `offered` now. Once the
  *  message that could not be confirmed has landed it is no longer in doubt, and what is left of
@@ -228,7 +244,7 @@ function setResendState(failedEventId: string, state: ResendState, unconfirmedPr
 export async function sendAgain(chatId: string, failedEventId: string, prompts: UserMessageEvent[]): Promise<void> {
   setResendState(failedEventId, "sending");
   for (const prompt of prompts) {
-    const messageId = mintMessageId();
+    const messageId = resendMessageIdOf(prompt);
     const outgoingId = addOutgoing(chatId, wordsOf(prompt), messageId);
     m.redraw();
     try {
@@ -239,7 +255,7 @@ export async function sendAgain(chatId: string, failedEventId: string, prompts: 
     } catch (err) {
       console.error(`Failed to send the message again to chat ${chatId}: ${describeRequestError(err)}`);
       dropOutgoing(chatId, outgoingId);
-      if (describeRequestErrorKind(err) === "submission_unconfirmed") {
+      if (describeRequestErrorKind(err) === "submission_unconfirmed" || isUnansweredRequest(err)) {
         setResendState(failedEventId, "unconfirmed", prompt.event_id);
       } else {
         setResendState(failedEventId, "failed");
@@ -252,4 +268,5 @@ export async function sendAgain(chatId: string, failedEventId: string, prompts: 
 
 export function resetResendStatesForTesting(): void {
   resendStates.clear();
+  resendMessageIds.clear();
 }
