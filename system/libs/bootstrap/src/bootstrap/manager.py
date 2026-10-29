@@ -14,15 +14,17 @@ in the workspace uses claude's own default ~/.claude, so there is nothing to
 resolve or export.
 """
 
+import base64
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import time
 import urllib.request
 import uuid
-from collections.abc import Generator
+from collections.abc import Generator, MutableMapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -116,6 +118,22 @@ _STARTER_PROJECT_ID = "project-1"
 _AGENT_ID_ENV_VAR = "MNGR_AGENT_ID"
 _HOST_DIR_ENV_VAR = "MNGR_HOST_DIR"
 _AGENT_STATE_DIR_ENV_VAR = "MNGR_AGENT_STATE_DIR"
+
+# The latchkey gateway a workspace reaches when its creator named none: the
+# VM-resident gateway, at the address the slice's ``--add-host`` mapping resolves
+# to the VM's docker bridge. Written into the host env file with a password
+# generated here, so the chrome that later provisions the VM's gateway reads the
+# password from the container rather than choosing one (the web latchkey auth
+# sandbox spec, section 4.2). A desktop-created workspace arrives with its own
+# values and is left alone.
+LATCHKEY_GATEWAY_URL = "http://host.docker.internal:1989"
+LATCHKEY_GATEWAY_ENV_VAR = "LATCHKEY_GATEWAY"
+LATCHKEY_GATEWAY_PASSWORD_ENV_VAR = "LATCHKEY_GATEWAY_PASSWORD"
+LATCHKEY_DISABLE_COUNTING_ENV_VAR = "LATCHKEY_DISABLE_COUNTING"
+_LATCHKEY_GATEWAY_PASSWORD_BYTES = 32
+# A ``NAME=value`` line of the host env file, with or without the ``export``
+# prefix a hand-written file may carry.
+_ENV_FILE_ASSIGNMENT_PATTERN = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)=")
 
 # Where the bootstrap announces each step it runs, one JSON line per event under
 # the standard event envelope, so the desktop that created this workspace can
@@ -695,6 +713,86 @@ def _sync_workspace_venv() -> None:
     logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
 
 
+def generate_latchkey_gateway_password() -> str:
+    """A fresh gateway password: 32 random bytes, base64."""
+    return base64.b64encode(secrets.token_bytes(_LATCHKEY_GATEWAY_PASSWORD_BYTES)).decode("ascii")
+
+
+def latchkey_gateway_env(password: str) -> dict[str, str]:
+    """The three variables the step writes for a workspace whose creator named no gateway."""
+    return {
+        LATCHKEY_GATEWAY_ENV_VAR: LATCHKEY_GATEWAY_URL,
+        LATCHKEY_GATEWAY_PASSWORD_ENV_VAR: password,
+        LATCHKEY_DISABLE_COUNTING_ENV_VAR: "1",
+    }
+
+
+def _env_file_names(text: str, name: str) -> bool:
+    """Whether an env file's text assigns ``name`` (commented and malformed lines never count)."""
+    for line in text.splitlines():
+        match = _ENV_FILE_ASSIGNMENT_PATTERN.match(line)
+        if match is not None and match.group(1) == name:
+            return True
+    return False
+
+
+def _format_env_file_line(name: str, value: str) -> str:
+    """One line in the shape mngr writes the host env file in, quoted the way it quotes."""
+    if " " in value or '"' in value or "'" in value or "\n" in value:
+        value = '"' + value.replace('"', '\\"') + '"'
+    return f"{name}={value}\n"
+
+
+def _ensure_latchkey_gateway_env(
+    host_env_path: Path, environ: MutableMapping[str, str], password: str
+) -> bool:
+    """Append the gateway variables to the host env file when it names no gateway, and export them.
+
+    The file is appended to, never rewritten: everything else in it is mngr's
+    and the desktop's. The variables are also put into ``environ`` (the
+    bootstrap's own process environment) so every supervised service inherits
+    them from the supervisord this process becomes. Returns whether the lines
+    were written. Best-effort like every other boot step: an unreadable or
+    unwritable file is logged and the boot goes on without a gateway, which is
+    what the workspace had before this step existed.
+    """
+    try:
+        text = host_env_path.read_text()
+    except FileNotFoundError:
+        text = ""
+    except OSError as e:
+        logger.warning("Could not read the host env file at {}: {}", host_env_path, e)
+        return False
+    if _env_file_names(text, LATCHKEY_GATEWAY_ENV_VAR):
+        logger.debug("{} already names a latchkey gateway; leaving it alone", host_env_path)
+        return False
+    variables = latchkey_gateway_env(password)
+    block = "".join(_format_env_file_line(name, value) for name, value in variables.items())
+    separator = "" if not text or text.endswith("\n") else "\n"
+    try:
+        with host_env_path.open("a") as env_file:
+            env_file.write(separator + block)
+    except OSError as e:
+        logger.warning("Could not write the latchkey gateway into {}: {}", host_env_path, e)
+        return False
+    environ.update(variables)
+    logger.info("Wrote the latchkey gateway address and a fresh password into {}", host_env_path)
+    return True
+
+
+def _configure_latchkey_gateway_env() -> None:
+    """The ``latchkey_gateway_env`` step: give a workspace with no named gateway the VM gateway's address.
+
+    Reads ``$MNGR_HOST_DIR/env``; a bare dev run has no host dir and skips, as
+    the other host-reading steps do.
+    """
+    host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
+    if not host_dir:
+        logger.debug("MNGR_HOST_DIR is unset; skipping the latchkey gateway env step")
+        return
+    _ensure_latchkey_gateway_env(Path(host_dir) / "env", os.environ, generate_latchkey_gateway_password())
+
+
 def _exec_supervisord() -> None:
     """Replace this process with supervisord running in the foreground.
 
@@ -1022,6 +1120,15 @@ def main() -> None:
     # timezone once at daemon start.
     with _bootstrap_step("set_timezone", "Setting the clock to your timezone"):
         _set_container_timezone(_fetch_user_timezone())
+
+    # A workspace whose creator named no latchkey gateway (a web-created one)
+    # gets the VM gateway's address and a fresh password before supervisord
+    # starts, so every service and every later chat agent inherits them. After
+    # the timezone step on purpose: that step asks the desktop through whatever
+    # gateway the environment names, and a web workspace's VM gateway is not
+    # provisioned until the chrome gets to it.
+    with _bootstrap_step("latchkey_gateway_env", "Preparing the credential gateway"):
+        _configure_latchkey_gateway_env()
 
     # Overlay symlinks must exist before services start writing.
     with _bootstrap_step("converge_environment", "Preparing the environment"):
