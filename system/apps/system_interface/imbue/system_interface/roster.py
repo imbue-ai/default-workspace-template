@@ -23,12 +23,14 @@ from pathlib import Path
 from typing import Any
 from typing import Final
 
+from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from share_grants.agent_grants import AgentGrant
 from share_grants.agent_grants import read_agent_last_seen_times
 from share_grants.grants import Grants
 from watchdog.observers.api import BaseObserver
+from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
@@ -177,6 +179,10 @@ class RosterSource(MutableModel):
         default=PRESENCE_CONNECTED_WINDOW, frozen=True, description="How long a sighting counts as connected"
     )
 
+    # The grants entries already warned about, per version of the document they came from, so a hand-edited entry
+    # the key refuses is warned about once rather than on every roster build.
+    _warned_entries_by_version: dict[int | None, set[str]] = PrivateAttr(default_factory=dict)
+
     def owner_key(self, now: datetime) -> ParticipantKey:
         """The owner's key as the presence records say it (the multiplayer spec, section 4.4): the account whose
         heartbeats say it owns the workspace, else the synthetic ``owner`` of a workspace that has not shared."""
@@ -199,7 +205,9 @@ class RosterSource(MutableModel):
         """The owner first, then every account the grants name, each named and pictured from its profile."""
         owner_key = self._owner_key(presence_by_key)
         granted_ids = sorted(grants.workspace.users) if grants is not None else []
-        keys = [owner_key, *(ParticipantKey(f"user:{user_id}") for user_id in granted_ids)]
+        grants_version = self.share_grants.document_version()
+        granted_keys = [self._key_or_none(f"user:{user_id}", grants_version) for user_id in granted_ids]
+        keys = [owner_key, *(key for key in granted_keys if key is not None)]
         # The owner may be granted too; they are listed once, first.
         ordered = list(dict.fromkeys(keys))
         user_ids = [UserId(str(key).removeprefix("user:")) for key in ordered if key != OWNER_PARTICIPANT_KEY]
@@ -249,9 +257,13 @@ class RosterSource(MutableModel):
         """Every email the grants still name: invited, not yet signed up, with no profile and no presence."""
         if grants is None:
             return []
+        grants_version = self.share_grants.document_version()
+        keyed = [
+            (email, self._key_or_none(f"email:{email}", grants_version)) for email in sorted(grants.workspace.emails)
+        ]
         return [
             _Entry(
-                key=ParticipantKey(f"email:{email}"),
+                key=key,
                 kind=ParticipantKind.INVITED,
                 display_name=email,
                 handle_name=_email_local_part(email) or email,
@@ -262,20 +274,43 @@ class RosterSource(MutableModel):
                 last_seen=None,
                 last_input_at=None,
             )
-            for email in sorted(grants.workspace.emails)
+            for email, key in keyed
+            if key is not None
         ]
 
     def _visiting_agents(self, now: datetime) -> list[_Entry]:
         """Every unexpired agent grant, connected while the gateway saw it within the window."""
         last_seen_by_id = read_agent_last_seen_times(self.agent_last_seen_path)
-        return [
-            self._visiting_agent(grant, last_seen_by_id.get(grant.agent_id), now)
+        grants_version = self.agent_grants.document_version()
+        keyed = [
+            (grant, self._key_or_none(f"agent:{grant.agent_id}", grants_version))
             for grant in self.agent_grants.read_active_grants(now)
         ]
+        return [
+            self._visiting_agent(grant, key, last_seen_by_id.get(grant.agent_id), now)
+            for grant, key in keyed
+            if key is not None
+        ]
 
-    def _visiting_agent(self, grant: AgentGrant, last_seen: datetime | None, now: datetime) -> _Entry:
+    def _key_or_none(self, value: str, grants_version: int | None) -> ParticipantKey | None:
+        """The participant key of a grants entry, or None for an entry the key's alphabet refuses (a hand-edited
+        file: the desktop validates what it writes), which is left out of the roster and warned about once per
+        version of the document, so one bad entry costs one entry rather than the whole roster."""
+        try:
+            return ParticipantKey(value)
+        except InvalidLayoutValueError as e:
+            warned = self._warned_entries_by_version.setdefault(grants_version, set())
+            if value not in warned:
+                warned.add(value)
+                self._warned_entries_by_version = {grants_version: warned}
+                logger.warning("Left a grants entry out of the roster: {}", e)
+            return None
+
+    def _visiting_agent(
+        self, grant: AgentGrant, key: ParticipantKey, last_seen: datetime | None, now: datetime
+    ) -> _Entry:
         return _Entry(
-            key=ParticipantKey(f"agent:{grant.agent_id}"),
+            key=key,
             kind=ParticipantKind.VISITING_AGENT,
             display_name=grant.name,
             handle_name=grant.name,

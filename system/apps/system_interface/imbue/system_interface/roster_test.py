@@ -205,6 +205,32 @@ def test_the_watch_waits_for_a_files_directory_to_appear_then_announces_and_foll
         watch.stop()
 
 
+def test_one_hand_edited_grants_entry_costs_one_roster_entry_and_is_warned_about_once(
+    tmp_path: Path, loguru_records: list[str]
+) -> None:
+    source = _source(tmp_path)
+    source.share_grants.share_grants_path.write_text(
+        '[workspace]\nusers = ["user-bob-4471", "not/a/user/id"]\nemails = ["friend@example.com", "bob"]\n'
+    )
+
+    first = source.document(_T0)
+    second = source.document(_T0)
+
+    assert (
+        _keys(first) == _keys(second) == ["owner", "user:user-bob-4471", "email:friend@example.com", "workspace-agent"]
+    )
+    warnings = [record for record in loguru_records if record.startswith("WARNING")]
+    assert len(warnings) == 2
+    assert any("not/a/user/id" in record for record in warnings)
+    assert any("email:bob" in record for record in warnings)
+
+    # The same entry in a rewritten document is warned about again, once.
+    source.share_grants.share_grants_path.write_text('[workspace]\nusers = ["not/a/user/id"]\nemails = []\n')
+    source.document(_T0)
+    source.document(_T0)
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 3
+
+
 def test_the_announcer_pushes_a_roster_once_until_it_changes(tmp_path: Path) -> None:
     source = _source(tmp_path)
     broadcaster = WebSocketBroadcaster()

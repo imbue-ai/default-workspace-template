@@ -50,6 +50,11 @@ class ShareGrantsReader(MutableModel):
 
     _warned_grants_mtime_ns: int | None = PrivateAttr(default=None)
 
+    def document_version(self) -> int | None:
+        """What version of the document is on disk (its mtime), so a reader can say something about it once per
+        version; None while there is none."""
+        return _file_version(self.share_grants_path)
+
     def read_grants(self) -> Grants | None:
         """The document, or None while the workspace is not shared, while the document is missing (the desktop
         writes it before the materials), or while it is one the gateway refuses, which is warned about once per
@@ -98,6 +103,10 @@ class AgentGrantsReader(MutableModel):
 
     _warned_grants_mtime_ns: int | None = PrivateAttr(default=None)
 
+    def document_version(self) -> int | None:
+        """What version of the document is on disk (its mtime); None while there is none."""
+        return _file_version(self.agent_grants_path)
+
     def read_active_grants(self, now: datetime) -> list[AgentGrant]:
         """Every unexpired grant, in file order; none while the file is absent or one the gateway refuses."""
         try:
@@ -116,3 +125,10 @@ class AgentGrantsReader(MutableModel):
             return []
         self._warned_grants_mtime_ns = None
         return grants
+
+
+def _file_version(path: Path) -> int | None:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return None
