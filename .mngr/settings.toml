@@ -667,7 +667,9 @@ type = "main"
 # (`;`, not `&&`) still boots on the existing venv, so the workspace stays
 # reachable for an agent to repair whatever broke it; bootstrap runs from
 # .venv/bin rather than under `uv run` so no uv process parents supervisord.
-extra_window = ["bootstrap='bash -c \"uv sync --all-packages --frozen; exec .venv/bin/bootstrap\"'"]
+# venv_links.py first makes .venv a link to a target beside the uv cache (so uv
+# hardlinks rather than copies), recreating a target a rebuilt root filesystem lost.
+extra_window = ["bootstrap='bash -c \"python3 system/scripts/workspace_bare_scripts/venv_links.py ensure . ; uv sync --all-packages --frozen; exec .venv/bin/bootstrap\"'"]
 # Write a sane default tmux config on every Imbue Studio host. tuple-typed
 # `extra_provision_command` stacks across templates (see
 # `apply_create_template` in mngr's cli/common_opts.py), so the
@@ -1784,8 +1786,9 @@ env__extend = ["REVIEWER_AUTOFIX_ENABLE=0", "REVIEWER_CI_ENABLE=0", "REVIEWER_VE
 # agents whose persisted type is already worker). Chat/main agents share the services
 # agent's boot-time converge. uv's warm cache makes this hardlink-fast when up to date.
 # --frozen, so a lock that has drifted from pyproject.toml is never rewritten here; the
-# worker's session-start sync reports it instead.
-extra_provision_command__extend = ["uv sync --all-packages --frozen"]
+# worker's session-start sync reports it instead. venv_links.py links the worktree's .venv
+# beside the uv cache first, and sweeps the targets of worktrees that are gone.
+extra_provision_command__extend = ["python3 system/scripts/workspace_bare_scripts/venv_links.py ensure . ; uv sync --all-packages --frozen"]
 append_system_prompt__extend = ["You were launched by another agent. List any questions at the end of your final response, along with the assumptions you made."]
 
 # Custom: a user-facing coding agent working in the user's OWN repo or

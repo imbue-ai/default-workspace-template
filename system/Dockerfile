@@ -60,6 +60,9 @@ RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/b
 # landing under /home/user (where the runtime mount would shadow them), and
 # runtime installs reuse them. The seed script additionally symlinks ~/.cache
 # here so even non-XDG-aware tools land off-volume. Caches are never backed up.
+# Every venv's files live beside the uv cache too, in /var/cache/user/venvs (each
+# .venv is a link there; see system/scripts/workspace_bare_scripts/venv_links.py),
+# so uv hardlinks them from the cache rather than copying across filesystems.
 ENV XDG_CACHE_HOME=/var/cache/user
 ENV UV_CACHE_DIR=/var/cache/user/uv
 ENV npm_config_cache=/var/cache/user/npm
@@ -106,6 +109,8 @@ COPY system/apps/routines/frontend/package.json /home/user/workspace/system/apps
 # helper treats as absent), and the secret never lands in a layer.
 COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies
 COPY system/scripts/_mngr_git_auth.sh /usr/local/bin/_mngr_git_auth.sh
+# The venv-link helper the install runs before its sync, at the path it runs it from.
+COPY system/scripts/workspace_bare_scripts/venv_links.py /home/user/workspace/system/scripts/workspace_bare_scripts/venv_links.py
 RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
 
 # End pre-COPY manifest layer. Source-changing layers begin below.

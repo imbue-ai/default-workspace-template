@@ -127,8 +127,11 @@ def test_transcripts_are_fetched_through_the_installed_mngr(
         "\n".join(json.dumps(record) for record in _atif_stream_records()) + "\n"
     )
     mngr_binary = shutil.which("mngr")
-    assert mngr_binary is not None and Path(mngr_binary).resolve().is_relative_to(
-        _REPO_ROOT
+    # The checkout's .venv is a link to a target beside the uv cache, so compare the venvs.
+    assert (
+        mngr_binary is not None
+        and Path(mngr_binary).parent.resolve()
+        == (_REPO_ROOT / ".venv" / "bin").resolve()
     ), f"the mngr on PATH is not this checkout's pinned install: {mngr_binary}"
     monkeypatch.setenv("MNGR_HOST_DIR", str(host_dir))
     # A temp cwd, so mngr does not read this checkout's own .mngr/settings.toml as project settings.

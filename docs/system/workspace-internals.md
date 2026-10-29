@@ -104,6 +104,19 @@ is named `<app>-<role>`.
   it with the pin through `system/scripts/vendor_mngr_skill.py --write`, the file's one
   writer, and the same CI job checks the copy against the pinned commit with its
   `--check`; edit it in the mngr repo, never here.
+- `.venv` - The root venv, as a symlink: every `.venv` (the checkout's, each
+  worktree's) links to a target under `<uv cache dir>/../venvs/`, beside the uv
+  cache on the root filesystem (`/var/cache/user/venvs` on docker), so uv
+  hardlinks its files from the cache instead of copying them onto the volume.
+  `system/scripts/workspace_bare_scripts/venv_links.py` owns the links: the boot
+  window, worker provisioning, the session-start sync and the build run its
+  `ensure` before their syncs, which creates a missing target (a rebuilt root
+  filesystem drops them; the next sync refills it from the cache), turns a real
+  `.venv` directory into a link, and deletes every target whose link is gone
+  (each records its link in a sibling `.owner.json`). The update apply syncs a
+  manifest change into a fresh target, pre-flights from it, and switches the
+  link just before its restart; a rollback switches it back. A target on a
+  different filesystem from the cache gets a warning in the boot log.
 - `system/vendor/tk/` - A vendored copy of the
   [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script
   (also callable as `tk`) manages tickets stored as markdown. We point

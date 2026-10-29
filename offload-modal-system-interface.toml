@@ -42,6 +42,8 @@ build_inputs = [
     "system/scripts/install_agent_plugins.sh",
     "system/scripts/install_dependencies.sh",
     "system/scripts/_mngr_git_auth.sh",
+    # Run by install_dependencies.sh before its sync.
+    "system/scripts/workspace_bare_scripts/venv_links.py",
     "system/scripts/build_workspace.sh",
     "system/scripts/_tool_env.sh",
     "system/scripts/install_mngr.py",

@@ -375,6 +375,7 @@ def preflight(
     spawner: Spawner,
     sleeper: Callable[[float], None],
     expend: ExpendWrapper = as_expendable,
+    venv: Path | None = None,
 ) -> str | None:
     """Boot the merged shell backend on a throwaway port and probe it, without
     touching the live service. Returns ``None`` iff it serves a healthy
@@ -382,10 +383,12 @@ def preflight(
     wrote, or, for a boot that could not be spawned at all, a line saying so.
 
     It boots the entry point the shell's supervisord program execs, from the
-    workspace venv, so what passes here is the install the restart then runs."""
+    workspace venv or, when the apply synced the merged tree into a fresh target,
+    from ``venv``: the venv the services run once the link is switched to it. What
+    passes here is the install the restart then runs."""
     port = find_free_port()
     return _preflight_boot(
-        argv=[str(repo_root / SYSTEM_INTERFACE_EXECUTABLE)],
+        argv=[_entry_point(repo_root, SYSTEM_INTERFACE_EXECUTABLE, venv)],
         cwd=repo_root / SYSTEM_INTERFACE_DIR,
         env_overrides={
             "SYSTEM_INTERFACE_HOST": "127.0.0.1",
@@ -406,6 +409,7 @@ def preflight_chat(
     spawner: Spawner,
     sleeper: Callable[[float], None],
     expend: ExpendWrapper = as_expendable,
+    venv: Path | None = None,
 ) -> str | None:
     """Boot the merged chat app on a throwaway port in its side-effect-free mode and
     probe it, the way :func:`preflight` boots the shell. The chat is the process that
@@ -415,7 +419,7 @@ def preflight_chat(
     from reconciling the live account store, starting ``mngr observe``, or registering."""
     port = find_free_port()
     return _preflight_boot(
-        argv=[str(repo_root / CHAT_EXECUTABLE), "--preflight"],
+        argv=[_entry_point(repo_root, CHAT_EXECUTABLE, venv), "--preflight"],
         # The repo root, where supervisord runs the chat from (its paths are relative to it).
         cwd=repo_root,
         env_overrides={"CHAT_HOST": "127.0.0.1", "CHAT_PORT": str(port)},
@@ -429,6 +433,12 @@ def preflight_chat(
         sleeper=sleeper,
         expend=expend,
     )
+
+
+def _entry_point(repo_root: Path, executable: str, venv: Path | None) -> str:
+    if venv is None:
+        return str(repo_root / executable)
+    return str(venv / "bin" / Path(executable).name)
 
 
 def _preflight_boot(
