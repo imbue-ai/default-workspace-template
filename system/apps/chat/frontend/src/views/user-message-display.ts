@@ -57,10 +57,17 @@ export const USER_MESSAGE_PART = appPartAttrs("chat", "user-message");
 
 /** wrap-break-word: long unbreakable tokens (API keys, URLs) wrap inside the
  *  bubble instead of overflowing past its edge. Code inside a bubble is
- *  markdown-rendered content and takes .markdown-content's own rules. */
-export const USER_BUBBLE_CLASS =
-  "message-user-bubble max-w-[80%] rounded-xl rounded-br-sm bg-user-bubble px-3.5 py-2 " +
+ *  markdown-rendered content and takes .markdown-content's own rules. The
+ *  geometry is the prototype's: an 18px round with a 4px corner squared toward
+ *  the sender (the viewer's own at the bottom right, another's at the top left
+ *  where their picture sits). */
+const USER_BUBBLE_BASE =
+  "message-user-bubble max-w-[80%] rounded-[18px] px-4 py-2.5 " +
   "text-(length:--font-size-body) leading-[1.4] text-primary wrap-break-word";
+/** The viewer's own bubble: right-aligned, in the own-message tint. */
+export const USER_BUBBLE_CLASS = `${USER_BUBBLE_BASE} rounded-br-[4px] bg-user-bubble`;
+/** Another person's bubble: left-aligned under their name, in the not-yours grey. */
+export const OTHER_BUBBLE_CLASS = `${USER_BUBBLE_BASE} rounded-tl-[4px] bg-bubble-other`;
 
 /** The collapsed, expandable "▸ <label>" chip used for every `SystemChip` kind
  *  (Stop hook / browser fleet / task-notification). Identical chrome regardless
@@ -140,20 +147,16 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (author === null) return m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, bubbleChildren);
       // Another person's turn: their name above, their picture at the left, the bubble squared at its top-left.
       const entry = getParticipant(author.key);
-      return m("div", { class: "message-other-turn flex flex-col items-start", "data-author": author.key }, [
+      return m("div", { class: "message-other-turn flex w-full flex-col items-start", "data-author": author.key }, [
         m("div", { class: "message-author mb-1 ml-8 text-(length:--font-size-helper) text-secondary" }, author.name),
-        m("div", { class: "flex items-start gap-2" }, [
+        m("div", { class: "flex w-full items-start gap-2" }, [
           participantPicture({
             name: author.name,
             pictureUrl: entry?.profile_picture_url ?? null,
             size: AUTHOR_PICTURE_SIZE_PX,
             extra: "message-author-picture mt-0.5",
           }),
-          m(
-            "div",
-            { class: `${USER_BUBBLE_CLASS} rounded-br-xl rounded-tl-sm`, ...USER_MESSAGE_PART },
-            bubbleChildren,
-          ),
+          m("div", { class: OTHER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, bubbleChildren),
         ]),
       ]);
     },

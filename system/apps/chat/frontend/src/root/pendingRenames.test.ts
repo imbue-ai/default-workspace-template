@@ -20,6 +20,7 @@ function row(chatId: string, title: string): ChatRow {
     lastActiveMs: null,
     kind: "agent",
     hasMention: false,
+    participants: [],
     isMain: false,
   };
 }

@@ -37,18 +37,24 @@ describe("machineBubbles", () => {
     ]);
     const root = render(machineBubbles({ ...attrs, isHeaded: true }));
 
+    // The person-turn geometry: the name over the bubble, the face in the gutter beside it.
     const header = root.querySelector("[data-machine-header]");
     expect(header?.textContent).toBe("Atlas");
-    expect(header?.querySelector("img")?.getAttribute("src")).toBe("/api/participants/workspace-agent/picture");
+    expect(root.querySelector(".machine-face img")?.getAttribute("src")).toBe(
+      "/api/participants/workspace-agent/picture",
+    );
     const bubbles = root.querySelectorAll("[data-machine-bubble]");
     expect(bubbles).toHaveLength(1);
-    expect(bubbles[0].className).toContain("rounded-tl-sm");
+    expect(bubbles[0].className).toContain("rounded-tl-[4px]");
   });
 
-  it("keeps an unheaded bubble's top-left corner round, where no header points at it", () => {
-    const bubbles = render(machineBubbles({ ...attrs, isHeaded: false })).querySelectorAll("[data-machine-bubble]");
+  it("keeps an unheaded bubble's top-left corner round and its gutter held by a spacer", () => {
+    const root = render(machineBubbles({ ...attrs, isHeaded: false }));
+    const bubbles = root.querySelectorAll("[data-machine-bubble]");
     expect(bubbles).toHaveLength(1);
-    expect(bubbles[0].className).not.toContain("rounded-tl-sm");
+    expect(bubbles[0].className).not.toContain("rounded-tl-[4px]");
+    expect(root.querySelector(".machine-face")).toBeNull();
+    expect(root.querySelector("span.w-6[aria-hidden]")).not.toBeNull();
   });
 
   it("draws nothing for whitespace-only text", () => {
@@ -59,8 +65,10 @@ describe("machineBubbles", () => {
   it("wears no header past the run's first group, and a monogram before the roster has landed", () => {
     expect(render(machineBubbles({ ...attrs, isHeaded: false })).querySelector("[data-machine-header]")).toBeNull();
 
-    const header = render(machineBubbles({ ...attrs, isHeaded: true })).querySelector("[data-machine-header]");
-    expect(header?.textContent).toBe("AAgent");
-    expect(header?.querySelector("img")).toBeNull();
+    const root = render(machineBubbles({ ...attrs, isHeaded: true }));
+    expect(root.querySelector("[data-machine-header]")?.textContent).toBe("Agent");
+    const face = root.querySelector(".machine-face");
+    expect(face?.querySelector("img")).toBeNull();
+    expect(face?.textContent).toBe("A");
   });
 });

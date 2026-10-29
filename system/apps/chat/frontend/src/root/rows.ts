@@ -30,6 +30,9 @@ export interface ChatRow {
   isMain: boolean;
   /** True while the viewer has a mention in the chat they have not looked at. */
   hasMention: boolean;
+  /** Who has written in the chat, each once, in order of first message: the row shows their pictures when there
+   *  are two or more (the multiplayer spec, section 5.4). */
+  participants: readonly string[];
 }
 
 // What a chat that is not an agent yet is doing, as a chat status.
@@ -65,6 +68,7 @@ export function rowsFromSnapshots(
     lastActiveMs: chat.last_messaged_at === null ? null : chat.last_messaged_at * 1000,
     isMain: chat.chat_id === mainChatId,
     hasMention: mentionedChatIds.has(chat.chat_id),
+    participants: chat.participants ?? [],
   }));
   for (const chat of provisional) {
     if (known.has(chat.chat_id)) continue;
@@ -78,6 +82,7 @@ export function rowsFromSnapshots(
       lastActiveMs: null,
       isMain: chat.chat_id === mainChatId,
       hasMention: false,
+      participants: [],
     });
   }
   return rows;

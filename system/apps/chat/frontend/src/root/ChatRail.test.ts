@@ -65,6 +65,23 @@ describe("ChatRail status marks", () => {
   });
 });
 
+describe("ChatRail participant photos", () => {
+  it("shows who has written in a chat only when two or more have, stepping aside under the pointer", () => {
+    const rail = mount([
+      chatRowFixture("agent-shared", { participants: ["user:josh-1", "user:bob-2"] }),
+      chatRowFixture("agent-solo", { participants: ["user:josh-1"] }),
+      chatRowFixture("agent-quiet"),
+    ]);
+    const photos = rail.querySelector('[data-chat-row-people="agent-shared"]');
+    expect(photos).not.toBeNull();
+    expect(photos?.querySelectorAll("[data-participant-picture]")).toHaveLength(2);
+    // Out of the way on hover, where the pencil and the kebab come out.
+    expect(photos?.className).toContain("group-hover:hidden");
+    expect(rail.querySelector('[data-chat-row-people="agent-solo"]')).toBeNull();
+    expect(rail.querySelector('[data-chat-row-people="agent-quiet"]')).toBeNull();
+  });
+});
+
 describe("ChatRail main chat", () => {
   it("sets the main chat alone above the rest, its helpers right under the rule, and marks its row", () => {
     const helper = chatRowFixture("agent-helper", { labels: { agent_created: "true", lead_agent: "agent-welcome" } });

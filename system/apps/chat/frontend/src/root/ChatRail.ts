@@ -31,6 +31,8 @@ import { kebabGlyph, peopleGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
 import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
 import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
+import { getParticipant, participantName } from "../models/Participants";
+import { participantPicture } from "../views/participant-picture";
 import { isAgentStarted, isRoom, startsWithMainChat } from "./rows";
 import {
   DEFAULT_RAIL_WIDTH_PX,
@@ -480,13 +482,15 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
         // A finger's height in the drawer; the rail's rows stay dense under a pointer.
         attrs.isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "chat-rail-row--nested pr-2 pl-5" : "px-2",
+        // The selected row wears the same grey as a not-yours bubble (one fill for "where you are" and "what
+        // someone else said", per the design), so the rows' hover has to read lighter than it.
         isDeleting
           ? "chat-rail-row--deleting text-danger line-through opacity-50"
           : status === "done"
-            ? `chat-rail-row--done font-semibold text-success ${isSelected ? "bg-fill-active" : "hover:bg-fill-hover"}`
+            ? `chat-rail-row--done font-semibold text-success ${isSelected ? "bg-bubble-other" : "hover:bg-fill-faint"}`
             : isSelected
-              ? "chat-rail-row--selected bg-fill-active text-primary"
-              : "text-primary hover:bg-fill-hover",
+              ? "chat-rail-row--selected bg-bubble-other text-primary"
+              : "text-primary hover:bg-fill-faint",
         row.status === "stopped" ? "chat-rail-row--stopped opacity-50" : "",
         row.isMain ? "chat-rail-row--main font-medium" : "",
       ].join(" "),
@@ -520,8 +524,29 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
         : statusDot(row, "flex-none"),
       m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
       row.hasMention ? mentionMark() : null,
+      participantPhotos(row),
       attrs.isTouch && isDeleting ? null : attrs.isTouch ? rowKebab(row) : [renamePencil(row), hoverKebab(row)],
     ],
+  );
+}
+
+/** Who has written in the chat, as a stack of little pictures at the row's end (the multiplayer spec, section
+ *  5.4): drawn only when two or more have, and stepping aside under the pointer, where the pencil and the kebab
+ *  come out. Each picture tucks under the one before it with a ring of the rail's surface, like the tray's stack. */
+function participantPhotos(row: ChatRow): m.Vnode | null {
+  if (row.participants.length < 2) return null;
+  return m(
+    "span",
+    { class: "chat-row-people flex flex-none items-center group-hover:hidden", "data-chat-row-people": row.chatId },
+    row.participants.map((key, index) => {
+      const entry = getParticipant(key);
+      return participantPicture({
+        name: participantName(key, null),
+        pictureUrl: entry?.profile_picture_url ?? null,
+        size: 16,
+        extra: "ring-1 ring-sidebar" + (index > 0 ? " -ml-1" : ""),
+      });
+    }),
   );
 }
 

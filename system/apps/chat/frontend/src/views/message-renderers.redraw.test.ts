@@ -130,7 +130,9 @@ describe("the machine-bubble header without a hand-cranked render", () => {
       view: () => m(StableAssistantMessage, { event, toolResults, chatId: "chat-1" }),
     });
     const header = (): HTMLElement | null => document.querySelector("[data-machine-header]");
-    expect(header()?.textContent).toBe("AAgent");
+    const face = (): HTMLElement | null => document.querySelector(".machine-face");
+    expect(header()?.textContent).toBe("Agent");
+    expect(face()?.textContent).toBe("A");
 
     setParticipantsForTesting("owner", [
       {
@@ -151,6 +153,6 @@ describe("the machine-bubble header without a hand-cranked render", () => {
     await settle();
 
     expect(header()?.textContent).toBe("Atlas");
-    expect(header()?.querySelector("img")?.getAttribute("src")).toBe("/api/participants/workspace-agent/picture");
+    expect(face()?.querySelector("img")?.getAttribute("src")).toBe("/api/participants/workspace-agent/picture");
   });
 });

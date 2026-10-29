@@ -158,6 +158,10 @@ export interface ChatSnapshot {
   /** The chats a mention from this room sent to and has not heard back from: the room's row shows a working dot
    *  while one of them works (section 7.4). Empty for an agent chat. */
   awaiting_chat_ids: string[];
+  /** Who has written in the chat (people and visiting agents, never the workspace agent), each once, in order of
+   *  first message: the row shows their pictures when there are two or more (section 5.4). Absent from an older
+   *  backend's snapshot. */
+  participants?: string[];
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend

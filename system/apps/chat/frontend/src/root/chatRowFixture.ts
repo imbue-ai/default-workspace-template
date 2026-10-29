@@ -13,6 +13,7 @@ export function chatRowFixture(chatId: string, overrides: Partial<ChatRow> = {})
     lastActiveMs: null,
     isMain: false,
     hasMention: false,
+    participants: [],
     ...overrides,
   };
 }

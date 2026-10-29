@@ -31,6 +31,20 @@ describe("rowsFromSnapshots", () => {
       ["agent-b", "New chat", "error", null, "provisional"],
     ]);
   });
+
+  it("carries each chat's participants, empty for an older backend's snapshot and for a provisional chat", () => {
+    const withPeople = { ...chatSnapshotFixture("agent-a"), participants: ["user:josh-1", "user:bob-2"] };
+    const fromOlderBackend = chatSnapshotFixture("agent-b");
+    delete (fromOlderBackend as { participants?: string[] }).participants;
+
+    const rows = rowsFromSnapshots([withPeople, fromOlderBackend], [provisional("agent-c", "creating")], null);
+
+    expect(rows.map((row) => [row.chatId, row.participants])).toEqual([
+      ["agent-a", ["user:josh-1", "user:bob-2"]],
+      ["agent-b", []],
+      ["agent-c", []],
+    ]);
+  });
 });
 
 describe("groupedRows", () => {
