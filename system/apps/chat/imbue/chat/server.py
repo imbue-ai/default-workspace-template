@@ -1028,11 +1028,11 @@ def _attributed_delivery(
     message: str,
     message_id: str,
     identity: RequestIdentity,
-    # The kind of chat the words are for when the caller knows it better than the chat's state does (a switch's
-    # target); None reads it off the chat.
     target_kind: ChatKind | None,
 ) -> str:
-    """The text the agent is handed for a send to an existing chat, its annotation recorded before delivery."""
+    """The text the agent is handed for a send to an existing chat, its annotation recorded before delivery.
+    ``target_kind`` is the kind of chat the words are for when the caller knows it better than the chat's state
+    does (a switch's target); None reads it off the chat."""
     attributed = _attributed_send(
         state, message, message_id, identity, _is_author_prefixed(state, chat_id, target_kind)
     )
