@@ -2,7 +2,9 @@ Multiplayer, part one (the mngr repo's `specs/multiplayer-refinements/spec.md`, 
 
 - `AGENTS.md` tells the agent, under "Communication", that a message prefixed `[from: <name>]` came from someone other than the workspace's owner, and that the prefix is not part of what they said.
 
-- The desktop interface contract (`docs/system/blueprint/desktop-interface/contracts.md`) gains the participant key (section 4.3), the heartbeat's input time and the roster route (5.1), the client inventory's participants (5.5), and the `roster_updated` push (6).
+- The desktop interface contract (`docs/system/blueprint/desktop-interface/contracts.md`) gains the participant key (section 4.3), the heartbeat's input age (`input_age_seconds`, stamped by the shell; an older page's `last_input_at` accepted and clamped) and the roster route (5.1), the refusal of a present `X-Imbue-Identity` header that does not parse (5.5, with the client inventory's participants), the `roster_updated` push (6; on a person's input time moving too, a burst of file events announced once, never an unchanged document) beside the new `clients_updated` push (a registered window's disconnect, a pruned client), and the handshake's third trigger, the page's `shell:capabilities` (7).
+
+- `system/scripts/message_chat.py` says a chat room is answered with `mngr message --start <room>`, never through the script: a send no proxy vouched for is nobody's speech, raising no bubble and acting on no mention.
 
 - The grants parsers the share gateway and the shell both need now live in one library, `system/libs/share_grants`.
 
