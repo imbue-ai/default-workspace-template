@@ -459,13 +459,35 @@ desktop the window came from, else the viewer's first. A viewed desktop is
 shown as its owner has it, live: the layout read is the owner's newest
 client's written one (`?of=owner` on the placements read), refreshed on every
 `placements_updated` push for the desktop and by a slow backstop poll, and it
-is read-only -- the pages are inert, the windows take no press, the taskbar's
-entries mirror theirs without acting, and nothing a viewing window holds is
-saved as the viewer's layout. On every other client the owner of
+is read-only from every side -- the desktop's stage (the wallpaper, the
+shortcut grid, the windows, the ghosts, the pages host) is `inert`, so nothing
+on it takes a press, a key, or focus and Tab reaches nothing inside it; the
+taskbar's entries mirror theirs without acting; the backdrop menu keeps "New
+desktop" and disables "Change wallpaper...", "Change theme...", and "Show all
+desktops"; the launcher's launch, window, and free-text rows stand down with
+"Stop viewing to open things here"; every change the store could still make
+(shortcuts, wallpaper, theme, launches, the app chat, closing, raising,
+minimizing, restoring, resizing, navigating, a bubble's chat) is refused with
+one "Stop viewing first" note per gesture, and a viewed page's focus report
+raises nothing; the owner's layout is reloaded whole on every read, so nothing
+that slipped through outlives the next poll; and nothing a viewing window
+holds is saved as the viewer's layout. The overview never opens while viewing,
+and one opened before the first heartbeat answered closes when the answer
+lands. The shell greets a page again when it says what it can do
+(`shell:capabilities`), so a terminal learns it is viewed before its frame's
+load and attaches as a viewer from the first moment. When the viewed desktop
+is deleted the window lands on the desktop it left for it, else the viewer's
+first own desktop, else -- a visitor with none left -- the desktop the shell
+seeds when they arrive again, the letterbox and the way back cleared; Stop
+viewing with nowhere to go arrives again the same way. The phone layout never
+views: a phone-width window whose active desktop is somebody else's lands on
+one of the viewer's own. On every other client the owner of
 a desktop somebody else is on wears a ring in their colour in the tray, read
 off the clients and the desktop moves the socket announces; a move by a client
-the last read did not list, and a change in who is here, read the clients
-again.
+the last read did not list, a change in who is here, and the shell's
+`clients_updated` (a window's socket closed, a stale client pruned) read the
+clients again, so the ring follows a viewing window that closes while its
+person stays connected elsewhere.
 The launcher's window rows name the owner of a desktop that is not the
 viewer's. The phone layout offers no overview.
 
