@@ -554,16 +554,23 @@ export function getTerminalUrl(): string {
   return deriveAppOrigin(getTerminalOriginLabel() || "terminal");
 }
 
-/** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session. The terminal
- *  app's dispatch takes the URL's ``arg`` values in order: a placeholder ("_", which lands in
- *  ``$0``), the dispatch key ("agent"), then the agent name.
+/** The argument the terminal app's dispatch reads as "attach as a viewer" (its ``VIEWER_ARGUMENT``, pinned here):
+ *  read-only, and never the client tmux sizes the window by (the multiplayer spec, section 8.3). */
+const TERMINAL_VIEWER_ARGUMENT = "view";
+
+/** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session (the ambient one when the chat
+ *  has no agent in the list yet). The terminal app's dispatch takes the URL's ``arg`` values in order: a placeholder
+ *  ("_", which lands in ``$0``), the dispatch key ("agent"), the agent name (empty for the ambient session, so the
+ *  next argument keeps its place), then the viewer argument while the shell says the chat's window is being looked
+ *  at on somebody else's desktop.
  *
  *  Only the back face of that agent's chat attaches one: two live ttyd clients on one tmux
  *  window keep resizing it out from under each other. */
-export function buildAgentTerminalUrl(agentName: string): string {
+export function buildAgentTerminalUrl(agentName: string | null, isViewing: boolean): string {
   const baseUrl = getTerminalUrl();
   const separator = baseUrl.includes("?") ? "&" : "?";
-  return `${baseUrl}${separator}arg=_&arg=agent&arg=${encodeURIComponent(agentName)}`;
+  const dispatchArguments = ["_", "agent", agentName ?? "", ...(isViewing ? [TERMINAL_VIEWER_ARGUMENT] : [])];
+  return `${baseUrl}${separator}${dispatchArguments.map((value) => `arg=${encodeURIComponent(value)}`).join("&")}`;
 }
 
 /** A create the chat app refused, with its reason in words and, when the account is the reason, the refusal's kind:

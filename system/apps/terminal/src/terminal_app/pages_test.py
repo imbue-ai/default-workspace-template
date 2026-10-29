@@ -254,6 +254,22 @@ def test_the_wrapper_attaches_the_pty_as_a_viewer_when_the_shell_says_the_window
     assert f'(isViewing ? "&arg={VIEWER_ARGUMENT}" : "")' in wrapper
 
 
+def test_a_framed_wrapper_holds_its_first_pointing_of_the_pty_until_the_shells_handshake(
+    pages_client: FlaskClient,
+) -> None:
+    """Pointed before the shell has said whether the window is viewed, a viewed terminal would attach as a full
+    client and size its owner's window for a moment: while framed, the first pointing waits for the handshake (or
+    gives up after a grace and attaches plainly); unframed, the page points at once."""
+    wrapper = pages_client.get("/?session=terminal-1").text
+    assert "let isHandshakeAwaited = window.parent !== window;" in wrapper
+    assert "if (!isHandshakeAwaited) {\n        pointFrameAt(" in wrapper
+    assert "const HANDSHAKE_GRACE_MS = 2000;" in wrapper
+    assert "if (isHandshakeAwaited) {\n    setTimeout(() => {" in wrapper
+    assert "}, HANDSHAKE_GRACE_MS);" in wrapper
+    # The first handshake points the held frame even when it says the window is not viewed.
+    assert "if (next === isViewing && !isFirstWord) return;" in wrapper
+
+
 def test_a_missing_app_contract_module_says_the_shell_is_not_built(
     session_source: TmuxSessionSource, tmp_path: Path
 ) -> None:

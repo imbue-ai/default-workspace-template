@@ -69,7 +69,8 @@ import { ModelProviderMenu } from "./ModelProviderMenu";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
-import { buildAgentTerminalUrl, getTerminalUrl } from "../models/Chats";
+import { buildAgentTerminalUrl } from "../models/Chats";
+import { getShellHandshake } from "../shell";
 import {
   buildConversationRows,
   MESSAGE_LIST_CLASS,
@@ -106,15 +107,11 @@ function getChatTerminalUrl(chatId: string): string {
   // the first trailing arg becomes $0 (not $1). ``buildAgentTerminalUrl``
   // emits ``arg=_&arg=agent&arg=<name>`` so the dispatch lands ``agent`` in
   // ``$1`` and the name in ``$2``, mirroring the workdir deep-link pattern.
-  // When the agent isn't in the local cache yet, fall back to the bare
-  // base URL and let agent.sh attach to the ambient session.
+  // When the agent isn't in the local cache yet, the name is empty and
+  // agent.sh attaches to the ambient session. A window viewed on somebody
+  // else's desktop attaches as a viewer, as the terminal app's own wrapper does.
   const agentName = getChatById(chatId)?.active_agent.name;
-  if (!agentName) {
-    const baseUrl = getTerminalUrl();
-    const separator = baseUrl.includes("?") ? "&" : "?";
-    return `${baseUrl}${separator}arg=_&arg=agent`;
-  }
-  return buildAgentTerminalUrl(agentName);
+  return buildAgentTerminalUrl(agentName || null, getShellHandshake()?.isViewing === true);
 }
 
 /** The provisional record of a chat that is not an agent yet, or null once the app lists it

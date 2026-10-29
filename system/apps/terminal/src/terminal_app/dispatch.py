@@ -43,21 +43,28 @@ exit 1
 # CLEANUP: move agent.sh (the chat UI's terminal back face, ``?arg=_&arg=agent&arg=<name>``)
 # into the chat app (system/apps/chat), and stop installing it here, in the release after the
 # one that ships the workspace app model, once every workspace has restarted on it.
-_AGENT_SCRIPT: Final[str] = """#!/bin/bash
+_AGENT_SCRIPT_TEMPLATE: Final[str] = """#!/bin/bash
 # Attach to a mngr agent's tmux session window 0.
 #
 # If a session name is provided as $1, use "$MNGR_PREFIX$1" as the target
 # session (so the Imbue Studio chat UI can deep-link to a specific sub-agent's
 # terminal by passing the agent name). Otherwise fall back to the current
 # tmux session -- useful when ttyd is invoked without args.
+# $2 = "{viewer_argument}" when the chat's window is being looked at on somebody else's desktop
+#      (the multiplayer spec, section 8.3): the attach is read-only and tmux never sizes the
+#      window by this client, as the session script attaches a viewer.
 set -euo pipefail
 if [ $# -gt 0 ] && [ -n "$1" ]; then
     TARGET_SESSION="${MNGR_PREFIX:-mngr-}$1"
 else
     TARGET_SESSION=$(tmux display-message -p '#{session_name}')
 fi
+ATTACH_FLAGS=()
+if [ "${2:-}" = "{viewer_argument}" ]; then
+    ATTACH_FLAGS=(-r -f ignore-size)
+fi
 unset TMUX
-exec tmux attach -t "$TARGET_SESSION":0
+exec tmux attach "${ATTACH_FLAGS[@]}" -t "$TARGET_SESSION":0
 """
 
 _WORKDIR_SCRIPT: Final[str] = """#!/bin/bash
@@ -155,7 +162,8 @@ def render_dispatch_snippet(commands_dir: Path) -> str:
 
 @pure
 def render_agent_script() -> str:
-    return _AGENT_SCRIPT
+    """The agent dispatch script, taking the viewer marker the session script takes."""
+    return _AGENT_SCRIPT_TEMPLATE.replace("{viewer_argument}", VIEWER_ARGUMENT)
 
 
 @pure

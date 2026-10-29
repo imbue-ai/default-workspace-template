@@ -46,7 +46,7 @@ exit 1
 """)
 
 
-def test_agent_script_attaches_to_the_prefixed_agent_session() -> None:
+def test_agent_script_attaches_to_the_prefixed_agent_session_as_a_viewer_when_marked() -> None:
     assert render_agent_script() == snapshot("""\
 #!/bin/bash
 # Attach to a mngr agent's tmux session window 0.
@@ -55,14 +55,21 @@ def test_agent_script_attaches_to_the_prefixed_agent_session() -> None:
 # session (so the Imbue Studio chat UI can deep-link to a specific sub-agent's
 # terminal by passing the agent name). Otherwise fall back to the current
 # tmux session -- useful when ttyd is invoked without args.
+# $2 = "view" when the chat's window is being looked at on somebody else's desktop
+#      (the multiplayer spec, section 8.3): the attach is read-only and tmux never sizes the
+#      window by this client, as the session script attaches a viewer.
 set -euo pipefail
 if [ $# -gt 0 ] && [ -n "$1" ]; then
     TARGET_SESSION="${MNGR_PREFIX:-mngr-}$1"
 else
     TARGET_SESSION=$(tmux display-message -p '#{session_name}')
 fi
+ATTACH_FLAGS=()
+if [ "${2:-}" = "view" ]; then
+    ATTACH_FLAGS=(-r -f ignore-size)
+fi
 unset TMUX
-exec tmux attach -t "$TARGET_SESSION":0
+exec tmux attach "${ATTACH_FLAGS[@]}" -t "$TARGET_SESSION":0
 """)
 
 

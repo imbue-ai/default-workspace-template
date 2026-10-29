@@ -171,6 +171,12 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   // viewer (read-only, and never the client tmux sizes the window by), through the path's viewer argument.
   let isViewing = false;
   let shownPage = null;
+  // A framed page points the pty at nothing until the shell's handshake has said whether the window is viewed:
+  // attached before that word, a viewed terminal would join as a full client and size its owner's window for a
+  // moment (the window-size rule follows the latest client). A handshake that never comes (the shell's page
+  // died) is given up on after the grace, and the pty attached as it would be unframed.
+  const HANDSHAKE_GRACE_MS = 2000;
+  let isHandshakeAwaited = window.parent !== window;
 
   function coordinate(host) {
     const labels = host.split(".");
@@ -239,17 +245,34 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       keys.hidden = false;
       // A navigate to the session already framed re-points at the same target: assigning the
       // same src again would reload the frame and drop the live ttyd connection.
-      pointFrameAt(originFor(page.pty_label) + page.pty_path + (isViewing ? "&arg=__VIEWER_ARGUMENT__" : ""));
+      if (!isHandshakeAwaited) {
+        pointFrameAt(originFor(page.pty_label) + page.pty_path + (isViewing ? "&arg=__VIEWER_ARGUMENT__" : ""));
+      }
     }
     shownPage = page;
     connection?.location(pathFor(page.name), page.title);
   }
 
-  // The shell's word on whether the window is viewed changed: the pty is attached again the other way.
-  function takeViewing(next) {
-    if (next === isViewing) return;
-    isViewing = next;
+  function pointHeldFrame() {
     if (shownPage !== null && shownPage.pty_label !== "") show(shownPage);
+  }
+
+  // The shell's word on whether the window is viewed: the first one points the held frame, a changed one attaches
+  // the pty again the other way.
+  function takeViewing(next) {
+    const isFirstWord = isHandshakeAwaited;
+    isHandshakeAwaited = false;
+    if (next === isViewing && !isFirstWord) return;
+    isViewing = next;
+    pointHeldFrame();
+  }
+
+  if (isHandshakeAwaited) {
+    setTimeout(() => {
+      if (!isHandshakeAwaited) return;
+      isHandshakeAwaited = false;
+      pointHeldFrame();
+    }, HANDSHAKE_GRACE_MS);
   }
 
   async function refresh(session) {
