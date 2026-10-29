@@ -1151,17 +1151,20 @@ describe("MessageInput send failure notice", () => {
     expect(localStorage.getItem("message-text:agent-1") ?? "").not.toContain("hello");
   });
 
-  it("takes a send the chat app never answered out of the composer once its turn lands", async () => {
-    // The chat app may have delivered it before its answer was lost.
+  it("treats a send the chat app never answered as unconfirmed, and takes it out of the composer once its turn lands", async () => {
+    // The chat app may have delivered it before its answer was lost: Force's restart could lose it,
+    // and its repeat under the same id would be answered without sending it again.
     mocks.sendMessage.mockRejectedValueOnce({ code: 0, response: null, toString: () => "no answer" });
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
-    expect(renderedText(after)).toContain("Couldn't send your message");
+    expect(renderedText(after)).toContain("Couldn't confirm your message arrived");
+    expect(findButton(after, "Send again")).toBeTruthy();
+    expect(findButton(after, "Force")).toBeUndefined();
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
 
     mocks.hasUserTurnLandedSince.mockReturnValueOnce(true);
     const landed = component.view!({ attrs: { chatId: "agent-1" } } as never);
-    expect(renderedText(landed)).not.toContain("Couldn't send your message");
+    expect(renderedText(landed)).not.toContain("Couldn't confirm your message arrived");
     expect(findByTag(landed, "textarea")?.attrs?.value).toBe("");
   });
 

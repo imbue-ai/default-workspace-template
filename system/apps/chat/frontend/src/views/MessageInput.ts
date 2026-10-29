@@ -132,6 +132,12 @@ function sendFailureKind(sendError: unknown): unknown {
   return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
 }
 
+/** The kind the notice handles a failed send as. A send that got no answer may have been delivered
+ *  before its answer was lost, so it is handled as one mngr could not confirm. */
+function noticeKindOf(sendError: unknown): SendFailureKind {
+  return isUnansweredRequest(sendError) ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
+}
+
 function messageTextKey(chatId: string): string {
   return `${MESSAGE_TEXT_KEY_PREFIX}${chatId}`;
 }
@@ -458,7 +464,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     // A Send again that is unconfirmed too keeps the first watch: the turns read before the
     // first send let a landing of either one count.
     if (
-      (describeRequestErrorKind(err) === "submission_unconfirmed" || isUnansweredRequest(err)) &&
+      noticeKindOf(err) === "submission_unconfirmed" &&
       !unconfirmedSends.some((watched) => watched.recovery === recovery)
     ) {
       unconfirmedSends = [...unconfirmedSends, { recovery, priorTurnIds }];
@@ -890,7 +896,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               actionFailureTitle = "Couldn't send your message";
               actionFailureDetail = detail;
-              actionFailureKind = describeRequestErrorKind(err);
+              actionFailureKind = noticeKindOf(err);
               isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
               actionFailureRecovery = recovery;
             }
@@ -1266,7 +1272,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             actionFailureDetail = describeRequestError(err);
             // The reason can change between attempts -- a blocked input can become an agent that
             // is gone -- and the buttons follow the kind, so it has to be re-read with the text.
-            actionFailureKind = describeRequestErrorKind(err);
+            actionFailureKind = noticeKindOf(err);
             isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
             actionFailureInFlight = null;
           } else {
@@ -1340,8 +1346,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // anything unclassified -- keeps it.
         const canRetryHelp = actionFailureKind !== "agent_unreachable";
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
-        // The text was typed and Enter sent, but nothing confirmed the agent took it, so it may
-        // already be in the agent's input or turn and a resend can deliver it twice. mngr's reason
+        // The text was typed and Enter sent but nothing confirmed the agent took it, or the chat app
+        // never answered the send, so it may already be in the agent's input or turn and a resend
+        // can deliver it twice. mngr's reason
         // here is its diagnostics (the whole pane included), not something to show the user.
         const isUnconfirmed = actionFailureKind === "submission_unconfirmed";
         const retryWording = isUnconfirmed
