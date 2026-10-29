@@ -38,10 +38,10 @@ needs a directory put on `sys.path`, and each stub says which. See
   type's `config_overrides`. Existing reviewer settings still control gates;
   the worker's disabled review/CI/fetch gates are unchanged. mngr's existing
   workspace-trust consent governs hook execution.
-- Session start: `session_start_sync.sh`, claude's `SessionStart` hook (wired in
-  `.claude/settings.json`). It regenerates a `uv.lock` that drifted from
-  `pyproject.toml` once, telling the agent to commit it, then syncs the venv
-  `--frozen`.
+- Session start: `session_start_sync.sh`, claude's and codex's `SessionStart`
+  hook (wired in `.claude/settings.json` and `.codex/hooks.json`). It never
+  relocks: it syncs the venv `--frozen` from the committed `uv.lock`, and when
+  that lock has drifted from `pyproject.toml` it tells the agent so once.
 - Claude status line: `claude_status_line.sh`, wired in `.claude/settings.json`. It prints
   nothing; it records each agent's live model state for the chat model bar.
 - Utility scripts: `forward_port.py` (port registry), `message_chat.py` (send a
