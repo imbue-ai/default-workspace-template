@@ -1113,11 +1113,12 @@ def _sends_the_transcript_does_not_hold(
 
 
 class HandoffCapabilities(FrozenModel):
-    """What a handoff (and a re-auth's resend) needs from the app state and the routes, bound by the composition root."""
+    """What a handoff (and a resend of the chat app's own) needs from the app state and the routes, bound by the
+    composition root."""
 
     model_config = {"arbitrary_types_allowed": True}
 
-    # The agent's watcher, built if need be: the summary wait and the re-auth resend read its transcript through it.
+    # The agent's watcher, built if need be: the summary wait and the resends read its transcript through it.
     ensure_watcher: Callable[[AgentInfo], TranscriptReader]
     # The stop button's path: interrupt the turn and return the queue as one block.
     drain_to_composer: Callable[[AgentInfo], str]
@@ -1365,8 +1366,9 @@ class AgentManager:
     # sent again or given up on: the snapshot's ``is_resending_after_sign_in``. Counted per agent, since
     # two sign-ins of one account can overlap and the agent is resending until the later one settles.
     _pending_resends_after_sign_in_by_agent: dict[str, int]
-    # Held for the whole of one of the agent's re-auth resends, so the resend of a second, overlapping
-    # sign-in reads the transcript only once the first one's message has landed, and does not send it again.
+    # Held for the whole of one of the agent's resends (after a sign-in, or of messages lost with its process), so
+    # another resend of it (a second, overlapping sign-in's) reads the transcript only once the first one's
+    # message has landed, and does not send it again.
     _resend_locks_by_agent: dict[str, threading.Lock]
     # The messages delivered to each agent of a harness that can lose one with its process, kept until the
     # process exits (when the ones its transcript does not hold are sent again) or they grow old.
@@ -2502,7 +2504,8 @@ class AgentManager:
     # ``chat_rebinds.py`` run the steps).
 
     def set_handoff_capabilities(self, capabilities: HandoffCapabilities) -> None:
-        """Install what a handoff, a rebind or a re-auth's resend needs from the app state.
+        """Install what a handoff, a rebind or a resend (after a sign-in, or of a message lost with its process) needs
+        from the app state.
 
         ``create_application`` calls this once, where the routes are; a manager built without
         the app (a test that never assembles it) refuses every switch and resends nothing.
