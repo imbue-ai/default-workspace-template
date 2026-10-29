@@ -42,21 +42,16 @@ Every window gets "Chat about this app" (the mngr repo's `specs/multiplayer-refi
 
 - Viewing somebody else's desktop shows it as they have it, live and read-only: the placements read gains `?of=owner` (the desktop as its owner last arranged it, from their most recently seen client with a written layout), which a viewing window reads in place of its own layout, refreshed on every `placements_updated` push for the desktop, by a slow backstop poll, and the moment the first heartbeat says who the viewer is; the pages are inert the way the overview's tiles are, the windows and the taskbar's entries take no press, and nothing a viewing window holds is saved as the viewer's layout.
 
-- The overview's rename works and is discoverable: the rename input keeps what you type through the shell's constant redraws (it was a controlled value that every redraw reset, so typing appeared dead), the thumbnail's right-click menu offers "Rename" beside "Delete desktop...", and the delete confirmation hangs above the thumbnail rather than clipping past the bottom of the screen.
+- The overview's rename works and is discoverable: the rename input keeps what you type through the shell's constant redraws (it was a controlled value that every redraw reset, so typing appeared dead), the thumbnail's right-click menu offers "Rename" beside "Delete desktop...", and the delete confirmation hangs above the thumbnail rather than clipping past the bottom of the screen, the tiles' live pages stepping aside while it is up, since they lie above everything drawn inside the overview.
 
 - The agent's hover card trades its pencil for action rows -- "Change avatar..." and "Float" -- and the tray's agent entry takes a right-click menu with the same two, the way the floating creature offers its own.
 
 - Presence reads real activity: the active/idle call used to see only the shell window's own pointer and key events, so everyone read as idle since they last touched the chrome; the app pages' `shell:input` reports now feed the heartbeat's `last_input_at`.
 
-- The owner-layout read (`?of=owner`) answers without a `client` parameter, which is how a viewing window asks for it; it used to refuse that request, so a viewed desktop showed its default (empty) layout rather than its owner's.
-
 - A person's card marks the desktop they are on ("There now", with a dot in their colour) beside the "Viewing" mark of the one you are on, read off their newest connected client as the card opens.
-
-- The overview's live tile pages step aside while a desktop's deletion is being confirmed, since the confirmation hangs up into the grid and the pages, laid above the overview's scrim, covered it.
 
 - A viewed desktop is drawn as its owner sees it: every desktop layout reports its backdrop size to the shell (`POST /api/clients/<id>/viewport`, on boot once the backdrop is measured and after each resize settles; never from the phone layout or a pulled-out window), the clients listing and the inventory carry each client's `viewport`, and the `?of=owner` placements read answers the chosen client's beside the layout. A window viewing a desktop whose owner's size is known lays the wallpaper, the shortcut grid, the windows, and their pages out in a box of that size, scaled down to fit this backdrop (never up) and centred, with a band in the owner's colour around it; the taskbar and the floating entries stay the viewer's own. With no size on record the desktop is drawn at this backdrop's size, as before.
 
-
-- A person's profile picture is served from the shell's own origin: the roster points at `GET /api/roster/<key>/picture?v=<version>`, which answers bytes the shell fetches once from the profile's URL and keeps beside the profile cache (versioned by that URL, so a newer picture is a newer address, cached by the page for good). The pages' content security policy admits no outside image, so the tray showed a monogram for everyone with a picture before.
+- A person's profile picture is served from the shell's own origin: the roster points at `GET /api/roster/<key>/picture?v=<version>`, which answers bytes the shell fetches once from the profile's URL and keeps beside the profile cache (versioned by that URL, so a newer picture is a newer address, cached by the page for good). The pages' content security policy admits no outside image.
 
 - The handshake to a page carries `isViewing`, whether its window is being looked at on somebody else's desktop, and is sent again when that changes; a terminal attaches to its session as a viewer by it.
