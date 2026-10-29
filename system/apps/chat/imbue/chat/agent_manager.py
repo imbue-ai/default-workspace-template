@@ -1092,24 +1092,20 @@ class _UnrecordedSend(FrozenModel):
 def _sends_the_transcript_does_not_hold(
     events: list[dict[str, Any]], sends: Sequence[_UnrecordedSend]
 ) -> list[_UnrecordedSend]:
-    """The ``sends`` (in the order they were sent) that no new user message of ``events`` accounts for.
+    """The ``sends`` sent after the transcript's last user message was recorded.
 
-    Each message accounts for one send only, so of two sends saying the same, a transcript holding one
-    message for them holds only the first.
+    A harness writes down the messages it takes in the order it took them, so a user message recorded after a send
+    means the send was written down too, in whatever words the harness recorded it (a bash-mode command, a notice,
+    several queued messages merged into one turn). A user message with no timestamp cannot be placed and counts as
+    recorded after every send, so a message is never sent twice on a reading that cannot tell.
     """
-    claimed_ids: set[str | None] = set()
-    lost: list[_UnrecordedSend] = []
-    for send in sends:
-        new_ids = [
-            event_id
-            for event_id in _ordered_ids_of_user_messages_saying_since(events, send.text, send.sent_after)
-            if event_id not in claimed_ids
-        ]
-        if new_ids:
-            claimed_ids.add(new_ids[0])
-        else:
-            lost.append(send)
-    return lost
+    recorded_times = [
+        parse_iso_timestamp_to_epoch(event.get("timestamp")) for event in events if event.get("type") == "user_message"
+    ]
+    if any(recorded_at is None for recorded_at in recorded_times):
+        return []
+    last_recorded_at = max((recorded_at for recorded_at in recorded_times if recorded_at is not None), default=None)
+    return [send for send in sends if last_recorded_at is None or last_recorded_at < send.sent_after]
 
 
 class HandoffCapabilities(FrozenModel):
