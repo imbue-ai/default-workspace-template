@@ -19,7 +19,7 @@ does **not** watch the config file -- you apply changes with
 
 ```ini
 [program:my-service]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "uv sync --all-packages --frozen && exec .venv/bin/my-service"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/my_service && uv sync --locked --project system/services/my_service && exec system/services/my_service/.venv/bin/my-service"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -46,7 +46,7 @@ Key fields:
   other shell syntax must be wrapped in `bash -c "..."`:
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && exec .venv/bin/foo"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/foo && uv sync --locked --project system/apps/foo && python3 system/scripts/forward_port.py --manifest system/apps/foo/app.toml --url http://localhost:8090 && exec system/apps/foo/.venv/bin/foo"
   ```
 
   The `python3 system/services/oom_priority/bin/oom_tag_service.py user` prefix is the **OOM band tag**
@@ -60,9 +60,10 @@ Key fields:
   it must be DNS-safe: lowercase letters/digits with single hyphens
   (underscores are tolerated only for legacy names like `system_interface`),
   not `localhost`, and not starting with `host-` or `agent-`. The app then
-  execs its entry point from the workspace venv (`.venv/bin/foo`, which
-  `uv sync --all-packages` installs), never through `uv run`: the venv is the
-  one install of every Python app and service. A registration with no app directory (a preview, an isolated test
+  execs its entry point from a venv, never through `uv run`: a built-in from the
+  root venv (`.venv/bin/foo`), and a user-built app or service from its own,
+  after syncing it (`system/apps/foo/.venv/bin/foo`; see "User packages are
+  standalone projects" in [running-python.md](running-python.md)). A registration with no app directory (a preview, an isolated test
   server, the owner-exec service) keeps the manifest-less
   `forward_port.py --name <name> --url <url>` form with `--internal` or
   `--no-icon`, and never passes `--program`.

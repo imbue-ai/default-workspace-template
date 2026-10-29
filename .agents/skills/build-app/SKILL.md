@@ -172,13 +172,13 @@ Optional:
 - `--port`: explicit port; auto-picked if omitted.
 - `--extra-dep`: repeatable. Add libraries beyond `flask`/`flask-sock`
   (e.g. `--extra-dep "jinja2>=3.1" --extra-dep "anthropic>=0.40"`).
-- `--skip-uv-sync`: skip the final manifest check and
-  `uv sync --all-packages` (for fast iteration / dry runs).
+- `--skip-uv-sync`: skip the final manifest check and the app's own lock and
+  venv (for fast iteration / dry runs).
 
 The scaffolder fails non-zero with a clear stderr message if the lib
 already exists, the name is reserved or invalid, the description is
 empty, spans lines or is over 200 characters, the requested port
-is taken, or the manifest check or `uv sync` fails.
+is taken, or the manifest check, the app's `uv lock` or its `uv sync` fails.
 
 What gets generated:
 
@@ -208,11 +208,20 @@ What gets generated:
   editing it). Anything you build for this app outside `system/apps/<package>/`
   -- a skill that drives it, a script, a doc -- is registered in the same file
   under `[[references]]` with a `note` naming the surface it uses.
-- `system/apps/<package>/pyproject.toml` -- declares
-  `[project.scripts] <name> = "<package>.runner:main"`, the entry point
-  `uv sync --all-packages` installs into the workspace venv, and makes the directory its own
-  `ty` project (an empty `[tool.ty]` table and a pinned `ty` dev dependency)
-  for the ratchets' type check.
+- `system/apps/<package>/pyproject.toml` -- the app is a **standalone uv
+  project**, not a root workspace member: it declares
+  `[project.scripts] <name> = "<package>.runner:main"`, the entry point its own
+  sync installs into its own `.venv`; depends on the workspace's shared code
+  (`app-schema`) through an editable path source, so that code is shared live
+  and `imbue-common` comes from the root's mngr pin; and makes the directory its
+  own `ty` project (an empty `[tool.ty]` table and a pinned `ty` dev dependency)
+  for the ratchets' type check. Never add an `imbue-common` source of your own:
+  a second source for the same package fails to lock.
+- `system/apps/<package>/uv.lock` -- the app's own lock, seeded from the root
+  `uv.lock` so the app starts on the built-ins' versions and resolves from the
+  warm cache.
+- `system/apps/<package>/.venv` -- the app's own venv, a link to a directory
+  beside the uv cache (`system/scripts/workspace_bare_scripts/venv_links.py`).
 - `system/apps/<package>/src/<package>/__init__.py` -- empty.
 - `system/apps/<package>/src/<package>/runner_test.py` -- the one test every
   app starts with: its API document at `/api/schema` says what its manifest
@@ -256,18 +265,17 @@ What gets generated:
   zero, plus `test_no_type_errors`, which fails on any `ty` error in the app.
 - `system/apps/<package>/README.md` -- one-line description.
 
-What gets updated and installed -- no shared file is authored, which is what
-lets two agents scaffold two apps at once (`uv.lock` is the exception: `uv sync`
-regenerates it, but it is derived, so it stays out of a creation's footprint):
+What gets updated and installed -- no shared file is written, which is what
+lets two agents scaffold two apps at once:
 
-- Root `pyproject.toml` -- untouched. The `system/apps/*` member glob picks the
-  package up and `uv sync --all-packages` installs it, so a scaffolded app
-  needs no root entry at all.
+- Root `pyproject.toml` and `uv.lock` -- untouched. The root `members` names
+  only the built-in packages; an app it does not name is a standalone project,
+  so its dependencies never move the chat's or another app's.
 - `system/supervisord.conf.d/<name>.conf` -- writes the app's own program block:
 
   ```ini
   [program:<name>]
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec .venv/bin/<name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/<package> && uv sync --locked --project system/apps/<package> && python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec system/apps/<package>/.venv/bin/<name>"
   directory=/home/user/workspace
   autostart=true
   autorestart=true
@@ -281,13 +289,15 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   FATAL rather than restarting a broken app several times a second for the life
   of the workspace. Built-in services deliberately retry forever instead.
 
-  The command ends in `exec .venv/bin/<name>`, not the name under `uv run`, so
-  the app is the process supervisord tagged rather than a child of a wrapper.
-  That is the console script `uv sync --all-packages` writes into the workspace
-  venv, the one install of the app (and of every Python app). So always sync
-  with `--all-packages`: a root-closure-scoped `uv sync` prunes the member (a
-  scaffolded app is not a root dependency), deletes that script, and the next
-  restart is a spawn error with nothing to recover it.
+  Each start links the app's venv (a rebuilt root filesystem loses the venv's
+  directory, and uv refuses a dangling link), syncs it from the app's own lock
+  with `--locked` (about 30 ms when it is current, and no network), and then
+  execs the entry point from the app's own `.venv/bin`, not the name under
+  `uv run`, so the app is the process supervisord tagged rather than a child of
+  a wrapper. A lock that no longer matches the app's `pyproject.toml` (after a
+  hand edit), or a failed sync, fails the start with uv's error in the app's
+  stderr log, and nothing else: fix the lock (`uv lock` in the app's directory)
+  and restart.
 
   An app that needs a credential (an API key the user supplied through the
   `connect-external-service` skill's secret card) declares it in `app.toml` and
@@ -307,7 +317,7 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   ```
 
   ```ini
-  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec python3 system/scripts/with_secrets.py data/.secrets/example.env -- .venv/bin/<name>"
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/<package> && uv sync --locked --project system/apps/<package> && python3 system/scripts/forward_port.py --manifest system/apps/<package>/app.toml --url http://localhost:<port> && exec python3 system/scripts/with_secrets.py data/.secrets/example.env -- system/apps/<package>/.venv/bin/<name>"
   ```
 
   A preview (`update-app`'s `preview_app.py`) runs the app under the same
@@ -323,12 +333,13 @@ regenerates it, but it is derived, so it stays out of a creation's footprint):
   `oom_tag_service.py user` prefix tags this user-created app so it is
   shed before any built-in service under memory pressure (see
   `system/services/oom_priority/README.md`).
-- The workspace venv: the scaffold's final `uv sync --all-packages` installs
-  the package (editable) and its `<name>` entry point into `.venv`, which is
-  what the program line runs. A dependency you add later, or a new console
-  script, takes another `uv sync --all-packages` (see `update-app`). The
-  root `pyproject.toml` is not edited: the `system/apps/*` member glob already
-  covers the package.
+- The app's own venv: the scaffold's `uv sync --locked` installs the package
+  (editable) and its `<name>` entry point into the app's `.venv`, which is what
+  the program line runs; its tests run from it too (the sync installs the `dev`
+  group). Add a dependency with `uv add <package>` **in the app's directory**:
+  that changes only the app's `pyproject.toml`, `uv.lock` and venv, never the
+  root lock or the chat's environment. A one-off run of one of the app's
+  commands is `uv run --no-sync --project system/apps/<package> <command>`.
 
 If you passed `--start` to `scaffold_flask_lib.py`, the service is already registered and running healthy.
 If you ran without `--start`, tell supervisord to pick up the new program:

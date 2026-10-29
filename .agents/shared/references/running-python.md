@@ -113,18 +113,55 @@ You never need to know which tier a script is in: follow the rule at the top
 ## Long-running processes: sync, then `exec` the entry point
 
 A supervisord program (or anything else that stays up) runs its entry point
-directly from the venv:
+directly from a venv, never under `uv run`. A built-in one runs from the root
+venv:
 
 ```ini
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "uv sync --all-packages --frozen && exec .venv/bin/my-service"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py system-services bash -c "uv sync --all-packages --frozen && exec .venv/bin/some-built-in-service"
 ```
 
 Under `uv run`, a `uv` process would stay resident as the program's parent
 for its whole life (about 19 MB each), sit between supervisord and the
 program, and could relock the workspace on every restart. The `--frozen`
 sync makes sure the entry point exists and matches the committed lock without
-ever rewriting it. An app with an `app.toml` runs its own tool's entry point
-instead (see `service-processes.md`).
+ever rewriting it.
+
+## User packages are standalone projects
+
+Every Python package the user's agents create under `system/apps`,
+`system/services` or `system/libs` is its own uv project: its own
+`pyproject.toml`, `uv.lock` and `.venv`, and not a member of the root
+workspace (the root `pyproject.toml`'s `members` names only the built-in
+packages). So a dependency one of them adds never moves the versions the chat,
+the shell or another user package run on, and two user packages can pin
+different versions of the same library. User skills stay in the shared
+workspace. The rules:
+
+- **Change its dependencies in its own directory:** `uv add <package>` (or
+  `uv lock` after a hand edit, then `uv sync`) in `system/<kind>/<package>/`.
+  Never `uv sync --all-packages` for it, and never add it to the root
+  `members`.
+- **Depend on shared code by editable path** (`app-schema`,
+  `workspace-layout`, a built-in app's package):
+  `[tool.uv.sources] app-schema = { path = "../../libs/app_schema", editable = true }`.
+  The library's own workspace sources then apply in the package's lock, so
+  `imbue-common` and the mngr packages come from the root's mngr pin; never
+  write a source for `imbue-common` yourself (a second source for one package
+  fails to lock).
+- **Its program syncs and execs its own venv at start:** link its venv, sync
+  its own project with `--locked`, then exec a script from its own `.venv/bin`:
+
+  ```ini
+  command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/my_service && uv sync --locked --project system/services/my_service && exec system/services/my_service/.venv/bin/my-service"
+  ```
+
+  A stale lock or a failed sync fails that program's start and nothing else.
+- **A one-off of its command** runs from its project:
+  `uv run --no-sync --project system/<kind>/<package> <command>`. Its tests run
+  the same way from its directory (`uv run --no-sync pytest`), against its own
+  venv, which holds its `dev` group.
+- `system/test_user_packages_are_standalone.py` checks every user package
+  against these rules and its lock with `uv lock --check`.
 
 ## Keep startup imports light
 

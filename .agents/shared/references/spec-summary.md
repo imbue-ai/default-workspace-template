@@ -203,10 +203,11 @@ the one workspace lock and its package installs into the root venv:
   inside the function that runs it. A test fails an entry that loads one of
   those at import time. Code whose signatures name a heavy library's types
   goes in a module of its own, imported inside the subcommands that need it.
-- A dependency must co-resolve with the rest of the workspace, the same as an
-  app's. After adding or changing one, run `uv lock` and then
-  `uv sync --all-packages`, and commit `uv.lock` with the change; a clash
-  surfaces at `uv lock`.
+- A skill is a member of the shared workspace, so a dependency must co-resolve
+  with the built-in packages'. After adding or changing one, run `uv lock` and
+  then `uv sync --all-packages`, and commit `uv.lock` with the change; a clash
+  surfaces at `uv lock`. A path dependency on a user lib (a standalone project
+  under `system/libs`) pulls that lib's dependencies into the shared lock too.
 
 A skill whose whole Python is one script that imports only the standard
 library may instead be a **bare skill**: the script is

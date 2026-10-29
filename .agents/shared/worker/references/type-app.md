@@ -20,9 +20,9 @@ paths.
   and routes), plus its `pyproject.toml`, `README.md`, and
   `test_<package>_ratchets.py`. This is the scope file's `primary`.
 - The app's program entry at `system/supervisord.conf.d/<name>.conf` -- you
-  normally do not touch it; the scaffold created it. The root `pyproject.toml`
-  needs no entry at all: the `system/apps/*` workspace member glob picks the
-  package up and `uv sync --all-packages` installs it.
+  normally do not touch it; the scaffold created it. The app is a standalone uv
+  project with its own `uv.lock` and `.venv` (`uv add` in its directory changes
+  its dependencies), so the root `pyproject.toml` and `uv.lock` need no entry.
 - A background service co-owned by the app (a `<app>-<role>` program) also
   lives in the app's folder; treat it as part of the app, and its
   `[program:<app>-<role>]` block as one more `wiring` section beside the app's
