@@ -36,7 +36,11 @@ import {
 import type { ProviderAccount } from "../models/Providers";
 import { beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
-import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
+import {
+  describeRequestError,
+  describeRequestErrorKind,
+  isUnansweredRequest,
+} from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
   areAccountsLoaded,
@@ -130,6 +134,12 @@ function dropOutgoingNoTurnWillRetire(chatId: string, outgoingId: string, status
 
 function sendFailureKind(sendError: unknown): unknown {
   return (sendError as { response?: { kind?: unknown } | null } | null)?.response?.kind;
+}
+
+/** The kind the notice handles a failed send as. A send that got no answer may have been delivered
+ *  before its answer was lost, so it is handled as one mngr could not confirm. */
+function noticeKindOf(sendError: unknown): SendFailureKind {
+  return isUnansweredRequest(sendError) ? "submission_unconfirmed" : describeRequestErrorKind(sendError);
 }
 
 function messageTextKey(chatId: string): string {
@@ -428,6 +438,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     text: string;
     sentText: string;
     attachments: readonly ComposerAttachment[];
+    /** The failed send's id: a retry goes under it, so the chat app answers it as it answered the
+     *  first when the first was delivered after all, rather than delivering it twice. */
+    messageId: string;
   };
   let actionFailureDetail: string | null = null;
   // A failed Stop shares this notice, and telling the user their message could not be sent when
@@ -443,7 +456,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   const authCommandNotice = makeNoticeDialog();
   // mngr's classification of the failure, which decides which recoveries are worth offering.
   let actionFailureKind: SendFailureKind = "unknown";
-  // A send mngr typed into the agent but could not confirm: its text went back to the composer
+  // A send mngr typed into the agent but could not confirm, or one the chat app never answered
+  // (it may have delivered it before the answer was lost): its text went back to the composer
   // like any failed send's, but the agent may have it. Once its turn reaches the transcript
   // the copy comes back out and its notice closes, so the user does not send it a second time.
   // Kept past Cancel, which leaves the copy in the composer just the same. One per send, across
@@ -454,7 +468,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     // A Send again that is unconfirmed too keeps the first watch: the turns read before the
     // first send let a landing of either one count.
     if (
-      describeRequestErrorKind(err) === "submission_unconfirmed" &&
+      noticeKindOf(err) === "submission_unconfirmed" &&
       !unconfirmedSends.some((watched) => watched.recovery === recovery)
     ) {
       unconfirmedSends = [...unconfirmedSends, { recovery, priorTurnIds }];
@@ -875,7 +889,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
           restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
-          const recovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
+          const recovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments, messageId };
           watchForUnconfirmedTurn(err, recovery, priorTurnIds);
           catchUpOnSignedOutAccount(err);
           // Notices only if they are still on the agent that failed -- this catch runs after an
@@ -886,7 +900,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             } else {
               actionFailureTitle = "Couldn't send your message";
               actionFailureDetail = detail;
-              actionFailureKind = describeRequestErrorKind(err);
+              actionFailureKind = noticeKindOf(err);
               isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
               actionFailureRecovery = recovery;
             }
@@ -1238,7 +1252,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       async function repeatFailedSend(recovery: SendRecovery): Promise<void> {
         // Paint the same optimistic bubble the normal send path paints, so a retried message is
         // not simply absent from the transcript until the backend catches up.
-        const messageId = mintMessageId();
+        const messageId = recovery.messageId;
         const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
         let priorTurnIds: ReadonlySet<string> = new Set();
         try {
@@ -1262,7 +1276,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             actionFailureDetail = describeRequestError(err);
             // The reason can change between attempts -- a blocked input can become an agent that
             // is gone -- and the buttons follow the kind, so it has to be re-read with the text.
-            actionFailureKind = describeRequestErrorKind(err);
+            actionFailureKind = noticeKindOf(err);
             isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
             actionFailureInFlight = null;
           } else {
@@ -1336,9 +1350,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // anything unclassified -- keeps it.
         const canRetryHelp = actionFailureKind !== "agent_unreachable";
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
-        // The text was typed and Enter sent but nothing confirmed the agent took it, so it may
-        // already be in the agent's input or turn and a resend can deliver it twice. The notice shows
-        // its own sentence: mngr's reason for this kind is its diagnostics (the whole pane included).
+        // The text was typed and Enter sent but nothing confirmed the agent took it, or the chat app
+        // never answered the send, so it may already be in the agent's input or turn and a resend
+        // can deliver it twice. The notice shows its own sentence: mngr's reason for this kind is its
+        // diagnostics (the whole pane included), and an unanswered send has no reason at all.
         const isUnconfirmed = actionFailureKind === "submission_unconfirmed";
         const retryWording = isUnconfirmed
           ? { label: "Send again", inFlight: "Sending…", tooltip: "Sends the message again, even if the agent has it" }

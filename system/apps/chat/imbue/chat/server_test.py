@@ -1080,6 +1080,51 @@ def test_send_message_success() -> None:
     assert messenger.sent == [(agent_id, "hello")]
 
 
+def test_a_send_repeated_under_its_id_is_delivered_once() -> None:
+    """A page that got no answer sends again under the same id; the chat app answers it without delivering twice."""
+    agent_id = "agent-00000000000000000000000000000001"
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="test-agent",
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        first = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-1"})
+        repeat = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-1"})
+        other = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-2"})
+
+    assert [first.status_code, repeat.status_code, other.status_code] == [200, 200, 200]
+    assert repeat.get_json() == first.get_json()
+    assert messenger.sent == [(agent_id, "hello"), (agent_id, "hello")]
+
+
+def test_a_repeat_of_a_refused_send_gets_the_refusal_while_a_plain_send_under_its_id_is_sent_afresh() -> None:
+    """The page's repeat (``is_repeat``) of an unconfirmed send must not type it again; the user's Send again does."""
+    agent_info = _agent_info()
+    agent_id = agent_info.id
+    messenger = RecordingMngrMessenger(succeeds=False, failure_kind="submission_unconfirmed")
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    url = f"/api/chats/{agent_id}/message"
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        first = client.post(url, json={"message": "hello", "message_id": "m-1"})
+        repeat = client.post(url, json={"message": "hello", "message_id": "m-1", "is_repeat": True})
+        assert messenger.sent == [(agent_id, "hello")]
+        send_again = client.post(url, json={"message": "hello", "message_id": "m-1"})
+
+    assert [first.status_code, repeat.status_code, send_again.status_code] == [500, 500, 500]
+    assert first.get_json()["kind"] == "submission_unconfirmed"
+    assert repeat.get_json() == first.get_json()
+    assert messenger.sent == [(agent_id, "hello"), (agent_id, "hello")]
+
+
 def test_a_send_to_a_chat_launched_at_sign_in_carries_the_seeded_conversation_once(
     tmp_path: Path, signed_in_account: str
 ) -> None:

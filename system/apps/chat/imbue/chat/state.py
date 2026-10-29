@@ -34,6 +34,7 @@ from imbue.chat.reply_drafts import ReplyDraftReader
 from imbue.chat.reply_drafts import capture_tmux_session_pane
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
+from imbue.chat.send_ledger import SendLedger
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
@@ -97,6 +98,8 @@ class ChatAppState(MutableModel):
     # The intakes held for the chat root to apply (``chat_intakes.py``): drafts, choices, and first messages
     # that need an account; in memory, so a restart drops them.
     pending_intakes: PendingIntakeStore = Field(default_factory=PendingIntakeStore)
+    # Each send's answer by its send-time id, so the page can repeat a send it got no answer to.
+    send_ledger: SendLedger = Field(default_factory=SendLedger)
     event_queues: AgentEventQueues
     chat_namer: ChatNamer | None = Field(
         default=None,

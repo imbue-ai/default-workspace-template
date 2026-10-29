@@ -199,6 +199,8 @@ from imbue.chat.request_helpers import require_loopback
 from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import NoticeDeliveryError
 from imbue.chat.secret_requests import SecretRequestChatBridge
+from imbue.chat.send_ledger import RepeatedSendOutcomeUnknownError
+from imbue.chat.send_ledger import SendStillUnderWayError
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
@@ -210,6 +212,7 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
 
 logger = _loguru_logger
@@ -954,7 +957,45 @@ def _send_message_endpoint(chat_id: str) -> Response:
     if not agent_manager.is_agent_list_known():
         return _agent_list_not_known_response()
     send_message_request = parse_request_body(SendMessageRequest)
-    message_id = send_message_request.message_id or uuid4().hex
+    if not send_message_request.message_id:
+        return _send_message(state, chat_id, send_message_request, uuid4().hex)
+    # A page that got no answer sends the same message again under the same id; the ledger answers
+    # the repeat as the first send was answered rather than delivering it twice.
+    message_id = send_message_request.message_id
+    try:
+        return state.send_ledger.send_once(
+            f"{chat_id}:{message_id}",
+            lambda: _send_message(state, chat_id, send_message_request, message_id),
+            _replay_send_answer,
+            send_message_request.is_repeat,
+        )
+    except SendStillUnderWayError:
+        return error_response("The message is still on its way.", 503)
+    except RepeatedSendOutcomeUnknownError:
+        return model_response(
+            SendFailureResponse(
+                detail="Couldn't confirm your message arrived.", kind=SendFailureKind.SUBMISSION_UNCONFIRMED.value
+            ),
+            500,
+        )
+
+
+def _replay_send_answer(data: bytes, status: int) -> Response:
+    """A send's answer again, for the request that repeated it: held (202), delivered, or the refusal of the send
+    it repeats: an ``ErrorResponse``, or a ``SendFailureResponse`` where the refusal carried its kind."""
+    if status >= 400:
+        body = json.loads(data)
+        refusal = SendFailureResponse.model_validate(body) if "kind" in body else ErrorResponse.model_validate(body)
+        return model_response(refusal, status)
+    if status == 202:
+        return model_response(HeldSendResponse.model_validate_json(data), 202)
+    return model_response(SendMessageResponse.model_validate_json(data), status)
+
+
+def _send_message(
+    state: ChatAppState, chat_id: str, send_message_request: SendMessageRequest, message_id: str
+) -> Response:
+    """The message route's send itself, once per send-time id."""
     if _find_active_agent(chat_id) is None:
         held = _hold_send_for_chat_being_created(state, chat_id, send_message_request, message_id)
         if held is not None:
