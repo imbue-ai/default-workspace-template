@@ -25,9 +25,14 @@ import hashlib
 import importlib.util
 import json
 import os
+import shlex
+import shutil
+import socket
 import subprocess
 import sys
+import time
 import tomllib
+import urllib.request
 from pathlib import Path
 from types import ModuleType
 
@@ -141,7 +146,13 @@ def _scaffold(root: Path, name: str, *extra: str) -> subprocess.CompletedProcess
 
 def _write_inbox_status_lib(repo_root: Path) -> Path:
     return scaffold_flask_lib._write_lib(
-        repo_root, "inbox-status", "inbox status dashboard", "Inbox status", 8081, [], _ICON
+        repo_root,
+        "inbox-status",
+        "inbox status dashboard",
+        "Inbox status",
+        8081,
+        [],
+        _ICON,
     )
 
 
@@ -169,8 +180,8 @@ def test_a_scaffolded_app_gives_up_instead_of_crash_looping(tmp_path: Path) -> N
 def test_scaffold_authors_only_its_own_files(tmp_path: Path) -> None:
     """The program lands in its own drop-in; no shared file is edited.
 
-    `uv.lock` is the one shared file a real scaffold rewrites, and only because
-    `uv sync` regenerates it -- skipped here, as it is derived rather than authored.
+    The app is a standalone project, so a real scaffold writes its own `uv.lock` and
+    never the root one (the acceptance test below locks and syncs for real).
     """
     root = _make_workspace(
         tmp_path / "workspace", {"browser": 8081, "host-backup": None}
@@ -260,7 +271,11 @@ def test_the_scaffold_writes_the_port_it_picked(tmp_path: Path) -> None:
     }
     runner = (root / "system/apps/news/src/news/runner.py").read_text()
     assert runner == scaffold_flask_lib._lib_runner(
-        "news", "news", _DESCRIPTION, program_port, scaffold_flask_lib._display_name(_DESCRIPTION, None)
+        "news",
+        "news",
+        _DESCRIPTION,
+        program_port,
+        scaffold_flask_lib._display_name(_DESCRIPTION, None),
     )
     assert program_port >= scaffold_flask_lib.LOWEST_AUTO_PORT
     assert program_port not in {8080, 8081}
@@ -424,7 +439,9 @@ def test_a_scaffolded_app_passes_its_own_tests(tmp_path: Path) -> None:
     init_git_repository(tmp_path)
     commit_everything(tmp_path, "scaffold inbox-status")
     # Options the outer run was given are not the app's: a `-k` naming this test would deselect all of its tests.
-    inherited = {name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"}
+    inherited = {
+        name: value for name, value in os.environ.items() if name != "PYTEST_ADDOPTS"
+    }
 
     result = subprocess.run(
         [
@@ -462,7 +479,9 @@ def test_display_name_refuses_what_the_manifest_would_not_take(candidate: str) -
 
 
 @pytest.mark.parametrize("candidate", ["", "   ", "two\nlines", "x" * 201])
-def test_a_description_the_manifest_would_refuse_is_refused_before_anything_is_written(candidate: str) -> None:
+def test_a_description_the_manifest_would_refuse_is_refused_before_anything_is_written(
+    candidate: str,
+) -> None:
     with pytest.raises(SystemExit):
         scaffold_flask_lib._check_description(candidate)
 
@@ -479,7 +498,11 @@ def test_the_display_name_limit_matches_the_library() -> None:
 
 def test_the_runner_page_connects_to_the_shell_and_installs_the_element_menu() -> None:
     source = scaffold_flask_lib._lib_runner(
-        "inbox-status", "inbox_status", "inbox status dashboard", 8081, "inbox status dashboard"
+        "inbox-status",
+        "inbox_status",
+        "inbox status dashboard",
+        8081,
+        "inbox status dashboard",
     )
     assert 'from "/_static/app_contract.js"' in source
     assert 'from "/_static/context_menu.js"' in source
@@ -506,7 +529,7 @@ def test_a_secrets_file_that_is_not_a_slug_is_refused_before_anything_is_written
     ok = _scaffold(root, "news", "--secrets-file", "news-api")
     assert ok.returncode == 0, ok.stderr
     assert (
-        "data/.secrets/news-api.env -- .venv/bin/news"
+        "data/.secrets/news-api.env -- system/apps/news/.venv/bin/news"
         in (root / "system/supervisord.conf.d/news.conf").read_text()
     )
 
@@ -520,14 +543,14 @@ def test_a_declared_secrets_file_wraps_the_entry_point_in_with_secrets(
     scaffold_flask_lib._write_supervisord_program(
         plain, "widget-app", "widget_app", 8090, None
     )
-    assert '&& exec .venv/bin/widget-app"' in plain.read_text()
+    assert '&& exec system/apps/widget_app/.venv/bin/widget-app"' in plain.read_text()
     wrapped = tmp_path / "wrapped.conf"
     scaffold_flask_lib._write_supervisord_program(
         wrapped, "widget-app", "widget_app", 8090, "widget"
     )
     assert (
-        '&& exec python3 system/scripts/with_secrets.py data/.secrets/widget.env -- .venv/bin/widget-app"'
-        in wrapped.read_text()
+        "&& exec python3 system/scripts/with_secrets.py data/.secrets/widget.env"
+        ' -- system/apps/widget_app/.venv/bin/widget-app"' in wrapped.read_text()
     )
 
 
@@ -548,10 +571,16 @@ def test_the_shell_module_paths_match_the_library() -> None:
     )
 
 
-def _import_scaffolded_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+def _import_scaffolded_runner(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> ModuleType:
     """Write a scaffolded runner.py into ``tmp_path``, with one shell module beside it, and import it."""
     source = scaffold_flask_lib._lib_runner(
-        "inbox-status", "inbox_status", "inbox status dashboard", 8081, "inbox status dashboard"
+        "inbox-status",
+        "inbox_status",
+        "inbox status dashboard",
+        8081,
+        "inbox status dashboard",
     )
     runner = tmp_path / "runner.py"
     runner.write_text(source)
@@ -589,20 +618,29 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
         "version": "1.0",
         "description": "inbox status dashboard",
     }
-    assert set(document["paths"]) == {"/", "/_csp-report", "/_static/{basename}", "/health"}
+    assert set(document["paths"]) == {
+        "/",
+        "/_csp-report",
+        "/_static/{basename}",
+        "/health",
+    }
     # The scaffold's route table: the health probe answers its model through the table, and the page and the
     # shell modules say why they carry no schema.
     health = client.get("/health")
     assert (health.status_code, health.get_json()) == (200, {"status": "ok"})
-    assert document["paths"]["/health"]["get"]["responses"]["200"]["content"]["application/json"]["schema"] == {
-        "$ref": "#/components/schemas/HealthResponse"
-    }
+    assert document["paths"]["/health"]["get"]["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"] == {"$ref": "#/components/schemas/HealthResponse"}
     assert "HealthResponse" in document["components"]["schemas"]
     assert NO_SCHEMA_KEY in document["paths"]["/"]["get"]
     assert NO_SCHEMA_KEY in document["paths"]["/_static/{basename}"]["get"]
     assert NO_SCHEMA_KEY in document["paths"]["/_csp-report"]["post"]
     # The page's policy admits its one inline script by the hash of the body as served, and nothing inline beyond it.
-    body = page.get_data(as_text=True).split('<script type="module">', 1)[1].split("</script>", 1)[0]
+    body = (
+        page.get_data(as_text=True)
+        .split('<script type="module">', 1)[1]
+        .split("</script>", 1)[0]
+    )
     digest = base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
     policy = page.headers["Content-Security-Policy"]
     assert f"script-src 'self' 'report-sample' 'sha256-{digest}';" in policy
@@ -612,7 +650,9 @@ def test_the_runner_serves_the_shell_modules_and_nothing_else(
     assert "Content-Security-Policy" not in client.get("/health").headers
 
 
-def test_the_runner_logs_what_its_policy_blocked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_the_runner_logs_what_its_policy_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A browser's report of a blocked resource is logged as an error naming the resource, the page and the directive.
 
     That line is how an agent learns a page pulled in something the policy does not admit: the
@@ -625,7 +665,10 @@ def test_the_runner_logs_what_its_policy_blocked(tmp_path: Path, monkeypatch: py
     client = _import_scaffolded_runner(tmp_path, monkeypatch).app.test_client()
     logged: list[str] = []
     sink_id = logger.add(
-        lambda message: logged.append(f"{message.record['level'].name} {message.record['message']}"), level="DEBUG"
+        lambda message: logged.append(
+            f"{message.record['level'].name} {message.record['message']}"
+        ),
+        level="DEBUG",
     )
     try:
         report = client.post(
@@ -678,7 +721,9 @@ def test_the_runner_logs_what_its_policy_blocked(tmp_path: Path, monkeypatch: py
             }
         }
         assert client.post("/_csp-report", json=from_extension).status_code == 204
-        assert client.post("/_csp-report", json=["not", "a", "report"]).status_code == 204
+        assert (
+            client.post("/_csp-report", json=["not", "a", "report"]).status_code == 204
+        )
         assert client.post("/_csp-report", data=b"\x00garbage").status_code == 204
         assert logged == []
     finally:
@@ -687,7 +732,11 @@ def test_the_runner_logs_what_its_policy_blocked(tmp_path: Path, monkeypatch: py
 
 def test_the_runner_does_not_use_reloader() -> None:
     source = scaffold_flask_lib._lib_runner(
-        "inbox-status", "inbox_status", "inbox status dashboard", 8081, "inbox status dashboard"
+        "inbox-status",
+        "inbox_status",
+        "inbox status dashboard",
+        8081,
+        "inbox status dashboard",
     )
     assert "use_reloader=False" in source
 
@@ -706,7 +755,11 @@ def test_the_runner_module_evaluates_its_environment_reads(tmp_path: Path) -> No
     """The runner reads its port and data dir from the environment at import; a
     runner whose imports do not cover that read crashes before serving anything."""
     source = scaffold_flask_lib._lib_runner(
-        "inbox-status", "inbox_status", "inbox status dashboard", 8081, "inbox status dashboard"
+        "inbox-status",
+        "inbox_status",
+        "inbox status dashboard",
+        8081,
+        "inbox status dashboard",
     )
     namespace: dict[str, object] = {"__name__": "inbox_status.runner"}
 
@@ -714,3 +767,133 @@ def test_the_runner_module_evaluates_its_environment_reads(tmp_path: Path) -> No
 
     assert namespace["PORT"] == 8081
     assert namespace["DATA_DIR"] == Path("data/.apps/inbox-status")
+
+
+def _workspace_for_a_real_lock(root: Path) -> Path:
+    """A workspace uv can resolve a scaffolded app against, without the whole tree.
+
+    The root pyproject and lock as they are, every root member's pyproject (uv reads them
+    to discover the workspace), the full source of the two libraries a scaffolded app
+    installs, and the venv-link helper its program line runs.
+    """
+    root.mkdir(parents=True)
+    shutil.copy(_REPO_ROOT / "pyproject.toml", root / "pyproject.toml")
+    shutil.copy(_REPO_ROOT / "uv.lock", root / "uv.lock")
+    members = tomllib.loads((_REPO_ROOT / "pyproject.toml").read_text())["tool"]["uv"][
+        "workspace"
+    ]["members"]
+    for member in members:
+        for directory in _REPO_ROOT.glob(member):
+            relative = directory.relative_to(_REPO_ROOT)
+            (root / relative).mkdir(parents=True, exist_ok=True)
+            shutil.copy(
+                directory / "pyproject.toml", root / relative / "pyproject.toml"
+            )
+    for library in ("system/libs/app_schema", "system/libs/app_manifest"):
+        shutil.rmtree(root / library)
+        shutil.copytree(
+            _REPO_ROOT / library,
+            root / library,
+            ignore=shutil.ignore_patterns(".venv", "__pycache__"),
+        )
+    helper = Path("system/scripts/workspace_bare_scripts/venv_links.py")
+    (root / helper.parent).mkdir(parents=True, exist_ok=True)
+    shutil.copy(_REPO_ROOT / helper, root / helper)
+    (root / "system/supervisord.conf.d").mkdir(parents=True)
+    (root / "system/supervisord.conf").write_text(_MAIN_CONF)
+    return root
+
+
+def _free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+@pytest.mark.acceptance
+@pytest.mark.timeout(600)
+def test_a_scaffolded_app_is_a_standalone_project_that_boots_from_its_own_venv(
+    tmp_path: Path,
+) -> None:
+    root = _workspace_for_a_real_lock(tmp_path / "workspace")
+    port = _free_port()
+    before_lock = (root / "uv.lock").read_text()
+
+    result = _scaffold_for_real(root, "widget-check", port)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    app = root / "system/apps/widget_check"
+    # Its own lock and a linked venv; the root lock is untouched.
+    assert (app / "uv.lock").is_file()
+    assert (app / ".venv").is_symlink()
+    assert (root / "uv.lock").read_text() == before_lock
+    lock = tomllib.loads((app / "uv.lock").read_text())
+    by_name = {package["name"]: package for package in lock["package"]}
+    root_lock = tomllib.loads(before_lock)
+    root_versions = {
+        package["name"]: package.get("version") for package in root_lock["package"]
+    }
+    # Seeded from the root lock: a package both use stays on the built-ins' version, and
+    # imbue-common comes from the root's mngr pin through app-schema's sources.
+    assert by_name["flask"]["version"] == root_versions["flask"]
+    assert by_name["imbue-common"]["source"] == next(
+        package["source"]
+        for package in root_lock["package"]
+        if package["name"] == "imbue-common"
+    )
+    # The program line, run as supervisord would (less the registration with the shell,
+    # which needs a live workspace), boots the app from its own venv.
+    command = configparser.RawConfigParser()
+    command.read(root / "system/supervisord.conf.d/widget-check.conf")
+    words = shlex.split(command.get("program:widget-check", "command"))
+    steps = [step.strip() for step in words[words.index("-c") + 1].split("&&")]
+    script = " && ".join(step for step in steps if "forward_port" not in step)
+    assert script.endswith("exec system/apps/widget_check/.venv/bin/widget-check")
+    booted = subprocess.Popen(
+        ["bash", "-c", script],
+        cwd=root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        body = None
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline and booted.poll() is None:
+            try:
+                with urllib.request.urlopen(
+                    f"http://127.0.0.1:{port}/health", timeout=1
+                ) as response:
+                    body = json.loads(response.read())
+                    break
+            except OSError:
+                time.sleep(0.2)
+        assert body == {"status": "ok"}, booted.stdout.read() if booted.stdout else ""
+    finally:
+        booted.terminate()
+        booted.wait(timeout=10)
+
+
+def _scaffold_for_real(
+    root: Path, name: str, port: int
+) -> subprocess.CompletedProcess[str]:
+    icon = root.parent / "icon.svg"
+    icon.write_text(_ICON)
+    return subprocess.run(
+        [
+            sys.executable,
+            str(_SCRIPT),
+            "--name",
+            name,
+            "--description",
+            _DESCRIPTION,
+            "--icon-file",
+            str(icon),
+            "--repo-root",
+            str(root),
+            "--port",
+            str(port),
+        ],
+        capture_output=True,
+        text=True,
+    )

@@ -316,16 +316,18 @@ def ensure_link(project_dir: Path, root: Path, sync: Sequence[str], run: Run) ->
 
 
 def ensure(
-    checkout_root: Path,
+    checkout_root: Path | None,
     project_dirs: Sequence[Path],
     run: Run = run_subprocess,
     alive: Callable[[int], bool] = is_pid_alive,
 ) -> None:
-    """Link ``checkout_root``'s venv and each standalone project's, then sweep."""
-    cache_dir = uv_cache_dir(run, checkout_root)
+    """Link ``checkout_root``'s venv (unless it is ``None``) and each standalone
+    project's, then sweep."""
+    cache_dir = uv_cache_dir(run, checkout_root or project_dirs[0])
     root = venvs_root(cache_dir)
     root.mkdir(parents=True, exist_ok=True)
-    ensure_link(checkout_root, root, ROOT_SYNC, run)
+    if checkout_root is not None:
+        ensure_link(checkout_root, root, ROOT_SYNC, run)
     for project_dir in project_dirs:
         ensure_link(project_dir, root, PROJECT_SYNC, run)
     sweep(root, alive)
@@ -342,6 +344,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     ensure_parser.add_argument("checkout_root", type=Path)
     ensure_parser.add_argument("project_dirs", type=Path, nargs="*")
+    project_parser = commands.add_parser(
+        "ensure-project",
+        help="link standalone projects' venvs only (a user program's start), then sweep",
+    )
+    project_parser.add_argument("project_dirs", type=Path, nargs="+")
     commands.add_parser("sweep", help="delete targets no link serves")
     fresh_parser = commands.add_parser(
         "fresh", help="print a new empty target for a project, held by a pid"
@@ -362,6 +369,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.checkout_root.resolve(),
                 [path.resolve() for path in args.project_dirs],
             )
+        elif args.command == "ensure-project":
+            ensure(None, [path.resolve() for path in args.project_dirs])
         elif args.command == "sweep":
             for removed in sweep(venvs_root(uv_cache_dir(run_subprocess, cwd))):
                 print(f"removed {removed}")

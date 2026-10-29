@@ -1,25 +1,24 @@
 """Stand up a new Flask app (and its supervisord program entry).
 
 Creates `system/apps/<package>/` with a Flask starter (synchronous; flask-sock
-is available for WebSockets) and its `app.toml` manifest, writes a
-`[program:<name>]` block to its own `system/supervisord.conf.d/<name>.conf`
-whose command registers the manifest and runs the app's entry point from the
-workspace venv, and runs `uv sync --all-packages`, which installs that entry
-point into the venv and has the root lockfile cover the new workspace member
-(the `system/apps/*` member glob picks the package up automatically; the root
-pyproject.toml is not edited).
+is available for WebSockets) and its `app.toml` manifest, as a standalone uv
+project: its own `pyproject.toml`, a `uv.lock` seeded from the root lock (so the
+app starts on the built-ins' versions and resolves from the warm cache), and a
+`.venv` linked beside the uv cache. It writes a `[program:<name>]` block to its
+own `system/supervisord.conf.d/<name>.conf` whose command links and syncs that
+project (`--locked`), registers the manifest, and execs the app's entry point
+from the app's own `.venv/bin`.
 
-No shared file is *authored*: the supervisord program lives in its own file
-rather than being appended to a config shared with every other creation. That is
-what lets two agents scaffold two apps concurrently without editing the same
-file.
+The app is not a root workspace member, so a dependency it adds changes only its
+own lock and venv, never the chat's or another app's
+(docs/system/blueprint/app-environments/). It reaches the shared code through an
+editable path dependency on `app-schema`, whose own workspace sources keep
+`imbue-common` on the root's mngr pin.
 
-The one shared file still written is `uv.lock`, which `uv sync --all-packages`
-regenerates to add the new member. It is derived rather than authored, so
-harden-contention.md keeps it out of a creation's footprint and regenerates it
-on merge instead of treating the conflict as a stale pass -- but it does still
-show up as a dirty file in the tree, so it is not accurate to say a scaffold
-touches nothing shared.
+No shared file is written: the supervisord program lives in its own file rather
+than being appended to a config shared with every other creation, and the root
+`pyproject.toml` and `uv.lock` are not touched. That is what lets two agents
+scaffold two apps concurrently without editing the same file.
 
 Usage:
     uv run --no-sync .agents/skills/build-app/python/build_app_skill/scaffold_flask_lib.py \\
@@ -34,6 +33,7 @@ any failure (lib already exists, reserved name, sync failure, etc.).
 import argparse
 import json
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -43,7 +43,7 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import tomlkit
-from workspace_bare_scripts import forward_port
+from workspace_bare_scripts import forward_port, venv_links
 
 # The template's own app and service names, which forward_port.py has no reason
 # to know about: it refuses names that can never be an origin label, while these
@@ -225,7 +225,15 @@ def _pick_port(
 
 
 def _format_dep_list(extras: Iterable[str]) -> str:
-    base = ['"app-schema"', '"flask>=3.0"', '"flask-sock>=0.7"', '"imbue-common"', '"loguru>=0.7"', '"pydantic>=2.0"', '"werkzeug>=3.0"']
+    base = [
+        '"app-schema"',
+        '"flask>=3.0"',
+        '"flask-sock>=0.7"',
+        '"imbue-common"',
+        '"loguru>=0.7"',
+        '"pydantic>=2.0"',
+        '"werkzeug>=3.0"',
+    ]
     extras_lines = [f'"{dep}"' for dep in extras]
     all_lines = base + extras_lines
     return ",\n    ".join(all_lines)
@@ -260,6 +268,12 @@ dev = [
     # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
     "ty==0.0.85",
 ]
+
+# The workspace's shared code, live and editable. app-schema's own workspace sources
+# apply in this lock, so imbue-common comes from the root's mngr pin; a source for it
+# here as well would be a second URL for one package, which uv refuses to lock.
+[tool.uv.sources]
+app-schema = {{ path = "../../libs/app_schema", editable = true }}
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
 [tool.ty]
@@ -736,7 +750,7 @@ copies = {{data = "data/.apps/{name}"}}
 # workspace: 46,939 restarts in one day).
 _SUPERVISORD_PROGRAM_TEMPLATE = """\
 [program:{name}]
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && exec {entry_point}"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/{package} && uv sync --locked --project system/apps/{package} && python3 system/scripts/forward_port.py --manifest system/apps/{package}/app.toml --url http://localhost:{port} && exec {entry_point}"
 directory=/home/user/workspace
 autostart=true
 autorestart=true
@@ -779,14 +793,14 @@ def _reserve_supervisord_program_path(repo_root: Path, name: str) -> Path:
     return _supervisord_program_path(conf, name)
 
 
-def _entry_point_command(name: str, secrets_file: str | None) -> str:
+def _entry_point_command(name: str, package: str, secrets_file: str | None) -> str:
     """The program's entry point, wrapped so a declared secret file's variables reach it.
 
     `with_secrets.py` is the one sanctioned reader of data/.secrets/ (see the
     connect-external-service skill): it loads the file into the child's environment
     and execs the app, so the value appears in no config file and no command line.
     """
-    entry_point = f".venv/bin/{name}"
+    entry_point = f"system/apps/{package}/.venv/bin/{name}"
     if secrets_file is None:
         return entry_point
     return f"python3 system/scripts/with_secrets.py data/.secrets/{secrets_file}.env -- {entry_point}"
@@ -803,9 +817,12 @@ def _write_supervisord_program(
     shed before any built-in app or service under memory pressure (see
     system/services/oom_priority/README.md).
 
-    The app runs its entry point from the workspace venv (written by _run_uv_sync),
-    like every Python app, not through `uv run`, so no uv process stays resident as
-    its parent.
+    Each start links the app's venv (a rebuilt root filesystem loses its target,
+    and uv refuses a dangling link), syncs it from the app's own lock with
+    `--locked` (a no-op in about 30 ms when current; a stale lock or failed sync
+    fails the start with uv's error, and supervisord retries), then execs the entry
+    point from the app's own `.venv/bin` -- not through `uv run`, so no uv process
+    stays resident as its parent.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -813,7 +830,7 @@ def _write_supervisord_program(
             name=name,
             package=package,
             port=port,
-            entry_point=_entry_point_command(name, secrets_file),
+            entry_point=_entry_point_command(name, package, secrets_file),
         )
     )
 
@@ -840,12 +857,26 @@ def _validate_manifest(repo_root: Path, package: str) -> None:
         sys.exit(f"error: {manifest_path.relative_to(repo_root)} is invalid: {error}")
 
 
-def _run_uv_sync(repo_root: Path) -> None:
-    # The app is a workspace member (the root pyproject's system/apps/* glob):
-    # the sync installs its entry point into the venv its program runs from, and
-    # the root lockfile must learn about it or the next
-    # `uv sync --all-packages --frozen` (the update-self apply) refuses.
-    _run_checked(["uv", "sync", "--all-packages"], repo_root, "uv sync --all-packages")
+def _create_project_env(repo_root: Path, package: str) -> None:
+    """Lock the new app on its own and build its linked venv.
+
+    The lock starts as a copy of the root one, so `uv lock` keeps every version the
+    built-ins run where the app needs the same package, and resolves from the warm
+    cache; it then drops what the app does not use.
+    """
+    relative = f"system/apps/{package}"
+    shutil.copyfile(repo_root / "uv.lock", repo_root / relative / "uv.lock")
+    _run_checked(
+        ["uv", "lock", "--project", relative],
+        repo_root,
+        f"uv lock --project {relative}",
+    )
+    venv_links.ensure(None, [repo_root / relative])
+    _run_checked(
+        ["uv", "sync", "--locked", "--project", relative],
+        repo_root,
+        f"uv sync --locked --project {relative}",
+    )
 
 
 def _start_and_wait(
@@ -924,7 +955,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-uv-sync",
         action="store_true",
-        help="skip the manifest check and `uv sync --all-packages` after generation (for tests/dry runs)",
+        help="skip the manifest check and the app's lock and venv after generation (for tests/dry runs)",
     )
     parser.add_argument(
         "--start",
@@ -963,7 +994,7 @@ def main() -> None:
 
     if not args.skip_uv_sync:
         _validate_manifest(repo_root, package)
-        _run_uv_sync(repo_root)
+        _create_project_env(repo_root, package)
 
     if args.start:
         _start_and_wait(repo_root, args.name, port)

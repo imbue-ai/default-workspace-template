@@ -308,3 +308,21 @@ def test_target_keys_are_readable_and_distinct(root: Path) -> None:
     assert a != b
     long = venv_links.target_for(root, Path("/x" * 80 + "/project"))
     assert len(long.name) <= 60 + 1 + 10 and long.name.split("-")[-2] == "project"
+
+
+def test_ensure_project_links_only_the_standalone_projects(
+    project: Path, cache_dir: Path, root: Path
+) -> None:
+    # A user program's start: the checkout's own venv, even a real directory, is left alone.
+    (project / ".venv").mkdir()
+    package = project / "system" / "apps" / "widget"
+    package.mkdir(parents=True)
+    uv = _FakeUv(cache_dir)
+
+    venv_links.ensure(None, [package], run=uv, alive=_never_alive)
+
+    assert not (project / ".venv").is_symlink()
+    assert (package / ".venv").is_symlink()
+    assert venv_links.target_for(root, package).is_dir()
+    assert not any(argv[:2] == ["uv", "sync"] for argv, _ in uv.calls)
+
