@@ -47,3 +47,9 @@ Every window gets "Chat about this app" (the mngr repo's `specs/multiplayer-refi
 - The agent's hover card trades its pencil for action rows -- "Change avatar..." and "Float" -- and the tray's agent entry takes a right-click menu with the same two, the way the floating creature offers its own.
 
 - Presence reads real activity: the active/idle call used to see only the shell window's own pointer and key events, so everyone read as idle since they last touched the chrome; the app pages' `shell:input` reports now feed the heartbeat's `last_input_at`.
+
+- The owner-layout read (`?of=owner`) answers without a `client` parameter, which is how a viewing window asks for it; it used to refuse that request, so a viewed desktop showed its default (empty) layout rather than its owner's.
+
+- A person's card marks the desktop they are on ("There now", with a dot in their colour) beside the "Viewing" mark of the one you are on, read off their newest connected client as the card opens.
+
+- The overview's live tile pages step aside while a desktop's deletion is being confirmed, since the confirmation hangs up into the grid and the pages, laid above the overview's scrim, covered it.

@@ -73,7 +73,7 @@ import { AVATAR_DESIGN_PROMPT, AvatarChooserDialog } from "./AvatarChooserDialog
 import { Backdrop } from "./Backdrop";
 import { THEME_DESIGN_PROMPT, THEME_PREVIEW_APP, ThemeChooserDialog } from "./ThemeChooserDialog";
 import { LauncherMenu } from "./LauncherMenu";
-import { GRID_SHARE, gridFor } from "./Overview";
+import { GRID_SHARE, gridFor, overviewPresentationOf } from "./Overview";
 import type { OverviewAttrs, OverviewGrid, OverviewTile } from "./Overview";
 import { ReplacedDesktopNotice } from "./ReplacedDesktopNotice";
 import { applyDropStyle, applyLiftStyle } from "./ShortcutIcon";
@@ -1240,13 +1240,14 @@ export function App(): m.Component<AppAttrs> {
       if (store !== null && windowToPaint !== null) paintWindow(store, windowToPaint);
       draggedWindowId = movingWindowId;
       if (store !== null) pages?.setMountPolicy(mountPolicyOf(store));
-      // The pages lie over the overview's tiles while it is up, at the scale this redraw tiled them at.
+      // The pages lie over the overview's tiles while it is up, at the scale this redraw tiled them at, and step
+      // aside while a deletion is being confirmed over the thumbnails.
       const tiling = overviewTiling;
       if (tiling === null) {
         pages?.setOverview(null);
       } else {
-        const tileIds = new Set(tiling.tiles.map((tile) => tile.window.id));
-        pages?.setOverview({ scaleOf: (windowId) => (tileIds.has(windowId) ? tiling.grid.scale : null) });
+        const confirmingDeleteId = store === null ? null : store.getOverviewDeletingId();
+        pages?.setOverview(overviewPresentationOf(tiling.tiles, tiling.grid, confirmingDeleteId));
       }
       pages?.reconcile();
     },

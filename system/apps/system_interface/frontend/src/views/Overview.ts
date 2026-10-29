@@ -28,6 +28,7 @@ import type { PixelRect, PixelSize } from "../geometry/frames";
 import { OVERVIEW_SCRIM_Z_INDEX } from "../geometry/stacking";
 import { wallpaperBackgroundImage } from "../model/api";
 import type { AppRecord, Desktop, Layout, WindowRecord } from "../model/records";
+import type { OverviewPresentation } from "../pages/livePages";
 import type { ThemeMetrics } from "../theme/metrics";
 import { appGlyph } from "./glyphs";
 
@@ -97,6 +98,20 @@ export function thumbnailSize(backdrop: PixelSize, desktopCount: number, metrics
   const width = Math.max(1, Math.min(metrics.overviewThumbnailWidth, fitted));
   const height = backdrop.width > 0 ? (width * backdrop.height) / backdrop.width : width;
   return { width, height };
+}
+
+/** The tiles' live pages while the overview is up (the live-page layer's ``setOverview``): each tiled window's page
+ *  at the grid's scale, or none while a deletion is being confirmed. The confirmation hangs up from the desktops
+ *  row into the grid, and the pages lie above the overview's scrim, out of reach of anything drawn inside it, so
+ *  they step aside until the confirmation is answered. */
+export function overviewPresentationOf(
+  tiles: readonly OverviewTile[],
+  grid: OverviewGrid,
+  confirmingDeleteId: string | null,
+): OverviewPresentation {
+  if (confirmingDeleteId !== null) return { scaleOf: () => null };
+  const tileIds = new Set(tiles.map((tile) => tile.window.id));
+  return { scaleOf: (windowId) => (tileIds.has(windowId) ? grid.scale : null) };
 }
 
 /** A gap of the desktops row (0 to n) a dragged thumbnail would land in. */
@@ -301,7 +316,8 @@ export function Overview(): m.Component<OverviewAttrs> {
   ): m.Vnode {
     const isActive = desktop.id === attrs.desktop.id;
     const isRenaming = attrs.renamingId === desktop.id;
-    if (isRenaming && renameDraft?.desktopId !== desktop.id) renameDraft = { desktopId: desktop.id, text: desktop.name };
+    if (isRenaming && renameDraft?.desktopId !== desktop.id)
+      renameDraft = { desktopId: desktop.id, text: desktop.name };
     const isConfirmingDelete = attrs.confirmingDeleteId === desktop.id;
     const landing =
       isReorderable &&

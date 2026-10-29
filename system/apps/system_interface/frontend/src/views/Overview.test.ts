@@ -11,7 +11,7 @@ import {
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import { GRID_SHARE, Overview, gridFor, reorderedForDrop, thumbnailSize } from "./Overview";
+import { GRID_SHARE, Overview, gridFor, overviewPresentationOf, reorderedForDrop, thumbnailSize } from "./Overview";
 import type { OverviewAttrs, OverviewTile } from "./Overview";
 
 const METRICS = themeMetricsRecord();
@@ -115,6 +115,19 @@ describe("gridFor and thumbnailSize", () => {
     expect(reorderedForDrop(desktops, { desktopId: "a", gap: 1 })).toEqual(["a", "b", "c"]);
     expect(reorderedForDrop(desktops, { desktopId: "b", gap: 1 })).toEqual(["a", "b", "c"]);
     expect(reorderedForDrop(desktops, { desktopId: "x", gap: 1 })).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("overviewPresentationOf", () => {
+  it("scales each tiled window's page by the grid, hides the rest, and hides every page while a deletion is confirmed", () => {
+    const tiles = [tile("win-1", "Plan")];
+    const grid = { columns: 1, scale: 0.4 };
+    const shown = overviewPresentationOf(tiles, grid, null);
+    expect(shown.scaleOf("win-1")).toBe(0.4);
+    expect(shown.scaleOf("win-2")).toBeNull();
+    // The confirmation hangs up into the grid, where the pages would cover it.
+    const confirming = overviewPresentationOf(tiles, grid, "home");
+    expect(confirming.scaleOf("win-1")).toBeNull();
   });
 });
 
