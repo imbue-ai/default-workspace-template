@@ -21,7 +21,7 @@ _WRAPPER = (
     "python3 system/scripts/with_secrets.py data/.secrets/svc.env -- svc --port 8090"
 )
 _REQUEST = (
-    "python3 .agents/skills/connect-external-service/scripts/request_secret.py "
+    "python3 .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py "
     "--file svc --var SVC_TOKEN --rationale 'I need the key from data/.secrets/svc.env to call the API'"
 )
 # The shape build-app writes into a supervisord program: an OOM tag in front of a

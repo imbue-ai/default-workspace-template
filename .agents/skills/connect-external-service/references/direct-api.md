@@ -18,7 +18,7 @@ default to the browser (row 6) unless they take it.
 One tool call, nothing else in it, output untouched, then end the turn:
 
 ```bash
-uv run --no-sync .agents/skills/connect-external-service/scripts/request_secret.py \
+uv run --no-sync .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py \
   --file example --var EXAMPLE_API_KEY --rationale "I need your Example API key to look up the part numbers you asked about."
 ```
 

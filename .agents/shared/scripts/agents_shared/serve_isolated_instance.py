@@ -145,7 +145,7 @@ FAILED_LOG_SUFFIX = "-failed.log"
 # (``refresh`` / ``down``) are sub-commands of *this* script, and the flows that
 # reach them arrive through an adapter (e.g. ``preview_app.py up``), so a bare
 # verb would not be runnable.
-_SELF_HINT = ".agents/shared/scripts/serve_isolated_instance.py"
+_SELF_HINT = ".agents/shared/scripts/agents_shared/serve_isolated_instance.py"
 
 # The wrapper server ships in this package, so it runs as a module under the same
 # interpreter that runs this script.
@@ -1486,3 +1486,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     parser.error(f"unknown command: {args.command}")
     return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

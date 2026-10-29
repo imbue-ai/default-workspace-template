@@ -18,11 +18,11 @@ from the same worktree first, so a shell preview can frame them.
 Run from the repo root via ``uv run --no-sync`` (it imports the manifest library from
 the root venv):
 
-    uv run --no-sync .agents/skills/update-app/scripts/preview_app.py up \\
+    uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \\
         --app <name> --worktree <dir> [--with <name>]... [--instance-key <key>] \\
         [--title <label>] [--repo-root PATH]
-    uv run --no-sync .agents/skills/update-app/scripts/preview_app.py refresh --app <name> [--repo-root PATH]
-    uv run --no-sync .agents/skills/update-app/scripts/preview_app.py down --app <name> [--repo-root PATH]
+    uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name> [--repo-root PATH]
+    uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name> [--repo-root PATH]
 
 ``up`` prints the preview's app name (``<name>-preview``) on stdout; open a window
 of it with ``uv run --no-sync workspace-layout open <name>-preview``. ``refresh``
@@ -386,3 +386,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1
     parser.error(f"unknown command: {args.command}")
     return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

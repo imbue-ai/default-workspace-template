@@ -73,7 +73,7 @@ mngr_git_auth_run python3 "$REPO_ROOT/system/scripts/install_mngr.py" --repo-roo
 for app_dir in "$REPO_ROOT"/system/apps/*/; do
     [ -f "$app_dir/pyproject.toml" ] && [ -f "$app_dir/app.toml" ] || continue
     app_name="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["name"])' "$app_dir/app.toml")"
-    mapfile -t APP_PLUGIN_ARGS < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --tool "$app_name" --repo-root "$REPO_ROOT")
+    mapfile -t APP_PLUGIN_ARGS < <(python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/list_mngr_plugins.py" --tool "$app_name" --repo-root "$REPO_ROOT")
     mngr_git_auth_run uv tool install -e "$app_dir" "${APP_PLUGIN_ARGS[@]}"
 done
 

@@ -19,7 +19,7 @@ scripted; Step 4a is your recipe for it.
 ## 1. Resolve inputs
 
 ```bash
-eval "$(uv run --no-sync .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 ```
 
 Sets `LEAD_AGENT`, `LEAD_WORK_DIR`, `FINISH_REPORT_PATH`, and `TARGET_REF`. If the worktree has
@@ -155,7 +155,7 @@ whether the creation carries the workspace's own content, and whether the
 update reached it.
 
 ```bash
-eval "$(uv run --no-sync .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 SCOPES=data/.tasks/update-self/scopes
 RANGES=data/.tasks/update-self/footprint-ranges.json
 rm -rf "$SCOPES" && mkdir -p "$SCOPES"
@@ -376,7 +376,7 @@ in your report.
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a
   file of it in `local_only`) -- against a scratch data copy via
-  `.agents/shared/scripts/serve_isolated_instance.py` (see `update-app`),
+  `.agents/shared/scripts/agents_shared/serve_isolated_instance.py` (see `update-app`),
   never the live store. A service that arrived exactly as upstream shipped
   it is not booted here: upstream tested it, and for the shell and the chat
   app the apply pre-flights the merged copy itself before anything live

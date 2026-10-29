@@ -145,7 +145,9 @@ def test_identity_prefix_quotes_names_with_spaces() -> None:
         "",
     ],
 )
-@pytest.mark.parametrize("identity", [None, ("O'Brien; the build chat", "agent-1@host-2")])
+@pytest.mark.parametrize(
+    "identity", [None, ("O'Brien; the build chat", "agent-1@host-2")]
+)
 def test_the_original_command_comes_back_from_a_rewrite_with_any_identity(
     command: str, identity: tuple[str, str] | None
 ) -> None:

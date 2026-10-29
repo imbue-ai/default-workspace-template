@@ -719,7 +719,7 @@ program = "{name}"
 stop_when_no_windows = true
 
 # How update-app boots a throwaway preview of this app: on a free port, over a
-# scratch copy of its data (see .agents/skills/update-app/scripts/preview_app.py).
+# scratch copy of its data (see .agents/skills/update-app/python/update_app_skill/preview_app.py).
 [preview]
 env = {{{package_upper}_PORT = "{{port:main}}", {package_upper}_HOST = "{{host}}", {package_upper}_DATA_DIR = "{{copy:data}}"}}
 copies = {{data = "data/.apps/{name}"}}

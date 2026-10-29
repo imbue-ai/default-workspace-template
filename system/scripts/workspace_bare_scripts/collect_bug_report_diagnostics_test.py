@@ -1285,7 +1285,9 @@ def test_a_dispatcher_log_as_long_as_a_read_still_rides_beside_the_records(
         scan_gate_dir=gate,
     )
     _write_update_apply_state(
-        workspace, log_lines=diagnostics.MAX_UPDATE_APPLY_LOG_LINES, line_padding=" x" * 400
+        workspace,
+        log_lines=diagnostics.MAX_UPDATE_APPLY_LOG_LINES,
+        line_padding=" x" * 400,
     )
 
     collector.run(["--logs"])

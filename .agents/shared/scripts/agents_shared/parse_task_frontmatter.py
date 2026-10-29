@@ -218,3 +218,7 @@ def main() -> int:
         return 1
     sys.stdout.write(_render(fields))
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

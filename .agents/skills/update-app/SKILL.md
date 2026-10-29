@@ -349,7 +349,7 @@ where the data dies. Encode these, cheapest first:
   point it at the live store.** Boot a throwaway instance against a *copy* of
   the store on a *spare* port, exercise it there, then tear it down with its
   copy. The shared
-  [`serve_isolated_instance.py`](../../shared/scripts/serve_isolated_instance.py)
+  [`serve_isolated_instance.py`](../../shared/scripts/agents_shared/serve_isolated_instance.py)
   script owns all of it -- `--copy` copies the store into the instance's own
   space on disk, it picks a free port, injects it (via the
   `<PACKAGE_UPPER>_PORT` override) plus your data-dir override pointed at the
@@ -357,7 +357,7 @@ where the data dies. Encode these, cheapest first:
   and deletes the copy:
 
   ```bash
-  URL=$(uv run --no-sync .agents/shared/scripts/serve_isolated_instance.py up \
+  URL=$(uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
       --copy data=data/.apps/<name> \
@@ -365,7 +365,7 @@ where the data dies. Encode these, cheapest first:
       --health-path /health \
       -- .venv/bin/<name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
-  uv run --no-sync .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
+  uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <name>-test
   ```
 
   **Never copy app data into `/tmp`.** In the workspace container `/tmp` is a
@@ -382,7 +382,7 @@ where the data dies. Encode these, cheapest first:
   port, leaving the port, the service registration, and any window untouched:
 
   ```bash
-  uv run --no-sync .agents/shared/scripts/serve_isolated_instance.py refresh --name <name>-test
+  uv run --no-sync .agents/shared/scripts/agents_shared/serve_isolated_instance.py refresh --name <name>-test
   ```
 
   A change that only alters files the running process reads from disk on each
@@ -401,11 +401,11 @@ where the data dies. Encode these, cheapest first:
   names, surfaced as the labeled `<name>-preview` app:
 
   ```bash
-  uv run --no-sync .agents/skills/update-app/scripts/preview_app.py up \
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \
       --app <name> --worktree <dir>          # prints <name>-preview
   uv run --no-sync workspace-layout open <name>-preview   # puts a window of it in front of the user
-  uv run --no-sync .agents/skills/update-app/scripts/preview_app.py refresh --app <name>   # after a rebuild, in place
-  uv run --no-sync .agents/skills/update-app/scripts/preview_app.py down --app <name>
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name>   # after a rebuild, in place
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
   ```
 
   Every `up` and `refresh` runs `uv sync --all-packages --frozen` in the
