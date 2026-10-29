@@ -22,6 +22,7 @@ from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.primitives import DesignId
 from imbue.system_interface.avatar.testing import png_size
@@ -39,7 +40,9 @@ from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
+from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.testing import TEST_PAGE_ID
+from imbue.system_interface.shell.testing import client_report
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
 from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
@@ -922,6 +925,52 @@ def test_websocket_connect_sends_the_connected_users(app: Flask) -> None:
     # The connected users follow the apps, desktops, avatar status, and update notice.
     assert messages[4]["type"] == "presence_updated"
     assert [user["user_id"] for user in messages[4]["users"]] == ["user-bob-4471"]
+
+
+@pytest.mark.flaky
+@pytest.mark.timeout(15)
+def test_a_registered_windows_disconnect_broadcasts_clients_updated_and_an_unregistered_ones_does_not(
+    app: Flask,
+) -> None:
+    broadcaster = state_of(app).shell.broadcaster
+    observer_queue = broadcaster.register()
+    try:
+        with serve_app(app) as served:
+            unregistered = open_ws(served, "/api/ws")
+            close_ws(unregistered)
+            registered = open_ws(served, "/api/ws")
+            registered.send(json.dumps(_moving_report("c-leaving", "home")))
+            wait_for(
+                lambda: "c-leaving" in broadcaster.connected_client_ids(),
+                timeout=5.0,
+                poll_interval=0.05,
+                error_message="the window never registered",
+            )
+            drain_messages(observer_queue)
+            close_ws(registered)
+            wait_for(
+                lambda: "c-leaving" not in broadcaster.connected_client_ids(),
+                timeout=5.0,
+                poll_interval=0.05,
+                error_message="the window never unregistered",
+            )
+        assert [message["type"] for message in drain_messages(observer_queue)] == ["clients_updated"]
+    finally:
+        broadcaster.unregister(observer_queue)
+
+
+def test_pruning_a_stale_client_broadcasts_clients_updated_and_pruning_none_is_silent(app: Flask) -> None:
+    shell = state_of(app).shell
+    long_ago = utc_now() - CLIENT_RETENTION - timedelta(days=1)
+    shell.clients.record_report(client_report("c-stale", "home"), long_ago, is_redirected=False)
+    client_queue = shell.broadcaster.register()
+    try:
+        shell.prune_unseen_clients()
+        assert [message["type"] for message in drain_messages(client_queue)] == ["clients_updated"]
+        shell.prune_unseen_clients()
+        assert drain_messages(client_queue) == []
+    finally:
+        shell.broadcaster.unregister(client_queue)
 
 
 def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> None:

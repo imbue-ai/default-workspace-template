@@ -261,7 +261,8 @@ class ShellState(MutableModel):
     def prune_unseen_clients(self) -> None:
         """Drop every client unseen for the retention period, together with the layouts it owns (desktop contracts.md section 4.3)."""
         now = datetime.now(timezone.utc)
-        for client_id in self.clients.prune_unseen(now):
+        pruned = self.clients.prune_unseen(now)
+        for client_id in pruned:
             removed = self.placements.delete_client_layouts(client_id)
             is_paths_file_removed = self.window_paths.delete_client_paths(client_id)
             logger.info(
@@ -271,6 +272,8 @@ class ShellState(MutableModel):
                 removed,
                 is_paths_file_removed,
             )
+        if pruned:
+            self.broadcaster.broadcast_clients_updated()
 
     def _run_client_prune(self) -> None:
         while not self._prune_stop.wait(timeout=self.client_prune_interval_seconds):

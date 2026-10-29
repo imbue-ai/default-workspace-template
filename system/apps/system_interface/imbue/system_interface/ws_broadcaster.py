@@ -244,6 +244,12 @@ class WebSocketBroadcaster(MutableModel):
         """Broadcast a speech bubble (the multiplayer spec, section 6.5) to every window but the speaker's own."""
         self.broadcast_except_clients({"type": "bubble", **bubble}, excluded_client_ids)
 
+    def broadcast_clients_updated(self) -> None:
+        """Broadcast that the clients listing changed in a way no other message carries: a client's window
+        disconnected, or a client was pruned (the multiplayer spec, section 8.3). The listing itself is read back
+        from ``GET /api/clients``, so the message carries nothing."""
+        self.broadcast({"type": "clients_updated"})
+
     def broadcast_chats_activity(self, report: Mapping[str, Any]) -> None:
         """Broadcast what every chat is doing (the multiplayer spec, section 6.4), as the chat app last reported it."""
         self.broadcast({"type": "chats_activity", **report})

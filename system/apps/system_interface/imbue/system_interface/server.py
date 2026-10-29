@@ -887,6 +887,10 @@ def _run_ws_broadcast_loop(
             disconnect_reason,
         )
         ws_broadcaster.unregister(client_queue)
+        # A registered window going away changes which clients are connected and where, which the tray's
+        # viewing ring reads off the clients listing; a window that never registered was never listed.
+        if client_info is not None:
+            ws_broadcaster.broadcast_clients_updated()
 
 
 APP_DISPLAY_NAME: Final[str] = "Workspace"
