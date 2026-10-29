@@ -239,6 +239,7 @@ class ShareStack:
             media_port=self.assignment.media_port,
             local_media_address=self._media_proxy_address(),
             local_media_port=SCREEN_MEDIA_LOCAL_PORT,
+            is_domain_shared=self.materials.is_domain_shared,
         )
 
     def _media_proxy_address(self) -> str | None:

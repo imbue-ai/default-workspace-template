@@ -104,6 +104,15 @@ class ShareMaterials:
         # other's sessions.
         self.is_cookie_host_only = is_cookie_host_only
 
+    @property
+    def is_domain_shared(self) -> bool:
+        """Whether other shares of the region tunnel under this workspace domain too (an auth sandbox).
+
+        The connector marks exactly those shares with ``SHARE_COOKIE_HOST_ONLY=1``; the frpc login user
+        has to be unique per share for the same reason the session cookie has to be host-scoped.
+        """
+        return self.is_cookie_host_only
+
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ShareMaterials):
             return NotImplemented

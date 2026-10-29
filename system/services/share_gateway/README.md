@@ -50,7 +50,12 @@ three things running:
    (the multi-relay design: any relay can then serve any visitor),
    authenticated by the per-share relay token (in the client metadata; the
    connector authorizes every Login/NewProxy). Each claims exactly this
-   workspace's registered service labels + the auth label. The relay set comes
+   workspace's registered service labels + the auth label, logged in as the
+   workspace domain's first label (frps prefixes every proxy name with it);
+   a share whose domain other shares of the region use too (an auth sandbox,
+   `SHARE_COOKIE_HOST_ONLY=1`) logs in as its auth label instead, the one
+   per-share label it holds, so two sandboxes never collide on a proxy name.
+   The relay set comes
    from the connector's `GET /shares/assignment` (relay-token auth), fetched
    at stack start, re-polled on the server-provided interval, and cached under
    `data/.state/share_gateway/assignment.json` so restarts work with the
