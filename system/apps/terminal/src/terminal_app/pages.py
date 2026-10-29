@@ -392,6 +392,11 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     // The shell grants focus to the frame it created, which is this page: pass it on to ttyd.
     if (event.source === window.parent && data.type === "ttyd-focus") focusPty();
     if (event.source === frame.contentWindow && data.type === "terminal:ctrl") setCtrlArmed(data.armed === true);
+    // Typing happens in the pty frame, out of this page's sight: its input reports go up to the shell as this
+    // page's own would (the multiplayer spec, section 4.3), the way the chat root hands up its nested pages'.
+    if (event.source === frame.contentWindow && data.type === "shell:input" && window.parent !== window) {
+      window.parent.postMessage({ type: "shell:input" }, "*");
+    }
   });
   window.addEventListener("focus", () => connection?.focused());
 

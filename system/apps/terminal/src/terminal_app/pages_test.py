@@ -14,6 +14,7 @@ from terminal_app.pages import (
     render_page,
 )
 from terminal_app.primitives import TerminalTitle, TmuxSessionName
+from terminal_app.pty_page import PTY_PAGE_SCRIPT
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
@@ -229,6 +230,17 @@ def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_c
     assert response.mimetype == "text/javascript"
     assert response.text == TEST_APP_CONTRACT_SOURCE
     assert 'import("/_static/app_contract.js")' in pages_client.get("/").text
+
+
+def test_the_wrapper_hands_the_pty_frames_input_reports_up_to_the_shell(pages_client: FlaskClient) -> None:
+    """Typing happens in the pty frame, on another origin, so the wrapper's own contract never sees it: the pty page
+    reports it as ``shell:input``, and the wrapper forwards exactly that type from its frame to the shell (the
+    multiplayer spec, section 4.3)."""
+    assert 'window.parent.postMessage({ type: "shell:input" }, "*")' in PTY_PAGE_SCRIPT
+    assert 'window.addEventListener(type, reportInput, { capture: true, passive: true })' in PTY_PAGE_SCRIPT
+    wrapper = pages_client.get("/?session=terminal-1").text
+    assert 'event.source === frame.contentWindow && data.type === "shell:input"' in wrapper
+    assert 'window.parent.postMessage({ type: "shell:input" }, "*")' in wrapper
 
 
 def test_a_missing_app_contract_module_says_the_shell_is_not_built(
