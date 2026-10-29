@@ -8,6 +8,9 @@ import pytest
 from flask import Flask
 from flask import request as flask_request
 from flask.testing import FlaskClient
+from workspace_profile.overrides import load_unsent_change_values
+from workspace_profile.overrides import load_user_override_values
+from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
 from imbue.system_interface.shell.gateway_access import ENV_GATEWAY
 from imbue.system_interface.shell.gateway_access import ENV_GATEWAY_PASSWORD
@@ -19,9 +22,6 @@ from imbue.system_interface.shell.testing import shell_application
 from imbue.system_interface.shell.testing import write_two_app_registry
 from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
-from workspace_profile.overrides import load_unsent_change_values
-from workspace_profile.overrides import load_user_override_values
-from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
 _VISITOR = RequestIdentity(owner=False, user_id="visitor-1", email="v@example.com")
 

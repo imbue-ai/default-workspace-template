@@ -30,6 +30,8 @@ from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_profile.manifest import KeybindingsActionsResponse
+from workspace_profile.manifest import KeybindingsMeResponse
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 
 from imbue.system_interface.api_models import HeartbeatResponse
@@ -66,20 +68,6 @@ from imbue.system_interface.shell.desktop_routes import DesktopWallpaperRequest
 from imbue.system_interface.shell.desktop_routes import ShortcutMoveRequest
 from imbue.system_interface.shell.desktop_routes import ShortcutRemoveRequest
 from imbue.system_interface.shell.embedder_messages import EmbedderMessageRelayRequest
-from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
-from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
-from imbue.system_interface.shell.route_helpers import HTTP_CREATED
-from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
-from imbue.system_interface.shell.theme_routes import AppThemingRequest
-from imbue.system_interface.shell.theme_routes import AppThemingResponse
-from imbue.system_interface.shell.theme_routes import DefaultThemeResponse
-from imbue.system_interface.shell.theme_routes import ThemeChoiceRequest
-from imbue.system_interface.shell.theme_wire import THEME_ICON_ROUTE
-from imbue.system_interface.shell.theme_wire import ThemeCatalogWire
-from imbue.system_interface.shell.tour import TOUR_ROUTE
-from workspace_profile.manifest import KeybindingsActionsResponse
-from workspace_profile.manifest import KeybindingsMeResponse
-
 from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryOutcome
 from imbue.system_interface.shell.keybindings_routes import DeliverKeybindingsRequest
 from imbue.system_interface.shell.keybindings_routes import DiscardKeybindingRequest
@@ -94,6 +82,17 @@ from imbue.system_interface.shell.keybindings_routes import KeybindingsCatalogRe
 from imbue.system_interface.shell.keybindings_routes import ResetKeybindingRequest
 from imbue.system_interface.shell.keybindings_routes import SaveKeybindingRequest
 from imbue.system_interface.shell.keybindings_routes import SaveKeybindingResponse
+from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
+from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
+from imbue.system_interface.shell.route_helpers import HTTP_CREATED
+from imbue.system_interface.shell.route_helpers import HTTP_NO_CONTENT
+from imbue.system_interface.shell.theme_routes import AppThemingRequest
+from imbue.system_interface.shell.theme_routes import AppThemingResponse
+from imbue.system_interface.shell.theme_routes import DefaultThemeResponse
+from imbue.system_interface.shell.theme_routes import ThemeChoiceRequest
+from imbue.system_interface.shell.theme_wire import THEME_ICON_ROUTE
+from imbue.system_interface.shell.theme_wire import ThemeCatalogWire
+from imbue.system_interface.shell.tour import TOUR_ROUTE
 from imbue.system_interface.shell.tour import TourProgress
 from imbue.system_interface.shell.wallpapers import WALLPAPER_ROUTE_PREFIX
 from imbue.system_interface.shell.wallpapers import WallpapersListing

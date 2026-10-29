@@ -5,11 +5,11 @@ from pathlib import Path
 from typing import Any
 
 from flask.testing import FlaskClient
+from workspace_profile.identity import IDENTITY_HEADER
+from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
 from imbue.chat.server import create_application
 from imbue.chat.testing import build_test_state
-from workspace_profile.identity import IDENTITY_HEADER
-from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
 
 def _client() -> FlaskClient:

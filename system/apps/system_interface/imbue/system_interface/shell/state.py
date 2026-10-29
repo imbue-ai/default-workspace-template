@@ -21,6 +21,7 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import field_validator
+from watchdog.observers.api import BaseObserver
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import IfPresent
@@ -36,6 +37,7 @@ from workspace_layout.records import EntryPresentation
 from workspace_layout.records import StoredWindowPath
 from workspace_layout.records import Window
 from workspace_layout.records import WindowView
+from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 from workspace_themes.catalog import CachingThemeCatalogLoader
 from workspace_themes.interfaces import ThemeCatalogLoaderInterface
 
@@ -47,6 +49,8 @@ from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
 from imbue.system_interface.avatar.status import background_tasks_root_from_environment
+from imbue.system_interface.file_watch import start_file_watch
+from imbue.system_interface.file_watch import stop_file_watch
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
@@ -119,10 +123,6 @@ from imbue.system_interface.shell.primitives import mint_window_id
 from imbue.system_interface.shell.share_grants import DEFAULT_SHARE_GRANTS_PATH
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
-from watchdog.observers.api import BaseObserver
-from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
-from imbue.system_interface.file_watch import start_file_watch
-from imbue.system_interface.file_watch import stop_file_watch
 from imbue.system_interface.shell.theme_watch import ThemeCatalogWatch
 from imbue.system_interface.shell.theme_wire import theme_catalog_wire_json
 from imbue.system_interface.shell.tour import TourStore

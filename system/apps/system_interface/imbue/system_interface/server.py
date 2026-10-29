@@ -63,9 +63,9 @@ from imbue.system_interface.shell.data_types import PopOutStateReport
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
+from imbue.system_interface.shell.keybindings_routes import register_keybindings_routes
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import request_identity
-from imbue.system_interface.shell.keybindings_routes import register_keybindings_routes
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
