@@ -1,8 +1,8 @@
 /**
  * Who this page is, and who everyone else is (the multiplayer spec, sections 4 and 5.4): the page's own
  * participant key from ``GET /api/me``, and the roster from ``GET /api/participants`` (the shell's, served by the
- * chat app with the workspace agent's picture on this origin). Both load once per page; a transcript turn is drawn
- * as the viewer's own, or as another person's with their picture and name, from these.
+ * chat app with every picture on this origin). Both load once per page; a transcript turn is drawn as the
+ * viewer's own, or as another person's with their picture and name, from these.
  */
 
 import m from "mithril";
@@ -82,8 +82,8 @@ export function foldOwnerKey(key: string): string {
   return getOwner()?.key ?? key;
 }
 
-/** A picture the roster names by an origin-relative path (the workspace agent's, served by this app) is reached
- *  under the page's base path, as every other API URL is; an absolute URL (a person's) is left alone. */
+/** A picture the roster names by an origin-relative path (every picture, since this app serves them all) is
+ *  reached under the page's base path, as every other API URL is; an absolute URL is left alone. */
 function withPictureOnThisOrigin(entry: Participant): Participant {
   const url = entry.profile_picture_url;
   return url !== null && url.startsWith("/") ? { ...entry, profile_picture_url: apiUrl(url) } : entry;
