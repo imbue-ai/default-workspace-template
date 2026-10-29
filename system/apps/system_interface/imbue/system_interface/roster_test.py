@@ -1,21 +1,21 @@
-import httpx
 import json
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
+import httpx
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import UserId
 from workspace_layout.roster import PARTICIPANT_COLORS
 from workspace_layout.roster import RosterDocument
 
+from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
 from imbue.system_interface.presence import PresenceStore
-from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import picture_version_of
 from imbue.system_interface.roster import RosterSource
@@ -231,5 +231,8 @@ def test_a_persons_picture_is_the_shells_own_route_versioned_by_the_connectors_u
     source.presence.heartbeat(_BOB, _T0)
 
     bob = next(entry for entry in pictured.document(_T0).participants if str(entry.key) == "user:user-bob-4471")
-    assert bob.profile_picture_url == f"/api/roster/user:user-bob-4471/picture?v={picture_version_of('https://a/bob.png')}"
+    assert (
+        bob.profile_picture_url
+        == f"/api/roster/user:user-bob-4471/picture?v={picture_version_of('https://a/bob.png')}"
+    )
     assert bob.display_name == "Bob"

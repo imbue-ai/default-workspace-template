@@ -699,7 +699,9 @@ def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_versio
     client = _profile_aware_app(tmp_path, broadcaster, connector).test_client()
     _heartbeat(client, _OWNER_IDENTITY)
     owner = next(
-        entry for entry in client.get("/api/roster").get_json()["participants"] if entry["key"] == "user:user-owner-9c21"
+        entry
+        for entry in client.get("/api/roster").get_json()["participants"]
+        if entry["key"] == "user:user-owner-9c21"
     )
     assert owner["profile_picture_url"].startswith("/api/roster/user:user-owner-9c21/picture?v=")
 

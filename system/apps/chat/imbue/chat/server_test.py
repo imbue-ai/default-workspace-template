@@ -5580,7 +5580,9 @@ def _shell_with_workspace_agent(picture_url: str | None) -> FakeShell:
         handle="agent",
         profile_picture_url=picture_url,
     )
-    bob = roster_participant(ParticipantKey("user:user-bob-4471"), display_name="Bob", profile_picture_url=_BOB_PICTURE_PATH)
+    bob = roster_participant(
+        ParticipantKey("user:user-bob-4471"), display_name="Bob", profile_picture_url=_BOB_PICTURE_PATH
+    )
     return FakeShell(roster_document=RosterDocument(participants=(bob, agent)))
 
 
@@ -5633,7 +5635,9 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
     assert (relayed.status_code, relayed.mimetype, relayed.data) == (200, "image/png", b"\x89PNG...")
     assert asked == [f"{shell_base_url()}{_AGENT_PICTURE_PATH}"]
     # A person's picture comes with the shell's caching, so a versioned one is kept by the page for good.
-    bobs = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get("/api/participants/user:user-bob-4471/picture")
+    bobs = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
+        "/api/participants/user:user-bob-4471/picture"
+    )
     assert (bobs.status_code, bobs.mimetype, bobs.data, bobs.headers["Cache-Control"]) == (
         200,
         "image/jpeg",
@@ -5642,8 +5646,13 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
     )
     assert asked[-1] == f"{shell_base_url()}{_BOB_PICTURE_PATH}"
     # A key that is nobody's, or not a key at all, has no picture here.
-    assert app_over(_shell_with_workspace_agent(None)).get("/api/participants/user:user-nobody/picture").status_code == 404
-    assert app_over(_shell_with_workspace_agent(None)).get("/api/participants/not%20a%20key/picture").status_code == 404
+    assert (
+        app_over(_shell_with_workspace_agent(None)).get("/api/participants/user:user-nobody/picture").status_code
+        == 404
+    )
+    assert (
+        app_over(_shell_with_workspace_agent(None)).get("/api/participants/not%20a%20key/picture").status_code == 404
+    )
 
     # A shell that does not answer the picture with a success is a bad gateway, not this app's failure.
     refused = app_over(_shell_with_workspace_agent("/api/avatars/other/missing.svg")).get(

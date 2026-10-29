@@ -227,12 +227,24 @@ def test_resolve_picture_fetches_the_bytes_once_and_again_only_for_a_new_url(tmp
 
 def test_resolve_picture_answers_none_for_no_picture_a_failed_fetch_or_a_non_image(tmp_path: Path) -> None:
     connector = _Connector()
-    connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json={**_BOB_WIRE, "profile_picture_url": None})
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(
+        200, json={**_BOB_WIRE, "profile_picture_url": None}
+    )
     connector.response_by_user_id["user-amy-0001"] = httpx.Response(
-        200, json={"user_id": "user-amy-0001", "display_name": "Amy", "profile_picture_url": "https://pictures.example/amy"}
+        200,
+        json={
+            "user_id": "user-amy-0001",
+            "display_name": "Amy",
+            "profile_picture_url": "https://pictures.example/amy",
+        },
     )
     connector.response_by_user_id["user-cal-0002"] = httpx.Response(
-        200, json={"user_id": "user-cal-0002", "display_name": "Cal", "profile_picture_url": "https://pictures.example/cal"}
+        200,
+        json={
+            "user_id": "user-cal-0002",
+            "display_name": "Cal",
+            "profile_picture_url": "https://pictures.example/cal",
+        },
     )
 
     def handle(request: httpx.Request) -> httpx.Response:
