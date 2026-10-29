@@ -97,7 +97,10 @@ ever acting on a laptop with swap.
   entry only while its pid is still that process, started at the recorded time in
   the same boot: pids are reused within hours under gVisor, `/proc/<id>` also
   resolves for another process's thread, and the registry outlives a container
-  restart while start times count from boot.
+  restart while start times count from boot. An entry written before start times
+  were recorded counts while its pid is a process whose environment carries the
+  agent id the entry names. The kill hook, which reads an entry after its process
+  is gone, can check only that it was recorded in this boot.
 - **`ledger`** -- the append-only shed ledger and the revival-notice bookkeeping.
 
 Tagging happens at three startup points, each setting a process's band directly
