@@ -1028,8 +1028,21 @@ export class DesktopStore {
     // The modes event always yields a new state, so the dispatch notifies and redraws.
     this.dispatch({ type: "render_modes_changed", modes });
     this.landPhone();
+    void this.leaveOthersDesktopOnPhone();
     // A report waiting when the phone layout came must not go out; one that is due goes once it is gone.
     this.scheduleViewportReport();
+  }
+
+  /** The phone layout never views (the multiplayer spec, section 8.3): a phone-width window whose active desktop
+   *  is somebody else's lands on the desktop it left for it, else the viewer's first own desktop, else the one the
+   *  shell seeds for a visitor with none; the letterbox and the way back go with the viewing. Nothing until a
+   *  heartbeat has said who the viewer is, and nothing on a desktop of their own. */
+  private async leaveOthersDesktopOnPhone(): Promise<void> {
+    const desktop = activeDesktop(this.state);
+    if (!this.isPhoneLayout() || desktop === null || getOwnIdentity() === null || this.isOwnDesktop(desktop)) return;
+    this.viewedViewport = null;
+    const target = await this.wayBackOrOwnDesktop();
+    if (target !== null && target !== this.state.activeDesktopId) await this.switchDesktop(target, "landing");
   }
 
   /** Resolves once the app list has landed, with the bootstrap's inventory read or the socket's first
@@ -1367,10 +1380,12 @@ export class DesktopStore {
 
   /** The desktop this window is viewing: the active one, when it is not the viewer's own (section 8.3); null on
    *  one of the viewer's own, and until a heartbeat has said who the viewer is, so a visitor's page does not wear
-   *  the viewing chrome on their own desktop while the first heartbeat is on its way. */
+   *  the viewing chrome on their own desktop while the first heartbeat is on its way. The phone layout never
+   *  views: it is on its way off somebody else's desktop (``leaveOthersDesktopOnPhone``) the moment it finds
+   *  itself there. */
   viewedDesktop(): Desktop | null {
     const desktop = activeDesktop(this.state);
-    if (desktop === null || getOwnIdentity() === null) return null;
+    if (desktop === null || getOwnIdentity() === null || this.isPhoneLayout()) return null;
     return this.isOwnDesktop(desktop) ? null : desktop;
   }
 
@@ -1391,7 +1406,9 @@ export class DesktopStore {
    *  as the viewer's own, so a window that landed straight on somebody else's desktop re-reads its layout as the
    *  owner's now (the multiplayer spec, section 8.3). */
   takeViewerIdentityKnown(): void {
-    if (this.viewedDesktop() !== null) {
+    if (this.isPhoneLayout()) {
+      void this.leaveOthersDesktopOnPhone();
+    } else if (this.viewedDesktop() !== null) {
       // An overview opened before the answer landed would keep its tiles outside the stage the viewing
       // transforms, and the live-page layer could not lay their pages over them.
       this.closeOverview();

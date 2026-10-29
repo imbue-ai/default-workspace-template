@@ -3518,15 +3518,56 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     socket.deliver().onPlacementsUpdated({ desktopId: "alice", clientId: "alice-laptop", saveId: "save-more" });
     await settle();
     expect(store.viewingLetterbox()).not.toBeNull();
-    // The phone layout draws no stage to scale: a window resized narrow while viewing keeps the desktop and the
-    // size read, and draws no letterbox until it is wide again.
-    store.setThemeMetrics(METRICS, { isPhone: true, isTouch: true });
-    expect(store.viewingLetterbox()).toBeNull();
-    store.setThemeMetrics(METRICS, MODES);
-    expect(store.viewingLetterbox()).not.toBeNull();
     await store.stopViewing();
     expect(store.viewingLetterbox()).toBeNull();
     expect(store.renderedRect(placement)).toEqual({ x: 300, y: 300, width: 1500, height: 1500 });
+  });
+
+  it("never views on the phone: a window shrunk to phone width while viewing lands on the way back", async () => {
+    api.ownerLayoutClientId = "alice-laptop";
+    api.ownerViewport = { width: 2000, height: 1600 };
+    api.writeLayout("alice", "alice-laptop", { updated_at: "2026-10-29T00:00:00Z", placements: [] });
+    const store = await viewerStore();
+    await store.switchDesktop("work");
+    await store.switchDesktop("alice");
+    expect(store.viewingLetterbox()).not.toBeNull();
+    // The phone layout draws no stage to scale and no viewing chrome: the window leaves the viewed desktop for the
+    // one it came from, and nothing reads as viewed meanwhile.
+    store.setThemeMetrics(METRICS, { isPhone: true, isTouch: true });
+    expect(store.viewedDesktop()).toBeNull();
+    expect(store.viewingLetterbox()).toBeNull();
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(last(socket.reports)).toEqual(moveReport("work", ""));
+    // Wide again, the window is still on its own desktop, the way back spent.
+    store.setThemeMetrics(METRICS, MODES);
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(store.viewedDesktop()).toBeNull();
+    expect(store.viewingLetterbox()).toBeNull();
+  });
+
+  it("never views on the phone: a phone-width window found on somebody else's desktop lands on its own", async () => {
+    api.desktops = [...api.desktops, alices];
+    api.clients = [clientRecord(CLIENT, { active_desktop: "alice" })];
+    const store = makeStore();
+    store.setThemeMetrics(METRICS, { isPhone: true, isTouch: true });
+    await store.start(NO_LINK);
+    // Until the heartbeat has answered the desktop reads as the viewer's own, and the phone stays put.
+    expect(store.getState().activeDesktopId).toBe("alice");
+    expect(store.viewedDesktop()).toBeNull();
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    store.takeViewerIdentityKnown();
+    await settle();
+    // No way back (the window landed there): the first own desktop.
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(store.viewedDesktop()).toBeNull();
+    expect(last(socket.reports)).toEqual(moveReport("home", ""));
+    expect(api.calls.filter((call) => call === "fetchOwnerPlacements:alice")).toEqual([]);
   });
 
   it("tells its own desktops from the ones it views, remembers the way back, and stops viewing onto it", async () => {
