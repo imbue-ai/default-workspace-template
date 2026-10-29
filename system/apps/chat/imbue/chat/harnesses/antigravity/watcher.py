@@ -34,9 +34,8 @@ from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.harnesses.antigravity.agy_transcript import TruncatedError
 from imbue.chat.harnesses.antigravity.agy_transcript import decode_step
 from imbue.chat.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
-from imbue.chat.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
 from imbue.chat.harnesses.antigravity.queue_tracker import drop_tracker
-from imbue.chat.harnesses.antigravity.queue_tracker import get_tracker
+from imbue.chat.harnesses.antigravity.queue_tracker import get_agent_tracker
 from imbue.chat.harnesses.antigravity.queue_tracker import session_token
 from imbue.chat.harnesses.antigravity.session_parser import parse_step
 from imbue.chat.harnesses.antigravity.session_parser import parse_step_detail
@@ -145,7 +144,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         # The session's identity: the marker mngr stamps on every launch/resume. A journal
         # written under a different token belongs to a session that has since restarted, and
         # the contract says such a queue is gone -- never replayed, never delivered.
-        self._queue = get_tracker(self._agent_id, self._state_dir / OUTBOX_FILENAME, session_token(self._state_dir))
+        self._queue = get_agent_tracker(self._agent_id, self._state_dir)
         self._turn_state = get_turn_state(self._agent_id)
         self._queue_snapshot_callback = None
         self._flush_send = None
@@ -172,7 +171,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self.stop()
         drop_tracker(self._agent_id)
 
-    # --- paths ---------------------------------------------------------------------------
+    # Paths
 
     def _conversations_dir(self) -> Path:
         return self._state_dir / _CONVERSATIONS_RELATIVE
@@ -196,7 +195,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
                 seen.append(candidate)
         return seen
 
-    # --- lifecycle -----------------------------------------------------------------------
+    # Lifecycle
 
     def start(self) -> None:
         if self._thread is not None:
@@ -294,7 +293,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         if pending:
             self._on_events(self._agent_id, pending)
 
-    # --- scanning ------------------------------------------------------------------------
+    # Scanning
 
     def _collect_new_events(self) -> list[dict[str, Any]]:
         """Scan every conversation for new/settled rows; append + return newly-emitted events.
@@ -369,7 +368,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             except sqlite3.Error as e:
                 logger.debug("antigravity: closing the {} connection failed: {}", db_path, e)
 
-    # --- read interface (single flat session; subagents not surfaced) --------------------
+    # Read interface (single flat session; subagents not surfaced)
 
     def get_all_events(self, session_id: str | None = None) -> list[dict[str, Any]]:
         with self._lock:
@@ -446,7 +445,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         return True
 
-    # --- queued messages: the queue we hold on agy's behalf ---------------------------
+    # Queued messages: the queue we hold on agy's behalf
     #
     # Every other harness mirrors a queue its harness keeps. agy parks mid-turn input
     # invisibly inside its TUI, so instead we hold the messages and deliver them ourselves
@@ -532,14 +531,15 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         except OSError:
             return None
 
-    # --- the flush worker: the ONLY typist ---------------------------------------------
+    # The flush worker: the ONLY typist
 
     def _run_flush_worker(self) -> None:
         """Deliver the held queue when no turn is open. Own thread, so a slow send stalls nothing.
 
         This is the only code in the system that types into agy. ``session.send`` enqueues and
-        wakes this loop; the tap cancels and wakes this loop; nothing else delivers. One typist
-        is what removes the check-then-act window that let a message land in a live turn.
+        wakes this loop; a model pick holds its ``/model`` command and wakes this loop; the tap
+        cancels and wakes this loop; nothing else delivers. One typist is what removes the
+        check-then-act window that let a message land in a live turn.
         """
         while not self._stopping.is_set():
             self._flush_wake.wait(timeout=_FLUSH_RETRY_SECONDS)
@@ -566,12 +566,15 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
            wearing a different hat.
         3. **Is a turn open?** The whole bug was that this question was never asked. Bounded on
            every rung, so a cancelled or abandoned turn cannot wedge the queue forever.
-        4. **Claim.** The tracker refuses a second claim while one is open, which is the mutual
+        4. **Type a held model switch**, alone and ahead of the block. agy runs ``/model``
+           without opening a turn, so it cannot ride in the block, whose delivery is witnessed
+           by the turn it opens. While a switch stays held, the block waits for a later pass.
+        5. **Claim.** The tracker refuses a second claim while one is open, which is the mutual
            exclusion between every typist.
-        5. **Send, then look.** mngr's ack is the busy marker's mtime, which advances even for
+        6. **Send, then look.** mngr's ack is the busy marker's mtime, which advances even for
            a message that merely parked -- so the ack is not evidence. The evidence is agy's
            own store gaining a user turn whose text is ours.
-        6. **Embargo the poll thread** for the span of the send, so the turn our block becomes
+        7. **Embargo the poll thread** for the span of the send, so the turn our block becomes
            departs the queue before it arrives in the transcript (A3b) no matter which thread
            happened to scan the row first.
         """
@@ -579,7 +582,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         if send is None or is_alive is None:
             return
         self._queue.republish()
-        if not self._queue.has_entries():
+        if not self._queue.has_entries() and self._queue.model_command() is None:
             return
         if not is_alive():
             # HELD, not taken. "Returned to the composer" is the RESPONSE to a stop request;
@@ -594,6 +597,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             # A turn opened before we got here, so anything presented as "about to be typed"
             # is genuinely parked now and must read as queued rather than Sending.
             self._queue.demote_pending()
+            return
+        if not self._type_held_model_command(send):
             return
         block, claimed, generation = self._queue.begin_flush()
         if not claimed:
@@ -626,6 +631,29 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             # emit would let the poll thread wake in between and ship a later row first,
             # inverting the transcript -- the ordering this whole embargo exists to protect.
             self._emit_embargo_until = 0.0
+
+    def _type_held_model_command(self, send: Callable[[str], bool]) -> bool:
+        """Type a held model switch, if any; returns whether the held block may follow on this pass.
+
+        Typed here rather than by the switch request, so it never lands in a live turn. While a
+        switch stays held (a failed send, or a newer pick), the block waits so it runs on the pick.
+        """
+        model_command = self._queue.model_command()
+        if model_command is None:
+            return True
+        # Settled even when the send raises, so the attempt counts toward the switch's bound and
+        # the block behind it is not held forever.
+        is_delivered = False
+        try:
+            is_delivered = send(model_command)
+        finally:
+            self._queue.settle_model_command(model_command, is_delivered=is_delivered)
+            held_command = self._queue.model_command()
+            if held_command == model_command:
+                # Waiting a retry cadence behind the failed switch, the block is parked, not on
+                # its way. A newer pick has already woken the worker, so its block stays Sending.
+                self._queue.demote_pending()
+        return held_command is None
 
     def _observe_delivery(
         self, before: tuple[str, ...], block: str, claimed: tuple[str, ...]

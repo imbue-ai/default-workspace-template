@@ -505,9 +505,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         tracker_class=AntigravityActivityTracker,
         process_started_marker_filename=AntigravityActivityTracker.marker_filename,
         binding_class=AntigravityAccountBinding,
-        # Display-only model bar: agy's `/model` is an interactive TUI picker with no
-        # scriptable one-shot form, so the bar reflects and never drives. The session subclass
-        # exists only to absorb catalog staleness -- see its switch_options.
+        # A pick is held for the flush worker, which types agy's `/model` between turns (see
+        # antigravity/model.py). The session subclass also absorbs catalog staleness -- see
+        # its switch_options.
         resolver_class=AntigravityModelResolver,
         catalog_factory=lambda: ANTIGRAVITY_CATALOG,
         session_class=AntigravityHarnessSession,
