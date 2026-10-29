@@ -6395,7 +6395,7 @@ def test_an_earlier_turn_saying_the_same_does_not_count_as_the_lost_message(
 ) -> None:
     chat = _LostSendChat(broadcaster)
     try:
-        chat.transcript._events.append(_typed_turn("yes"))
+        chat.transcript._events.append(_typed_turn("yes", at="2026-01-01T00:00:00.000Z"))
         chat.send("yes")
         chat.observe(AgentLifecycleState.DONE)
         wait_for(lambda: chat.resent == ["yes"], error_message="the lost message was never sent again")
@@ -6451,7 +6451,7 @@ def test_stopping_a_chat_lets_go_of_the_sends_kept_for_resending(
     manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
     agent_id = f"agent-{uuid4().hex}"
     seed_agent_state(manager, agent_id, name="Stopped-Chat")
-    manager._keep_unrecorded_send(agent_id, "what is 5+5?", frozenset())
+    manager._keep_unrecorded_send(agent_id, "what is 5+5?", time.time())
     try:
         manager.stop_chat(ChatId(agent_id))
     finally:

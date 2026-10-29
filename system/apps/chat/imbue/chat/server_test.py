@@ -2665,7 +2665,7 @@ def test_a_restart_route_lets_go_of_the_sends_kept_for_resending(app: Flask, cli
     """Both routes restart the agent on purpose, so what it took before is not sent again when its process ends."""
     agent_info = _agent_info()
     manager = state_of(app).agent_manager
-    manager._keep_unrecorded_send(agent_info.id, "what is 5+5?", frozenset())
+    manager._keep_unrecorded_send(agent_info.id, "what is 5+5?", time.time())
     letting_go_during_restart: list[bool] = []
 
     def restart(**_kwargs: Any) -> FinishedProcess:
@@ -2683,7 +2683,9 @@ def test_a_restart_route_lets_go_of_the_sends_kept_for_resending(app: Flask, cli
 
     assert response.status_code == 200
     assert letting_go_during_restart == [True]
-    assert agent_info.id not in manager._unrecorded_sends_by_agent
+    kept_texts = [send.text for send in manager._unrecorded_sends_by_agent.get(agent_info.id, [])]
+    # The flush sends the drained queue to the restarted agent, which is kept like any other send.
+    assert kept_texts == (["queued text"] if route == "flush-queue" else [])
 
 
 def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) -> None:

@@ -261,6 +261,8 @@ _RESENT_TURN_LANDING_POLL_SECONDS: Final[float] = 0.25
 # How long a delivered message the transcript has not shown is kept for sending again should the agent's process
 # exit: far longer than any harness takes to write one down, short of sending a stale message hours on.
 _UNRECORDED_SEND_KEPT_SECONDS: Final[float] = 30 * 60.0
+# How far a transcript's timestamp may lag the chat app's clock (the harness rounds, and writes it from its own process).
+_TRANSCRIPT_CLOCK_SLACK_SECONDS: Final[float] = 2.0
 
 # A finished harness task's notice normally starts a turn at once; the marker of one whose notice
 # starts none (a task the user stopped from the harness's own task list) goes after this many
@@ -723,10 +725,18 @@ def _ids_of_user_turns_saying(events: list[dict[str, Any]], text: str) -> frozen
 
 
 @pure
-def _ordered_ids_of_user_messages_saying(events: list[dict[str, Any]], text: str) -> list[str | None]:
-    """Every user message saying ``text``, machine lines included: a slash command or a notice the chat app sent is
-    recorded as a user message with a display decision of its own, not as a turn of the user's."""
-    return [event.get("event_id") for event in events if _is_user_message_saying(event, text)]
+def _ordered_ids_of_user_messages_saying_since(
+    events: list[dict[str, Any]], text: str, since: float
+) -> list[str | None]:
+    """Every user message saying ``text`` recorded at ``since`` or later, machine lines included: a slash command or a
+    notice the chat app sent is recorded as a user message with a display decision of its own, not as a turn of the
+    user's. One with no timestamp counts as recorded since, so a message it cannot place is never sent twice."""
+    return [
+        event.get("event_id")
+        for event in events
+        if _is_user_message_saying(event, text)
+        and ((recorded_at := parse_iso_timestamp_to_epoch(event.get("timestamp"))) is None or recorded_at >= since)
+    ]
 
 
 @pure
@@ -1060,8 +1070,9 @@ class _UnrecordedSend(FrozenModel):
     """A message mngr delivered to an agent whose transcript may not hold it yet."""
 
     text: str = Field(frozen=True, description="The message as it was sent")
-    seen_turn_ids: frozenset[str | None] = Field(
-        frozen=True, description="The ids of the transcript's user messages saying the same before it was sent"
+    sent_after: float = Field(
+        frozen=True,
+        description="A wall-clock time (epoch seconds) before it was sent, to set against the transcript's",
     )
     sent_at: float = Field(frozen=True, description="When it was delivered (monotonic seconds)")
     is_resend: bool = Field(frozen=True, description="Whether it was itself sent again after a process exit")
@@ -1081,8 +1092,8 @@ def _sends_the_transcript_does_not_hold(
     for send in sends:
         new_ids = [
             event_id
-            for event_id in _ordered_ids_of_user_messages_saying(events, send.text)
-            if event_id not in send.seen_turn_ids and event_id not in claimed_ids
+            for event_id in _ordered_ids_of_user_messages_saying_since(events, send.text, send.sent_after)
+            if event_id not in claimed_ids
         ]
         if new_ids:
             claimed_ids.add(new_ids[0])
@@ -2287,22 +2298,13 @@ class AgentManager:
         is kept until then, so it can be sent again should the process exit before the transcript holds it."""
         if not get_harness_spec(harness).resends_sends_lost_with_process:
             return self.send_message_to_agent(AgentId(agent_id), text)
-        seen_turn_ids = self._user_message_ids_saying(agent_id, text)
+        sent_after = time.time() - _TRANSCRIPT_CLOCK_SLACK_SECONDS
         failure = self.send_message_to_agent(AgentId(agent_id), text)
-        if failure is None and seen_turn_ids is not None:
-            self._keep_unrecorded_send(agent_id, text, seen_turn_ids)
+        if failure is None:
+            self._keep_unrecorded_send(agent_id, text, sent_after)
         return failure
 
-    def _user_message_ids_saying(self, agent_id: str, text: str) -> frozenset[str | None] | None:
-        """The ids of the agent's user messages saying ``text`` now; None when its transcript cannot be read here."""
-        capabilities = self._handoff_capabilities
-        agent_info = self.get_agent_info_by_id(agent_id)
-        if capabilities is None or agent_info is None:
-            return None
-        events = capabilities.ensure_watcher(agent_info).get_all_events()
-        return frozenset(_ordered_ids_of_user_messages_saying(events, text))
-
-    def _keep_unrecorded_send(self, agent_id: str, text: str, seen_turn_ids: frozenset[str | None]) -> None:
+    def _keep_unrecorded_send(self, agent_id: str, text: str, sent_after: float) -> None:
         now = time.monotonic()
         with self._lock:
             if agent_id in self._letting_go_counts_by_agent:
@@ -2315,7 +2317,7 @@ class AgentManager:
             kept.append(
                 _UnrecordedSend(
                     text=text,
-                    seen_turn_ids=seen_turn_ids,
+                    sent_after=sent_after,
                     sent_at=now,
                     is_resend=(agent_id, text) in self._lost_sends_being_resent,
                 )
