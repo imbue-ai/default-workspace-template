@@ -1,12 +1,11 @@
 /**
- * The agent's card (the multiplayer spec, section 6.4): the face, the workspace name with a pencil that opens the
- * avatar chooser, "Working" or "Idle", then "Working on" (the chats whose status is working or background) and
- * "Needs you" (the chats whose status is attention), one row each with the chat's status dot and title, a click
- * opening that chat.
+ * The agent's card (the multiplayer spec, section 6.4): the face, the workspace name, "Working" or "Idle", then
+ * "Working on" (the chats whose status is working or background) and "Needs you" (the chats whose status is
+ * attention), one row each with the chat's status dot and title, a click opening that chat; then the actions --
+ * "Change avatar..." and "Float" (the card only shows while the avatar is docked, so Float is always the way out).
  */
 
 import m from "mithril";
-import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { ChatActivity } from "../../model/records";
 import type { AvatarState } from "../../reducers/desktopState";
 import { AvatarImage } from "../AvatarImage";
@@ -14,7 +13,6 @@ import { TrayCardFrame } from "./TrayCard";
 import type { TrayCardFrameAttrs } from "./TrayCard";
 
 const CARD_FACE_SIZE_PX = 36;
-const PENCIL_GLYPH_SIZE = 12;
 
 export interface AgentCardAttrs extends Omit<TrayCardFrameAttrs, "label"> {
   readonly avatar: AvatarState;
@@ -22,7 +20,25 @@ export interface AgentCardAttrs extends Omit<TrayCardFrameAttrs, "label"> {
   readonly workingOn: readonly ChatActivity[];
   readonly needsYou: readonly ChatActivity[];
   readonly onChangeAvatar: () => void;
+  /** Move the one avatar creature out of the tray, floating above the windows. */
+  readonly onFloat: () => void;
   readonly onOpenChat: (chatId: string) => void;
+}
+
+/** One of the card's actions: a full-width row like the chats', without a dot. */
+function actionRow(label: string, dataAttr: string, onclick: () => void): m.Vnode {
+  return m(
+    "button",
+    {
+      type: "button",
+      [dataAttr]: "",
+      class:
+        "flex w-full cursor-pointer items-center rounded-md border-0 bg-transparent px-1 py-0.5 text-left " +
+        "text-primary hover:bg-fill-hover",
+      onclick,
+    },
+    label,
+  );
 }
 
 function chatRows(
@@ -75,21 +91,7 @@ export const AgentCard: m.Component<AgentCardAttrs> = {
           }),
         ),
         m("div", { class: "flex min-w-0 flex-col" }, [
-          m("div", { class: "flex items-center gap-1" }, [
-            m("span", { class: "truncate font-semibold", "data-tray-card-name": "" }, name),
-            m(
-              "button",
-              {
-                type: "button",
-                "data-tray-card-change-avatar": "",
-                class:
-                  "flex shrink-0 cursor-pointer items-center rounded border-0 bg-transparent p-0.5 text-faint hover:bg-fill-hover hover:text-primary",
-                "aria-label": "Change avatar...",
-                onclick: attrs.onChangeAvatar,
-              },
-              m.trust(icon("edit", { size: PENCIL_GLYPH_SIZE })),
-            ),
-          ]),
+          m("span", { class: "truncate font-semibold", "data-tray-card-name": "" }, name),
           m("div", { class: "flex items-center gap-1.5 text-(length:--font-size-helper) text-secondary" }, [
             m("span", { class: `inline-block size-2 shrink-0 rounded-full ${isWorking ? "bg-accent" : "bg-faint"}` }),
             m("span", { "data-tray-card-status": "" }, isWorking ? "Working" : "Idle"),
@@ -98,6 +100,10 @@ export const AgentCard: m.Component<AgentCardAttrs> = {
       ]),
       chatRows("Working on", attrs.workingOn, "bg-accent", attrs.onOpenChat),
       chatRows("Needs you", attrs.needsYou, "bg-warning", attrs.onOpenChat),
+      m("div", { class: "flex flex-col gap-0.5 border-t border-subtle pt-1.5", "data-tray-card-actions": "" }, [
+        actionRow("Change avatar...", "data-tray-card-change-avatar", attrs.onChangeAvatar),
+        actionRow("Float", "data-tray-card-float", attrs.onFloat),
+      ]),
     ]);
   },
 };

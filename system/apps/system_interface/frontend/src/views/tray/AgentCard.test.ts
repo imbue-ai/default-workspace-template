@@ -20,6 +20,7 @@ function render(overrides: Partial<AgentCardAttrs> = {}): HTMLElement {
     workingOn: [{ chat_id: "agent-1", title: "Main chat", status: "working", kind: "agent" }],
     needsYou: [{ chat_id: "agent-2", title: "Deploy", status: "attention", kind: "agent" }],
     onChangeAvatar: vi.fn(),
+    onFloat: vi.fn(),
     onOpenChat: vi.fn(),
     ...overrides,
   };
@@ -31,10 +32,11 @@ afterEach(() => {
 });
 
 describe("AgentCard", () => {
-  it("shows the workspace name with the avatar pencil, Working, and the chats under Working on and Needs you", () => {
+  it("shows the workspace name, Working, the chats under Working on and Needs you, and the actions", () => {
     const onChangeAvatar = vi.fn();
+    const onFloat = vi.fn();
     const onOpenChat = vi.fn();
-    const root = render({ onChangeAvatar, onOpenChat });
+    const root = render({ onChangeAvatar, onFloat, onOpenChat });
     expect(root.querySelector("[data-tray-card-name]")?.textContent).toBe("Atlas");
     expect(root.querySelector("[data-tray-card-status]")?.textContent).toBe("Working");
     expect(root.querySelector("[data-tray-card-chats='Working on'] [data-tray-card-chat]")?.textContent).toBe(
@@ -45,6 +47,9 @@ describe("AgentCard", () => {
     expect(onOpenChat).toHaveBeenCalledWith("agent-2");
     (root.querySelector("[data-tray-card-change-avatar]") as HTMLElement).click();
     expect(onChangeAvatar).toHaveBeenCalledTimes(1);
+    expect(root.querySelector("[data-tray-card-change-avatar]")?.textContent).toBe("Change avatar...");
+    (root.querySelector("[data-tray-card-float]") as HTMLElement).click();
+    expect(onFloat).toHaveBeenCalledTimes(1);
   });
 
   it("reads Idle with no chat lists when nothing is doing", () => {

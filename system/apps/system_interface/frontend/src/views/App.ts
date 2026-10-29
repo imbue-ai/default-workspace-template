@@ -858,6 +858,21 @@ export function App(): m.Component<AppAttrs> {
       .finally(() => m.redraw());
   }
 
+  /** Move the one avatar creature out of the tray: the pinned chat entry goes floating for this client. */
+  function floatAvatar(current: DesktopStore): void {
+    const entry = avatarPinnedEntryOf(current.getState());
+    if (entry === null) return;
+    void current.setEntryMode(entry.window.app, "floating");
+  }
+
+  /** The tray agent entry's right-click menu: the card's actions, the way the floating creature offers its own. */
+  function trayAgentMenuRows(current: DesktopStore): MenuRow[] {
+    return [
+      { kind: "action", key: "float", label: "Float", onSelect: () => floatAvatar(current) },
+      { kind: "action", key: "change-avatar", label: "Change avatar...", onSelect: () => openAvatarChooser(current) },
+    ];
+  }
+
   /** The box of a speaker's tray entry, where its bubble's arrow points. */
   function trayEntryRect(speaker: string): DOMRect | null {
     const selector =
@@ -878,6 +893,10 @@ export function App(): m.Component<AppAttrs> {
         onChangeAvatar: () => {
           trayCard.close();
           openAvatarChooser(current);
+        },
+        onFloat: () => {
+          trayCard.close();
+          floatAvatar(current);
         },
         onOpenChat: (chatId) => {
           trayCard.close();
@@ -1447,6 +1466,10 @@ export function App(): m.Component<AppAttrs> {
               onAgentClick: () => {
                 trayCard.close();
                 void current.openMainChat();
+              },
+              onAgentContextMenu: (x, y) => {
+                trayCard.close();
+                openMenuAt({ kind: "element", rows: trayAgentMenuRows(current) }, anchorForPoint(x, y));
               },
               onPersonHoverStart: (entry, element) => trayCard.enterEntry({ kind: "person", key: entry.key }, element),
               onAgentHoverStart: (element) => trayCard.enterEntry({ kind: "agent" }, element),

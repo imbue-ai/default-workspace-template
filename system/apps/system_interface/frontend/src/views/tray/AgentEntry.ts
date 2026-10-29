@@ -2,7 +2,7 @@
  * The agent's tray entry (the multiplayer spec, section 6.4): the workspace avatar at 36px, in its mood, attending
  * while the pinned chat window is focused. The one avatar creature's home in the tray: while a client floats the
  * avatar it is drawn above the windows instead, and the tray draws none. A click opens the main chat; hovering
- * opens its card.
+ * opens its card; a right-click offers the card's actions as a menu, the way the floating creature's does.
  */
 
 import m from "mithril";
@@ -18,6 +18,7 @@ export interface AgentEntryAttrs {
   /** Whether a bubble of the agent's just appeared, which the entry hops for. */
   readonly isHopping: boolean;
   readonly onClick: () => void;
+  readonly onContextMenu: (x: number, y: number) => void;
   readonly onHoverStart: (element: HTMLElement) => void;
   readonly onHoverEnd: () => void;
 }
@@ -38,6 +39,10 @@ export const AgentEntry: m.Component<AgentEntryAttrs> = {
         style: { width: `${AGENT_PICTURE_SIZE_PX}px`, height: `${AGENT_PICTURE_SIZE_PX}px` },
         "aria-label": attrs.workspaceName === "" ? "The agent" : attrs.workspaceName,
         onclick: attrs.onClick,
+        oncontextmenu: (event: MouseEvent) => {
+          event.preventDefault();
+          attrs.onContextMenu(event.clientX, event.clientY);
+        },
         onmouseenter: (event: MouseEvent) => attrs.onHoverStart(event.currentTarget as HTMLElement),
         onmouseleave: attrs.onHoverEnd,
       },

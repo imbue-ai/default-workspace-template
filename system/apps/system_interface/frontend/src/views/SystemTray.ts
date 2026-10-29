@@ -28,6 +28,7 @@ export interface SystemTrayAttrs {
   readonly isAvatarFloating: boolean;
   readonly onPersonClick: (entry: RosterParticipant) => void;
   readonly onAgentClick: () => void;
+  readonly onAgentContextMenu: (x: number, y: number) => void;
   readonly onPersonHoverStart: (entry: RosterParticipant, element: HTMLElement) => void;
   readonly onAgentHoverStart: (element: HTMLElement) => void;
   readonly onHoverEnd: () => void;
@@ -56,6 +57,7 @@ export const SystemTray: m.Component<SystemTrayAttrs> = {
             isAttending: attrs.isAgentAttending,
             isHopping: attrs.hopping.has(WORKSPACE_AGENT_KEY),
             onClick: attrs.onAgentClick,
+            onContextMenu: attrs.onAgentContextMenu,
             onHoverStart: attrs.onAgentHoverStart,
             onHoverEnd: attrs.onHoverEnd,
           }),

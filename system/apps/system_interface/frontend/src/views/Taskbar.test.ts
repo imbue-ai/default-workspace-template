@@ -35,6 +35,7 @@ function trayAttrs(overrides: Partial<SystemTrayAttrs> = {}): SystemTrayAttrs {
     isAvatarFloating: false,
     onPersonClick: vi.fn(),
     onAgentClick: vi.fn(),
+    onAgentContextMenu: vi.fn(),
     onPersonHoverStart: vi.fn(),
     onAgentHoverStart: vi.fn(),
     onHoverEnd: vi.fn(),
