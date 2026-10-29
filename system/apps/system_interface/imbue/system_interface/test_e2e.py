@@ -2425,6 +2425,54 @@ def test_a_phone_in_either_orientation_lands_on_the_pinned_window(
             expect(_phone_pill(phone)).to_have_attribute("data-phone-pill", "home")
 
 
+# A soft keyboard as iOS Safari and Android Chrome show one: the visual viewport loses height and keeps its width,
+# the layout viewport stays. Null puts the real visual viewport back.
+_SET_KEYBOARD_JS = """(heightPx) => {
+  const viewport = window.visualViewport;
+  if (heightPx === null) delete viewport.height;
+  else Object.defineProperty(viewport, "height", { configurable: true, get: () => heightPx });
+  viewport.dispatchEvent(new Event("resize"));
+}"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_bar_steps_aside_for_a_soft_keyboard_on_a_touch_phone_only(tmp_path: Path, page: Page) -> None:
+    """With an app's page focused, a keyboard over the bottom of a touch phone takes the bar away and the page
+    reaches down to the keyboard; the bar comes back when the keyboard goes. A phone-sized window under a mouse
+    keeps its bar through the same viewports."""
+    phone_size = _MOBILE_CONTEXT_ARGS["viewport"]
+    keyboard_top = phone_size["height"] - 400
+    with _running_e2e_server(tmp_path, pin=("avatar", "linked", "bar")) as server:
+        pinned = _pinned_window(server.base_url)
+        with _phone_client(page, server) as phone:
+            _phone_shows(phone, pinned["id"])
+            phone.locator(f'iframe[data-live-page="{pinned["id"]}"]').focus()
+
+            phone.evaluate(_SET_KEYBOARD_JS, keyboard_top)
+            expect(phone.locator("[data-phone-bar]")).to_have_count(0)
+            host = _box(phone.locator("[data-phone-page-host]"))
+            _assert_close(host["y"] + host["height"], keyboard_top, "the page's foot against the keyboard")
+
+            phone.evaluate(_SET_KEYBOARD_JS, None)
+            expect(phone.locator("[data-phone-bar]")).to_be_visible()
+            bar = _box(phone.locator("[data-phone-bar]"))
+            _assert_close(bar["y"] + bar["height"], phone_size["height"], "the bar's foot against the screen's")
+
+        desktop = _second_context(page, viewport=phone_size)
+        try:
+            narrow = desktop.new_page()
+            narrow.goto(f"{server.base_url}/")
+            expect(narrow.locator("[data-phone-bar]")).to_be_visible(timeout=15000)
+            _phone_shows(narrow, pinned["id"])
+            narrow.locator(f'iframe[data-live-page="{pinned["id"]}"]').focus()
+            narrow.evaluate(_SET_KEYBOARD_JS, keyboard_top)
+            # The resize has been handled by the time evaluate returns; give a stray redraw a frame to land.
+            narrow.wait_for_timeout(100)
+            expect(narrow.locator("[data-phone-bar]")).to_be_visible()
+        finally:
+            desktop.close()
+
+
 @pytest.mark.timeout(120, func_only=False)
 def test_a_phone_and_a_laptop_share_the_windows_but_the_phone_moves_nothing(e2e_server: E2EServer, page: Page) -> None:
     """A window the laptop opens is in the phone's windows sheet, and showing it on the phone writes no placement
