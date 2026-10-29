@@ -36,7 +36,8 @@ README for details.
 - `pytest_workspace_env/` - Test-only pytest plugin that clears the
   environment an mngr agent runs with before any test code runs, and, with
   `DWT_REQUIRE_WORKSPACE_ENV=1` set, fails rather than skips any test (the CI
-  job that runs the suites inside the workspace image sets it).
+  job that runs the suites inside the workspace image sets it). It also picks
+  the browser a browser test launches.
 - `tk_command_parsing/` - Parsing helpers for the vendored `tk` ticket
   tracker's command output.
 

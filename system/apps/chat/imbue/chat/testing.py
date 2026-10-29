@@ -21,7 +21,6 @@ import queue
 import shutil
 import socket
 import subprocess
-import sys
 import tempfile
 import threading
 import time
@@ -115,13 +114,6 @@ from imbue.system_interface.shell.testing import write_registry
 from imbue.system_interface.testing import build_test_state as build_shell_test_state
 from imbue.system_interface.testing import find_free_port
 from imbue.system_interface.wsgi import make_threaded_server as make_shell_server
-
-# The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
-# provisioned by env-converge. Playwright's own browser-cache lookup only
-# auto-discovers builds Playwright downloaded itself, so launches must name
-# this binary explicitly via ``executable_path`` (see the
-# ``browser_type_launch_args`` fixture override in ``conftest.py``).
-FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
 
 
 @contextmanager
@@ -313,26 +305,6 @@ def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
 def is_chat_frontend_built() -> bool:
     """True when the chat page's bundle (``static/chat.html``) exists, which the browser tests serve."""
     return (Path(__file__).parent / "static" / "chat.html").is_file()
-
-
-def is_e2e_browser_installed() -> bool:
-    """True when a Chromium the e2e suite can launch is present on this host.
-
-    Either the workspace-provisioned Fortress build (which the
-    ``browser_type_launch_args`` fixture prefers) or a browser in Playwright's
-    own download cache satisfies the check; with neither present the e2e tests
-    skip instead of erroring at browser launch.
-    """
-    if FORTRESS_CHROMIUM_PATH.exists():
-        return True
-    env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if env_path:
-        cache_dir = Path(env_path)
-    elif sys.platform == "darwin":
-        cache_dir = Path.home() / "Library" / "Caches" / "ms-playwright"
-    else:
-        cache_dir = Path.home() / ".cache" / "ms-playwright"
-    return cache_dir.exists() and any(cache_dir.iterdir())
 
 
 def drain_is_connecting_pushes(client_queue: queue.Queue[str | None], chat_id: str) -> list[bool]:

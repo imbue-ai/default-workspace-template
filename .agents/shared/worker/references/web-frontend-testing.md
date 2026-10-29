@@ -22,9 +22,12 @@ Assert on markers that are true if and only if a route behaves correctly --
 status, the rendered content, the raw-data/source affordance, and the empty and
 overflow states -- not just that the route returned `200`. Add Playwright
 coverage wherever the value is in the rendered UI rather than the JSON, driving
-it against the isolated instance. Use pytest-playwright's `page` / `context` /
-`browser` fixtures: the repo-root `conftest.py` already points them at
-Fortress, the workspace's browser, which is installed before any agent starts.
+it against the isolated instance. Use the repo-root `conftest.py`'s
+`module_browser` fixture (and `phone_context` for the phone layout), not
+pytest-playwright's `page` / `context` / `browser`, which that conftest refuses
+because they break every later browser test in the worker. It launches the test
+browser (Playwright's headless shell, or Fortress where it is missing), which is
+installed before any agent starts.
 Do not write your own launch fixture, do not `playwright install` a managed
 browser, and never skip browser tests on browser presence -- a browser that
 cannot launch must fail the run. The only per-suite setup a browser test needs

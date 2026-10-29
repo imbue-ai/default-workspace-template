@@ -8,10 +8,8 @@ directory, mirroring `main.build_production_state` without ever starting the she
 
 from __future__ import annotations
 
-import os
 import socket
 import socketserver
-import sys
 import tempfile
 import threading
 import time
@@ -48,13 +46,6 @@ from imbue.system_interface.shell.state import build_shell_state
 from imbue.system_interface.workspace_name import workspace_name_source
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 from imbue.system_interface.wsgi import make_threaded_server
-
-# The workspace's browser engine is Fortress (a stealth-patched Chromium fork)
-# provisioned by env-converge. Playwright's own browser-cache lookup only
-# auto-discovers builds Playwright downloaded itself, so launches must name
-# this binary explicitly via ``executable_path`` (see the
-# ``browser_type_launch_args`` fixture override in ``conftest.py``).
-FORTRESS_CHROMIUM_PATH = Path("/opt/fortress/tilion-fortress/tilion")
 
 
 class _FakeSupervisorRequestHandler(SimpleXMLRPCRequestHandler):
@@ -140,26 +131,6 @@ class FakeSupervisorServer:
             raise xmlrpc.client.Fault(_SUPERVISOR_FAULT_NOT_RUNNING, f"NOT_RUNNING: {program}")
         self.statename_by_program[program] = "STOPPED"
         return True
-
-
-def is_e2e_browser_installed() -> bool:
-    """True when a Chromium the e2e suite can launch is present on this host.
-
-    Either the workspace-provisioned Fortress build (which the
-    ``browser_type_launch_args`` fixture prefers) or a browser in Playwright's
-    own download cache satisfies the check; with neither present the e2e tests
-    skip instead of erroring at browser launch.
-    """
-    if FORTRESS_CHROMIUM_PATH.exists():
-        return True
-    env_path = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-    if env_path:
-        cache_dir = Path(env_path)
-    elif sys.platform == "darwin":
-        cache_dir = Path.home() / "Library" / "Caches" / "ms-playwright"
-    else:
-        cache_dir = Path.home() / ".cache" / "ms-playwright"
-    return cache_dir.exists() and any(cache_dir.iterdir())
 
 
 # The directories minted for states built without a ``shell_state_directory``; each is removed

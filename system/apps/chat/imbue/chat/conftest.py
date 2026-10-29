@@ -14,9 +14,9 @@ from playwright.sync_api import Browser
 from playwright.sync_api import BrowserType
 from playwright.sync_api import Playwright
 from playwright.sync_api import sync_playwright
+from pytest_workspace_env.browsers import pick_e2e_browser_executable
 
 from imbue.chat.agent_manager import AgentManager
-from imbue.chat.testing import FORTRESS_CHROMIUM_PATH
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -133,16 +133,15 @@ def browser_type_launch_args(pytestconfig: pytest.Config) -> dict[str, Any]:
     browser_channel = pytestconfig.getoption("--browser-channel", default=None)
     if browser_channel:
         launch_options["channel"] = browser_channel
-    elif FORTRESS_CHROMIUM_PATH.exists():
-        # Prefer the workspace-provisioned Fortress build over Playwright's
-        # downloaded chromium/headless-shell, which is absent in a fresh
-        # workspace (only env-converge installs a browser here). An explicit
-        # ``--browser-channel`` wins because Playwright rejects a launch that
-        # names both ``channel`` and ``executable_path``.
-        launch_options["executable_path"] = str(FORTRESS_CHROMIUM_PATH)
+    elif (executable := pick_e2e_browser_executable(is_headed=headed)) is not None:
+        # The workspace's test headless shell, else Fortress (see
+        # ``pick_e2e_browser_executable``); Playwright's default cache holds neither
+        # reliably. An explicit ``--browser-channel`` wins because Playwright
+        # rejects a launch that names both ``channel`` and ``executable_path``.
+        launch_options["executable_path"] = str(executable)
     else:
-        # No channel requested and no Fortress install (e.g. CI hosts that ran
-        # `playwright install`): leave both keys unset so the launch falls
+        # No channel requested and neither browser installed (e.g. CI hosts that
+        # ran `playwright install`): leave both keys unset so the launch falls
         # through to Playwright's managed-browser lookup.
         pass
     slowmo = pytestconfig.getoption("--slowmo", default=0)
