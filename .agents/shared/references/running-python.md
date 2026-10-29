@@ -50,16 +50,23 @@ import.
 
 Every Python script here is a module of a package. A skill keeps its code in
 its own uv project, `python/` (`python/pyproject.toml`, package
-`python/<skill_name>_skill/`), and its entry files (and any shell scripts) in
-`scripts/`. `.agents/shared/scripts` (package `agents_shared`) and
-`system/scripts` are a project each, with the packages beside the entry files.
-A built-in script that only this release calls has no entry file: its module
-has its own `if __name__ == "__main__":` block and runs by its path
+`python/<skill_name>_skill/`), and any shell scripts in `scripts/`.
+`.agents/shared/scripts` (package `agents_shared`) and `system/scripts` are a
+project each. A script's module has its own `if __name__ == "__main__":` block
+and runs by its path
 (`uv run --no-sync system/scripts/workspace_scripts/verify_app.py`). Such a
 run puts the module's own directory first on `sys.path`, so a package with one
-never holds a module named like a standard-library module. An entry file is
-kept where a script runs with no venv or something outside this release calls
-it by a fixed path. The code runs under one of two interpreters:
+never holds a module named like a standard-library module.
+
+An entry file (a stub at the top of a `scripts/` dir) is kept only where
+something outside this release runs a fixed path, where a script that runs
+with no venv imports other modules of its package, or where a script must put
+a directory on `sys.path`; each stub says which. A stub run by the system
+`python3` finds its package only because Python puts the stub's own directory
+first on `sys.path`, so it is run as `python3 <path>`, never with `-I`, `-P`
+or `PYTHONSAFEPATH` set.
+
+The code runs under one of two interpreters:
 
 - **Venv tier** (the default): runs from the root venv, through
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`

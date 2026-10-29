@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Entry point for :mod:`workspace_bare_scripts.agent_rewrite_bash_command`."""
+"""Entry point for :mod:`workspace_bare_scripts.agent_rewrite_bash_command`.
+
+Kept as a stub: the harness hook configs (claude's, codex's, pi's extension and agy's shim)
+run this path, and it puts oom_priority's source on sys.path, which only an entry file may do.
+
+The system python3 finds workspace_bare_scripts only because this file's directory is first
+on sys.path, so run it as ``python3 <path>``, never with -I, -P or PYTHONSAFEPATH set.
+"""
 
 import sys
 from pathlib import Path
