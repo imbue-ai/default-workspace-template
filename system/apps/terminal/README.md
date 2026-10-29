@@ -19,7 +19,12 @@ like every Python app with a manifest):
   with a coarse pointer (a phone; never a mouse-driven desktop window), it shows a key strip under the frame (Esc, Tab, a one-shot Ctrl, the arrows) that
   posts `{type: "terminal:key", key, ctrl}` and `{type: "terminal:ctrl", armed}` into
   the frame, followed by a `ttyd-focus`; the pty page posts
-  `{type: "terminal:ctrl", armed: false}` back when a typed key used the Ctrl. The
+  `{type: "terminal:ctrl", armed: false}` back when a typed key used the Ctrl.
+  Typing happens in the pty frame, on its own origin, out of the wrapper's sight,
+  so the pty page posts `{type: "shell:input"}` to the wrapper (a pointer press or
+  a key, at most once per 20 seconds) and the wrapper hands it up to the shell as
+  the app contract's own input report, which is how the presence heartbeat reads a
+  person typing in a terminal as active. The
   page fills `100dvh` and nudges the frame a pixel after it loads and whenever the
   visual viewport resizes, so ttyd refits its grid; `POST /new` (the manifest's
   `new` launch path, posted by the shell with an optional `workdir`) allocates the
