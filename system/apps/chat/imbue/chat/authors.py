@@ -15,8 +15,9 @@ command or bash-mode input, which a harness runs only when it leads the message)
 A ``user_message`` event is stamped with ``author`` (the key) and ``author_name`` by the first of: the annotation
 whose text hash is the hash of the turn's content, nearest in time (which keeps a visitor's unprefixed slash
 command its author); the annotation whose display name the turn's prefix names, nearest in time, else a synthetic
-``name:<name>`` key for a prefix typed by hand; nothing, which is the owner. The stamping is stateless over the
-chat's annotations, so a restart, a reload, or an archived segment all read the same way.
+``name:<name>`` key for a prefix typed by hand (the name made key-safe, since a prefix may carry what a key may
+not); nothing, which is the owner. The stamping is stateless over the chat's annotations, so a restart, a reload,
+or an archived segment all read the same way.
 """
 
 import hashlib
@@ -66,6 +67,10 @@ AUTHOR_PREFIX_PATTERN: Final[re.Pattern[str]] = re.compile(
 _WHITESPACE_RUN: Final[re.Pattern[str]] = re.compile(r"\s+")
 # The key of an author known only from a prefix nobody annotated (typed by hand, or whose annotation was lost).
 NAME_KEY_PREFIX: Final[str] = "name:"
+# What a ``name:`` key may not carry (the key names a file and sits in a path), which a hand-typed prefix may.
+_KEY_UNSAFE_RUN: Final[re.Pattern[str]] = re.compile(r"[/\x00-\x1f]+")
+# The name part of the key of a prefix whose name holds nothing a key may carry.
+_UNNAMED_KEY_NAME: Final[str] = "unnamed"
 
 
 class AuthorAnnotation(EventEnvelope):
@@ -127,8 +132,11 @@ def text_sha256(text: str) -> str:
 
 @pure
 def name_key(display_name: str) -> ParticipantKey:
-    """The synthetic key of an author known only by the name a prefix carries."""
-    return ParticipantKey(f"{NAME_KEY_PREFIX}{display_name.strip()[:MAX_PARTICIPANT_NAME_LENGTH]}")
+    """The synthetic key of an author known only by the name a prefix carries: the name as the key's alphabet
+    admits it (a slash or a control character as a space, whitespace runs as one), cut to the key's length, and a
+    placeholder when nothing is left; the display name stays as the prefix spelled it."""
+    cleaned = _WHITESPACE_RUN.sub(" ", _KEY_UNSAFE_RUN.sub(" ", display_name)).strip()[:MAX_PARTICIPANT_NAME_LENGTH]
+    return ParticipantKey(f"{NAME_KEY_PREFIX}{cleaned.strip() or _UNNAMED_KEY_NAME}")
 
 
 @pure

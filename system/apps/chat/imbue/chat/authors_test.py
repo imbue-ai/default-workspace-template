@@ -130,6 +130,28 @@ def test_a_prefix_without_a_matching_hash_resolves_by_name_else_to_a_synthetic_k
     assert resolve_author("[from:  ] typed by hand", "2026-10-22T10:00:01Z", annotations) is None
 
 
+@pytest.mark.parametrize(
+    ("name", "expected_key"),
+    [
+        pytest.param("a/b", "name:a b", id="slash"),
+        pytest.param("tab\there", "name:tab here", id="control-character"),
+        pytest.param("a  /  b", "name:a b", id="whitespace-run"),
+        pytest.param("/", "name:unnamed", id="nothing-left"),
+        pytest.param("x" * 70, "name:" + "x" * 60, id="cut-to-length"),
+    ],
+)
+def test_a_hand_typed_name_the_key_alphabet_refuses_still_makes_a_key_and_keeps_its_spelling(
+    name: str, expected_key: str
+) -> None:
+    # A prefix may carry what a key may not (the key names a mentions file): the turn is still stamped, never
+    # refused, and the name is shown as typed.
+    resolved = resolve_author(f"[from: {name}] typed by hand", "2026-10-22T10:00:01Z", [])
+    assert resolved == (ParticipantKey(expected_key), name)
+    event = _user_event(f"[from: {name}] typed by hand")
+    stamp_authors([event], [])
+    assert (event["author"], event["author_name"]) == (expected_key, name)
+
+
 def test_stamping_marks_only_user_messages_with_an_author_and_never_restamps() -> None:
     annotations = [_annotation("m1", _BOB, "Bob", "[from: Bob] hello", "2026-10-22T10:00:00.000000000Z")]
     bob = _user_event("[from: Bob] hello")
