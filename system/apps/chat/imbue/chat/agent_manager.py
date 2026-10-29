@@ -3432,7 +3432,8 @@ class AgentManager:
             raise ChatConvergingError(_converging_detail_of(chat.transition))
         if agent_state is None:
             raise AgentStopError(f"Chat '{chat_id}' has no agent to stop")
-        self._run_mngr_stop(agent_state.name)
+        with self.letting_go_of_unrecorded_sends(agent_state.id):
+            self._run_mngr_stop(agent_state.name)
 
     def _run_mngr_stop(self, agent_name: str) -> None:
         """Run ``mngr stop`` for one agent. Raises ``AgentStopError`` when mngr refuses or fails.

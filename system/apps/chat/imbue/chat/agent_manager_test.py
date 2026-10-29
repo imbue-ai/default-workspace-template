@@ -6431,6 +6431,22 @@ def test_messages_delivered_before_or_during_a_stop_are_not_sent_again(broadcast
     assert chat.resent == []
 
 
+def test_stopping_a_chat_lets_go_of_the_sends_kept_for_resending(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Stopped-Chat")
+    manager._keep_unrecorded_send(agent_id, "what is 5+5?", frozenset())
+    try:
+        manager.stop_chat(ChatId(agent_id))
+    finally:
+        manager.stop()
+    assert argv_log.read_text().splitlines() == ["stop Stopped-Chat"]
+    assert agent_id not in manager._unrecorded_sends_by_agent
+
+
 def test_an_agent_the_stream_reports_removed_takes_its_kept_sends_with_it(broadcaster: WebSocketBroadcaster) -> None:
     chat = _LostSendChat(broadcaster)
     try:
