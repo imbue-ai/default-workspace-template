@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -21,11 +22,12 @@ _SETTINGS = ImageBuildSettings(latchkey_version="3.19.3")
 
 def test_pinned_latchkey_version_reads_the_setup_scripts_pin() -> None:
     assert pinned_latchkey_version(': "${LATCHKEY_VERSION:=3.19.3}"\n') == "3.19.3"
-    assert (
+    # The real pin moves with every latchkey bump, so only its shape is checked here.
+    assert re.fullmatch(
+        r"\d+\.\d+\.\d+",
         pinned_latchkey_version(
             (_REPO_ROOT / "system" / "scripts" / "setup_system.sh").read_text()
-        )
-        == "3.19.3"
+        ),
     )
     with pytest.raises(ImageBuildError):
         pinned_latchkey_version("nothing here")
