@@ -105,14 +105,14 @@ No status indicator.
 The title bar is the drag handle; double-click toggles maximize; dragging to the left or right edge snaps to that half, and to the top edge maximizes.
 The window menu offers Refresh, Open in its own window (where the embedding chrome can pull windows out), Share, Quit the app (which closes every window of it and stops it; `docs/system/specs/stop-when-no-windows.md`), and Close.
 Close removes the window from the desktop for everyone; there is no separate "remove from desktop".
-A pinned window keeps its close control and its menus' Close, and each minimizes it: it is never closed, only minimized.
+A pinned window keeps its close control and its menus' Close, and each closes it for this client alone: the shared window is never closed, only minimized, and its entry leaves this client's bar until something shows the window again.
 
 ### 2.8 Taskbar, launcher, system tray, tray widgets
 
 The taskbar is the bar along the bottom of the viewport.
 Left to right: the **launcher field**; one **taskbar entry** per window of the active desktop, in the order the windows were opened, minimized and pulled-out ones marked; then the **system tray**.
 An entry shows the app icon and the title.
-A pinned window's entry is always there, and a client may draw it in the bar in a style (the app's icon, or the workspace's avatar) or floating above the windows (pinned-taskbar-entries plan section 4.2).
+A pinned window's entry is a plain bar entry like any other window's (absent while this client has closed the window), and a client may draw the app's creature (the workspace's avatar) floating above the windows beside it (pinned-taskbar-entries plan section 4.2).
 Clicking an entry restores a minimized window and raises it, shows a pulled-out window's own desktop window (or, when its ghost is hidden, the ghost), minimizes the top window, or raises any other window.
 
 The launcher is the text field and the menu it opens above the field: one row per launch path of every app, window rows (every desktop's windows, while typing), and at the foot the free-text rows, which send the typed text to whichever app declares a launch path with a `text_param` (the chat's new chat, and its send to an existing chat).
@@ -223,7 +223,7 @@ Recorded here so the spec need not re-argue them.
 3. Windows are shared per desktop; placements, including stacking order, are per client; a window without a placement is minimized.
 4. Shortcut cells are shared and fitted to the current grid at render time.
 5. Geometry is fractions of the backdrop.
-6. Taskbar entries are the active desktop's windows in this client; a pinned window's entry may be drawn in the bar with a style or floating above the windows.
+6. Taskbar entries are the active desktop's windows in this client; a pinned window's entry is a plain bar entry, and the app's creature may float above the windows beside it.
 7. The launcher is a text field and the menu it opens, never a window.
 8. The shell has no instance layer; apps own their things, and the chat app lists its chats inside its own page with an inner frame per selected chat, keeping its single-chat page for direct launches.
 9. A window's close removes it for everyone; minimize is the per-client way to get it out of sight. Whether the app keeps what the window showed is the app's rule (decision 16).
