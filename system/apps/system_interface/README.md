@@ -409,10 +409,12 @@ iframe of an app page under a title bar with the window menu, Refresh, and "Chat
 about this app" on the left while it is focused, the page's title centred, and
 the window controls on the right. The taskbar shows the launcher field, the
 overview button, one entry per window of the active desktop, and the tray. A
-pinned window's entry may float above the windows instead, drawn as the
-workspace's avatar (the chat's default); its context menu moves it between the
-bar and the desktop, switches its style, and opens the avatar chooser. Shortcuts
-are added, moved, and removed on the backdrop.
+pinned window's entry is a plain entry like any other window's, except that its
+Close closes the window for this client alone (minimized, and the entry out of
+this client's bar until something shows the window again); the entry's context
+menu moves the app's creature -- the workspace's avatar, docked in the tray by
+default -- between the tray and a spot floating above the windows, and opens the
+avatar chooser. Shortcuts are added, moved, and removed on the backdrop.
 
 **Desktops** (the multiplayer spec, section 8; `frontend/src/views/Overview.ts`,
 `model/Ownership.ts`). The overview button (four squares, "Manage Desktops")
@@ -478,7 +480,8 @@ faded while the entry is not here; stacked from four entries on, each
 tucked under the one before it, spread while the pointer is over them; hopping
 once when it arrives and when a bubble of its appears), the viewer's own
 picture, and the agent's avatar at 36px in its mood, attending while the pinned
-avatar-style window is focused. Hovering
+chat window is focused -- the one creature's docked home, not drawn while this
+client floats the avatar over the windows instead. Hovering
 an entry for 180ms opens its card above it: a person's shows the picture, the name
 ("(you)", "(owner)"; "You" for the owner of an unshared workspace), the status
 line ("Active", "Idle · 4m", "Offline · last seen 3h ago", "Invited"), what they
@@ -502,7 +505,8 @@ somebody sends and every turn the agent closes with text (`{"speaker", "chat_id"
 "chat_title", "text", "message_id", "mentions"}`), which the shell broadcasts as
 `bubble` to every window but the speaker's own clients (the clients whose records
 carry the speaker's key; the owner's under either of their keys, the account's or
-the synthetic `owner`, whichever the bubble carries); and
+the synthetic `owner`, whichever the bubble carries; a window looking at the
+bubble's chat drops it on receipt unless it mentions the viewer); and
 `POST /api/chats-activity` with what every chat is doing (`{"chats": [{"chat_id",
 "title", "status", "kind"}]}`), kept and broadcast as `chats_activity`, and sent on
 connect once reported. A speech bubble is a rounded card hanging above the tray
