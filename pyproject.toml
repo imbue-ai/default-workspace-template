@@ -100,32 +100,49 @@ dev = [
 package = false
 
 [tool.uv.workspace]
-# The globs cover every package in the three-way system/ split -- built-in
-# libraries, background services, and apps (built-in and user-built alike) --
-# so a newly scaffolded or adopted app joins the workspace without editing
-# this list. Every app runs from this workspace's venv, its one install: its
-# supervisord program execs its entry point from .venv/bin. One lockfile keeps
-# every package on the same versions, and a user-built app never has to edit
-# this file.
+# Every built-in library, service and app, named one by one: these share this one
+# lock and venv, reviewed and tested together upstream. A user-built package under
+# system/apps, system/services or system/libs is not listed: it is a standalone uv
+# project with its own pyproject.toml, uv.lock and .venv, so its dependencies never
+# move a built-in's (docs/system/blueprint/app-environments/). Adding a built-in
+# package means adding it here; system/test_app_manifests.py fails on one that is
+# neither listed nor standalone.
 # A skill's Python lives in its own project, .agents/skills/<name>/python/
 # (pyproject.toml plus the <skill_name>_skill package), so a skill's dependencies
-# join the same lock; its scripts/ dir keeps only entry files and shell scripts.
-# uv refuses a glob-matched directory with no pyproject.toml, and scripts/ is the
-# standard Agent Skills dir name, so the glob names a dir only this layout uses.
-# The shared skill scripts and system/scripts are a project each too.
+# join the same lock -- user skills included; its scripts/ dir keeps only entry files
+# and shell scripts. uv refuses a glob-matched directory with no pyproject.toml, and
+# scripts/ is the standard Agent Skills dir name, so the glob names a dir only this
+# layout uses. The shared skill scripts and system/scripts are a project each too.
 members = [
-    "system/libs/*",
-    "system/services/*",
-    "system/apps/*",
+    "system/libs/app_manifest",
+    "system/libs/app_schema",
+    "system/libs/bootstrap",
+    "system/libs/chat_background_tasks",
+    "system/libs/github_sync",
+    "system/libs/mngr_cli_contract",
+    "system/libs/pytest_executable_tmp",
+    "system/libs/pytest_workspace_env",
+    "system/libs/routines",
+    "system/libs/tk_command_parsing",
+    "system/libs/workspace_layout",
+    "system/libs/workspace_themes",
+    "system/services/caretaker",
+    "system/services/env_converge",
+    "system/services/host_backup",
+    "system/services/oom_priority",
+    "system/services/share_gateway",
+    "system/apps/browser",
+    "system/apps/chat",
+    "system/apps/files",
+    "system/apps/getting_started",
+    "system/apps/routines",
+    "system/apps/system_interface",
+    "system/apps/system_monitor",
+    "system/apps/terminal",
     "system/scripts",
     ".agents/shared/scripts",
     ".agents/skills/*/python",
 ]
-# system/libs/workspace_ui is a JavaScript library (the frontends' shared code), not a Python
-# package; system/apps/terminal_pty is a manifest alone (the terminal's pty origin), whose
-# program is an entry point of system/apps/terminal. system/apps/datalib is a manifest and a
-# standard-library launcher around the datalib-http binary.
-exclude = ["system/libs/workspace_ui", "system/apps/terminal_pty", "system/apps/datalib"]
 
 [tool.uv.sources]
 bootstrap = { workspace = true }

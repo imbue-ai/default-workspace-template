@@ -23,7 +23,7 @@ _UPDATE_SELF_PACKAGE_DIR = (
 )
 
 
-@pytest.mark.parametrize("name", ["tool_env.py", "run_in_background.py", "venv_links.py"])
+@pytest.mark.parametrize("name", ["tool_env.py", "run_in_background.py", "venv_links.py", "user_packages.py"])
 def test_update_selfs_copy_matches_the_canonical_one(name: str) -> None:
     canonical = _SCRIPTS_DIR / name
     mirrored = _UPDATE_SELF_PACKAGE_DIR / name

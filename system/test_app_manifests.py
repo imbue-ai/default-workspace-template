@@ -21,6 +21,7 @@ from app_manifest.scope import (
 )
 from oom_priority import bands
 from oom_priority.supervisord_testing import supervisord_commands
+from workspace_bare_scripts import user_packages
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _APPS_DIR = _REPO_ROOT / "system" / "apps"
@@ -33,19 +34,20 @@ _MANIFEST_FLAG = re.compile(r"--manifest\s+(\S+)")
 _VENV_BIN_PREFIX = ".venv/bin/"
 
 
-# The apps the template ships. Only these are checked: a workspace built from the
-# template may carry user-built apps (with a manifest whose priority is ``user``,
-# or with no manifest at all), and this suite runs there too.
-_BUILT_IN_APP_PACKAGES = (
-    "browser",
-    "chat",
-    "files",
-    "getting_started",
-    "routines",
-    "system_interface",
-    "system_monitor",
-    "terminal",
-    "terminal_pty",
+# The apps the template ships: the root workspace members under system/apps, plus the
+# manifest-only app the terminal runs. Only these are checked: a workspace built from the
+# template may carry user-built apps, standalone projects the root members do not name,
+# and this suite runs there too.
+_MANIFEST_ONLY_BUILT_IN_APPS = ("terminal_pty",)
+_BUILT_IN_APP_PACKAGES = tuple(
+    sorted(
+        {
+            member.removeprefix("system/apps/")
+            for member in user_packages.built_in_members(_REPO_ROOT)
+            if member.startswith("system/apps/") and "*" not in member
+        }
+        | set(_MANIFEST_ONLY_BUILT_IN_APPS)
+    )
 )
 
 
@@ -543,7 +545,12 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     ]
     # Every seeded shortcut opens a new window of its app; the one browser is focused instead
     # (docs/system/specs/window-bound-resources.md section 3.1).
-    for name, mode in (("chat", "new"), ("terminal", "new"), ("files", "new"), ("browser", "focus")):
+    for name, mode in (
+        ("chat", "new"),
+        ("terminal", "new"),
+        ("files", "new"),
+        ("browser", "focus"),
+    ):
         shortcut = by_name[name].default_shortcut
         assert shortcut is not None
         assert shortcut.mode == mode, name
@@ -562,10 +569,15 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     ]
     assert by_name["chat"].default_shortcut is not None
     assert by_name["chat"].default_shortcut.launch == "root"
-    for name, launch_path, method in (("terminal", "/new", "POST"), ("files", "/home/user/workspace/", "GET"), ("browser", "/new", "POST")):
-        assert [(entry.id, entry.path, entry.method.value) for entry in by_name[name].launch_paths] == [
-            ("new", launch_path, method)
-        ], name
+    for name, launch_path, method in (
+        ("terminal", "/new", "POST"),
+        ("files", "/home/user/workspace/", "GET"),
+        ("browser", "/new", "POST"),
+    ):
+        assert [
+            (entry.id, entry.path, entry.method.value)
+            for entry in by_name[name].launch_paths
+        ] == [("new", launch_path, method)], name
         shortcut = by_name[name].default_shortcut
         assert shortcut is not None
         assert shortcut.launch == "new", name
@@ -613,3 +625,20 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert [param.name for param in by_name["browser"].launch_paths[0].params] == [
         "url"
     ]
+
+
+def test_every_package_the_template_ships_is_a_root_member() -> None:
+    # A package under system/ that is neither a root member nor standalone would run as a
+    # user package without being one: a package the template ships is listed, and a user
+    # package carries its own lock.
+    unlisted = [
+        relative
+        for relative in user_packages.user_packages(_REPO_ROOT)
+        if not (_REPO_ROOT / relative / "uv.lock").is_file()
+    ]
+    assert unlisted == [], (
+        f"{unlisted} sit under system/ with no uv.lock of their own and are not root "
+        "workspace members. A package the template ships belongs in the root "
+        "pyproject.toml's [tool.uv.workspace] members; a user package is instead "
+        f"converted to a standalone project ({user_packages.MIGRATION_REFERENCE})."
+    )
