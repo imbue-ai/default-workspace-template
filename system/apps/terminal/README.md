@@ -46,8 +46,9 @@ like every Python app with a manifest):
   recorded under `data/.state/terminal/sessions/<name>` (falling back to `tmux
   new-session -A` by name, which creates the session when tmux lost it, when there is
   no record, or when the session under that id is a later server's); `workdir.sh` opens a shell in a
-  directory; `agent.sh` attaches to an mngr agent's tmux window for the chat UI's
-  terminal back face. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
+  directory; `agent.sh <name> [view]` attaches to an mngr agent's tmux window for
+  the chat UI's terminal back face, read-only and size-ignored when the chat's
+  window is viewed. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
   `commands/<key>.sh` with the remaining arguments. It decompresses the OSC 52-capable
   ttyd web client the `imbue-mngr-ttyd` package ships, adds the script in `pty_page.py`
   before its closing body tag, and serves it via `ttyd -I`, falling back to
@@ -86,7 +87,13 @@ appended while the shell's handshake says the window is viewed on somebody
 else's desktop (the multiplayer spec, section 8.3), and `session.sh` receives
 the name, the directory, and the viewer marker as its arguments: for a viewer
 it attaches read-only and as a client tmux never sizes the window by
-(`tmux attach -r -f ignore-size`), and never creates the session.
+(`tmux attach -r -f ignore-size`), names the session exactly when the record
+does not verify (`-t =<name>`, never tmux's prefix match, so a viewer of a
+lost `terminal-1` is refused rather than shown `terminal-10`), and never
+creates the session. A framed wrapper points the pty frame only once the
+shell's handshake has said whether the window is viewed, so a viewed terminal
+never attaches writable first; when no handshake comes within two seconds it
+attaches plainly, and an unframed wrapper points at once.
 A terminal created through `new` always carries a workdir: the `workdir` param
 when the create gave one, else the directory the app runs from (the workspace
 root under supervisord); a record of a hand-made session holds none, and a
