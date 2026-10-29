@@ -69,7 +69,9 @@ answer shapes live in one place the shell and its callers share.
   the workspace carries, read the same way by the shell and the apps:
   `RequestIdentity` (the owner flag, the account's `user_id` and `email`, a
   visiting agent's `agent_id`, `agent_name`, and `granter`),
-  `parse_identity_header` (a missing or unreadable header is `ANONYMOUS_OWNER`),
+  `parse_identity_header` (a missing or blank header is `ANONYMOUS_OWNER`; a
+  present one that does not parse raises `InvalidIdentityHeaderError`, an
+  `InvalidLayoutValueError`, which the shell and the chat app answer with 400),
   `participant_key_of` (the account, else the agent, else `owner`),
   `is_owner_participant` (the owner under either of their keys), and
   `visiting_user_id` (a signed-in requester other than the owner).
