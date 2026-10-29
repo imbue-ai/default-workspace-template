@@ -1074,7 +1074,8 @@ def _participants_endpoint() -> Response:
 
 def _participant_picture_endpoint(key: str) -> Response:
     """A participant's picture, fetched from the shell over loopback: a person's profile picture as the shell keeps
-    it, or the workspace agent's selected avatar icon. A page's cache keeps a versioned one for good."""
+    it, or the workspace agent's selected avatar icon. The shell is asked at the roster's picture path with the page's
+    own query (the version, or the icon's size), so its caching answer is about the address the page asked under."""
     state = get_state()
     try:
         participant_key = ParticipantKey(key)
@@ -1083,9 +1084,11 @@ def _participant_picture_endpoint(key: str) -> Response:
     entry = state.roster.participant(participant_key)
     if entry is None or entry.profile_picture_url is None or not entry.profile_picture_url.startswith("/"):
         return error_response(f"{key} has no picture here", 404)
+    picture_path = entry.profile_picture_url.partition("?")[0]
+    query = request.query_string.decode()
     try:
         answer = state.http_client.get(
-            f"{shell_base_url()}{entry.profile_picture_url}", timeout=_PICTURE_TIMEOUT_SECONDS
+            f"{shell_base_url()}{picture_path}" + (f"?{query}" if query else ""), timeout=_PICTURE_TIMEOUT_SECONDS
         )
     except httpx.HTTPError as e:
         logger.debug("Could not fetch the picture of {} from the shell: {}", key, e)

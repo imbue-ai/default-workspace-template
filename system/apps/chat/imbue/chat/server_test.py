@@ -5605,6 +5605,8 @@ def test_participants_are_the_shells_roster_with_every_picture_on_this_origin(
 def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_type_and_caching(
     config: Config, signed_in_account: str, tmp_path: Path
 ) -> None:
+    """The shell is asked at the roster's picture path with the page's own query, so the caching it answers (which
+    is relayed) is about the address the page asked under; a key that is nobody's is a 404 here."""
     asked: list[str] = []
 
     def shell_answers(request: httpx.Request) -> httpx.Response:
@@ -5629,14 +5631,15 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
         )
         return create_application(state).test_client()
 
+    # The page asks under the addresses the participants listing hands out: the roster's path with its query.
     relayed = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
-        "/api/participants/workspace-agent/picture"
+        "/api/participants/workspace-agent/picture?size=64"
     )
     assert (relayed.status_code, relayed.mimetype, relayed.data) == (200, "image/png", b"\x89PNG...")
     assert asked == [f"{shell_base_url()}{_AGENT_PICTURE_PATH}"]
     # A person's picture comes with the shell's caching, so a versioned one is kept by the page for good.
     bobs = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
-        "/api/participants/user:user-bob-4471/picture"
+        "/api/participants/user:user-bob-4471/picture?v=0123456789abcdef"
     )
     assert (bobs.status_code, bobs.mimetype, bobs.data, bobs.headers["Cache-Control"]) == (
         200,
@@ -5645,6 +5648,15 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
         "public, max-age=1",
     )
     assert asked[-1] == f"{shell_base_url()}{_BOB_PICTURE_PATH}"
+    # A stale page asks under an older version, or none: the shell is asked under that, not the roster's.
+    app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
+        "/api/participants/user:user-bob-4471/picture?v=old"
+    )
+    app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get("/api/participants/user:user-bob-4471/picture")
+    assert asked[-2:] == [
+        f"{shell_base_url()}/api/roster/user:user-bob-4471/picture?v=old",
+        f"{shell_base_url()}/api/roster/user:user-bob-4471/picture",
+    ]
     # A key that is nobody's, or not a key at all, has no picture here.
     assert (
         app_over(_shell_with_workspace_agent(None)).get("/api/participants/user:user-nobody/picture").status_code

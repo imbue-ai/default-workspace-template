@@ -507,7 +507,8 @@ def _roster_endpoint() -> Response:
     return model_response(get_state().roster.document(utc_now()))
 
 
-# A picture a page's cache may keep for good: its URL carries the version, so a newer picture is a newer URL.
+# A picture a page's cache may keep for good: its URL carries the version, so a newer picture is a newer URL. Only
+# an answer under the current version is kept so, since a stale page asking under an older one gets these bytes too.
 _VERSIONED_PICTURE_CACHE_CONTROL: Final[str] = "public, max-age=31536000, immutable"
 # The participant keys that name a person, whose id part the profile is kept under.
 _USER_KEY_PREFIX: Final[str] = "user:"
@@ -530,7 +531,8 @@ def _participant_picture_endpoint(key: str) -> ResponseReturnValue:
     if picture is None:
         return error_response("No profile picture", HTTP_NOT_FOUND)
     response = Response(picture.content, mimetype=picture.media_type)
-    response.headers["Cache-Control"] = _VERSIONED_PICTURE_CACHE_CONTROL if "v" in request.args else "no-cache"
+    is_current_version = request.args.get("v") == picture.version
+    response.headers["Cache-Control"] = _VERSIONED_PICTURE_CACHE_CONTROL if is_current_version else "no-cache"
     return response
 
 

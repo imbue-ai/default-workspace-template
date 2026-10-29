@@ -211,7 +211,11 @@ def test_resolve_picture_fetches_the_bytes_once_and_again_only_for_a_new_url(tmp
     first = resolver.resolve_picture(UserId("user-bob-4471"), _T0)
     again = resolver.resolve_picture(UserId("user-bob-4471"), _T0 + timedelta(seconds=1))
 
-    assert first is not None and (first.media_type, first.content) == ("image/png", b"PNG:/bob.png")
+    assert first is not None and (first.media_type, first.content, first.version) == (
+        "image/png",
+        b"PNG:/bob.png",
+        picture_version_of("https://a/bob.png"),
+    )
     assert again == first
     assert picture_requests == [_BOB_WIRE["profile_picture_url"]]
     assert (tmp_path / "profiles" / "user-bob-4471.picture.json").exists()
@@ -221,7 +225,10 @@ def test_resolve_picture_fetches_the_bytes_once_and_again_only_for_a_new_url(tmp
         200, json={**_BOB_WIRE, "profile_picture_url": "https://pictures.example/bob/c"}
     )
     newer = resolver.resolve_picture(UserId("user-bob-4471"), _T0 + PROFILE_CACHE_TTL + timedelta(seconds=1))
-    assert newer is not None and newer.content == b"PNG:/bob/c"
+    assert newer is not None and (newer.content, newer.version) == (
+        b"PNG:/bob/c",
+        picture_version_of("https://pictures.example/bob/c"),
+    )
     assert picture_requests == [_BOB_WIRE["profile_picture_url"], "https://pictures.example/bob/c"]
 
 

@@ -962,7 +962,8 @@ participant key, and `GET /api/participants` relays the shell's roster
 picture the shell serves from its own origin (a person's profile picture, the
 workspace agent's avatar icon) rewritten to `GET /api/participants/<key>/picture`
 (the shell URL's query kept, so a versioned picture stays cached), which the chat
-app proxies from the shell with its caching, so the page needs no second origin.
+app proxies from the shell -- asked at that path with the page's own query, its
+caching answer relayed -- so the page needs no second origin.
 The agent's prose is drawn as bubbles under that picture and the workspace's name,
 one per reply (tool chips and cards sit between them, outside the bubbles).
 

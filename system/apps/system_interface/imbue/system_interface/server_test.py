@@ -682,7 +682,8 @@ def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_versio
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
     """``GET /api/roster/<key>/picture`` (the multiplayer spec, section 4.2) relays the bytes the profile's URL
-    serves, immutably cacheable under its version; a key that is not a listed person's (an account the roster does
+    serves, immutably cacheable under its current version alone (a stale page asking under an older version, or
+    none, gets the same bytes uncached); a key that is not a listed person's (an account the roster does
     not name, a key with no id, the agent's), or a person with no picture, is a 404, and nothing is fetched for it."""
     pictures_fetched: list[str] = []
 
@@ -716,6 +717,8 @@ def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_versio
     assert served.headers["Cache-Control"] == "public, max-age=31536000, immutable"
     unversioned = client.get("/api/roster/user:user-owner-9c21/picture")
     assert (unversioned.status_code, unversioned.headers["Cache-Control"]) == (200, "no-cache")
+    stale = client.get("/api/roster/user:user-owner-9c21/picture?v=0123456789abcdef")
+    assert (stale.status_code, stale.data, stale.headers["Cache-Control"]) == (200, b"\x89PNG...", "no-cache")
     assert client.get("/api/roster/user:user-bob-4471/picture").status_code == 404
     assert client.get("/api/roster/user:user-carol-1138/picture").status_code == 404
     assert client.get("/api/roster/user:/picture").status_code == 404

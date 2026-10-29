@@ -386,7 +386,8 @@ admits no outside image: the roster points at
 the profile's URL (5 second bound) and keeps them under
 `data/.state/presence/profiles/<user_id>.picture.json` until the profile names
 another URL; `v` is a digest of that URL, so a newer picture is a newer address
-and a versioned answer is cached by the page for good.
+and an answer under the current version is cached by the page for good (one
+under an older version, or none, is the same bytes uncached).
 
 The same header decides where a page lands. A shell page posts its arrival
 (`POST /api/clients/<client_id>/arrive`) before it reads the inventory

@@ -74,10 +74,14 @@ class UserProfile(FrozenModel):
 
 
 class ProfilePicture(FrozenModel):
-    """A profile picture's bytes and media type, as the shell serves them from its own origin."""
+    """A profile picture's bytes and media type, as the shell serves them from its own origin, and the version its
+    route carries (``picture_version_of`` the URL they came from)."""
 
     media_type: str = Field(description="The image's media type, as the connector served it")
     content: bytes = Field(description="The image bytes")
+    version: str = Field(
+        description="The digest of the URL the bytes came from, which the shell's route is versioned by"
+    )
 
 
 class _CachedPicture(FrozenModel):
@@ -202,7 +206,11 @@ class ProfileResolver(MutableModel):
             return None
         cached = self._read_cached_picture(user_id)
         if cached is not None and cached.url == profile.profile_picture_url:
-            return ProfilePicture(media_type=cached.media_type, content=base64.b64decode(cached.content_base64))
+            return ProfilePicture(
+                media_type=cached.media_type,
+                content=base64.b64decode(cached.content_base64),
+                version=picture_version_of(cached.url),
+            )
         fetched = self._fetch_picture(profile.profile_picture_url, user_id)
         if fetched is None:
             return None
@@ -261,7 +269,7 @@ class ProfileResolver(MutableModel):
         if not media_type.startswith("image/"):
             logger.warning("Refused the profile picture of {}: its type is {!r}", user_id, media_type)
             return None
-        return ProfilePicture(media_type=media_type, content=response.content)
+        return ProfilePicture(media_type=media_type, content=response.content, version=picture_version_of(url))
 
     def _read_cached(self, user_id: UserId) -> _CachedProfile | None:
         document = read_json_object(self._cache_path(user_id))
