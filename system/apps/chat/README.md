@@ -942,7 +942,8 @@ Every request reaches the chat app with the shell's `X-Imbue-Identity` header
 (`identity.py`; the keys are `workspace_layout.identity`): the owner, a signed-in
 person the workspace is shared with (`user:<id>`), or a visiting agent
 (`agent:<id>`). A present header that does not parse is refused with 400; only a
-missing one reads as the owner (an in-workspace caller, such as a script). Every
+missing or blank one reads as the owner (an in-workspace caller, such as a
+script). Every
 route that delivers a person's words attributes them the same way: the message
 route, a new chat's first message (the create's and the new-chat intake's), and
 the message that confirms a switch. A send from anyone but the owner is delivered
