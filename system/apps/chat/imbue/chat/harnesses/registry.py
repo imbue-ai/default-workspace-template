@@ -364,6 +364,10 @@ class HarnessSpec(FrozenModel):
     # What a /compact sent from the composer does; unless it is sent as text, the chat shows the
     # compaction it starts.
     composer_compact_handling: ComposerCompactHandling = ComposerCompactHandling.SENT_AS_TEXT
+    # Whether a message the harness took can be lost with its process: mngr counts a message as delivered
+    # once the harness shows it, which can be before the harness writes it down (claude, while its startup
+    # hooks run). The chat sends such a message again when the process exits before the transcript holds it.
+    resends_sends_lost_with_process: bool = False
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -400,6 +404,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # the Chat context) even with no turn in flight, which cancels a compaction.
         can_interrupt_compaction=True,
         composer_compact_handling=ComposerCompactHandling.FORWARDED_TO_HARNESS,
+        resends_sends_lost_with_process=True,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,

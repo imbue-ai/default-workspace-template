@@ -331,6 +331,7 @@ class ChatAppState(MutableModel):
         or a restart actually ran. Raises ``AgentRestartError`` when the restart fails.
         """
         watcher = self.get_or_create_watcher(agent_info)
+        self.agent_manager.forget_unrecorded_sends(agent_info.id)
         interrupts = _SentInterrupts(
             restart=restart_process,
             press_chord=lambda: self.agent_manager.press_key_chord_on_agent(
