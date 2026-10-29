@@ -74,6 +74,14 @@ export function participantName(key: string, fallbackName: string | null): strin
   return getParticipant(key)?.display_name ?? fallbackName ?? key;
 }
 
+/** The owner's two keys read as one owner (the multiplayer spec, section 11): an annotation written before the
+ *  workspace was shared stays under the synthetic ``owner``, so that key folds to the roster owner's -- itself on
+ *  an unshared workspace -- and every other key is its own. */
+export function foldOwnerKey(key: string): string {
+  if (key !== OWNER_KEY) return key;
+  return getOwner()?.key ?? key;
+}
+
 /** A picture the roster names by an origin-relative path (the workspace agent's, served by this app) is reached
  *  under the page's base path, as every other API URL is; an absolute URL (a person's) is left alone. */
 function withPictureOnThisOrigin(entry: Participant): Participant {

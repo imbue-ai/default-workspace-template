@@ -31,7 +31,7 @@ import { kebabGlyph, peopleGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
 import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
 import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
-import { getParticipant, participantName } from "../models/Participants";
+import { foldOwnerKey, getParticipant, participantName } from "../models/Participants";
 import { participantPicture } from "../views/participant-picture";
 import { isAgentStarted, isRoom, startsWithMainChat } from "./rows";
 import {
@@ -532,13 +532,16 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
 
 /** Who has written in the chat, as a stack of little pictures at the row's end (the multiplayer spec, section
  *  5.4): drawn only when two or more have, and stepping aside under the pointer, where the pencil and the kebab
- *  come out. Each picture tucks under the one before it with a ring of the rail's surface, like the tray's stack. */
+ *  come out. Each picture tucks under the one before it with a ring of the rail's surface, like the tray's stack.
+ *  The owner's two keys fold into one owner before counting and drawing (section 11), so an owner annotated under
+ *  ``owner`` before the workspace was shared and under their account key after is one person, not two. */
 function participantPhotos(row: ChatRow): m.Vnode | null {
-  if (row.participants.length < 2) return null;
+  const keys = [...new Set(row.participants.map(foldOwnerKey))];
+  if (keys.length < 2) return null;
   return m(
     "span",
     { class: "chat-row-people flex flex-none items-center group-hover:hidden", "data-chat-row-people": row.chatId },
-    row.participants.map((key, index) => {
+    keys.map((key, index) => {
       const entry = getParticipant(key);
       return participantPicture({
         name: participantName(key, null),

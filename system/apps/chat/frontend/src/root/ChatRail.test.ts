@@ -16,6 +16,7 @@ const verbs = vi.hoisted(() => ({
 vi.mock("./verbs", () => verbs);
 
 import m from "mithril";
+import { setParticipantsForTesting } from "../models/Participants";
 import { ChatRail, rowMenuRows } from "./ChatRail";
 import { chatRailAttrsFixture } from "./chatRailAttrsFixture";
 import { chatRowFixture } from "./chatRowFixture";
@@ -66,6 +67,10 @@ describe("ChatRail status marks", () => {
 });
 
 describe("ChatRail participant photos", () => {
+  afterEach(() => {
+    setParticipantsForTesting(null, []);
+  });
+
   it("shows who has written in a chat only when two or more have, stepping aside under the pointer", () => {
     const rail = mount([
       chatRowFixture("agent-shared", { participants: ["user:josh-1", "user:bob-2"] }),
@@ -79,6 +84,34 @@ describe("ChatRail participant photos", () => {
     expect(photos?.className).toContain("group-hover:hidden");
     expect(rail.querySelector('[data-chat-row-people="agent-solo"]')).toBeNull();
     expect(rail.querySelector('[data-chat-row-people="agent-quiet"]')).toBeNull();
+  });
+
+  it("folds the owner's two keys into one owner before counting and drawing", () => {
+    setParticipantsForTesting(null, [
+      {
+        key: "user:josh-1",
+        kind: "person",
+        display_name: "Josh",
+        profile_picture_url: "https://p.example/josh.png",
+        email: null,
+        handle: "Josh",
+        color: "#000",
+        is_owner: true,
+        is_connected: true,
+        last_seen: null,
+        last_input_at: null,
+      },
+    ]);
+    const rail = mount([
+      chatRowFixture("agent-solo-owner", { participants: ["owner", "user:josh-1"] }),
+      chatRowFixture("agent-with-visitor", { participants: ["owner", "user:bob-2"] }),
+    ]);
+    // The owner annotated before the workspace was shared and after is one person, never a stack of two.
+    expect(rail.querySelector('[data-chat-row-people="agent-solo-owner"]')).toBeNull();
+    // Folded, the pre-share key draws the owner's picture.
+    const photos = rail.querySelector('[data-chat-row-people="agent-with-visitor"]');
+    expect(photos?.querySelectorAll("[data-participant-picture]")).toHaveLength(2);
+    expect(photos?.querySelector("img")?.getAttribute("src")).toBe("https://p.example/josh.png");
   });
 });
 

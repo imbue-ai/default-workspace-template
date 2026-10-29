@@ -224,6 +224,17 @@ describe("user-message-display other people's turns", () => {
     );
   });
 
+  it("folds a turn annotated under the synthetic owner key into the owner, for the owner and for a visitor", () => {
+    // Annotated before the workspace was shared, read after: the owner's key of the moment is their account's.
+    setParticipantsForTesting("user:owner-1", roster());
+    expect(mounted(turn({ author: "owner", author_name: "Owner" })).querySelector(".message-author")).toBeNull();
+
+    setParticipantsForTesting("user:bob-2", roster());
+    const seenByVisitor = mounted(turn({ author: "owner", author_name: "Owner" }));
+    expect(seenByVisitor.querySelector(".message-author")?.textContent).toBe("Josh");
+    expect(seenByVisitor.querySelector("[data-author]")?.getAttribute("data-author")).toBe("user:owner-1");
+  });
+
   it("names an author the roster no longer lists by the name the turn carried", () => {
     setParticipantsForTesting("owner", roster());
     const root = mounted(turn({ author: "name:Someone Else", author_name: "Someone Else" }));
