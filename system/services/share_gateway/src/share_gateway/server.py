@@ -425,7 +425,10 @@ def build_gateway_app(
 
         response = Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})
         set_session_cookie(
-            response, mint_session_cookie_value(signing_secret, handoff, workspace_domain), workspace_domain
+            response,
+            mint_session_cookie_value(signing_secret, handoff, workspace_domain),
+            workspace_domain,
+            is_host_only=materials.is_cookie_host_only,
         )
         return response
 

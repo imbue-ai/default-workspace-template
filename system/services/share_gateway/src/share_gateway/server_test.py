@@ -93,7 +93,10 @@ class _GatewayHarness:
 
 
 def _make_harness(
-    tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str = _CHROME_ORIGIN
+    tmp_path: Path,
+    grants_text: str = _GRANTS,
+    chrome_origin: str = _CHROME_ORIGIN,
+    is_cookie_host_only: bool = False,
 ) -> _GatewayHarness:
     grants_path = tmp_path / "share_grants.toml"
     grants_path.write_text(grants_text)
@@ -103,6 +106,7 @@ def _make_harness(
         connector_url="https://connector.example.com",
         broker_url=_BROKER_URL,
         chrome_origin=chrome_origin,
+        is_cookie_host_only=is_cookie_host_only,
     )
     pending_logins = PendingLoginRegistry()
     app = build_gateway_app(
@@ -454,6 +458,37 @@ def test_callback_sets_both_domain_cookies_and_redirects_to_next(
     plain_value = _cookie_value(set_cookies[SESSION_COOKIE_NAME])
     assert plain_value == _cookie_value(set_cookies[PARTITIONED_SESSION_COOKIE_NAME])
     harness.client.set_cookie(SESSION_COOKIE_NAME, plain_value)
+    verified = harness.client.get("/_auth/verify", headers=_verify_headers())
+    assert verified.status_code == 200
+
+
+def test_callback_on_an_auth_sandbox_sets_host_only_cookies_that_still_verify(
+    tmp_path: Path,
+) -> None:
+    # SHARE_COOKIE_HOST_ONLY=1 (an auth sandbox, whose workspace domain every sandbox of the
+    # region shares): both copies are set without a Domain attribute, so the browser scopes
+    # them to the host that set them, and the verify path reads them exactly as before.
+    harness = _make_harness(tmp_path, is_cookie_host_only=True)
+    nonce = harness.pending_logins.mint(is_retry=False)
+    token = _mint_handoff(nonce)
+
+    resp = harness.client.get(
+        f"/_auth/callback?token={token}&state={nonce}&next=https://{_WEB_HOST}/panel"
+    )
+
+    assert resp.status_code == 302
+    set_cookies = set_cookies_by_name(resp)
+    assert set(set_cookies) == {SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME}
+    for header in set_cookies.values():
+        assert "Domain=" not in header
+        assert "HttpOnly" in header
+        assert "Secure" in header
+    assert "SameSite=Lax" in set_cookies[SESSION_COOKIE_NAME]
+    assert "SameSite=None" in set_cookies[PARTITIONED_SESSION_COOKIE_NAME]
+    assert "Partitioned" in set_cookies[PARTITIONED_SESSION_COOKIE_NAME]
+    harness.client.set_cookie(
+        SESSION_COOKIE_NAME, _cookie_value(set_cookies[SESSION_COOKIE_NAME])
+    )
     verified = harness.client.get("/_auth/verify", headers=_verify_headers())
     assert verified.status_code == 200
 

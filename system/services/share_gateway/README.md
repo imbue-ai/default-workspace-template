@@ -27,7 +27,13 @@ three things running:
    `/_auth/callback`, which verifies the broker's 60-second RS256 handoff
    token (JWKS, audience, nonce, single-use jti) and sets the
    workspace-domain session cookie (30 days). What a failed callback shows is
-   described under "Login outcomes".
+   described under "Login outcomes". When `share.env` carries
+   `SHARE_COOKIE_HOST_ONLY=1` (an auth sandbox of the web latchkey sign-in flow,
+   whose workspace domain `auth.<region>.<content domain>` every sandbox of the
+   region shares), both cookie copies are set with no `Domain` attribute, so each
+   belongs to the one service host that set it and two users' sandboxes never
+   overwrite each other's sessions; the verify path and the cookie names are
+   unchanged.
 2. **caddy** (`127.0.0.1:8443`): terminates the share's real TLS with the
    cert/key under `data/.secrets/share_tls/` and routes by Host -- the bare
    workspace domain to `system_interface`, `<service>.<domain>` to that
