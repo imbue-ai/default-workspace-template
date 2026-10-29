@@ -458,7 +458,7 @@ describe("Escape", () => {
     expect(stage().contains(host)).toBe(true);
     // The band around the stage is the backdrop's own ground; the floating entries stay outside the stage.
     const backdrop = document.querySelector(".backdrop") as HTMLElement;
-    expect(backdrop.getAttribute("style") ?? "").toContain("color-mix");
+    expect(backdrop.getAttribute("style") ?? "").toMatch(/color-mix\(in srgb, \S+ 12%, var\(--c-bg\)\)/);
     expect(stage().querySelector(".floating-entries, [data-pinned-entry]")).toBeNull();
 
     // Stop viewing: the stage is the whole backdrop again.

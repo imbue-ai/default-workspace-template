@@ -124,7 +124,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
           style:
             letterbox === null
               ? {}
-              : { backgroundColor: `color-mix(in srgb, ${letterbox.color} ${LETTERBOX_BAND_TINT}, var(--c-page))` },
+              : { backgroundColor: `color-mix(in srgb, ${letterbox.color} ${LETTERBOX_BAND_TINT}, var(--c-bg))` },
         },
         [
           m(
