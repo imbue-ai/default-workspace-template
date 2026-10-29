@@ -6,7 +6,7 @@ Chats know who said what (the mngr repo's `specs/multiplayer-refinements/spec.md
 
 - The page draws your own messages on the right as before, and another person's on the left under their name and picture. The agent's replies are drawn as bubbles, one per reply, under the workspace's picture and name.
 
-- New routes: `GET /api/me` (the page's own participant key), `GET /api/participants` (the shell's roster, every picture the shell serves -- a person's profile picture, the workspace agent's avatar icon -- pointed at this app's `GET /api/participants/<key>/picture`, which relays it with the shell's caching, since the page's policy admits no outside image).
+- New routes: `GET /api/me` (the page's own participant key), `GET /api/participants` (the shell's roster, every picture the shell serves -- a person's profile picture, the workspace agent's avatar icon -- pointed at this app's `GET /api/participants/<key>/picture`, which relays it with the shell's caching, since the roster names those pictures on the shell's origin, which the page cannot reach).
 
 - The chat list's rows show a kebab beside the rename pencil on hover, opening the row's context menu.
 
