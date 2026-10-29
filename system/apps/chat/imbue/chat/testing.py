@@ -820,6 +820,7 @@ def build_test_state(
     )
     if tray_feed is not None:
         manager.set_chats_updated_listener(tray_feed.report_chats)
+    manager.set_participants_reader(state.authors.participant_keys)
     # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's
     # that nobody is streaming, and removing a chat's active agent ends the chat's streams.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)

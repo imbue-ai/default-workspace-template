@@ -20,7 +20,18 @@ def test_a_person_header_keeps_the_account_and_ignores_fields_it_does_not_know()
     identity = parse_identity_header(
         '{"owner":false,"user_id":"user-bob-4471","email":"bob@example.com","display_name":"Bob"}'
     )
-    assert identity == RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
+    assert identity == RequestIdentity(
+        owner=False, user_id="user-bob-4471", email="bob@example.com", is_header_present=True
+    )
+
+
+def test_only_a_header_a_proxy_readably_stamped_counts_as_present() -> None:
+    """``is_header_present`` tells a page's request from an in-container caller's (a script's, the terminal's),
+    which both read as the owner otherwise; what the header itself claims about it is overwritten."""
+    assert parse_identity_header('{"owner":true}').is_header_present is True
+    assert parse_identity_header('{"owner":true,"is_header_present":false}').is_header_present is True
+    assert parse_identity_header(None).is_header_present is False
+    assert parse_identity_header("{not json").is_header_present is False
 
 
 def test_a_visiting_agent_header_carries_the_grant_and_no_user() -> None:

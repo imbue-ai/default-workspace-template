@@ -5,6 +5,7 @@ participant key it names (the multiplayer spec, section 4.1), read the same way 
 from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import ConfigDict
@@ -35,6 +36,12 @@ class RequestIdentity(FrozenModel):
     agent_id: str | None = Field(default=None, description="A visiting agent's grant id; absent for a person")
     agent_name: str | None = Field(default=None, description="The name the visiting agent joined under")
     granter: str | None = Field(default=None, description="Who invited the visiting agent, as the grant records it")
+    is_header_present: bool = Field(
+        default=False,
+        description="Whether a proxy actually stamped the request: set by the parse, never read from the wire. "
+        "False tells an in-container caller (a script, the terminal) from a page's request, which both read as "
+        "the owner otherwise",
+    )
 
 
 ANONYMOUS_OWNER: Final[RequestIdentity] = RequestIdentity(owner=True)
@@ -46,15 +53,17 @@ def parse_identity_header(header_value: str | None) -> RequestIdentity:
 
     A missing header means the request came through no current proxy (an older
     forward, an in-container caller): it is treated as the owner with no account,
-    never as a visitor. An unreadable one is logged and treated the same way.
+    never as a visitor. An unreadable one is logged and read the same way, so
+    ``is_header_present`` is set only for a header a proxy readably stamped.
     """
     if header_value is None or not header_value.strip():
         return ANONYMOUS_OWNER
     try:
-        return RequestIdentity.model_validate_json(header_value)
+        parsed = RequestIdentity.model_validate_json(header_value)
     except ValueError as e:
         logger.warning("Ignored an unreadable {} header: {}", IDENTITY_HEADER, e)
         return ANONYMOUS_OWNER
+    return parsed.model_copy_update(to_update(parsed.field_ref().is_header_present, True))
 
 
 @pure

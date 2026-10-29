@@ -988,12 +988,16 @@ def _attributed_delivery(
 ) -> str:
     """The text the agent is handed for the sender ``identity`` vouches for (the multiplayer spec, sections 5.1 and
     5.3): the words as they are for the owner (under either key) and for a slash command or bash input, else prefixed
-    ``[from: <name>] ``; a sender other than the owner is recorded in the chat's annotations before delivery. The
-    identity is read from the request by the caller, since an intake's send may run off the request thread."""
-    if is_owner_participant(identity):
-        return message
+    ``[from: <name>] ``; every sender a proxy vouched for is recorded in the chat's annotations before delivery (the
+    owner's never prefixed, and a request with no header -- a script's, the terminal's -- never annotated, so the
+    annotations say who actually wrote here). The identity is read from the request by the caller, since an intake's
+    send may run off the request thread."""
     sender = participant_key_of(identity)
     display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)
+    if is_owner_participant(identity):
+        if identity.is_header_present:
+            state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, message))
+        return message
     is_prefixed = _is_author_prefixed(chat_id) and not is_unprefixable_input(message)
     delivered = author_prefix(display_name) + message if is_prefixed else message
     state.authors.record(chat_id, new_author_annotation(message_id, sender, display_name, delivered))
@@ -1908,9 +1912,9 @@ def _record_room_first_message_author(
     state: ChatAppState, chat_id: ChatId, message: str, identity: RequestIdentity, message_id: str
 ) -> None:
     """Record who a new room's first message is from (the multiplayer spec, section 5.1): the message is appended
-    once the room's agent is up, with no identity of its own, so a sender other than the owner is annotated here,
-    under the id the append will carry."""
-    if not message or is_owner_participant(identity):
+    once the room's agent is up, with no identity of its own, so the sender the create's request vouched for is
+    annotated here, under the id the append will carry."""
+    if not message or (is_owner_participant(identity) and not identity.is_header_present):
         return
     sender = participant_key_of(identity)
     display_name = prefix_safe_name(state.roster.display_name_of(sender, identity), sender)

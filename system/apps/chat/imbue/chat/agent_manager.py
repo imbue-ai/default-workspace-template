@@ -23,6 +23,7 @@ from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import lookup_pid_by_agent_id
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
+from workspace_layout.primitives import ParticipantKey
 
 from imbue.chat.accounts import Account
 from imbue.chat.accounts import AccountError
@@ -1298,6 +1299,10 @@ class AgentManager:
     # Hears every chat-list push beside the pages: the tray's feed to the shell. Set once at composition
     # (``set_chats_updated_listener``); ``None`` (tests, a secondary) = nobody beside the pages.
     _chats_updated_listener: Callable[[list[ChatSnapshot]], object] | None
+    # Who has written in a chat, for its snapshot (the multiplayer spec, section 5.4): reads the chat's author
+    # annotations, which live on the app state the manager must not import. Set once at composition
+    # (``set_participants_reader``); ``None`` (tests) = no chat names participants.
+    _participants_reader: Callable[[ChatId], tuple[ParticipantKey, ...]] | None
     # Evicts one agent's session watcher (releasing its resident transcript, thread, and
     # filesystem watches). Set once at composition (``set_watcher_eviction_callback``) --
     # the watcher registry lives on the app state, which the manager must not import; the
@@ -1444,6 +1449,7 @@ class AgentManager:
         manager._main_chat_wake_started_at = {}
         manager._transcript_broadcaster = None
         manager._chats_updated_listener = None
+        manager._participants_reader = None
         manager._watcher_eviction_callback = None
         manager._unviewed_transcript_release = None
         manager._session_watcher_check = None
@@ -1619,6 +1625,11 @@ class AgentManager:
         spec, section 6.4). The composition root calls this once."""
         self._chats_updated_listener = listener
 
+    def set_participants_reader(self, reader: Callable[[ChatId], tuple[ParticipantKey, ...]]) -> None:
+        """Install what answers who has written in a chat, for its snapshot (the multiplayer spec, section 5.4):
+        the author annotations live on the app state. The composition root calls this once."""
+        self._participants_reader = reader
+
     def _wake_main_chat_if_stopped(self) -> None:
         """Start the main chat's agent, on a thread of its own, when it is stopped: the main chat never sleeps.
 
@@ -1734,9 +1745,14 @@ class AgentManager:
         with self._lock:
             title = self._title_override_by_chat.get(snapshot.chat_id)
             awaiting = self._awaiting_by_chat.get(snapshot.chat_id, ())
+        # Read outside ``_lock``: the author store takes a lock of its own, and foreign locks are
+        # never taken under this one (see ``get_chat_snapshots``).
+        reader = self._participants_reader
+        participants = () if reader is None else reader(snapshot.chat_id)
         return snapshot.model_copy_update(
             to_update(snapshot.field_ref().title, snapshot.title if title is None else title),
             to_update(snapshot.field_ref().awaiting_chat_ids, awaiting),
+            to_update(snapshot.field_ref().participants, participants),
         )
 
     def note_chat_awaiting(self, chat_id: ChatId, asked_chat_id: ChatId) -> None:

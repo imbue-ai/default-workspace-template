@@ -168,6 +168,9 @@ def build_production_state(
     tray_feed = None if is_secondary else TrayFeed(shell=shell)
     if tray_feed is not None:
         agent_manager.set_chats_updated_listener(tray_feed.report_chats)
+    # The snapshots name who has written in each chat, read off the author annotations.
+    authors = AuthorStore(root=chat_records_root)
+    agent_manager.set_participants_reader(authors.participant_keys)
     lounge = None if is_secondary else LoungeKeeper(agent_manager=agent_manager)
     state = ChatAppState(
         config=config,
@@ -205,7 +208,7 @@ def build_production_state(
         secret_requests=SecretRequestStore(
             requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
         ),
-        authors=AuthorStore(root=chat_records_root),
+        authors=authors,
         roster=RosterClient(shell=shell),
         mentions=MentionStore(root=data_dir / MENTIONS_DIRNAME),
         tray_feed=tray_feed,

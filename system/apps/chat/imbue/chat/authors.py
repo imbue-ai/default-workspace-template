@@ -2,11 +2,13 @@
 message from someone other than the owner, and how it is joined to the transcript turn it became.
 
 A message reaches the agent through its pane, so the transcript knows nothing of its author; the chat app keeps,
-per chat, an append-only ``authors.jsonl`` under the standard event envelope, one line per send a visitor or a
-visiting agent makes, keyed by the composer's ``message_id`` and carrying the hash of the delivered text. The line
-is written before the text is delivered, so the turn's first stamp (which may run before the send route returns)
-already sees it; a send the chat then refuses leaves a line that matches no turn.
-A message with no annotation is the owner's, as is every message from before the convention. The agent learns a
+per chat, an append-only ``authors.jsonl`` under the standard event envelope, one line per send a proxy vouched
+for -- the owner's included, so the file also says who has written in a chat -- keyed by the composer's
+``message_id`` and carrying the hash of the delivered text. The line is written before the text is delivered, so
+the turn's first stamp (which may run before the send route returns) already sees it; a send the chat then refuses
+leaves a line that matches no turn.
+A message with no annotation is the owner's: every message from before the convention, and a send no proxy
+stamped (a script's, the terminal's), which is why the owner's absence stays the fallback. The agent learns a
 non-owner author from the ``[from: <name>] `` prefix the send route puts on the delivered text (never on a slash
 command or bash-mode input, which a harness runs only when it leads the message).
 
@@ -127,6 +129,18 @@ def text_sha256(text: str) -> str:
 def name_key(display_name: str) -> ParticipantKey:
     """The synthetic key of an author known only by the name a prefix carries."""
     return ParticipantKey(f"{NAME_KEY_PREFIX}{display_name.strip()[:MAX_PARTICIPANT_NAME_LENGTH]}")
+
+
+@pure
+def participant_keys_of(annotations: Sequence[AuthorAnnotation]) -> tuple[ParticipantKey, ...]:
+    """Who has written in the chat the annotations belong to, each once, in order of first message (the chat
+    list's row shows them, the multiplayer spec section 5.4). The workspace agent is never annotated, so it is
+    never among them."""
+    seen: list[ParticipantKey] = []
+    for annotation in annotations:
+        if annotation.author not in seen:
+            seen.append(annotation.author)
+    return tuple(seen)
 
 
 def new_author_annotation(
@@ -252,6 +266,10 @@ class AuthorStore(MutableModel):
         """Stamp the authors of a chat's events, in place: a chat with no annotations still stamps a hand-typed
         prefix with its synthetic key."""
         stamp_authors(events, self.annotations(chat_id))
+
+    def participant_keys(self, chat_id: ChatId) -> tuple[ParticipantKey, ...]:
+        """Who has written in the chat, each once, in order of first message."""
+        return participant_keys_of(self.annotations(chat_id))
 
 
 def _read_annotations(path: Path) -> tuple[AuthorAnnotation, ...]:

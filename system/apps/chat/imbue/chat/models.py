@@ -696,6 +696,12 @@ class ChatSnapshot(FrozenModel):
         description="The chats a mention from this room sent to and has not heard back from: the room's row shows "
         "a working dot while one of them works (the multiplayer spec, section 7.4); empty for an agent chat",
     )
+    participants: tuple[ParticipantKey, ...] = Field(
+        default=(),
+        description="Who has written in the chat (people and visiting agents, never the workspace agent), each "
+        "once, in order of first message: what the chat list's row shows when there are two or more (the "
+        "multiplayer spec, section 5.4)",
+    )
 
 
 class ChatSegmentInfo(FrozenModel):

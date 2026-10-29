@@ -34,6 +34,7 @@ from pydantic import SecretStr
 from werkzeug.test import TestResponse
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import RequestIdentity
+from workspace_layout.identity import parse_identity_header
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ParticipantKind
 from workspace_layout.roster import RosterDocument
@@ -5528,18 +5529,30 @@ def test_a_name_the_prefix_cannot_carry_is_made_safe_before_delivery_and_annotat
     assert annotation.display_name == "Josh's [Claude"
 
 
-def test_the_owners_messages_are_never_prefixed_nor_annotated_under_either_key(
+def test_the_owners_messages_are_never_prefixed_and_only_a_pages_are_annotated(
     app: Flask, messenger: RecordingMngrMessenger
 ) -> None:
+    """A send with no identity header (a script's, the terminal's) writes no annotation, so the owner is not
+    overcounted among a chat's participants; a page's send, which a proxy stamped, is annotated under the owner's
+    key of the moment. Neither is ever prefixed."""
     agent_id = "agent-00000000000000000000000000000033"
     seed_agent_state(state_of(app).agent_manager, agent_id, name="Chat-33")
     client = app.test_client()
 
     client.post(f"/api/chats/{agent_id}/message", json={"message": "one"})
     client.post(f"/api/chats/{agent_id}/message", json={"message": "two"}, headers=_identity_header(_OWNER_ACCOUNT))
+    client.post(
+        f"/api/chats/{agent_id}/message",
+        json={"message": "three"},
+        headers=_identity_header(RequestIdentity(owner=True)),
+    )
 
-    assert messenger.sent == [(agent_id, "one"), (agent_id, "two")]
-    assert state_of(app).authors.annotations(ChatId(agent_id)) == ()
+    assert messenger.sent == [(agent_id, "one"), (agent_id, "two"), (agent_id, "three")]
+    annotations = state_of(app).authors.annotations(ChatId(agent_id))
+    assert [(str(annotation.author), annotation.text_sha256) for annotation in annotations] == [
+        ("user:user-owner-9c21", text_sha256("two")),
+        ("owner", text_sha256("three")),
+    ]
 
 
 def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
@@ -5663,6 +5676,24 @@ def _peopled_app(
     app = create_application(state)
     assert manager.make_main_chat(ChatId(_MAIN_ID))
     return app
+
+
+def test_a_chats_snapshot_names_who_has_written_in_it_once_in_order_of_first_message(tmp_path: Path) -> None:
+    """The snapshot's ``participants`` (the multiplayer spec, section 5.4): each annotated sender once, in order of
+    first message -- the owner's page sends included, scripts' and the workspace agent's never."""
+    messenger = RecordingMngrMessenger()
+    app = _peopled_app(tmp_path, messenger)
+    client = app.test_client()
+    listed = {chat["chat_id"]: chat for chat in client.get("/api/chats").get_json()["chats"]}
+    assert listed[_MAIN_ID]["participants"] == []
+
+    client.post(f"/api/chats/{_MAIN_ID}/message", json={"message": "a script's words"})
+    client.post(f"/api/chats/{_MAIN_ID}/message", json={"message": "hello"}, headers=_identity_header(_JOSH))
+    client.post(f"/api/chats/{_MAIN_ID}/message", json={"message": "hi"}, headers=_identity_header(_VISITOR))
+    client.post(f"/api/chats/{_MAIN_ID}/message", json={"message": "again"}, headers=_identity_header(_JOSH))
+
+    listed_after = {chat["chat_id"]: chat for chat in client.get("/api/chats").get_json()["chats"]}
+    assert listed_after[_MAIN_ID]["participants"] == ["user:user-josh-0001", "user:user-bob-4471"]
 
 
 def _room_events(client: FlaskClient) -> list[dict[str, Any]]:
@@ -6106,19 +6137,23 @@ def test_a_secondary_chat_feeds_no_tray_and_makes_no_lounge(tmp_path: Path) -> N
 
 
 def test_a_rooms_first_message_from_a_visitor_is_recorded_as_theirs_before_the_room_is_up(tmp_path: Path) -> None:
-    """The create route annotates the first message of a room a visitor starts: the message is appended once
-    the room's agent is up, by a path with no identity of its own, so the annotation is what names its author."""
+    """The create route annotates the first message of a room: the message is appended once the room's agent is
+    up, by a path with no identity of its own, so the annotation is what names its author. A sender no proxy
+    vouched for (an in-container caller reading as the owner) writes nothing."""
     state = state_of(_peopled_app(tmp_path, RecordingMngrMessenger()))
     room_id = ChatId("agent-00000000000000000000000000000043")
 
     _record_room_first_message_author(state, room_id, "first words", _VISITOR, "m-first")
     _record_room_first_message_author(state, room_id, "", _VISITOR, "m-none")
-    _record_room_first_message_author(state, room_id, "the owner's own", _JOSH, "m-owner")
+    _record_room_first_message_author(state, room_id, "the owner's own", _JOSH, "m-script")
+    _record_room_first_message_author(
+        state, room_id, "the owner's page", parse_identity_header(_JOSH.model_dump_json()), "m-owner"
+    )
 
     annotations = state.authors.annotations(room_id)
     assert [
         (str(annotation.author), annotation.display_name, annotation.message_id) for annotation in annotations
-    ] == [("user:user-bob-4471", "Bob", "m-first")]
+    ] == [("user:user-bob-4471", "Bob", "m-first"), ("user:user-josh-0001", "Josh", "m-owner")]
     assert annotations[0].text_sha256 == text_sha256("first words")
 
 
