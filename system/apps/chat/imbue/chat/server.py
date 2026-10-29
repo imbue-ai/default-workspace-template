@@ -1302,7 +1302,8 @@ def _interrupt_agent_endpoint(chat_id: str) -> Response:
 
     agent_name = agent_info.name
 
-    is_restarted, output = _restart_agent_process(agent_name)
+    with get_state().agent_manager.letting_go_of_unrecorded_sends(agent_info.id):
+        is_restarted, output = _restart_agent_process(agent_name)
     if not is_restarted:
         return error_response(f"Failed to interrupt agent '{agent_name}': {output}", 500)
 
@@ -1397,14 +1398,15 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
     if not watcher.get_queued_block():
         return model_response(SendMessageResponse(status="ok"))
 
+    agent_manager: AgentManager = get_state().agent_manager
     try:
-        block = restart_drain(agent_info, watcher, restart_process, settle_activity)
+        with agent_manager.letting_go_of_unrecorded_sends(agent_info.id):
+            block = restart_drain(agent_info, watcher, restart_process, settle_activity)
     except AgentRestartError as e:
         return error_response(str(e), 500)
 
     if block:
-        agent_manager: AgentManager = get_state().agent_manager
-        resend_failure = agent_manager.send_message_to_agent(AgentId(agent_info.id), block)
+        resend_failure = agent_manager.send_message_kept_until_recorded(agent_info.id, agent_info.harness, block)
         if resend_failure is not None:
             # The harness said why; passing that on rather than a generic sentence is the whole
             # point of carrying it this far.

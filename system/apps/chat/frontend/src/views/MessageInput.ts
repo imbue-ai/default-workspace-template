@@ -14,7 +14,15 @@ import {
 import type { ComposerAttachment } from "../models/ComposerAttachments";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { stageElementReferences } from "../models/elementReferences";
-import { drainToComposer, getEventsForChat, interruptAgent, mintMessageId, sendMessage } from "../models/Response";
+import {
+  drainToComposer,
+  getEventsForChat,
+  hasUserTurnLandedSince,
+  interruptAgent,
+  mintMessageId,
+  sendMessage,
+  sentUserTurnIds,
+} from "../models/Response";
 import type { SendStatus } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { addModelChoiceFailureListener } from "../models/ModelSettings";
@@ -435,6 +443,27 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   const authCommandNotice = makeNoticeDialog();
   // mngr's classification of the failure, which decides which recoveries are worth offering.
   let actionFailureKind: SendFailureKind = "unknown";
+  // A send mngr typed into the agent but could not confirm: its text went back to the composer
+  // like any failed send's, but the agent may have it. Once its turn reaches the transcript
+  // the copy comes back out and its notice closes, so the user does not send it a second time.
+  // Kept past Cancel, which leaves the copy in the composer just the same. One per send, across
+  // every chat this composer serves.
+  let unconfirmedSends: { recovery: SendRecovery; priorTurnIds: ReadonlySet<string> }[] = [];
+
+  function watchForUnconfirmedTurn(err: unknown, recovery: SendRecovery, priorTurnIds: ReadonlySet<string>): void {
+    // A Send again that is unconfirmed too keeps the first watch: the turns read before the
+    // first send let a landing of either one count.
+    if (
+      describeRequestErrorKind(err) === "submission_unconfirmed" &&
+      !unconfirmedSends.some((watched) => watched.recovery === recovery)
+    ) {
+      unconfirmedSends = [...unconfirmedSends, { recovery, priorTurnIds }];
+    }
+  }
+
+  function stopWatchingUnconfirmedTurn(recovery: SendRecovery): void {
+    unconfirmedSends = unconfirmedSends.filter((watched) => watched.recovery !== recovery);
+  }
   // Whether the chat app refused the send because the chat's account was signed out: sending again cannot help, so
   // the notice offers choosing a provider instead of Retry and Force.
   let isActionFailureOnSignedOutAccount = false;
@@ -640,6 +669,19 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         messageText = pendingPrepend;
       }
 
+      // After the hand-back above is adopted: the failed send's copy arrives through it.
+      for (const { recovery, priorTurnIds } of unconfirmedSends) {
+        if (!hasUserTurnLandedSince(recovery.chatId, recovery.sentText, priorTurnIds)) {
+          continue;
+        }
+        stopWatchingUnconfirmedTurn(recovery);
+        clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
+        // Only its own notice, and not out from under a Send again already on its way.
+        if (actionFailureRecovery === recovery && actionFailureInFlight === null) {
+          clearActionFailureNotice();
+        }
+      }
+
       /** What a send (or a switch) puts on the wire, with what to put back if it fails. */
       interface PreparedSend {
         /** What the user typed, for the bubble and for restoring the composer. */
@@ -759,6 +801,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         const messageId = mintMessageId();
         const outgoingId = addOutgoing(chatId, sentText, messageId);
         m.redraw();
+        let priorTurnIds: ReadonlySet<string> = new Set();
 
         try {
           // A chat awaiting its first send (a seeded one, one an intake minted, or the one an empty
@@ -812,6 +855,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // the send yet, so that one send waits for the chat to land.
           if (isLaunchInFlight(chatId)) await whenChatRegistered(chatId);
           refuseSendToFailedChat(chatId);
+          priorTurnIds = sentUserTurnIds(chatId);
           const status = await sendMessage(chatId, finalText, messageId);
           // The send resolved: the message is now real (committed, queued, or held for the
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
@@ -831,6 +875,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // would take the message with it (contract A1a). A repeat send removes that copy once
           // it has landed.
           restoreFailedMessageToComposer(chatId, sentText, sentAttachments);
+          const recovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
+          watchForUnconfirmedTurn(err, recovery, priorTurnIds);
           catchUpOnSignedOutAccount(err);
           // Notices only if they are still on the agent that failed -- this catch runs after an
           // await, so they may have switched and the switch-clear has already gone by.
@@ -842,7 +888,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               actionFailureDetail = detail;
               actionFailureKind = describeRequestErrorKind(err);
               isActionFailureOnSignedOutAccount = sendFailureKind(err) === ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND;
-              actionFailureRecovery = { chatId, text: sentText, sentText: finalText, attachments: sentAttachments };
+              actionFailureRecovery = recovery;
             }
           }
           m.redraw();
@@ -1088,7 +1134,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           .trimEnd();
       }
 
-      /** Remove just the restored copy once a repeat send has landed, leaving the rest alone. */
+      /** Remove just the restored copy once a repeat send (or an unconfirmed one's turn) has landed, leaving the rest alone. */
       function clearRestoredMessage(
         forChatId: string,
         restoredText: string,
@@ -1111,6 +1157,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           localStorage.setItem(messageTextKey(forChatId), withoutRestored);
         } else {
           localStorage.removeItem(messageTextKey(forChatId));
+        }
+        // A hand-back the chat's composer has not taken in yet (the chat is not on screen) still
+        // carries the copy, and would put it back when the chat is shown.
+        if (pendingComposerPrepends.has(forChatId)) {
+          pendingComposerPrepends.set(forChatId, withoutRestored);
         }
         // The delivered attachments go regardless of whether text remains. Keying this off the
         // text emptying meant a Retry after the user had typed something left the files behind,
@@ -1189,16 +1240,20 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // not simply absent from the transcript until the backend catches up.
         const messageId = mintMessageId();
         const outgoingId = addOutgoing(recovery.chatId, recovery.text, messageId);
+        let priorTurnIds: ReadonlySet<string> = new Set();
         try {
           refuseSendToFailedChat(recovery.chatId);
+          priorTurnIds = sentUserTurnIds(recovery.chatId);
           const status = await sendMessage(recovery.chatId, recovery.sentText, messageId);
           dropOutgoingNoTurnWillRetire(recovery.chatId, outgoingId, status);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
+          stopWatchingUnconfirmedTurn(recovery);
           clearActionFailureNotice();
           focusMessageTextarea();
         } catch (err) {
           dropOutgoing(recovery.chatId, outgoingId);
+          watchForUnconfirmedTurn(err, recovery, priorTurnIds);
           catchUpOnSignedOutAccount(err);
           // Failed again. Only re-open the notice if they are still on that agent -- otherwise
           // it would surface this agent's error over a different chat, with no way to act on it.
@@ -1281,20 +1336,27 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // anything unclassified -- keeps it.
         const canRetryHelp = actionFailureKind !== "agent_unreachable";
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
+        // The text was typed and Enter sent but nothing confirmed the agent took it, so it may
+        // already be in the agent's input or turn and a resend can deliver it twice. The notice shows
+        // its own sentence: mngr's reason for this kind is its diagnostics (the whole pane included).
+        const isUnconfirmed = actionFailureKind === "submission_unconfirmed";
+        const retryWording = isUnconfirmed
+          ? { label: "Send again", inFlight: "Sending…", tooltip: "Sends the message again, even if the agent has it" }
+          : { label: "Retry", inFlight: "Retrying…", tooltip: "Tries the same thing again" };
         return m(actionFailureNotice, {
-          title: actionFailureTitle,
-          body: [
-            detail,
-            // Only when the detail does not already say what to do. An input_blocked reason is
-            // the dialog's own advice ("press Enter in its terminal to run it") -- following it
-            // with a vaguer paraphrase of the same instruction is the third time one screen has
-            // told the reader to go look at their terminal.
-            actionFailureKind === "agent_unreachable"
-              ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
-              : isRepeatable && actionFailureKind !== "input_blocked"
-                ? "You can open the agent's terminal, fix it there, then Retry."
-                : null,
-          ],
+          title: isUnconfirmed ? "Couldn't confirm your message arrived" : actionFailureTitle,
+          body: isUnconfirmed
+            ? ["The agent may already have it, so check its terminal before you send it again."]
+            : [
+                detail,
+                // Only when the detail does not already say what to do: an input_blocked reason is
+                // the dialog's own advice ("press Enter in its terminal to run it").
+                actionFailureKind === "agent_unreachable"
+                  ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
+                  : isRepeatable && actionFailureKind !== "input_blocked"
+                    ? "You can open the agent's terminal, fix it there, then Retry."
+                    : null,
+              ],
           dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
           isDismissable: actionFailureInFlight === null,
           onDismiss: dismissActionFailureNotice,
@@ -1302,8 +1364,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             ...(isRepeatable
               ? [
                   {
-                    label: actionFailureInFlight === "retry" ? "Retrying…" : "Retry",
-                    tooltip: "Tries the same thing again",
+                    label: actionFailureInFlight === "retry" ? retryWording.inFlight : retryWording.label,
+                    tooltip: retryWording.tooltip,
                     isDisabled: actionFailureInFlight !== null,
                     run: () => void retryFailedSend(),
                   },
@@ -1311,9 +1373,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               : []),
             // Force needs a message to send afterwards, so it is offered only for our own send --
             // and never for an agent that is merely still starting, where restarting would
-            // discard the session it was about to finish bringing up. It is the only thing that
-            // helps an agent that is GONE, which is why it survives Retry being withheld.
-            ...(recovery === null || actionFailureKind === "not_ready"
+            // discard the session it was about to finish bringing up, or for one that may already
+            // be working on this message, where it would cut that turn off and send it twice. It
+            // is the only thing that helps an agent that is GONE, which is why it survives Retry
+            // being withheld.
+            ...(recovery === null || actionFailureKind === "not_ready" || isUnconfirmed
               ? []
               : [
                   {

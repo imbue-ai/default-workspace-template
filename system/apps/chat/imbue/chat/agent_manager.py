@@ -35,12 +35,14 @@ from imbue.chat.accounts import resolve_account
 from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
+from imbue.chat.activity_state import EXITED_LIFECYCLE_STATE
 from imbue.chat.activity_state import RUNNING_LIFECYCLE_STATES
 from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_discovery import delivered_or_raise
@@ -204,6 +206,7 @@ from imbue.mngr.api.observe import AgentStateEvent
 from imbue.mngr.api.observe import FullAgentStateEvent
 from imbue.mngr.api.observe import ObserveEventFollower
 from imbue.mngr.api.observe import parse_observe_event_line
+from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import MngrError
 from imbue.mngr.interfaces.data_types import AgentDetails
 from imbue.mngr.primitives import AgentId
@@ -246,6 +249,12 @@ _MAIN_CHAT_WAKE_TIMEOUT_SECONDS: Final[float] = 60.0
 # host), so they are short local operations -- but they run inside a request the
 # user is waiting on, so they are bounded rather than left to hang.
 _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
+
+# How long a delivered message the transcript has not shown is kept for sending again should the agent's process
+# exit: far longer than any harness takes to write one down, short of sending a stale message hours on.
+_UNRECORDED_SEND_KEPT_SECONDS: Final[float] = 30 * 60.0
+# How far a transcript's timestamp may lag the chat app's clock (the harness rounds, and writes it from its own process).
+_TRANSCRIPT_CLOCK_SLACK_SECONDS: Final[float] = 2.0
 
 # A finished harness task's notice normally starts a turn at once; the marker of one whose notice
 # starts none (a task the user stopped from the harness's own task list) goes after this many
@@ -967,12 +976,45 @@ def _observed_with_recent_rename(observed: AgentStateItem, rename: _RecentRename
     return renamed, True
 
 
+class _UnrecordedSend(FrozenModel):
+    """A message mngr delivered to an agent whose transcript may not hold it yet."""
+
+    text: str = Field(frozen=True, description="The message as it was sent")
+    sent_after: float = Field(
+        frozen=True,
+        description="A wall-clock time (epoch seconds) before it was sent, to set against the transcript's",
+    )
+    sent_at: float = Field(frozen=True, description="When it was delivered (monotonic seconds)")
+    is_resend: bool = Field(frozen=True, description="Whether it was itself sent again after a process exit")
+
+
+@pure
+def _sends_the_transcript_does_not_hold(
+    events: list[dict[str, Any]], sends: Sequence[_UnrecordedSend]
+) -> list[_UnrecordedSend]:
+    """The ``sends`` sent after the transcript's last user message was recorded.
+
+    A harness writes down the messages it takes in the order it took them, so a user message recorded after a send
+    means the send was written down too, in whatever words the harness recorded it (a bash-mode command, a notice,
+    several queued messages merged into one turn). A user message with no timestamp cannot be placed and counts as
+    recorded after every send, so a message is never sent twice on a reading that cannot tell.
+    """
+    recorded_times = [
+        parse_iso_timestamp_to_epoch(event.get("timestamp")) for event in events if event.get("type") == "user_message"
+    ]
+    if any(recorded_at is None for recorded_at in recorded_times):
+        return []
+    last_recorded_at = max((recorded_at for recorded_at in recorded_times if recorded_at is not None), default=None)
+    return [send for send in sends if last_recorded_at is None or last_recorded_at < send.sent_after]
+
+
 class HandoffCapabilities(FrozenModel):
-    """What a handoff needs from the app state and the routes, bound by the composition root."""
+    """What a handoff (and a resend of the chat app's own) needs from the app state and the routes, bound by the
+    composition root."""
 
     model_config = {"arbitrary_types_allowed": True}
 
-    # The agent's watcher, built if need be: the summary wait reads its transcript through it.
+    # The agent's watcher, built if need be: the summary wait and the resends read its transcript through it.
     ensure_watcher: Callable[[AgentInfo], TranscriptReader]
     # The stop button's path: interrupt the turn and return the queue as one block.
     drain_to_composer: Callable[[AgentInfo], str]
@@ -1216,6 +1258,16 @@ class AgentManager:
     _withdrawable_sends_by_agent: dict[str, dict[str, str]]
     # The send-time ids Stop took back while they waited for their agent, until their send ends.
     _withdrawn_message_ids: set[str]
+    # Held for the whole of one of the agent's resends of messages lost with its process, so another resend of it
+    # reads the transcript only once the first one's messages have landed, and does not send them again.
+    _resend_locks_by_agent: dict[str, threading.Lock]
+    # The messages delivered to each agent of a harness that can lose one with its process, kept until the
+    # process exits (when the ones its transcript does not hold are sent again) or they grow old.
+    _unrecorded_sends_by_agent: dict[str, list[_UnrecordedSend]]
+    # The (agent, text) pairs being sent again after a process exit, so their delivery is kept as a resend.
+    _lost_sends_being_resent: set[tuple[str, str]]
+    # How many stops of each agent's turn or process are under way (``letting_go_of_unrecorded_sends``).
+    _letting_go_counts_by_agent: dict[str, int]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1385,6 +1437,10 @@ class AgentManager:
         manager._withdrawable_sends_by_agent = {}
         manager._abandoned_creates = set()
         manager._withdrawn_message_ids = set()
+        manager._resend_locks_by_agent = {}
+        manager._unrecorded_sends_by_agent = {}
+        manager._lost_sends_being_resent = set()
+        manager._letting_go_counts_by_agent = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
@@ -1989,6 +2045,134 @@ class AgentManager:
                 _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
         return restarted
 
+    def _send_to_harness(self, agent_id: str, harness: HarnessType, text: str) -> bool:
+        """A file session's delivery (``send_message_kept_until_recorded``). Raises ``SendFailedError`` when refused."""
+        return delivered_or_raise(self.send_message_kept_until_recorded(agent_id, harness, text))
+
+    def send_message_kept_until_recorded(self, agent_id: str, harness: HarnessType, text: str) -> SendFailure | None:
+        """``send_message_to_agent``; for a harness that can lose a message with its process, the delivered message
+        is kept until then, so it can be sent again should the process exit before the transcript holds it."""
+        if not get_harness_spec(harness).resends_sends_lost_with_process:
+            return self.send_message_to_agent(AgentId(agent_id), text)
+        sent_after = time.time() - _TRANSCRIPT_CLOCK_SLACK_SECONDS
+        failure = self.send_message_to_agent(AgentId(agent_id), text)
+        if failure is None:
+            self._keep_unrecorded_send(agent_id, text, sent_after)
+        return failure
+
+    def _keep_unrecorded_send(self, agent_id: str, text: str, sent_after: float) -> None:
+        now = time.monotonic()
+        with self._lock:
+            if agent_id in self._letting_go_counts_by_agent:
+                return
+            kept = [
+                send
+                for send in self._unrecorded_sends_by_agent.get(agent_id, [])
+                if now - send.sent_at < _UNRECORDED_SEND_KEPT_SECONDS
+            ]
+            kept.append(
+                _UnrecordedSend(
+                    text=text,
+                    sent_after=sent_after,
+                    sent_at=now,
+                    is_resend=(agent_id, text) in self._lost_sends_being_resent,
+                )
+            )
+            self._unrecorded_sends_by_agent[agent_id] = kept
+
+    @contextmanager
+    def letting_go_of_unrecorded_sends(self, agent_id: str) -> Generator[None, None, None]:
+        """Scope a stop of the agent's turn or process (Stop taking its turn and queue back, the chat app stopping
+        it): the messages delivered to it, before and during the scope, are not sent again when its process ends."""
+        with self._lock:
+            self._letting_go_counts_by_agent[agent_id] = self._letting_go_counts_by_agent.get(agent_id, 0) + 1
+            self._unrecorded_sends_by_agent.pop(agent_id, None)
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._unrecorded_sends_by_agent.pop(agent_id, None)
+                remaining = self._letting_go_counts_by_agent.pop(agent_id) - 1
+                if remaining > 0:
+                    self._letting_go_counts_by_agent[agent_id] = remaining
+
+    def _resend_sends_lost_with_exits(self, newly_dead_ids: set[str], states_by_id: Mapping[str, str]) -> None:
+        """Send the agents whose processes just exited the messages they took but never wrote down.
+
+        Only an exit counts: a process that crashed or was killed while its pane lives on. A deliberate stop,
+        which takes the pane with it, lets the agent's messages go, as does a message kept too long.
+        """
+        now = time.monotonic()
+        with self._lock:
+            sends_by_agent = {
+                agent_id: self._unrecorded_sends_by_agent.pop(agent_id, []) for agent_id in newly_dead_ids
+            }
+        for agent_id, sends in sends_by_agent.items():
+            fresh = tuple(send for send in sends if now - send.sent_at < _UNRECORDED_SEND_KEPT_SECONDS)
+            if fresh and states_by_id[agent_id] == EXITED_LIFECYCLE_STATE:
+                self._creation_cg.start_new_thread(
+                    target=self._resend_sends_lost_with_process,
+                    args=(agent_id, fresh),
+                    name=f"lost-send-{agent_id[-8:]}",
+                    is_checked=False,
+                )
+
+    def _resend_sends_lost_with_process(self, agent_id: str, sends: tuple[_UnrecordedSend, ...]) -> None:
+        """Send an agent whose process exited the messages among ``sends`` that its transcript does not hold.
+
+        Read after the exit, so the transcript is final: a message it holds was taken, whatever became of its
+        turn, and is not sent again. Nothing is sent to a chat that is switching or has moved on from the agent.
+        A message lost a second time is left, or a process that keeps exiting would take it again and again.
+        """
+        capabilities = self._handoff_capabilities
+        if capabilities is None:
+            return
+        agent_info = self.get_agent_info_by_id(agent_id)
+        if agent_info is None:
+            _loguru_logger.info("Not resending agent {}'s lost messages: it is no longer known", agent_id)
+            return
+        with self._lock:
+            chat = self._resolve_chat_locked(self._chat_id_of_agent_locked(agent_id))
+            is_archived_member = self._is_archived_member_locked(agent_id)
+            resend_lock = self._resend_locks_by_agent.setdefault(agent_id, threading.Lock())
+        if (chat is not None and chat.transition is not None) or is_archived_member:
+            _loguru_logger.info("Not resending {}'s lost messages: its chat is switching or moved on", agent_info.name)
+            return
+        with resend_lock:
+            events = capabilities.ensure_watcher(agent_info).get_all_events()
+            for send in _sends_the_transcript_does_not_hold(events, sends):
+                if send.is_resend:
+                    _loguru_logger.warning(
+                        "{}'s process exited again before writing down a resent message; it is not sent again",
+                        agent_info.name,
+                    )
+                    continue
+                if not self._resend_lost_send(capabilities, agent_info, send.text):
+                    return
+
+    def _resend_lost_send(self, capabilities: HandoffCapabilities, agent_info: AgentInfo, text: str) -> bool:
+        """Deliver one message lost with its agent's process again; False when it did not land."""
+        resent = (agent_info.id, text)
+        with self._lock:
+            self._lost_sends_being_resent.add(resent)
+        try:
+            outcome = capabilities.deliver(agent_info, text, uuid4().hex)
+        except (SendFailedError, AgentNotFoundError) as e:
+            _loguru_logger.warning(
+                "Could not resend {}'s message lost when its process exited: {}", agent_info.name, e
+            )
+            return False
+        finally:
+            with self._lock:
+                self._lost_sends_being_resent.discard(resent)
+        if outcome is not SendOutcome.OK:
+            _loguru_logger.warning(
+                "Resending {}'s message lost when its process exited did not land ({})", agent_info.name, outcome.value
+            )
+            return False
+        _loguru_logger.info("Resent {}'s message lost when its process exited", agent_info.name)
+        return True
+
     def record_presence(self, chat_id: ChatId, report: PresenceReport) -> None:
         """Record one chat page's presence report: re-tags the chats, and marks the chat read in the Imbue
         Studio app when the report is what made someone watch it."""
@@ -2056,10 +2240,10 @@ class AgentManager:
     # ``chat_rebinds.py`` run the steps).
 
     def set_handoff_capabilities(self, capabilities: HandoffCapabilities) -> None:
-        """Install what a handoff or a rebind needs from the app state.
+        """Install what a handoff, a rebind or a resend of a message lost with its process needs from the app state.
 
         ``create_application`` calls this once, where the routes are; a manager built without
-        the app (a test that never assembles it) refuses every switch.
+        the app (a test that never assembles it) refuses every switch and resends nothing.
         """
         self._handoff_capabilities = capabilities
 
@@ -2865,7 +3049,8 @@ class AgentManager:
     def stop_agent_process(self, agent_info: AgentInfo) -> None:
         """``mngr stop`` one agent and reflect the stop at once: its session's live state is reaped and its
         tracked lifecycle reads stopped before the observe stream confirms it. Raises ``AgentStopError``."""
-        self._run_mngr_stop(agent_info.name)
+        with self.letting_go_of_unrecorded_sends(agent_info.id):
+            self._run_mngr_stop(agent_info.name)
         with self._lock:
             session = self._session_by_agent.get(agent_info.id)
             agent_state = self._agents.get(agent_info.id)
@@ -3001,7 +3186,8 @@ class AgentManager:
             raise ChatConvergingError(_converging_detail_of(chat.transition))
         if agent_state is None:
             raise AgentStopError(f"Chat '{chat_id}' has no agent to stop")
-        self._run_mngr_stop(agent_state.name)
+        with self.letting_go_of_unrecorded_sends(agent_state.id):
+            self._run_mngr_stop(agent_state.name)
 
     def _run_mngr_stop(self, agent_name: str) -> None:
         """Run ``mngr stop`` for one agent. Raises ``AgentStopError`` when mngr refuses or fails.
@@ -3212,6 +3398,8 @@ class AgentManager:
             self._created_unobserved_by_id.pop(agent_id, None)
             self._match_by_agent_id.pop(agent_id, None)
             self._pending_permission_ids_by_agent.pop(agent_id, None)
+            self._unrecorded_sends_by_agent.pop(agent_id, None)
+            self._resend_locks_by_agent.pop(agent_id, None)
             is_own_chat = not self._is_recorded_member_locked(agent_id)
         if is_own_chat:
             self._forget_chat(ChatId(agent_id))
@@ -4735,6 +4923,8 @@ class AgentManager:
             self._evict_removed_agent(agent_id)
             with self._lock:
                 self._pending_permission_ids_by_agent.pop(agent_id, None)
+                self._unrecorded_sends_by_agent.pop(agent_id, None)
+                self._resend_locks_by_agent.pop(agent_id, None)
                 is_own_chat = not self._is_recorded_member_locked(agent_id)
             # An agent that is its own chat takes the chat's per-chat records with it; a
             # member of a recorded chat (its first agent included) leaves the chat standing.
@@ -4773,6 +4963,10 @@ class AgentManager:
             recompute_ids = [agent_id for agent_id in state_changed_ids if agent_id in self._activity_tracked_agents]
         for agent_id in recompute_ids:
             self._recompute_activity_state(agent_id, broadcast_on_change=False)
+
+        self._resend_sends_lost_with_exits(
+            newly_dead_ids, {agent_id: details_by_id[agent_id].state.value for agent_id in newly_dead_ids}
+        )
 
         # An archived member dying drops only its own transcript. A chat whose active agent died
         # is left to the release, which spares a chat whose stream is open: that stream is fed
@@ -4916,7 +5110,7 @@ class AgentManager:
         deps = SessionDeps(
             harness=harness,
             state_dir=state_dir,
-            send_to_harness=lambda text: delivered_or_raise(self.send_message_to_agent(AgentId(agent_id), text)),
+            send_to_harness=lambda text: self._send_to_harness(agent_id, harness, text),
             notify_agents_changed=self._broadcast_chats_updated,
             is_harness_starting_up=lambda: is_harness_starting_up(
                 state_dir, spec.startup_ready_marker, spec.process_started_marker_filename

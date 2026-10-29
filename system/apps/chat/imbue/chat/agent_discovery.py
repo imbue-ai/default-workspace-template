@@ -340,6 +340,33 @@ def _without_send_prefix(message: str, agent_name: str) -> str:
     return message[len(prefix) :] if message.startswith(prefix) else message
 
 
+@pure
+def _is_location_miss(result: MessageResult) -> bool:
+    """Whether a send reached no agent only because the agent was not where it was looked for.
+
+    Only then was nothing typed, so only then may the message be sent again at a freshly
+    discovered location. Any other failure is the answer: an unconfirmed submission's text may
+    already be in the agent's input, and a blocked send was delivered, so sending either again
+    can deliver the message twice. A send that recorded nothing at all reached no agent either.
+    """
+    return not result.blocked_agents and all(
+        failure.kind == SendFailureKind.AGENT_NOT_FOUND for failure in result.failures
+    )
+
+
+@pure
+def _is_untaken(result: MessageResult) -> bool:
+    """Whether every agent the send reached left the message untaken, and cleared it from its input box.
+
+    Nothing was delivered and nothing is left to append to, so the message may be sent again at once.
+    """
+    return (
+        not result.blocked_agents
+        and len(result.failures) > 0
+        and all(failure.kind == SendFailureKind.NOT_SUBMITTED for failure in result.failures)
+    )
+
+
 def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) -> MessageResult:
     """Press ``key`` into a pre-resolved set of agents' panes (never auto-starting).
 
@@ -415,33 +442,47 @@ class MngrMessenger(FrozenModel):
         a bool here would leave the UI with nothing to report but the fact of failure.
 
         ``known_locations`` (the caller's already-resolved location, from the live
-        observe cache) is messaged directly -- no discovery. On a miss, or if that send
-        reaches no agent (the location just went stale: destroyed, recreated, or moved
-        hosts), it falls back to a full mngr discovery. The id is globally unique, so it
-        resolves to exactly the intended agent, never fanning out across same-named
-        agents on other hosts. STOPPED agents are auto-started (`is_start_desired=True`).
+        observe cache) is messaged directly -- no discovery. With no known location, or
+        when that send finds the agent is not there (the location went stale: destroyed,
+        recreated, or moved hosts), it falls back to a full mngr discovery. Any other
+        failure at the known location is returned as is, never sent again (see
+        ``_is_location_miss``), except a message the agent never took and cleared from its input
+        box, which is sent once more wherever it was sent (``_is_untaken``). The id is globally
+        unique, so discovery resolves to exactly the intended agent, never fanning out across
+        same-named agents on other hosts. STOPPED agents are auto-started (`is_start_desired=True`).
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
             if known_locations:
-                result = self.send(known_locations, message, mngr_ctx)
+                result = self._send_once_more_if_untaken(known_locations, message, mngr_ctx)
                 if result.successful_agents:
                     return None
+                if not _is_location_miss(result):
+                    return _first_failure(result)
             matches = self.discover(agent_id, mngr_ctx)
-            result = self.send(matches, message, mngr_ctx)
+            result = self._send_once_more_if_untaken(matches, message, mngr_ctx)
             if result.successful_agents:
                 return None
             return _first_failure(result)
         finally:
             cg.__exit__(None, None, None)
 
+    def _send_once_more_if_untaken(
+        self, matches: Sequence[AgentMatch], message: str, mngr_ctx: MngrContext
+    ) -> MessageResult:
+        """Send to ``matches``, and once more when the agent never took the message (``_is_untaken``)."""
+        result = self.send(matches, message, mngr_ctx)
+        if _is_untaken(result):
+            return self.send(matches, message, mngr_ctx)
+        return result
+
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.
 
-        The key-chord sibling of ``send_to_agent`` and resolves the agent exactly the same
-        way (known location first, discovery on a miss), but delivers a keystroke rather than
-        text and never auto-starts a stopped agent. Returns True when the chord reached the
-        agent.
+        The key-chord sibling of ``send_to_agent``: it tries the known location first, but
+        falls back to discovery whenever the press there reached no agent, not only on a
+        location miss. It delivers a keystroke rather than text and never auto-starts a
+        stopped agent. Returns True when the chord reached the agent.
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
