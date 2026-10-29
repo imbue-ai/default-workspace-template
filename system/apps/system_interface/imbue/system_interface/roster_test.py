@@ -20,11 +20,14 @@ from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import picture_version_of
 from imbue.system_interface.roster import RosterSource
 from imbue.system_interface.roster import RosterWatch
+from imbue.system_interface.roster import build_roster_announcer
 from imbue.system_interface.shell.data_types import UserRecord
 from imbue.system_interface.shell.share_grants import AgentGrantsReader
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
+from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.users import UserStore
 from imbue.system_interface.workspace_name import workspace_name_source
+from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _T0 = datetime(2026, 10, 22, 10, 0, 0, tzinfo=timezone.utc)
 _BOB = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
@@ -198,6 +201,50 @@ def test_the_watch_waits_for_a_files_directory_to_appear_then_announces_and_foll
         seen = len(announced)
         grants_path.write_text("[[agents]]\n# changed\n")
         wait_for(lambda: len(announced) > seen, timeout=5.0, poll_interval=0.01, error_message="the write was missed")
+    finally:
+        watch.stop()
+
+
+def test_the_announcer_pushes_a_roster_once_until_it_changes(tmp_path: Path) -> None:
+    source = _source(tmp_path)
+    broadcaster = WebSocketBroadcaster()
+    client_queue = broadcaster.register()
+    announcer = build_roster_announcer(source, broadcaster, lambda: _T0)
+    try:
+        announcer.announce()
+        announcer.announce()
+        (first,) = drain_messages(client_queue)
+        assert first["type"] == "roster_updated"
+        assert [entry["key"] for entry in first["participants"]] == ["owner", "workspace-agent"]
+
+        # The roster changed (the owner's account heartbeated), so the next announcement goes out; the one after
+        # it, of the same document again, does not.
+        source.presence.heartbeat(_OWNER, _T0)
+        announcer.announce()
+        announcer.announce()
+        (second,) = drain_messages(client_queue)
+        assert [entry["key"] for entry in second["participants"]] == ["user:user-owner-9c21", "workspace-agent"]
+    finally:
+        broadcaster.unregister(client_queue)
+
+
+def test_the_watch_folds_a_burst_of_file_events_into_one_announcement(tmp_path: Path) -> None:
+    announced: list[int] = []
+    watch = RosterWatch(watched_paths=(), announce=lambda: announced.append(1), coalesce_seconds=0.05)
+    watch.start()
+    try:
+        # An atomic replace fires twice, and a second write may land within the window: one announcement.
+        watch.note_change()
+        watch.note_change()
+        watch.note_change()
+        wait_for(lambda: len(announced) >= 1, timeout=5.0, poll_interval=0.01, error_message="never announced")
+        assert announced == [1]
+        # A later event, after the window, is its own announcement.
+        watch.note_change()
+        wait_for(
+            lambda: len(announced) >= 2, timeout=5.0, poll_interval=0.01, error_message="the later write was missed"
+        )
+        assert announced == [1, 1]
     finally:
         watch.stop()
 

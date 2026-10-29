@@ -653,8 +653,9 @@ def _heartbeat(client: FlaskClient, identity: RequestIdentity | None, body: dict
 
 
 def _presence_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """The ``presence_updated`` messages among ``messages``: every one rides with a ``roster_updated``."""
-    assert [message["type"] for message in messages[1::2]] == ["roster_updated"] * (len(messages) // 2)
+    """The ``presence_updated`` messages among ``messages``: the only other thing pushed beside them is the roster
+    they changed (a connected set that changed and left the roster as it was pushes no roster)."""
+    assert {message["type"] for message in messages} <= {"presence_updated", "roster_updated"}
     return [message for message in messages if message["type"] == "presence_updated"]
 
 

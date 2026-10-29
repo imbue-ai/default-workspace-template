@@ -8,8 +8,11 @@ pictured by the selected avatar design. Presence comes from the heartbeat files 
 last-seen record for visiting agents, under one connected window. Handles are assigned in roster order, so a
 collision suffixes the later entry; the workspace agent's ``agent`` is reserved before anyone else's.
 
-``GET /api/roster`` answers the document, and ``roster_updated`` carries the same body whenever presence changes, a
-grants file changes (the desktop and the gateway both write them, so the shell watches them), and on connect.
+``GET /api/roster`` answers the document, and ``roster_updated`` carries the same body whenever presence changes
+(someone came or went, or a person's newest input time moved), a grants file changes (the desktop and the gateway
+both write them, so the shell watches them), and on connect. The announcer pushes a document only when it differs
+from the one it last pushed, and the watch folds a burst of file events (an atomic replace fires twice; the gateway
+rewrites its last-seen record every ten seconds per working visiting agent) into one announcement.
 """
 
 import threading
@@ -17,6 +20,7 @@ from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 from typing import Final
 
 from pydantic import Field
@@ -63,6 +67,8 @@ ANONYMOUS_OWNER_NAME: Final[str] = "Owner"
 _AVATAR_ICON_SIZE: Final[int] = 64
 # How often a watched file whose directory does not exist yet is tried again.
 ROSTER_WATCH_RETRY_SECONDS: Final[float] = 10.0
+# How long the watch waits after a file event for the rest of its burst before announcing once.
+ROSTER_WATCH_COALESCE_SECONDS: Final[float] = 1.0
 
 
 class _Entry(FrozenModel):
@@ -298,11 +304,33 @@ class RosterSource(MutableModel):
         )
 
 
+class RosterAnnouncer(MutableModel):
+    """How the roster reaches every window: computed afresh and pushed as ``roster_updated``, unless it is the very
+    document last pushed, which every window already holds."""
+
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
+
+    roster: RosterSource = Field(frozen=True, description="What the document is computed from")
+    broadcaster: WebSocketBroadcaster = Field(frozen=True, description="Where the document is pushed")
+    now: Callable[[], datetime] = Field(frozen=True, description="The clock the document is computed at")
+
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _last_announced: dict[str, Any] | None = PrivateAttr(default=None)
+
+    def announce(self) -> None:
+        """Push the roster as it is now, when it differs from the one last pushed."""
+        document = self.roster.document(self.now()).model_dump(mode="json")
+        with self._lock:
+            if document == self._last_announced:
+                return
+            self._last_announced = document
+        self.broadcaster.broadcast_roster_updated(document)
+
+
 def build_roster_announcer(
     roster: RosterSource, broadcaster: WebSocketBroadcaster, now: Callable[[], datetime]
-) -> Callable[[], None]:
-    """How the roster reaches every window: computed afresh and pushed as ``roster_updated``."""
-    return lambda: broadcaster.broadcast_roster_updated(roster.document(now()).model_dump(mode="json"))
+) -> RosterAnnouncer:
+    return RosterAnnouncer(roster=roster, broadcaster=broadcaster, now=now)
 
 
 class RosterWatch(MutableModel):
@@ -310,7 +338,8 @@ class RosterWatch(MutableModel):
     gateway's last-seen record. The gateway creates the agent-access directories when the workspace is first shared,
     which is after the shell started on a fresh workspace, so a file whose directory does not exist yet is tried
     again every ``retry_interval_seconds`` until it is watched, and a watch that starts late announces the roster
-    once, since the file may have been written before it began."""
+    once, since the file may have been written before it began. A burst of events (an atomic replace fires twice)
+    is announced once, ``coalesce_seconds`` after its first event."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
@@ -319,11 +348,18 @@ class RosterWatch(MutableModel):
     retry_interval_seconds: float = Field(
         default=ROSTER_WATCH_RETRY_SECONDS, frozen=True, description="How often a not-yet-watchable file is tried"
     )
+    coalesce_seconds: float = Field(
+        default=ROSTER_WATCH_COALESCE_SECONDS,
+        frozen=True,
+        description="How long after a file event the rest of its burst is waited for before the one announcement",
+    )
 
     _observers: list[BaseObserver] = PrivateAttr(default_factory=list)
     _pending: list[Path] = PrivateAttr(default_factory=list)
     _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _thread: threading.Thread | None = PrivateAttr(default=None)
+    _coalesce_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _coalesce_timer: threading.Timer | None = PrivateAttr(default=None)
 
     @property
     def pending_paths(self) -> tuple[Path, ...]:
@@ -345,6 +381,25 @@ class RosterWatch(MutableModel):
         for observer in self._observers:
             stop_file_watch(observer)
         self._observers = []
+        with self._coalesce_lock:
+            if self._coalesce_timer is not None:
+                self._coalesce_timer.cancel()
+                self._coalesce_timer = None
+
+    def note_change(self) -> None:
+        """One file event: the first of a burst starts the wait, the rest ride it, and one announcement follows."""
+        with self._coalesce_lock:
+            if self._coalesce_timer is not None or self._stop.is_set():
+                return
+            timer = threading.Timer(self.coalesce_seconds, self._announce_coalesced)
+            timer.daemon = True
+            self._coalesce_timer = timer
+            timer.start()
+
+    def _announce_coalesced(self) -> None:
+        with self._coalesce_lock:
+            self._coalesce_timer = None
+        self.announce()
 
     def _watch_pending(self) -> bool:
         """Start the watch of every pending file whose directory now exists; whether any started."""
@@ -354,7 +409,7 @@ class RosterWatch(MutableModel):
             if not path.parent.is_dir():
                 still_pending.append(path)
                 continue
-            observer = start_file_watch(path, self.announce)
+            observer = start_file_watch(path, self.note_change)
             if observer is not None:
                 self._observers.append(observer)
                 is_any_started = True
@@ -364,6 +419,6 @@ class RosterWatch(MutableModel):
     def _run(self) -> None:
         while not self._stop.wait(timeout=self.retry_interval_seconds):
             if self._watch_pending():
-                self.announce()
+                self.note_change()
             if not self._pending:
                 return

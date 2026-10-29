@@ -275,17 +275,20 @@ def build_test_state(
         workspace_name=workspace_name,
         avatar_selection=shell.avatar_selection,
     )
-    announce_roster = build_roster_announcer(roster, resolved_broadcaster, utc_now)
+    roster_announcer = build_roster_announcer(roster, resolved_broadcaster, utc_now)
     return SystemInterfaceState(
         config=resolved_config,
         shell=shell,
         is_preview=is_preview,
         static_directory=resolved_static_directory,
         presence=presence,
-        presence_sweep=build_presence_sweep(presence, resolved_profiles, resolved_broadcaster, announce_roster),
+        presence_sweep=build_presence_sweep(
+            presence, resolved_profiles, resolved_broadcaster, roster_announcer.announce
+        ),
         profiles=resolved_profiles,
         roster=roster,
-        roster_watch=RosterWatch(watched_paths=(), announce=announce_roster),
+        roster_announcer=roster_announcer,
+        roster_watch=RosterWatch(watched_paths=(), announce=roster_announcer.announce),
         workspace_name=workspace_name,
     )
 

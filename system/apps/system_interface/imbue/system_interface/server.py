@@ -505,7 +505,7 @@ def _broadcast_presence_if_changed(outcome: PresenceOutcome) -> None:
     if outcome.is_membership_changed:
         _shell().broadcaster.broadcast_presence_updated(_present_users_wire_json(outcome.users))
     if outcome.is_membership_changed or outcome.is_input_changed:
-        _shell().broadcaster.broadcast_roster_updated(_roster_wire_json())
+        get_state().roster_announcer.announce()
 
 
 def _roster_endpoint() -> Response:

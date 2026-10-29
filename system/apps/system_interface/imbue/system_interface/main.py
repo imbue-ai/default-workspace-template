@@ -106,21 +106,22 @@ def build_production_state(
         workspace_name=workspace_name,
         avatar_selection=shell.avatar_selection,
     )
-    announce_roster = build_roster_announcer(roster, broadcaster, utc_now)
+    roster_announcer = build_roster_announcer(roster, broadcaster, utc_now)
     return SystemInterfaceState(
         config=config,
         shell=shell,
         presence=presence,
-        presence_sweep=build_presence_sweep(presence, profiles, broadcaster, announce_roster),
+        presence_sweep=build_presence_sweep(presence, profiles, broadcaster, roster_announcer.announce),
         profiles=profiles,
         roster=roster,
+        roster_announcer=roster_announcer,
         roster_watch=RosterWatch(
             watched_paths=(
                 shell.share_grants.share_grants_path,
                 shell.agent_grants.agent_grants_path,
                 roster.agent_last_seen_path,
             ),
-            announce=announce_roster,
+            announce=roster_announcer.announce,
         ),
         workspace_name=workspace_name,
         is_preview=is_preview,
