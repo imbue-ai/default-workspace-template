@@ -5,7 +5,8 @@
  * to open its share settings for the app (never for a critical app); Quit closes every window of
  * the app and stops its program where the workspace can honestly do so (the stop-when-no-windows
  * spec, section 7); Close removes the window for
- * everyone, and minimizes a pinned window, which is never closed (pinned-taskbar-entries plan
+ * everyone, and closes a pinned window, which is never closed for everyone, for this client alone --
+ * minimized, and its entry out of this client's bar (pinned-taskbar-entries plan
  * section 4.4). Defined once so both menus render the identical list off the identical rule.
  */
 
@@ -90,7 +91,8 @@ export interface WindowMenuActions {
   /** Pull the window out into a desktop window of the embedding chrome's own (the pull-out-window spec); null
    *  where the chrome cannot (a plain browser, an older chrome). */
   readonly popOut: (() => void) | null;
-  /** Close the window for everyone; for a pinned window, which is never closed, this minimizes it instead. */
+  /** Close the window for everyone; for a pinned window, which is never closed for everyone, this closes it for
+   *  this client alone (minimized, and its entry out of this client's bar). */
   readonly close: () => void;
   /** Null for an app that wears the theme itself, or declares that it is not themed. */
   readonly theme: WindowThemeActions | null;
