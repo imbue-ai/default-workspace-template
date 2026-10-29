@@ -794,6 +794,19 @@ def test_presence_heartbeat_records_the_owner_of_an_unshared_workspace_under_the
     ]
 
 
+def test_a_present_identity_header_that_does_not_parse_is_refused_by_every_route(client: FlaskClient) -> None:
+    """A header no proxy could have stamped is nobody's: the request is refused rather than read as the owner's
+    (the multiplayer spec, D10), on the shell's own routes and the layout routes alike."""
+    unreadable = {"X-Imbue-Identity": '{"owner": "false"}'}
+    heartbeat = client.post("/api/presence/heartbeat", json={}, headers=unreadable)
+    assert heartbeat.status_code == 400
+    assert "X-Imbue-Identity" in heartbeat.get_json()["detail"]
+    assert client.get("/api/presence").get_json() == {"users": []}
+    assert client.post("/api/desktops", json={"name": "Mine"}, headers=unreadable).status_code == 400
+    # A blank header is a missing one: the anonymous owner.
+    assert _heartbeat(client, None).get_json()["participant"] == "owner"
+
+
 def test_presence_heartbeat_records_nothing_for_a_visiting_agent(client: FlaskClient) -> None:
     agent = RequestIdentity(owner=False, agent_id="va-0123", agent_name="Visitor", granter="user:8c0f")
     assert _heartbeat(client, agent).status_code == 204

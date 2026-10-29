@@ -7,10 +7,10 @@ from typing import Final
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
-from loguru import logger
 from pydantic import ConfigDict
 from pydantic import Field
 
+from workspace_layout.errors import InvalidIdentityHeaderError
 from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
@@ -49,20 +49,22 @@ ANONYMOUS_OWNER: Final[RequestIdentity] = RequestIdentity(owner=True)
 
 @pure
 def parse_identity_header(header_value: str | None) -> RequestIdentity:
-    """The identity a request carries; a missing or unreadable header reads as the anonymous owner.
+    """The identity a request carries; a missing or blank header reads as the anonymous owner.
 
     A missing header means the request came through no current proxy (an older
     forward, an in-container caller): it is treated as the owner with no account,
-    never as a visitor. An unreadable one is logged and read the same way, so
-    ``is_header_present`` is set only for a header a proxy readably stamped.
+    never as a visitor, so ``is_header_present`` is set only for a header a proxy
+    stamped. A present header that does not parse is nobody's proxy's: it raises
+    ``InvalidIdentityHeaderError`` for the route to refuse (the multiplayer spec,
+    D10), since reading it as the owner's would make a visitor behind a buggy proxy
+    the owner for attribution and desktop ownership.
     """
     if header_value is None or not header_value.strip():
         return ANONYMOUS_OWNER
     try:
         parsed = RequestIdentity.model_validate_json(header_value)
     except ValueError as e:
-        logger.warning("Ignored an unreadable {} header: {}", IDENTITY_HEADER, e)
-        return ANONYMOUS_OWNER
+        raise InvalidIdentityHeaderError(f"the {IDENTITY_HEADER} header does not parse: {e}") from e
     return parsed.model_copy_update(to_update(parsed.field_ref().is_header_present, True))
 
 

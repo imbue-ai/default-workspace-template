@@ -1,5 +1,6 @@
 import pytest
 
+from workspace_layout.errors import InvalidIdentityHeaderError
 from workspace_layout.identity import ANONYMOUS_OWNER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
@@ -8,12 +9,17 @@ from workspace_layout.identity import participant_key_of
 from workspace_layout.identity import visiting_user_id
 
 
-def test_a_missing_or_unreadable_header_reads_as_the_anonymous_owner() -> None:
+def test_a_missing_or_blank_header_reads_as_the_anonymous_owner() -> None:
     assert parse_identity_header(None) == ANONYMOUS_OWNER
     assert parse_identity_header("   ") == ANONYMOUS_OWNER
-    assert parse_identity_header("{not json") == ANONYMOUS_OWNER
-    assert parse_identity_header('{"owner": "yes"}') == ANONYMOUS_OWNER
-    assert parse_identity_header('{"owner": "false"}') == ANONYMOUS_OWNER
+
+
+@pytest.mark.parametrize(
+    "header", ["{not json", '{"owner": "yes"}', '{"owner": "false"}', "[false]", '{"user_id": "u"}']
+)
+def test_a_present_header_that_does_not_parse_is_refused_rather_than_read_as_the_owner(header: str) -> None:
+    with pytest.raises(InvalidIdentityHeaderError):
+        parse_identity_header(header)
 
 
 def test_a_person_header_keeps_the_account_and_ignores_fields_it_does_not_know() -> None:
@@ -31,7 +37,6 @@ def test_only_a_header_a_proxy_readably_stamped_counts_as_present() -> None:
     assert parse_identity_header('{"owner":true}').is_header_present is True
     assert parse_identity_header('{"owner":true,"is_header_present":false}').is_header_present is True
     assert parse_identity_header(None).is_header_present is False
-    assert parse_identity_header("{not json").is_header_present is False
 
 
 def test_a_visiting_agent_header_carries_the_grant_and_no_user() -> None:
