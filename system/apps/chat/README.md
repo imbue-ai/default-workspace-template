@@ -360,6 +360,17 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
+A message is sent again automatically only where the chat app knows it was not
+processed, and never twice. A send naming its send-time id (`message_id`) goes
+through `send_ledger.py`: a page whose request got no answer sends it again under
+the same id, marked `is_repeat`, and the repeat gets the first send's answer, a
+refusal included (waiting for it while it is still under way), rather than a
+second delivery. A Retry under the same id gets a taken send's answer, but is
+sent afresh after a refusal. A send mngr reports
+`agent_not_found` (the agent moved) is sent again once, by discovery; one mngr
+could not confirm (`submission_unconfirmed`) is never sent again by the chat
+app, and the page says it may already have arrived.
+
 The intake route is how a text enters a chat from outside a chat page
 (`docs/system/blueprint/post-launch-paths/`): `POST /api/chats/intake` takes the
 text, how the receiving chat is chosen (`target`: `new_chat`, `main_chat` (the
