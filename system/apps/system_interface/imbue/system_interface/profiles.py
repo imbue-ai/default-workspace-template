@@ -7,8 +7,15 @@ connector serves publicly at ``GET {broker_url}/users/{user_id}/profile``. The b
 workspace is shared (read fresh on every miss; absent means no profiles are available). Each
 answer -- and each failure -- is cached for five minutes under ``profiles/<user_id>.json``, so a
 connector outage costs one failed fetch per user per five minutes and never a hung request.
+
+The picture itself is served from the shell's own origin (the multiplayer spec, section 4.2): the pages'
+content security policy admits images from the workspace alone, so the roster points at the shell's
+picture route and the shell fetches the bytes from the profile's URL once, keeping them beside the
+profile under ``profiles/<user_id>.picture.json`` until the profile names another URL.
 """
 
+import base64
+import hashlib
 import re
 import time
 from collections.abc import Sequence
@@ -41,6 +48,13 @@ PROFILES_DIRECTORY_NAME: Final[str] = "profiles"
 
 PROFILE_CACHE_TTL: Final[timedelta] = timedelta(minutes=5)
 PROFILE_REQUEST_TIMEOUT_SECONDS: Final[float] = 2.0
+PICTURE_REQUEST_TIMEOUT_SECONDS: Final[float] = 5.0
+# A picture larger than this is refused rather than cached: the connector validates uploads well under it.
+MAX_PROFILE_PICTURE_BYTES: Final[int] = 4 * 1024 * 1024
+_PICTURE_CACHE_SUFFIX: Final[str] = ".picture.json"
+# How many hex digits of the picture URL's digest name its version in the shell's route: enough that two
+# pictures of one person never share one, short enough for a query value.
+_PICTURE_VERSION_LENGTH: Final[int] = 16
 # A fetch slower than this is logged: the connector is degrading before it is down.
 _SLOW_PROFILE_FETCH_SECONDS: Final[float] = 1.0
 
@@ -56,6 +70,28 @@ class UserProfile(FrozenModel):
     user_id: str = Field(description="The account the profile belongs to")
     display_name: str | None = Field(description="The name the account chose, when it has one")
     profile_picture_url: str | None = Field(description="The profile picture URL, when the account has one")
+
+
+class ProfilePicture(FrozenModel):
+    """A profile picture's bytes and media type, as the shell serves them from its own origin."""
+
+    media_type: str = Field(description="The image's media type, as the connector served it")
+    content: bytes = Field(description="The image bytes")
+
+
+class _CachedPicture(FrozenModel):
+    """The on-disk form of a fetched picture: the URL it came from, so a new picture is fetched afresh."""
+
+    url: str = Field(description="The profile picture URL the bytes were fetched from")
+    media_type: str = Field(description="The image's media type")
+    content_base64: str = Field(description="The image bytes, base64")
+
+
+@pure
+def picture_version_of(profile_picture_url: str) -> str:
+    """The version a picture URL carries in the shell's own picture route: a digest of the connector's URL, which
+    changes with the picture's content hash, so a page's cached copy is never shown for a newer picture."""
+    return hashlib.sha256(profile_picture_url.encode()).hexdigest()[:_PICTURE_VERSION_LENGTH]
 
 
 class _ProfileWire(FrozenModel):
@@ -156,8 +192,71 @@ class ProfileResolver(MutableModel):
                 profile_by_user_id[str(user_id)] = profile
         return profile_by_user_id
 
+    def resolve_picture(self, user_id: UserId, now: datetime) -> ProfilePicture | None:
+        """The user's profile picture, or None when their profile names none (or cannot be resolved): the cached
+        bytes while the profile still names the URL they came from, else fetched from that URL and cached. A fetch
+        that fails is not cached: the page falls back to a monogram and the next load tries again."""
+        profile = self.resolve(user_id, now)
+        if profile is None or profile.profile_picture_url is None:
+            return None
+        cached = self._read_cached_picture(user_id)
+        if cached is not None and cached.url == profile.profile_picture_url:
+            return ProfilePicture(media_type=cached.media_type, content=base64.b64decode(cached.content_base64))
+        fetched = self._fetch_picture(profile.profile_picture_url, user_id)
+        if fetched is None:
+            return None
+        self._write_cached_picture(
+            user_id,
+            _CachedPicture(
+                url=profile.profile_picture_url,
+                media_type=fetched.media_type,
+                content_base64=base64.b64encode(fetched.content).decode(),
+            ),
+        )
+        return fetched
+
     def _cache_path(self, user_id: UserId) -> Path:
         return self.cache_directory / f"{user_id}.json"
+
+    def _picture_cache_path(self, user_id: UserId) -> Path:
+        return self.cache_directory / f"{user_id}{_PICTURE_CACHE_SUFFIX}"
+
+    def _read_cached_picture(self, user_id: UserId) -> _CachedPicture | None:
+        document = read_json_object(self._picture_cache_path(user_id))
+        if document is None:
+            return None
+        try:
+            return _CachedPicture.model_validate(document)
+        except ValidationError as e:
+            logger.warning("Skipped an unreadable picture cache entry for {}: {}", user_id, e.errors()[0]["msg"])
+            return None
+
+    def _write_cached_picture(self, user_id: UserId, cached: _CachedPicture) -> None:
+        # A cache that cannot be written costs a fetch per request, not the request itself.
+        try:
+            write_json_atomic(self._picture_cache_path(user_id), cached.model_dump(mode="json"))
+        except OSError as e:
+            logger.warning("Could not cache the profile picture of {}: {}", user_id, e)
+
+    def _fetch_picture(self, url: str, user_id: UserId) -> ProfilePicture | None:
+        client = httpx.Client(transport=self.transport, timeout=PICTURE_REQUEST_TIMEOUT_SECONDS)
+        with client:
+            try:
+                response = client.get(url)
+            except httpx.HTTPError as e:
+                logger.warning("Failed to fetch the profile picture of {} from {}: {}", user_id, url, e)
+                return None
+        if response.status_code != httpx.codes.OK:
+            logger.warning("Fetching the profile picture of {} answered HTTP {}", user_id, response.status_code)
+            return None
+        if len(response.content) > MAX_PROFILE_PICTURE_BYTES:
+            logger.warning("Refused the profile picture of {}: {} bytes", user_id, len(response.content))
+            return None
+        media_type = response.headers.get("Content-Type", "").split(";")[0].strip()
+        if not media_type.startswith("image/"):
+            logger.warning("Refused the profile picture of {}: its type is {!r}", user_id, media_type)
+            return None
+        return ProfilePicture(media_type=media_type, content=response.content)
 
     def _read_cached(self, user_id: UserId) -> _CachedProfile | None:
         document = read_json_object(self._cache_path(user_id))

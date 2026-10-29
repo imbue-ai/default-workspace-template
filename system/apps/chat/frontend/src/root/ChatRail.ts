@@ -546,6 +546,7 @@ function participantPhotos(row: ChatRow): m.Vnode | null {
       return participantPicture({
         name: participantName(key, null),
         pictureUrl: entry?.profile_picture_url ?? null,
+        color: entry?.color ?? null,
         size: 16,
         extra: "ring-1 ring-sidebar" + (index > 0 ? " -ml-1" : ""),
       });

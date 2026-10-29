@@ -5569,6 +5569,9 @@ def test_me_answers_the_requesters_participant_key(app: Flask) -> None:
 _AGENT_PICTURE_PATH = "/api/avatars/imbue-character/icon.png?size=64"
 
 
+_BOB_PICTURE_PATH = "/api/roster/user:user-bob-4471/picture?v=0123456789abcdef"
+
+
 def _shell_with_workspace_agent(picture_url: str | None) -> FakeShell:
     agent = roster_participant(
         ParticipantKey("workspace-agent"),
@@ -5577,23 +5580,27 @@ def _shell_with_workspace_agent(picture_url: str | None) -> FakeShell:
         handle="agent",
         profile_picture_url=picture_url,
     )
-    return FakeShell(roster_document=RosterDocument(participants=(agent,)))
+    bob = roster_participant(ParticipantKey("user:user-bob-4471"), display_name="Bob", profile_picture_url=_BOB_PICTURE_PATH)
+    return FakeShell(roster_document=RosterDocument(participants=(bob, agent)))
 
 
-def test_participants_are_the_shells_roster_with_the_agents_picture_on_this_origin(
+def test_participants_are_the_shells_roster_with_every_picture_on_this_origin(
     config: Config, signed_in_account: str, tmp_path: Path
 ) -> None:
+    """Every picture the shell serves from its own origin (a person's, the agent's) is pointed at this app's picture
+    route, keeping the shell URL's query, so the page, whose policy admits no outside image, can show them all."""
     shell = _shell_with_workspace_agent(_AGENT_PICTURE_PATH)
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger(), chat_files_root=tmp_path)
     client = create_application(build_test_state(config=config, agent_manager=manager, shell=shell)).test_client()
 
-    (agent,) = client.get("/api/participants").get_json()["participants"]
+    (bob, agent) = client.get("/api/participants").get_json()["participants"]
 
     assert (agent["key"], agent["display_name"], agent["handle"]) == ("workspace-agent", "Atlas", "agent")
-    assert agent["profile_picture_url"] == "/api/participants/workspace-agent/picture"
+    assert agent["profile_picture_url"] == "/api/participants/workspace-agent/picture?size=64"
+    assert bob["profile_picture_url"] == "/api/participants/user:user-bob-4471/picture?v=0123456789abcdef"
 
 
-def test_the_workspace_agents_picture_is_fetched_from_the_shell_and_relayed_with_its_type(
+def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_type_and_caching(
     config: Config, signed_in_account: str, tmp_path: Path
 ) -> None:
     asked: list[str] = []
@@ -5602,6 +5609,10 @@ def test_the_workspace_agents_picture_is_fetched_from_the_shell_and_relayed_with
         asked.append(str(request.url))
         if request.url.path.endswith("icon.png"):
             return httpx.Response(200, content=b"\x89PNG...", headers={"Content-Type": "image/png"})
+        if request.url.path == "/api/roster/user:user-bob-4471/picture":
+            return httpx.Response(
+                200, content=b"JPEG...", headers={"Content-Type": "image/jpeg", "Cache-Control": "public, max-age=1"}
+            )
         return httpx.Response(503, text="starting")
 
     def app_over(shell: FakeShell) -> FlaskClient:
@@ -5621,6 +5632,18 @@ def test_the_workspace_agents_picture_is_fetched_from_the_shell_and_relayed_with
     )
     assert (relayed.status_code, relayed.mimetype, relayed.data) == (200, "image/png", b"\x89PNG...")
     assert asked == [f"{shell_base_url()}{_AGENT_PICTURE_PATH}"]
+    # A person's picture comes with the shell's caching, so a versioned one is kept by the page for good.
+    bobs = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get("/api/participants/user:user-bob-4471/picture")
+    assert (bobs.status_code, bobs.mimetype, bobs.data, bobs.headers["Cache-Control"]) == (
+        200,
+        "image/jpeg",
+        b"JPEG...",
+        "public, max-age=1",
+    )
+    assert asked[-1] == f"{shell_base_url()}{_BOB_PICTURE_PATH}"
+    # A key that is nobody's, or not a key at all, has no picture here.
+    assert app_over(_shell_with_workspace_agent(None)).get("/api/participants/user:user-nobody/picture").status_code == 404
+    assert app_over(_shell_with_workspace_agent(None)).get("/api/participants/not%20a%20key/picture").status_code == 404
 
     # A shell that does not answer the picture with a success is a bad gateway, not this app's failure.
     refused = app_over(_shell_with_workspace_agent("/api/avatars/other/missing.svg")).get(

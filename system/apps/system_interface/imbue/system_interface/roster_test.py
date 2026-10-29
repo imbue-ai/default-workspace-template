@@ -1,3 +1,4 @@
+import httpx
 import json
 from datetime import datetime
 from datetime import timedelta
@@ -14,7 +15,9 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
 from imbue.system_interface.presence import PresenceStore
+from imbue.imbue_common.model_update import to_update
 from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.profiles import picture_version_of
 from imbue.system_interface.roster import RosterSource
 from imbue.system_interface.roster import RosterWatch
 from imbue.system_interface.shell.data_types import UserRecord
@@ -197,3 +200,36 @@ def test_the_watch_waits_for_a_files_directory_to_appear_then_announces_and_foll
         wait_for(lambda: len(announced) > seen, timeout=5.0, poll_interval=0.01, error_message="the write was missed")
     finally:
         watch.stop()
+
+
+def test_a_persons_picture_is_the_shells_own_route_versioned_by_the_connectors_url(tmp_path: Path) -> None:
+    """The roster never names the connector's picture URL (the pages admit no outside image): a person with a
+    picture is pointed at the shell's picture route, versioned so a newer picture is a newer URL (4.2)."""
+    source = _source(tmp_path)
+    source.share_grants.share_grants_path.write_text(_GRANTS)
+    share_env_path = tmp_path / "share.env"
+    share_env_path.write_text("SHARE_BROKER_URL=https://broker.example\n")
+
+    def connector(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/users/user-bob-4471/profile":
+            return httpx.Response(
+                200,
+                json={"user_id": "user-bob-4471", "display_name": "Bob", "profile_picture_url": "https://a/bob.png"},
+            )
+        return httpx.Response(404, json={"detail": "no such user"})
+
+    pictured = source.model_copy_update(
+        to_update(
+            source.field_ref().profiles,
+            ProfileResolver(
+                cache_directory=tmp_path / "profiles",
+                share_env_path=share_env_path,
+                transport=httpx.MockTransport(connector),
+            ),
+        )
+    )
+    source.presence.heartbeat(_BOB, _T0)
+
+    bob = next(entry for entry in pictured.document(_T0).participants if str(entry.key) == "user:user-bob-4471")
+    assert bob.profile_picture_url == f"/api/roster/user:user-bob-4471/picture?v={picture_version_of('https://a/bob.png')}"
+    assert bob.display_name == "Bob"

@@ -61,6 +61,7 @@ export function machineBubbles(attrs: MachineBubblesAttrs): m.Vnode | null {
         ? participantPicture({
             name,
             pictureUrl: agent?.profile_picture_url ?? null,
+            color: agent?.color ?? null,
             size: MACHINE_FACE_SIZE_PX,
             extra: "machine-face mt-0.5",
           })

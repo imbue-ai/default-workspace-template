@@ -34,6 +34,7 @@ from workspace_layout.roster import RosterDocument
 from workspace_layout.roster import RosterParticipant
 from workspace_layout.roster import assign_handles
 from workspace_layout.roster import participant_color
+from workspace_layout.shell_url import ROSTER_ROUTE
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
@@ -47,6 +48,7 @@ from imbue.system_interface.presence import ParticipantPresence
 from imbue.system_interface.presence import PresenceStore
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
+from imbue.system_interface.profiles import picture_version_of
 from imbue.system_interface.shell.share_grants import AgentGrantsReader
 from imbue.system_interface.shell.share_grants import ShareGrantsReader
 from imbue.system_interface.shell.users import UserStore
@@ -76,6 +78,13 @@ class _Entry(FrozenModel):
     is_connected: bool = Field(description="Whether they are here now")
     last_seen: str | None = Field(description="When they were last here")
     last_input_at: str | None = Field(description="When their newest page last saw input")
+
+
+@pure
+def participant_picture_route(key: ParticipantKey, profile_picture_url: str) -> str:
+    """Where the shell serves a person's picture from its own origin (the multiplayer spec, section 4.2): the
+    roster's picture route, versioned by the connector's URL so a page never shows a cached older picture."""
+    return f"{ROSTER_ROUTE}/{key}/picture?v={picture_version_of(profile_picture_url)}"
 
 
 @pure
@@ -209,7 +218,11 @@ class RosterSource(MutableModel):
                     kind=ParticipantKind.PERSON,
                     display_name=display_name,
                     handle_name=display_name,
-                    profile_picture_url=profile.profile_picture_url if profile is not None else None,
+                    profile_picture_url=(
+                        participant_picture_route(key, profile.profile_picture_url)
+                        if profile is not None and profile.profile_picture_url is not None
+                        else None
+                    ),
                     email=email,
                     is_owner=key == owner_key,
                     is_connected=presence.is_connected if presence is not None else False,

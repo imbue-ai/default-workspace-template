@@ -47,10 +47,11 @@ from loguru import logger as _loguru_logger
 from pydantic import Field
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
+from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
-from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.shell_url import shell_base_url
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
@@ -1041,39 +1042,59 @@ def _me_endpoint() -> Response:
     return model_response(MeResponse(participant=request_participant()))
 
 
-# Where this app serves the workspace agent's picture from its own origin (the roster names it on the shell's).
-WORKSPACE_AGENT_PICTURE_ROUTE: Final[str] = "/api/participants/workspace-agent/picture"
+# Where this app serves a participant's picture from its own origin: the roster names every picture on the shell's
+# (a person's from its own picture route, the workspace agent's from the avatar's icon), which the page cannot fetch.
+PARTICIPANT_PICTURE_ROUTE: Final[str] = "/api/participants/<key>/picture"
 _PICTURE_TIMEOUT_SECONDS: Final[float] = 5.0
 
 
+@pure
+def _participant_picture_path(key: ParticipantKey, shell_picture_url: str) -> str:
+    """This app's picture path for a participant, carrying the shell URL's query (its version, or the icon's size)
+    so a page's cache follows the picture."""
+    query = shell_picture_url.partition("?")[2]
+    return f"/api/participants/{key}/picture" + (f"?{query}" if query else "")
+
+
 def _participants_endpoint() -> Response:
-    """``GET /api/participants``: the roster as the shell holds it, the workspace agent's picture pointed at this
+    """``GET /api/participants``: the roster as the shell holds it, every picture the shell serves pointed at this
     origin, since the page cannot fetch the shell's."""
     participants = tuple(
-        entry.model_copy_update(to_update(entry.field_ref().profile_picture_url, WORKSPACE_AGENT_PICTURE_ROUTE))
-        if entry.key == WORKSPACE_AGENT_PARTICIPANT_KEY and entry.profile_picture_url is not None
+        entry.model_copy_update(
+            to_update(
+                entry.field_ref().profile_picture_url, _participant_picture_path(entry.key, entry.profile_picture_url)
+            )
+        )
+        if entry.profile_picture_url is not None and entry.profile_picture_url.startswith("/")
         else entry
         for entry in get_state().roster.document().participants
     )
     return model_response(ParticipantsResponse(participants=participants))
 
 
-def _workspace_agent_picture_endpoint() -> Response:
-    """The workspace agent's picture, fetched from the shell over loopback: the selected avatar design's icon."""
+def _participant_picture_endpoint(key: str) -> Response:
+    """A participant's picture, fetched from the shell over loopback: a person's profile picture as the shell keeps
+    it, or the workspace agent's selected avatar icon. A page's cache keeps a versioned one for good."""
     state = get_state()
-    agent = state.roster.participant(WORKSPACE_AGENT_PARTICIPANT_KEY)
-    if agent is None or agent.profile_picture_url is None:
-        return error_response("The workspace agent has no picture yet", 404)
     try:
-        answer = state.http_client.get(
-            f"{shell_base_url()}{agent.profile_picture_url}", timeout=_PICTURE_TIMEOUT_SECONDS
-        )
+        participant_key = ParticipantKey(key)
+    except InvalidLayoutValueError:
+        return error_response(f"No participant {key!r}", 404)
+    entry = state.roster.participant(participant_key)
+    if entry is None or entry.profile_picture_url is None or not entry.profile_picture_url.startswith("/"):
+        return error_response(f"{key} has no picture here", 404)
+    try:
+        answer = state.http_client.get(f"{shell_base_url()}{entry.profile_picture_url}", timeout=_PICTURE_TIMEOUT_SECONDS)
     except httpx.HTTPError as e:
-        logger.debug("Could not fetch the workspace agent's picture from the shell: {}", e)
-        return error_response("The workspace agent's picture could not be fetched", 502)
+        logger.debug("Could not fetch the picture of {} from the shell: {}", key, e)
+        return error_response("The picture could not be fetched", 502)
     if not answer.is_success:
         return error_response(f"The shell answered {answer.status_code} for the picture", 502)
-    return Response(answer.content, mimetype=answer.headers.get("Content-Type", "image/png"))
+    response = Response(answer.content, mimetype=answer.headers.get("Content-Type", "image/png"))
+    cache_control = answer.headers.get("Cache-Control")
+    if cache_control is not None:
+        response.headers["Cache-Control"] = cache_control
+    return response
 
 
 def _send_message_endpoint(chat_id: str) -> Response:
@@ -2796,7 +2817,7 @@ _ROUTE_TABLE: Final[RouteTable] = {
     ("GET", "/api/chats"): RouteModels(response_model=ChatListResponse),
     ("GET", "/api/me"): RouteModels(response_model=MeResponse),
     ("GET", "/api/participants"): RouteModels(response_model=ParticipantsResponse),
-    ("GET", WORKSPACE_AGENT_PICTURE_ROUTE): SchemalessRoute(reason="The workspace agent's picture, an image"),
+    ("GET", "/api/participants/{key}/picture"): SchemalessRoute(reason="A participant's picture, an image"),
     ("POST", "/api/chats/create"): RouteModels(
         request_model=CreateChatRequest,
         response_model=CreateChatResponse,
@@ -2956,9 +2977,7 @@ def create_application(state: ChatAppState) -> Flask:
     application.add_url_rule("/api/chats", view_func=_list_chats_endpoint, methods=["GET"])
     application.add_url_rule("/api/me", view_func=_me_endpoint, methods=["GET"])
     application.add_url_rule("/api/participants", view_func=_participants_endpoint, methods=["GET"])
-    application.add_url_rule(
-        WORKSPACE_AGENT_PICTURE_ROUTE, view_func=_workspace_agent_picture_endpoint, methods=["GET"]
-    )
+    application.add_url_rule(PARTICIPANT_PICTURE_ROUTE, view_func=_participant_picture_endpoint, methods=["GET"])
     application.add_url_rule("/api/chats/create", view_func=_create_chat, methods=["POST"])
     application.add_url_rule("/api/chats/seed", view_func=_seed_chat, methods=["POST"])
     application.add_url_rule("/api/chats/awaiting", view_func=_awaiting_chat_for_empty_list, methods=["POST"])

@@ -162,6 +162,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
           participantPicture({
             name: author.name,
             pictureUrl: entry?.profile_picture_url ?? null,
+            color: entry?.color ?? null,
             size: AUTHOR_PICTURE_SIZE_PX,
             extra: "message-author-picture mt-0.5",
           }),

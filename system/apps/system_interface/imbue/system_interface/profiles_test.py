@@ -1,4 +1,5 @@
 import json
+from collections.abc import Callable
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -12,6 +13,7 @@ from imbue.system_interface.profiles import PROFILE_CACHE_TTL
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
 from imbue.system_interface.profiles import parse_share_broker_url
+from imbue.system_interface.profiles import picture_version_of
 from imbue.system_interface.profiles import read_share_broker_url
 
 _T0 = datetime(2026, 9, 19, 10, 0, 0, tzinfo=timezone.utc)
@@ -181,3 +183,73 @@ def test_resolve_many_answers_only_the_users_with_a_profile(tmp_path: Path) -> N
 
     assert set(profile_by_user_id) == {"user-bob-4471"}
     assert profile_by_user_id["user-bob-4471"].display_name == "Bob"
+
+
+def _picture_resolver(tmp_path: Path, handle: Callable[[httpx.Request], httpx.Response]) -> ProfileResolver:
+    """A resolver whose transport answers profiles and pictures alike through ``handle``."""
+    share_env_path = tmp_path / "share.env"
+    share_env_path.write_text('export SHARE_BROKER_URL="https://broker.example.test/"\n')
+    return ProfileResolver(
+        cache_directory=tmp_path / "profiles", share_env_path=share_env_path, transport=httpx.MockTransport(handle)
+    )
+
+
+def test_resolve_picture_fetches_the_bytes_once_and_again_only_for_a_new_url(tmp_path: Path) -> None:
+    """The picture is fetched from the profile's URL and kept beside the profile; the cached bytes answer while the
+    profile names the same URL, and a profile naming another is fetched afresh (the multiplayer spec, 4.2)."""
+    connector = _Connector()
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json=_BOB_WIRE)
+    picture_requests: list[str] = []
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/users/"):
+            return connector.handle(request)
+        picture_requests.append(str(request.url))
+        return httpx.Response(200, content=b"PNG:" + request.url.path.encode(), headers={"Content-Type": "image/png"})
+
+    resolver = _picture_resolver(tmp_path, handle)
+    first = resolver.resolve_picture(UserId("user-bob-4471"), _T0)
+    again = resolver.resolve_picture(UserId("user-bob-4471"), _T0 + timedelta(seconds=1))
+
+    assert first is not None and (first.media_type, first.content) == ("image/png", b"PNG:/bob.png")
+    assert again == first
+    assert picture_requests == [_BOB_WIRE["profile_picture_url"]]
+    assert (tmp_path / "profiles" / "user-bob-4471.picture.json").exists()
+
+    # A newer picture is a new URL on the profile: fetched afresh once the profile is read again.
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(
+        200, json={**_BOB_WIRE, "profile_picture_url": "https://pictures.example/bob/c"}
+    )
+    newer = resolver.resolve_picture(UserId("user-bob-4471"), _T0 + PROFILE_CACHE_TTL + timedelta(seconds=1))
+    assert newer is not None and newer.content == b"PNG:/bob/c"
+    assert picture_requests == [_BOB_WIRE["profile_picture_url"], "https://pictures.example/bob/c"]
+
+
+def test_resolve_picture_answers_none_for_no_picture_a_failed_fetch_or_a_non_image(tmp_path: Path) -> None:
+    connector = _Connector()
+    connector.response_by_user_id["user-bob-4471"] = httpx.Response(200, json={**_BOB_WIRE, "profile_picture_url": None})
+    connector.response_by_user_id["user-amy-0001"] = httpx.Response(
+        200, json={"user_id": "user-amy-0001", "display_name": "Amy", "profile_picture_url": "https://pictures.example/amy"}
+    )
+    connector.response_by_user_id["user-cal-0002"] = httpx.Response(
+        200, json={"user_id": "user-cal-0002", "display_name": "Cal", "profile_picture_url": "https://pictures.example/cal"}
+    )
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/users/"):
+            return connector.handle(request)
+        if request.url.path.endswith("/amy"):
+            return httpx.Response(404, text="gone")
+        return httpx.Response(200, content=b"<html>", headers={"Content-Type": "text/html"})
+
+    resolver = _picture_resolver(tmp_path, handle)
+    assert resolver.resolve_picture(UserId("user-bob-4471"), _T0) is None
+    assert resolver.resolve_picture(UserId("user-amy-0001"), _T0) is None
+    assert resolver.resolve_picture(UserId("user-cal-0002"), _T0) is None
+    assert not (tmp_path / "profiles" / "user-amy-0001.picture.json").exists()
+
+
+def test_picture_version_of_follows_the_url() -> None:
+    assert picture_version_of("https://a/b") == picture_version_of("https://a/b")
+    assert picture_version_of("https://a/b") != picture_version_of("https://a/c")
+    assert len(picture_version_of("https://a/b")) == 16

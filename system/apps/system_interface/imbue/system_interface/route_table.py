@@ -124,6 +124,7 @@ SHELL_ROUTE_TABLE: RouteTable = {
         is_body_parsed_by_view=True,
     ),
     ("GET", ROSTER_ROUTE): RouteModels(response_model=RosterDocument),
+    ("GET", f"{ROSTER_ROUTE}/{{key}}/picture"): _IMAGE,
     # Section 5.1 and 5: the client-activity report, and an app's lifecycle
     ("POST", CLIENT_ACTIVITY_ROUTE): RouteModels(request_model=ClientActivityReport, success_status=HTTP_NO_CONTENT),
     # The multiplayer spec, sections 6.4 and 6.5: the tray's feed from the chat app

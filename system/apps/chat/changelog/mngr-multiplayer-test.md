@@ -47,3 +47,5 @@ The chat about an app (the mngr repo's `specs/multiplayer-refinements/spec.md`, 
 - The chat root's relay forwards its nested pages' `shell:input` activity reports up to the shell, like their focus.
 
 - The chat root loads the roster for itself, so the rows' participant pictures draw the people's real pictures and names rather than the first letter of their keys (the models are singletons per entry, and only the chat page had loaded them).
+
+- Every participant's picture is served from this app's own origin: `GET /api/participants/<key>/picture` relays the picture the shell serves for the key (a person's profile picture, the workspace agent's avatar icon) with the shell's caching, and `/api/participants` points every shell-served picture at it. A monogram (a person with no picture, or one whose picture would not load) sits on the person's roster colour, as the desktop's tray draws it.

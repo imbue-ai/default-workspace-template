@@ -32,6 +32,21 @@ describe("participantPicture", () => {
     expect(root.textContent).toBe("F");
   });
 
+  it("sits the monogram on the participant's colour when one is known, and on the neutral fill otherwise", () => {
+    const colored = render(participantPicture({ name: "Bob", pictureUrl: null, color: "#3b5ba9", size: 24 }));
+    const frame = colored.querySelector<HTMLElement>("[data-participant-picture]");
+    expect(frame?.style.backgroundColor).toBe("rgb(59, 91, 169)");
+    expect(frame?.className).toContain("text-on-accent");
+    expect(frame?.textContent).toBe("B");
+    const neutral = render(participantPicture({ name: "Bob", pictureUrl: null, color: null, size: 24 }));
+    expect(neutral.querySelector<HTMLElement>("[data-participant-picture]")?.className).toContain("bg-fill-hover");
+    // A picture is drawn as it is, whatever the colour.
+    const pictured = render(
+      participantPicture({ name: "Bob", pictureUrl: "https://p.example/b.png", color: "#3b5ba9", size: 24 }),
+    );
+    expect(pictured.querySelector<HTMLElement>("[data-participant-picture]")?.style.backgroundColor).toBe("");
+  });
+
   it("treats an empty picture URL as no picture", () => {
     const root = render(participantPicture({ name: "Bob", pictureUrl: "", size: 24 }));
     expect(root.querySelector("img")).toBeNull();

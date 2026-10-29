@@ -678,6 +678,40 @@ def _profile_aware_app(
     )
 
 
+def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_version(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """``GET /api/roster/<key>/picture`` (the multiplayer spec, section 4.2) relays the bytes the profile's URL
+    serves, immutably cacheable under its version; a key that is not a person's, or a person with no picture, is a
+    404."""
+
+    def connector(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/users/user-owner-9c21/profile":
+            return httpx.Response(
+                200, json={"user_id": "user-owner-9c21", "display_name": "Josh", "profile_picture_url": "https://a/b"}
+            )
+        if request.url.path == "/users/user-bob-4471/profile":
+            return httpx.Response(200, json={"user_id": "user-bob-4471", "display_name": "Bob"})
+        if str(request.url) == "https://a/b":
+            return httpx.Response(200, content=b"\x89PNG...", headers={"Content-Type": "image/png"})
+        return httpx.Response(404, json={"detail": "no such user"})
+
+    client = _profile_aware_app(tmp_path, broadcaster, connector).test_client()
+    _heartbeat(client, _OWNER_IDENTITY)
+    owner = next(
+        entry for entry in client.get("/api/roster").get_json()["participants"] if entry["key"] == "user:user-owner-9c21"
+    )
+    assert owner["profile_picture_url"].startswith("/api/roster/user:user-owner-9c21/picture?v=")
+
+    served = client.get(owner["profile_picture_url"])
+    assert (served.status_code, served.mimetype, served.data) == (200, "image/png", b"\x89PNG...")
+    assert served.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+    unversioned = client.get("/api/roster/user:user-owner-9c21/picture")
+    assert (unversioned.status_code, unversioned.headers["Cache-Control"]) == (200, "no-cache")
+    assert client.get("/api/roster/user:user-bob-4471/picture").status_code == 404
+    assert client.get("/api/roster/workspace-agent/picture").status_code == 404
+
+
 def test_presence_heartbeat_records_the_requester_and_answers_their_identity(client: FlaskClient) -> None:
     response = _heartbeat(client, _VISITOR_IDENTITY)
 

@@ -31,6 +31,7 @@ from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.identity import participant_key_of
+from workspace_layout.primitives import UserId
 
 from imbue.system_interface.api_models import HeartbeatRequest
 from imbue.system_interface.api_models import HeartbeatResponse
@@ -505,6 +506,26 @@ def _roster_endpoint() -> Response:
     return model_response(get_state().roster.document(utc_now()))
 
 
+# A picture a page's cache may keep for good: its URL carries the version, so a newer picture is a newer URL.
+_VERSIONED_PICTURE_CACHE_CONTROL: Final[str] = "public, max-age=31536000, immutable"
+# The participant keys that name a person, whose id part the profile is kept under.
+_USER_KEY_PREFIX: Final[str] = "user:"
+
+
+def _participant_picture_endpoint(key: str) -> ResponseReturnValue:
+    """A person's profile picture from the shell's own origin (the multiplayer spec, section 4.2): fetched from the
+    profile's URL once and kept, so the pages, whose policy admits no outside image, can show it. 404 for a key that
+    is not a person's, or a person with no picture."""
+    if not key.startswith(_USER_KEY_PREFIX):
+        return error_response("Only a person has a profile picture here", HTTP_NOT_FOUND)
+    picture = get_state().roster.profiles.resolve_picture(UserId(key.removeprefix(_USER_KEY_PREFIX)), utc_now())
+    if picture is None:
+        return error_response("No profile picture", HTTP_NOT_FOUND)
+    response = Response(picture.content, mimetype=picture.media_type)
+    response.headers["Cache-Control"] = _VERSIONED_PICTURE_CACHE_CONTROL if "v" in request.args else "no-cache"
+    return response
+
+
 def _parse_heartbeat() -> HeartbeatRequest:
     """The heartbeat's body, read here rather than by ``parse_request_body`` because a page from before the body was
     sent posts none at all, which is a heartbeat carrying nothing; anything else is refused as the helper refuses it."""
@@ -884,6 +905,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(PRESENCE_PATH, view_func=_presence_endpoint, methods=["GET"])
     application.add_url_rule(PRESENCE_HEARTBEAT_PATH, view_func=_presence_heartbeat_endpoint, methods=["POST"])
     application.add_url_rule(ROSTER_ROUTE, view_func=_roster_endpoint, methods=["GET"])
+    application.add_url_rule(f"{ROSTER_ROUTE}/<key>/picture", view_func=_participant_picture_endpoint, methods=["GET"])
     register_shell_routes(application)
     register_avatar_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
