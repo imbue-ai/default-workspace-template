@@ -32,6 +32,7 @@ import {
   NO_MENTION_APP_REASON,
   OTHER_WORKSPACE_LINK_NOTICE,
   SHOWN_WITH_NO_DESKTOP_WINDOW_NOTICE,
+  STOP_VIEWING_FIRST_NOTICE,
   TRAY_HOP_MS,
   VIEWPORT_REPORT_DEBOUNCE_MS,
   chooseInitialDesktopId,
@@ -3614,6 +3615,177 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     socket.deliver().onPresenceUpdated([]);
     await settle();
     expect([...store.viewedOwnerKeys()]).toEqual([]);
+  });
+
+  it("lets go of a ring when the clients listing changes under it: a viewing window closed", async () => {
+    api.clients = [
+      clientRecord("josh-laptop", { participant: VIEWER, active_desktop: "home" }),
+      clientRecord("alice-laptop", { participant: alice.key, active_desktop: "home" }),
+      clientRecord("alice-phone", { participant: alice.key, active_desktop: "alice" }),
+    ];
+    const store = await viewerStore();
+    expect([...store.viewedOwnerKeys()]).toEqual([josh.key]);
+    // Alice closes the laptop window that looked at Home while her phone keeps her connected: no presence change,
+    // but the shell says the clients changed, and the read shows the laptop gone.
+    api.clients = api.clients.map((client) =>
+      client.id === "alice-laptop" ? { ...client, is_connected: false } : client,
+    );
+    socket.deliver().onClientsUpdated();
+    await settle();
+    expect([...store.viewedOwnerKeys()]).toEqual([]);
+  });
+
+  it("refuses every change to a viewed desktop with one note, and reloads the owner's layout on every poll", async () => {
+    const shortcut = shortcutRecord("docs", { column: 0, row: 0 });
+    const withWindows = desktopRecord("alice", {
+      owner: "user:user-alice-0001",
+      shortcuts: [shortcut],
+      windows: [windowRecord("win-a", "docs", "/a"), windowRecord("win-b", "docs", "/b")],
+    });
+    api.desktops = [...api.desktops, withWindows];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    api.ownerLayoutClientId = "alice-laptop";
+    const owners = {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-a"), placementRecord("win-b")],
+    };
+    api.writeLayout("alice", "alice-laptop", owners);
+    const store = await startedStore();
+    socket.deliver().onRosterUpdated([josh, alice]);
+    socket.deliver().onBubble({
+      speaker: alice.key,
+      chat_id: "agent-2",
+      chat_title: "Lounge",
+      text: "hi",
+      message_id: "m-1",
+      mentions: [],
+    });
+    await store.switchDesktop("alice");
+    const callsBefore = api.calls.length;
+
+    // Every way of changing the desktop is a no-op: nothing reaches the shell, the owner's layout stands.
+    store.raiseWindow("win-a");
+    store.minimizeWindow("win-b");
+    store.restoreWindow("win-b");
+    store.setWindowState("win-a", "MAXIMIZED");
+    await store.closeWindow("win-a");
+    await store.closeOrMinimizeWindow("win-b");
+    await store.setDesktopWallpaper("alice", null);
+    await store.setDesktopTheme("alice", null);
+    await store.runShortcut(shortcut);
+    await store.removeShortcut("docs", "new");
+    expect(await store.launchAt("docs", "new", {}, { kind: "new" })).toBeNull();
+    expect(await store.openAppChat("win-a")).toBe(false);
+    expect(await store.navigateOwnWindow("win-a", "/elsewhere")).toBe(false);
+    expect(await store.reportLocation("win-a", "/elsewhere", "Elsewhere")).toBe(false);
+    store.openBubble(alice.key);
+    store.openOverview();
+    expect(store.isOverviewOpen()).toBe(false);
+    expect(api.calls.slice(callsBefore)).toEqual([]);
+    expect(activePlacements(store.getState())).toEqual(owners.placements);
+    expect(store.getBubbles().map((bubble) => bubble.speaker)).toEqual([alice.key]);
+    // One note for the lot, not one per refusal.
+    expect(notices()).toEqual([STOP_VIEWING_FIRST_NOTICE]);
+
+    // A change that slipped past the guards is undone by the next read of the owner's layout, even one whose
+    // stamp has not moved.
+    store.dispatch({ type: "window_raised", windowId: "win-a" });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-a");
+    socket.deliver().onPlacementsUpdated({ desktopId: "alice", clientId: "alice-laptop", saveId: "save-same" });
+    await settle();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+    expect(activePlacements(store.getState())).toEqual(owners.placements);
+
+    // Back on an own desktop every verb works again.
+    await store.stopViewing();
+    store.raiseWindow("win-2");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+  });
+
+  it("lands on the way back when the viewed desktop is deleted, the letterbox and the overview cleared", async () => {
+    api.ownerLayoutClientId = "alice-laptop";
+    api.ownerViewport = { width: 2000, height: 1600 };
+    api.writeLayout("alice", "alice-laptop", { updated_at: "2026-10-29T00:00:00Z", placements: [] });
+    const store = await viewerStore();
+    await store.switchDesktop("work");
+    await store.switchDesktop("alice");
+    expect(store.viewingLetterbox()).not.toBeNull();
+    // Alice deletes her desktop: the first desktop listed is Home, but the window goes back where it came from.
+    socket.deliver().onDesktopsUpdated([api.desktops[0], api.desktops[1]]);
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("work");
+    expect(store.viewedDesktop()).toBeNull();
+    expect(store.viewingLetterbox()).toBeNull();
+    expect(store.isOverviewOpen()).toBe(false);
+    expect(last(socket.reports)).toEqual(moveReport("work", ""));
+    expect(api.calls[api.calls.length - 1]).toBe("fetchPlacements:work");
+    // With the way back gone too, the first own desktop is where the window lands.
+    socket.deliver().onDesktopsUpdated([...api.desktops.slice(0, 2), alices]);
+    await store.switchDesktop("alice");
+    socket.deliver().onDesktopsUpdated([api.desktops[0]]);
+    await settle();
+    expect(store.getState().activeDesktopId).toBe("home");
+    expect(store.viewedDesktop()).toBeNull();
+  });
+
+  it("a visitor with no desktop left arrives again when the viewed one is deleted, and lands on the seeded one", async () => {
+    const bobs = desktopRecord("bob", { owner: "user:user-bob-0001" });
+    api.desktops = [api.desktops[0], alices, bobs];
+    setOwnIdentityForTesting({
+      owner: false,
+      user_id: "user-alice-0001",
+      email: "alice@example.com",
+      participant: alice.key,
+    });
+    api.clients = [clientRecord(CLIENT, { participant: alice.key, active_desktop: "home" })];
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    // Home and Alice's own desktop go at once: the way back and her own are both gone, and the first desktop listed
+    // is Bob's; the shell seeds her another on her arrival, which is where she lands.
+    api.arrival = { created_desktop: desktopRecord("alice-2", { owner: alice.key }), replaced_desktop_name: "alice" };
+    socket.deliver().onDesktopsUpdated([bobs]);
+    await settle();
+    expect(api.calls.filter((call) => call === `arriveClient:${CLIENT}`)).toHaveLength(2);
+    expect(store.getState().activeDesktopId).toBe("alice-2");
+    expect(store.viewedDesktop()).toBeNull();
+    expect(store.getReplacedDesktop()?.replacedName).toBe("alice");
+    expect(last(socket.reports)).toEqual(moveReport("alice-2", ""));
+  });
+
+  it("stop viewing with no desktop of its own arrives again and lands on the seeded one", async () => {
+    api.desktops = [api.desktops[0], desktopRecord("bob", { owner: "user:user-bob-0001" })];
+    setOwnIdentityForTesting({
+      owner: false,
+      user_id: "user-alice-0001",
+      email: "alice@example.com",
+      participant: alice.key,
+    });
+    const store = await startedStore();
+    expect(store.viewedDesktop()?.id).toBe("home");
+    api.arrival = { created_desktop: desktopRecord("alice-2", { owner: alice.key }), replaced_desktop_name: null };
+    await store.stopViewing();
+    expect(store.getState().activeDesktopId).toBe("alice-2");
+    expect(store.viewedDesktop()).toBeNull();
+  });
+
+  it("closes an overview opened before the heartbeat said the desktop is somebody else's", async () => {
+    api.desktops = [...api.desktops, alices];
+    const store = await startedStore();
+    await store.switchDesktop("alice");
+    store.openOverview();
+    expect(store.isOverviewOpen()).toBe(true);
+    setOwnIdentityForTesting({ owner: true, user_id: null, email: null, participant: "owner" });
+    store.takeViewerIdentityKnown();
+    await settle();
+    expect(store.viewedDesktop()?.id).toBe("alice");
+    expect(store.isOverviewOpen()).toBe(false);
+    store.toggleOverview();
+    expect(store.isOverviewOpen()).toBe(false);
   });
 
   it("keeps a move heard while the clients were being read, which is newer than the listing", async () => {

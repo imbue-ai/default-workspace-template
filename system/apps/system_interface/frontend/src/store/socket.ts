@@ -9,8 +9,9 @@
  * client's other windows, the shell's own edits, and an agent's ops reach this one; ``avatar_status`` and
  * ``avatar_selection_changed`` are how the workspace's avatar reaches every window, ``update_notice_changed``
  * how the update notice does, ``presence_updated`` is who is connected to the workspace, ``roster_updated`` everyone
- * who may be, ``chats_activity`` what every chat is doing, and ``bubble`` what somebody just said (the multiplayer
- * spec, sections 4.2, 6.4, and 6.5).
+ * who may be, ``clients_updated`` that a client left (its socket closed or its record was pruned), ``chats_activity``
+ * what every chat is doing, and ``bubble`` what somebody just said (the multiplayer spec, sections 4.2, 6.4, 6.5,
+ * and 8.3).
  */
 
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
@@ -107,6 +108,9 @@ export interface SocketHandlers {
   onPresenceUpdated(users: PresentUser[]): void;
   /** The roster (the multiplayer spec, section 4.2), on connect and whenever presence or a grants file changed. */
   onRosterUpdated(participants: RosterParticipant[]): void;
+  /** A client's socket closed or its record was pruned (the multiplayer spec, section 8.3): the clients listing
+   *  has changed and is worth reading again. */
+  onClientsUpdated(): void;
   /** What every chat is doing, as the chat app last reported it (the multiplayer spec, section 6.4). */
   onChatsActivity(chats: ChatActivity[]): void;
   /** Somebody just said something (the multiplayer spec, section 6.5). */
@@ -234,6 +238,9 @@ export class ShellSocket implements DesktopSocket {
         return;
       case "roster_updated":
         handlers.onRosterUpdated(parseRoster(event.participants));
+        return;
+      case "clients_updated":
+        handlers.onClientsUpdated();
         return;
       case "chats_activity":
         handlers.onChatsActivity(parseChatsActivity(event.chats));

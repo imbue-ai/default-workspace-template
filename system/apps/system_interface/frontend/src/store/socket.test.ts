@@ -71,6 +71,7 @@ beforeEach(() => {
     onLayoutOp: vi.fn(),
     onPresenceUpdated: vi.fn(),
     onRosterUpdated: vi.fn(),
+    onClientsUpdated: vi.fn(),
     onChatsActivity: vi.fn(),
     onBubble: vi.fn(),
     onConnected: vi.fn(),
@@ -163,9 +164,11 @@ describe("ShellSocket", () => {
     });
     const bob = presentUserRecord("user-bob-4471", { display_name: "Bob" });
     current().receive({ type: "presence_updated", users: [bob] });
+    current().receive({ type: "clients_updated" });
     expect(handlers.onAppsUpdated).toHaveBeenCalledWith([]);
     expect(handlers.onDesktopsUpdated).toHaveBeenCalledWith([]);
     expect(handlers.onPresenceUpdated).toHaveBeenCalledWith([bob]);
+    expect(handlers.onClientsUpdated).toHaveBeenCalledTimes(1);
     expect(handlers.onPlacementsUpdated).toHaveBeenCalledWith({
       desktopId: "home",
       clientId: "client-1",

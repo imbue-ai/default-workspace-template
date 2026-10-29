@@ -1065,6 +1065,9 @@ export class DesktopStore {
       onLayoutOp: (event) => this.handleLayoutOp(event),
       onPresenceUpdated: (users) => this.takePresence(users),
       onRosterUpdated: (participants) => this.takeRoster(participants),
+      // A client left (its socket closed, or its record was pruned) while its person may still be here on another:
+      // the listing is read again, so a ring their viewing window held is let go of.
+      onClientsUpdated: () => void this.refreshClients(),
       onChatsActivity: (chats) => {
         applyChatsActivity(chats);
         this.deps.redraw();
