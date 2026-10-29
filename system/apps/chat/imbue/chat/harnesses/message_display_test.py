@@ -21,6 +21,7 @@ from imbue.chat.harnesses.message_display import SecretResolutionVerdict
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_NOTE_TAG
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_LANDED
 from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_NOT_LANDED
+from imbue.chat.harnesses.message_display import bash_mode_command
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
@@ -251,6 +252,9 @@ def test_bash_blocks_become_chips_rather_than_bubbles() -> None:
     assert command.display is DisplayKind.CHIP
     assert command.display_label == "Bash"
     assert command.display_body == "ls -la"
+    assert bash_mode_command("<bash-input>ls -la</bash-input>\n") == "ls -la"
+    assert bash_mode_command("<bash-stdout>test</bash-stdout><bash-stderr></bash-stderr>") is None
+    assert bash_mode_command("ls -la") is None
 
     # stdout and stderr arrive together in ONE message, the stderr half usually empty.
     output = classify_user_message("<bash-stdout>test</bash-stdout><bash-stderr></bash-stderr>")

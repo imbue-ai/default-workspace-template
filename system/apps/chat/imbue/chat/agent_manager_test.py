@@ -6377,13 +6377,20 @@ def test_a_message_the_chat_app_sends_outside_a_session_is_kept_for_sending_agai
         chat.manager.stop()
 
 
+@pytest.mark.parametrize(
+    ("sent", "recorded"),
+    [
+        pytest.param("/model opus", "/model opus", id="a-machine-line"),
+        pytest.param("!ls -la", "<bash-input>ls -la</bash-input>", id="a-bash-mode-command"),
+    ],
+)
 def test_a_send_the_transcript_holds_as_a_machine_line_is_not_sent_again_when_the_process_exits(
-    broadcaster: WebSocketBroadcaster,
+    broadcaster: WebSocketBroadcaster, sent: str, recorded: str
 ) -> None:
     chat = _LostSendChat(broadcaster)
     try:
-        chat.send("/model opus")
-        chat.transcript._events.append(_typed_turn("/model opus", display="chip"))
+        chat.send(sent)
+        chat.transcript._events.append(_typed_turn(recorded, display="chip"))
         chat.observe(AgentLifecycleState.DONE)
     finally:
         chat.manager.stop()
