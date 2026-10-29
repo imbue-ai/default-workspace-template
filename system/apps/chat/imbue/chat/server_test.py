@@ -1243,7 +1243,10 @@ def _client_with_account_labeled_chat(
         manager._agents[agent_id] = AgentStateItem(
             id=agent_id, name="Chat-7", state="RUNNING", labels={"account": account_id}, work_dir=None, harness=harness
         )
-    agent_state_dir(tmp_path, agent_id).mkdir(parents=True, exist_ok=True)
+    # A room's send appends to the transcript under its state dir; an agent chat's dir stays absent, since a claude
+    # agent whose dir holds no ready marker reads as starting up and a send to it waits.
+    if harness is HarnessType.ROOM:
+        agent_state_dir(tmp_path, agent_id).mkdir(parents=True, exist_ok=True)
     return create_application(build_test_state(agent_manager=manager)).test_client(), messenger
 
 
