@@ -327,6 +327,50 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-1").style.pointerEvents).toBe("auto");
   });
 
+  it("tells a shown page again when whether its desktop is viewed changes, and only then", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a")],
+      }),
+    ];
+    // This client's own layout of Alice's desktop and her own both place win-a, so the page is the same one
+    // before and after the heartbeat says who the viewer is.
+    api.writeLayout("alice", CLIENT, { updated_at: "2026-10-29T00:00:00Z", placements: [placementRecord("win-a")] });
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:01:00Z",
+      placements: [placementRecord("win-a")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+
+    // Until the first heartbeat has answered, the desktop reads as this window's own: the page is not viewed.
+    await store.switchDesktop("alice");
+    renderChrome("win-a");
+    layer.reconcile();
+    const spy = spyOnFrame("win-a");
+    load("win-a");
+    const handshakes = (): unknown[] =>
+      spy.mock.calls.map((call) => call[0]).filter((message) => message.type === SHELL_HANDSHAKE);
+    expect(handshakes()).toMatchObject([{ desktopId: "alice", isViewing: false }]);
+
+    // The answer lands and the desktop is somebody else's: the page is told once that it is viewed.
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    store.takeViewerIdentityKnown();
+    await settle();
+    renderChrome("win-a");
+    layer.reconcile();
+    expect(handshakes()).toMatchObject([{ isViewing: false }, { desktopId: "alice", isViewing: true }]);
+    layer.reconcile();
+    expect(handshakes()).toHaveLength(2);
+  });
+
   it("lays a page over its content box in the stage's own pixels while a viewed desktop is drawn scaled down", async () => {
     api.desktops = [
       ...api.desktops,
