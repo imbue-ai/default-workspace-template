@@ -75,8 +75,13 @@ that holds no id, or a session the dispatch created on attach; a session
 that only carries the old name of a terminal whose own session is live is
 skipped, whichever tmux lists first), and one with no record at all lists under
 its own name. A window of the terminal shows the wrapper page, `/?session=<name>`;
-the wrapper frames `/?arg=_&arg=session&arg=<name>[&arg=<workdir>]` on the pty
-origin, and `session.sh` receives the name and the directory as its arguments.
+the wrapper frames `/?arg=_&arg=session&arg=<name>&arg=<workdir>` on the pty
+origin (the workdir argument always sent, empty for none), with `&arg=view`
+appended while the shell's handshake says the window is viewed on somebody
+else's desktop (the multiplayer spec, section 8.3), and `session.sh` receives
+the name, the directory, and the viewer marker as its arguments: for a viewer
+it attaches read-only and as a client tmux never sizes the window by
+(`tmux attach -r -f ignore-size`), and never creates the session.
 A terminal created through `new` always carries a workdir: the `workdir` param
 when the create gave one, else the directory the app runs from (the workspace
 root under supervisord); a record of a hand-made session holds none, and a
