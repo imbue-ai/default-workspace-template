@@ -26,6 +26,7 @@ import {
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
+import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { resetThemeClientForTests, wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
 import type { Placement } from "../model/records";
 import { activeFocusedWindowId, activePlacements } from "../reducers/desktopState";
@@ -182,6 +183,7 @@ beforeEach(async () => {
 afterEach(() => {
   resetEmbedderRelayForTesting();
   resetThemeClientForTests();
+  resetPresenceForTesting();
   backdrop.remove();
 });
 
@@ -284,6 +286,41 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-2").style.pointerEvents).toBe("none");
     layer.setGestureActive(false);
     expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
+  });
+
+  it("makes every page inert while this window views somebody else's desktop, the focused one included", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a")],
+      }),
+    ];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-a")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+
+    // The owner's layout focuses win-a, and even the focused page takes no press on a viewed desktop (8.3).
+    await store.switchDesktop("alice");
+    renderChrome("win-a");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-a");
+    expect(wrapperOf("win-a").style.pointerEvents).toBe("none");
+
+    // Back on an own desktop, the focused page is interactive again.
+    await store.stopViewing();
+    renderChrome();
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("auto");
   });
 
   it("hides a page when its window is minimized, keeping the same frame, and destroys it on close", async () => {
