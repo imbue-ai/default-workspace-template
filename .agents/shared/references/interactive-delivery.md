@@ -61,7 +61,9 @@ specifics, but the shape below holds for all of them.
      integration is cheap, or when the rough version should simply become the real
      thing.
    - *Type 2 -- detached prototype:* a separate throwaway (a hand-built HTML mock,
-     a fake UI). Cheapest and fastest, no real wiring, discarded after. Prefer it
+     a fake UI) -- still something the user opens and clicks, never a picture
+     of it, since a picture shows none of the interactions. Cheapest and
+     fastest, no real wiring, discarded after. Prefer it
      for the fastest look-and-feel loop, or for comparing directions when a fake
      conveys the idea and real wiring is costly -- but it may *not convince* when
      real rendering matters.

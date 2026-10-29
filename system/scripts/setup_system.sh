@@ -61,7 +61,7 @@ provision_drop_inherited_pins
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
-: "${LATCHKEY_VERSION:=3.19.3}"
+: "${LATCHKEY_VERSION:=3.19.4}"
 : "${MCPC_VERSION:=0.7.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
@@ -251,10 +251,9 @@ curl -fsSL "${CURL_RETRY[@]}" https://claude.ai/install.sh > /tmp/install_claude
 bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"
 test -x /root/.local/bin/claude
 # Fail the build/provision right here on a pin mismatch. mngr's own runtime
-# version check still runs when a claude agent is created, but since the
-# services agent stopped being a claude agent that check would not fire until
-# the first chat agent is created on first boot -- far too late to catch a
-# Dockerfile/settings.toml desync cheaply.
+# version check only warns (version_mismatch = "WARN" in .mngr/settings.toml)
+# and does not run until the first chat agent is created on first boot, so this
+# is the one place an installer/pin desync fails loudly.
 installed_claude_version="$(/root/.local/bin/claude --version | awk '{print $1}')"
 if [ "${installed_claude_version}" != "${CLAUDE_CODE_VERSION}" ]; then
     echo "Installed claude version ${installed_claude_version} does not match pinned CLAUDE_CODE_VERSION ${CLAUDE_CODE_VERSION}" >&2
@@ -304,7 +303,8 @@ if [ ! -x "${codex_native_binary}" ]; then
     exit 1
 fi
 
-# OpenCode CLI (pinned; standalone binary, no Node needed). Its installer reads
+# OpenCode CLI (pinned; standalone binary, no Node needed). Keep in sync with
+# agent_types.opencode.version in .mngr/settings.toml. Its installer reads
 # VERSION and hardcodes $HOME/.opencode/bin, which is NOT on PATH, so symlink the
 # binary into /usr/local/bin like the other downloaded tools.
 curl -fsSL https://opencode.ai/install | VERSION="${OPENCODE_VERSION}" bash
@@ -322,16 +322,16 @@ command -v playwright-cli >/dev/null
 # Antigravity CLI (agy). Installed via a vendored, version-LOCKED copy of Google's
 # installer: the upstream one queries a "latest" manifest, and that manifest is the
 # ONLY source of a release's opaque build id, so a version can be pinned only by
-# capturing its URL + sha512 while it is current. agy_install-1.1.22.sh holds those.
+# capturing its URL + sha512 while it is current. agy_install.sh holds those.
 # Reachable two ways depending on how we were invoked (mirrors the secret-scanner
 # dual-name resolution below): in a Dockerfile build it is baked beside this script as
 # default-workspace-template-install-agy; run straight from the repo (Lima/Modal) it is
-# its sibling agy_install-1.1.22.sh. Installed into /usr/local/bin explicitly rather
+# its sibling agy_install.sh. Installed into /usr/local/bin explicitly rather
 # than the installer's $HOME/.local/bin default, so agy sits with every other
 # downloaded tool and does not depend on HOME surviving into the runtime image.
 agy_installer_dir="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$agy_installer_dir/agy_install-1.1.22.sh" ]; then
-    bash "$agy_installer_dir/agy_install-1.1.22.sh" /usr/local/bin
+if [ -f "$agy_installer_dir/agy_install.sh" ]; then
+    bash "$agy_installer_dir/agy_install.sh" /usr/local/bin
 else
     bash "$agy_installer_dir/default-workspace-template-install-agy" /usr/local/bin
 fi
