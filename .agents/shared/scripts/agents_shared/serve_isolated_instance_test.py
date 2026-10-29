@@ -18,6 +18,7 @@ import io
 import json
 import os
 import signal
+import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1290,3 +1291,52 @@ def test_a_boot_whose_health_says_the_frontend_is_not_built_is_not_up(
     # A health route that says nothing about a frontend (a bare service) is judged on its status alone.
     assert mod.ProbeResult(200, '{"status": "ok"}').is_healthy
     assert mod.ProbeResult(200, "not json").is_healthy
+
+
+def test_a_project_launch_links_and_syncs_the_project_then_becomes_its_own_script(
+    tmp_path: Path,
+) -> None:
+    """A standalone project boots as its program does: its venv linked, synced from its
+    own lock, and the bare script name resolved from its own .venv/bin, with no uv
+    process left as the parent."""
+    cwd = tmp_path / "workspace"
+    project = "system/apps/widget"
+    bin_dir = cwd / project / ".venv" / "bin"
+    bin_dir.mkdir(parents=True)
+    script = bin_dir / "widget-app"
+    script.write_text('#!/bin/sh\necho "$$ $VIRTUAL_ENV $*"\n')
+    helper = cwd / mod.VENV_LINKS_SCRIPT
+    helper.parent.mkdir(parents=True)
+    helper.write_text(
+        f"import sys\nopen({str(tmp_path / 'links-args')!r}, 'w').write(' '.join(sys.argv[1:]))\n"
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    uv = fake_bin / "uv"
+    uv.write_text(f'#!/bin/sh\necho "$*" > {tmp_path / "uv-args"}\n')
+    for executable in (script, uv):
+        executable.chmod(0o755)
+
+    process = subprocess.Popen(
+        [*mod.project_launcher(project), "widget-app", "--port", "1"],
+        cwd=cwd,
+        env={**os.environ, "PATH": f"{fake_bin}:{os.environ['PATH']}"},
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    stdout, _ = process.communicate(timeout=30)
+
+    assert process.returncode == 0
+    assert (tmp_path / "links-args").read_text() == f"ensure-project {project}"
+    assert (tmp_path / "uv-args").read_text().split() == [
+        "sync",
+        "--locked",
+        "--project",
+        project,
+    ]
+    assert stdout.split() == [
+        str(process.pid),
+        str(cwd / project / ".venv"),
+        "--port",
+        "1",
+    ]

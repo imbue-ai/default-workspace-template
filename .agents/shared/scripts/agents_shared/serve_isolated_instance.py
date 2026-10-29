@@ -53,7 +53,7 @@ Usage:
         [--env NAME=VALUE ...] [--unset-env NAME ...] [--copy KEY=SOURCE ...] \\
         [--health-path /path] [--service-name <name>] \\
         [--preview-service-name <name> --preview-title <label> [--inner-path /path]] \\
-        [--repo-root PATH] -- <launch argv...>
+        [--project system/<kind>/<package>] [--repo-root PATH] -- <launch argv...>
     python3 serve_isolated_instance.py refresh --name <slug> [--repo-root PATH]
     python3 serve_isolated_instance.py down --name <slug> [--repo-root PATH]
 
@@ -92,6 +92,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import socket
@@ -469,6 +470,28 @@ class Spawner:
                 start_new_session=True,
             )
         return int(process.pid)
+
+
+# How a standalone project (a user package under system/, with its own uv.lock and
+# .venv) is booted: like its supervisord program, it links the project's venv, syncs it
+# from the project's own lock, and execs the command with that venv first on PATH, so a
+# bare console-script name resolves to the project's own install.
+VENV_LINKS_SCRIPT = "system/scripts/workspace_bare_scripts/venv_links.py"
+
+
+def project_launcher(project: str) -> list[str]:
+    """The argv prefix that boots a command from the standalone ``project``'s own venv,
+    ``project`` relative to the instance's working directory."""
+    quoted = shlex.quote(project)
+    return [
+        "bash",
+        "-c",
+        f"python3 {VENV_LINKS_SCRIPT} ensure-project {quoted}"
+        f" && uv sync --locked --project {quoted}"
+        f' && export VIRTUAL_ENV="$PWD/"{quoted}/.venv PATH="$PWD/"{quoted}/.venv/bin:"$PATH"'
+        ' && exec "$@"',
+        "bash",
+    ]
 
 
 def find_free_port() -> int:
@@ -1417,6 +1440,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         default="/",
         help="The path the preview frame opens the inner service on (default: /).",
     )
+    up_parser.add_argument(
+        "--project",
+        default=None,
+        help="Boot the launch argv from this standalone project's own venv (a user "
+        "app, service or lib under system/, relative to --cwd): link it, sync it "
+        "--locked, and put its .venv/bin first on PATH, as its program does.",
+    )
     _add_repo_root_arg(up_parser)
     up_parser.add_argument(
         "launch",
@@ -1450,6 +1480,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         launch = list(args.launch)
         if launch and launch[0] == "--":
             launch = launch[1:]
+        if args.project is not None:
+            launch = [*project_launcher(args.project), *launch]
         try:
             env_overrides = parse_env_assignments(args.env)
             port_env_by_name = parse_port_envs(args.port_env, args.port)

@@ -21,7 +21,7 @@ from app_manifest.manifest import (
     load_manifest,
 )
 from app_manifest.registry_location import registry_path
-from workspace_bare_scripts import forward_port
+from workspace_bare_scripts import forward_port, user_packages
 
 from update_app_skill.preview_app import (
     INNER_SERVICE_SUFFIX,
@@ -129,6 +129,16 @@ def _declared_theming_mode(worktree: Path, manifest: AppManifest) -> str | None:
     return mode if isinstance(mode, str) else None
 
 
+def _launcher(worktree: Path, manifest: AppManifest) -> tuple[str, ...]:
+    """A built-in app boots from the worktree's root venv; a user-built app, a standalone
+    project, from its own (``serve_isolated_instance.project_launcher``)."""
+    manifest_path, _ = find_manifest(worktree, str(manifest.name))
+    relative = manifest_path.parent.relative_to(worktree).as_posix()
+    if relative in user_packages.user_packages(worktree):
+        return tuple(serve_isolated_instance.project_launcher(relative))
+    return LAUNCHER
+
+
 def build_instance_spec(
     manifest: AppManifest,
     worktree: Path,
@@ -150,7 +160,7 @@ def build_instance_spec(
     return InstanceSpec(
         name=instance_name(manifest.name),
         command=[
-            *LAUNCHER,
+            *_launcher(worktree, manifest),
             *(resolve_own_placeholders(part, registry_copy) for part in launch),
         ],
         cwd=worktree,

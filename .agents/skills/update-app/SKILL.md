@@ -216,18 +216,23 @@ process restarts:
   supervisorctl status <name>   # confirm it came back RUNNING
   ```
 
-- **Dependency or entry-point change to an app** (its `pyproject.toml`):
-  every app runs from the workspace venv, an editable install of
-  `system/apps/<package>/` that picks up source edits on its own but not a
-  new dependency or console script. Sync the venv, then restart:
+- **Dependency or entry-point change to an app** (its `pyproject.toml`): an
+  app's venv is an editable install of `system/apps/<package>/` that picks up
+  source edits on its own but not a new dependency or console script. A
+  user-built app is a standalone project with its own lock and venv: change its
+  dependencies in its own directory, then restart (its program syncs its venv
+  from its lock at start):
 
   ```bash
-  uv sync --all-packages
+  (cd system/apps/<package> && uv add <dependency>)   # or `uv lock` after a hand edit
   uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<text>" --refresh
   ```
 
-  (Background services under `system/services/` run from the same venv:
-  `uv sync --all-packages`, then `supervisorctl restart <name>`.)
+  That touches only the app's own `pyproject.toml`, `uv.lock` and venv, never
+  the root lock or the chat's environment. A built-in app runs from the root
+  venv instead: `uv lock` and `uv sync --all-packages` at the repo root, then
+  restart. (A user service under `system/services/` works like a user app: `uv
+  add` in its directory, then `supervisorctl restart <name>`.)
 
 - **Frontend-only change** (templates, static JS/CSS served fresh on each
   request): no restart needed -- the next request already serves the new
@@ -360,10 +365,15 @@ where the data dies. Encode these, cheapest first:
       --copy data=data/.apps/<name> \
       --env '<PACKAGE_UPPER>_DATA_DIR={copy:data}' \
       --health-path /health \
-      -- .venv/bin/<name>)
+      --project system/apps/<package> \
+      -- <name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
   python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <name>-test
   ```
+
+  `--project` boots a user-built app (a standalone project with its own lock and
+  venv) from its own venv, synced first, as its program does; drop it, and run
+  `-- .venv/bin/<name>`, for a built-in app, which runs from the root venv.
 
   **Never copy app data into `/tmp`.** In the workspace container `/tmp` is a
   small RAM disk (about 1 GiB): a copy of any real store fails part way with
@@ -405,13 +415,15 @@ where the data dies. Encode these, cheapest first:
   uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
   ```
 
-  Every `up` and `refresh` runs `uv sync --all-packages --frozen` in the
-  worktree and then starts the app from the worktree's own `.venv`, so the
-  preview serves the worktree's code. That boot sync counts against the
-  preview's health wait, so on a fresh `git worktree add` run
-  `uv sync --all-packages --frozen` there once before the first `up`. The
-  sync never relocks: after changing a dependency in the worktree, run
-  `uv lock` there before `refresh`, or the preview boots without the change.
+  Every `up` and `refresh` syncs the app's venv in the worktree and then starts
+  the app from it, so the preview serves the worktree's code: a built-in app
+  from the worktree's root `.venv` (`uv sync --all-packages --frozen`), a
+  user-built app from its own project's (`uv sync --locked`). That boot sync
+  counts against the preview's health wait, so on a fresh `git worktree add`
+  run the same sync there once before the first `up`. The sync never relocks:
+  after changing a dependency in the worktree, run `uv lock` (in the app's
+  directory, for a user-built app) before `refresh`, or the preview boots
+  without the change.
   If the app has a frontend, build it in the worktree too.
 
   `--with <sibling>` boots a sibling app's preview from the same worktree first

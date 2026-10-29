@@ -19,6 +19,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import pytest
+from agents_shared import serve_isolated_instance
 
 from update_app_skill import preview_app as mod
 from update_app_skill import preview_boot as boot
@@ -621,3 +622,33 @@ def test_re_upping_a_framed_sibling_on_its_own_moves_the_shells_registry_copy_wi
     }
     # The shell's own record still names the chat, so a later ``down`` of the shell is unchanged.
     assert mod._recorded_siblings(tmp_path, "system_interface") == ["chat"]
+
+
+def test_a_user_built_app_previews_from_its_own_projects_venv(tmp_path: Path) -> None:
+    # A user-built app is a standalone project the root members do not name, so its
+    # preview boots it the way its program does; a built-in keeps the root venv.
+    worktree = _write_worktree(tmp_path)
+    (worktree / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers = ["system/apps/chat", "system/apps/system_interface"]\n'
+    )
+    for package in ("notes", "chat"):
+        (worktree / "system" / "apps" / package / "pyproject.toml").write_text(
+            f'[project]\nname = "{package}"\n'
+        )
+    instances = _RecordingInstances(tmp_path)
+
+    assert (
+        boot.up(
+            "notes",
+            worktree,
+            tmp_path,
+            instances=instances,
+            dump_registry=_dump_registry,
+        )
+        == 0
+    )
+
+    assert instances.up_spec("notes-preview").command == [
+        *serve_isolated_instance.project_launcher("system/apps/notes"),
+        "notes",
+    ]
