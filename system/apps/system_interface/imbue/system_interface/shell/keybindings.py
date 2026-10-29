@@ -22,6 +22,7 @@ from workspace_profile.identity import RequestIdentity
 from workspace_profile.keybindings import keybinding_assignment
 from workspace_profile.keybindings import with_keybinding_assignment
 from workspace_profile.keybindings import without_keybinding_assignment
+from workspace_profile.manifest import KEYBINDINGS_ACTIONS_SUBPATH
 from workspace_profile.manifest import KeybindingActionDeclaration
 from workspace_profile.manifest import KeybindingsActionsResponse
 from workspace_profile.overrides import load_unsent_change_values
@@ -88,7 +89,7 @@ def fetch_app_keybindings_manifests(entries: Sequence[AppInventoryEntry]) -> lis
         if api_base is None:
             continue
         try:
-            response = httpx.get(f"{api_base}/keybindings/actions", timeout=_MANIFEST_FETCH_TIMEOUT_SECONDS)
+            response = httpx.get(f"{api_base}{KEYBINDINGS_ACTIONS_SUBPATH}", timeout=_MANIFEST_FETCH_TIMEOUT_SECONDS)
         except httpx.HTTPError as e:
             logger.debug("Skipped {}'s keybindings manifest: {}", entry.row.name, e)
             continue

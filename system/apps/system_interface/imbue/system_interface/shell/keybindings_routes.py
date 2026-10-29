@@ -14,6 +14,8 @@ from pydantic import Field
 from workspace_profile.errors import InvalidChordError
 from workspace_profile.keybindings import normalize_chord
 from workspace_profile.keybindings import resolve_app_keybindings
+from workspace_profile.manifest import KEYBINDINGS_ACTIONS_SUBPATH
+from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
 from workspace_profile.manifest import resolve_keybindings_me_response
 from workspace_profile.resolve import resolve_request_user_id
 from workspace_profile.snapshot import load_workspace_profile_snapshot
@@ -41,8 +43,8 @@ from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.state import ShellState
 
-KEYBINDINGS_ACTIONS_ROUTE: Final[str] = "/api/keybindings/actions"
-KEYBINDINGS_ME_ROUTE: Final[str] = "/api/keybindings/me"
+KEYBINDINGS_ACTIONS_ROUTE: Final[str] = f"/api{KEYBINDINGS_ACTIONS_SUBPATH}"
+KEYBINDINGS_ME_ROUTE: Final[str] = f"/api{KEYBINDINGS_ME_SUBPATH}"
 KEYBINDINGS_CATALOG_ROUTE: Final[str] = "/api/keybindings/catalog"
 KEYBINDINGS_SAVE_ROUTE: Final[str] = "/api/keybindings"
 KEYBINDINGS_DISCARD_ROUTE: Final[str] = "/api/keybindings/discard"
@@ -237,9 +239,13 @@ def save_keybinding() -> ResponseReturnValue:
         chords = [normalize_chord(chord) for chord in body.chords]
     except InvalidChordError as e:
         return detail_response(str(e), HTTP_BAD_REQUEST)
+    # Only the named app's manifest is consulted (the shell's own is always included),
+    # so a save never fans out to every app the way the catalog read does.
+    named_entries = [entry for entry in shell.inventory.entries() if str(entry.row.name) == body.app]
     is_known_action = any(
-        app_manifest.manifest.app == body.app and any(action.id == body.action for action in app_manifest.manifest.actions)
-        for app_manifest in fetch_app_keybindings_manifests(shell.inventory.entries())
+        app_manifest.manifest.app == body.app
+        and any(action.id == body.action for action in app_manifest.manifest.actions)
+        for app_manifest in fetch_app_keybindings_manifests(named_entries)
     )
     if not is_known_action:
         return detail_response(f"no app declares the action {body.app}.{body.action}", HTTP_BAD_REQUEST)

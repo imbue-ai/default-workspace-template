@@ -18,14 +18,16 @@ from flask import Response
 from flask import request
 from workspace_profile.identity import IDENTITY_HEADER
 from workspace_profile.identity import parse_identity_header
+from workspace_profile.manifest import KEYBINDINGS_ACTIONS_SUBPATH
+from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
 from workspace_profile.manifest import KeybindingActionDeclaration
 from workspace_profile.manifest import KeybindingsActionsResponse
 from workspace_profile.manifest import KeybindingsMeResponse
 from workspace_profile.manifest import resolve_keybindings_me_response
 from workspace_profile.snapshot import load_workspace_profile_snapshot
 
-KEYBINDINGS_ACTIONS_ROUTE: Final[str] = "/api/keybindings/actions"
-KEYBINDINGS_ME_ROUTE: Final[str] = "/api/keybindings/me"
+KEYBINDINGS_ACTIONS_ROUTE: Final[str] = f"/api{KEYBINDINGS_ACTIONS_SUBPATH}"
+KEYBINDINGS_ME_ROUTE: Final[str] = f"/api{KEYBINDINGS_ME_SUBPATH}"
 
 CHAT_KEYBINDINGS_MANIFEST: Final[KeybindingsActionsResponse] = KeybindingsActionsResponse(
     app="chat",

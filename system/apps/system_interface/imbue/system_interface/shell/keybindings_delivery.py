@@ -164,6 +164,10 @@ def deliver_unsent_keybindings(
             detail="Imbue Studio could not be reached; the change stays in this workspace until it can.",
         )
     if response.status_code == 200:
+        # The optimistic copies clear now, but the snapshot still carries the old account value
+        # until the desktop's kicked sync pass rewrites it: a /me read in that window resolves
+        # the previous chord, and the snapshot watch broadcasts the correction when it lands.
+        # The designed cost of never holding a request on an in-workspace write (spec section 9.2).
         clear_delivered_keybindings(workspace_root, owner_user_id, unsent)
         store.set_pending_request_id(None)
         logger.info("Delivered {} keybinding save(s) to the account", sum(len(v) for v in unsent.values()))

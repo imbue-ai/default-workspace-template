@@ -38,6 +38,8 @@ from pydantic import ConfigDict, Field, field_validator
 from workspace_layout.windows import WindowClosedHint, window_query_value
 from workspace_profile.identity import IDENTITY_HEADER, parse_identity_header
 from workspace_profile.manifest import (
+    KEYBINDINGS_ACTIONS_SUBPATH,
+    KEYBINDINGS_ME_SUBPATH,
     KeybindingsActionsResponse,
     KeybindingsMeResponse,
     resolve_keybindings_me_response,
@@ -69,8 +71,8 @@ from terminal_app.sessions import TmuxSessionSource
 
 BLUEPRINT_NAME: Final[str] = "terminal_pages"
 NEW_PATH: Final[str] = "/new"
-KEYBINDINGS_ACTIONS_PATH: Final[str] = "/api/keybindings/actions"
-KEYBINDINGS_ME_PATH: Final[str] = "/api/keybindings/me"
+KEYBINDINGS_ACTIONS_PATH: Final[str] = f"/api{KEYBINDINGS_ACTIONS_SUBPATH}"
+KEYBINDINGS_ME_PATH: Final[str] = f"/api{KEYBINDINGS_ME_SUBPATH}"
 HEALTH_PATH: Final[str] = "/api/health"
 APP_DISPLAY_NAME: Final[str] = "Terminal"
 APP_DESCRIPTION: Final[str] = "Web terminals inside the workspace, one per window."

@@ -28,6 +28,8 @@ from flask import send_from_directory
 from loguru import logger
 from workspace_profile.identity import IDENTITY_HEADER
 from workspace_profile.identity import parse_identity_header
+from workspace_profile.manifest import KEYBINDINGS_ACTIONS_SUBPATH
+from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
 from workspace_profile.manifest import KeybindingsActionsResponse
 from workspace_profile.manifest import KeybindingsMeResponse
 from workspace_profile.manifest import resolve_keybindings_me_response
@@ -88,8 +90,8 @@ _FILE_VERBS: Final[dict[str, str]] = {
 ROUTE_TABLE: RouteTable = {
     ("GET", f"{API_PREFIX}/connections"): RouteModels(response_model=Connections),
     ("GET", f"{API_PREFIX}/stamps"): RouteModels(response_model=FolderStamps),
-    ("GET", f"{API_PREFIX}/keybindings/actions"): RouteModels(response_model=KeybindingsActionsResponse),
-    ("GET", f"{API_PREFIX}/keybindings/me"): RouteModels(response_model=KeybindingsMeResponse),
+    ("GET", f"{API_PREFIX}{KEYBINDINGS_ACTIONS_SUBPATH}"): RouteModels(response_model=KeybindingsActionsResponse),
+    ("GET", f"{API_PREFIX}{KEYBINDINGS_ME_SUBPATH}"): RouteModels(response_model=KeybindingsMeResponse),
     ("GET", f"{ASSETS_PREFIX}/{{name}}"): SchemalessRoute(reason="a file of the frontend's build"),
     **{
         (method, path): SchemalessRoute(reason=reason)
@@ -228,12 +230,12 @@ def create_app(
         device_paths.update({device.id: device.has_device_paths for device in listed.devices})
         return model_response(listed)
 
-    @app.get(f"{API_PREFIX}/keybindings/actions")
+    @app.get(f"{API_PREFIX}{KEYBINDINGS_ACTIONS_SUBPATH}")
     def keybindings_actions() -> Response:
         """The Files keybindings manifest: every browser action a keystroke can trigger."""
         return model_response(FILES_KEYBINDINGS_MANIFEST)
 
-    @app.get(f"{API_PREFIX}/keybindings/me")
+    @app.get(f"{API_PREFIX}{KEYBINDINGS_ME_SUBPATH}")
     def keybindings_me() -> Response:
         """The requesting user's resolved chords for the Files actions."""
         workspace_root = Path.cwd()
