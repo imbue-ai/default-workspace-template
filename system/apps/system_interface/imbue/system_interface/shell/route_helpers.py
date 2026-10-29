@@ -32,6 +32,10 @@ HTTP_INTERNAL_ERROR: Final[int] = 500
 HTTP_BAD_GATEWAY: Final[int] = 502
 HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
+# What an image the shell serves is sent under beside its type: never sniffed into another type, and, since an svg
+# can carry script, a document that runs nothing and loads nothing but its own inline styles on a direct visit.
+IMAGE_CONTENT_SECURITY_POLICY: Final[str] = "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+
 
 def detail_response(message: str, status_code: int) -> ResponseReturnValue:
     """A refusal or a failure as the ``ErrorResponse`` every route answers them with."""

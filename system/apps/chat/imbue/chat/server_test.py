@@ -5615,7 +5615,14 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
             return httpx.Response(200, content=b"\x89PNG...", headers={"Content-Type": "image/png"})
         if request.url.path == "/api/roster/user:user-bob-4471/picture":
             return httpx.Response(
-                200, content=b"JPEG...", headers={"Content-Type": "image/jpeg", "Cache-Control": "public, max-age=1"}
+                200,
+                content=b"JPEG...",
+                headers={
+                    "Content-Type": "image/jpeg",
+                    "Cache-Control": "public, max-age=1",
+                    "X-Content-Type-Options": "nosniff",
+                    "Content-Security-Policy": "default-src 'none'; sandbox",
+                },
             )
         return httpx.Response(503, text="starting")
 
@@ -5637,7 +5644,8 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
     )
     assert (relayed.status_code, relayed.mimetype, relayed.data) == (200, "image/png", b"\x89PNG...")
     assert asked == [f"{shell_base_url()}{_AGENT_PICTURE_PATH}"]
-    # A person's picture comes with the shell's caching, so a versioned one is kept by the page for good.
+    # A person's picture comes with the shell's caching, so a versioned one is kept by the page for good, and with
+    # the shell's image hardening.
     bobs = app_over(_shell_with_workspace_agent(_AGENT_PICTURE_PATH)).get(
         "/api/participants/user:user-bob-4471/picture?v=0123456789abcdef"
     )
@@ -5646,6 +5654,10 @@ def test_a_participants_picture_is_fetched_from_the_shell_and_relayed_with_its_t
         "image/jpeg",
         b"JPEG...",
         "public, max-age=1",
+    )
+    assert (bobs.headers["X-Content-Type-Options"], bobs.headers["Content-Security-Policy"]) == (
+        "nosniff",
+        "default-src 'none'; sandbox",
     )
     assert asked[-1] == f"{shell_base_url()}{_BOB_PICTURE_PATH}"
     # A stale page asks under an older version, or none: the shell is asked under that, not the roster's.

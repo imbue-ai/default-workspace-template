@@ -1046,6 +1046,13 @@ def _me_endpoint() -> Response:
 # (a person's from its own picture route, the workspace agent's from the avatar's icon), which the page cannot fetch.
 PARTICIPANT_PICTURE_ROUTE: Final[str] = "/api/participants/<key>/picture"
 _PICTURE_TIMEOUT_SECONDS: Final[float] = 5.0
+# What the shell's picture answer says beyond its type, relayed as it is: its caching, and the image hardening the
+# shell sends with every image (not sniffed into another type; an svg runs nothing on a direct visit).
+_RELAYED_PICTURE_HEADERS: Final[tuple[str, ...]] = (
+    "Cache-Control",
+    "X-Content-Type-Options",
+    "Content-Security-Policy",
+)
 
 
 @pure
@@ -1096,9 +1103,10 @@ def _participant_picture_endpoint(key: str) -> Response:
     if not answer.is_success:
         return error_response(f"The shell answered {answer.status_code} for the picture", 502)
     response = Response(answer.content, mimetype=answer.headers.get("Content-Type", "image/png"))
-    cache_control = answer.headers.get("Cache-Control")
-    if cache_control is not None:
-        response.headers["Cache-Control"] = cache_control
+    for name in _RELAYED_PICTURE_HEADERS:
+        value = answer.headers.get(name)
+        if value is not None:
+            response.headers[name] = value
     return response
 
 

@@ -715,6 +715,9 @@ def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_versio
     served = client.get(owner["profile_picture_url"])
     assert (served.status_code, served.mimetype, served.data) == (200, "image/png", b"\x89PNG...")
     assert served.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+    # Outside bytes under the shell's origin are sent as its own images are.
+    assert served.headers["X-Content-Type-Options"] == "nosniff"
+    assert served.headers["Content-Security-Policy"] == "default-src 'none'; style-src 'unsafe-inline'; sandbox"
     unversioned = client.get("/api/roster/user:user-owner-9c21/picture")
     assert (unversioned.status_code, unversioned.headers["Cache-Control"]) == (200, "no-cache")
     stale = client.get("/api/roster/user:user-owner-9c21/picture?v=0123456789abcdef")

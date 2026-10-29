@@ -71,6 +71,7 @@ from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
+from imbue.system_interface.shell.route_helpers import IMAGE_CONTENT_SECURITY_POLICY
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
@@ -531,6 +532,9 @@ def _participant_picture_endpoint(key: str) -> ResponseReturnValue:
     if picture is None:
         return error_response("No profile picture", HTTP_NOT_FOUND)
     response = Response(picture.content, mimetype=picture.media_type)
+    # The bytes are an outside host's, under whatever image type it declared: sent as the shell's own images are.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = IMAGE_CONTENT_SECURITY_POLICY
     is_current_version = request.args.get("v") == picture.version
     response.headers["Cache-Control"] = _VERSIONED_PICTURE_CACHE_CONTROL if is_current_version else "no-cache"
     return response
