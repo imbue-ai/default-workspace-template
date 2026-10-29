@@ -9,7 +9,8 @@ built in.
 
 from typing import Final
 
-from workspace_profile.manifest import KeybindingActionDeclaration, KeybindingsActionsResponse
+from workspace_profile.manifest import KeybindingActionDeclaration
+from workspace_profile.manifest import KeybindingsActionsResponse
 
 FILES_KEYBINDINGS_MANIFEST: Final[KeybindingsActionsResponse] = KeybindingsActionsResponse(
     app="files",

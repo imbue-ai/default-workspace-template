@@ -26,6 +26,12 @@ from flask import Response
 from flask import request
 from flask import send_from_directory
 from loguru import logger
+from workspace_profile.identity import IDENTITY_HEADER
+from workspace_profile.identity import parse_identity_header
+from workspace_profile.manifest import KeybindingsActionsResponse
+from workspace_profile.manifest import KeybindingsMeResponse
+from workspace_profile.manifest import resolve_keybindings_me_response
+from workspace_profile.snapshot import load_workspace_profile_snapshot
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
 
@@ -47,9 +53,6 @@ from files_app.sources import FileSource
 from files_app.sources import FilesError
 from files_app.sources import FolderStamps
 from files_app.sources import PageData
-from workspace_profile.identity import IDENTITY_HEADER, parse_identity_header
-from workspace_profile.manifest import KeybindingsActionsResponse, KeybindingsMeResponse, resolve_keybindings_me_response
-from workspace_profile.snapshot import load_workspace_profile_snapshot
 
 API_PREFIX: Final[str] = "/__files/api"
 APP_DISPLAY_NAME: Final[str] = "Files"
@@ -146,7 +149,9 @@ def create_app(
 
     def failure(error: FilesError) -> Response:
         """The error in plain words; a page asked for that isn't there is Files' own "not found" page."""
-        is_page_asked = "text/html" in request.headers.get("Accept", "") and not _NON_PAGE_QUERIES & request.args.keys()
+        is_page_asked = (
+            "text/html" in request.headers.get("Accept", "") and not _NON_PAGE_QUERIES & request.args.keys()
+        )
         if error.status == 404 and is_page_asked:
             response = send_from_directory(static_directory, "404.html", max_age=None)
             response.status_code = 404
