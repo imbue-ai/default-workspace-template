@@ -33,6 +33,7 @@ from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.agent_manager import AWAITING_CHAT_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FAST_ROLE_TEMPLATE
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
@@ -42,6 +43,7 @@ from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import ROOM_CREATE_SETTINGS
 from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
+from imbue.chat.agent_manager import _AwaitedChat
 from imbue.chat.agent_manager import _FINISHED_TASK_TURN_GRACE_PASSES
 from imbue.chat.agent_manager import _SwitchTarget
 from imbue.chat.agent_manager import _build_chat_create_command
@@ -1765,6 +1767,7 @@ def test_create_chat_relaunches_a_failed_chat_under_its_id_and_name(
         "is_seeded": False,
         "held_sends": [],
         "model_pick": None,
+        "kind": "agent",
     }
     assert [proto.chat_id for proto in agent_manager.get_provisional_chats()] == ["failed-1"]
 
@@ -8137,6 +8140,63 @@ def test_a_rooms_snapshot_names_no_account_whatever_its_labels_say(
         (snapshot,) = manager.get_chat_snapshots()
         assert snapshot.kind is ChatKind.ROOM
         assert snapshot.active_agent.account_id is None
+    finally:
+        manager.stop()
+
+
+def _rooms_and_main(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> tuple[AgentManager, ChatId, ChatId, ChatId]:
+    """A manager listing the main chat and two rooms; the rooms wait on nothing yet."""
+    manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger(), chat_files_root=tmp_path / "chats")
+    manager.note_agent_list_known()
+    main, lounge, attic = (ChatId(f"agent-{uuid4().hex}") for _ in range(3))
+    seed_agent_state(manager, str(main), name="Main", labels={"display_name": "Main"})
+    seed_agent_state(manager, str(lounge), name="Lounge", harness=HarnessType.ROOM, labels={"display_name": "Lounge"})
+    seed_agent_state(manager, str(attic), name="Attic", harness=HarnessType.ROOM, labels={"display_name": "Attic"})
+    return manager, main, lounge, attic
+
+
+def _awaiting(manager: AgentManager, chat_id: ChatId) -> tuple[ChatId, ...]:
+    snapshot = manager.get_chat_snapshot(str(chat_id))
+    assert snapshot is not None
+    return snapshot.awaiting_chat_ids
+
+
+def test_a_rooms_wait_on_a_chat_is_dropped_once_it_is_older_than_the_timeout(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """An agent that never posts back must not leave the room's row working for good (the multiplayer spec,
+    section 7.4): the chat-list recompute drops a wait older than the timeout and keeps a younger one."""
+    manager, main, lounge, _attic = _rooms_and_main(broadcaster, tmp_path)
+    try:
+        manager.note_chat_awaiting(lounge, main)
+        assert _awaiting(manager, lounge) == (main,)
+        with manager._lock:
+            manager._awaiting_by_chat[lounge] = (
+                _AwaitedChat(chat_id=main, since=time.monotonic() - AWAITING_CHAT_TIMEOUT_SECONDS - 1.0),
+            )
+
+        assert _awaiting(manager, lounge) == ()
+        assert lounge not in manager._awaiting_by_chat
+    finally:
+        manager.stop()
+
+
+def test_a_destroyed_chat_is_dropped_from_every_rooms_waits_and_a_destroyed_rooms_waits_go_with_it(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, main, lounge, attic = _rooms_and_main(broadcaster, tmp_path)
+    try:
+        manager.note_chat_awaiting(lounge, main)
+        manager.note_chat_awaiting(lounge, attic)
+        manager.note_chat_awaiting(attic, main)
+        assert (_awaiting(manager, lounge), _awaiting(manager, attic)) == ((main, attic), (main,))
+
+        manager.remove_agent(str(attic))
+        assert _awaiting(manager, lounge) == (main,)
+        assert attic not in manager._awaiting_by_chat
+
+        manager.remove_agent(str(main))
+        assert _awaiting(manager, lounge) == ()
     finally:
         manager.stop()
 

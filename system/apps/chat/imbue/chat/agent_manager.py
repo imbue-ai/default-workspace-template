@@ -226,6 +226,9 @@ CHAT_ROLE_TEMPLATE: Final[str] = "chat"
 # refuses every claude create on a pin mismatch, including the update run that would fix
 # it, so ``message_chat.py --create`` asks for it on every chat it makes from outside.
 SKIP_CLAUDE_INSTALLATION_CHECK_SETTING: Final[str] = "agent_types.claude.check_installation=false"
+# How long a room waits on a chat its mention asked before the wait is dropped: an agent that never posts back (one
+# that answered elsewhere, or not at all) must not leave the room's row working for good.
+AWAITING_CHAT_TIMEOUT_SECONDS: Final[float] = 300.0
 # The ``-S`` settings a room's create carries, clearing the create defaults' account label and environment for that
 # invocation (an empty value clears a list-valued config default); mngr refuses the clear as a narrowing of the
 # local settings unless the create's environment opts in (``create_command_env``).
@@ -1026,6 +1029,13 @@ def _observed_with_recent_rename(observed: AgentStateItem, rename: _RecentRename
     return renamed, True
 
 
+class _AwaitedChat(FrozenModel):
+    """One chat a room's mention asked and has not heard back from, and when it was asked."""
+
+    chat_id: ChatId = Field(description="The chat the mention was sent to")
+    since: float = Field(description="When the mention was sent (``time.monotonic()``)")
+
+
 class FirstMessage(FrozenModel):
     """A new chat's first message when it follows the create rather than riding it: handed to the agent through
     the send path once the create has landed, under the id the sender's annotation carries."""
@@ -1134,7 +1144,7 @@ class AgentManager:
     _rename_lock_by_chat: dict[ChatId, threading.Lock]
     # The chats a room's mention sent to and has not heard back from (the multiplayer spec, section 7.4), in
     # memory: a restart forgets them, and the room's working dot with them, which is harmless.
-    _awaiting_by_chat: dict[ChatId, tuple[ChatId, ...]]
+    _awaiting_by_chat: dict[ChatId, tuple[_AwaitedChat, ...]]
     # The records of the chats that have run on more than one agent, read from the store at
     # build (and on ``refresh_chat_records``); a chat with no record is its one agent.
     _chat_record_store: ChatRecordStore
@@ -1747,7 +1757,7 @@ class AgentManager:
     def _snapshot_as_shown(self, snapshot: ChatSnapshot) -> ChatSnapshot:
         with self._lock:
             title = self._title_override_by_chat.get(snapshot.chat_id)
-            awaiting = self._awaiting_by_chat.get(snapshot.chat_id, ())
+            awaiting = self._awaiting_chat_ids_locked(snapshot.chat_id, time.monotonic())
         # Read outside ``_lock``: the author store takes a lock of its own, and foreign locks are
         # never taken under this one (see ``get_chat_snapshots``).
         reader = self._participants_reader
@@ -1758,12 +1768,30 @@ class AgentManager:
             to_update(snapshot.field_ref().participants, participants),
         )
 
+    def _awaiting_chat_ids_locked(self, chat_id: ChatId, now: float) -> tuple[ChatId, ...]:
+        """The chats ``chat_id`` still waits on: a wait older than ``AWAITING_CHAT_TIMEOUT_SECONDS`` is dropped
+        here, by the recompute every chat-list push runs, since no answer is coming. Lock held."""
+        waiting = self._awaiting_by_chat.get(chat_id, ())
+        kept = tuple(awaited for awaited in waiting if now - awaited.since < AWAITING_CHAT_TIMEOUT_SECONDS)
+        if len(kept) != len(waiting):
+            self._set_awaiting_locked(chat_id, kept)
+        return tuple(awaited.chat_id for awaited in kept)
+
+    def _set_awaiting_locked(self, chat_id: ChatId, waiting: tuple[_AwaitedChat, ...]) -> None:
+        if waiting:
+            self._awaiting_by_chat[chat_id] = waiting
+        else:
+            self._awaiting_by_chat.pop(chat_id, None)
+
     def note_chat_awaiting(self, chat_id: ChatId, asked_chat_id: ChatId) -> None:
         """A mention from ``chat_id`` went to ``asked_chat_id``; the chat waits for its answer, and its row says so."""
         with self._lock:
             waiting = self._awaiting_by_chat.get(chat_id, ())
-            if asked_chat_id not in waiting:
-                self._awaiting_by_chat[chat_id] = (*waiting, asked_chat_id)
+            if all(awaited.chat_id != asked_chat_id for awaited in waiting):
+                self._awaiting_by_chat[chat_id] = (
+                    *waiting,
+                    _AwaitedChat(chat_id=asked_chat_id, since=time.monotonic()),
+                )
         self._broadcast_chats_updated()
 
     def forget_chat_awaiting(self, chat_id: ChatId, asked_chat_id: ChatId) -> None:
@@ -1771,13 +1799,10 @@ class AgentManager:
         waits on it, while still waiting on any other chat it asked."""
         with self._lock:
             waiting = self._awaiting_by_chat.get(chat_id, ())
-            if asked_chat_id not in waiting:
+            remaining = tuple(awaited for awaited in waiting if awaited.chat_id != asked_chat_id)
+            if len(remaining) == len(waiting):
                 return
-            remaining = tuple(asked for asked in waiting if asked != asked_chat_id)
-            if remaining:
-                self._awaiting_by_chat[chat_id] = remaining
-            else:
-                del self._awaiting_by_chat[chat_id]
+            self._set_awaiting_locked(chat_id, remaining)
         self._broadcast_chats_updated()
 
     def clear_chat_awaiting(self, chat_id: ChatId) -> None:
@@ -4715,6 +4740,13 @@ class AgentManager:
         with self._lock:
             self._creation_settled_by_chat.pop(chat_id, None)
             self._background_tasks_by_chat.pop(chat_id, None)
+            # A destroyed chat neither waits on anyone nor is waited on: a room it asked would otherwise read as
+            # working for good, and a destroyed room's own waits are nobody's.
+            self._awaiting_by_chat.pop(chat_id, None)
+            for waiting_chat_id, waiting in list(self._awaiting_by_chat.items()):
+                self._set_awaiting_locked(
+                    waiting_chat_id, tuple(awaited for awaited in waiting if awaited.chat_id != chat_id)
+                )
 
     def _initial_discover(self) -> None:
         """Perform initial agent discovery and start per-agent tracking."""

@@ -253,8 +253,13 @@ class ChatAppState(MutableModel):
             backlog = watcher.get_all_events()
             # A compaction that finished while no watcher ran (a chat nobody had open) ends here.
             self.agent_manager.stamp_compaction_events(agent_info, backlog)
-            self.authors.stamp_events(self.agent_manager.chat_id_of_agent(agent_info.id), backlog)
+            backlog_chat_id = self.agent_manager.chat_id_of_agent(agent_info.id)
+            self.authors.stamp_events(backlog_chat_id, backlog)
             self.name_authors(backlog)
+            # The workspace agent's post into a room nobody had open answers whatever the room asked, as a live
+            # post does (section 7.4).
+            if any(is_workspace_agent_turn(event) for event in backlog):
+                self.agent_manager.clear_chat_awaiting(backlog_chat_id)
             self.agent_manager.update_session_events(agent_info.id, backlog)
             watcher.start()
         finally:
