@@ -821,6 +821,11 @@ def test_presence_heartbeat_keeps_the_pages_newest_input_time(client: FlaskClien
     assert user["last_input_at"] == "2026-09-19T10:00:20.000000000Z"
     assert _heartbeat(client, _VISITOR_IDENTITY, {"last_input_at": "yesterday"}).status_code == 400
     assert _heartbeat(client, _VISITOR_IDENTITY, {"input_age_seconds": -1}).status_code == 400
+    # An age the shell could not stamp (the request's JSON parser admits Infinity) is refused, never a 500.
+    for unstampable in (1e300, float("inf")):
+        refused = _heartbeat(client, _VISITOR_IDENTITY, {"input_age_seconds": unstampable})
+        assert refused.status_code == 400
+        assert "input_age_seconds" in refused.get_json()["detail"]
 
 
 def test_presence_heartbeat_stamps_an_input_age_on_the_shells_clock(client: FlaskClient) -> None:

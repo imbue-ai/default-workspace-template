@@ -4,7 +4,7 @@ The shell knows who is here (the mngr repo's `specs/multiplayer-refinements/spec
 
 - Every request's identity resolves to a participant key (`owner`, `user:<id>`, `agent:<id>`); the heartbeat answers the page its own key and records when the person last typed or clicked, and the owner of an unshared workspace is now counted as present under the `owner` key. A present `X-Imbue-Identity` header that does not parse is refused with 400 on every route; only a missing or blank header reads as the anonymous owner.
 
-- The heartbeat reports how long ago the page last saw keyboard or pointer input (`input_age_seconds`) rather than a moment by the page's own clock; the shell stamps the moment itself, never later than its own now, keeps the newest, and announces the roster whenever a person's newest input time moves, so every window's "Active" and "Idle · 4m" follow real typing. A page from before the age may still send `last_input_at`, accepted and clamped.
+- The heartbeat reports how long ago the page last saw keyboard or pointer input (`input_age_seconds`) rather than a moment by the page's own clock; the shell stamps the moment itself, never later than its own now, keeps the newest, and announces the roster whenever a person's newest input time moves, so every window's "Active" and "Idle · 4m" follow real typing. A page from before the age may still send `last_input_at`, accepted and clamped; an age beyond a century is refused with 400, like any malformed body.
 
 - A `clients_updated` push follows a registered window's disconnect and the prune of a stale client, so a page re-reads the clients listing.
 

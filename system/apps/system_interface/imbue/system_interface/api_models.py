@@ -1,6 +1,7 @@
 """What the shell's own routes answer: the health probe, who is here, and a heartbeat's identity."""
 
 from typing import Annotated
+from typing import Final
 
 from pydantic import AwareDatetime
 from pydantic import ConfigDict
@@ -9,6 +10,10 @@ from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ParticipantKey
 
 from imbue.imbue_common.frozen_model import FrozenModel
+
+# The oldest input age a heartbeat may report: a page's age is at most its own lifetime, and the bound keeps the
+# moment the shell stamps from it inside what a datetime can hold (an age of Infinity or 1e300 would overflow).
+MAX_INPUT_AGE_SECONDS: Final[float] = 100 * 365 * 24 * 60 * 60
 
 
 class ShellHealthResponse(FrozenModel):
@@ -43,11 +48,11 @@ class HeartbeatRequest(FrozenModel):
     """What a shell page's heartbeat may carry: how long ago the page last saw keyboard or pointer input (the
     multiplayer spec, section 4.3). A page from before the age was sent reports the moment by its own clock instead,
     which is taken no later than the shell's now; an older page still sends other fields, or none, which are
-    ignored."""
+    ignored. An age beyond ``MAX_INPUT_AGE_SECONDS`` is refused as every malformed body is."""
 
     model_config = ConfigDict(extra="ignore")
 
-    input_age_seconds: Annotated[float, Field(ge=0)] | None = Field(
+    input_age_seconds: Annotated[float, Field(ge=0, le=MAX_INPUT_AGE_SECONDS)] | None = Field(
         default=None,
         description="How many seconds ago the page last saw keyboard or pointer input; absent when it has seen none",
     )
