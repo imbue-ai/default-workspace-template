@@ -13,7 +13,6 @@ import json
 import os
 import shutil
 import subprocess
-import tempfile
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -92,36 +91,6 @@ class _CompactionHoldingReplies:
 def _subprocess_env() -> dict[str, str]:
     """This process's environment without the conftest's own-agent identity, which would make mngr act as that agent."""
     return {key: value for key, value in os.environ.items() if not key.startswith("MNGR_AGENT_")}
-
-
-@contextmanager
-def _private_tmux_server(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
-    """Point every tmux call (mngr's subprocesses and its in-process sends) at a server of this test's own.
-
-    The directory is short because tmux refuses a socket path over about 100 bytes. The server's sessions are
-    killed by name at the end, never with ``kill-server``.
-    """
-    tmux_dir = Path(tempfile.mkdtemp(prefix="cmp", dir="/tmp"))
-    monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_dir))
-    socket_path = tmux_dir / f"tmux-{os.getuid()}" / "default"
-    try:
-        yield
-    finally:
-        if socket_path.exists():
-            listed = subprocess.run(
-                ["tmux", "-S", str(socket_path), "list-sessions", "-F", "#{session_name}"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            for session_name in listed.stdout.split():
-                subprocess.run(
-                    ["tmux", "-S", str(socket_path), "kill-session", "-t", f"={session_name}"],
-                    capture_output=True,
-                    timeout=30,
-                )
-        shutil.rmtree(tmux_dir, ignore_errors=True)
 
 
 def _make_project(project_dir: Path) -> None:
@@ -213,7 +182,7 @@ def _chat_app_over(agent: AgentInfo, chats_root: Path) -> Generator[ServedApp, N
 
 @pytest.mark.timeout(900, func_only=False)
 def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_chips(
-    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch, isolated_tmux: None
 ) -> None:
     _skip_unless_runnable()
     project_dir = tmp_path / "project"
@@ -223,10 +192,7 @@ def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_c
     monkeypatch.setenv("ANTHROPIC_API_KEY", _STAND_IN_API_KEY)
     monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
 
-    with (
-        StandInAnthropicApi(reply_for=replies) as api,
-        _private_tmux_server(monkeypatch),
-    ):
+    with StandInAnthropicApi(reply_for=replies) as api:
         _prepare_mngr_profile(Path(os.environ["MNGR_HOST_DIR"]), api)
         try:
             with (
