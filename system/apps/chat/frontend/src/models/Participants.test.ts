@@ -85,12 +85,19 @@ describe("ensureParticipants", () => {
       expect(participants.isViewerOwner()).toBe(false);
       expect(warn).toHaveBeenCalledTimes(1);
 
+      // Asked again while the app is still unreachable (a focus, a mentions push): the load runs, since nothing
+      // is cached, but the retry already pending is the one retry there is.
+      await participants.ensureParticipants();
+      expect(mockRequest).toHaveBeenCalledTimes(4);
+
       answerRequests("user:bob-2", ROSTER);
       await vi.advanceTimersByTimeAsync(participants.RETRY_DELAY_MS - 1);
-      expect(mockRequest).toHaveBeenCalledTimes(2);
-      await vi.advanceTimersByTimeAsync(1);
       expect(mockRequest).toHaveBeenCalledTimes(4);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockRequest).toHaveBeenCalledTimes(6);
       expect(participants.getOwnParticipant()).toBe("user:bob-2");
+      await vi.advanceTimersByTimeAsync(participants.RETRY_DELAY_MS);
+      expect(mockRequest).toHaveBeenCalledTimes(6);
       warn.mockRestore();
     } finally {
       vi.useRealTimers();

@@ -39,6 +39,9 @@ let loading: Promise<void> | null = null;
 /** When the roster was last read, so the reads a visibility change, a focus, and a mentions push ask for within
  *  moments of each other are one. */
 let loadedAt: number | null = null;
+/** The one retry a failed load has scheduled, while it is pending: a second failure before it fires (a focus or a
+ *  mentions push while the app is unreachable asks again) adds no retry of its own. */
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
 export const RETRY_DELAY_MS = 30_000;
 export const PARTICIPANTS_FRESH_MS = 5_000;
 
@@ -105,7 +108,8 @@ function withPictureOnThisOrigin(entry: Participant): Participant {
  * Load the page's own key and the roster, or read them again once the last read is older than
  * ``PARTICIPANTS_FRESH_MS``; calls within that window, and calls while a load runs, share the one load. A load
  * that fails is warned about and leaves the page as it was (an owner's page, every unannotated turn its own,
- * before any load landed) until the next attempt, which the failure itself schedules after ``RETRY_DELAY_MS``.
+ * before any load landed) until the next attempt, which the failure itself schedules after ``RETRY_DELAY_MS``,
+ * one at a time: a failure while a retry is pending schedules no second one.
  */
 export function ensureParticipants(): Promise<void> {
   if (loading !== null) return loading;
@@ -124,7 +128,11 @@ export function ensureParticipants(): Promise<void> {
     })
     .catch((error: unknown) => {
       console.warn("Failed to load the page's participant and the roster", error);
-      setTimeout(() => void ensureParticipants(), RETRY_DELAY_MS);
+      if (retryTimer !== null) return;
+      retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void ensureParticipants();
+      }, RETRY_DELAY_MS);
     })
     .finally(() => {
       loading = null;
@@ -138,4 +146,6 @@ export function setParticipantsForTesting(own: string | null, roster: Participan
   participants = roster;
   loading = null;
   loadedAt = own === null ? null : Date.now();
+  if (retryTimer !== null) clearTimeout(retryTimer);
+  retryTimer = null;
 }
