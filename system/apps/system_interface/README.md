@@ -379,7 +379,14 @@ cached for 5 minutes under `data/.state/presence/profiles/<user_id>.json`, so
 a connector outage costs one failed fetch per user per 5 minutes and no
 request ever hangs or fails on it. The profile rides on each present user
 over the wire (`display_name`, `profile_picture_url`, null when there is none)
-and names a visitor's desktop on their first arrival.
+and names a visitor's desktop on their first arrival. The picture itself is
+served from the shell's own origin, since the pages' content security policy
+admits no outside image: the roster points at
+`GET /api/roster/<key>/picture?v=<version>`, which fetches the bytes once from
+the profile's URL (5 second bound) and keeps them under
+`data/.state/presence/profiles/<user_id>.picture.json` until the profile names
+another URL; `v` is a digest of that URL, so a newer picture is a newer address
+and a versioned answer is cached by the page for good.
 
 The same header decides where a page lands. A shell page posts its arrival
 (`POST /api/clients/<client_id>/arrive`) before it reads the inventory
