@@ -299,7 +299,7 @@ def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str
     """The standalone form of a program command that runs one of ``scripts``, or ``None``:
     its prefix (an OOM tag, say) kept, then the shell it ran under (``bash -c`` when it
     had none) linking and syncing the package's own project before the steps it ran, with
-    the script exec'd from the package's venv."""
+    the script run (exec'd, when nothing runs after it) from the package's venv."""
     words = user_packages.split_words(command)
     shell_at = next(
         (
@@ -333,7 +333,9 @@ def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str
         rewritten = (
             None
             if script is None
-            else " ".join(map(_quote, _exec_words(step, script, relative)))
+            else " ".join(
+                map(_quote, _with_exec(_own_script_words(step, script, relative)))
+            )
         )
     if rewritten is None:
         return None
@@ -367,8 +369,9 @@ def _unquoted(word: str) -> str:
     return word.strip("'\"")
 
 
-def _exec_words(step: Sequence[str], script: str, relative: str) -> list[str]:
-    """``step`` exec'ing ``script`` from the package's own venv."""
+def _own_script_words(step: Sequence[str], script: str, relative: str) -> list[str]:
+    """``step`` running ``script`` from the package's own venv rather than through
+    ``uv run`` or another install."""
     words = list(step)
     script_at = next(
         index
@@ -388,10 +391,15 @@ def _exec_words(step: Sequence[str], script: str, relative: str) -> list[str]:
         # survives, and whatever wrapped it (`exec`, `nice -n 5`) still does.
         words = [*words[:uv_run_at], *words[script_at:]]
     own = f"{relative}/.venv/bin/{script}"
-    words = [
+    return [
         own if user_packages.runs_script(_unquoted(word), script) else word
         for word in words
     ]
+
+
+def _with_exec(words: Sequence[str]) -> list[str]:
+    """``words`` run by ``exec``, so the script becomes the process supervisord started."""
+    words = list(words)
     # `PORT=1 exec cmd` passes PORT to cmd; `exec PORT=1 cmd` execs a command named `PORT=1`.
     assignments = 0
     while assignments < len(words) and _ASSIGNMENT.match(words[assignments]):
@@ -402,8 +410,10 @@ def _exec_words(step: Sequence[str], script: str, relative: str) -> list[str]:
 
 
 def _rewrite_script(script: str, relative: str, scripts: Sequence[str]) -> str | None:
-    """A ``bash -c`` script with its ``uv sync`` steps dropped and the step running one of
-    ``scripts`` exec'ing it from the package's venv; ``None`` when no step runs one.
+    """A ``bash -c`` script with its ``uv sync`` steps dropped and each step running one of
+    ``scripts`` running it from the package's venv; ``None`` when no step runs one. That
+    step is exec'd when it is the script's last, and otherwise left to return, so the steps
+    after it (a backoff, a cleanup) still run.
 
     Every other step is kept as written, so its quoting, expansions and redirections
     survive. A dropped sync counts as having succeeded (the new up-front sync replaces it):
@@ -417,7 +427,7 @@ def _rewrite_script(script: str, relative: str, scripts: Sequence[str]) -> str |
     pieces = _SCRIPT_SEPARATOR.split(script)
     kept: list[tuple[str, str]] = []
     pending: str | None = None
-    found = False
+    last_script: tuple[int, list[str]] | None = None
     changes_directory = False
     for index in range(0, len(pieces), 2):
         if kept:
@@ -435,14 +445,18 @@ def _rewrite_script(script: str, relative: str, scripts: Sequence[str]) -> str |
         if found_script is not None:
             if changes_directory:
                 return None
-            found = True
-            text = " ".join(_exec_words(_raw_words(text), found_script, relative))
+            own_words = _own_script_words(_raw_words(text), found_script, relative)
+            last_script = (len(kept), own_words)
+            text = " ".join(own_words)
         elif words[0] in _DIRECTORY_CHANGES:
             changes_directory = True
         kept.append((pending or "", text))
         pending = None
-    if not found:
+    if last_script is None:
         return None
+    script_index, own_words = last_script
+    if script_index == len(kept) - 1:
+        kept[script_index] = (kept[script_index][0], " ".join(_with_exec(own_words)))
     body = kept[0][1] + "".join(
         ("; " if separator == ";" else f" {separator} ") + text
         for separator, text in kept[1:]

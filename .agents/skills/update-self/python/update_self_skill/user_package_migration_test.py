@@ -380,6 +380,34 @@ def test_a_programs_shell_steps_keep_their_expansions_redirections_and_operators
 
 
 @pytest.mark.parametrize(
+    ("script", "expected"),
+    [
+        (
+            "widget-app || sleep 5",
+            "{ system/apps/widget/.venv/bin/widget-app || sleep 5; }",
+        ),
+        (
+            "widget-app; echo done",
+            "{ system/apps/widget/.venv/bin/widget-app; echo done; }",
+        ),
+    ],
+)
+def test_a_script_with_steps_after_it_is_not_execd(script: str, expected: str) -> None:
+    # exec would replace the shell, and the steps after the script would never run.
+    rewritten = migration._program_rewrite(
+        f'bash -c "{script}"', "system/apps/widget", ["widget-app"]
+    )
+
+    assert rewritten is not None
+    words = user_packages.split_words(rewritten)
+    assert words[words.index("-c") + 1].endswith(f" && {expected}")
+    assert (
+        user_packages.program_problems(rewritten, "system/apps/widget", ["widget-app"])
+        == []
+    )
+
+
+@pytest.mark.parametrize(
     ("shell", "flag"), [("bash", "-lc"), ("dash", "-c"), ("/bin/zsh", "-c")]
 )
 def test_a_program_keeps_the_shell_it_ran_under(shell: str, flag: str) -> None:
