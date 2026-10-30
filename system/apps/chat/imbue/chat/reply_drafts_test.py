@@ -1,21 +1,24 @@
 from typing import Any
 
-from imbue.chat.harnesses.session_watcher import CapturePaneCallback
 from imbue.chat.harnesses.session_watcher import ReplyDraft
+from imbue.chat.harnesses.session_watcher import ReplyDraftSources
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.chat.reply_drafts import REPLY_DRAFT_EVENT_TYPE
 from imbue.chat.reply_drafts import ReplyDraftPublisher
 from imbue.chat.reply_drafts import ReplyDraftReader
 
 
 class _ScriptedDraftReader:
-    """Answers each read with the next draft of its script, capturing the pane first."""
+    """Answers each read with the next draft of its script, reading both of its sources first."""
 
     def __init__(self, drafts: list[ReplyDraft | None]) -> None:
         self._drafts = drafts
         self.captured: list[str | None] = []
+        self.streamed: list[StreamedReply | None] = []
 
-    def read_reply_draft(self, capture_pane: CapturePaneCallback) -> ReplyDraft | None:
-        self.captured.append(capture_pane())
+    def read_reply_draft(self, sources: ReplyDraftSources) -> ReplyDraft | None:
+        self.captured.append(sources.capture_pane())
+        self.streamed.append(sources.read_streamed_reply())
         return self._drafts.pop(0)
 
 
@@ -25,6 +28,7 @@ def _publisher(
     return ReplyDraftPublisher(
         list_watched_agents=lambda: list(watched),
         capture_agent_pane=lambda agent_id: f"pane of {agent_id}",
+        read_agent_streamed_reply=lambda agent_id: StreamedReply(message_id=f"message of {agent_id}", text=""),
         broadcast_to_chat=lambda chat_id, frame: sent.append((chat_id, frame)),
     )
 
@@ -39,13 +43,22 @@ def test_a_changed_draft_is_sent_once_on_its_chats_stream_and_an_unchanged_one_n
         publisher.publish_once()
 
     assert sent == [
-        ("chat-7", {"type": REPLY_DRAFT_EVENT_TYPE, "agent_id": "agent-9", "after_event_id": "event-1", "text": "Tides are"}),
         (
             "chat-7",
-            {"type": REPLY_DRAFT_EVENT_TYPE, "agent_id": "agent-9", "after_event_id": "event-1", "text": "Tides are the rise"},
+            {"type": REPLY_DRAFT_EVENT_TYPE, "agent_id": "agent-9", "after_event_id": "event-1", "text": "Tides are"},
+        ),
+        (
+            "chat-7",
+            {
+                "type": REPLY_DRAFT_EVENT_TYPE,
+                "agent_id": "agent-9",
+                "after_event_id": "event-1",
+                "text": "Tides are the rise",
+            },
         ),
     ]
     assert reader.captured == ["pane of agent-9"] * 3
+    assert reader.streamed == [StreamedReply(message_id="message of agent-9", text="")] * 3
 
 
 def test_a_cleared_draft_is_sent_once_and_no_draft_from_the_start_sends_nothing() -> None:

@@ -244,7 +244,16 @@ shows the draft after the transcript while `after_event_id` is still the last
 event it holds, so the reply landing replaces it at once; an empty `text`
 clears it. A draft that matches a reply the transcript already holds is never
 sent. The terminal's rendering loses heading levels and code-fence languages,
-which the landed reply restores. A chat in the background (no page, a hidden
+which the landed reply restores. Codex also writes an agent message to its
+rollout only once it is finished; its draft comes from the
+`item/agentMessage/delta` notifications the agent's live app-server connection
+already receives (`harnesses/codex/reply_stream.py`), and is dropped once the
+rollout holds the message's id. Pi records an assistant message only on
+`message_end`; mngr's pi lifecycle extension writes the text pi has streamed
+so far to `pi_reply_draft` in the agent's state dir, which the watcher reads.
+Antigravity writes a planner step's text into its row while the step is still
+generating; the watcher takes the newest such row as the draft and drops it
+in the scan that sees the row settle. A chat in the background (no page, a hidden
 or unfocused window, or a frame the chat root keeps loaded out of sight) is
 never read.
 
@@ -344,9 +353,10 @@ while since `mngr start` does not wait for the harness to come up. A new chat
 created with a pick (`POST /api/chats/create` takes `model` too) is set up the
 same way. `GET /api/accounts/<account-id>/model-options` is where the dialog
 gets the target account's models, for a handoff's successor and a rebound agent
-alike: the catalog for a static harness, for codex the options an agent of the
-account was last offered, and nothing for antigravity, whose model is changed
-from the agent's terminal.
+alike: the catalog for a static harness, and for codex the options an agent of
+the account was last offered. An antigravity pick is typed into the agent as
+`/model <slug>` by the same worker that delivers its held messages, once no turn
+is open, so a pick made mid-turn takes effect when that turn ends.
 
 The send route is also how anything inside the workspace messages a chat:
 `system/scripts/message_chat.py` posts to it by chat id (the browser app's
@@ -405,17 +415,14 @@ The create route is likewise how a chat is made from outside the chat page:
 and update chats go through it, run inside the workspace by `mngr exec`). Beside
 `name`, `account_id`, and `message`, the request takes `labels` for the chat's
 agent (`auto_open=true` has the shell surface its window; the labels the app sets
-itself are refused), `is_installation_check_skipped` (a waiver of the claude
-version check the in-container mngr would otherwise fail the create on, which the
-script sends on every create so the update chat that repairs it can be made), and
-`should_wait`, which holds the answer until `mngr create` has finished:
-the chat's identity when it landed, a 500 carrying the create's own reason when
-it failed, a 504 if it is still running at the wait's ceiling. The script falls
-back to a plain `mngr create --template chat` on the send's terms plus one of
-its own: a chat app that cannot be reached, one with no create route, and one
-whose create route predates these fields, which it tells apart by the 400 naming
-the field it does not know (a workspace that has taken a template update and has
-not restarted its chat app yet).
+itself are refused) and `should_wait`, which holds the answer until `mngr create`
+has finished: the chat's identity when it landed, a 500 carrying the create's own
+reason when it failed, a 504 if it is still running at the wait's ceiling. The
+script falls back to a plain `mngr create --template chat` on the send's terms
+plus one of its own: a chat app that cannot be reached, one with no create
+route, and one whose create route predates these fields, which it tells apart by
+the 400 naming the field it does not know (a workspace that has taken a template
+update and has not restarted its chat app yet).
 
 A chat can also start from a conversation that happened before the workspace
 existed. `POST /api/chats/seed` (`chat_seed.py`; the Imbue Studio app runs
@@ -590,8 +597,8 @@ their model menu has no Auto-compact row.
 **The Auto-compact setting.** Each chat is On or Off, chosen in the model menu's
 Auto-compact submenu, which ends with a "New chats start with" row whose On /
 Off segments show and set the workspace default, independent of the chat's own
-choice; a read-only menu shows the value alone. The setting is kept in the
-chat's folder as `autocompact.json` (`chat_autocompact.py`,
+choice. The setting is kept in the chat's folder as `autocompact.json`
+(`chat_autocompact.py`,
 `GET`/`PUT /api/chats/<chat-id>/autocompact` with `{"is_enabled": true}`). A
 new chat copies the workspace default (`autocompact_default` in
 `GET`/`PUT /api/settings`, stored at `data/.apps/chat/settings.json`; on unless

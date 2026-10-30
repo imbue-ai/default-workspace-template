@@ -21,6 +21,8 @@ import tomlkit
 from click.core import ParameterSource
 from imbue.mngr.cli.common_opts import apply_create_template
 from imbue.mngr.config.data_types import CreateTemplate, CreateTemplateName, MngrConfig
+from imbue.mngr.main import get_or_create_plugin_manager
+from mngr_cli_contract.contract import assert_mngr_settings_valid
 
 _REPO_ROOT = Path(__file__).parents[1]
 _SETTINGS_PATH = _REPO_ROOT / ".mngr" / "settings.toml"
@@ -166,6 +168,65 @@ def test_worker_template_installs_no_worker_skill_and_keeps_the_venv() -> None:
     )
     assert "uv sync --all-packages" in commands
     assert "MNGR_AGENT_ROLE=worker" in result["env"]
+
+
+def _apply_custom() -> dict[str, Any]:
+    """Apply the custom template on a resolved claude --type (the chat-app launcher always
+    passes one). Routing the template's role keys to the resolved agent type needs mngr's
+    agent-config plugins registered, hence the plugin manager."""
+    get_or_create_plugin_manager()
+    return _apply(("custom",), extra_param_defaults={"type": "claude"})
+
+
+def test_custom_template_marks_the_agent_role_and_keeps_every_harness_launchable() -> None:
+    """A `-t custom` create works outside a checkout of this template.
+
+    The role marker drives tooling that tells agent kinds apart, and the absolute
+    launch-command overrides are what keep a custom agent launchable from a work
+    dir that has no `system/` tree of its own (the agent-type defaults are
+    ${MNGR_AGENT_WORK_DIR}-relative).
+    """
+    result = _apply_custom()
+    assert "MNGR_AGENT_ROLE=custom" in result["env"]
+    settings = result["setting"]
+    command_overrides = [entry for entry in settings if ".command=" in entry]
+    assert len(command_overrides) == 5, f"one launch-command override per harness, got {command_overrides!r}"
+    assert all("/home/user/workspace/" in entry for entry in command_overrides)
+    # Claude keeps permission bypass but regains its native planning/todo tools.
+    cli_args_overrides = [entry for entry in settings if entry.startswith("agent_types.claude.cli_args=")]
+    assert len(cli_args_overrides) == 1
+    assert "--dangerously-skip-permissions" in cli_args_overrides[0]
+    assert "--disallowed-tools" not in cli_args_overrides[0]
+
+
+def test_custom_template_replaces_the_workspace_prompt_with_the_custom_block() -> None:
+    """Each harness's workspace prompt block (tk, .agents/skills, data/memories) is
+    cleared by a bare assign, and the custom context block is routed afterwards as an
+    extend on the resolved type -- so the final prompt is exactly the custom block.
+    The assign must come before the extend in the settings list, since mngr applies
+    them in order.
+    """
+    result = _apply_custom()
+    settings = list(result["setting"])
+    clear_idx = settings.index("agent_types.claude.append_system_prompt=[]")
+    routed_idx = next(
+        idx for idx, entry in enumerate(settings) if entry.startswith("agent_types.claude.append_system_prompt__extend=")
+    )
+    assert clear_idx < routed_idx, "the clearing assign must precede the routed custom block"
+    assert "Custom coding agent context" in settings[routed_idx]
+    # Codex's provisioning is repointed at the absolute script path for the same reason
+    # as the launch commands.
+    provision_overrides = [entry for entry in settings if entry.startswith("agent_types.codex.extra_provision_command=")]
+    assert provision_overrides == [
+        'agent_types.codex.extra_provision_command=["bash /home/user/workspace/system/scripts/codex_update_plugin.sh"]'
+    ]
+
+
+def test_custom_template_settings_resolve_against_the_live_mngr_config() -> None:
+    """Every -S entry the custom template contributes must resolve against mngr's
+    config model, or the first `-t custom` create fails outright in a workspace."""
+    result = _apply_custom()
+    assert_mngr_settings_valid(result["setting"])
 
 
 def test_chat_template_marks_the_agent_role() -> None:
