@@ -222,3 +222,17 @@ def test_dropin_filename_matches_the_program_it_declares() -> None:
     assert not mismatched, (
         f"drop-ins whose filename does not match their single program: {mismatched}"
     )
+
+
+def test_every_program_tolerates_settings_newer_than_its_mngr() -> None:
+    """supervisord hands every program ``MNGR_ALLOW_UNKNOWN_CONFIG``.
+
+    An update makes the new tree's ``.mngr/settings.toml`` live before it reinstalls mngr, and
+    the old mngr rejects keys only the new one knows. The daemon's own ``environment`` is the one
+    place every program inherits from, so the tolerance has to sit there.
+    """
+    environment = _parse_main_config().get("supervisord", "environment", fallback="")
+    entries = [entry.strip() for entry in environment.split(",")]
+    assert 'MNGR_ALLOW_UNKNOWN_CONFIG="1"' in entries, (
+        f"[supervisord] environment does not set MNGR_ALLOW_UNKNOWN_CONFIG: {environment!r}"
+    )
