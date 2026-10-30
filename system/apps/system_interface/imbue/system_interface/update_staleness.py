@@ -104,13 +104,12 @@ _IMPORTED_SOURCE_PREFIXES = (
     "system/libs/workspace_themes/",
 )
 # The manifests this environment was resolved from. The root ``uv.lock`` is
-# deliberately absent: scaffolding an app relocks it (``uv sync
-# --all-packages``, so the root lockfile learns the new workspace member),
-# which moves nothing this process resolved but would raise the banner on every
-# app a user builds. The root ``pyproject.toml`` stays -- the scaffold no
-# longer edits it, since the ``system/apps/*`` member glob picks a new package
-# up, so it still catches a ``[tool.uv.sources]`` re-point or a
-# ``[tool.uv.workspace]`` members/exclude edit. That leaves this list a
+# deliberately absent: a user skill's dependency change relocks it (skills share
+# the root workspace), which would raise the banner on every such edit though it
+# rarely moves what this process resolved. The root ``pyproject.toml`` stays --
+# nothing the user builds edits it (a user app, service or lib is a standalone
+# project, never a root member), so it still catches a ``[tool.uv.sources]``
+# re-point or a ``[tool.uv.workspace]`` members edit. That leaves this list a
 # deliberate narrowing away from the apply's ``_is_backend_manifest`` and
 # ``_is_app_pyproject`` in
 # ``.agents/skills/update-self/python/update_self_skill/update_classification.py``, which it
