@@ -13,7 +13,6 @@ from pydantic import Field, SecretStr
 from auth_sandbox.errors import MissingMaterialError
 from auth_sandbox.primitives import (
     EXPORT_DIRNAME,
-    HOST_DIRNAME,
     INCOMING_DIRNAME,
     LATCHKEY_DIRNAME,
     LATCHKEY_KEY_FILENAME,
@@ -74,11 +73,6 @@ class SandboxPaths(FrozenModel):
     @property
     def exported_browser_state_path(self) -> Path:
         return self.export_dir / BROWSER_STATE_FILENAME
-
-    @property
-    def host_dir(self) -> Path:
-        """The host record directory the boot script writes for owner-exec's audience."""
-        return self.runtime_dir / HOST_DIRNAME
 
 
 def read_key(path: Path) -> SecretStr:

@@ -17,9 +17,6 @@ TRANSFER_KEY_FILENAME: Final[str] = "transfer_key"
 INCOMING_DIRNAME: Final[str] = "incoming"
 EXPORT_DIRNAME: Final[str] = "export"
 LATCHKEY_DIRNAME: Final[str] = "latchkey"
-# The host record owner-exec reads its audience from (``container:<host id>``), written by the boot script
-# from AUTH_SANDBOX_HOST_ID in the shape ``$MNGR_HOST_DIR/data.json`` has on a workspace.
-HOST_DIRNAME: Final[str] = "host"
 
 # What the image build installs, outside the workspace tree so the sandbox's command is a fixed path.
 INSTALL_DIR: Final[Path] = Path("/opt/auth-sandbox")
@@ -42,10 +39,9 @@ SCREEN_RUNTIME_DIR: Final[str] = "/tmp/screen-runtime"
 SCREEN_PULSE_SERVER: Final[str] = f"unix:{SCREEN_RUNTIME_DIR}/pulse.sock"
 SCREEN_SERVICE_URL: Final[str] = "http://127.0.0.1:8090"
 
-# The non-secret environment the connector passes at sandbox create (spec 5.2); the boot script and the
-# commands read them from the process environment.
-SANDBOX_ID_ENV_VAR: Final[str] = "AUTH_SANDBOX_ID"
-CONNECTOR_URL_ENV_VAR: Final[str] = "AUTH_SANDBOX_CONNECTOR_URL"
+# The non-secret environment the connector passes at sandbox create (spec 5.2) that the boot script and
+# the commands read from the process environment (it also passes AUTH_SANDBOX_ID and
+# AUTH_SANDBOX_CONNECTOR_URL, which nothing here reads).
 HOST_ID_ENV_VAR: Final[str] = "AUTH_SANDBOX_HOST_ID"
 REGION_ENV_VAR: Final[str] = "AUTH_SANDBOX_REGION"
 WORKSPACE_HOST_ID_ENV_VAR: Final[str] = "AUTH_SANDBOX_WORKSPACE_HOST_ID"
