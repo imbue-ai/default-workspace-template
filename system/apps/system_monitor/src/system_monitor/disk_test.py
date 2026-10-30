@@ -229,37 +229,29 @@ def test_a_row_that_cannot_be_measured_is_not_listed_as_space_that_cannot_be_fre
     ]
 
 
-def test_a_system_walk_that_fails_leaves_the_rest_of_the_disk_unlisted(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "system",
+    [
+        # The system walk fails.
+        None,
+        # lima: the system software is on the boot disk, not the data disk the workspace and home
+        # folder are on, so the walk is bigger than what the rows above leave of the 100 MiB.
+        disk.Measured(500 * _MIB, {}),
+    ],
+)
+def test_a_system_walk_that_fails_or_is_bigger_than_the_rest_leaves_the_rest_unlisted(
+    tmp_path: Path, system: disk.Measured | None
 ) -> None:
     home, root = tmp_path / "home", tmp_path / "root"
     (home / ".mngr").mkdir(parents=True)
 
     def measure(paths: list[Path], excludes: list[Path]) -> disk.Measured | None:
-        if paths == [root]:
-            return None
-        return disk.Measured(10 * _MIB, {})
+        return system if paths == [root] else disk.Measured(10 * _MIB, {})
 
     rows, missing = disk.scan(100 * _MIB, tmp_path / "workspace", home, measure, root)
 
     assert missing == []
-    assert rows[-1]["items"] == []
-
-
-# lima: the system software is on the boot disk, not the data disk the workspace and home folder are on.
-def test_system_software_bigger_than_the_rest_of_the_disk_is_not_listed(
-    tmp_path: Path,
-) -> None:
-    home, root = tmp_path / "home", tmp_path / "root"
-    (home / ".mngr").mkdir(parents=True)
-
-    def measure(paths: list[Path], excludes: list[Path]) -> disk.Measured | None:
-        return disk.Measured((500 if paths == [root] else 10) * _MIB, {})
-
-    rows, missing = disk.scan(100 * _MIB, tmp_path / "workspace", home, measure, root)
-
-    assert missing == []
-    # The rows above take 40 MiB of the 100, which leaves less than the 500 MiB system walk.
+    # The rows above take 40 MiB of the 100.
     assert rows[-1]["bytes"] == 60 * _MIB and rows[-1]["items"] == []
 
 
