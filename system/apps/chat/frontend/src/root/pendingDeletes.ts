@@ -19,11 +19,11 @@ export function dropPendingDelete(chatId: string): void {
   pendingChatIds.delete(chatId);
 }
 
-/** A chat list arrived: a chat it no longer carries is gone, so there is nothing left to hide. */
-export function settlePendingDeletes(listedChatIds: ReadonlySet<string>): void {
-  for (const chatId of pendingChatIds) {
-    if (!listedChatIds.has(chatId)) pendingChatIds.delete(chatId);
-  }
+/** A chat list arrived: a chat it no longer carries is gone, so there is nothing left to hide. Answers those chats. */
+export function settlePendingDeletes(listedChatIds: ReadonlySet<string>): string[] {
+  const goneChatIds = [...pendingChatIds].filter((chatId) => !listedChatIds.has(chatId));
+  for (const chatId of goneChatIds) pendingChatIds.delete(chatId);
+  return goneChatIds;
 }
 
 export function hasPendingDelete(): boolean {

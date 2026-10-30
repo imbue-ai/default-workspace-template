@@ -2392,6 +2392,30 @@ def test_deleting_the_last_chat_empties_the_list_at_once_and_a_refusal_brings_th
 
 
 @pytest.mark.timeout(60, func_only=False)
+def test_deleting_the_only_chat_while_it_awaits_its_first_send_opens_a_new_one(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """The chat an empty list opened can itself be deleted: the root asks again once it is gone, is handed a new chat
+    rather than that one, and the deleted chat's frame goes with it."""
+    e2e_server.chat_state.agent_manager.remove_agent(FIXTURE_AGENT_ID)
+    page.on("dialog", lambda dialog: dialog.accept())
+    page.goto(f"{e2e_server.chat_url}/")
+    rows = page.locator(".chat-rail-row")
+    expect(rows).to_have_count(1, timeout=15000)
+    deleted_chat_id = rows.first.get_attribute("data-chat-id")
+    assert deleted_chat_id is not None
+
+    rows.first.click(button="right")
+    page.locator('.chat-rail-menu [data-menu-row="delete"]').click()
+
+    new_row = page.locator(f'.chat-rail-row:not([data-chat-id="{deleted_chat_id}"])')
+    expect(new_row).to_have_count(1, timeout=15000)
+    expect(rows).to_have_count(1)
+    assert _selection_of(page.url) == new_row.get_attribute("data-chat-id")
+    expect(page.locator(f'iframe.chat-root-frame[data-chat-id="{deleted_chat_id}"]')).to_have_count(0)
+
+
+@pytest.mark.timeout(60, func_only=False)
 def test_a_drawer_row_kebab_stops_that_chat(tmp_path: Path, page: Page) -> None:
     """Each row in the drawer carries a kebab with the right-click menu's verbs; its Stop chat stops that row's chat,
     not the one on screen, and picks nothing."""

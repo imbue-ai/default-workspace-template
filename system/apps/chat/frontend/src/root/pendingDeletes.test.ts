@@ -39,7 +39,7 @@ describe("pending deletes", () => {
   it("has nothing left to hide once a chat list drops the chat", () => {
     showPendingDelete("chat-a");
 
-    settlePendingDeletes(new Set(["chat-b"]));
+    expect(settlePendingDeletes(new Set(["chat-b"]))).toEqual(["chat-a"]);
 
     expect(hasPendingDelete()).toBe(false);
   });

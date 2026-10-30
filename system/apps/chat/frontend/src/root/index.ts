@@ -341,7 +341,8 @@ function onChatsUpdated(): void {
     if (rows.some((row) => row.chatId === chatId && row.lastActiveMs !== null)) startedHere.delete(chatId);
   }
   const listed = new Set(rows.map((row) => row.chatId));
-  settlePendingDeletes(listed);
+  // A chat opened here can be deleted while it still waits for a push to name it, and none will now.
+  for (const chatId of settlePendingDeletes(listed)) awaitingListing.delete(chatId);
   for (const chatId of listed) awaitingListing.delete(chatId);
   const isKept = (chatId: string): boolean => listed.has(chatId) || awaitingListing.has(chatId);
   if (pool !== null) {
