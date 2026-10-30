@@ -27,7 +27,7 @@ CACHE_DIRS: Final[tuple[Path, ...]] = (
     Path(".local/share/pnpm"),
 )
 # Where the workspace's environment puts uv's, npm's and other tools' caches (XDG_CACHE_HOME), off the
-# home volume; relative to the root.
+# home volume except on lima, where it links to ~/.cache; relative to the root.
 OFF_VOLUME_CACHE_DIR: Final[Path] = Path("var/cache/user")
 # What the top-level folders of the workspace hold, for the ones a user would not know.
 WORKSPACE_FOLDER_HINTS: Final[dict[str, str]] = {
