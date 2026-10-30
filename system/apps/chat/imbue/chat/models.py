@@ -159,8 +159,9 @@ class SendMessageResponse(FrozenModel):
 
     status: str = Field(
         description=(
-            "Status of the send operation: 'ok', 'compaction_requested', or 'withdrawn' (Stop took it back while "
-            "the agent was coming up, and nothing was delivered)"
+            "Status of the send operation: 'ok', 'resent' (delivered by a second send, mngr having been unable to "
+            "confirm the first, which may have landed too), 'compaction_requested', or 'withdrawn' (Stop took it "
+            "back while the agent was coming up, and nothing was delivered)"
         )
     )
 

@@ -254,7 +254,16 @@ shows the draft after the transcript while `after_event_id` is still the last
 event it holds, so the reply landing replaces it at once; an empty `text`
 clears it. A draft that matches a reply the transcript already holds is never
 sent. The terminal's rendering loses heading levels and code-fence languages,
-which the landed reply restores. A chat in the background (no page, a hidden
+which the landed reply restores. Codex also writes an agent message to its
+rollout only once it is finished; its draft comes from the
+`item/agentMessage/delta` notifications the agent's live app-server connection
+already receives (`harnesses/codex/reply_stream.py`), and is dropped once the
+rollout holds the message's id. Pi records an assistant message only on
+`message_end`; mngr's pi lifecycle extension writes the text pi has streamed
+so far to `pi_reply_draft` in the agent's state dir, which the watcher reads.
+Antigravity writes a planner step's text into its row while the step is still
+generating; the watcher takes the newest such row as the draft and drops it
+in the scan that sees the row settle. A chat in the background (no page, a hidden
 or unfocused window, or a frame the chat root keeps loaded out of sight) is
 never read.
 
@@ -370,17 +379,29 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
-A message is sent again automatically only where the chat app knows it was not
-processed, and never twice. A send naming its send-time id (`message_id`) goes
-through `send_ledger.py`: a page whose request got no answer sends it again under
-the same id, marked `is_repeat`, and the repeat gets the first send's answer, a
-refusal included (waiting for it while it is still under way), rather than a
-second delivery. A Retry under the same id gets a taken send's answer, but is
-sent afresh after a refusal. A send mngr reports
-`agent_not_found` (the agent moved) or `not_submitted` (Claude never took it, and
-mngr cleared it from the input box) is sent again once, by discovery or at the
-same place; one mngr could not confirm (`submission_unconfirmed`) is never sent
-again by the chat app, and the page says it may already have arrived. Since mngr
+A send naming its send-time id (`message_id`) goes through `send_ledger.py`: a
+page whose request got no answer sends it again under the same id, marked
+`is_repeat`, and the repeat gets the first send's answer, a refusal included
+(waiting for it while it is still under way), rather than a second delivery. A
+Retry under the same id gets a taken send's answer, but is sent afresh after a
+refusal. A page whose request still gets no answer cannot know whether the chat
+app took it, and the chat app is out of its reach, so nothing sends it again: it
+gets the "Couldn't confirm your message arrived" notice.
+
+A send mngr reports `agent_not_found` (the agent moved) or `not_submitted`
+(Claude never took it, and mngr cleared it from the input box) is sent again
+once, by discovery or at the same place. One mngr could not confirm
+(`submission_unconfirmed`) may or may not have arrived; not sending one that
+never arrived is worse than sending it twice, so it is sent again once at the
+same place, and the route answers a send that then lands
+`{"status": "resent"}` (as the ledger answers its repeats). The page shows
+"Sent again" under the message, with a "?" saying the agent may see it twice,
+and folds a second copy that reaches the transcript into that line
+(`frontend/src/models/ResentSends.ts`). A send still unconfirmed the second
+time is not sent a third: its failure gets the "Couldn't confirm your message
+arrived" notice. Antigravity's flush, which sends again a block it did not see
+land on its own later pass, asks for no such repeat
+(`is_resent_when_unconfirmed=False`). Since mngr
 counts a Claude message as delivered once Claude shows it, which during its
 startup hooks is before it is written down, the chat app keeps each delivered
 Claude send until the agent's process ends: when the process exits (lifecycle

@@ -66,7 +66,15 @@ const { mockDetailState, mockRequestDetail, transcript } = vi.hoisted(() => ({
   mockDetailState: vi.fn(),
   mockRequestDetail: vi.fn(),
   // The chat's held transcript, and the send the recovered sign-in note makes.
-  transcript: { events: [] as unknown[], sendMessage: vi.fn(async () => "ok") },
+  transcript: {
+    events: [] as unknown[],
+    sendMessage: vi.fn(async () => "ok"),
+    noteResentSend: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => {}),
+  },
+}));
+vi.mock("../models/ResentSends", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/ResentSends")>()),
+  noteResentSend: transcript.noteResentSend,
 }));
 vi.mock("../models/Response", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Response")>()),
@@ -870,6 +878,28 @@ describe("the auth-error note's switch link", () => {
       const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
       expect(allText(children)).toContain("That didn't send.");
       expect(findButton(children, "Try again")).not.toBeNull();
+    });
+
+    it("takes a resend the chat app had to send twice as sent, and says so under the message", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      transcript.sendMessage.mockResolvedValueOnce("resent");
+      transcript.noteResentSend.mockClear();
+
+      findButton(
+        renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"),
+        "Send your message again",
+      )!.attrs.onclick();
+      await vi.waitFor(() =>
+        expect(transcript.noteResentSend).toHaveBeenCalledExactlyOnceWith(
+          "chat-1",
+          "Summarize the deploy thread",
+          expect.any(Set),
+        ),
+      );
+
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+      expect(allText(children)).not.toContain("That didn't send.");
+      expect(allText(children)).not.toContain("Couldn't confirm your message arrived");
     });
 
     it("asks the user to check the agent before sending a resend mngr could not confirm again", async () => {

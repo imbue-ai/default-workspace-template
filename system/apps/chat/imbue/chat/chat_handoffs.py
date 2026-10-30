@@ -624,7 +624,7 @@ class HandoffRunner:
         except SendFailedError as e:
             logger.warning("Handoff of chat {}: the summary request was refused: {}", chat_id, e.detail)
             return SummaryOutcome.MISSING
-        if sent is not SendOutcome.OK:
+        if not sent.is_delivered:
             logger.warning("Handoff of chat {}: the summary request did not land ({})", chat_id, sent.value)
             return SummaryOutcome.MISSING
         return self._await_summary(chat_id, handoff_id, retiring_id, path, stale_mtime)
@@ -1050,7 +1050,7 @@ def deliver_held_send(
             "Chat {}: held send {} was taken back by Stop before it reached the agent", chat_id, held.message_id
         )
         return
-    if outcome is not SendOutcome.OK:
+    if not outcome.is_delivered:
         logger.warning(
             "Handoff of chat {}: held send {} to agent {} did not land ({})",
             chat_id,

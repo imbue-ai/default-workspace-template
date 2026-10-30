@@ -12,6 +12,7 @@ from pydantic import PrivateAttr
 from workspace_layout.interfaces import ShellLayoutInterface
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import agent_tmux_session_name
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.chat_intakes import PendingIntakeStore
@@ -196,11 +197,15 @@ class ChatAppState(MutableModel):
             # DELIVER it, which needs the manager's send path and a liveness check. No-op for
             # every other harness, whose queue its own harness consumes.
             watcher.set_flush_hooks(
-                # `is None` is the delivery test: send_message_to_agent returns the FAILURE
-                # (or None on success), while FlushSendCallback is declared to return True for
-                # delivered. Passing the result straight through inverts it, and antigravity's
-                # flush would count every failed send as delivered and drop the queue.
-                lambda text: self.agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
+                # Not sent again when mngr cannot confirm it: the flush sends a block it did not see
+                # land again itself, on a later pass and only while no turn is open, so a second send
+                # here could type into the turn the first one opened.
+                lambda text: isinstance(
+                    self.agent_manager.send_message_to_agent(
+                        AgentId(agent_info.id), text, is_resent_when_unconfirmed=False
+                    ),
+                    SendDelivery,
+                ),
                 lambda: self.agent_manager.is_agent_alive(agent_info.id),
             )
             self.watchers[agent_info.id] = watcher
@@ -272,6 +277,7 @@ class ChatAppState(MutableModel):
             self._reply_draft_publisher = ReplyDraftPublisher(
                 list_watched_agents=self.list_watched_agents,
                 capture_agent_pane=self.capture_agent_pane,
+                read_agent_streamed_reply=self.agent_manager.read_streamed_reply,
                 broadcast_to_chat=self.event_queues.broadcast,
             )
         self._reply_draft_publisher.start()

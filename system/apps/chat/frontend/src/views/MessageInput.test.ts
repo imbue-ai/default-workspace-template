@@ -75,6 +75,8 @@ const mocks = vi.hoisted(() => {
     // deferred promise.
     waitForComposerUploads: vi.fn(async (_chatId: string) => {}),
     interruptAgent: vi.fn(async () => {}),
+    // What a send the chat app delivered by sending it a second time is noted with.
+    noteResentSend: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => {}),
     // Whether the agent's turn for a message has reached the transcript; none has, at rest.
     hasUserTurnLandedSince: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => false),
     openProviderChooser: vi.fn(),
@@ -105,6 +107,7 @@ vi.mock("../models/Response", () => ({
   interruptAgent: mocks.interruptAgent,
   mintMessageId: () => `m-${Math.random().toString(36).slice(2)}`,
 }));
+vi.mock("../models/ResentSends", () => ({ noteResentSend: mocks.noteResentSend }));
 vi.mock("../models/Handoffs", () => ({ switchChat: mocks.switchChat, cancelHandoff: mocks.cancelHandoff }));
 // The armed choice is served from here; whether a switch request is out is the real module's.
 vi.mock("../models/PendingLane", async (importOriginal) => {
@@ -1075,9 +1078,38 @@ describe("MessageInput send failure notice", () => {
     expect(text).toContain("Force");
   });
 
+  it("notes a message the chat app delivered by sending it again, and shows no notice", async () => {
+    mocks.noteResentSend.mockClear();
+    mocks.sendMessage.mockResolvedValueOnce("resent");
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    // Its turn is looked for among the turns that were not there before the send, by the text sent.
+    expect(mocks.noteResentSend).toHaveBeenCalledWith("agent-1", "hello", new Set(["turn-before-the-send"]));
+    expect(renderedText(after)).not.toContain("Couldn't confirm your message arrived");
+    expect(renderedText(after)).not.toContain("Couldn't send your message");
+    expect(findByTag(after, "textarea")?.attrs?.value).toBe("");
+  });
+
+  it("notes nothing for a message delivered the first time", async () => {
+    mocks.noteResentSend.mockClear();
+    await typeAndSend(MessageInput(), "agent-1", "hello");
+    expect(mocks.noteResentSend).not.toHaveBeenCalled();
+  });
+
+  it("notes a Send again the chat app delivered by sending it again", async () => {
+    mocks.noteResentSend.mockClear();
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
+    const component = MessageInput();
+    const after = await typeAndSend(component, "agent-1", "hello");
+    mocks.sendMessage.mockResolvedValueOnce("resent");
+    (findButton(after, "Send again")!.attrs!.onclick as () => void)();
+    await flushAsync();
+    expect(mocks.noteResentSend).toHaveBeenCalledWith("agent-1", "hello", new Set(["turn-before-the-send"]));
+  });
+
   it("asks the user to check the agent before sending an unconfirmed message again", async () => {
-    // The text was typed and Enter sent, so the agent may already have it: a plain Retry or a
-    // Force (restart and resend) could deliver it twice. mngr's reason is diagnostics, not copy.
+    // The chat app has already sent it twice without confirmation, and the agent may have either
+    // copy: a plain Retry or a Force (restart and resend) could deliver it a third time.
+    // mngr's reason is diagnostics, not copy.
     mocks.sendMessage.mockRejectedValueOnce({
       kind: "submission_unconfirmed",
       toString: () => "Timeout waiting for message submission evidence: pane content: ❯ hello",

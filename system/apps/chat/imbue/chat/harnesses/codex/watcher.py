@@ -40,6 +40,7 @@ from imbue.chat.harnesses.codex.model import CODEX_STATE_RELATIVE_PATH
 from imbue.chat.harnesses.codex.session_parser import SETTINGS_CHANGED_SINCE_TURN_KEY
 from imbue.chat.harnesses.codex.session_parser import SOURCE as _SOURCE
 from imbue.chat.harnesses.codex.session_parser import THINKING_SOURCE_MARKER_TYPE
+from imbue.chat.harnesses.codex.session_parser import assistant_message_event_id
 from imbue.chat.harnesses.codex.session_parser import parse_line_detail
 from imbue.chat.harnesses.codex.session_parser import parse_lines
 from imbue.chat.harnesses.codex.session_parser import parse_reasoning_detail
@@ -47,6 +48,8 @@ from imbue.chat.harnesses.events import SPECIAL_EVENT_TYPE
 from imbue.chat.harnesses.events import SpecialEventKind
 from imbue.chat.harnesses.model import model_state_path
 from imbue.chat.harnesses.session_watcher import OnEventsCallback
+from imbue.chat.harnesses.session_watcher import ReplyDraft
+from imbue.chat.harnesses.session_watcher import ReplyDraftSources
 from imbue.chat.harnesses.transcript_store import StoreBackedTranscriptLoader
 from imbue.chat.harnesses.transcript_store import StoreBackedWatcher
 from imbue.chat.harnesses.transcript_store import iter_line_spans
@@ -388,6 +391,26 @@ class CodexSessionWatcher(CodexTranscriptLoader, StoreBackedWatcher):
 
     def _filter_broadcast(self, events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return [event for event in events if not _is_live_suppressed(self._agent_id, event)]
+
+    def read_reply_draft(self, sources: ReplyDraftSources) -> ReplyDraft | None:
+        """The agent message codex's app-server is streaming, until the rollout records it.
+
+        Codex writes an agent message to the rollout only once it is finished; the live
+        connection hears it as it streams. The rollout keys the message by the id it streams
+        under, so the draft is dropped exactly when the transcript holds that message.
+        """
+        streamed = sources.read_streamed_reply()
+        baseline = self._reply_draft_baseline()
+        if streamed is None:
+            return ReplyDraft(after_event_id=baseline.after_event_id, text="")
+        with self._lock:
+            is_landed = (
+                self._store.offset_of(
+                    self._selected_lane_ids_locked(None), assistant_message_event_id(streamed.message_id)
+                )
+                >= 0
+            )
+        return ReplyDraft(after_event_id=baseline.after_event_id, text="" if is_landed else streamed.text.strip())
 
     def _reflect_effective_model(self, model: Any, effort: Any) -> None:
         """Write the effective per-turn model into ``model_state.json`` when it DIVERGES

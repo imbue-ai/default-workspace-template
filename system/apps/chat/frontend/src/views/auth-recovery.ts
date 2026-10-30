@@ -25,7 +25,8 @@ import {
 import { getChatById } from "../models/Chats";
 import { addOutgoing, dropOutgoing, dropOutgoingNoTurnWillRetire } from "../models/OutgoingMessages";
 import { accountForAgent } from "../models/Providers";
-import { mintMessageId, sendMessage } from "../models/Response";
+import { noteResentSend } from "../models/ResentSends";
+import { mintMessageId, sendMessage, sentUserTurnIds } from "../models/Response";
 import type { AssistantMessageEvent, TranscriptEvent, UserMessageEvent } from "../models/Response";
 import { classifyUserMessage, isTurnUserMessage } from "./message-classification";
 
@@ -248,8 +249,11 @@ export async function sendAgain(chatId: string, failedEventId: string, prompts: 
     const outgoingId = addOutgoing(chatId, wordsOf(prompt), messageId);
     m.redraw();
     try {
+      const priorTurnIds = sentUserTurnIds(chatId);
       const status = await sendMessage(chatId, prompt.content, messageId);
       dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
+      // Delivered like any send, by a second one the chat app made when it could not confirm the first.
+      if (status === "resent") noteResentSend(chatId, prompt.content, priorTurnIds);
       // Stop took it back while the agent came up: the user stopped the resend, so the rest stay unsent.
       if (status === "withdrawn") break;
     } catch (err) {

@@ -31,6 +31,7 @@ from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
@@ -5323,7 +5324,7 @@ def _capture_prioritizer_writes(manager: AgentManager, pids: dict[str, int]) -> 
     writes: list[tuple[int, int]] = []
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pid=lambda cid: pids.get(cid),
+        resolve_pids=lambda cid: [pids[cid]] if cid in pids else [],
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=manager._read_active_process_started_at,
     )
@@ -6170,6 +6171,7 @@ def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
     ("outcome", "expected_attempts"),
     [
         pytest.param(SendOutcome.OK, ["first", "second"], id="each-lands-in-order"),
+        pytest.param(SendOutcome.RESENT, ["first", "second"], id="each-lands-sent-again-by-the-chat-app"),
         pytest.param(SendOutcome.WITHDRAWN, ["first"], id="stop-took-it-back"),
         pytest.param(SendOutcome.NOT_READY, ["first"], id="not-ready"),
         pytest.param(SendOutcome.FAILED, ["first"], id="failed"),
@@ -6189,7 +6191,10 @@ def test_a_resend_sends_each_refused_message_until_one_does_not_land(
 
     def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
         attempted.append(text)
-        return landing.land(agent_info, text) if outcome is SendOutcome.OK else outcome
+        if not outcome.is_delivered:
+            return outcome
+        landing.land(agent_info, text)
+        return outcome
 
     _install_resend_capabilities(manager, landing.reader, deliver)
     try:
@@ -6372,7 +6377,10 @@ def test_a_message_the_chat_app_sends_outside_a_session_is_kept_for_sending_agai
     """The flush route's queue block goes to a just-restarted agent outside its session, and is kept the same."""
     chat = _LostSendChat(broadcaster)
     try:
-        assert chat.manager.send_message_kept_until_recorded(chat.agent_id, HarnessType.CLAUDE, "queued block") is None
+        assert (
+            chat.manager.send_message_kept_until_recorded(chat.agent_id, HarnessType.CLAUDE, "queued block")
+            is SendDelivery.DELIVERED
+        )
         chat.observe(AgentLifecycleState.DONE)
         wait_for(lambda: chat.resent == ["queued block"], error_message="the lost block was never sent again")
     finally:
