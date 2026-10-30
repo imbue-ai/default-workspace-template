@@ -1190,7 +1190,7 @@ def test_a_send_delivered_by_a_second_send_answers_resent() -> None:
     """mngr could not confirm the first send and the chat sent it again, so the page is told, to say so."""
     agent_info = _agent_info()
     messenger = RecordingMngrMessenger(delivery=SendDelivery.RESENT)
-    _, client = _client_over(messenger)
+    manager, client = _client_over(messenger)
     url = f"/api/chats/{agent_info.id}/message"
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
         response = client.post(url, json={"message": "hello", "message_id": "m-1"})
