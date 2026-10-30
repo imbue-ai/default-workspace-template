@@ -45,7 +45,6 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-# ---------------------------------------------------------------------------
 # Record round-trips
 
 
@@ -111,7 +110,6 @@ def test_rootfs_stamp_round_trip(tmp_path: Path) -> None:
     assert stamp.read_text() == first_id
 
 
-# ---------------------------------------------------------------------------
 # Overlay
 
 
@@ -169,7 +167,6 @@ def test_apply_overlay_entry_is_idempotent(tmp_path: Path) -> None:
     assert (rootfs_dir / "state.txt").read_text() == "written through the symlink"
 
 
-# ---------------------------------------------------------------------------
 # Pinned timestamp + upgrade deltas
 
 
@@ -186,7 +183,6 @@ def test_compute_version_deltas() -> None:
     assert deltas == {"curl": "7.88.1 -> 8.0.0", "git": "(absent) -> 2.45.0"}
 
 
-# ---------------------------------------------------------------------------
 # Fresh-rootfs capture guard (the record must survive to be replayed)
 
 
@@ -245,7 +241,6 @@ def test_read_record_snapshot_reads_present_sources_and_leaves_absent_none(
     assert snapshot.cargo_state is None
 
 
-# ---------------------------------------------------------------------------
 # Preserving recorded entries the replay could not install
 
 
@@ -347,7 +342,6 @@ def test_merge_missing_recorded_cargo_captured_default_toolchain_wins() -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # Per-entry fallback when a batched install fails
 
 
