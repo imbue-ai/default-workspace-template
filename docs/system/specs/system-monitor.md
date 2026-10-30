@@ -232,7 +232,7 @@ Each bucket is one `du -sk` (GNU, the container is Linux), bounded at 120 s:
 | Everything else | the disk's used bytes less the rows above, never below 0 | the machine's system software (`/` less the home tree, `/var/cache/user`, the kernel and memory filesystems, and the container engines' stores) and whatever else is on the disk, which is not part of the workspace and cannot be freed from it; neither when the system walk fails or is larger than the row (`/` is on another disk, as lima's boot disk is), and only the system software when a row above could not be measured |
 
 The result is kept in memory with its time; the app stopping forgets it, which is fine for a figure the user asked for once.
-A `du` that fails or times out leaves its row out and the response says which rows are missing.
+A `du` that fails or times out, or a home folder that cannot be listed, leaves its row out and the response says which rows are missing.
 A walk that cannot read the disk at all ends in a `failed` state with no rows, so the button offers to try again rather than staying disabled.
 
 ### 4.5 Backups
