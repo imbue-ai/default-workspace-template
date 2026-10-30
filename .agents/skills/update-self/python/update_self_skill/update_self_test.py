@@ -1632,8 +1632,8 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     copy may predate the subcommand entirely, so a local-path invocation fails
     exactly on the first update into the release that ships it -- the runs
     those records exist for. Only Step 1's ``run-status start`` runs before
-    anything is staged and stays local, plus Step 3a's verdict for a system
-    Python too old to run the staged copy at all.
+    anything is staged and stays local; the verdict for a system Python too old
+    to run the staged copy at all is printed by that copy, not written here.
     """
     skill_dir = _SKILL_DIR
     skill_md = (skill_dir / "SKILL.md").read_text(encoding="utf-8")
@@ -1654,12 +1654,7 @@ def test_skill_md_runs_its_scripts_from_the_staged_copy_below_step_3() -> None:
     assert any("run-status delegate" in line for line in invocations)
     assert any("run-status verdict" in line for line in invocations)
     staged = "data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py"
-    strays = [line for line in invocations if staged not in line]
-    assert len(strays) == 1
-    assert strays[0].startswith(
-        "python3 .agents/skills/update-self/scripts/update_self.py "
-    )
-    assert "run-status verdict NEEDS_RECREATION" in strays[0]
+    assert [line for line in invocations if staged not in line] == []
 
 
 _FENCED_BLOCK = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)

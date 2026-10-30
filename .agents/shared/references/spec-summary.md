@@ -92,12 +92,11 @@ its `scripts/` directory, i.e. `.agents/skills/<name>/scripts/`. The repo-root
 scripts.
 
 Start a new skill with the scaffold, which writes this layout, installs the
-package and validates the result (`--python` for a skill with scripted steps;
-`--crystallized` for one this lifecycle produces):
+package and validates the result (`--python` for a skill with scripted steps):
 
 ```bash
 uv run --no-sync .agents/shared/scripts/agents_shared/scaffold_skill.py <name> \
-    --description "<what-and-when>" --python --crystallized
+    --description "<what-and-when>" --python
 ```
 
 The `name` used in `.agents/skills/<name>/` must match the `name` field in
@@ -113,9 +112,15 @@ Minimum required:
 name: <skill-name>              # must match parent directory
 description: <what-and-when>    # 1-1024 chars; describe behavior + triggers
 metadata:
-  crystallized: true            # set for skills produced by this lifecycle
+  crystallized: true            # made in this workspace; the scaffold sets it
 ---
 ```
+
+The marker is how the workspace tells its own skills from a third party's. A
+skill marked `metadata.crystallized: true`, or a built-in one (marked
+`metadata.author: imbue`), is held to the root suite's import-cost, type and
+launch checks. Any other skill is kept as it came and left out of them, so a
+skill written here without the scaffold needs the marker added by hand.
 
 Omit `allowed-tools`, `license`, and `compatibility` unless you have a
 specific reason to constrain or declare them -- the defaults are fine.

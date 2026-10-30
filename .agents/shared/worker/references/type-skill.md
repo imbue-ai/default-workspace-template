@@ -10,7 +10,7 @@ cheat-sheet and the universal `harden-creation.md` contract don't already cover.
 A new skill starts from the scaffold (`spec-summary.md`, "Directory layout"),
 which writes the layout, installs the package and validates it:
 `uv run --no-sync .agents/shared/scripts/agents_shared/scaffold_skill.py <name>
---description "..." --python --crystallized`.
+--description "..." --python`.
 
 **Design judgement.** Reliability is the floor; simplicity is the target. Default
 to a subcommand per cleanly-separable step plus a `run all` that chains them; add

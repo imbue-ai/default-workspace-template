@@ -274,24 +274,9 @@ cat /tmp/update-self-recheck.json
 Set `PINNED_CEILING` as Step 2 does: the `Ceiling:` of a message that pinned
 the update, else empty, so a pinned pass never asks the app here either.
 
-**If it exits with code 75**, this workspace's system Python is older than the
-one the target release needs (a local workspace created before 2026-09-14), and
-it cannot be updated in place. Stop here: apply nothing and dispatch no worker.
-Record the verdict with the workspace's own copy, the one Step 1 ran -- the
-staged copy exits 75 on every subcommand under this Python:
-
-```bash
-python3 .agents/skills/update-self/scripts/update_self.py \
-    run-status verdict NEEDS_RECREATION --detail "System Python too old to update in place."
-```
-
-A copy older than minds-v0.4.3 has no `run-status` subcommand and rejects it
-as an invalid choice; it recorded no run in Step 1 either, so skip the verdict
-then.
-
-Then tell the user as "Migration-required updates" below says, and release the
-`updating workspace` lease (`tk close "$UPDATE_LEASE_ID" "Update pass
-finished."`). There is no history bridge or tracking ticket to clean up yet.
+**If it exits non-zero, stop** and follow what it printed: an `error:` line is
+handled as a Step 2 error, and exit code 75 (a system Python too old for the
+target release) prints the whole procedure.
 
 This is the only ceiling check that runs on a workspace updating *into* the
 ceiling for the first time (its local copy may predate the check). If
