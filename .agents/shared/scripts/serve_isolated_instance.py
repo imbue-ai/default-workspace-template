@@ -119,7 +119,7 @@ sys.path.insert(
     ),
 )
 
-from disk_headroom.space import read_disk_space
+from disk_headroom.space import DiskSpace, read_disk_space
 
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and
@@ -136,6 +136,11 @@ SCRATCH_DIRNAME = "scratch"
 # What a ``--copy`` must leave the workspace able to write, for the live
 # workspace's own writes.
 COPY_RESERVE_BYTES = 2 * 1024**3
+# What a cloud machine's disk quota holds back of its disk. Where the machine
+# publishes no quota, statfs overstates what the workspace can write by up to this.
+# CLEANUP: remove once every gen-2 slice VM publishes /mngr-vol/.host-diskinfo
+# (`minds-admin install-vm-memory-units --apply` across the pool).
+UNPUBLISHED_QUOTA_RESERVE_BYTES = 4 * 1024**3
 # The port the health probe reaches and the wrapper frames; every instance has it.
 MAIN_PORT_NAME = "main"
 LOOPBACK_HOST = "127.0.0.1"
@@ -240,12 +245,15 @@ class InstanceError(Exception):
 
 
 def free_bytes(path: Path) -> int:
-    """What the workspace can still write to the disk holding ``path``, which must exist.
+    """What the workspace can still write to the disk holding ``path``, which must exist."""
+    return writable_bytes(read_disk_space(path))
 
-    On a cloud machine that is the smaller of the filesystem's free space and
-    the room left under the machine's disk quota, which statfs does not see.
-    """
-    return read_disk_space(path).free
+
+def writable_bytes(space: DiskSpace) -> int:
+    """``space.free`` under a published quota; without one, less the quota statfs may not see."""
+    if space.quota_free is not None:
+        return space.free
+    return max(space.free - UNPUBLISHED_QUOTA_RESERVE_BYTES, 0)
 
 
 def tree_size_bytes(root: Path) -> int:
