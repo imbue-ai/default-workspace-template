@@ -151,17 +151,13 @@ def _rest_of_disk_items(
 ) -> list[dict[str, Any]]:
     """What the Everything else row's ``other`` bytes break down into: the system software, the home tree
     beside the workspace, and whatever else is on the disk."""
-    if system is None or not system.total:
-        return []
-    software = min(other, system.total)
-    items: list[dict[str, Any]] = [
-        {"name": "System software", "hint": "the workspace's tools", "bytes": software}
-    ]
-    # Without the home tree's size the rest of the disk cannot be told apart from it, so neither
-    # is listed rather than the home tree being called something that cannot be freed.
-    if home_rest is None:
-        return items
-    home_data = min(other - software, home_rest.total)
+    software = min(other, system.total) if system is not None else 0
+    home_data = min(other - software, home_rest.total) if home_rest is not None else 0
+    items: list[dict[str, Any]] = []
+    if software:
+        items.append(
+            {"name": "System software", "hint": "the workspace's tools", "bytes": software}
+        )
     if home_data:
         items.append(
             {
@@ -170,7 +166,9 @@ def _rest_of_disk_items(
                 "bytes": home_data,
             }
         )
-    if other - software - home_data:
+    # Without both walks' sizes the rest of the disk cannot be told apart from what was not measured,
+    # so it is not listed rather than that being called something that cannot be freed.
+    if software and home_rest is not None and other - software - home_data:
         items.append(
             {
                 "name": "Other files on the machine's disk",

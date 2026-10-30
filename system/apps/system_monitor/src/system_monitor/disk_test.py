@@ -223,6 +223,27 @@ def test_a_home_tree_that_cannot_be_measured_is_not_listed_as_space_that_cannot_
     ]
 
 
+def test_a_system_walk_that_fails_still_lists_the_home_tree(tmp_path: Path) -> None:
+    home, root = tmp_path / "home", tmp_path / "root"
+    (home / ".mngr").mkdir(parents=True)
+
+    def measure(paths: list[Path], excludes: list[Path]) -> disk.Measured | None:
+        if paths == [root]:
+            return None
+        return disk.Measured(10 * _MIB, {})
+
+    rows, missing = disk.scan(100 * _MIB, tmp_path / "workspace", home, measure, root)
+
+    assert missing == []
+    assert rows[-1]["items"] == [
+        {
+            "name": "Chats, logs and settings",
+            "hint": "kept beside the workspace's files",
+            "bytes": 10 * _MIB,
+        }
+    ]
+
+
 def test_du_measures_a_tree_less_its_excludes_and_a_missing_path_is_nothing(
     tmp_path: Path,
 ) -> None:
