@@ -13,6 +13,16 @@ set -euo pipefail
 readonly OFFLOAD_VERSION="0.10.0"
 readonly REPO_ROOT="/home/user/workspace"
 
+# An imbue_cloud workspace's /home/user is a symlink onto the host volume's home
+# (mngr_vps's container setup), not the directory the image ships, so the kernel
+# and claude report its paths resolved. Give the tests that layout too.
+readonly VOLUME_HOME="/mngr-vol/home"
+if [ ! -L /home/user ]; then
+    mkdir -p "$(dirname "$VOLUME_HOME")"
+    mv /home/user "$VOLUME_HOME"
+    ln -s "$VOLUME_HOME" /home/user
+fi
+
 cd "$REPO_ROOT"
 
 # The build context reaches Modal through its file upload, which copies what a

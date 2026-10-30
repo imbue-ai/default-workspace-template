@@ -19,7 +19,7 @@ from uuid import uuid4
 from chat_background_tasks.markers import TaskSource
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
-from oom_priority.registry import lookup_pid_by_agent_id
+from oom_priority.registry import lookup_pids_by_agent_id
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 
@@ -138,6 +138,7 @@ from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.chat.imbue_studio_notifications import ImbueStudioNotificationsClient
@@ -1449,7 +1450,7 @@ class AgentManager:
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_ids=manager.get_chat_ids,
-            resolve_pid=lambda chat_id: manager._resolve_active_pid(chat_id),
+            resolve_pids=lambda chat_id: manager._resolve_active_pids(chat_id),
             # A secondary's presence is its own windows', not the workspace's, and the scores it
             # would write are the live chat's, so it keeps an inert prioritizer.
             set_adj=None if is_secondary else set_oom_score_adj,
@@ -1469,10 +1470,10 @@ class AgentManager:
         )
         return manager
 
-    def _resolve_active_pid(self, chat_id: ChatId) -> int | None:
-        """The pid of the process a chat runs on, for the OOM prioritizer; None for a chat with no active agent."""
+    def _resolve_active_pids(self, chat_id: ChatId) -> list[int]:
+        """The pids of the processes a chat runs on, for the OOM prioritizer; empty for a chat with no active agent."""
         active_agent_id = self._active_agent_id_of_chat(chat_id)
-        return None if active_agent_id is None else lookup_pid_by_agent_id(active_agent_id)
+        return [] if active_agent_id is None else lookup_pids_by_agent_id(active_agent_id)
 
     def _read_active_process_started_at(self, chat_id: ChatId) -> float | None:
         """When the process a chat runs on started, for the OOM prioritizer; None for a chat with no active agent."""
@@ -2179,6 +2180,15 @@ class AgentManager:
         transition = self._oom_prioritizer.record_presence(chat_id, report)
         if transition.is_newly_watched:
             self._imbue_studio_notifications.mark_chat_read(chat_id)
+
+    def read_streamed_reply(self, agent_id: str) -> StreamedReply | None:
+        """The reply the agent's harness session is streaming over its live connection, or None.
+
+        Reads only a session already built: a draft never brings one up.
+        """
+        with self._lock:
+            session = self._session_by_agent.get(agent_id)
+        return None if session is None else session.read_streamed_reply()
 
     def chat_watchers(self, chat_id: ChatId) -> list[str]:
         """The page instances watching the chat now (shown and focused, recently reported)."""

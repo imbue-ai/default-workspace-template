@@ -45,6 +45,7 @@ from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
 from share_gateway import materials as materials_module
+from share_gateway.access_log import QueryOmittingRequestHandler
 from share_gateway.agent_access import LastSeenStore
 from share_gateway.agent_access import default_agent_access_paths
 from share_gateway.agent_access import reconcile as reconcile_agent_access
@@ -304,7 +305,9 @@ def _start_stack(materials: ShareMaterials) -> ShareStack:
         share_grants_path=materials_module.GRANTS_FILE,
         get_registered_apps=lambda: read_registered_apps(APPS_TOML_PATH),
     )
-    stack.gateway_server = make_server("127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True)
+    stack.gateway_server = make_server(
+        "127.0.0.1", materials_module.GATEWAY_PORT, app, threaded=True, request_handler=QueryOmittingRequestHandler
+    )
     threading.Thread(target=stack.gateway_server.serve_forever, name="share-gateway-http", daemon=True).start()
 
     materials_module.STATE_DIR.mkdir(parents=True, exist_ok=True)
