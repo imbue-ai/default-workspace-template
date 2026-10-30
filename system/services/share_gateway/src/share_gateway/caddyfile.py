@@ -155,6 +155,23 @@ def _render_hardening_headers(indent: str) -> str:
     return "\n".join(f"{indent}{line}" for line in lines)
 
 
+def _render_callback_on_every_host_block(gateway_backend: str) -> str:
+    """The site-wide login callback route of a share whose session cookies are host-only.
+
+    An auth sandbox's cookies carry no ``Domain`` (every sandbox of the region
+    shares one workspace domain), so a cookie the auth label set would never
+    reach the Screen's or owner-exec's host. The callback is therefore served
+    on every host of the share, and the gateway sends the broker back to the
+    host being visited (``server.py``); a domain-wide share keeps the callback
+    confined to the auth label.
+    """
+    return f"""
+    handle /_auth/callback {{
+        reverse_proxy {gateway_backend}
+    }}
+"""
+
+
 def render_caddyfile(
     workspace_domain: str,
     apps: list[RegisteredApp],
@@ -164,9 +181,15 @@ def render_caddyfile(
     https_port: int,
     gateway_port: int,
     chrome_origin: str,
+    # Host-only session cookies (an auth sandbox) belong to the host that set them, so the login
+    # callback that sets them must run on the host being visited, not only on the auth label.
+    is_callback_served_on_every_host: bool,
 ) -> str:
     """Render the full Caddyfile for one shared workspace."""
     gateway_backend = f"127.0.0.1:{gateway_port}"
+    callback_on_every_host_block = (
+        _render_callback_on_every_host_block(gateway_backend) if is_callback_served_on_every_host else ""
+    )
     frame_ancestors = build_frame_ancestors_policy(workspace_domain, chrome_origin)
     site_hardening_headers = _render_hardening_headers(indent="    ")
     error_hardening_headers = _render_hardening_headers(indent="        ")
@@ -246,7 +269,7 @@ https://*.{workspace_domain}:{https_port} {{
     handle /_health {{
         reverse_proxy {gateway_backend}
     }}
-
+{callback_on_every_host_block}
     # A registered service whose backend refuses the connection (a stopped app
     # whose port the shell has not parked yet, or one it just released for the
     # app to bind) gets the auto-retrying loading page rather than a bare 502;

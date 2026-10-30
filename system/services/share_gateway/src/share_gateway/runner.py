@@ -212,6 +212,7 @@ class ShareStack:
             https_port=materials_module.CADDY_HTTPS_PORT,
             gateway_port=materials_module.GATEWAY_PORT,
             chrome_origin=self.materials.chrome_origin,
+            is_callback_served_on_every_host=self.materials.is_cookie_host_only,
         )
 
     def admin_port_for(self, relay_id: str) -> int:

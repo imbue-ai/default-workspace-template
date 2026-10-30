@@ -493,6 +493,36 @@ def test_callback_on_an_auth_sandbox_sets_host_only_cookies_that_still_verify(
     assert verified.status_code == 200
 
 
+def test_verify_without_a_session_sends_the_callback_to_the_auth_origin_on_a_domain_wide_share(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+
+    assert resp.status_code == 302
+    query = parse_qs(urlsplit(resp.headers["Location"]).query)
+    assert query["callback_origin"] == [_AUTH_ORIGIN]
+    assert query["next"] == [f"https://{_WEB_HOST}/some/page"]
+
+
+def test_verify_without_a_session_sends_the_callback_to_the_visited_host_when_cookies_are_host_only(
+    tmp_path: Path,
+) -> None:
+    # Host-only cookies belong to the host that set them: a callback on the auth
+    # origin would leave the visited host without a session and the visitor
+    # bouncing between the gateway and the broker. The callback runs on the
+    # visited host instead (caddy serves it there on such a share).
+    harness = _make_harness(tmp_path, is_cookie_host_only=True)
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+
+    assert resp.status_code == 302
+    query = parse_qs(urlsplit(resp.headers["Location"]).query)
+    assert query["callback_origin"] == [f"https://{_WEB_HOST}"]
+    assert query["next"] == [f"https://{_WEB_HOST}/some/page"]
+
+
 def test_verify_accepts_the_partitioned_copy_alone(tmp_path: Path) -> None:
     # A browser inside the hosted chrome's iframe sends only the partitioned
     # copy; it must open the session just like the plain one.
