@@ -25,7 +25,9 @@ writes today, keeping the versions it runs on:
 6. it is locked, every package the root sources from git that it declares directly is held
    to the root's pin, and its venv is linked and synced.
 
-``--dry-run`` prints what it would change and changes nothing. ``relock`` re-runs step 6's
+A step that fails puts every file the migration wrote back as it was, so the package can be
+migrated again once the cause is fixed. ``--dry-run`` prints what it would change and
+changes nothing. ``relock`` re-runs step 6's
 lock and pin alignment, for a package whose shared libraries or mngr pin moved.
 
 Run from the repo root, from the root venv (where ``update_self_skill`` is installed):
@@ -784,9 +786,40 @@ def _lock(repo_root: Path, relative: str, run: Run) -> None:
         )
 
 
+def _read_if_present(path: Path) -> bytes | None:
+    return path.read_bytes() if path.is_file() else None
+
+
+def _put_back(originals: dict[Path, bytes | None]) -> None:
+    for path, content in originals.items():
+        if content is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(content)
+
+
 def apply(plan: Plan, repo_root: Path, run: Run) -> list[str]:
+    """Carry out ``plan``, all or nothing: when a step fails, every file it wrote is put
+    back as it was, so a later ``migrate`` plans the package afresh."""
     _refuse_unconverted_user_dependencies(repo_root, plan.relative)
     package_dir = repo_root / plan.relative
+    written = [
+        package_dir / "pyproject.toml",
+        package_dir / "uv.lock",
+        repo_root / "pyproject.toml",
+        repo_root / "uv.lock",
+        *plan.program_files,
+        *plan.caller_files,
+    ]
+    originals = {path: _read_if_present(path) for path in written}
+    try:
+        return _apply_steps(plan, repo_root, package_dir, run)
+    except BaseException:
+        _put_back(originals)
+        raise
+
+
+def _apply_steps(plan: Plan, repo_root: Path, package_dir: Path, run: Run) -> list[str]:
     (package_dir / "pyproject.toml").write_text(plan.package_text)
     shutil.copyfile(plan.seed, package_dir / "uv.lock")
     root_changed = plan.root_text != (repo_root / "pyproject.toml").read_text()

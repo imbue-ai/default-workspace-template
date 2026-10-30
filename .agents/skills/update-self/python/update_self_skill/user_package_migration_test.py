@@ -164,6 +164,50 @@ def test_migrate_converts_an_old_layout_app_to_a_standalone_project(
     assert ["uv", "sync", "--locked", "--project", "system/apps/widget"] in uv.calls
 
 
+class _UvWhoseSyncFails(_Uv):
+    """``_Uv``, but the package's ``uv sync`` (the migration's last step) fails."""
+
+    def __call__(self, command: Sequence[str], cwd: Path) -> migration.Completed:
+        if list(command)[:2] == ["uv", "sync"]:
+            self.calls.append(list(command))
+            return migration.Completed(1, "", "error: network unreachable")
+        return super().__call__(command, cwd)
+
+
+def test_a_migration_that_fails_part_way_puts_every_file_back(
+    workspace: Path, tmp_path: Path
+) -> None:
+    written = [
+        workspace / "pyproject.toml",
+        workspace / "uv.lock",
+        workspace / "system/apps/widget/pyproject.toml",
+        workspace / user_packages.SUPERVISORD_DROPIN_DIR / "widget.conf",
+        workspace / ".agents/skills/report/SKILL.md",
+    ]
+    before = {path: path.read_bytes() for path in written}
+    uv = _UvWhoseSyncFails(tmp_path / "cache" / "uv")
+
+    code = migration.main(
+        [
+            "--repo-root",
+            str(workspace),
+            "migrate",
+            "system/apps/widget",
+            "--shared-lock",
+            str(tmp_path / "pre-merge.lock"),
+        ],
+        run=uv,
+    )
+
+    assert code == 1
+    # It got as far as relocking the root before the sync failed.
+    assert ["uv", "lock"] in uv.calls
+    assert {path: path.read_bytes() for path in written} == before
+    assert not (workspace / "system/apps/widget/uv.lock").exists()
+    # So a second run migrates it rather than calling it standalone already.
+    assert user_packages.standalone_problems(workspace, "system/apps/widget")
+
+
 def test_a_uv_run_program_line_ends_standalone_and_its_comment_names_the_project(
     workspace: Path, tmp_path: Path
 ) -> None:
