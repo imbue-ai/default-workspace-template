@@ -9591,3 +9591,18 @@ def test_an_apply_that_changes_a_user_package_syncs_it_in_place_and_its_failure_
     assert "uv sync --locked --project system/apps/gadget failed" in err
     assert "the lockfile needs to be updated" in err
     assert "warning: system/apps/gizmo:" in err
+
+
+def test_a_user_package_sync_with_no_uv_cache_to_link_into_stops_only_that_package(
+    apply_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    _write_app(apply_repo, "widget", "widget", "widget-app", False)
+    runner = _apply_runner("M\tsystem/apps/widget/uv.lock\n", apply_repo)
+    runner.respond(("uv", "cache", "dir"), _Result(returncode=2, stderr="no cache"))
+
+    assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
+
+    assert not runner.ran("uv", "sync", "--locked", "--project", "system/apps/widget")
+    assert (
+        "warning: system/apps/widget: `uv cache dir` failed" in capsys.readouterr().err
+    )
