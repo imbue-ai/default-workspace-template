@@ -239,6 +239,31 @@ def _remove_from_root(text: str, name: str) -> str:
     return pattern.sub("", text)
 
 
+_MINIMUM_PYTHON = re.compile(r"^\s*>=\s*(\d+)\.(\d+)\s*$")
+
+
+def _raise_python_floor(text: str, pyproject: dict, root: dict) -> str | None:
+    """``text`` with ``requires-python`` raised to the root's floor, or ``None`` when it
+    already meets it. A standalone package resolves the workspace's libraries on its own,
+    and they require the root's floor (an older scaffold wrote a lower one, which no longer
+    locks); the package already ran on the root's interpreter, so nothing it runs changes."""
+    own = _table(pyproject.get("project")).get("requires-python")
+    floor = _table(root.get("project")).get("requires-python")
+    own_match = _MINIMUM_PYTHON.match(own) if isinstance(own, str) else None
+    floor_match = _MINIMUM_PYTHON.match(floor) if isinstance(floor, str) else None
+    if own_match is None or floor_match is None or not isinstance(floor, str):
+        return None
+    if tuple(map(int, own_match.groups())) >= tuple(map(int, floor_match.groups())):
+        return None
+    return re.sub(
+        r'^(\s*requires-python\s*=\s*)"[^"]*"',
+        lambda match: f'{match.group(1)}"{floor}"',
+        text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+
+
 def _test_files(package_dir: Path) -> list[Path]:
     return [
         path
@@ -527,6 +552,14 @@ def plan_migration(
                 "path": os.path.relpath(repo_root / packages[dependency], package_dir),
                 "editable": True,
             }
+    raised = _raise_python_floor(
+        package_text, pyproject, _read_toml(repo_root / "pyproject.toml")
+    )
+    if raised is not None:
+        package_text = raised
+        notes.append(
+            "raises its requires-python to the workspace's floor, which its libraries need"
+        )
     test_files = _test_files(package_dir)
     if test_files:
         dependency = _test_dependency(test_files)

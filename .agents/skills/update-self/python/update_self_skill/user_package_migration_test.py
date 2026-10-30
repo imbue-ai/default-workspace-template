@@ -450,3 +450,32 @@ def test_ratchet_tests_get_the_testing_extra_though_the_package_declares_imbue_c
     assert tomllib.loads(plan.package_text)["dependency-groups"]["dev"] == [
         "imbue-common[testing]"
     ]
+
+
+def test_a_package_below_the_workspaces_python_floor_is_raised_to_it(
+    workspace: Path,
+) -> None:
+    # An older scaffold wrote >=3.11, which cannot lock standalone against libraries that
+    # require the root's >=3.12; the package ran on the root's interpreter all along.
+    root_pyproject = workspace / "pyproject.toml"
+    root_pyproject.write_text(
+        root_pyproject.read_text().replace(
+            'requires-python = ">=3.12"', 'requires-python = ">=3.13"'
+        )
+    )
+    pyproject = workspace / "system/apps/widget/pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace(
+            'requires-python = ">=3.12"', 'requires-python = ">=3.11"'
+        )
+    )
+
+    plan = migration.plan_migration(
+        workspace, "system/apps/widget", None, migration.run_subprocess
+    )
+
+    assert tomllib.loads(plan.package_text)["project"]["requires-python"] == ">=3.13"
+    assert (
+        "raises its requires-python to the workspace's floor, which its libraries need"
+        in plan.notes
+    )
