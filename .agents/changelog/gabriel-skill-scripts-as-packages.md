@@ -2,9 +2,9 @@ Each skill's Python now lives in its own uv project, `.agents/skills/<name>/pyth
 
 - **Scripts that call scripts:** the shared preview script registers its servers through `forward_port` in-process and starts the preview frame by its path under its own interpreter; `preview_app.py` boots, refreshes and tears down previews by calling it in-process; launch-task sends the task and every reply through `message_chat` in-process, and a failed task send is reported with the destroy hint instead of raising; build-app's scaffold validates the manifest with `app_manifest` in-process.
 
-- **Third-party skills don't break uv:** a skill whose `scripts/` holds plain or PEP 723 scripts is not a uv workspace member, so it can't break `uv` commands in the workspace. The root import-cost and type checks still cover its scripts.
+- **Third-party skills are left as they came:** the workspace holds a skill to its own checks only when its SKILL.md frontmatter carries `metadata.crystallized: true` (made in the workspace) or `metadata.author: imbue` (built in; `datalib` and `imbue-studio` now carry it too). A skill with neither, one installed or copied in from elsewhere, is left out of the import-cost and launch checks, and a `scripts/` of plain or PEP 723 scripts never touches the workspace's uv setup. `.agents/shared/scripts/agents_shared/skill_ownership.py unmarked` lists the skills with Python that carry neither marker.
 
-- **What existing workspaces need:** a workspace's own skills with Python need the same layout. The update worker converts them by following the new `update-self/references/python-packaging-migration.md`, which also covers a skill test that loads its module from a file: it imports the module from the package instead. `migrate-workspace` converts the skills it brings over from an older workspace the same way.
+- **What existing workspaces need:** a workspace's own skills with Python need the same layout. The update worker first decides which unmarked skills the workspace made, from each skill's history, its files and the chat that added it, and marks those `crystallized: true`; then it converts them by following the new `update-self/references/python-packaging-migration.md`, which also covers a skill test that loads its module from a file: it imports the module from the package instead. `migrate-workspace` decides about, marks and converts the skills it brings over from an older workspace the same way.
 
 - **Commands that changed:**
   - `notify_user.py`, `request_secret.py`, `serve_isolated_instance.py`, `resolve_template_base.py` and the preview wrapper import only the standard library, so they run from their modules under `python3`: `.agents/skills/notify-user/python/notify_user_skill/notify_user.py`, `.agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py`, and `.agents/shared/scripts/agents_shared/` for the rest. The chat's secret card and the secret guards still recognise `request_secret.py` at its new path.
@@ -26,7 +26,7 @@ Each skill's Python now lives in its own uv project, `.agents/skills/<name>/pyth
 
   It no longer requires PEP 723 headers.
 
-- **New skills:** `.agents/shared/scripts/agents_shared/scaffold_skill.py <name> --description "..." [--python] [--crystallized]` writes a new skill in the spec layout (its `run.py` is a package module run by its path, with no stub in `scripts/`), runs `uv lock` and `uv sync --all-packages`, and validates it. A name or description that would not validate writes nothing.
+- **New skills:** `.agents/shared/scripts/agents_shared/scaffold_skill.py <name> --description "..." [--python]` writes a new skill in the spec layout, marked `metadata.crystallized: true` (its `run.py` is a package module run by its path, with no stub in `scripts/`), runs `uv lock` and `uv sync --all-packages`, and validates it. A name or description that would not validate writes nothing.
 
 - **Previews start faster:** `preview_app.py` loads the manifest library (and pydantic) only for `up`; `refresh` and `down` work from the preview's recorded state.
 

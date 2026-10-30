@@ -34,7 +34,15 @@ def test_a_python_below_the_floor_is_told_the_update_is_impossible() -> None:
 
     assert result.returncode == 75, result.stderr
     assert "cannot be updated in place" in result.stderr
-    assert "migrate-workspace" in result.stderr
+    # The staged copy refuses every subcommand here, so the verdict it asks for runs the
+    # workspace's own copy, and the procedure it points at is one this copy ships.
+    assert (
+        "   python3 .agents/skills/update-self/scripts/update_self.py run-status verdict "
+        'NEEDS_RECREATION --detail "System Python too old to update in place."\n'
+    ) in result.stderr
+    reference = _STUB.parents[1] / "references" / "apply-outcomes.md"
+    assert f'"Migration-required updates" in {reference} says' in result.stderr
+    assert "## Migration-required updates" in reference.read_text()
     assert result.stdout == "[]"
 
 

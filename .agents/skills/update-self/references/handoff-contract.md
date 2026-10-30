@@ -36,10 +36,11 @@ target release's own copy (or the local one, when the ref predates the skill).
   `.agents/skills/update-self/scripts/update_self.py` resolves to the
   workspace's own copy, which may predate a subcommand the prose relies on --
   the `run-status` writes in particular fail exactly on the first update into
-  the release that ships them. The one exception is Step 3a's verdict after the
+  the release that ships them. The one exception is the verdict after the
   staged copy exits 75 (system Python older than the target's floor): the
-  staged copy exits 75 on every subcommand there, so that verdict goes through
-  the local copy, and is skipped when the local copy predates `run-status`.
+  staged copy exits 75 on every subcommand there, so the command it prints for
+  that verdict runs the local copy, and is skipped when the local copy
+  predates `run-status`.
 - **The task-file template keeps `lead_agent` and `finish_report_path`** (a
   test holds this too): an older workspace's lead follows the staged prose but
   launches with its own `launch-task/create_worker.py`, which may predate

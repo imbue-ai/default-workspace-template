@@ -2,7 +2,8 @@
 
 The root ``[tool.ty.src]`` covers the agent skills and their shared scripts, ``system/scripts``
 and the root-level tests, checked against the root venv (every other package under ``system/``
-runs its own ``test_no_type_errors``).
+runs its own ``test_no_type_errors``). A third party's skill is kept as it came, so the check
+excludes it (``validate_skill.is_workspace_skill``).
 
 The bare tier -- what the system ``python3`` runs with no venv -- is checked a second time
 against an environment with no third-party packages at all, so an import it cannot make at
@@ -22,6 +23,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from agents_shared.validate_skill import is_workspace_skill
 from entry_points_testing import (
     BARE_MODULES,
     BARE_PACKAGES,
@@ -117,10 +119,12 @@ def _bare_files() -> list[Path]:
     return sorted({*stubs, *modules})
 
 
-def _run_ty(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+def _run_ty(
+    arguments: list[str], repo_root: Path = REPO_ROOT
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [str(_TY), "check", "--output-format", "concise", *arguments],
-        cwd=REPO_ROOT,
+        cwd=repo_root,
         capture_output=True,
         text=True,
         timeout=600,
@@ -152,12 +156,52 @@ def _check_bare(
     return _run_ty([*arguments, *(str(path) for path in files)])
 
 
+def _check_root(repo_root: Path = REPO_ROOT) -> subprocess.CompletedProcess[str]:
+    """The root project's check, with each third party's skill excluded (ty adds a command
+    line ``--exclude`` to the configured ones)."""
+    excludes = [
+        f"{skill_dir.relative_to(repo_root).as_posix()}/"
+        for skill_dir in sorted((repo_root / ".agents" / "skills").glob("*/"))
+        if not is_workspace_skill(skill_dir)
+    ]
+    return _run_ty(
+        [argument for pattern in excludes for argument in ("--exclude", pattern)],
+        repo_root,
+    )
+
+
 @pytest.mark.timeout(600)
 def test_the_root_project_has_no_type_errors() -> None:
-    result = _run_ty([])
+    result = _check_root()
     assert result.returncode == 0, (
         f"ty found problems in the root project:\n{result.stdout}\n{result.stderr}"
     )
+
+
+@pytest.mark.timeout(600)
+def test_the_root_check_leaves_out_a_third_partys_skill_but_keeps_the_configured_excludes(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "pyproject.toml").write_text(
+        '[tool.ty.src]\ninclude = [".agents"]\nexclude = [".agents/skills/*/scripts/*_test.py"]\n'
+    )
+    wrong = "def count() -> int:\n    return 'none'\n"
+    for name, marker in (
+        ("ours", "metadata:\n  crystallized: true\n"),
+        ("installed", ""),
+    ):
+        scripts = tmp_path / ".agents" / "skills" / name / "scripts"
+        scripts.mkdir(parents=True)
+        (scripts.parent / "SKILL.md").write_text(f"---\nname: {name}\n{marker}---\n")
+        (scripts / "tool.py").write_text(wrong)
+        (scripts / "tool_test.py").write_text(wrong)
+
+    result = _check_root(tmp_path)
+
+    reported = {
+        line.split(":")[0] for line in result.stdout.splitlines() if "error[" in line
+    }
+    assert reported == {".agents/skills/ours/scripts/tool.py"}
 
 
 @pytest.mark.timeout(600)

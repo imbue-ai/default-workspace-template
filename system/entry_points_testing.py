@@ -16,7 +16,11 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from agents_shared.validate_skill import bare_skill_module, package_entry_modules
+from agents_shared.validate_skill import (
+    bare_skill_module,
+    is_workspace_skill,
+    package_entry_modules,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SYSTEM_SCRIPTS = REPO_ROOT / "system" / "scripts"
@@ -97,11 +101,24 @@ print(json.dumps(sorted({name.split(".")[0] for name in sys.modules})))
 """
 
 
+def workspace_skill_dirs(repo_root: Path = REPO_ROOT) -> list[Path]:
+    """The skills held to the workspace's checks: a third party's skill is left as it came."""
+    return [
+        skill_dir
+        for skill_dir in sorted((repo_root / ".agents" / "skills").glob("*/"))
+        if is_workspace_skill(skill_dir)
+    ]
+
+
 def scripts_dirs(repo_root: Path = REPO_ROOT) -> list[Path]:
     return [
         repo_root / "system" / "scripts",
         repo_root / ".agents" / "shared" / "scripts",
-        *sorted((repo_root / ".agents" / "skills").glob("*/scripts")),
+        *(
+            skill_dir / "scripts"
+            for skill_dir in workspace_skill_dirs(repo_root)
+            if (skill_dir / "scripts").is_dir()
+        ),
     ]
 
 
@@ -110,7 +127,11 @@ def project_dirs(repo_root: Path = REPO_ROOT) -> list[Path]:
     return [
         repo_root / "system" / "scripts",
         repo_root / ".agents" / "shared" / "scripts",
-        *sorted((repo_root / ".agents" / "skills").glob("*/python")),
+        *(
+            skill_dir / "python"
+            for skill_dir in workspace_skill_dirs(repo_root)
+            if (skill_dir / "python").is_dir()
+        ),
     ]
 
 
@@ -174,7 +195,7 @@ def bare_skill_modules(repo_root: Path = REPO_ROOT) -> list[Path]:
     """Every bare skill's single script."""
     return [
         module
-        for skill_dir in sorted((repo_root / ".agents" / "skills").glob("*/"))
+        for skill_dir in workspace_skill_dirs(repo_root)
         if (module := bare_skill_module(skill_dir)) is not None
     ]
 
