@@ -79,6 +79,7 @@ from pathlib import Path
 from typing import Mapping, NamedTuple, Sequence
 
 from agents_shared import resolve_template_base
+from update_self_skill import user_package_migration, user_packages
 
 # The old workspace could not be reached at all (host offline, or -- most often
 # in a long pass -- an expired SSH grant). Distinct from a generic failure so the
@@ -1863,6 +1864,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     convert_parser.add_argument(
         "--shared-lock",
+        type=Path,
         default=None,
         help="The source workspace's uv.lock, the versions its packages ran on.",
     )
@@ -1876,13 +1878,6 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# The landed user packages are converted by update-self's migration script, the one
-# writer of the standalone layout for packages that predate it. The lister is bare and runs
-# under python3; the migration runs from this root venv, where update_self_skill is installed.
-USER_PACKAGES_SCRIPT = "system/scripts/workspace_bare_scripts/user_packages.py"
-PACKAGE_MIGRATION_SCRIPT = (
-    ".agents/skills/update-self/python/update_self_skill/user_package_migration.py"
-)
 # The order the kinds are converted in: a package cannot lock on a user lib that is not
 # converted yet, and apps and services are what use libs.
 _CONVERSION_ORDER = ("system/libs/", "system/services/", "system/apps/")
@@ -1900,30 +1895,16 @@ def _conversion_rank(package: str) -> int:
 
 
 def _cmd_convert_packages(args: argparse.Namespace) -> int:
-    repo_root = Path.cwd()
-    listing = subprocess.run(
-        ["python3", USER_PACKAGES_SCRIPT, "list"],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if listing.returncode != 0:
-        print(
-            f"error: listing the user packages failed (exit {listing.returncode}): "
-            f"{listing.stderr.strip()}",
-            file=sys.stderr,
-        )
-        return 1
+    """Convert the landed user packages with update-self's migration, the one writer of the
+    standalone layout for packages that predate it; one that fails leaves the rest to go on."""
+    repo_root = Path.cwd().resolve()
     is_any_failed = False
-    for package in sorted(listing.stdout.split(), key=_conversion_rank):
-        argv = [sys.executable, PACKAGE_MIGRATION_SCRIPT, "migrate", package]
-        if args.dry_run:
-            argv.append("--dry-run")
-        if args.shared_lock is not None:
-            argv.extend(["--shared-lock", args.shared_lock])
+    for package in sorted(user_packages.user_packages(repo_root), key=_conversion_rank):
         is_any_failed |= (
-            subprocess.run(argv, cwd=repo_root, check=False).returncode != 0
+            user_package_migration.migrate(
+                repo_root, package, args.shared_lock, args.dry_run
+            )
+            != 0
         )
     return 1 if is_any_failed else 0
 

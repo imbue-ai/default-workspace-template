@@ -2442,10 +2442,14 @@ version = "0.1.0"
 source = { editable = ".agents/skills/migrate-workspace/python" }
 dependencies = [
     { name = "agents-shared" },
+    { name = "update-self-skill" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "agents-shared", editable = ".agents/shared/scripts" }]
+requires-dist = [
+    { name = "agents-shared", editable = ".agents/shared/scripts" },
+    { name = "update-self-skill", editable = ".agents/skills/update-self/python" },
+]
 
 [[package]]
 name = "mngr-cli-contract"

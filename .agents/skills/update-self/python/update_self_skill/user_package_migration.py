@@ -30,8 +30,8 @@ migrated again once the cause is fixed. ``--dry-run`` prints what it would chang
 changes nothing. ``relock`` re-runs step 6's
 lock and pin alignment, for a package whose shared libraries or mngr pin moved.
 
-Run from the repo root, from the root venv (where ``update_self_skill`` is installed):
-``uv run --no-sync .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/apps/<package> --dry-run``.
+Run from the repo root as update-self's ``user-package-migration`` command:
+``uv run --no-sync user-package-migration migrate system/apps/<package> --dry-run``.
 """
 
 from __future__ import annotations
@@ -99,19 +99,19 @@ def _read_toml(path: Path) -> dict:
         return tomllib.load(handle)
 
 
-def _table(value: object) -> dict:
-    return value if isinstance(value, dict) else {}
+def _uv_sources(pyproject: dict) -> dict:
+    return pyproject.get("tool", {}).get("uv", {}).get("sources", {})
 
 
 def _declared_requirements(pyproject: dict) -> list[str]:
-    requirements = list(_table(pyproject.get("project")).get("dependencies") or [])
-    for group in _table(pyproject.get("dependency-groups")).values():
-        requirements.extend(entry for entry in group or [] if isinstance(entry, str))
-    for group in _table(
-        _table(pyproject.get("project")).get("optional-dependencies")
-    ).values():
-        requirements.extend(group or [])
-    return [entry for entry in requirements if isinstance(entry, str)]
+    project = pyproject.get("project", {})
+    requirements = list(project.get("dependencies", []))
+    for group in pyproject.get("dependency-groups", {}).values():
+        # A group can also hold `{ include-group = "..." }` tables.
+        requirements.extend(entry for entry in group if isinstance(entry, str))
+    for group in project.get("optional-dependencies", {}).values():
+        requirements.extend(group)
+    return requirements
 
 
 def _package_directories(repo_root: Path) -> dict[str, str]:
@@ -131,8 +131,8 @@ def _package_directories(repo_root: Path) -> dict[str, str]:
         pyproject_path = directory / "pyproject.toml"
         if not pyproject_path.is_file():
             continue
-        name = _table(_read_toml(pyproject_path).get("project")).get("name")
-        if isinstance(name, str):
+        name = _read_toml(pyproject_path).get("project", {}).get("name")
+        if name is not None:
             found[_normalize(name)] = directory.relative_to(repo_root).as_posix()
     return found
 
@@ -149,12 +149,10 @@ def _requirement_extras(requirement: str) -> frozenset[str]:
 
 
 def _root_sources(repo_root: Path) -> dict[str, dict]:
-    sources = _table(
-        _table(_read_toml(repo_root / "pyproject.toml").get("tool")).get("uv")
-    ).get("sources")
+    # A source that is a list (one per marker) is never a workspace or git pin to carry over.
     return {
         _normalize(name): value
-        for name, value in _table(sources).items()
+        for name, value in _uv_sources(_read_toml(repo_root / "pyproject.toml")).items()
         if isinstance(value, dict)
     }
 
@@ -252,8 +250,8 @@ def _raise_python_floor(text: str, pyproject: dict, root: dict) -> str | None:
     already meets it. A standalone package resolves the workspace's libraries on its own,
     and they require the root's floor (an older scaffold wrote a lower one, which no longer
     locks); the package already ran on the root's interpreter, so nothing it runs changes."""
-    own = _table(pyproject.get("project")).get("requires-python")
-    floor = _table(root.get("project")).get("requires-python")
+    own = pyproject.get("project", {}).get("requires-python")
+    floor = root.get("project", {}).get("requires-python")
     own_match = _MINIMUM_PYTHON.match(own) if isinstance(own, str) else None
     floor_match = _MINIMUM_PYTHON.match(floor) if isinstance(floor, str) else None
     if own_match is None or floor_match is None or not isinstance(floor, str):
@@ -569,16 +567,14 @@ def plan_migration(
         )
     package_text = (package_dir / "pyproject.toml").read_text()
     pyproject = tomllib.loads(package_text)
-    name = _table(pyproject.get("project")).get("name")
-    if not isinstance(name, str):
+    name = pyproject.get("project", {}).get("name")
+    if name is None:
         raise MigrationError(f"{relative}/pyproject.toml names no project")
     packages = _package_directories(repo_root)
     root_sources = _root_sources(repo_root)
     own_sources = {
         _normalize(key): value
-        for key, value in _table(
-            _table(_table(pyproject.get("tool")).get("uv")).get("sources")
-        ).items()
+        for key, value in _uv_sources(pyproject).items()
         if isinstance(value, dict)
     }
     notes: list[str] = []
@@ -622,7 +618,7 @@ def plan_migration(
             notes.append(
                 f"adds `{dependency}` to its dev group, so its tests run from its own venv"
             )
-        if not _table(_table(pyproject.get("tool")).get("pytest")).get("ini_options"):
+        if not pyproject.get("tool", {}).get("pytest", {}).get("ini_options"):
             package_text = _add_pytest_root(package_text)
             notes.append("makes its directory its tests' own pytest root")
     if changed:
@@ -663,13 +659,7 @@ def _refuse_unconverted_user_dependencies(repo_root: Path, relative: str) -> Non
         directory = packages.get(dependency)
         if directory not in others:
             continue
-        sources = _table(
-            _table(
-                _table(
-                    _read_toml(repo_root / directory / "pyproject.toml").get("tool")
-                ).get("uv")
-            ).get("sources")
-        )
+        sources = _uv_sources(_read_toml(repo_root / directory / "pyproject.toml"))
         if not (repo_root / directory / "uv.lock").is_file() or any(
             isinstance(value, dict) and value.get("workspace") is True
             for value in sources.values()
@@ -682,9 +672,7 @@ def _refuse_unconverted_user_dependencies(repo_root: Path, relative: str) -> Non
 
 def _verify_package(text: str, relative: str, converted: set[str]) -> None:
     try:
-        sources = _table(
-            _table(_table(tomllib.loads(text).get("tool")).get("uv")).get("sources")
-        )
+        sources = _uv_sources(tomllib.loads(text))
     except tomllib.TOMLDecodeError as exc:
         raise MigrationError(
             f"rewriting {relative}/pyproject.toml would not parse: {exc}"
@@ -708,16 +696,12 @@ def _verify_root(text: str, name: str) -> None:
         raise MigrationError(
             f"rewriting the root pyproject.toml would not parse: {exc}"
         ) from exc
-    dependencies = _table(root.get("project")).get("dependencies") or []
-    if any(
-        _requirement_name(entry) == name
-        for entry in dependencies
-        if isinstance(entry, str)
-    ):
+    dependencies = root.get("project", {}).get("dependencies", [])
+    if any(_requirement_name(entry) == name for entry in dependencies):
         raise MigrationError(
             f"`{name}` is still a root dependency in a form this cannot remove"
         )
-    sources = _table(_table(_table(root.get("tool")).get("uv")).get("sources"))
+    sources = _uv_sources(root)
     if name in {_normalize(key) for key in sources}:
         raise MigrationError(
             f"`{name}` still has a root source in a form this cannot remove"
@@ -762,7 +746,7 @@ def align_pins(repo_root: Path, relative: str, run: Run) -> list[str]:
             pinned[dependency] = root_source
     if pinned:
         text = (package_dir / "pyproject.toml").read_text()
-        own = _table(_table(_table(pyproject.get("tool")).get("uv")).get("sources"))
+        own = _uv_sources(pyproject)
         text = _set_sources(
             text, {**{_normalize(k): v for k, v in own.items()}, **pinned}, set(pinned)
         )
@@ -849,12 +833,14 @@ def main(argv: Sequence[str] | None = None, run: Run = run_subprocess) -> int:
     )
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     commands = parser.add_subparsers(dest="command", required=True)
-    migrate = commands.add_parser("migrate", help="convert one user package")
-    migrate.add_argument("package", help="its directory, e.g. system/apps/<package>")
-    migrate.add_argument(
+    migrate_parser = commands.add_parser("migrate", help="convert one user package")
+    migrate_parser.add_argument(
+        "package", help="its directory, e.g. system/apps/<package>"
+    )
+    migrate_parser.add_argument(
         "--dry-run", action="store_true", help="print the changes; make none"
     )
-    migrate.add_argument(
+    migrate_parser.add_argument(
         "--shared-lock",
         type=Path,
         default=None,
@@ -867,35 +853,47 @@ def main(argv: Sequence[str] | None = None, run: Run = run_subprocess) -> int:
     args = parser.parse_args(argv)
     repo_root = args.repo_root.resolve()
     relative = args.package.rstrip("/")
-    try:
-        if args.command == "relock":
+    if args.command == "relock":
+        try:
             _lock(repo_root, relative, run)
             pinned = align_pins(repo_root, relative, run)
-            print(
-                f"{relative}: relocked"
-                + (f"; pinned {', '.join(pinned)} to the root's" if pinned else "")
-            )
-            return 0
-        if relative in user_packages.user_packages(repo_root) and not (
-            user_packages.standalone_problems(repo_root, relative)
-        ):
-            print(f"{relative}: already a standalone project; nothing to do")
-            return 0
-        plan = plan_migration(repo_root, relative, args.shared_lock, run)
+        except MigrationError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+        print(
+            f"{relative}: relocked"
+            + (f"; pinned {', '.join(pinned)} to the root's" if pinned else "")
+        )
+        return 0
+    return migrate(repo_root, relative, args.shared_lock, args.dry_run, run)
+
+
+def migrate(
+    repo_root: Path,
+    relative: str,
+    shared_lock: Path | None,
+    is_dry_run: bool,
+    run: Run = run_subprocess,
+) -> int:
+    """Convert the user package at ``relative``, printing what it changes (and, for a dry
+    run, changing nothing); 0 once it is standalone or already was, 1 when it is not."""
+    if relative in user_packages.user_packages(repo_root) and not (
+        user_packages.standalone_problems(repo_root, relative)
+    ):
+        print(f"{relative}: already a standalone project; nothing to do")
+        return 0
+    try:
+        plan = plan_migration(repo_root, relative, shared_lock, run)
         print(describe(plan, repo_root))
-        if args.dry_run:
+        if is_dry_run:
             return 0
         pinned = apply(plan, repo_root, run)
-        if pinned:
-            print(f"  pinned {', '.join(pinned)} to the root's source")
-        problems = user_packages.standalone_problems(repo_root, relative)
-        for problem in problems:
-            print(f"  still not standalone: {problem}")
-        return 1 if problems else 0
     except MigrationError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+    if pinned:
+        print(f"  pinned {', '.join(pinned)} to the root's source")
+    problems = user_packages.standalone_problems(repo_root, relative)
+    for problem in problems:
+        print(f"  still not standalone: {problem}")
+    return 1 if problems else 0

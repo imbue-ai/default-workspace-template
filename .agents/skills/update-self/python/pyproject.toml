@@ -5,6 +5,9 @@ description = "Pulls an update from the upstream template"
 requires-python = ">=3.12"
 dependencies = []
 
+[project.scripts]
+user-package-migration = "update_self_skill.user_package_migration:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

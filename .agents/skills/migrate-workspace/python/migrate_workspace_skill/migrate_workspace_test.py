@@ -9,7 +9,6 @@ and its labels, port reconciliation, and the audit patterns.
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -816,27 +815,11 @@ def test_shared_options_survive_being_passed_before_the_subcommand() -> None:
     assert getattr(neither, "refresh", False) is False
 
 
-_REPO_ROOT = Path(__file__).resolve().parents[5]
-
-
-def _with_conversion_scripts(root: Path) -> Path:
-    """A landed workspace with the two scripts convert-packages runs by their paths."""
-    shutil.copytree(
-        _REPO_ROOT / ".agents/skills/update-self/python/update_self_skill",
-        root / ".agents/skills/update-self/python/update_self_skill",
-        ignore=shutil.ignore_patterns("__pycache__", "*_test.py"),
-    )
-    for name in ("user_packages.py", "venv_links.py", "__init__.py"):
-        target = root / "system/scripts/workspace_bare_scripts" / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy(_REPO_ROOT / "system/scripts/workspace_bare_scripts" / name, target)
-    return root
-
-
 def test_convert_packages_dry_runs_every_landed_package_that_is_not_standalone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
-    root = _with_conversion_scripts(tmp_path / "workspace")
+    root = tmp_path / "workspace"
+    root.mkdir()
     (root / "pyproject.toml").write_text(
         '[tool.uv.workspace]\nmembers = ["system/libs/applib"]\n\n'
         "[tool.uv.sources]\napplib = { workspace = true }\n"
@@ -871,7 +854,8 @@ def test_convert_packages_converts_a_user_lib_before_the_app_that_uses_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     # The app cannot lock on the lib until the lib is standalone, so the lib goes first.
-    root = _with_conversion_scripts(tmp_path / "workspace")
+    root = tmp_path / "workspace"
+    root.mkdir()
     (root / "pyproject.toml").write_text(
         '[tool.uv.workspace]\nmembers = ["system/libs/app_schema"]\n\n'
         "[tool.uv.sources]\napp-schema = { workspace = true }\n"
@@ -899,3 +883,27 @@ def test_convert_packages_converts_a_user_lib_before_the_app_that_uses_it(
     out = capfd.readouterr().out
     assert code == 0
     assert out.index("system/libs/notes_core:") < out.index("system/apps/board:")
+
+
+def test_convert_packages_goes_on_past_a_package_it_cannot_convert(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    root = tmp_path / "workspace"
+    root.mkdir()
+    (root / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers = []\n')
+    (root / "uv.lock").write_text("version = 1\n")
+    for relative, text in (
+        ("system/libs/unnamed", "[tool.uv]\npackage = false\n"),
+        ("system/apps/board", '[project]\nname = "board"\n'),
+    ):
+        (root / relative).mkdir(parents=True)
+        (root / relative / "pyproject.toml").write_text(text)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    monkeypatch.chdir(root)
+
+    code = migrate_workspace.main(["convert-packages", "--dry-run"])
+
+    captured = capfd.readouterr()
+    assert code == 1
+    assert "system/libs/unnamed/pyproject.toml names no project" in captured.err
+    assert "system/apps/board:" in captured.out

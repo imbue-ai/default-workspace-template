@@ -55,13 +55,6 @@ Write it for a non-technical reader skimming top to bottom, in this order:
    Never call built-in code "workspace-added".
 9. **The offer** -- see the language rules.
 
-When the pass restructured how the user's own apps, services or libraries are
-installed (the migration in `python-packaging-migration.md`, "A user app,
-service or lib"), say so in at most one plain sentence, or not at all if
-nothing about how they work changed for the user -- for example "Your apps now
-each keep their own set of add-ons, so a change to one can't break another."
-The dry-run output and the per-package detail stay in the report.
-
 When the report marks a surface's merge work nontrivial (the system interface,
 a user app), name that surface, say what was reconciled, and attach the
 rollback offer to exactly that piece: the live workspace is the review surface,

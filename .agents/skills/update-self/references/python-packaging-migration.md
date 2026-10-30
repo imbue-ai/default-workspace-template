@@ -87,14 +87,14 @@ Every Python package the user's agents made under `system/apps`,
 (`.agents/shared/references/running-python.md`, "User packages are standalone
 projects"). Until one is converted it has no lock of its own, its program runs
 it from the root venv, and `system/test_user_packages_are_standalone.py` names
-what is missing. The migration script converts it and keeps it on the versions
+what is missing. The migration command converts it and keeps it on the versions
 it runs today:
 
 1. **Dry run, and put its output in your report.** For each package the test
    names:
 
    ```bash
-   uv run --no-sync .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/<kind>/<package> --dry-run
+   uv run --no-sync user-package-migration migrate system/<kind>/<package> --dry-run
    ```
 
    It lists what it would change: the sources that become editable path
@@ -106,12 +106,12 @@ it runs today:
 
    ```bash
    git show <rollback point>:uv.lock > /var/tmp/pre-merge.uv.lock
-   uv run --no-sync .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/<kind>/<package> --shared-lock /var/tmp/pre-merge.uv.lock
+   uv run --no-sync user-package-migration migrate system/<kind>/<package> --shared-lock /var/tmp/pre-merge.uv.lock
    ```
 
    It locks the package (holding any package the root pins from git to the
    root's pin), relocks the root, and links and syncs the package's venv.
-   Migrate a user lib before the packages that use it: the script refuses a
+   Migrate a user lib before the packages that use it: the command refuses a
    package whose user lib is not converted yet, and names the lib.
 3. **Fix what it could not, if it is mechanical.** The usual one is an import
    the package never declared, which it got from the shared venv: the program
@@ -131,7 +131,7 @@ it runs today:
 
 If a shared library it uses or the mngr pin moves later, its lock goes stale
 (`uv lock --check` fails in the standalone test); relock it with the same
-script's `relock system/<kind>/<package>`.
+command's `relock system/<kind>/<package>`.
 
 Never add a user package to the root `members` to make it run again: that puts
 it back on the shared lock, which is what this change takes it off.
@@ -146,7 +146,7 @@ program line ends up in the standalone form, keeping whatever OOM tag and other
 command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/<package> && uv sync --locked --project system/services/<package> && exec system/services/<package>/.venv/bin/<name>"
 ```
 
-The migration script writes it from a line that runs `uv run <name>` as well as from a
+The migration command writes it from a line that runs `uv run <name>` as well as from a
 `.venv/bin/<name>` one. After the apply the program picks it up on its next
 restart.
 

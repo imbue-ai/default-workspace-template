@@ -123,7 +123,7 @@ git worktree add -q "$WT" HEAD
   redo the merge in `/home/user/workspace` and resolve it interactively with them.
 - **An app from an older template** (one that is a root workspace member in the template's
   layout, with no `uv.lock` of its own) needs converting to a standalone project with
-  `.agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate`
+  `uv run --no-sync user-package-migration migrate`, once the root venv is synced
   (`references/python-packaging-migration.md` in update-self, "A user app, service or
   lib"); until then it fails to start. When resolving a conflict in the root
   `pyproject.toml`, keep this workspace's explicit `members` list, never the template's

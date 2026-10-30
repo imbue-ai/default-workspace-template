@@ -356,7 +356,7 @@ resources. Use `rsync` over the SSH session with an `--exclude` for each.
 port that way -- never by copying the old registry file, which is runtime state.
 Land the app in the shape `build-app` writes today, a standalone uv project with its
 own lock and venv. Once every app, service and library is in place, convert them with
-update-self's migration script, dry run first, seeding each lock from the source
+update-self's user-package migration, dry run first, seeding each lock from the source
 workspace's `uv.lock` (the versions they ran on):
 
 ```bash
