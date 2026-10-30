@@ -1887,15 +1887,22 @@ PACKAGE_MIGRATION_SCRIPT = (
 
 def _cmd_convert_packages(args: argparse.Namespace) -> int:
     repo_root = Path.cwd()
-    listed = subprocess.run(
+    listing = subprocess.run(
         ["python3", USER_PACKAGES_SCRIPT, "list"],
         cwd=repo_root,
         capture_output=True,
         text=True,
-        check=True,
-    ).stdout.split()
+        check=False,
+    )
+    if listing.returncode != 0:
+        print(
+            f"error: listing the user packages failed (exit {listing.returncode}): "
+            f"{listing.stderr.strip()}",
+            file=sys.stderr,
+        )
+        return 1
     is_any_failed = False
-    for package in listed:
+    for package in listing.stdout.split():
         argv = [sys.executable, PACKAGE_MIGRATION_SCRIPT, "migrate", package]
         if args.dry_run:
             argv.append("--dry-run")
