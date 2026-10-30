@@ -21,6 +21,7 @@ from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import match_option
 from imbue.chat.harnesses.model import validate_model_pick
+from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 
 
@@ -109,7 +110,7 @@ def _session(model_state_path: Path) -> AntigravityHarnessSession:
             harness=HarnessType.ANTIGRAVITY,
             state_dir=model_state_path.parent,
             model_state_path=model_state_path,
-            send_to_harness=lambda text: True,
+            send_to_harness=lambda text: SendOutcome.OK,
             notify_agents_changed=lambda: None,
             is_harness_starting_up=lambda: False,
             is_tracked=lambda: True,

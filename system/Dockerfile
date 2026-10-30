@@ -92,6 +92,7 @@ COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/cha
 COPY system/apps/getting_started/frontend/package.json /home/user/workspace/system/apps/getting_started/frontend/
 COPY system/apps/files/frontend/package.json /home/user/workspace/system/apps/files/frontend/
 COPY system/apps/routines/frontend/package.json /home/user/workspace/system/apps/routines/frontend/
+COPY system/apps/style_guide/frontend/package.json /home/user/workspace/system/apps/style_guide/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
 # Copied with its sibling _mngr_git_auth.sh (which it sources via `dirname "$0"`).

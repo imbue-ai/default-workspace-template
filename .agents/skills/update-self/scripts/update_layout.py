@@ -48,6 +48,11 @@ ROUTINES_DIR = "system/apps/routines"
 
 ROUTINES_FRONTEND_DIR = f"{ROUTINES_DIR}/frontend"
 
+# The Style Guide app, whose bundle its own server serves from inside its package.
+STYLE_GUIDE_DIR = "system/apps/style_guide"
+
+STYLE_GUIDE_FRONTEND_DIR = f"{STYLE_GUIDE_DIR}/frontend"
+
 # The frontends' shared library (source only: each app's build compiles what it imports) and
 # the npm workspace every frontend belongs to -- one ``npm ci`` at its root, one lockfile.
 FRONTEND_LIB_DIR = "system/libs/workspace_ui"
@@ -66,6 +71,7 @@ NPM_MANIFEST_PATHS = frozenset(
         f"{GETTING_STARTED_FRONTEND_DIR}/package.json",
         f"{FILES_FRONTEND_DIR}/package.json",
         f"{ROUTINES_FRONTEND_DIR}/package.json",
+        f"{STYLE_GUIDE_FRONTEND_DIR}/package.json",
         f"{FRONTEND_LIB_DIR}/package.json",
     }
 )
@@ -86,6 +92,7 @@ FRONTEND_SOURCE_DIRS = (
     GETTING_STARTED_FRONTEND_DIR,
     FILES_FRONTEND_DIR,
     ROUTINES_FRONTEND_DIR,
+    STYLE_GUIDE_FRONTEND_DIR,
     FRONTEND_LIB_DIR,
 )
 
@@ -152,6 +159,9 @@ FILES_FRONTEND_BUILD_INDEX = f"{FILES_STATIC_DIR}/index.html"
 ROUTINES_STATIC_DIR = f"{ROUTINES_DIR}/src/routines_app/static"
 ROUTINES_FRONTEND_BUILD_INDEX = f"{ROUTINES_STATIC_DIR}/index.html"
 
+STYLE_GUIDE_STATIC_DIR = f"{STYLE_GUIDE_DIR}/src/style_guide_app/static"
+STYLE_GUIDE_FRONTEND_BUILD_INDEX = f"{STYLE_GUIDE_STATIC_DIR}/index.html"
+
 
 class FrontendBundle(NamedTuple):
     """One frontend's build: the app it belongs to, its sources, and the bundle its backend serves.
@@ -200,6 +210,13 @@ FRONTEND_BUNDLES = (
         ROUTINES_FRONTEND_DIR,
         ROUTINES_STATIC_DIR,
         ROUTINES_FRONTEND_BUILD_INDEX,
+    ),
+    FrontendBundle(
+        "style_guide",
+        "style_guide_bundle",
+        STYLE_GUIDE_FRONTEND_DIR,
+        STYLE_GUIDE_STATIC_DIR,
+        STYLE_GUIDE_FRONTEND_BUILD_INDEX,
     ),
 )
 

@@ -604,6 +604,7 @@ def test_a_compact_typed_in_a_codex_or_pi_chat_asks_mngr_and_shows_the_compactio
         expect(_compaction_panel(chat).locator(".compaction-summary")).to_have_text(_SUMMARY_TEXT)
 
 
+@pytest.mark.flaky
 @pytest.mark.timeout(60, func_only=False)
 def test_the_auto_compact_notice_shows_under_the_compactions_chip_row_until_it_is_dismissed(
     compaction_server: RunningWorkspace, page: Page

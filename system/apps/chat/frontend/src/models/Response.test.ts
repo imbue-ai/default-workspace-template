@@ -40,6 +40,7 @@ import {
   isMessageCarriedBySwitch,
   noteLoadedArrivals,
   sentUserTurnIds,
+  userTurnIdsLandedSince,
   whenTranscriptLoadSettles,
   type AssistantMessageEvent,
   type ToolCall,
@@ -262,6 +263,14 @@ describe("hasUserTurnLandedSince", () => {
     const prior = sentUserTurnIds(chat);
     appendEvents(chat, [userTurn("seed-0", "hello", "seed")]);
     expect(hasUserTurnLandedSince(chat, "hello", prior)).toBe(false);
+  });
+
+  it("lists every copy that landed since, oldest first, and none from before", () => {
+    const chat = freshChat();
+    appendEvents(chat, [userTurn("old-copy", "hello"), userTurn("before", "earlier")]);
+    const prior = sentUserTurnIds(chat);
+    appendEvents(chat, [userTurn("first", "hello"), userTurn("other", "something else"), userTurn("second", "hello")]);
+    expect(userTurnIdsLandedSince(getEventsForChat(chat), "hello", prior)).toEqual(["first", "second"]);
   });
 });
 

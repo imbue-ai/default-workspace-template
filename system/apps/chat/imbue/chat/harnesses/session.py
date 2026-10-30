@@ -41,6 +41,7 @@ from imbue.chat.harnesses.interrupt import SettleActivity
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.sending_registry import SendingRegistry
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.imbue_common.frozen_model import FrozenModel
 
 
@@ -48,12 +49,19 @@ class SendOutcome(StrEnum):
     """How a session's ``send`` resolved; the endpoint maps these to HTTP statuses."""
 
     OK = "ok"
+    # Delivered by a second send: mngr could not confirm the first, which may have landed too.
+    RESENT = "resent"
     # The harness cannot accept messages yet (its daemon is still starting); retryable -> 503.
     NOT_READY = "not_ready"
     # Delivery was attempted and failed -> 500.
     FAILED = "failed"
     # Stop took the message back while it waited for the agent to come up; nothing was delivered.
     WITHDRAWN = "withdrawn"
+
+    @property
+    def is_delivered(self) -> bool:
+        """Whether the message reached the agent."""
+        return self in (SendOutcome.OK, SendOutcome.RESENT)
 
 
 class ShoulderTapOutcome(FrozenModel):
@@ -109,8 +117,8 @@ class SessionDeps(FrozenModel):
 
     harness: HarnessType
     state_dir: Path
-    # Deliver one message through mngr's locked message API (blocking); True = delivered/queued.
-    send_to_harness: Callable[[str], bool]
+    # Deliver one message through mngr's locked message API (blocking): OK or RESENT when delivered/queued.
+    send_to_harness: Callable[[str], SendOutcome]
     # Push a fresh agents snapshot to clients (tap-button greying rides this).
     notify_agents_changed: Callable[[], None]
     # Whether the harness's process has launched but not yet written its ready marker (False for a
@@ -182,6 +190,13 @@ class AgentHarnessSession(ABC):
     def in_flight_block(self) -> str:
         """The still-in-flight (Sending) messages as one concatenated block ('' = none)."""
         return ""
+
+    def read_streamed_reply(self) -> StreamedReply | None:
+        """The reply the harness's live connection is streaming, which its transcript may not hold yet.
+
+        None by default: a file harness has no live connection to stream one.
+        """
+        return None
 
     # Turn control
 
@@ -256,8 +271,7 @@ class FileHarnessSession(AgentHarnessSession):
         # it never stays stuck greyed.
         try:
             self._deps.notify_agents_changed()
-            success = self._deps.send_to_harness(text)
-            return SendOutcome.OK if success else SendOutcome.FAILED
+            return self._deps.send_to_harness(text)
         finally:
             # Resolved on EVERY exit -- delivered/queued (a real representation exists), failed
             # (Returned, not Sending), or an exception from the send (the request 500s and the
