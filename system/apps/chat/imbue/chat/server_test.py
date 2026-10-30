@@ -1663,6 +1663,23 @@ def test_revive_and_retry_send_gives_up_after_the_budget(tmp_path: Path, agent_m
     assert sleeps == []
 
 
+@pytest.mark.parametrize("is_single_send", [False, True], ids=["a-plain-send", "a-send-from-a-failure-notice"])
+def test_revive_and_retry_send_keeps_the_senders_choice_on_repeating_it(
+    tmp_path: Path, agent_manager: AgentManager, is_single_send: bool
+) -> None:
+    agent_info = _model_agent_info("codex-agent-11", tmp_path, harness=HarnessType.CODEX)
+    session = _codex_session_over(None)
+    request_body = SendMessageRequest(message="hi", message_id="m11", is_single_send=is_single_send)
+
+    with (
+        patch("imbue.chat.server.start_agent", lambda name: None),
+        patch.object(session, "send", return_value=SendOutcome.OK) as mock_send,
+    ):
+        outcome = _revive_and_retry_send(agent_info, agent_manager, session, request_body, "m11", sleep=lambda _: None)
+    assert outcome is SendOutcome.OK
+    mock_send.assert_called_once_with("hi", "m11", not is_single_send)
+
+
 def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:
     """The codex tap delivers the queue early through the ledger's ``shoulder_tap``."""
     agent_id = "codex-agent-3"

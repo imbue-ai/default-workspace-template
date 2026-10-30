@@ -550,7 +550,7 @@ def _revive_and_retry_send(
         sleep(_REVIVE_RETRY_INTERVAL_SECONDS)
         if not agent_manager.claim_send_for_delivery(agent_info.id, message_id):
             return SendOutcome.WITHDRAWN
-        outcome = session.send(send_message_request.message, message_id)
+        outcome = session.send(send_message_request.message, message_id, not send_message_request.is_single_send)
     return outcome
 
 
@@ -709,7 +709,11 @@ def _deliver_message(
         if outcome is SendOutcome.NOT_READY:
             mark_connecting()
             outcome = _revive_and_retry_send(
-                agent_info, agent_manager, session, SendMessageRequest(message=text, message_id=message_id), message_id
+                agent_info,
+                agent_manager,
+                session,
+                SendMessageRequest(message=text, message_id=message_id, is_single_send=not is_resent_when_unsure),
+                message_id,
             )
         # A delivered send means the agent is up: mngr's own send auto-starts a stopped
         # file-harness agent (``is_start_desired``), and the observe stream would not see that
