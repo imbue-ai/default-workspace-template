@@ -47,7 +47,6 @@ from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
-from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.background_tasks import BackgroundTaskReader
@@ -2173,7 +2172,7 @@ def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dic
     manager = AgentManager.build(WebSocketBroadcaster())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pid=lambda cid: pids.get(cid),
+        resolve_pids=lambda cid: [pids[cid]] if cid in pids else [],
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         # No process-start marker in this fake, so the chat's idle time comes from
         # the reported presence alone -- which is what these tests are about.
@@ -2347,7 +2346,7 @@ def test_send_records_the_message_for_the_chats_recency() -> None:
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pid=lambda cid: {agent_id: 4242}.get(cid),
+        resolve_pids=lambda cid: [4242] if cid == agent_id else [],
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=lambda _cid: None,
     )
@@ -3473,7 +3472,7 @@ def test_create_chat_refuses_a_label_the_app_sets_itself_with_a_400(
 
 def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) -> None:
     """``system/scripts/message_chat.py --create`` is standard-library only and cannot import this
-    package, so its copy of the route's path, its waiver setting, and the fields it posts are
+    package, so its copy of the route's path and the fields it posts are
     pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
     a chat app from before them: a rename on this side would send every Imbue Studio chat back to the
     bare ``mngr create`` without a single failing test."""
@@ -3483,21 +3482,15 @@ def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) ->
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
 
-    assert module.SKIP_CLAUDE_INSTALLATION_CHECK_SETTING == SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
     assert module.CREATE_CHAT_PATH in {rule.rule for rule in app.url_map.iter_rules()}
     body = module.create_request_body(
-        module.CreateRequest(
-            name="assist-1a2b3c",
-            message="/assist it broke",
-            labels={"auto_open": "true"},
-        )
+        module.CreateRequest(name="assist-1a2b3c", message="/assist it broke", labels={"auto_open": "true"})
     )
 
     parsed = CreateChatRequest.model_validate(body)
     assert parsed.name == "assist-1a2b3c"
     assert parsed.message == "/assist it broke"
     assert parsed.labels == {"auto_open": "true"}
-    assert parsed.is_installation_check_skipped is True
     assert body[module.WAIT_FIELD] is True and parsed.should_wait is True
 
 

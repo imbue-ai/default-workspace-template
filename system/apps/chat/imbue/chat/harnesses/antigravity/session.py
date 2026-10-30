@@ -19,9 +19,7 @@ from loguru import logger
 
 from imbue.chat.harnesses.antigravity.model import derived_option
 from imbue.chat.harnesses.antigravity.queue_tracker import AntigravityQueueTracker
-from imbue.chat.harnesses.antigravity.queue_tracker import OUTBOX_FILENAME
-from imbue.chat.harnesses.antigravity.queue_tracker import get_tracker
-from imbue.chat.harnesses.antigravity.queue_tracker import session_token
+from imbue.chat.harnesses.antigravity.queue_tracker import get_agent_tracker
 from imbue.chat.harnesses.antigravity.turn_state import get_turn_state
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.model import match_option
@@ -96,11 +94,7 @@ class AntigravityHarnessSession(FileHarnessSession):
         Keyed by the state dir's own name, which IS the agent id (mngr lays agents out as
         ``<host_dir>/agents/<agent_id>``); SessionDeps carries no id of its own.
         """
-        return get_tracker(
-            self._deps.state_dir.name,
-            self._deps.state_dir / OUTBOX_FILENAME,
-            session_token(self._deps.state_dir),
-        )
+        return get_agent_tracker(self._deps.state_dir.name, self._deps.state_dir)
 
     def switch_options(self) -> tuple[ModelOption, ...]:
         """The static catalog, plus a derived option when the LIVE model is not in it.
@@ -118,7 +112,7 @@ class AntigravityHarnessSession(FileHarnessSession):
         identity = read_model_identity(self._deps.model_state_path)
         if identity is None or match_option(identity, options) is not None:
             return options
-        return (*options, derived_option(identity.model_id))
+        return (*options, derived_option(identity))
 
 
 def _now_iso() -> str:

@@ -42,8 +42,6 @@ from imbue.chat.harnesses.lanes import LaneNotFoundError
 from imbue.chat.harnesses.lanes import PasteMethod
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.chat.harnesses.lanes import numbered_provider
-from imbue.chat.harnesses.model import SwitchMode
-from imbue.chat.harnesses.registry import get_catalog
 from imbue.chat.harnesses.registry import list_account_options
 from imbue.chat.identity import forbid_unless_owner
 from imbue.chat.models import ModelOptionsResponse
@@ -274,8 +272,7 @@ def account_model_options(account_id: str) -> Response:
 
     The account-level twin of the per-chat ``/model-options``. A static harness offers its whole
     catalog (``models`` and ``options`` both null). A harness whose set is account-derived (codex)
-    has no catalog to offer, so the account's own codex is asked for it. A harness whose model the
-    chat app cannot switch offers nothing (``options`` empty).
+    has no catalog to offer, so the account's own codex is asked for it.
 
     The question is put to the ACCOUNT, never to some other account's agent: the two accounts of one
     provider can be on different subscriptions and genuinely offer different models, so an answer
@@ -289,8 +286,6 @@ def account_model_options(account_id: str) -> Response:
     harness = accounts.harness_for(account)
     if harness is None:
         return _error_response(f"Account {account_id} is on a lane this build does not have", status_code=404)
-    if get_catalog(harness).switch_mode is SwitchMode.READ_ONLY:
-        return model_response(ModelOptionsResponse(models=None, options=()))
     options = list_account_options(harness, accounts.account_dir(account_id))
     return model_response(ModelOptionsResponse(models=None, options=options))
 

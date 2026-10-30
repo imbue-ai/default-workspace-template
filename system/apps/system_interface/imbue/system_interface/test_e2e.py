@@ -2248,8 +2248,9 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
                 error_message="the windows never drew the chosen design",
             )
             # "Design your own..." drafts into this client's pinned window rather than opening a chat: the app's
-            # draft launch path is posted the prompt with this client's view of the window as the envelope's
-            # ``window_path``, the window is pointed at the page it answers and shown, and no window is opened.
+            # draft launch path is posted the prompt with no ``window_path`` (the text is not about the page the
+            # window shows, so it goes to the main chat), the window is pointed at the page it answers and shown,
+            # and no window is opened.
             chooser.locator(".avatar-design-own").click()
             expect(chooser).to_have_count(0)
             pinned_id = _pinned_window(server.base_url)["id"]
@@ -2274,7 +2275,6 @@ def test_the_avatar_wears_the_mood_of_the_agents_file_and_the_chooser_changes_ev
                 _PINNED_TEXT_PARAM: draft,
                 "client_id": client_id,
                 "desktop_id": _HOME_DESKTOP_ID,
-                "window_path": _PINNED_HOME_PATH,
             }
             expect(_window(page, pinned_id)).to_be_visible(timeout=15000)
             # The page itself is moved there (the following step, as for an agent's navigate), and only here: the
@@ -2423,6 +2423,54 @@ def test_a_phone_in_either_orientation_lands_on_the_pinned_window(
             phone.reload()
             expect(phone.locator(f'[data-phone-app="{_STUB_APP_NAME}"]')).to_be_visible(timeout=15000)
             expect(_phone_pill(phone)).to_have_attribute("data-phone-pill", "home")
+
+
+# A soft keyboard as iOS Safari and Android Chrome show one: the visual viewport loses height and keeps its width,
+# the layout viewport stays. Null puts the real visual viewport back.
+_SET_KEYBOARD_JS = """(heightPx) => {
+  const viewport = window.visualViewport;
+  if (heightPx === null) delete viewport.height;
+  else Object.defineProperty(viewport, "height", { configurable: true, get: () => heightPx });
+  viewport.dispatchEvent(new Event("resize"));
+}"""
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_the_bar_steps_aside_for_a_soft_keyboard_on_a_touch_phone_only(tmp_path: Path, page: Page) -> None:
+    """With an app's page focused, a keyboard over the bottom of a touch phone takes the bar away and the page
+    reaches down to the keyboard; the bar comes back when the keyboard goes. A phone-sized window under a mouse
+    keeps its bar through the same viewports."""
+    phone_size = _MOBILE_CONTEXT_ARGS["viewport"]
+    keyboard_top = phone_size["height"] - 400
+    with _running_e2e_server(tmp_path, pin=("avatar", "linked", "bar")) as server:
+        pinned = _pinned_window(server.base_url)
+        with _phone_client(page, server) as phone:
+            _phone_shows(phone, pinned["id"])
+            phone.locator(f'iframe[data-live-page="{pinned["id"]}"]').focus()
+
+            phone.evaluate(_SET_KEYBOARD_JS, keyboard_top)
+            expect(phone.locator("[data-phone-bar]")).to_have_count(0)
+            host = _box(phone.locator("[data-phone-page-host]"))
+            _assert_close(host["y"] + host["height"], keyboard_top, "the page's foot against the keyboard")
+
+            phone.evaluate(_SET_KEYBOARD_JS, None)
+            expect(phone.locator("[data-phone-bar]")).to_be_visible()
+            bar = _box(phone.locator("[data-phone-bar]"))
+            _assert_close(bar["y"] + bar["height"], phone_size["height"], "the bar's foot against the screen's")
+
+        desktop = _second_context(page, viewport=phone_size)
+        try:
+            narrow = desktop.new_page()
+            narrow.goto(f"{server.base_url}/")
+            expect(narrow.locator("[data-phone-bar]")).to_be_visible(timeout=15000)
+            _phone_shows(narrow, pinned["id"])
+            narrow.locator(f'iframe[data-live-page="{pinned["id"]}"]').focus()
+            narrow.evaluate(_SET_KEYBOARD_JS, keyboard_top)
+            # The resize is handled by the time evaluate returns, and a redraw it asked for lands within two frames.
+            narrow.evaluate("() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)))")
+            assert narrow.locator("[data-phone-bar]").is_visible()
+        finally:
+            desktop.close()
 
 
 @pytest.mark.timeout(120, func_only=False)

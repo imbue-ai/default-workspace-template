@@ -1,0 +1,1 @@
+Tests only: the layout pipeline tests' `layout_server` fixture no longer chooses the shell's port before it starts its two stand-in apps. When it did, a stand-in could take that port, and the shell's server then failed to start with "Address already in use". `test_context_and_desktops_round_trip_through_the_command_and_endpoint`, which hit this once in CI, is now marked flaky.

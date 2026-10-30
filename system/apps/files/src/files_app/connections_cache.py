@@ -13,10 +13,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Final
 
-from files_app.connections import SYNCED_FOLDERS
 from files_app.connections import Computer
 from files_app.connections import Connections
 from files_app.connections import ProbeKey
+from files_app.connections import SYNCED_FOLDERS
 from files_app.connections import Share
 from files_app.connections import assemble
 from files_app.connections import listed_devices

@@ -38,7 +38,9 @@ from collections.abc import Mapping
 from typing import Final
 from urllib.parse import urlsplit
 
-from flask import Blueprint, Flask, Response
+from flask import Blueprint
+from flask import Flask
+from flask import Response
 
 from app_manifest.errors import PolicySourceError
 

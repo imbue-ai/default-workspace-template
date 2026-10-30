@@ -64,10 +64,10 @@ what this run needs, with no confirmation and no preflight script, you may:
 - stop the browser and the user apps no window is showing, and on a **scheduled**
   run any user app at all, windows or not
   (`python3 system/services/oom_priority/bin/memory_candidates.py` lists them;
-  a browser stops through the browser service, an app through `supervisorctl
-  stop <program>`). `references/freeing-memory-for-an-update.md` has the rule,
-  how to tell a scheduled run from a pressed one, and what the pass owes the
-  user afterwards;
+  a browser stops through the browser service, an app through `run-status
+  stop-apps`, which records it so `resume-apps` starts it again).
+  `references/freeing-memory-for-an-update.md` has the rule, how to tell a
+  scheduled run from a pressed one, and what the pass owes the user afterwards;
 - prune the worktrees of workers that are gone (`git worktree list`, then `git
   worktree remove` one whose agent `mngr list` no longer shows, never the
   `update-self` worker's), apply snapshots under
@@ -362,8 +362,8 @@ Per §6 of the worker guide: the report shapes come from
 report by hand as §6 spells out -- not with the launcher's `report` subcommand,
 which this workspace's own launcher may predate. Valid `name:` values:
 `question` (mid-flight gate: a genuine, unresolvable conflict, the §4a/§4b/§4c
-scope escape hatch, or a §4b customization the update cannot keep),
-`done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
+scope escape hatch, a gate command shed for memory, or a §4b customization the
+update cannot keep), `done` / `stuck` (terminal). `<TASK_FILE>` -> `data/.tasks/update-self/task.md`.
 BODY_EOF
 } > data/.tasks/update-self/task.md
 ```
@@ -448,8 +448,9 @@ on a worker" in `.agents/shared/references/lead-proxy.md`.
 
 Per `.agents/shared/references/lead-proxy.md` (worker `update-self`, branch
 `mngr/update-self`, reports dir `data/.tasks/update-self/reports/`). A
-`question` is one of four things; you answer the first three yourself, and only
-the last reaches the user. For the first three: reply via `create_worker.py
+`question` is one of four things. You answer the first two yourself; the third
+you answer too, and reach the user only where it says so; the last always ends
+the pass with a decision for them. For the first three: reply via `create_worker.py
 reply --task-file data/.tasks/update-self/task.md -m "..."`, consume the
 report, re-arm the poll. The last ends the pass, as below.
 
@@ -475,8 +476,9 @@ report, re-arm the poll. The last ends the pass, as below.
    reports *after* it. Memory pressure is never a reason to narrow the gate, so
    never answer it by telling the worker to skip or trim one. It reaches the
    user only when the licence is spent and the room is still not there: then
-   ask them, recording the wait with Step 2's `run-status hold` and clearing it
-   with `resume`, and name what is left to stop and what stopping it costs
+   ask them, recording the wait with the staged copy's `run-status hold` and
+   clearing it with `resume` (an older own copy drops the record of the apps
+   you stopped), and name what is left to stop and what stopping it costs
    them. The worker keeps its branch and waits; this is not the §4b hold.
 4. **A customization hold** (its §4b verdict): something the user built that
    the update **cannot keep**, after the worker genuinely tried to re-fit it.
@@ -516,8 +518,10 @@ each command on its own:
        data/.tasks/update-self/reports/consumed/$(date +%s)-question.md
    ```
 
-3. Run Step 6's opening commands (they drop the history bridge and bring back
-   any chat this pass paused), then release the `updating workspace` lease:
+3. Run Step 6's opening commands (they drop the history bridge, bring back any
+   chat this pass paused, and start any app it stopped for memory -- the user
+   may take days over this decision, and the workspace has to run as usual
+   while they do), then release the `updating workspace` lease:
    `tk close "$UPDATE_LEASE_ID" "Waiting on the user's decision."`. Leave the
    tracking ticket open; the re-land closes it.
 
@@ -597,16 +601,17 @@ path below instead.
 **When the update touches a critical app (`system/apps/system_interface/`,
 `system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
 `system/apps/getting_started/frontend/`, `system/apps/files/frontend/`,
-`system/apps/routines/frontend/`, `system/libs/workspace_ui/`,
+`system/apps/routines/frontend/`, `system/apps/style_guide/frontend/`,
+`system/libs/workspace_ui/`,
 `system/libs/workspace_layout/`, `system/libs/workspace_themes/`, or `system/package.json` /
 `system/package-lock.json` at all** (every critical app's tree, plus the
-Getting Started, Files and Routines frontends, the shared library,
+Getting Started, Files, Routines and Style Guide frontends, the shared library,
 and the npm files, whose change rebuilds every frontend bundle, and the layout
 wire contract and theme library the critical apps run), also take the `editing
 critical app <name>` lease for each critical app it touches through the apply,
 as `update-app/references/critical-app.md` does (`<name>` is the app's
 `app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
-Started, Files and Routines frontends, `workspace_ui`, and the npm files count as both
+Started, Files, Routines and Style Guide frontends, `workspace_ui`, and the npm files count as both
 `system_interface` and `chat`; `workspace_layout` and `workspace_themes` each count as
 `system_interface`, `chat`, and `terminal`). Take them all or none, as that reference says:
 check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
@@ -722,9 +727,10 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles** (the shell's
-`static/`, the chat app's, the Getting Started app's, the Files app's, and the Routines app's), append
+`static/`, the chat app's, the Getting Started app's, the Files app's, the Routines app's, and the Style Guide's), append
 `--worker-bundle system_interface=<path> --worker-bundle chat=<path>
---worker-bundle getting_started=<path> --worker-bundle files=<path> --worker-bundle routines=<path>` so the
+--worker-bundle getting_started=<path> --worker-bundle files=<path> --worker-bundle routines=<path>
+--worker-bundle style_guide=<path>` so the
 exact builds the worker validated
 are installed instead of a live build; the apply installs them only as a set (one
 `npm run build` emits them all), and builds live when any is missing or stale.
@@ -854,10 +860,17 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 After an apply that landed, give this resume 5b's `--landed` and
 `--wip-commit` too, so a chat it still had to tell hears the same news.
 
-Then put back the apps and browsers this pass stopped for memory, which no
-command records: an apply that landed has already restarted every program, so
-this is for every other ending
-(`references/freeing-memory-for-an-update.md`, "Putting it back").
+Then start the apps this pass stopped for memory, whatever the outcome (a no-op
+when it stopped none, or when a landed apply's restart got there first):
+
+```bash
+python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scripts/update_self.py \
+    run-status resume-apps
+```
+
+A browser is not a program and no ending brings one back, so put any this pass
+stopped back yourself (`references/freeing-memory-for-an-update.md`, "Putting it
+back").
 
 If a stray preview of a critical app is registered (an older pass may have left
 one; the careful flow refuses its next pass on that app while one is), tear it

@@ -41,6 +41,7 @@ from imbue.chat.harnesses.interrupt import SettleActivity
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.sending_registry import SendingRegistry
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.imbue_common.frozen_model import FrozenModel
 
 
@@ -152,7 +153,7 @@ class AgentHarnessSession(ABC):
 
     # Liveness
 
-    def ensure_live(self) -> None:
+    def ensure_live(self) -> None:  # noqa: B027
         """Bring up whatever live backend the harness needs (blocking OK). No-op default:
         a file harness has no daemon to connect."""
 
@@ -161,12 +162,12 @@ class AgentHarnessSession(ABC):
         connecting). Default: the harness's own ready marker says it has not finished starting."""
         return self._deps.is_harness_starting_up()
 
-    def on_lifecycle_dead(self) -> None:
+    def on_lifecycle_dead(self) -> None:  # noqa: B027
         """The agent's mngr lifecycle is positively dead; drop live state that died with it.
         Level-triggered: called on every recompute observing a dead lifecycle, and must stay
         idempotent. No-op default."""
 
-    def close(self) -> None:
+    def close(self) -> None:  # noqa: B027
         """Terminal teardown (the manager stopped tracking the agent). No-op default."""
 
     # Messages
@@ -182,6 +183,13 @@ class AgentHarnessSession(ABC):
     def in_flight_block(self) -> str:
         """The still-in-flight (Sending) messages as one concatenated block ('' = none)."""
         return ""
+
+    def read_streamed_reply(self) -> StreamedReply | None:
+        """The reply the harness's live connection is streaming, which its transcript may not hold yet.
+
+        None by default: a file harness has no live connection to stream one.
+        """
+        return None
 
     # Turn control
 
@@ -218,7 +226,7 @@ class AgentHarnessSession(ABC):
         """The option set the switch endpoint validates against; static catalog by default."""
         return self._deps.catalog_options()
 
-    def note_offered_options(self, options: tuple[ModelOption, ...]) -> None:
+    def note_offered_options(self, options: tuple[ModelOption, ...]) -> None:  # noqa: B027
         """A picker-open fetch produced ``options``; a harness with a per-agent dynamic set
         records them (codex, D2 reconciliation). No-op default."""
 

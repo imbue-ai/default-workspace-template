@@ -19,7 +19,7 @@ from uuid import uuid4
 from chat_background_tasks.markers import TaskSource
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
-from oom_priority.registry import lookup_pid_by_agent_id
+from oom_priority.registry import lookup_pids_by_agent_id
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 
@@ -122,7 +122,6 @@ from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelChoice
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.model import ModelOption
-from imbue.chat.harnesses.model import SwitchMode
 from imbue.chat.harnesses.model import read_model_identity
 from imbue.chat.harnesses.model import resolve_model_choice
 from imbue.chat.harnesses.model import validate_model_pick
@@ -137,6 +136,7 @@ from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.chat.imbue_studio_notifications import ImbueStudioNotificationsClient
@@ -214,11 +214,6 @@ from imbue.mngr.primitives import HostName
 # `--type` (see `_build_chat_create_command`); only the role varies in the template list,
 # and it travels as `harness`, not folded into the role name.
 CHAT_ROLE_TEMPLATE: Final[str] = "chat"
-
-# The ``-S`` that waves the claude version check for one create: the in-container mngr
-# refuses every claude create on a pin mismatch, including the update run that would fix
-# it, so ``message_chat.py --create`` asks for it on every chat it makes from outside.
-SKIP_CLAUDE_INSTALLATION_CHECK_SETTING: Final[str] = "agent_types.claude.check_installation=false"
 
 # The labels a chat create sets from what it knows (``_build_chat_create_command`` and the
 # handoff's successor labels); a caller's extra labels may not restate them.
@@ -363,7 +358,6 @@ def _build_chat_create_command(
     account_args: Sequence[str] = (),
     initial_message: str = "",
     extra_labels: Sequence[str] = (),
-    settings: Sequence[str] = (),
 ) -> list[str]:
     """Build the ``mngr create`` argv for a chat's agent on a given harness.
 
@@ -422,8 +416,6 @@ def _build_chat_create_command(
     # caller's own labels against ``APP_OWNED_LABEL_KEYS`` first.
     for label in extra_labels:
         cmd.extend(["--label", label])
-    for setting in settings:
-        cmd.extend(["-S", setting])
     # The seeded first message rides the create too, for the same reason: mngr delivers it
     # once the harness signals readiness. A create that has a model to apply first withholds
     # its message and sends it afterwards, so it passes none here.
@@ -1402,7 +1394,7 @@ class AgentManager:
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_ids=manager.get_chat_ids,
-            resolve_pid=lambda chat_id: manager._resolve_active_pid(chat_id),
+            resolve_pids=lambda chat_id: manager._resolve_active_pids(chat_id),
             # A secondary's presence is its own windows', not the workspace's, and the scores it
             # would write are the live chat's, so it keeps an inert prioritizer.
             set_adj=None if is_secondary else set_oom_score_adj,
@@ -1422,10 +1414,10 @@ class AgentManager:
         )
         return manager
 
-    def _resolve_active_pid(self, chat_id: ChatId) -> int | None:
-        """The pid of the process a chat runs on, for the OOM prioritizer; None for a chat with no active agent."""
+    def _resolve_active_pids(self, chat_id: ChatId) -> list[int]:
+        """The pids of the processes a chat runs on, for the OOM prioritizer; empty for a chat with no active agent."""
         active_agent_id = self._active_agent_id_of_chat(chat_id)
-        return None if active_agent_id is None else lookup_pid_by_agent_id(active_agent_id)
+        return [] if active_agent_id is None else lookup_pids_by_agent_id(active_agent_id)
 
     def _read_active_process_started_at(self, chat_id: ChatId) -> float | None:
         """When the process a chat runs on started, for the OOM prioritizer; None for a chat with no active agent."""
@@ -2005,6 +1997,15 @@ class AgentManager:
         if transition.is_newly_watched:
             self._imbue_studio_notifications.mark_chat_read(chat_id)
 
+    def read_streamed_reply(self, agent_id: str) -> StreamedReply | None:
+        """The reply the agent's harness session is streaming over its live connection, or None.
+
+        Reads only a session already built: a draft never brings one up.
+        """
+        with self._lock:
+            session = self._session_by_agent.get(agent_id)
+        return None if session is None else session.read_streamed_reply()
+
     def chat_watchers(self, chat_id: ChatId) -> list[str]:
         """The page instances watching the chat now (shown and focused, recently reported)."""
         return self._presence.watchers(chat_id)
@@ -2491,13 +2492,8 @@ class AgentManager:
         that set and ``ModelApplyError`` when the harness refused the switch, each with the reason
         the user sees. A per-agent set that could not be fetched is checked against the last set
         the agent was offered instead, and a pick outside that one is a ``ModelApplyError``: an
-        agent just restarted on another account has not answered for its new set yet. A harness
-        whose model the chat app cannot switch rejects every pick.
+        agent just restarted on another account has not answered for its new set yet.
         """
-        if get_catalog(agent_info.harness).switch_mode is SwitchMode.READ_ONLY:
-            raise ModelPickRejectedError(
-                f"{HARNESS_LABEL[agent_info.harness]}'s model is changed from the agent's terminal, not from the chat"
-            )
         resolver = build_resolver(agent_info)
         session = self.get_or_create_session(agent_info)
         dynamic_options = resolver.list_offered_options()
@@ -3861,7 +3857,6 @@ class AgentManager:
         chat_id: str = "",
         message: str = "",
         labels: Mapping[str, str] | None = None,
-        is_installation_check_skipped: bool = False,
         model_pick: ModelPick | None = None,
     ) -> CreatedChat:
         """Create a chat, as an agent in the primary agent's work dir on the given harness.
@@ -3906,10 +3901,9 @@ class AgentManager:
 
         ``labels`` ride the create as extra ``--label``s, for a caller outside the workspace
         that wants the chat's window surfaced (``auto_open``); one that restates a label the app
-        sets itself (``APP_OWNED_LABEL_KEYS``) is refused. ``is_installation_check_skipped``
-        waves the claude version check (``SKIP_CLAUDE_INSTALLATION_CHECK_SETTING``). Both are
-        kept on the provisional record like the message, so a relaunch by ``chat_id`` (the
-        page's "Try again") creates on the same terms and refuses new ones.
+        sets itself (``APP_OWNED_LABEL_KEYS``) is refused. They are kept on the provisional
+        record like the message, so a relaunch by ``chat_id`` (the page's "Try again") creates
+        with the same labels and refuses new ones.
 
         ``model_pick`` is the model the chat runs on. It is applied once the agent is up, so
         with a pick the create is silent and the message is delivered afterwards through the
@@ -3931,10 +3925,10 @@ class AgentManager:
         assert harness is not None, "resolve_binding rejects an account whose lane is unknown"
 
         explicit_name = explicit_chat_name(requested_name)
-        if chat_id and (explicit_name or project_id or extra_labels or is_installation_check_skipped):
+        if chat_id and (explicit_name or project_id or extra_labels):
             raise AgentCreationError(
-                f"Chat {chat_id} keeps the name and project it was minted with, and its create's labels "
-                "and waiver; a launch cannot rename, refile, or relabel it"
+                f"Chat {chat_id} keeps the name and project it was minted with, and its create's labels; "
+                "a launch cannot rename, refile, or relabel it"
             )
         owned_keys = sorted(APP_OWNED_LABEL_KEYS.intersection(extra_labels))
         if owned_keys:
@@ -3987,7 +3981,6 @@ class AgentManager:
                 display_name = provisional.name
                 project_id = provisional.project_id
                 extra_labels = dict(provisional.labels)
-                is_installation_check_skipped = provisional.is_installation_check_skipped
             else:
                 launched_chat_id = ChatId(str(AgentId()))
                 display_name = self._mint_display_name_locked(explicit_name)
@@ -4010,7 +4003,6 @@ class AgentManager:
                 account_id=account.id,
                 message=message,
                 labels=extra_labels,
-                is_installation_check_skipped=is_installation_check_skipped,
                 phase=ProvisionalChatPhase.CREATING,
                 is_seeded=seed_record is not None,
                 held_sends=carried_held_sends,
@@ -4069,7 +4061,6 @@ class AgentManager:
             account_args,
             initial_message="" if deferred_message else launch_message,
             extra_labels=create_labels,
-            settings=[SKIP_CLAUDE_INSTALLATION_CHECK_SETTING] if is_installation_check_skipped else [],
         )
 
         self._broadcast_provisional(provisional)

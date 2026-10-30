@@ -19,6 +19,8 @@ from chat_background_tasks import markers
 from chat_background_tasks.testing import runner_task
 from imbue.mngr.cli.field_catalog import FieldContext, build_list_field_catalog
 from mngr_cli_contract.contract import assert_mngr_argv_valid
+from oom_priority.meminfo import HOST_MEMINFO_MAX_AGE_SECONDS
+from oom_priority.testing import FAKE_BOOT_ID, write_fake_process
 
 _SCRIPT = Path(__file__).parent / "memory_candidates.py"
 _spec = importlib.util.spec_from_file_location("memory_candidates", _SCRIPT)
@@ -35,16 +37,25 @@ _PROFILE_ROOT = "/home/user/.mngr/browser-profiles"
 def _fake_process(
     proc_dir: Path,
     pid: int,
-    rss_kib: int,
+    anonymous_kib: int,
     children: Sequence[int] = (),
     argv: Sequence[str] = ("python3",),
 ) -> None:
-    """One process in the fake ``/proc``: its status (VmRSS), children, and argv."""
+    """One process in the fake ``/proc``, started at tick ``pid``: its ``smaps`` (two mappings whose
+    anonymous memory sums to ``anonymous_kib``), its status (a VmRSS three times that, as gVisor
+    inflates it), children, and argv."""
+    write_fake_process(proc_dir, pid, start_ticks=pid, comm=Path(argv[0]).name)
     task_dir = proc_dir / str(pid) / "task" / str(pid)
     task_dir.mkdir(parents=True)
     (task_dir / "children").write_text(" ".join(str(child) for child in children) + " ")
     (proc_dir / str(pid) / "status").write_text(
-        f"Name:\t{Path(argv[0]).name}\nVmRSS:\t   {rss_kib} kB\n"
+        f"Name:\t{Path(argv[0]).name}\nTgid:\t{pid}\nVmRSS:\t   {anonymous_kib * 3} kB\n"
+    )
+    first = anonymous_kib // 2
+    (proc_dir / str(pid) / "smaps").write_text(
+        f"00400000-00500000 r-xp 00000000 00:00 0\nRss:   {anonymous_kib} kB\nAnonymous:   {first} kB\n"
+        f"00600000-00700000 rw-p 00000000 00:00 0\nRss:   {anonymous_kib} kB\n"
+        f"Anonymous:   {anonymous_kib - first} kB\n"
     )
     (proc_dir / str(pid) / "cmdline").write_bytes("\0".join(argv).encode() + b"\0")
 
@@ -96,10 +107,19 @@ def _render_like_mngr(template: str, record: Mapping[str, Any]) -> str:
 
 
 def _register_pid(runtime_dir: Path, pid: int, agent_id: str) -> None:
+    """Register ``pid`` for ``agent_id`` as started at tick ``pid`` in this boot, matching ``_fake_process``."""
     directory = runtime_dir / "agent_pids"
     directory.mkdir(parents=True, exist_ok=True)
     (directory / f"{pid}.json").write_text(
-        json.dumps({"agent_name": "x", "is_worker": False, "agent_id": agent_id})
+        json.dumps(
+            {
+                "agent_name": "x",
+                "is_worker": False,
+                "agent_id": agent_id,
+                "start_ticks": pid,
+                "boot_id": FAKE_BOOT_ID,
+            }
+        )
     )
 
 
@@ -308,8 +328,8 @@ def test_lists_idle_chats_and_workers_with_last_activity_and_the_memory_of_their
     ]
     assert agents[0].last_activity == chat_activity
     assert agents[0].pids == (100, 150)
-    assert agents[0].rss_kib == 2200
-    assert agents[1].rss_kib == 300
+    assert agents[0].anonymous_kib == 2200
+    assert agents[1].anonymous_kib == 300
     assert report.agents.notes == ()
     table = memory_candidates.render_table(report)
     assert (
@@ -483,7 +503,7 @@ def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(
         ("browser-1", "free", 2, "https://b.test/")
     ]
     assert browsers[0].pids == (300,)
-    assert browsers[0].rss_kib == 1000
+    assert browsers[0].anonymous_kib == 1000
 
 
 def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
@@ -536,13 +556,84 @@ def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
     )
 
     apps = report.apps.candidates
-    assert [(a.name, a.display_name, a.window_count, a.rss_kib) for a in apps] == [
+    assert [
+        (a.name, a.display_name, a.window_count, a.anonymous_kib) for a in apps
+    ] == [
         ("daily-digest", "Daily Digest", 2, 3072),
         ("lineup-scout", "lineup-scout", 0, 512),
     ]
     assert [a.stops_when_no_windows for a in apps] == [False, True]
-    assert "daily-digest  Daily Digest  daily-digest  2        3 MiB" in (
-        memory_candidates.render_table(report)
+    # The table carries the auto-stop field too: an app the shell does not stop by itself may be
+    # doing work between requests, which is what a reader ranks the candidates by.
+    table = memory_candidates.render_table(report)
+    assert (
+        "daily-digest  Daily Digest  daily-digest  2        no         3 MiB" in table
+    )
+    assert (
+        "lineup-scout  lineup-scout  lineup-scout  0        yes        0 MiB" in table
+    )
+
+
+def test_an_app_sharing_a_critical_apps_program_is_never_offered(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
+    """The shell's own `stoppable_program_of` refuses these, because `supervisorctl stop <program>`
+    would take the critical app down with the row that merely shares its program."""
+    proc = tmp_path / "proc"
+    _fake_process(proc, 500, 4096)
+    inventory = _inventory(
+        apps=[
+            _app("terminal", program="terminal", critical=True),
+            _app("terminal-extras", program="terminal"),
+        ],
+    )
+    http = _FakeHttp(
+        {
+            f"{_BROWSER_URL}/browsers": _fleet(),
+            f"{_SHELL_URL}/api/inventory": inventory,
+        }
+    )
+
+    report = memory_candidates.collect_report(
+        _sources(proc, _FakeMngr([]), http, supervised_pids={"terminal": 500})
+    )
+
+    assert report.apps.candidates == ()
+
+
+def test_a_window_the_browser_read_cannot_parse_leaves_the_apps_listed(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
+    """The browser read needs a window's paths; the counts need only its app. One malformed record
+    takes the browsers to unknown and leaves the apps standing."""
+    proc = tmp_path / "proc"
+    _fake_process(proc, 600, 2048)
+    inventory = _inventory(
+        {"app": "browser", "path": None, "client_paths": {"c": "/?session=browser-1"}},
+        {"app": "daily-digest", "path": "/"},
+        apps=[_app("daily-digest", program="daily-digest")],
+    )
+    http = _FakeHttp(
+        {
+            f"{_BROWSER_URL}/browsers": _fleet(_browser("browser-1", "running")),
+            f"{_SHELL_URL}/api/inventory": inventory,
+        }
+    )
+
+    report = memory_candidates.collect_report(
+        _sources(proc, _FakeMngr([]), http, supervised_pids={"daily-digest": 600})
+    )
+
+    assert [(a.name, a.window_count) for a in report.apps.candidates] == [
+        ("daily-digest", 1)
+    ]
+    assert report.browsers.candidates is None
+    # The note names the window, not the document: the shell answered, and the apps section above
+    # was read from that same answer.
+    assert "so which browsers no window shows is unknown" in report.browsers.notes[0]
+    assert (
+        "a browser window carried a path the read could not parse"
+        in report.browsers.notes[0]
     )
 
 
@@ -695,13 +786,9 @@ def test_an_unreadable_shell_leaves_browsers_unknown_rather_than_calling_them_un
 ) -> None:
     proc = tmp_path / "proc"
     fleet = _fleet(_browser("browser-1", "running"))
-    malformed_browser_window = _inventory(
-        {"app": "browser", "path": None, "client_paths": {"c": "/?session=browser-1"}}
-    )
     for inventory_answer in (
         urllib.error.URLError("timed out"),
         {"unexpected": "shape"},
-        malformed_browser_window,
     ):
         http = _FakeHttp(
             {
@@ -762,7 +849,7 @@ def test_free_memory_comes_from_the_headroom_file_the_memory_guard_acts_on(
 
     # earlyoom ignores the file once it is stale, and so must this: a publisher that died would
     # otherwise freeze the reported headroom at whatever it last wrote.
-    stale = _NOW + timedelta(seconds=memory_candidates.HOST_MEMINFO_MAX_AGE_SECONDS + 1)
+    stale = _NOW + timedelta(seconds=HOST_MEMINFO_MAX_AGE_SECONDS + 1)
     fallen_back = memory_candidates.read_free_memory(proc / "meminfo", host, stale)
     assert fallen_back is not None
     assert (fallen_back.source, fallen_back.free_kib) == (str(proc / "meminfo"), 6000)
@@ -822,7 +909,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
                     "last_activity": "2026-09-24T11:00:00Z",
                     "idle_seconds": 3600,
                     "pids": [100],
-                    "rss_kib": 2048,
+                    "anonymous_kib": 2048,
                 }
             ],
             "notes": [],
@@ -836,7 +923,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
                     "window_count": 1,
                     "stop_when_no_windows": False,
                     "pids": [400],
-                    "rss_kib": 256,
+                    "anonymous_kib": 256,
                 }
             ],
             "notes": [],
@@ -849,7 +936,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
                     "tab_count": 1,
                     "active_url": "https://a.test/",
                     "pids": [300],
-                    "rss_kib": 512,
+                    "anonymous_kib": 512,
                 }
             ],
             "notes": [],
@@ -903,3 +990,18 @@ def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -
     assert document["browsers"]["notes"][0].startswith(
         "could not reach the browser service at http://127.0.0.1:9/browsers"
     )
+
+
+def test_the_free_memory_flag_prints_only_the_free_memory_line() -> None:
+    # The worker polls this while memory is short, so it must not run mngr or call the services.
+    completed = subprocess.run(
+        [sys.executable, str(_SCRIPT), "--free-memory"],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env={**os.environ, "PATH": "/nonexistent"},
+        check=True,
+    )
+    lines = completed.stdout.splitlines()
+    assert len(lines) == 1
+    assert lines[0].startswith("Free memory: ")
