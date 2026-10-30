@@ -195,6 +195,29 @@ def test_a_row_that_cannot_be_measured_is_reported_missing_and_the_rest_never_go
     assert rows[-1]["bytes"] == 0 and rows[-1]["items"] == []
 
 
+def test_a_home_tree_that_cannot_be_measured_is_not_listed_as_space_that_cannot_be_freed(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    (home / "workspace").mkdir(parents=True)
+    (home / ".mngr").mkdir()
+
+    def measure(paths: list[Path], excludes: list[Path]) -> disk.Measured | None:
+        if paths == [home / ".mngr"]:
+            return None
+        return disk.Measured(10 * _MIB, {})
+
+    rows, missing = disk.scan(
+        100 * _MIB, home / "workspace", home, measure, tmp_path / "root"
+    )
+
+    assert missing == []
+    # Without the home tree's size the rest of the disk is not split into what can and cannot be freed.
+    assert rows[-1]["items"] == [
+        {"name": "System software", "hint": "the workspace's tools", "bytes": 10 * _MIB}
+    ]
+
+
 def test_du_measures_a_tree_less_its_excludes_and_a_missing_path_is_nothing(
     tmp_path: Path,
 ) -> None:

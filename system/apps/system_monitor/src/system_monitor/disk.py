@@ -264,9 +264,6 @@ def scan(
     other_items: list[dict[str, Any]] = []
     if system is not None and system.total:
         software = min(other, system.total)
-        home_data = min(
-            other - software, home_rest.total if home_rest is not None else 0
-        )
         other_items.append(
             {
                 "name": "System software",
@@ -274,22 +271,26 @@ def scan(
                 "bytes": software,
             }
         )
-        if home_data:
-            other_items.append(
-                {
-                    "name": "Chats, logs and settings",
-                    "hint": "kept beside the workspace's files",
-                    "bytes": home_data,
-                }
-            )
-        if other - software - home_data:
-            other_items.append(
-                {
-                    "name": "Other files on the machine's disk",
-                    "hint": "not part of this workspace, so it cannot be freed from here",
-                    "bytes": other - software - home_data,
-                }
-            )
+        # Without the home tree's size the rest of the disk cannot be told apart from it, so neither
+        # is listed rather than the home tree being called something that cannot be freed.
+        if home_rest is not None:
+            home_data = min(other - software, home_rest.total)
+            if home_data:
+                other_items.append(
+                    {
+                        "name": "Chats, logs and settings",
+                        "hint": "kept beside the workspace's files",
+                        "bytes": home_data,
+                    }
+                )
+            if other - software - home_data:
+                other_items.append(
+                    {
+                        "name": "Other files on the machine's disk",
+                        "hint": "not part of this workspace, so it cannot be freed from here",
+                        "bytes": other - software - home_data,
+                    }
+                )
     rows.append(
         {
             "id": "other",
