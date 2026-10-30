@@ -19,7 +19,7 @@ from uuid import uuid4
 from chat_background_tasks.markers import TaskSource
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
-from oom_priority.registry import lookup_pid_by_agent_id
+from oom_priority.registry import lookup_pids_by_agent_id
 from pydantic import Field
 from workspace_layout.client import DisconnectedShell
 
@@ -1395,7 +1395,7 @@ class AgentManager:
         # read ``_agents`` / ``_lock`` / ``_host_dir``, which are set above.
         manager._oom_prioritizer = ChatOomPrioritizer(
             list_chat_ids=manager.get_chat_ids,
-            resolve_pid=lambda chat_id: manager._resolve_active_pid(chat_id),
+            resolve_pids=lambda chat_id: manager._resolve_active_pids(chat_id),
             # A secondary's presence is its own windows', not the workspace's, and the scores it
             # would write are the live chat's, so it keeps an inert prioritizer.
             set_adj=None if is_secondary else set_oom_score_adj,
@@ -1418,10 +1418,10 @@ class AgentManager:
         )
         return manager
 
-    def _resolve_active_pid(self, chat_id: ChatId) -> int | None:
-        """The pid of the process a chat runs on, for the OOM prioritizer; None for a chat with no active agent."""
+    def _resolve_active_pids(self, chat_id: ChatId) -> list[int]:
+        """The pids of the processes a chat runs on, for the OOM prioritizer; empty for a chat with no active agent."""
         active_agent_id = self._active_agent_id_of_chat(chat_id)
-        return None if active_agent_id is None else lookup_pid_by_agent_id(active_agent_id)
+        return [] if active_agent_id is None else lookup_pids_by_agent_id(active_agent_id)
 
     def _read_active_process_started_at(self, chat_id: ChatId) -> float | None:
         """When the process a chat runs on started, for the OOM prioritizer; None for a chat with no active agent."""

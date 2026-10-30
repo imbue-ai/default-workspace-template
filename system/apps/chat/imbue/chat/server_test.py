@@ -2222,7 +2222,7 @@ def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dic
     manager = AgentManager.build(WebSocketBroadcaster())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pid=lambda cid: pids.get(cid),
+        resolve_pids=lambda cid: [pids[cid]] if cid in pids else [],
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         # No process-start marker in this fake, so the chat's idle time comes from
         # the reported presence alone -- which is what these tests are about.
@@ -2396,7 +2396,7 @@ def test_send_records_the_message_for_the_chats_recency() -> None:
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pid=lambda cid: {agent_id: 4242}.get(cid),
+        resolve_pids=lambda cid: [4242] if cid == agent_id else [],
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=lambda _cid: None,
     )
