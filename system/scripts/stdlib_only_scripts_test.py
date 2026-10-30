@@ -5,8 +5,9 @@ packages: a script that imports one runs fine under ``uv run`` and in these test
 with ``ModuleNotFoundError`` the moment an agent or a supervisord program line calls it as
 documented. The list below is every script the docs, skills, prompts, program lines, and shell
 scripts invoke that way (``grep -rho "python3 system/scripts/[a-z_]*\\.py"``, and the shell
-scripts' ``python3 "$REPO_ROOT/system/scripts/<name>.py"`` spelling); a script may import a
-sibling script, which is then held to the same rule.
+scripts' ``python3 "$REPO_ROOT/system/scripts/<name>.py"`` spelling), plus the shared agent
+scripts outside ``system/scripts/`` the skills run that way; a script may import a sibling
+script, which is then held to the same rule.
 """
 
 from __future__ import annotations
@@ -37,14 +38,29 @@ _SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
     "vendor_mngr_skill.py",
 )
 
+_OTHER_SCRIPTS_RUN_WITH_SYSTEM_PYTHON = (
+    _SCRIPTS_DIR.parents[1]
+    / ".agents"
+    / "shared"
+    / "scripts"
+    / "serve_isolated_instance.py",
+)
+
 # The stdlib-only workspace libraries a script may put on ``sys.path`` and import, by package,
-# each held to the same rule.
+# each held to the same rule: the package directory, or the one module of it scripts import
+# where the rest of the package (a click command) runs only under ``uv run``.
 _STDLIB_ONLY_LIBRARIES = {
     "chat_background_tasks": _SCRIPTS_DIR.parent
     / "libs"
     / "chat_background_tasks"
     / "src"
     / "chat_background_tasks",
+    "disk_headroom": _SCRIPTS_DIR.parent
+    / "libs"
+    / "disk_headroom"
+    / "src"
+    / "disk_headroom"
+    / "space.py",
     "oom_priority": _SCRIPTS_DIR.parent
     / "services"
     / "oom_priority"
@@ -100,26 +116,32 @@ def _modules_outside_the_stdlib(
 def _library_modules_outside_the_stdlib(library: str) -> set[str]:
     """Every module a stdlib-only library's own (non-test) code imports that is neither standard
     library nor the library itself."""
+    location = _STDLIB_ONLY_LIBRARIES[library]
+    sources = [location] if location.is_file() else list(location.glob("*.py"))
     return {
         module
-        for source in _STDLIB_ONLY_LIBRARIES[library].glob("*.py")
+        for source in sources
         if not source.name.endswith("_test.py") and source.name != "conftest.py"
         for module in _imported_top_level_modules(source)
         if module not in sys.stdlib_module_names and module != library
     }
 
 
-@pytest.mark.parametrize("script_name", _SCRIPTS_RUN_WITH_SYSTEM_PYTHON)
+@pytest.mark.parametrize(
+    "script",
+    [
+        *(_SCRIPTS_DIR / name for name in _SCRIPTS_RUN_WITH_SYSTEM_PYTHON),
+        *_OTHER_SCRIPTS_RUN_WITH_SYSTEM_PYTHON,
+    ],
+    ids=lambda script: script.name,
+)
 def test_a_script_run_with_the_system_python_imports_only_the_standard_library(
-    script_name: str,
+    script: Path,
 ) -> None:
-    script = _SCRIPTS_DIR / script_name
-    assert script.is_file(), (
-        f"{script_name} is listed but does not exist beside this test"
-    )
+    assert script.is_file(), f"{script} is listed but does not exist"
     offenders = _modules_outside_the_stdlib(script)
     assert offenders == set(), (
-        f"{script_name} runs under the system python3, which cannot import {sorted(offenders)}; "
+        f"{script.name} runs under the system python3, which cannot import {sorted(offenders)}; "
         "use the standard library (tomllib, json, urllib) instead"
     )
 
