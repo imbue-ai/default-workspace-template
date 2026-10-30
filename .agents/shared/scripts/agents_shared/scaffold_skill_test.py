@@ -59,6 +59,7 @@ def test_a_python_skill_is_installed_then_validated_with_a_runnable_entry(
         "order-sync",
         description,
         has_python=True,
+        is_crystallized=True,
         runner=runner,
     )
 
@@ -90,12 +91,13 @@ def test_a_prose_skill_is_only_its_skill_md(tmp_path: Path) -> None:
         "weekly-review",
         "Review the week",
         has_python=False,
+        is_crystallized=False,
         runner=runner,
     )
 
     assert sorted(path.name for path in directory.iterdir()) == ["SKILL.md"]
     assert runner.calls == []
-    assert _frontmatter(directory / "SKILL.md")["metadata"] == {"crystallized": True}
+    assert "metadata" not in _frontmatter(directory / "SKILL.md")
 
 
 def test_a_description_that_would_not_validate_leaves_nothing_behind(
@@ -109,6 +111,7 @@ def test_a_description_that_would_not_validate_leaves_nothing_behind(
             "too-long",
             "x" * 1025,
             has_python=True,
+            is_crystallized=False,
             runner=runner,
         )
 
@@ -124,6 +127,7 @@ def test_a_bad_name_writes_nothing(tmp_path: Path, name: str) -> None:
             name,
             "Sync orders",
             has_python=True,
+            is_crystallized=False,
             runner=_Runner(),
         )
 
@@ -141,6 +145,7 @@ def test_an_existing_skill_is_left_untouched(tmp_path: Path) -> None:
             "order-sync",
             "Sync orders",
             has_python=True,
+            is_crystallized=False,
             runner=_Runner(),
         )
 
@@ -158,6 +163,7 @@ def test_a_failed_lock_is_reported_and_the_files_are_kept_to_fix(
             "order-sync",
             "Sync orders",
             has_python=True,
+            is_crystallized=False,
             runner=runner,
         )
 

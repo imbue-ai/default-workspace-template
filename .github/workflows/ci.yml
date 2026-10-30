@@ -137,13 +137,12 @@ jobs:
       - name: Install Python dependencies
         run: uv sync --all-packages
 
-      # A workspace holds a skill to its own checks by its SKILL.md marker, and every skill
-      # in the template's tree ships built in. A workspace repo made from the template
-      # inherits this workflow but also holds its own skills and third parties', so only
-      # the template runs this.
+      # Every skill in the template's tree ships built in, marked `metadata.author: imbue`.
+      # A workspace repo made from the template inherits this workflow but also holds its
+      # own skills and third parties', so only the template runs this.
       - name: Every built-in skill carries metadata.author
         if: github.repository == 'imbue-ai/default-workspace-template'
-        run: uv run --no-sync .agents/shared/scripts/agents_shared/skill_ownership.py check-built-in
+        run: uv run --no-sync .agents/shared/scripts/agents_shared/check_built_in_skills.py
 
       # Opt-in through the ENFORCE_RUFF repository variable, like check-changelog:
       # workspace repos made from the template inherit this workflow, and their
