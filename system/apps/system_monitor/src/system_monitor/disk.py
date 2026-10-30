@@ -298,7 +298,7 @@ def scan(
         {
             "id": "other",
             "label": "Everything else",
-            "hint": "the workspace's system software and the rest of the machine's disk",
+            "hint": "the workspace's system software, chats, logs and settings, and the rest of the machine's disk",
             "bytes": other,
             "items": other_items,
         }
