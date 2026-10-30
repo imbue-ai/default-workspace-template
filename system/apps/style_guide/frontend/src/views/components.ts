@@ -474,7 +474,7 @@ function overlaysSection(demos: ComponentDemos): CatalogSection {
     desc: [
       "The shared ",
       code("Modal"),
-      " shell, the notice dialog every notice uses, the confirm dialog for an irreversible verb, and the toasts that report a failed operation without stopping everything.",
+      " shell, the notice dialog every notice uses, the confirm dialog for an irreversible verb, and the toasts that report a failed operation without stopping everything: a plain one that goes on its own, and a lasting one that keeps its details and next step until dismissed.",
     ],
     body: () => [
       m("div", { class: "flex flex-wrap gap-3" }, [
@@ -489,6 +489,19 @@ function overlaysSection(demos: ComponentDemos): CatalogSection {
           Button,
           { id: "show-toast", onclick: () => demos.toasts.show("Couldn't save the file: the disk is full.") },
           "Show a toast",
+        ),
+        m(
+          Button,
+          {
+            id: "show-lasting-toast",
+            onclick: () =>
+              demos.toasts.show("Couldn't load the routines.", {
+                isLasting: true,
+                details: "HTTP 503: the routines app is not running",
+                actions: [{ label: "Try again", run: () => demos.toasts.show("Loaded the routines.") }],
+              }),
+          },
+          "Show a lasting toast",
         ),
       ]),
       demos.openDialog === "modal"
@@ -521,6 +534,7 @@ function overlaysSection(demos: ComponentDemos): CatalogSection {
             title: "Couldn't send the message",
             body: ["The chat app didn't answer.", "Your message is still in the composer."],
             dismissLabel: "Cancel",
+            details: "HTTP 504: the chat app took too long to answer",
             actions: [{ label: "Try again", run: () => (demos.openDialog = null) }],
             onDismiss: () => (demos.openDialog = null),
           })

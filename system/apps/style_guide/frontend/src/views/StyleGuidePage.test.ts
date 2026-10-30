@@ -84,6 +84,25 @@ describe("StyleGuidePage", () => {
     expect(document.querySelector("[data-toast]")).toBeNull();
   });
 
+  it("shows a lasting toast with its details, which its Try again takes away", () => {
+    const root = mountPage();
+    click(root.querySelector("#show-lasting-toast"));
+    const lasting = document.querySelector(".toast--lasting");
+    expect(lasting?.querySelector(".see-details-text")?.textContent).toContain("HTTP 503");
+    const retry = Array.from(lasting?.querySelectorAll(".toast-action") ?? []).find(
+      (button) => button.textContent === "Try again",
+    );
+    click(retry ?? null);
+    expect(document.querySelector(".toast--lasting")).toBeNull();
+    expect(document.querySelector("[data-toast]")?.textContent).toContain("Loaded the routines.");
+  });
+
+  it("shows the notice's details behind See details", () => {
+    const root = mountPage();
+    click(root.querySelector("#open-notice"));
+    expect(document.querySelector(".notice-details .see-details-text")?.textContent).toContain("HTTP 504");
+  });
+
   it("moves the segmented control's choice on a click", () => {
     const root = mountPage();
     click(root.querySelector('[data-segment="list"]'));

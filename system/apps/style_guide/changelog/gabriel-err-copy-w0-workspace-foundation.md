@@ -1,1 +1,1 @@
-The toast demo asks for a close button on its toast, which a plain toast in `workspace_ui` now shows only when the page asks for it, so the demo toast keeps the close button it had.
+The Dialogs and toasts section shows the failure surfaces of `workspace_ui` as the apps now draw them: a lasting toast, with its details behind "See details" and a Try again button, beside the plain toast, and the notice dialog with its details. The plain demo toast asks for its close button, which a plain toast now shows only when the page asks for it, so it keeps the one it had.
