@@ -228,7 +228,7 @@ Each bucket is one `du -sk` (GNU, the container is Linux), bounded at 120 s:
 | Uploads | `data/uploads` | nothing |
 | App data | `data/.apps` | one item per app directory |
 | Package caches | `~/.cache`, `~/.npm`, `~/.local/share/uv`, `~/.local/share/pnpm`, and `/var/cache/user` (where `XDG_CACHE_HOME`, `UV_CACHE_DIR` and `npm_config_cache` point), those that exist; one of `~/.cache` and `/var/cache/user` links to the other, and `du` does not follow a link it is handed, so the caches count once | each cache |
-| Everything else | the disk's used bytes less the rows above, never below 0 | the machine's system software (`/` less the home tree, `/var/cache/user`, the kernel and memory filesystems, and the container engines' stores) and whatever else is on the disk, which is not part of the workspace and cannot be freed from it |
+| Everything else | the disk's used bytes less the rows above, never below 0 | the machine's system software (`/` less the home tree, `/var/cache/user`, the kernel and memory filesystems, and the container engines' stores), the chats, logs and settings (the home tree's top-level entries less the workspace and the caches, since on imbue_cloud `/home/user` is itself a link `du` would not follow), and whatever else is on the disk, which is not part of the workspace and cannot be freed from it |
 
 The result is kept in memory with its time; the app stopping forgets it, which is fine for a figure the user asked for once.
 A `du` that fails or times out leaves its row out and the response says which rows are missing.

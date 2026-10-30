@@ -23,7 +23,8 @@ seconds. The design is `docs/system/specs/system-monitor.md`.
   disk", which measures the disk only when asked (walking it is slow under
   gVisor and the figures go stale at once): workspace files with the folders
   under them, uploads, each app's data, each package cache, and everything
-  else (the system software and the rest of the machine's disk), as of when
+  else (the system software, the chats, logs and settings kept beside the
+  workspace's files, and the rest of the machine's disk), as of when
   it ran; and the state of the backups (read from the backup service's events
   and settings, never by running restic), with a link to that service's README.
 

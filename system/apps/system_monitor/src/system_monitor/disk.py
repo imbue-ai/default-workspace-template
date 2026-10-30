@@ -229,7 +229,8 @@ def scan(
     # Depending on the provider, ~/.cache links to the off-volume cache or the other way round, and du
     # does not follow a link it is handed, so the caches are counted once.
     off_volume_cache = root / OFF_VOLUME_CACHE_DIR
-    caches = measure([*(home / cache for cache in CACHE_DIRS), off_volume_cache], [])
+    home_caches = [home / cache for cache in CACHE_DIRS]
+    caches = measure([*home_caches, off_volume_cache], [])
     counted += row(
         "caches",
         "Package caches",
@@ -245,13 +246,27 @@ def scan(
         ),
     )
     # The rest of the disk: the machine's system software (the workspace's tools, measured
-    # without the home tree and the off-volume cache, which the rows above hold) and whatever else is
-    # on the disk.
+    # without the home tree and the off-volume cache), the home tree beside the workspace and its
+    # caches (the chats' records and logs, worktrees, settings), and whatever else is on the disk.
     other = max(0, disk_used - counted)
+    # Measured as its top-level entries because the home directory itself can be a link (imbue_cloud's
+    # /home/user points into the volume), which du would count as nothing.
+    try:
+        home_entries = sorted(
+            path
+            for path in home.iterdir()
+            if path != workspace and path not in home_caches
+        )
+    except OSError:
+        home_entries = []
+    home_rest = measure(home_entries, home_caches)
     system = measure([root], [home, off_volume_cache, *SYSTEM_EXCLUDES])
     other_items: list[dict[str, Any]] = []
     if system is not None and system.total:
         software = min(other, system.total)
+        home_data = min(
+            other - software, home_rest.total if home_rest is not None else 0
+        )
         other_items.append(
             {
                 "name": "System software",
@@ -259,12 +274,20 @@ def scan(
                 "bytes": software,
             }
         )
-        if other - software:
+        if home_data:
+            other_items.append(
+                {
+                    "name": "Chats, logs and settings",
+                    "hint": "kept beside the workspace's files",
+                    "bytes": home_data,
+                }
+            )
+        if other - software - home_data:
             other_items.append(
                 {
                     "name": "Other files on the machine's disk",
                     "hint": "not part of this workspace, so it cannot be freed from here",
-                    "bytes": other - software,
+                    "bytes": other - software - home_data,
                 }
             )
     rows.append(

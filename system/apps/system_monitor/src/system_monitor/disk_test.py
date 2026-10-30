@@ -27,6 +27,7 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
         (workspace / folder).mkdir()
     (workspace / "uv.lock").write_text("x")
     (home / ".cache").mkdir(parents=True)
+    (home / ".mngr").mkdir()
     root.mkdir()
     sizes = {
         str(workspace / ".venv"): 2000,
@@ -38,6 +39,7 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
         str(workspace / "data" / ".apps" / "habit-tracker"): 290,
         str(home / ".cache"): 2400,
         str(home / ".local/share/uv"): 600,
+        str(home / ".mngr"): 1000,
         str(root): 1500,
     }
     measured: list[tuple[list[Path], list[Path]]] = []
@@ -76,7 +78,8 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
         {"name": ".cache", "hint": "downloads and build caches", "bytes": 2400 * _MIB},
         {"name": ".local/share/uv", "hint": "Python packages", "bytes": 600 * _MIB},
     ]
-    # The rest: the machine's system software, then whatever else the disk holds.
+    # The rest: the machine's system software, the home tree beside the workspace, then whatever
+    # else the disk holds.
     assert by_id["other"]["items"] == [
         {
             "name": "System software",
@@ -84,9 +87,14 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
             "bytes": 1500 * _MIB,
         },
         {
+            "name": "Chats, logs and settings",
+            "hint": "kept beside the workspace's files",
+            "bytes": 1000 * _MIB,
+        },
+        {
             "name": "Other files on the machine's disk",
             "hint": "not part of this workspace, so it cannot be freed from here",
-            "bytes": 2400 * _MIB,
+            "bytes": 1400 * _MIB,
         },
     ]
     # The workspace is measured as its top-level entries in one du, without the app data and
@@ -94,6 +102,11 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
     assert measured[0] == (
         sorted(workspace.iterdir()),
         [workspace / "data" / ".apps", workspace / "data" / "uploads"],
+    )
+    # The home tree beside the workspace as its top-level entries, less the caches.
+    assert measured[-2] == (
+        [home / ".mngr"],
+        [home / cache for cache in disk.CACHE_DIRS],
     )
     assert measured[-1] == (
         [root],
@@ -110,14 +123,26 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
         ("home/user/.cache", "var/cache/user", ".cache"),
     ],
 )
-def test_the_package_caches_are_counted_once_and_not_as_system_software(
-    tmp_path: Path, real_cache: str, linked_cache: str, listed_as: str
+# imbue_cloud: /home/user links to the volume's home, which the system walk leaves out with /mngr-vol.
+@pytest.mark.parametrize("home_is_a_link", [False, True])
+def test_the_package_caches_are_counted_once_and_in_no_other_item(
+    tmp_path: Path,
+    real_cache: str,
+    linked_cache: str,
+    listed_as: str,
+    home_is_a_link: bool,
 ) -> None:
     root = tmp_path / "root"
     home = root / "home" / "user"
+    if home_is_a_link:
+        (tmp_path / "mngr-vol" / "home").mkdir(parents=True)
+        home.parent.mkdir(parents=True)
+        home.symlink_to(tmp_path / "mngr-vol" / "home")
     (home / "workspace").mkdir(parents=True)
     (root / "usr" / "bin").mkdir(parents=True)
     (root / "usr" / "bin" / "tool").write_bytes(b"x" * _MIB)
+    (home / ".mngr").mkdir()
+    (home / ".mngr" / "log").write_bytes(b"x" * 2 * _MIB)
     (root / real_cache / "uv").mkdir(parents=True)
     (root / real_cache / "uv" / "wheels").write_bytes(b"x" * 3 * _MIB)
     (root / linked_cache).parent.mkdir(parents=True, exist_ok=True)
@@ -135,9 +160,11 @@ def test_the_package_caches_are_counted_once_and_not_as_system_software(
             "bytes": by_id["caches"]["bytes"],
         }
     ]
-    software = by_id["other"]["items"][0]
+    software, home_data = by_id["other"]["items"][:2]
     assert software["name"] == "System software"
     assert _MIB <= software["bytes"] < 2 * _MIB
+    assert home_data["name"] == "Chats, logs and settings"
+    assert 2 * _MIB <= home_data["bytes"] < 3 * _MIB
 
 
 def test_a_row_that_cannot_be_measured_is_reported_missing_and_the_rest_never_goes_negative(
