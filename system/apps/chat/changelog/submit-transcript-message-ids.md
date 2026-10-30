@@ -1,0 +1,3 @@
+A transcript row for one user message (a prompt, a system chip, or a notice) or one assistant message now carries `data-message-id` set to that event's id, beside the `message` marker class. An element reference can name the message from that attribute. The DOM `id` is unchanged, including on a permission row, where the id is the `perm-` measurement key and `data-message-id` is the event id.
+
+A row that folds more than one event, and a compaction chip row, do not get `data-message-id`. Their DOM id stays the head event's so the virtualized list can still measure them, and the attribute does not claim the row is only that event.

@@ -100,6 +100,24 @@ describe("user-message-display status messages", () => {
   });
 });
 
+describe("user message row identity", () => {
+  it("sets data-message-id to the event id and keeps the DOM id", () => {
+    const event: UserMessageEvent = {
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: "evt-hello",
+      source: "claude",
+      role: "user",
+      content: "hello",
+    };
+    const root = document.createElement("div");
+    m.render(root, renderUserMessage(event));
+    const el = root.querySelector(".message");
+    expect(el?.id).toBe("evt-hello");
+    expect(el?.getAttribute("data-message-id")).toBe("evt-hello");
+  });
+});
+
 describe("user-message-display prompt bubbles", () => {
   const SEED_BLOCK = "<chat-seed-context>\nthe conversation the chat opened on\n</chat-seed-context>";
   const ATTACHMENT = "See attachment here: ![/code/uploads/aaa/diagram.png](/code/uploads/aaa/diagram.png)";

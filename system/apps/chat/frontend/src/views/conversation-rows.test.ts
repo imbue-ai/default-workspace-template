@@ -81,6 +81,25 @@ function result(callId: string, output: string): ToolResultEvent {
   };
 }
 
+/** A permission request with no result yet: still pending, so it is its own row. */
+function permissionMsg(ts: string, callId: string): AssistantMessageEvent {
+  return {
+    timestamp: ts,
+    type: "assistant_message",
+    event_id: `a-${callId}`,
+    source: "test",
+    model: "m",
+    text: "",
+    tool_calls: [{ tool_call_id: callId, tool_name: "Bash", input_chars: 96, display: "permission_request" }],
+    stop_reason: null,
+    usage: null,
+    is_auth_error: false,
+    is_api_error: false,
+    api_error_kind: null,
+    is_provider_fault: false,
+  };
+}
+
 /** A plain (non-tk) tool call -- the kind that renders as a chip. */
 function toolMsg(ts: string, callId: string, note: string): AssistantMessageEvent {
   return {
@@ -119,6 +138,10 @@ function agentMsg(ts: string, callId: string, description: string): AssistantMes
   };
 }
 
+function renderedRowAttrs(row: RowDescriptor): { id?: string; "data-message-id"?: string } {
+  return (row.render() as { attrs: { id?: string; "data-message-id"?: string } }).attrs;
+}
+
 describe("buildConversationRows", () => {
   // The point of the shared builder: a subagent's transcript runs the same
   // section -> rows pipeline as the main chat, so a turn that declares tk steps
@@ -153,6 +176,51 @@ describe("buildConversationRows", () => {
 
     expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2"]);
     expect(rows.some((r) => r.key.startsWith("progress-"))).toBe(false);
+    expect(renderedRowAttrs(rows[0])).toMatchObject({ id: "u-t1", "data-message-id": "u-t1" });
+    expect(renderedRowAttrs(rows[1])).toMatchObject({ id: "a-t2", "data-message-id": "a-t2" });
+  });
+
+  it("names a one-event assistant row and leaves a multi-event row unnamed", () => {
+    const loneChip = buildConversationRows(
+      "agent-1",
+      [userMsg("t1", "go"), toolMsg("t2", "c1", "Read the log")],
+      true,
+    );
+    const chip = loneChip.find((r) => r.key === "a-c1");
+    expect(chip).toBeDefined();
+    expect(renderedRowAttrs(chip!)).toMatchObject({ id: "a-c1", "data-message-id": "a-c1" });
+
+    // Two chip-only events share one row. The DOM id stays the head's, which
+    // measurement and scroll resolve the row by. data-message-id is absent, so
+    // the row is not named as only that first event.
+    const grouped = buildConversationRows(
+      "agent-1",
+      [userMsg("t1", "go"), toolMsg("t2", "c1", "Read the log"), toolMsg("t3", "c2", "Check the app")],
+      true,
+    );
+    const run = grouped.find((r) => r.key === "a-c1");
+    expect(run).toBeDefined();
+    const runAttrs = renderedRowAttrs(run!);
+    expect(runAttrs.id).toBe("a-c1");
+    expect(runAttrs["data-message-id"]).toBeUndefined();
+
+    // Prose followed by a chip-only event is one row too, keyed on the prose.
+    const proseThenChip = buildConversationRows(
+      "agent-1",
+      [userMsg("t1", "go"), assistantText("t2", "Reading the log first."), toolMsg("t3", "c2", "Read the log")],
+      true,
+    );
+    const proseRun = proseThenChip.find((r) => r.key === "a-t2");
+    expect(proseRun).toBeDefined();
+    const proseAttrs = renderedRowAttrs(proseRun!);
+    expect(proseAttrs.id).toBe("a-t2");
+    expect(proseAttrs["data-message-id"]).toBeUndefined();
+
+    // A permission row's DOM id is the measurement key, not the event id.
+    const permission = buildConversationRows("agent-1", [userMsg("t1", "go"), permissionMsg("t2", "perm")], true);
+    const permRow = permission.find((r) => r.key === "perm-a-perm");
+    expect(permRow).toBeDefined();
+    expect(renderedRowAttrs(permRow!)).toMatchObject({ id: "perm-a-perm", "data-message-id": "a-perm" });
   });
 
   // A notice the agent was woken by sits between what it said before and what it did after.
@@ -359,6 +427,8 @@ describe("a compaction's chips in the rows", () => {
     expect(row.anchorEventId).toBe("cs1");
     expect(chipRows(rows, "cs1")).toEqual([["Compacting while idle…", "Compacted"]]);
     expect((row.render() as { attrs: { id?: string } }).attrs.id).toBe("cs1");
+    // A compaction chip row is not an assistant message, so it stays unnamed.
+    expect(renderedRowAttrs(row)["data-message-id"]).toBeUndefined();
   });
 
   // native: the agent's own compaction joins the chip run it landed in, between its tool calls.
