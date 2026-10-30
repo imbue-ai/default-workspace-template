@@ -286,9 +286,9 @@ def copy_tree_checked(
 ) -> None:
     """Copy the directory ``source`` to ``destination`` (which must not exist yet).
 
-    Refuses, writing nothing, when the copy would leave less than
-    ``COPY_RESERVE_BYTES`` free on the destination's disk; a copy that fails part
-    way is removed.
+    Refuses, writing nothing, when the copy would leave the workspace able to
+    write less than ``COPY_RESERVE_BYTES`` more to the destination's disk (as
+    ``free_space`` reports it); a copy that fails part way is removed.
     """
     if destination.exists():
         raise InstanceError(f"{destination} already exists; not copying over it")
@@ -297,8 +297,9 @@ def copy_tree_checked(
     if size + COPY_RESERVE_BYTES > available:
         raise InstanceError(
             f"copying {source} ({_format_bytes(size)}) would leave "
-            f"{_format_bytes(max(available - size, 0))} free on its disk, under the "
-            f"{_format_bytes(COPY_RESERVE_BYTES)} the workspace needs for its own "
+            f"the workspace able to write only {_format_bytes(max(available - size, 0))} "
+            "more to its disk, under the "
+            f"{_format_bytes(COPY_RESERVE_BYTES)} it needs for its own "
             "writes. Copy only what the test needs (a subdirectory, or a small store "
             "seeded for the test), or verify read-only against the live service."
         )
