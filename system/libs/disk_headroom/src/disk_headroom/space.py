@@ -5,9 +5,9 @@ on the machine's data filesystem, which the container cannot see: statfs here
 reports only the filesystem's own free space. Either can run out first,
 depending on how much of the disk the filesystem holds for its own metadata,
 so the machine publishes the quota's limit and usage into the workspace's
-volume (``/mngr-vol/.host-diskinfo``) and the room left is
-the smaller of the two. Where no fresh file exists (a local docker workspace,
-or a machine that publishes none), the filesystem's figures are the answer.
+volume (``/mngr-vol/.host-diskinfo``) and the room left is the smaller of the
+two. Where no fresh file exists (a local docker workspace, or a machine that
+publishes none), the filesystem's figures are the answer.
 
 Stdlib-only: serve_isolated_instance.py and other scripts import it under a
 bare ``python3`` by putting ``src`` on ``sys.path``.

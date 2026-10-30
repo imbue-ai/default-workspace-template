@@ -10,11 +10,11 @@ metadata, so `df` can show gigabytes free while writes already fail with
 "Disk quota exceeded", or show less than the quota allows.
 
 The machine publishes the quota's limit and usage into the workspace's volume,
-at `/mngr-vol/.host-diskinfo` (mngr's gen-2 slice VM publisher). This library reads that file while it is fresh and reports the
-smaller of the two limits. Where no fresh file exists (a local docker
-workspace, or a machine that publishes none), the filesystem's own figures are
-the answer. Paths on another filesystem, such as the `/tmp` RAM disk, are never
-held to the quota.
+at `/mngr-vol/.host-diskinfo` (mngr's gen-2 slice VM publisher). This library
+reads that file while it is fresh and reports the smaller of the two limits.
+Where no fresh file exists (a local docker workspace, or a machine that
+publishes none), the filesystem's own figures are the answer. Paths on another
+filesystem, such as the `/tmp` RAM disk, are never held to the quota.
 
 The reader, `disk_headroom.space`, is stdlib-only, so scripts that run under a
 bare `python3` can put `src` on `sys.path` and import it.
