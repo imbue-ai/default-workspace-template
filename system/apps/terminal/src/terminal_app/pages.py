@@ -47,6 +47,9 @@ from workspace_themes.serving import THEME_STATIC_ROUTE_PREFIX
 from terminal_app.errors import (
     InvalidTerminalValueError,
     TerminalAppError,
+    TerminalStoreError,
+    TerminalStoreVersionError,
+    TmuxCommandError,
     UnknownSessionPageError,
 )
 from terminal_app.primitives import (
@@ -130,6 +133,15 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   body { display: flex; flex-direction: column; height: 100%; height: 100dvh; margin: 0; background: #2b2b2b; color: #ddd; font-family: system-ui, sans-serif; }
   iframe { display: block; flex: 1 1 0; min-height: 0; width: 100%; border: 0; }
   #empty { display: flex; flex: 1 1 0; align-items: center; justify-content: center; font-size: 14px; color: #888; }
+  /* Why the terminal ended, in place of the frame and ttyd's own "Connection Closed". */
+  #ended { display: flex; flex: 1 1 0; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; font-size: 14px; }
+  #ended p { margin: 0; max-width: 36em; }
+  #ended-cause { color: #aaa; }
+  #ended .actions { display: flex; gap: 8px; }
+  #ended button { padding: 6px 14px; border: 1px solid #444; border-radius: 6px; background: #1c1c1c; color: #ddd; font: 13px system-ui, sans-serif; cursor: pointer; }
+  #ended details { max-width: 36em; font-size: 12px; color: #888; }
+  #ended summary { cursor: pointer; }
+  #ended pre { white-space: pre-wrap; word-break: break-word; text-align: left; }
   /* The phone's key strip: the keys a soft keyboard lacks, under the terminal and so above the keyboard. */
   #keys { display: none; flex: none; gap: 6px; padding: 6px; background: #111; border-top: 1px solid #262626; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
   #keys button { flex: 1 1 0; min-width: 0; height: 36px; padding: 0; border: 1px solid #333; border-radius: 6px; background: #1c1c1c; color: #ddd; font: 13px system-ui, sans-serif; }
@@ -142,6 +154,17 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <body>
 <iframe id="pty" title="Terminal" hidden sandbox="allow-scripts allow-same-origin allow-forms allow-popups" allow="clipboard-read; clipboard-write"></iframe>
 <div id="empty" hidden></div>
+<div id="ended" hidden>
+  <p id="ended-message"></p>
+  <p id="ended-cause" hidden></p>
+  <div class="actions">
+    <button type="button" id="ended-retry" hidden>Try again</button>
+    <button type="button" id="ended-ask" hidden>Ask an agent to fix this</button>
+    <button type="button" id="ended-new" hidden>Start a new terminal</button>
+    <button type="button" id="ended-report" hidden>Report a bug</button>
+  </div>
+  <details id="ended-details" hidden><summary>See details</summary><pre id="ended-details-text"></pre></details>
+</div>
 <div id="keys" role="toolbar" aria-label="Terminal keys" hidden>
   <button type="button" data-key="Escape">Esc</button>
   <button type="button" data-key="Tab">Tab</button>
@@ -162,10 +185,18 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   const RETRY_MS = 2000;
   const frame = document.getElementById("pty");
   const empty = document.getElementById("empty");
+  const ended = document.getElementById("ended");
+  const endedRetry = document.getElementById("ended-retry");
+  const endedAsk = document.getElementById("ended-ask");
+  const endedNew = document.getElementById("ended-new");
+  const endedReport = document.getElementById("ended-report");
   const keys = document.getElementById("keys");
   const ctrlKey = keys.querySelector("[data-ctrl]");
   let current = config.session;
+  // The shell connection and the contract's askAgentToFix, once the module at the end has loaded the contract; on a
+  // page no shell frames the connection never says it has one.
   let connection = null;
+  let askAgentToFix = null;
 
   function coordinate(host) {
     const labels = host.split(".");
@@ -186,9 +217,89 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   function showEmpty(message) {
     frame.hidden = true;
     keys.hidden = true;
+    ended.hidden = true;
     empty.textContent = message;
     empty.hidden = false;
   }
+
+  // What the pty page says the terminal ended for (dispatch.py's kinds), and what the person can do about it.
+  // The user's own exit sends nothing, so ttyd's overlay, which reconnects, stays the answer to that.
+  const NOT_STARTED = {
+    message: "This terminal couldn't start. Try again. If this persists, report a bug.",
+    cause: "",
+    actions: ["retry", "ask", "report"],
+  };
+  const ENDINGS = {
+    "not-started": NOT_STARTED,
+    "ended": { message: "This terminal closed.", cause: "", actions: ["new"] },
+    "missing-folder": {
+      message: "This terminal closed.",
+      cause: "This terminal's folder no longer exists, so it can't open.",
+      actions: ["new"],
+    },
+  };
+  let endedActions = [];
+  let endedDetail = "";
+
+  function showEnding(ending, detail) {
+    frame.hidden = true;
+    keys.hidden = true;
+    empty.hidden = true;
+    endedActions = ending.actions;
+    endedDetail = detail;
+    document.getElementById("ended-message").textContent = ending.message;
+    const cause = document.getElementById("ended-cause");
+    cause.textContent = ending.cause;
+    cause.hidden = ending.cause === "";
+    endedRetry.hidden = !endedActions.includes("retry");
+    endedNew.hidden = !endedActions.includes("new");
+    syncShellButtons();
+    document.getElementById("ended-details-text").textContent = detail;
+    document.getElementById("ended-details").hidden = detail === "";
+    ended.hidden = false;
+  }
+
+  // The two buttons that go through the shell show once its handshake says they can work: the agent with any shell,
+  // the bug report where the shell's embedder opens one.
+  function syncShellButtons() {
+    endedAsk.hidden = !endedActions.includes("ask") || connection === null || !connection.hasShell();
+    endedReport.hidden = !endedActions.includes("report") || connection === null || !connection.canReportBug();
+  }
+
+  function showEnded(kind, detail) {
+    showEnding(ENDINGS[kind] ?? ENDINGS.ended, detail);
+  }
+
+  endedRetry.addEventListener("click", () => {
+    ended.hidden = true;
+    frame.hidden = false;
+    keys.hidden = false;
+    // The same address again: a fresh connection runs the dispatch again.
+    frame.src = frame.src;
+  });
+  endedAsk.addEventListener("click", () => {
+    askAgentToFix(connection, { whatFailed: `The terminal ${current} couldn't start`, details: endedDetail || null });
+  });
+  endedReport.addEventListener("click", () => connection.reportBug());
+  endedNew.addEventListener("click", async () => {
+    endedNew.disabled = true;
+    try {
+      const response = await fetch("new", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${(await response.text()).trim()}`);
+      navigate((await response.json()).path);
+    } catch (error) {
+      showEnding(
+        {
+          message: "A new terminal couldn't be opened. Try again. If this persists, report a bug.",
+          cause: "",
+          actions: ["new", "report"],
+        },
+        String(error?.message ?? error),
+      );
+    } finally {
+      endedNew.disabled = false;
+    }
+  });
 
   // ttyd fits its grid once at mount, with the DOM renderer's whole-pixel cell width, then
   // switches to its WebGL renderer, whose narrower cell leaves that column count short of the
@@ -230,6 +341,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       setTimeout(() => void refresh(page.name), RETRY_MS);
     } else {
       empty.hidden = true;
+      ended.hidden = true;
       frame.hidden = false;
       keys.hidden = false;
       // A navigate to the session already framed re-points at the same target: assigning the
@@ -252,7 +364,7 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       return;
     }
     if (response.status === 404) {
-      showEmpty("There is no terminal named " + session + ".");
+      showEmpty("There is no terminal named " + session + ". Open a terminal from the launcher.");
       return;
     }
     if (!response.ok) {
@@ -392,6 +504,9 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     // The shell grants focus to the frame it created, which is this page: pass it on to ttyd.
     if (event.source === window.parent && data.type === "ttyd-focus") focusPty();
     if (event.source === frame.contentWindow && data.type === "terminal:ctrl") setCtrlArmed(data.armed === true);
+    if (event.source === frame.contentWindow && data.type === "terminal:ended") {
+      showEnded(String(data.kind), typeof data.detail === "string" ? data.detail : "");
+    }
   });
   window.addEventListener("focus", () => connection?.focused());
 
@@ -401,25 +516,180 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     show(config.page);
   }
 
-  if (window.parent !== window) {
-    import("__CONTRACT_PATH__")
-      .then(({ connectToShell }) => {
-        connection = connectToShell({
-          capabilities: { navigation: true, closeChord: false },
-          onNavigate: navigate,
-          onShown: focusPty,
-          onTheme: wearTheme,
-        });
-        if (current !== null) connection.location(pathFor(current), document.title);
-      })
-      .catch((error) => console.warn("[terminal] could not load the shell contract", error));
-  }
+  window.connectTerminalToShell = (contract) => {
+    askAgentToFix = contract.askAgentToFix;
+    connection = contract.connectToShell({
+      capabilities: { navigation: true, closeChord: false },
+      onNavigate: navigate,
+      onShown: focusPty,
+      onHandshake: syncShellButtons,
+      onTheme: wearTheme,
+    });
+    if (current !== null) connection.location(pathFor(current), document.title);
+  };
+</script>
+<script type="module">
+  // The page above works without this module.
+  import * as contract from "__CONTRACT_PATH__";
+  window.connectTerminalToShell(contract);
 </script>
 </body>
 </html>
 """
 
 _EMPTY_TITLE: Final[str] = "Terminal"
+
+# A terminal's window whose page could not be served gets a page of ours in its place: the sentence, what can be done
+# about it, and the raw reason behind "See details" (filled by ``render_failure_page``).
+_FAILURE_PAGE_TEMPLATE: Final[str] = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Terminal</title>
+<style>
+  html { height: 100%; }
+  body { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; box-sizing: border-box; height: 100%; height: 100dvh; margin: 0; padding: 24px; background: #000; color: #ddd; font: 14px system-ui, sans-serif; text-align: center; }
+  p { margin: 0; max-width: 36em; }
+  .actions { display: flex; gap: 8px; }
+  button { padding: 6px 14px; border: 1px solid #444; border-radius: 6px; background: #1c1c1c; color: #ddd; font: 13px system-ui, sans-serif; cursor: pointer; }
+  details { max-width: 36em; font-size: 12px; color: #888; }
+  summary { cursor: pointer; }
+  pre { white-space: pre-wrap; word-break: break-word; text-align: left; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<p class="failure-message">__MESSAGE__</p>
+<div class="actions">
+  <button type="button" data-action="retry"__RETRY_HIDDEN__>Try again</button>
+  <button type="button" data-action="ask" hidden>Ask an agent to fix this</button>
+  <button type="button" data-action="report" hidden>Report a bug</button>
+</div>
+<details><summary>See details</summary><pre>__DETAILS__</pre></details>
+<script type="application/json" id="terminal-failure">__CONFIG__</script>
+<script>
+  document.querySelector('[data-action="retry"]').addEventListener("click", () => location.reload());
+</script>
+<script type="module">
+  import { askAgentToFix, connectToShell } from "__CONTRACT_PATH__";
+  const config = JSON.parse(document.getElementById("terminal-failure").textContent);
+  const ask = document.querySelector('[data-action="ask"]');
+  const report = document.querySelector('[data-action="report"]');
+  const connection = connectToShell({ onHandshake: syncShellButtons });
+  // Each shows once the shell's handshake says it can work: the agent with any shell, the bug report where the
+  // shell's embedder opens one.
+  function syncShellButtons() {
+    ask.hidden = config.agent_fix === null || !connection.hasShell();
+    report.hidden = !config.is_reportable || !connection.canReportBug();
+  }
+  ask.addEventListener("click", () =>
+    askAgentToFix(connection, { whatFailed: config.agent_fix.what_failed, details: config.agent_fix.details }),
+  );
+  report.addEventListener("click", () => connection.reportBug());
+</script>
+</body>
+</html>
+"""
+_FAILURE_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(MESSAGE|RETRY_HIDDEN|DETAILS|CONFIG|CONTRACT_PATH)__")
+
+
+class AgentFix(FrozenModel):
+    """What "Ask an agent to fix this" hands an agent: the app contract's ``AgentFixRequest``."""
+
+    what_failed: str = Field(description="A sentence stem saying what failed")
+    details: str = Field(description="What went wrong underneath it, verbatim")
+
+
+class PageFailure(FrozenModel):
+    """What a terminal window is shown in place of a page that could not be served."""
+
+    message: str = Field(description="Our sentence")
+    details: str = Field(description="The raw reason, behind See details")
+    is_retryable: bool = Field(description="Whether a Try again (a reload) can help")
+    agent_fix: AgentFix | None = Field(description="What an agent is asked to fix; None where none can")
+    is_reportable: bool = Field(description="Whether the sentence asks the person to report a bug")
+    status: int = Field(description="The HTTP status the page is answered with")
+
+
+@pure
+def page_failure(error: TerminalAppError, raw_session: str) -> PageFailure:
+    """What a terminal window shows for ``error``, raised serving the page of the session named ``raw_session``."""
+    details = str(error)
+    match error:
+        case UnknownSessionPageError():
+            return PageFailure(
+                message=f"There is no terminal named {raw_session}. Open a terminal from the launcher.",
+                details=details,
+                is_retryable=False,
+                agent_fix=None,
+                is_reportable=False,
+                status=HTTP_NOT_FOUND,
+            )
+        case TmuxCommandError():
+            # Every agent runs in this same tmux server, so none could answer while it does not.
+            return PageFailure(
+                message="Terminals aren't responding in this workspace right now. Try again in a moment.",
+                details=details,
+                is_retryable=True,
+                agent_fix=None,
+                is_reportable=False,
+                status=HTTP_INTERNAL_ERROR,
+            )
+        case TerminalStoreVersionError():
+            return PageFailure(
+                message="This workspace's saved terminals were written by a newer version of the workspace's "
+                "software (for example before an update was rolled back).",
+                details=details,
+                is_retryable=False,
+                agent_fix=AgentFix(
+                    what_failed="The Terminal app can't open terminals: this workspace's saved terminals were "
+                    "written by a newer version of the app",
+                    details=details,
+                ),
+                is_reportable=False,
+                status=HTTP_INTERNAL_ERROR,
+            )
+        case TerminalStoreError():
+            return PageFailure(
+                message="This workspace's saved terminals can't be read, so terminals can't open.",
+                details=details,
+                is_retryable=False,
+                agent_fix=AgentFix(
+                    what_failed="The Terminal app can't open terminals: it can't read this workspace's saved "
+                    "terminals",
+                    details=details,
+                ),
+                is_reportable=False,
+                status=HTTP_INTERNAL_ERROR,
+            )
+        case _:
+            return PageFailure(
+                message="This terminal couldn't be opened. Try again. If this persists, report a bug.",
+                details=details,
+                is_retryable=True,
+                agent_fix=None,
+                is_reportable=True,
+                status=HTTP_INTERNAL_ERROR,
+            )
+
+
+@pure
+def render_failure_page(failure: PageFailure) -> str:
+    config = {
+        "agent_fix": None if failure.agent_fix is None else failure.agent_fix.model_dump(mode="json"),
+        "is_reportable": failure.is_reportable,
+    }
+    # `</` cannot appear inside a script element's text, whatever the JSON quoting says.
+    encoded = json.dumps(config).replace("</", "<\\/")
+    values = {
+        "MESSAGE": html.escape(failure.message),
+        "RETRY_HIDDEN": "" if failure.is_retryable else " hidden",
+        "DETAILS": html.escape(failure.details),
+        "CONFIG": encoded,
+        "CONTRACT_PATH": APP_CONTRACT_ROUTE,
+    }
+    return _FAILURE_PLACEHOLDER.sub(lambda match: values[match.group(1)], _FAILURE_PAGE_TEMPLATE)
 
 
 class SessionPage(FrozenModel):
@@ -591,8 +861,20 @@ def build_pages_blueprint(
         # Flask resolves a relative path against the app's own directory, not the cwd the path names.
         return send_file(contract_path.absolute(), mimetype="text/javascript")
 
+    def is_window_page_request() -> bool:
+        return request.endpoint == f"{BLUEPRINT_NAME}.{wrapper_page.__name__}"
+
+    def failure_page(error: TerminalAppError) -> ResponseReturnValue:
+        """A page of ours for a window whose page could not be served: a JSON body would be the whole window."""
+        failure = page_failure(error, request.args.get(SESSION_QUERY_KEY, ""))
+        response = Response(render_failure_page(failure), status=failure.status, mimetype="text/html")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
     @blueprint.errorhandler(UnknownSessionPageError)
     def answer_unknown_session(error: UnknownSessionPageError) -> ResponseReturnValue:
+        if is_window_page_request():
+            return failure_page(error)
         return error_response(str(error), HTTP_NOT_FOUND)
 
     @blueprint.errorhandler(InvalidTerminalValueError)
@@ -603,6 +885,8 @@ def build_pages_blueprint(
     def answer_terminal_error(error: TerminalAppError) -> ResponseReturnValue:
         # The app's own failures (tmux refusing, the store unreadable) answer a detail body rather than Flask's bare 500.
         logger.opt(exception=error).error("Failed to serve a terminal page request")
+        if is_window_page_request():
+            return failure_page(error)
         return error_response(str(error), HTTP_INTERNAL_ERROR)
 
     return blueprint

@@ -44,7 +44,7 @@ def test_the_viewer_page_imports_the_app_contract_from_its_own_origin() -> None:
     response = runner.application.test_client().get("/")
 
     assert response.status_code == 200
-    assert 'import("/_static/app_contract.js")' in response.text
+    assert 'from "/_static/app_contract.js"' in response.text
     assert response.headers["Cache-Control"] == "no-store"
 
 
@@ -198,14 +198,6 @@ def test_close_tab_closes_the_shown_tab_of_a_running_browser_and_refuses_the_res
     assert unknown.status_code == 404
 
 
-def test_the_viewer_module_script_reads_no_state_from_the_classic_script() -> None:
-    """The shell-contract block is a module: it cannot see the viewer closure's names."""
-    page = (Path(__file__).parent / "src" / "browser" / "assets" / "index.html").read_text()
-    module_block = page.split('<script type="module">', 1)[1].split("</script>", 1)[0]
-    assert "browserId" not in module_block
-    assert '"browsers/" + session + "/close-tab"' in module_block
-
-
 # ``POST /api/open-url``, the ``open:url`` message handler: a local page the human asked for
 
 
@@ -236,7 +228,7 @@ def test_open_url_opens_the_page_in_front_and_shows_the_browser_to_the_client_th
 
     assert response.status_code == 200, response.text
     assert response.get_json() == {"browser": "browser-1", "window_id": FAKE_WINDOW_ID, "shown": "raised"}
-    assert cdp.created == ["http://localhost:3000/app"]
+    wait_for(lambda: cdp.created == ["http://localhost:3000/app"])
     assert loopback_shell.posted_ops() == [
         ("show", {"app": "browser", "path": "/?session=browser-1", "client": "c-link"})
     ]
@@ -299,4 +291,93 @@ def test_open_url_says_why_when_the_shell_will_not_show_the_browser(
 
     assert response.status_code == 502
     assert "No client 'c-gone'" in response.get_json()["detail"]
-    assert cdp.created == ["http://localhost:3000/"]
+    assert response.get_json()["user_facing_message"] == (
+        "The page is open in the browser, but its window couldn't be shown."
+    )
+    wait_for(lambda: cdp.created == ["http://localhost:3000/"])
+
+
+# What a person is told when the browser cannot be started for them
+
+
+def test_a_browser_still_installing_refuses_a_launch_a_link_and_a_start_with_the_install_sentence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("BROWSER_SKIP_INSTALL_CHECK", raising=False)
+    monkeypatch.setattr(bsession, "_FORTRESS_EXECUTABLE", str(tmp_path / "tilion"))
+    stopped = bsession.LiveBrowser(browser_id="browser-1")
+    stopped._lifecycle = "stopped"
+    runner.manager._browsers["browser-1"] = stopped
+    client = runner.application.test_client()
+
+    launch = client.post("/new", json={})
+    link = client.post(runner.OPEN_URL_PATH, json={"client_id": "c-link", "url": "http://localhost:3000/"})
+    start = client.post("/browsers/browser-1/start")
+
+    installing = "The browser is still being set up in this workspace. Try again in a minute."
+    assert (launch.status_code, link.status_code, start.status_code) == (503, 503, 503)
+    # The developer's reason stays where agents and "See details" read it.
+    assert launch.get_json() == {
+        "detail": "Chromium is still installing in this workspace; try again in a minute.",
+        "user_facing_message": installing,
+    }
+    assert link.get_json()["user_facing_message"] == installing
+    assert start.get_json() == {
+        "detail": "Chromium is still installing in this workspace; try again in a minute.",
+        "user_facing_message": installing,
+    }
+    assert stopped._lifecycle == "stopped"
+
+
+def test_a_start_with_no_room_says_another_browser_runs_and_how_to_free_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+    running = bsession.LiveBrowser(browser_id="browser-1")
+    running._lifecycle = "running"
+    stopped = bsession.LiveBrowser(browser_id="browser-2")
+    stopped._lifecycle = "stopped"
+    runner.manager._browsers.update({"browser-1": running, "browser-2": stopped})
+
+    start = runner.application.test_client().post("/browsers/browser-2/start")
+
+    assert start.status_code == 409
+    assert start.get_json() == {
+        "detail": "1/1 browsers open -- close one first.",
+        "user_facing_message": (
+            "Another browser is already running, and only one can run at a time. Close its window, then press "
+            "Start browser again."
+        ),
+    }
+
+
+def test_a_launch_that_cannot_register_the_browser_says_it_could_not_start(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BROWSER_SKIP_INSTALL_CHECK", "1")
+
+    async def failing_ensure(self: bsession.BrowserSessionManager, start_url: str | None) -> bsession.LiveBrowser:
+        raise bsession.BrowserStartupError("no free X display number for the browser")
+
+    monkeypatch.setattr(bsession.BrowserSessionManager, "ensure_browser", failing_ensure)
+
+    launch = runner.application.test_client().post("/new", json={})
+
+    assert launch.status_code == 503
+    assert launch.get_json() == {
+        "detail": "Could not start browser: no free X display number for the browser",
+        "user_facing_message": "Couldn't start the browser. Try again. If this persists, report a bug.",
+        "reportable": True,
+    }
+
+
+def test_a_link_while_the_saved_browsers_are_restored_says_the_browser_is_still_starting() -> None:
+    runner._init_done.clear()
+    try:
+        link = runner.application.test_client().post(
+            runner.OPEN_URL_PATH, json={"client_id": "c-link", "url": "http://localhost:3000/"}
+        )
+        start = runner.application.test_client().post("/browsers/browser-1/start")
+    finally:
+        runner._init_done.set()
+
+    assert link.status_code == 503
+    assert link.get_json()["user_facing_message"] == "The browser is still starting up. Try again in a moment."
+    assert start.status_code == 503
+    assert start.get_json()["user_facing_message"] == "Your browsers are still being restored. Try again in a moment."

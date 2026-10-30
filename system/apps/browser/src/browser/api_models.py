@@ -6,9 +6,11 @@ loop (``attach_for``, ``acquire_with_state``, ``handoff_with_state``), validated
 these models on the way out so the document and the daemon cannot disagree.
 """
 
+from app_schema.api_schema import ErrorResponse
 from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import ConfigDict, Field, RootModel
 
+from browser.install_gate import AgentFix
 from browser.primitives import ControlOwner, Lifecycle
 
 
@@ -168,6 +170,16 @@ class BrowserStarted(FrozenModel):
     """A stopped browser is relaunching on its saved tabs."""
 
     started: bool = Field(description="Always true")
+
+
+class InstallRefusal(ErrorResponse):
+    """A start refused because the browser is not installed in this workspace yet, or its install failed."""
+
+    ask_agent: AgentFix | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="What an agent asked to fix a failed install starts from; absent while it is still installing",
+    )
 
 
 class TabClosed(FrozenModel):

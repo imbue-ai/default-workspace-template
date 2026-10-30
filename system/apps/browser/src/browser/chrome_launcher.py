@@ -130,6 +130,11 @@ class ChromeProcess:
     def alive(self) -> bool:
         return self.proc.poll() is None
 
+    @property
+    def exit_code(self) -> int | None:
+        """The process's exit status once it has ended (negative: the signal that killed it), else None."""
+        return self.proc.poll()
+
     def kill(self) -> None:
         if self.proc.poll() is not None:
             return

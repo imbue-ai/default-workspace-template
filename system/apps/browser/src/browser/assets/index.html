@@ -70,16 +70,22 @@
   #cancelpending { display: none; padding: 8px 16px; background: #3a3a3a; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
   #cancelpending.show { display: inline-block; }
 
-  /* Terminal near-opaque cover for a browser that is gone: crashed/OOM-killed
-     (#crashoverlay) or explicitly closed by an agent (#terminatedoverlay). Same styling
-     for both -- they differ only in wording. */
+  /* Near-opaque cover for a browser whose Chromium is not running: crashed (#crashoverlay),
+     explicitly closed by an agent (#terminatedoverlay), or stopped (#stoppedoverlay). Same
+     styling for all three -- they differ in wording and in the Start button. */
   #crashoverlay, #terminatedoverlay, #stoppedoverlay { display: none; position: absolute; inset: 0; z-index: 20; background: rgba(20, 20, 20, 0.92); flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px; }
   #crashoverlay.show, #terminatedoverlay.show, #stoppedoverlay.show { display: flex; }
   #crashoverlay .msg, #terminatedoverlay .msg, #stoppedoverlay .msg { font-size: 19px; line-height: 1.4; color: #fff; font-weight: 700; max-width: 90%; }
   #crashoverlay .sub, #terminatedoverlay .sub, #stoppedoverlay .sub { font-size: 14px; color: rgba(255, 255, 255, 0.75); max-width: 90%; }
-  /* A stopped browser is not gone: the same cover, with the one action that brings it back. */
-  #startbrowser { padding: 8px 16px; background: #2b6cb0; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
-  #startbrowser:disabled { opacity: .6; cursor: default; }
+  /* A stopped or crashed browser is not gone: the same cover, with the one action that brings it back. */
+  .coveractions { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+  .startbrowser, .askagent, .reportbug { padding: 8px 16px; background: #2b6cb0; border: none; color: #fff; border-radius: 4px; cursor: pointer; font-size: 14px; }
+  .askagent, .reportbug { background: #3a3a3a; }
+  .startbrowser:disabled { opacity: .6; cursor: default; }
+  /* What a refused start said, under the cover's own sentence. */
+  .refusaldetails { max-width: 90%; font-size: 12px; color: rgba(255, 255, 255, 0.6); }
+  .refusaldetails summary { cursor: pointer; }
+  .refusaldetails pre { margin: 6px 0 0; max-height: 30vh; overflow: auto; text-align: left; white-space: pre-wrap; word-break: break-word; }
 
   /* Paused-stream overlay: a translucent tint + label OVER the frozen last frame while
      this viewer isn't the active stream (another pane/device is). Click anywhere to resume. */
@@ -93,11 +99,10 @@
   #pausedoverlay .title { font-size: 15px; font-weight: 700; color: #f2f5fa; letter-spacing: 0.2px; }
   #pausedoverlay .body { font-size: 13px; line-height: 1.45; color: #aab8cc; max-width: 36ch; }
 
-  /* Memory-pressure warning: a red chip beside the corner control, shown while the box is
-     over its RAM warn threshold, hidden when it recovers. */
+  /* Memory-pressure warning: a red chip beside the corner control, shown while the machine is
+     over its memory warn threshold, hidden when it recovers. */
   #memwarn { display: none; align-items: center; gap: 4px; padding: 4px 9px; border-radius: 13px; background: rgba(70, 20, 20, 0.88); color: #ff6b6b; font-size: 11px; font-weight: 600; }
   #memwarn.show { display: inline-flex; }
-  #memwarn .tri { color: #ff5252; font-size: 13px; }
 
   /* Cover shown until the FIRST streamed frame paints. Removed on first paint (NOT on
      the lifecycle=running control message): running means Chromium is up, but pixels
@@ -150,7 +155,7 @@
       <button id="returnbtn">Return control to agents</button>
     </div>
     <div id="corner">
-      <span id="memwarn"><span class="tri">&#9888;</span><span>Warning: box is over 75% of its RAM. Close some tabs.</span></span>
+      <span id="memwarn">Warning: the machine this workspace runs on is low on memory. Close some tabs.</span>
       <button id="tipsbtn" title="View tips" aria-label="View tips">?</button>
     </div>
     <div id="overlay">
@@ -163,8 +168,14 @@
       </div>
     </div>
     <div id="crashoverlay">
-      <div class="msg">This browser crashed.<br />Chromium was killed (for example, out of memory).</div>
-      <div class="sub">Open a new browser from the launcher.</div>
+      <div class="msg">This browser stopped. Its tabs and sign-ins are kept.</div>
+      <div class="sub"></div>
+      <div class="coveractions">
+        <button class="startbrowser">Start browser</button>
+        <button class="askagent hidden">Ask an agent to fix this</button>
+        <button class="reportbug hidden">Report a bug</button>
+      </div>
+      <details class="refusaldetails hidden"><summary>See details</summary><pre></pre></details>
     </div>
     <div id="terminatedoverlay">
       <div class="msg">This browser has been terminated by an agent.</div>
@@ -172,8 +183,13 @@
     </div>
     <div id="stoppedoverlay">
       <div class="msg">This browser is stopped.</div>
-      <div class="sub">Its tabs and logins are kept. Start it to pick up where it left off.</div>
-      <button id="startbrowser">Start browser</button>
+      <div class="sub">Its tabs and sign-ins are kept. Start it to pick up where it left off.</div>
+      <div class="coveractions">
+        <button class="startbrowser">Start browser</button>
+        <button class="askagent hidden">Ask an agent to fix this</button>
+        <button class="reportbug hidden">Report a bug</button>
+      </div>
+      <details class="refusaldetails hidden"><summary>See details</summary><pre></pre></details>
     </div>
     <div id="initoverlay">
       <div class="bar"><div class="fill" id="initfill"></div></div>
@@ -219,7 +235,10 @@
   const stoppedOverlay = document.getElementById("stoppedoverlay");
   const stoppedSub = stoppedOverlay.querySelector(".sub");
   const stoppedSubText = stoppedSub.textContent;
-  const startButton = document.getElementById("startbrowser");
+  const startButton = stoppedOverlay.querySelector(".startbrowser");
+  const crashMsg = crashOverlay.querySelector(".msg");
+  const crashSub = crashOverlay.querySelector(".sub");
+  const crashStartButton = crashOverlay.querySelector(".startbrowser");
   const initOverlay = document.getElementById("initoverlay");
   const pausedOverlay = document.getElementById("pausedoverlay");
   const memWarn = document.getElementById("memwarn");
@@ -263,6 +282,9 @@
   let reconnectTimer = null;
   let closedForGood = false;
   let crashed = false;
+  // The browser program itself is stopping or restarting: its browsers come back with it, so
+  // the pane waits on the stopped cover and keeps reconnecting rather than starting over.
+  let isAwaitingProgram = false;
   let lifecycle = "init";
   let firstFramePainted = false;
   let handoffReason = null, handoffAgent = null;
@@ -398,13 +420,28 @@
     if (!tipsAutoOpened && !readTipsSeen()) { tipsAutoOpened = true; tipsModal.classList.add("show"); }
   }
 
-  function showCrashed() {
+  // How Chromium ended decides the wording: a kill is the memory shedder's way of ending it,
+  // and a browser still running but not answering has not stopped at all.
+  const CRASH_SUBS = {
+    killed: "It was likely stopped because the machine this workspace runs on was low on memory.",
+    exited: "",
+  };
+  function showCrashed(reason) {
     crashed = true;
     lifecycle = "crashed";
     stopIdleTimer();
     overlay.classList.remove("show");
     returnBar.classList.remove("show");
     initOverlay.classList.remove("show");
+    if (reason === "unresponsive") {
+      crashMsg.textContent = "This browser stopped responding. Start it again to pick up where it left off.";
+      crashSub.textContent = "";
+    } else {
+      crashMsg.textContent = "This browser stopped. Its tabs and sign-ins are kept.";
+      crashSub.textContent = CRASH_SUBS[reason] ?? "";
+    }
+    crashSub.classList.toggle("hidden", crashSub.textContent === "");
+    resetStartControls(crashOverlay);
     crashOverlay.classList.add("show");
   }
 
@@ -419,30 +456,94 @@
     returnBar.classList.remove("show");
     initOverlay.classList.remove("show");
     pausedOverlay.classList.remove("show");
-    startButton.disabled = false;
     stoppedSub.textContent = stoppedSubText;
+    resetStartControls(stoppedOverlay);
+    startButton.classList.remove("hidden");
     stoppedOverlay.classList.add("show");
   }
 
-  // A refused start (the fleet is full, Chromium is still installing, the service did not
-  // answer) is shown in the overlay, with the button back, rather than nothing happening.
-  function showStartRefused(reason) {
-    startButton.disabled = false;
-    stoppedSub.textContent = "Could not start: " + reason;
+  // The browser program is stopping (a restart, or any stop but a Quit): nothing to start from
+  // here, so no button; the cast socket reconnects until the program is back and says how the
+  // browser came back.
+  function showProgramStopping() {
+    showStopped();
+    isAwaitingProgram = true;
+    stoppedSub.textContent = "Its tabs and sign-ins are kept.";
+    startButton.classList.add("hidden");
   }
 
-  startButton.addEventListener("click", () => {
+  // The refused start each cover is telling, which decides its "Ask an agent to fix this" and "Report a bug".
+  const shownRefusals = new Map();
+  // The shell connection and the contract's askAgentToFix, once the module at the end has loaded the contract; on a
+  // page no shell frames the connection never says it has one.
+  let shell = null;
+  let askAgentToFix = null;
+
+  function resetStartControls(cover) {
+    cover.querySelector(".startbrowser").disabled = false;
+    cover.querySelector(".refusaldetails").classList.add("hidden");
+    cover.querySelector(".refusaldetails").open = false;
+    shownRefusals.delete(cover);
+    syncFailureButtons(cover);
+  }
+
+  // Both buttons go through the shell framing the page, so each shows only once its handshake has
+  // said it can work: any shell for the agent, one whose embedder opens a bug report for the other.
+  function syncFailureButtons(cover) {
+    const refusal = shownRefusals.get(cover);
+    const askButton = cover.querySelector(".askagent");
+    askButton.classList.toggle("hidden", !refusal?.agentFix || shell === null || !shell.hasShell());
+    askButton.onclick = refusal?.agentFix ? () => askAgentToFix(shell, refusal.agentFix) : null;
+    const reportButton = cover.querySelector(".reportbug");
+    reportButton.classList.toggle("hidden", !refusal?.isReportable || shell === null || !shell.canReportBug());
+    reportButton.onclick = () => shell.reportBug();
+  }
+
+  const START_FALLBACK = "Couldn't start this browser. Try again. If this persists, report a bug.";
+  const NOT_ANSWERED = "The browser didn't respond. Try again in a moment.";
+  // A refused start is told on the cover, with the button back: the daemon's own sentence when it
+  // wrote one, else ours, and its status and reason behind "See details". A refusal an agent can
+  // fix carries what to ask it (``ask_agent``).
+  async function readStartRefusal(response) {
+    let text = "";
+    let body = null;
+    try { text = await response.text(); body = JSON.parse(text); } catch (_) {}
+    const userFacing = body !== null && typeof body.user_facing_message === "string" ? body.user_facing_message : "";
+    const reason = body !== null && typeof body.detail === "string" ? body.detail : text.slice(0, 2000);
+    const isNotAnswered = response.status >= 502 && response.status <= 504;
+    const askAgent = body !== null && typeof body.ask_agent === "object" ? body.ask_agent : null;
+    return {
+      sentence: userFacing || (isNotAnswered ? NOT_ANSWERED : START_FALLBACK),
+      details: ["HTTP " + response.status, reason.trim()].filter((line) => line !== "").join("\n"),
+      agentFix: askAgent === null ? null : { whatFailed: String(askAgent.what_failed), details: String(askAgent.details) },
+      isReportable: userFacing ? body.reportable === true : !isNotAnswered,
+    };
+  }
+  function showStartRefused(cover, refusal) {
+    cover.querySelector(".startbrowser").disabled = false;
+    const sub = cover.querySelector(".sub");
+    sub.textContent = refusal.sentence;
+    sub.classList.remove("hidden");
+    const details = cover.querySelector(".refusaldetails");
+    details.querySelector("pre").textContent = refusal.details;
+    details.classList.toggle("hidden", refusal.details === "");
+    shownRefusals.set(cover, refusal);
+    syncFailureButtons(cover);
+  }
+  function startFrom(cover) {
     if (browserId === null) return;
-    startButton.disabled = true;
+    cover.querySelector(".startbrowser").disabled = true;
     fetch(new URL("browsers/" + browserId + "/start", document.baseURI), { method: "POST" })
       .then(async (response) => {
         if (response.ok) return;
-        let reason = "";
-        try { reason = (await response.json()).detail || ""; } catch (_) {}
-        showStartRefused(reason || ("the browser service answered " + response.status));
+        showStartRefused(cover, await readStartRefusal(response));
       })
-      .catch(() => showStartRefused("the browser service did not answer"));
-  });
+      .catch((error) => showStartRefused(
+        cover, { sentence: NOT_ANSWERED, details: String(error), agentFix: null, isReportable: false },
+      ));
+  }
+  startButton.addEventListener("click", () => startFrom(stoppedOverlay));
+  crashStartButton.addEventListener("click", () => startFrom(crashOverlay));
 
   // The browser was explicitly closed by an agent (or otherwise retired) -- a terminal
   // state like a crash, but its own wording. Cover the pane with the same near-opaque
@@ -584,13 +685,13 @@
           try {
             const m = JSON.parse(event.data);
             if (m.type === "closed") { showTerminated(); return; }
-            if (m.type === "crashed") { showCrashed(); return; }
+            if (m.type === "crashed") { showCrashed(m.reason); return; }
             if (m.type === "launch_failed") { showLaunchFailed(); return; }
           } catch (_) {}
         }
         if (event.data === "paused") { showPaused(); return; }   // conductor paused this viewer
         if (event.data === "active") { hidePaused(); return; }   // resumed as the active viewer
-        if (event.data === "mem,high") { memWarn.classList.add("show"); return; }     // box > half committed
+        if (event.data === "mem,high") { memWarn.classList.add("show"); return; }     // the machine is low on memory
         if (event.data === "mem,ok") { memWarn.classList.remove("show"); return; }    // recovered -> auto-hide
         if (event.data === "multiwin") { multiWinModal.classList.add("show"); return; }  // guardian closed a stray window
         if (event.data.startsWith("res,")) {
@@ -1106,16 +1207,20 @@ registerProcessor('pb', PB);`;
     ws.onmessage = (ev) => {
       bumpWatchdog();  // any inbound frame (ping included) proves the link is alive
       let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
-      if (m.type === "crashed") showCrashed();
+      if (m.type === "control") isAwaitingProgram = false;  // the program is up and answering
+      if (m.type === "crashed") showCrashed(m.reason);
       else if (m.type === "closed") showTerminated();  // agent closed this browser -> terminal overlay
       else if (crashed && m.type === "control" && m.lifecycle !== "crashed") {
         // A start after a crash: the daemon ends the dead browser's leftovers (stopped) and
-        // launches it again (init), so the crash state is over for this viewer too.
+        // launches it again (init), so the crash state is over for this viewer too, and the
+        // picture, which stopped reconnecting at the crash, is asked for again.
         crashed = false;
         crashOverlay.classList.remove("show");
         setLifecycle(m.lifecycle); setControl(m);
+        if (streamWs === null || streamWs.readyState === WebSocket.CLOSED) connectStream();
       }
       else if (crashed || closedForGood) return;
+      else if (m.type === "stopping") showProgramStopping();
       else if (m.type === "stopped") showStopped();
       else if (m.type === "launch_failed") showLaunchFailed();
       else if (m.type === "initializing") { if (lifecycle !== "running" && lifecycle !== "stopped") setLifecycle("init"); }
@@ -1153,6 +1258,7 @@ registerProcessor('pb', PB);`;
         initOverlay.querySelector(".msg").textContent = "Browser closed — reopen it from the launcher.";
         return;
       }
+      if (ev.code === 1013 && isAwaitingProgram) { scheduleReconnect(); return; }
       if (ev.code === 1013) { setLifecycle("init"); initOverlay.classList.add("show"); scheduleReconnect(); return; }
       initOverlay.classList.add("show");
       scheduleReconnect();
@@ -1170,53 +1276,54 @@ registerProcessor('pb', PB);`;
     const name = params.get("session");
     if (!name) { initOverlay.classList.add("static", "show"); initOverlay.querySelector(".msg").textContent = "Open a browser from the launcher."; return; }
     initOverlay.classList.add("show");
-    if (!("VideoDecoder" in window)) { initOverlay.classList.add("static"); initOverlay.querySelector(".msg").textContent = "This browser can't play the stream (WebCodecs missing)."; return; }
+    if (!("VideoDecoder" in window)) { initOverlay.classList.add("static"); initOverlay.querySelector(".msg").textContent = "Imbue Studio can't show this browser on this device. Update Imbue Studio, then open the browser again."; return; }
     setInitStage(15, "Starting browser…");  // seed the bar until the first control message lands
     connect(name);        // control/ownership
     connectStream();      // pixels
   }
-  boot();
-})();
-</script>
-<script type="module">
   // The workspace shell's app contract (docs/system/blueprint/desktop-interface/contracts.md
-  // section 7), imported from this page's own origin, which the daemon serves it from. The
-  // window's path says WHICH browser this page shows and its title is that browser's name; what
-  // the browser itself is looking at stays inside the streamed pixels. A session switch is a
-  // whole new stream, so this page declares no navigation capability and the shell reloads the
-  // frame to move it.
+  // section 7), imported from this page's own origin, which the daemon serves it from, by the
+  // module below (``shell`` and ``askAgentToFix``, declared beside the covers). The window's path
+  // says WHICH browser this page shows and its title is that browser's name; what the browser
+  // itself is looking at stays inside the streamed pixels. A session switch is a whole new
+  // stream, so this page declares no navigation capability and the shell reloads the frame to
+  // move it.
   function browserTitle(name) {
     const numbered = /^browser-([0-9]+)$/.exec(name);
     return numbered === null ? name : `Browser ${numbered[1]}`;
   }
   const session = new URLSearchParams(location.search).get("session");
   if (session) document.title = browserTitle(session);
-  if (window.parent !== window) {
-    import("/_static/app_contract.js")
-      .then(({ connectToShell }) => {
-        // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window:
-        // the window-bound sweep would otherwise stop the whole browser. The browser is
-        // named by the page's own session parameter; the viewer's state above is closure-local.
-        const closeRemoteTab = () => {
-          if (session === null) return;
-          fetch(new URL("browsers/" + session + "/close-tab", document.baseURI), { method: "POST" })
-            .then(async (response) => {
-              if (response.ok) return;
-              let reason = "";
-              try { reason = (await response.json()).detail || ""; } catch (_) {}
-              console.warn("[browser] close-tab refused (" + response.status + ")", reason);
-            })
-            .catch((error) => console.warn("[browser] close-tab request failed", error));
-        };
-        const connection = connectToShell({
-          capabilities: { navigation: false, closeChord: true },
-          onCloseRequest: closeRemoteTab,
-        });
-        window.addEventListener("focus", () => connection.focused());
-        if (session) connection.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
+  // The shell's close chord (Ctrl+W) closes this browser's current tab, not its window: the
+  // window-bound sweep would otherwise stop the whole browser.
+  function closeRemoteTab() {
+    if (session === null) return;
+    fetch(new URL("browsers/" + session + "/close-tab", document.baseURI), { method: "POST" })
+      .then(async (response) => {
+        if (response.ok) return;
+        let reason = "";
+        try { reason = (await response.json()).detail || ""; } catch (_) {}
+        console.warn("[browser] close-tab refused (" + response.status + ")", reason);
       })
-      .catch((error) => console.warn("[browser] could not load the shell contract", error));
+      .catch((error) => console.warn("[browser] close-tab request failed", error));
   }
+  window.connectViewerToShell = (contract) => {
+    askAgentToFix = contract.askAgentToFix;
+    shell = contract.connectToShell({
+      capabilities: { navigation: false, closeChord: true },
+      onCloseRequest: closeRemoteTab,
+      onHandshake: () => [stoppedOverlay, crashOverlay].forEach(syncFailureButtons),
+    });
+    window.addEventListener("focus", () => shell.focused());
+    if (session) shell.location(`/?session=${encodeURIComponent(session)}`, browserTitle(session));
+  };
+
+  boot();
+})();
+</script>
+<script type="module">
+  import * as contract from "/_static/app_contract.js";
+  window.connectViewerToShell(contract);
 </script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import html
 import json
 import re
 import subprocess
@@ -8,6 +9,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
+import pytest
 from werkzeug.test import TestResponse
 
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
@@ -246,6 +248,62 @@ def build_selection_workspace(repo_root: Path) -> None:
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "VALUE = 1\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh_test.py", "def test_refresh() -> None:\n    pass\n")
     commit_everything(repo_root, "workspace")
+
+
+def built_app_contract_source() -> str:
+    """The shell's built app contract module, through which a page under test speaks to ``shell_stand_in_page``; skips
+    the test when the shell's frontend has not been built."""
+    if not SHELL_APP_CONTRACT_PATH.is_file():
+        pytest.skip(f"the shell's frontend is not built: no {SHELL_APP_CONTRACT_PATH} (`cd system && npm run build`)")
+    return SHELL_APP_CONTRACT_PATH.read_text()
+
+
+_SHELL_STAND_IN_TEMPLATE: Final[str] = """<!doctype html>
+<html>
+<body style="margin: 0">
+<iframe id="app" src="__FRAME_URL__" style="width: 1000px; height: 700px; border: 0"></iframe>
+<script>
+  window.shellMessages = [];
+  const frame = document.getElementById("app");
+  const greet = () => frame.contentWindow.postMessage({
+    type: "shell:handshake",
+    clientId: "client-stand-in",
+    windowId: "window-stand-in",
+    desktopId: "desktop-stand-in",
+    app: "stand-in",
+    path: "/",
+    canReportBug: __CAN_REPORT_BUG__,
+  }, "*");
+  frame.addEventListener("load", greet);
+  window.addEventListener("message", (event) => {
+    if (event.source !== frame.contentWindow) return;
+    window.shellMessages.push(event.data);
+    if (event.data?.type === "shell:capabilities") greet();
+  });
+</script>
+</body>
+</html>
+"""
+
+
+# An init script for a browser context (``add_init_script``) that counts the shell handshakes each frame receives, in
+# ``window.shellHandshakes``. It listens before any of the page's own scripts, so once a frame's count has moved, the
+# page there has handled the handshake too: what it hides for want of a shell is hidden for that reason.
+SHELL_HANDSHAKE_COUNTER_SCRIPT: Final[str] = """
+window.shellHandshakes = 0;
+window.addEventListener("message", (event) => {
+  if (event.source === window.parent && event.data?.type === "shell:handshake") window.shellHandshakes += 1;
+});
+"""
+
+
+def shell_stand_in_page(frame_url: str, can_report_bug: bool) -> str:
+    """A page standing in for the workspace shell around one app page: it frames ``frame_url``, greets the frame with
+    a ``shell:handshake`` on every load and in answer to each ``shell:capabilities``, as the shell does, saying
+    ``can_report_bug``, and keeps every message the frame posts in ``window.shellMessages``."""
+    return _SHELL_STAND_IN_TEMPLATE.replace("__FRAME_URL__", html.escape(frame_url)).replace(
+        "__CAN_REPORT_BUG__", json.dumps(can_report_bug)
+    )
 
 
 def declare_root_dependency(repo_root: Path, name: str) -> None:

@@ -74,9 +74,21 @@ from browser import manifest as fleet_manifest
 from browser.cdp_client import CdpClient
 from browser.cdp_proxy import BrowserProxy, ProxyServer
 from browser.errors import BrowserNotDrivableError, UnknownBrowserError
+from browser.install_gate import (
+    READY_GATE,
+    InstallGate,
+    fortress_unit_failure_this_boot,
+    missing_install_gate,
+)
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
-from browser.primitives import APP_NAME, SESSION_QUERY_KEY, ControlOwner, Lifecycle
+from browser.primitives import (
+    APP_NAME,
+    SESSION_QUERY_KEY,
+    ControlOwner,
+    CrashKind,
+    Lifecycle,
+)
 
 # Errors expected when a target/CDP session goes away underneath us (tab closed,
 # navigation, browser killed). The bounded CDP helpers additionally catch broadly
@@ -450,17 +462,18 @@ def _is_restorable_url(url: str | None) -> bool:
     return bool(url) and not url.startswith(("about:", "chrome:", "chrome-error:", "devtools:"))
 
 
-def deferred_install_ready() -> tuple[bool, str]:
-    """Return ``(ready, reason)`` once Chromium is installed."""
+def deferred_install_ready() -> InstallGate:
+    """Whether Chromium (and, headful, its virtual display) is installed; when not, whether the install is still
+    running or failed in this boot."""
     if os.environ.get("BROWSER_SKIP_INSTALL_CHECK") == "1":
-        return True, "ready"  # host/CI testing without an installed Fortress
+        return READY_GATE  # host/CI testing without an installed Fortress
     if not os.access(_FORTRESS_EXECUTABLE, os.X_OK):
-        return False, "Chromium is still installing in this workspace; try again in a minute."
+        return missing_install_gate("Chromium", fortress_unit_failure_this_boot())
     # Headful needs the Xvfb display present; wait for its install too (headless
     # runs -- tests, bare dev boxes -- don't need it).
     if not _HEADLESS and shutil.which("Xvfb") is None:
-        return False, "The virtual display is still installing in this workspace; try again in a minute."
-    return True, "ready"
+        return missing_install_gate("The virtual display", fortress_unit_failure_this_boot())
+    return READY_GATE
 
 
 def _enabled_event() -> asyncio.Event:
@@ -634,6 +647,8 @@ class LiveBrowser(MutableModel):
     # the next ~10s checkpoint tick), so an ungraceful kill right after a crash doesn't
     # restore the dead browser as healthy next boot.
     _crash_save_hook: "Callable[[], None] | None" = PrivateAttr(default=None)
+    # How Chromium ended when the browser crashed; read when the crash is found.
+    _crash_kind: CrashKind = PrivateAttr(default="exited")
 
     @property
     def _crashed(self) -> bool:
@@ -1341,12 +1356,25 @@ class LiveBrowser(MutableModel):
         this the way the old Playwright ``disconnected`` callback did (with a payload)."""
         if self._closed or self._crashed:
             return
+        self._crash_kind = self._read_crash_kind()
         self._crashed = True
         self._spawn(self._announce_crash())
 
+    def _read_crash_kind(self) -> CrashKind:
+        chrome = self._chrome
+        if chrome is None:
+            return "exited"
+        exit_code = chrome.exit_code
+        if exit_code is None:
+            return "unresponsive"
+        return "killed" if exit_code < 0 else "exited"
+
+    def _crash_message(self) -> dict[str, Any]:
+        return {"type": "crashed", "browser_id": self.browser_id, "reason": self._crash_kind}
+
     async def _announce_crash(self) -> None:
-        logger.warning("browser {} crashed (Chromium connection lost)", self.browser_id)
-        self._broadcast({"type": "crashed", "browser_id": self.browser_id})
+        logger.warning("browser {} crashed ({}; Chromium connection lost)", self.browser_id, self._crash_kind)
+        self._broadcast(self._crash_message())
         # Release anyone queued for this browser: it will never free, so wait-queue waiters
         # must not hang and resume-queue agents must be told rather than wait for a wake
         # that never comes. (close() does the same for a user-closed browser.)
@@ -1724,7 +1752,7 @@ class LiveBrowser(MutableModel):
         # it whether to show the init overlay / live page / crashed overlay.
         client_queue.put_nowait(json.dumps(self._control_message(), default=str))
         if self._crashed:  # a viewer opening a crashed browser sees the crash state at once
-            client_queue.put_nowait(json.dumps({"type": "crashed", "browser_id": self.browser_id}, default=str))
+            client_queue.put_nowait(json.dumps(self._crash_message(), default=str))
         # Pixels are seeded on the /stream socket (a fresh SPS/PPS+IDR on connect), not here.
         self._cast_queues.append(client_queue)
         return client_queue
@@ -1876,16 +1904,17 @@ class LiveBrowser(MutableModel):
         self._lease_touched_at = time.monotonic()
         self._granted_at = 0.0
 
-    async def close(self) -> None:
+    async def close(self, is_program_stopping: bool) -> None:
+        """End the browser. ``is_program_stopping``: the browser program itself is stopping, and the browser comes
+        back with it, so its viewers are told it is stopping rather than closed."""
         self._closed = True
         if self._keepalive_task is not None:
             self._keepalive_task.cancel()
-        # Tell every connected viewer this browser is gone BEFORE pushing the shutdown
-        # sentinel, so the pane shows the terminal "terminated by an agent" overlay
-        # immediately (mirrors the ``crashed`` broadcast) instead of flashing the
-        # "Loading browser view…" spinner while its cast socket closes and reconnects.
-        # Enqueued ahead of the sentinel, so the ordered per-socket queue sends it first.
-        self._broadcast({"type": "closed", "browser_id": self.browser_id})
+        # Tell every connected viewer BEFORE pushing the shutdown sentinel, so the pane shows
+        # its cover at once instead of flashing the "Loading browser view…" spinner while its
+        # cast socket closes and reconnects. Enqueued ahead of the sentinel, so the ordered
+        # per-socket queue sends it first.
+        self._broadcast({"type": "stopping" if is_program_stopping else "closed", "browser_id": self.browser_id})
         # Tell every cast socket to tear down (don't wait for the client to disconnect).
         self._shutdown_cast_queues()
         # Release every queued agent so none hangs on a browser being torn down: wait-queue
@@ -2051,6 +2080,11 @@ class BrowserSessionManager(MutableModel):
         mutates it) is what makes it race-free, like ``capacity_async``."""
         return self.recently_failed_launch(name)
 
+    @property
+    def is_shutting_down(self) -> bool:
+        """Whether the program is stopping: a browser it no longer holds comes back with it."""
+        return self._closed
+
     async def recently_closed_async(self, name: str) -> bool:
         """Whether ``name`` was explicitly closed (and not since re-created). The cast/stream
         handlers use this to terminally close (1008) a viewer of a retired browser instead
@@ -2108,7 +2142,8 @@ class BrowserSessionManager(MutableModel):
                 # queues -- so the viewer sees the launch_failed message and then the
                 # socket tears down deterministically, not only on its own disconnect.
                 session._broadcast({"type": "launch_failed", "browser_id": session.browser_id})
-                await session.close()  # don't leak a half-started Chromium; pushes the sentinel
+                # Don't leak a half-started Chromium; pushes the sentinel.
+                await session.close(is_program_stopping=False)
                 return
         # A new RUNNING browser is a topology change worth persisting promptly (create);
         # restore defers to its reconcile instead (persist=False).
@@ -2258,12 +2293,17 @@ class BrowserSessionManager(MutableModel):
     async def open_url_for_human(self, url: str) -> LiveBrowser:
         """Open a page the human asked for (a link clicked in the workspace, ``open:url``) in the one browser, as
         ``ensure_browser`` does a start page, except that while an agent drives the browser the page is held rather
-        than opened over the agent's work: the viewer offers the human to take control, which opens it, or to
-        cancel it."""
+        than opened over the agent's work (the viewer offers the human to take control, which opens it, or to
+        cancel it), and that a running browser is answered before its new tab is up."""
         browser = self.the_browser()
         if browser is not None and browser._is_running and browser.controller == "agent":
             logger.info("Held {} for browser {} while an agent drives it", url, browser.browser_id)
             browser.hold_pending_url(url)
+            return browser
+        if browser is not None and browser._is_running:
+            # Opened in the background: a new tab can take longer than the shell's relay waits for this answer,
+            # and the relay would then report a link the browser goes on to open as one it could not.
+            browser._spawn(browser.open_tab(url))
             return browser
         return await self.ensure_browser(url)
 
@@ -2362,8 +2402,10 @@ class BrowserSessionManager(MutableModel):
         if session is None:
             return
         # Remember it as terminally gone so a still-open viewer tab is closed 1008 rather
-        # than looping on 1013 "Starting browser..." (cleared if the name is re-created).
-        self._closed_names.append(browser_id)
+        # than looping on 1013 "Starting browser..." (cleared if the name is re-created). A
+        # browser closed by the program's own shutdown is not gone: it comes back with the program.
+        if not self._closed:
+            self._closed_names.append(browser_id)
         # Mark closed FIRST, then serialize against an in-flight launch: if create's
         # background _launch is suspended mid-start(), await it so the launch finishes (or
         # aborts via start()'s _abort_start_if_torn_down guard, which now sees _closed)
@@ -2377,7 +2419,7 @@ class BrowserSessionManager(MutableModel):
                 await launch_task
             except (asyncio.CancelledError, BrowserStartupError, *_BROWSER_ERRORS) as e:
                 logger.debug("in-flight launch of {} unwound during close ({})", browser_id, e)
-        await session.close()
+        await session.close(is_program_stopping=self._closed)
 
     async def stop_browser(self, browser_id: str) -> None:
         """Stop a browser's Chromium while keeping it registered (see :meth:`LiveBrowser.stop`), then checkpoint.

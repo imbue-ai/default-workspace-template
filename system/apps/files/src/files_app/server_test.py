@@ -173,7 +173,8 @@ def test_a_path_that_is_not_there_is_files_own_not_found_page_for_a_browser_and_
 
     fetched = client.get("/missing/?json", headers={"Accept": "text/html,*/*"})
     assert fetched.status_code == 404
-    assert fetched.get_data(as_text=True) == "There's nothing at /missing/."
+    said = "There's nothing at /missing/."
+    assert fetched.get_json() == {"detail": said, "user_facing_message": said}
 
 
 def test_a_put_writes_the_file_creating_its_folders_and_keeping_its_mode(tmp_path: Path) -> None:
@@ -516,7 +517,8 @@ def test_a_change_the_computer_refuses_is_answered_as_read_only(tmp_path: Path) 
     computer.files["/Users/kim/photo.png"] = b"\x89PNG"
     response = _app(computer, tmp_path).put(f"/__remote/{DEVICE}/Users/kim/photo.png", data=b"new")
     assert response.status_code == 403
-    assert response.get_data(as_text=True) == "Your computer only shares this to read."
+    said = "Your computer only shares this to read."
+    assert response.get_json() == {"detail": said, "user_facing_message": said}
     assert computer.files["/Users/kim/photo.png"] == b"\x89PNG"
 
 

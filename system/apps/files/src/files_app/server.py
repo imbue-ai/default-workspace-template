@@ -100,6 +100,15 @@ def _text(message: str, status: int) -> Response:
     return Response(message, status=status, mimetype="text/plain")
 
 
+def _refusal(message: str, status: int, is_written_for_people: bool = True) -> Response:
+    """A refusal as the ``ErrorResponse`` the page reads (``detail`` for a script, and the same words as
+    ``user_facing_message`` when they are written for the person), except to a download: that loads in a hidden frame,
+    which can read only plain text (workspace_ui's ``startDownload``)."""
+    if "download" in request.args:
+        return _text(message, status)
+    return error_response(message, status, user_facing_message=message if is_written_for_people else None)
+
+
 def _request_body() -> Iterator[bytes]:
     if request.content_length in (None, 0) and "chunked" not in request.headers.get("Transfer-Encoding", ""):
         return iter(())
@@ -145,13 +154,13 @@ def create_app(
             response = send_from_directory(static_directory, "404.html", max_age=None)
             response.status_code = 404
             return response
-        return _text(error.message, error.status)
+        return _refusal(error.message, error.status)
 
     def answer(source: FileSource, prefix: str, path: str) -> Response:
         # A gateway client drops dot segments, so `..` would climb out of a computer's file server to the gateway's
         # own API; nothing is reached that way in the workspace either.
         if any(segment in (".", "..") for segment in path.split("/")):
-            return _text(f"{path} isn't a path to a file or folder.", 400)
+            return _refusal(f"{path} isn't a path to a file or folder.", 400)
         query = request.args
         try:
             if request.method in ("GET", "HEAD"):
@@ -180,16 +189,16 @@ def create_app(
                 return _text("", 204)
             destination = urllib.parse.unquote(urllib.parse.urlsplit(request.headers.get("Destination", "")).path)
             if prefix == "" and destination.startswith(f"{REMOTE_PREFIX}/"):
-                return _text(_NO_MOVE_TO_COMPUTER, 501)
+                return _refusal(_NO_MOVE_TO_COMPUTER, 501)
             source.move(path, destination[len(prefix) :])
             return _text("", 201)
         except FilesError as error:
             return failure(error)
         except PermissionError:
-            return _text(f"You don't have permission to change or read {path}.", 403)
+            return _refusal(f"You don't have permission to change or read {path}.", 403)
         except OSError as error:
             logger.warning("{} {} failed: {}", request.method, path, error)
-            return _text(f"Couldn't do that with {path}: {error.strerror or error}", 500)
+            return _refusal(f"Couldn't do that with {path}: {error.strerror or error}", 500, is_written_for_people=False)
 
     @app.get(f"{ASSETS_PREFIX}/<path:name>")
     def asset(name: str) -> Response:
@@ -234,7 +243,7 @@ def create_app(
         workspace is not connected to Imbue Studio, and moving onto or off a computer is not supported.
         """
         if gateway is None:
-            return _text(_NO_GATEWAY, 503)
+            return _refusal(_NO_GATEWAY, 503)
         prefix = f"{REMOTE_PREFIX}/{device}"
         source = DeviceFiles(gateway, device, device_paths.get(device))
         try:

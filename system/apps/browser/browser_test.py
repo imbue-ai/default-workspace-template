@@ -16,6 +16,7 @@ from browser import chrome_args, chrome_launcher, manifest
 from browser import session as bsession
 from browser.cdp_client import CdpError
 from browser.errors import BrowserNotDrivableError, UnknownBrowserError
+from browser.install_gate import InstallState
 from loguru import logger
 from mock_cdp_client_test import (
     NavigatingCdpClient,
@@ -77,16 +78,12 @@ def test_deferred_install_ready_gates_on_fortress_executable(monkeypatch: pytest
     fortress = tmp_path / "tilion"
     monkeypatch.setattr(bsession, "_FORTRESS_EXECUTABLE", str(fortress))
     # Missing binary: still installing.
-    ready, _ = bsession.deferred_install_ready()
-    assert ready is False
+    assert bsession.deferred_install_ready().state == InstallState.INSTALLING
     # Present but not executable (a partially-staged install): still not ready.
     fortress.write_text("")
-    ready, _ = bsession.deferred_install_ready()
-    assert ready is False
+    assert bsession.deferred_install_ready().state == InstallState.INSTALLING
     fortress.chmod(0o755)
-    ready, reason = bsession.deferred_install_ready()
-    assert ready is True
-    assert reason == "ready"
+    assert bsession.deferred_install_ready().is_ready is True
 
 
 # ownership state machine (no browser needed)
@@ -616,7 +613,7 @@ def test_close_releases_a_queued_waiter(monkeypatch: pytest.MonkeyPatch) -> None
 
         task = asyncio.create_task(waiter())
         await asyncio.sleep(0.05)
-        await browser.close()
+        await browser.close(is_program_stopping=False)
         assert await task == "closed"
         assert browser._wait_queue == []
 
@@ -698,7 +695,7 @@ def test_close_broadcasts_closed_before_teardown(monkeypatch: pytest.MonkeyPatch
 
     async def go() -> None:
         session = bsession.LiveBrowser(browser_id="alex-smith")
-        await session.close()
+        await session.close(is_program_stopping=False)
         assert any(m.get("type") == "closed" and m.get("browser_id") == "alex-smith" for m in casts)
 
     asyncio.run(go())
@@ -1176,7 +1173,7 @@ def test_shutdown_checkpoints_every_browser_before_closing_any(monkeypatch: pyte
     # would report afterwards, so a save that ran after it would show.
     events: list[str] = []
 
-    async def fake_close(self: bsession.LiveBrowser) -> None:
+    async def fake_close(self: bsession.LiveBrowser, is_program_stopping: bool) -> None:
         events.append(f"close:{self.browser_id}")
         self._cdp = None
         self._last_known_tabs = ["https://after-close.example"]
@@ -2224,6 +2221,7 @@ def test_a_page_for_a_free_running_browser_opens_as_a_tab_in_front() -> None:
 
     async def go() -> None:
         assert await _fleet_of(browser).open_url_for_human("http://localhost:3000/app") is browser
+        await _settle_background(browser)
 
     asyncio.run(go())
     assert cdp.created == ["http://localhost:3000/app"]
@@ -2319,3 +2317,118 @@ def test_a_page_asked_for_while_the_browser_launches_is_kept_for_the_launch() ->
     asyncio.run(go())
     assert browser._lifecycle == "init"
     assert browser._pending_url == "http://localhost:3000/"
+
+
+# how a crash, and the program's own stop, reach the viewer
+
+
+class _EndedChrome(chrome_launcher.ChromeProcess):
+    """A launched Chromium whose process ended with ``exit_code`` (None: it still runs)."""
+
+    def __init__(self, exit_code: int | None) -> None:
+        self._exit_code = exit_code
+
+    @property
+    def alive(self) -> bool:
+        return self._exit_code is None
+
+    @property
+    def exit_code(self) -> int | None:
+        return self._exit_code
+
+    def kill(self) -> None:
+        pass
+
+
+@pytest.mark.parametrize(
+    ("exit_code", "kind"),
+    [
+        pytest.param(-signal.SIGKILL, "killed", id="killed-by-a-signal"),
+        pytest.param(0, "exited", id="ended-on-its-own"),
+        pytest.param(None, "unresponsive", id="running-but-not-answering"),
+    ],
+)
+def test_a_crash_tells_viewers_how_chromium_ended(exit_code: int | None, kind: str) -> None:
+    browser = _running_browser("browser-1")
+    browser._chrome = _EndedChrome(exit_code)
+
+    async def go() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        watching = await browser.register_cast_queue()
+        _pop_json(watching)  # the control seed
+        browser._on_disconnected()
+        await _settle_background(browser)
+        announced = [_pop_json(watching) for _ in range(watching.qsize())]
+        joining = await browser.register_cast_queue()
+        seeded = [_pop_json(joining) for _ in range(joining.qsize())]
+        return announced, seeded
+
+    announced, seeded = asyncio.run(go())
+    crash = {"type": "crashed", "browser_id": "browser-1", "reason": kind}
+    assert crash in announced
+    # A viewer that opens the browser after the crash is told the same.
+    assert seeded[-1] == crash
+
+
+def test_the_programs_own_stop_tells_viewers_the_browser_is_stopping_and_keeps_its_name() -> None:
+    mgr = _manager()
+    stopping = _running_browser("browser-1")
+    closed_by_agent = _running_browser("browser-2")
+    mgr._browsers = {"browser-1": stopping, "browser-2": closed_by_agent}
+
+    async def go() -> tuple[list[dict[str, Any]], list[dict[str, Any]], bool, bool]:
+        agent_watching = await closed_by_agent.register_cast_queue()
+        await mgr.close("browser-2")
+        watching = await stopping.register_cast_queue()
+        await mgr.shutdown()
+        drained = [[], []]
+        for messages, cast_queue in zip(drained, (agent_watching, watching), strict=True):
+            while not cast_queue.empty():
+                payload = cast_queue.get_nowait()
+                if payload is not None:
+                    messages.append(json.loads(payload))
+        return (
+            drained[0],
+            drained[1],
+            await mgr.recently_closed_async("browser-2"),
+            await mgr.recently_closed_async("browser-1"),
+        )
+
+    agent_close, program_stop, is_agent_close_retired, is_stopped_name_retired = asyncio.run(go())
+    assert {"type": "closed", "browser_id": "browser-2"} in agent_close
+    assert {"type": "stopping", "browser_id": "browser-1"} in program_stop
+    assert not any(message.get("type") == "closed" for message in program_stop)
+    # A browser the program's stop closed comes back with the program, so a viewer reconnecting is not turned away.
+    assert is_agent_close_retired is True
+    assert is_stopped_name_retired is False
+    assert mgr.is_shutting_down is True
+
+
+class _SlowTabCdpClient(TabClosingCdpClient):
+    """Opens a new tab only once the test lets it, as a slow page's tab does."""
+
+    def __init__(self) -> None:
+        super().__init__([{"targetId": "t1", "url": "https://a.example/"}], shown_target_id="t1")
+        self.may_open = asyncio.Event()
+
+    async def create_target(self, url: str) -> str:
+        await self.may_open.wait()
+        return await super().create_target(url)
+
+
+def test_a_page_for_a_running_browser_is_answered_before_its_tab_is_up() -> None:
+    browser = _running_browser("browser-1")
+    cdp = _SlowTabCdpClient()
+    browser._cdp = cdp
+    browser._active_target_id = "t1"
+
+    async def go() -> list[str]:
+        answered = await asyncio.wait_for(_fleet_of(browser).open_url_for_human("http://localhost:3000/slow"), 5)
+        assert answered is browser
+        created_when_answered = list(cdp.created)
+        cdp.may_open.set()
+        await _settle_background(browser)
+        return created_when_answered
+
+    created_when_answered = asyncio.run(go())
+    assert created_when_answered == []
+    assert cdp.created == ["http://localhost:3000/slow"]

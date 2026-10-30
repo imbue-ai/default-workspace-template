@@ -331,7 +331,7 @@ def test_close_endpoint_deletes_profile_and_drops_from_manifest(monkeypatch: pyt
     profile.mkdir(parents=True)
     _install_fake_browser(monkeypatch, browser_id="riley-jones")
 
-    async def fake_close(self: bsession.LiveBrowser) -> None:  # avoid real Chromium teardown
+    async def fake_close(self: bsession.LiveBrowser, is_program_stopping: bool) -> None:  # avoid real Chromium teardown
         return None
 
     monkeypatch.setattr(bsession.LiveBrowser, "close", fake_close)

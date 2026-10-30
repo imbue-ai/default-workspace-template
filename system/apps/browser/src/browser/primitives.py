@@ -29,6 +29,10 @@ ControlOwner = Literal["human", "agent"]
 # and last known tabs); a start relaunches it from those. Unlike ``crashed`` it is not terminal.
 Lifecycle = Literal["init", "running", "crashed", "stopped"]
 
+# How a crashed browser's Chromium ended, which the viewer words its cover by: killed by a signal (the memory
+# shedder's way of ending it), ended on its own, or still running but no longer answering.
+CrashKind = Literal["killed", "exited", "unresponsive"]
+
 # A start page is an absolute http(s) URL with a host; the length bound keeps a query string
 # from smuggling in an unbounded value.
 MAX_START_URL_LENGTH: Final[int] = 2048
