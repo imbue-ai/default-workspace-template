@@ -1,0 +1,1 @@
+The docstring of the environment bootstrap hands supervisord now gives its current reason (bare-named commands such as the agent observer's `mngr` resolve to the workspace venv first), since every app's program line names its entry point by path and no app has a uv tool of its own. No behavior change.

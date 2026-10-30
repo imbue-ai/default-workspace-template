@@ -712,13 +712,13 @@ def _sync_workspace_venv() -> None:
 def _supervisord_environment(environ: Mapping[str, str], venv: Path) -> dict[str, str]:
     """``environ`` with ``venv`` activated the way ``uv run`` activates it.
 
-    supervisord's programs inherit this environment, and a program line that names
-    its entry point bare (``chat-app``, the ``exec <name>`` ending a scaffolded app's
-    line) resolves it on PATH. The copy it has to find there is the console script
-    ``uv sync --all-packages`` writes into the venv: a user-built app's
-    ``uv tool install -e`` puts its own entry point under a HOME that is not on PATH.
-    The bootstrap window starts this program from ``.venv/bin`` rather than under
-    ``uv run``, so nothing else has put the venv there.
+    supervisord's programs inherit this environment, so a command a program runs by
+    bare name (the agent observer's ``mngr``, a ``python`` a service shells out to)
+    resolves to the venv's copy first, as it would under ``uv run``. The built-in
+    apps' and services' lines name their entry points by path (``.venv/bin/<name>``),
+    and a user package's line execs its own project's ``.venv/bin``, so neither
+    depends on this. The bootstrap window starts this program from ``.venv/bin``
+    rather than under ``uv run``, so nothing else has put the venv there.
     """
     path = os.pathsep.join(
         entry for entry in (str(venv / "bin"), environ.get("PATH", "")) if entry
