@@ -161,9 +161,12 @@ describe("a compaction's chips", () => {
     expect(header.querySelector("svg polyline")).not.toBeNull();
   });
 
-  it("opens on the explanation alone when there is no summary yet", () => {
-    for (const event of [compactionEvent("idle"), null]) {
-      const body = openPanelBody(event, 0);
+  it("opens the finish chip of an event with no summary, and the running start chip, on the explanation alone", () => {
+    for (const [event, index] of [
+      [compactionEvent("idle"), 1],
+      [null, 0],
+    ] as const) {
+      const body = openPanelBody(event, index);
       expect(body).toHaveLength(1);
       expect(body[0].classList.contains("compaction-explanation")).toBe(true);
       expect(root.querySelector(".compaction-summary")).toBeNull();
