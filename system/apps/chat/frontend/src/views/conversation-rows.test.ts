@@ -469,7 +469,7 @@ describe("a compaction's chips in the rows", () => {
     expect(chipRows(rows, "a-c1")).toEqual([["c1", "Compacting while idle…", "Compacted"]]);
   });
 
-  it("keeps a /compact as a bubble when the compaction after it is not idle, or nothing follows it", () => {
+  it("keeps a /compact as a bubble when a message comes between it and the idle compaction, or the compaction running after it is not idle", () => {
     const refused = buildConversationRows(
       "agent-1",
       [...typedCompact("t1"), userMsg("t2", "never mind"), compacted("t3", "cs-idle", "idle")],
