@@ -473,9 +473,9 @@ class Spawner:
 
 
 # How a standalone project (a user package under system/, with its own uv.lock and
-# .venv) is booted: like its supervisord program, it links the project's venv, syncs it
-# from the project's own lock, and execs the command with that venv first on PATH, so a
-# bare console-script name resolves to the project's own install.
+# .venv) is booted: like its supervisord program, it links the project's venv and syncs it
+# from the project's own lock; it then execs the command with that venv first on PATH, so
+# a bare console-script name in the launch argv resolves to the project's own install.
 VENV_LINKS_SCRIPT = "system/scripts/workspace_bare_scripts/venv_links.py"
 
 
@@ -1444,8 +1444,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--project",
         default=None,
         help="Boot the launch argv from this standalone project's own venv (a user "
-        "app, service or lib under system/, relative to --cwd): link it, sync it "
-        "--locked, and put its .venv/bin first on PATH, as its program does.",
+        "app, service or lib under system/, relative to --cwd): link it and sync it "
+        "--locked, as its program does, then put its .venv/bin first on PATH so a "
+        "bare script name in the launch argv resolves to its install.",
     )
     _add_repo_root_arg(up_parser)
     up_parser.add_argument(
