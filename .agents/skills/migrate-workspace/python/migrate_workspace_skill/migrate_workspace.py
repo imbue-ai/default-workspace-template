@@ -1877,7 +1877,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 # The landed user packages are converted by update-self's migration script, the one
-# writer of the standalone layout for packages that predate it; both run by their paths.
+# writer of the standalone layout for packages that predate it. The lister is bare and runs
+# under python3; the migration runs from this root venv, where update_self_skill is installed.
 USER_PACKAGES_SCRIPT = "system/scripts/workspace_bare_scripts/user_packages.py"
 PACKAGE_MIGRATION_SCRIPT = (
     ".agents/skills/update-self/python/update_self_skill/user_package_migration.py"
@@ -1895,7 +1896,7 @@ def _cmd_convert_packages(args: argparse.Namespace) -> int:
     ).stdout.split()
     is_any_failed = False
     for package in listed:
-        argv = ["python3", PACKAGE_MIGRATION_SCRIPT, "migrate", package]
+        argv = [sys.executable, PACKAGE_MIGRATION_SCRIPT, "migrate", package]
         if args.dry_run:
             argv.append("--dry-run")
         if args.shared_lock is not None:

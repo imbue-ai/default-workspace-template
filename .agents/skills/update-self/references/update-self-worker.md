@@ -324,7 +324,7 @@ in your report.
   in the workspace can start); fix it before running anything else. A user
   package whose lock is stale after the merge (a shared library it uses or the
   mngr pin moved) is relocked with
-  `python3 .agents/skills/update-self/python/update_self_skill/user_package_migration.py relock <package>`,
+  `uv run --no-sync .agents/skills/update-self/python/update_self_skill/user_package_migration.py relock <package>`,
   never by hand-editing its lock. A user package that is not standalone yet (the
   update that made them standalone; `system/test_user_packages_are_standalone.py`
   names it) is converted with the same script's `migrate`, after its `--dry-run`,

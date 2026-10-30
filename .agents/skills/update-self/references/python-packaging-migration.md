@@ -94,7 +94,7 @@ it runs today:
    names:
 
    ```bash
-   python3 .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/<kind>/<package> --dry-run
+   uv run --no-sync .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/<kind>/<package> --dry-run
    ```
 
    It lists what it would change: the sources that become editable path
@@ -106,7 +106,7 @@ it runs today:
 
    ```bash
    git show <rollback point>:uv.lock > /var/tmp/pre-merge.uv.lock
-   python3 .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/<kind>/<package> --shared-lock /var/tmp/pre-merge.uv.lock
+   uv run --no-sync .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/<kind>/<package> --shared-lock /var/tmp/pre-merge.uv.lock
    ```
 
    It locks the package (holding any package the root pins from git to the
@@ -144,7 +144,7 @@ program line ends up in the standalone form, keeping whatever OOM tag and other
 command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/<package> && uv sync --locked --project system/services/<package> && exec system/services/<package>/.venv/bin/<name>"
 ```
 
-The migration script writes it from a `uv run <name>` line as well as a
+The migration script writes it from a line that runs `uv run <name>` as well as from a
 `.venv/bin/<name>` one. After the apply the program picks it up on its next
 restart.
 

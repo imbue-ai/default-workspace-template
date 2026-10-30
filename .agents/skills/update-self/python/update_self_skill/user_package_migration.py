@@ -28,7 +28,8 @@ writes today, keeping the versions it runs on:
 ``--dry-run`` prints what it would change and changes nothing. ``relock`` re-runs step 6's
 lock and pin alignment, for a package whose shared libraries or mngr pin moved.
 
-Run from the repo root: ``python3 .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/apps/<package> --dry-run``.
+Run from the repo root, from the root venv (where ``update_self_skill`` is installed):
+``uv run --no-sync .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/apps/<package> --dry-run``.
 """
 
 from __future__ import annotations
@@ -43,9 +44,6 @@ import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import NamedTuple
-
-if not __package__:
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from update_self_skill import user_packages, venv_links
 
