@@ -18,7 +18,9 @@
  * turn the user took: the registry marks chips and notices as no turn, and verdicts are excluded on
  * top of that (the app talking to itself). So are the turns of a seeded chat's seed segment: those
  * were written before any agent ran, so they bought no fast turns. Nor is the `/compact` the idle
- * sweep sends a Claude agent: the user never sent it, and it shows on its compaction's chip.
+ * sweep sends a Claude agent once its compaction has landed: the user never sent it, and it shows on
+ * its compaction's chip. While that compaction runs, the count cannot tell it from a typed one; the
+ * automatic switch reads the count only once the agent is idle again.
  */
 
 import m from "mithril";
