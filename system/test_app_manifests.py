@@ -420,8 +420,8 @@ def test_every_built_in_preview_boots_its_programs_entry_point(
 ) -> None:
     # preview_app.py execs the preview command, or the program's name when the table names
     # none, with the venv's bin first on PATH; whatever the venv holds under that name is
-    # what boots. Anything
-    # but the script the app's own program runs previews some other package, or nothing.
+    # what boots. Anything but the script the app's own program runs previews some other
+    # package, or nothing.
     manifest = load_manifest(manifest_path)
     launched = (
         manifest.preview.command[0]
