@@ -9,6 +9,7 @@ import threading
 import time
 import tomllib
 from collections.abc import Callable
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
@@ -155,6 +157,7 @@ from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import append_observe_event
 from imbue.mngr.api.observe import get_observe_events_dir
@@ -5863,14 +5866,40 @@ def _install_resend_capabilities(
     )
 
 
+class _StopDuringSendMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger that runs each of ``during_send`` while a send is in flight."""
+
+    during_send: list[Callable[[], None]] = []
+
+    def send_to_agent(
+        self,
+        agent_id: MngrAgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        for run in self.during_send:
+            run()
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
 class _LostSendChat:
     """One claude chat whose transcript shows only the turns a test lands in it, and the messages sent to it
     again after its process ended. ``is_resend_routed`` sends each resend through the chat's session, as the
     message route does, so a resend is itself kept for sending again."""
 
-    def __init__(self, broadcaster: WebSocketBroadcaster, *, is_resend_routed: bool = False) -> None:
+    def __init__(
+        self,
+        broadcaster: WebSocketBroadcaster,
+        *,
+        is_resend_routed: bool = False,
+        messenger: RecordingMngrMessenger | None = None,
+    ) -> None:
         self.agent_id = f"agent-{uuid4().hex}"
-        self.manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger())
+        self.manager = AgentManager.build(
+            broadcaster, messenger=messenger if messenger is not None else RecordingMngrMessenger()
+        )
         self.transcript = _FixedTranscriptReader([])
         self.resent: list[str] = []
         self._is_resend_routed = is_resend_routed
@@ -6021,6 +6050,23 @@ def test_messages_delivered_before_or_during_a_stop_are_not_sent_again(broadcast
     assert chat.resent == []
 
 
+def test_a_send_a_stop_began_and_ended_during_is_not_kept_for_sending_again(broadcaster: WebSocketBroadcaster) -> None:
+    """Stop handed the message back while it was in flight, so its landing afterwards does not bring it back."""
+    messenger = _StopDuringSendMngrMessenger()
+    chat = _LostSendChat(broadcaster, messenger=messenger)
+
+    def stop_the_agent() -> None:
+        with chat.manager.letting_go_of_unrecorded_sends(chat.agent_id):
+            pass
+
+    messenger.during_send.append(stop_the_agent)
+    try:
+        chat.send("what is 5+5?")
+    finally:
+        chat.manager.stop()
+    assert chat.agent_id not in chat.manager._unrecorded_sends_by_agent
+
+
 def test_a_stop_takes_back_the_sends_in_flight_when_it_began_and_no_later_one() -> None:
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
@@ -6039,7 +6085,7 @@ def test_stopping_a_chat_lets_go_of_the_sends_kept_for_resending(
     manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
     agent_id = f"agent-{uuid4().hex}"
     seed_agent_state(manager, agent_id, name="Stopped-Chat")
-    manager._keep_unrecorded_send(agent_id, "what is 5+5?", time.time())
+    manager._keep_unrecorded_send(agent_id, "what is 5+5?", time.time(), stops_begun_before_send=0)
     try:
         manager.stop_chat(ChatId(agent_id))
     finally:

@@ -2742,7 +2742,7 @@ def test_a_restart_route_lets_go_of_the_sends_kept_for_resending(app: Flask, cli
     """Both routes restart the agent on purpose, so what it took before is not sent again when its process ends."""
     agent_info = _agent_info()
     manager = state_of(app).agent_manager
-    manager._keep_unrecorded_send(agent_info.id, "what is 5+5?", time.time())
+    manager._keep_unrecorded_send(agent_info.id, "what is 5+5?", time.time(), stops_begun_before_send=0)
     letting_go_during_restart: list[bool] = []
 
     def restart(**_kwargs: Any) -> FinishedProcess:

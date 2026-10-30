@@ -2074,15 +2074,19 @@ class AgentManager:
         if not get_harness_spec(harness).resends_sends_lost_with_process:
             return self.send_message_to_agent(AgentId(agent_id), text, is_resent_when_unsure)
         sent_after = time.time() - _TRANSCRIPT_CLOCK_SLACK_SECONDS
+        stops_begun_before_send = self._stops_begun_of(AgentId(agent_id))
         result = self.send_message_to_agent(AgentId(agent_id), text, is_resent_when_unsure)
         if isinstance(result, SendDelivery):
-            self._keep_unrecorded_send(agent_id, text, sent_after)
+            self._keep_unrecorded_send(agent_id, text, sent_after, stops_begun_before_send)
         return result
 
-    def _keep_unrecorded_send(self, agent_id: str, text: str, sent_after: float) -> None:
+    def _keep_unrecorded_send(self, agent_id: str, text: str, sent_after: float, stops_begun_before_send: int) -> None:
         now = time.monotonic()
         with self._lock:
-            if agent_id in self._letting_go_counts_by_agent:
+            if (
+                agent_id in self._letting_go_counts_by_agent
+                or self._stops_begun_by_agent.get(agent_id, 0) != stops_begun_before_send
+            ):
                 return
             kept = [
                 send
