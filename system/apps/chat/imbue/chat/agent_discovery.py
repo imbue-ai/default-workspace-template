@@ -424,12 +424,12 @@ class _SendAttempt(FrozenModel):
     """What one send through ``MngrMessenger`` came to, its repeats included."""
 
     result: MessageResult
-    is_resent_when_unsure: bool
+    is_resent: bool
 
 
 def _delivery_of(attempt: _SendAttempt) -> SendDelivery:
     """How a send that reached its agent got there."""
-    return SendDelivery.RESENT if attempt.is_resent_when_unsure else SendDelivery.DELIVERED
+    return SendDelivery.RESENT if attempt.is_resent else SendDelivery.DELIVERED
 
 
 def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) -> MessageResult:
@@ -538,7 +538,7 @@ class MngrMessenger(FrozenModel):
                 )
                 if attempt.result.successful_agents:
                     return _delivery_of(attempt)
-                if attempt.is_resent_when_unsure or not _is_location_miss(attempt.result) or is_taken_back():
+                if attempt.is_resent or not _is_location_miss(attempt.result) or is_taken_back():
                     return _first_failure(attempt.result)
             matches = self.discover(agent_id, mngr_ctx)
             attempt = self._send_with_repeats(matches, message, mngr_ctx, is_resent_when_unsure, is_taken_back)
@@ -566,13 +566,13 @@ class MngrMessenger(FrozenModel):
                 break
             self.pause(delay_seconds)
             if is_taken_back():
-                return _SendAttempt(result=result, is_resent_when_unsure=False)
+                return _SendAttempt(result=result, is_resent=False)
             result = self.send(matches, message, mngr_ctx)
         if (_is_untaken(result) or _is_unstarted(result)) and not is_taken_back():
             result = self.send(matches, message, mngr_ctx)
         if is_resent_when_unsure and _is_unsure(result) and not is_taken_back():
-            return _SendAttempt(result=self.send(matches, message, mngr_ctx), is_resent_when_unsure=True)
-        return _SendAttempt(result=result, is_resent_when_unsure=False)
+            return _SendAttempt(result=self.send(matches, message, mngr_ctx), is_resent=True)
+        return _SendAttempt(result=result, is_resent=False)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.
