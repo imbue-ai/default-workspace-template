@@ -972,9 +972,17 @@ class _ResendChoiceRecordingMngrMessenger(RecordingMngrMessenger):
         message: str,
         known_locations: Sequence[AgentMatch],
         is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
     ) -> SendDelivery | SendFailure:
         self.resend_choices.append(is_resent_when_unsure)
-        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
+def _client_over(messenger: RecordingMngrMessenger) -> tuple[AgentManager, FlaskClient]:
+    """A chat app whose agent list is known and whose sends go to ``messenger``, with a client for its routes."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    return manager, create_application(build_test_state(agent_manager=manager)).test_client()
 
 
 def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass() -> None:
@@ -992,6 +1000,22 @@ def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass(
         assert messenger.resend_choices == [False]
     finally:
         state.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("body_fields", "expected_choice"),
+    [({}, True), ({"is_single_send": True}, False)],
+    ids=["a-plain-send", "a-send-from-a-failure-notice"],
+)
+def test_only_a_send_from_a_failure_notice_goes_out_once(body_fields: dict[str, bool], expected_choice: bool) -> None:
+    agent_info = _agent_info()
+    messenger = _ResendChoiceRecordingMngrMessenger()
+    _manager, client = _client_over(messenger)
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_info.id}/message", json={"message": "hello", **body_fields})
+
+    assert response.status_code == 200
+    assert messenger.resend_choices == [expected_choice]
 
 
 def test_a_watcher_released_while_it_starts_is_stopped_once_after_its_start() -> None:
@@ -1164,19 +1188,10 @@ def test_a_repeat_of_a_refused_send_gets_the_refusal_while_a_plain_send_under_it
 
 def test_a_send_delivered_by_a_second_send_answers_resent() -> None:
     """mngr could not confirm the first send and the chat sent it again, so the page is told, to say so."""
-    agent_id = "agent-00000000000000000000000000000001"
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
-        claude_config_dir=Path("/tmp/.claude"),
-    )
+    agent_info = _agent_info()
     messenger = RecordingMngrMessenger(delivery=SendDelivery.RESENT)
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
-    manager.note_agent_list_known()
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
-    url = f"/api/chats/{agent_id}/message"
+    _, client = _client_over(messenger)
+    url = f"/api/chats/{agent_info.id}/message"
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
         response = client.post(url, json={"message": "hello", "message_id": "m-1"})
         # The page's repeat after a lost answer gets the same answer, so it can say so too.
@@ -1185,9 +1200,9 @@ def test_a_send_delivered_by_a_second_send_answers_resent() -> None:
     assert response.status_code == 200
     assert response.get_json() == {"status": "resent"}
     assert repeat.get_json() == {"status": "resent"}
-    assert messenger.sent == [(agent_id, "hello")]
+    assert messenger.sent == [(agent_info.id, "hello")]
     # Delivered all the same: kept to be sent again should the agent's process exit before recording it.
-    assert [send.text for send in manager._unrecorded_sends_by_agent.get(agent_id, [])] == ["hello"]
+    assert [send.text for send in manager._unrecorded_sends_by_agent.get(agent_info.id, [])] == ["hello"]
 
 
 def test_a_send_to_a_chat_launched_at_sign_in_carries_the_seeded_conversation_once(
@@ -1530,7 +1545,7 @@ def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarness
         harness=agent_info.harness,
         state_dir=agent_info.agent_state_dir,
         model_state_path=agent_info.agent_state_dir / "model_state.json",
-        send_to_harness=lambda text: SendOutcome.OK,
+        send_to_harness=lambda text, is_resent_when_unsure: SendOutcome.OK,
         notify_agents_changed=lambda: None,
         is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,
@@ -1684,6 +1699,23 @@ def test_revive_and_retry_send_gives_up_after_the_budget(tmp_path: Path, agent_m
         )
     assert outcome is SendOutcome.NOT_READY
     assert sleeps == []
+
+
+@pytest.mark.parametrize("is_single_send", [False, True], ids=["a-plain-send", "a-send-from-a-failure-notice"])
+def test_revive_and_retry_send_keeps_the_senders_choice_on_repeating_it(
+    tmp_path: Path, agent_manager: AgentManager, is_single_send: bool
+) -> None:
+    agent_info = _model_agent_info("codex-agent-11", tmp_path, harness=HarnessType.CODEX)
+    session = _codex_session_over(None)
+    request_body = SendMessageRequest(message="hi", message_id="m11", is_single_send=is_single_send)
+
+    with (
+        patch("imbue.chat.server.start_agent", lambda name: None),
+        patch.object(session, "send", return_value=SendOutcome.OK) as mock_send,
+    ):
+        outcome = _revive_and_retry_send(agent_info, agent_manager, session, request_body, "m11", sleep=lambda _: None)
+    assert outcome is SendOutcome.OK
+    mock_send.assert_called_once_with("hi", "m11", not is_single_send)
 
 
 def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:
@@ -2765,7 +2797,7 @@ def test_a_restart_route_lets_go_of_the_sends_kept_for_resending(app: Flask, cli
     """Both routes restart the agent on purpose, so what it took before is not sent again when its process ends."""
     agent_info = _agent_info()
     manager = state_of(app).agent_manager
-    manager._keep_unrecorded_send(agent_info.id, "what is 5+5?", time.time())
+    manager._keep_unrecorded_send(agent_info.id, "what is 5+5?", time.time(), stops_begun_before_send=0)
     letting_go_during_restart: list[bool] = []
 
     def restart(**_kwargs: Any) -> FinishedProcess:

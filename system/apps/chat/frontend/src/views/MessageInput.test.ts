@@ -1095,17 +1095,6 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.noteResentSend).not.toHaveBeenCalled();
   });
 
-  it("notes a Send again the chat app delivered by sending it again", async () => {
-    mocks.noteResentSend.mockClear();
-    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
-    const component = MessageInput();
-    const after = await typeAndSend(component, "agent-1", "hello");
-    mocks.sendMessage.mockResolvedValueOnce("resent");
-    (findButton(after, "Send again")!.attrs!.onclick as () => void)();
-    await flushAsync();
-    expect(mocks.noteResentSend).toHaveBeenCalledWith("agent-1", "hello", new Set(["turn-before-the-send"]));
-  });
-
   it("asks the user to check the agent before sending an unconfirmed message again", async () => {
     // The chat app has already sent it twice without confirmation, and the agent may have either
     // copy: a plain Retry or a Force (restart and resend) could deliver it a third time.
@@ -1137,7 +1126,7 @@ describe("MessageInput send failure notice", () => {
     (findButton(after, "Send again")!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
-    expect(mocks.sendMessage).toHaveBeenLastCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
+    expect(mocks.sendMessage).toHaveBeenLastCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
     const settled = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(settled)).not.toContain("Couldn't confirm your message arrived");
   });
@@ -1395,7 +1384,7 @@ describe("MessageInput send failure notice", () => {
     const retry = findButton(after, "Retry");
     (retry!.attrs!.onclick as () => void)();
     await flushAsync();
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
   it("force restarts the agent before sending, in that order", async () => {
@@ -1410,7 +1399,7 @@ describe("MessageInput send failure notice", () => {
     await flushAsync();
     expect(mocks.drainToComposer).toHaveBeenCalledWith("agent-1");
     expect(mocks.interruptAgent).toHaveBeenCalledWith("agent-1");
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
   it("does not send when the restart itself fails", async () => {

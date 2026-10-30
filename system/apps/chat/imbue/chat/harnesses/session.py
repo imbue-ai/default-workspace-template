@@ -118,7 +118,7 @@ class SessionDeps(FrozenModel):
     harness: HarnessType
     state_dir: Path
     # Deliver one message through mngr's locked message API (blocking): OK or RESENT when delivered/queued.
-    send_to_harness: Callable[[str], SendOutcome]
+    send_to_harness: Callable[[str, bool], SendOutcome]
     # Push a fresh agents snapshot to clients (tap-button greying rides this).
     notify_agents_changed: Callable[[], None]
     # Whether the harness's process has launched but not yet written its ready marker (False for a
@@ -180,8 +180,12 @@ class AgentHarnessSession(ABC):
     # Messages
 
     @abstractmethod
-    def send(self, text: str, message_id: str) -> SendOutcome:
-        """Deliver one message, owning its whole Sending lifecycle (contract A1)."""
+    def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
+        """Deliver one message, owning its whole Sending lifecycle (contract A1).
+
+        ``is_resent_when_unsure`` says whether a send mngr cannot confirm may be sent once more. Only a session
+        that delivers through mngr's send can come back unconfirmed; any other ignores it.
+        """
 
     def is_sending(self) -> bool:
         """Whether any send is currently in flight (greys the shoulder-tap button)."""
@@ -258,7 +262,7 @@ class FileHarnessSession(AgentHarnessSession):
         self._sending_lock = threading.Lock()
         return self
 
-    def send(self, text: str, message_id: str) -> SendOutcome:
+    def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
         # Record as Sending BEFORE delivery (contract A1): while the synchronous send is in
         # flight the message has no on-disk harness record yet, so a concurrent interrupt reads
         # this to return a not-yet-committed send to the composer rather than lose it (A4).
@@ -271,7 +275,7 @@ class FileHarnessSession(AgentHarnessSession):
         # it never stays stuck greyed.
         try:
             self._deps.notify_agents_changed()
-            return self._deps.send_to_harness(text)
+            return self._deps.send_to_harness(text, is_resent_when_unsure)
         finally:
             # Resolved on EVERY exit -- delivered/queued (a real representation exists), failed
             # (Returned, not Sending), or an exception from the send (the request 500s and the

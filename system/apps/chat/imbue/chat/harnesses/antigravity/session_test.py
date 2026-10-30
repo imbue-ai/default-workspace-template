@@ -31,7 +31,7 @@ def _session(state_dir: Path, sent: list[str]) -> AntigravityHarnessSession:
             harness=HarnessType.ANTIGRAVITY,
             state_dir=state_dir,
             model_state_path=state_dir / "model_state.json",
-            send_to_harness=lambda text: (sent.append(text), SendOutcome.OK)[1],
+            send_to_harness=lambda text, is_resent_when_unsure: (sent.append(text), SendOutcome.OK)[1],
             notify_agents_changed=lambda: None,
             is_harness_starting_up=lambda: False,
             is_tracked=lambda: True,

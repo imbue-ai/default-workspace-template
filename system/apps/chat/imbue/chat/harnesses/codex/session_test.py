@@ -95,7 +95,7 @@ def _session_over(transport: _ScriptedTransport, state_dir: Path) -> tuple[Codex
         harness=HarnessType.CODEX,
         state_dir=state_dir,
         model_state_path=state_dir / "model_state.json",
-        send_to_harness=lambda text: SendOutcome.OK,
+        send_to_harness=lambda text, is_resent_when_unsure: SendOutcome.OK,
         notify_agents_changed=lambda: None,
         is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,

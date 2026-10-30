@@ -1351,6 +1351,8 @@ class AgentManager:
     _lost_sends_being_resent: set[tuple[str, str]]
     # How many stops of each agent's turn or process are under way (``letting_go_of_unrecorded_sends``).
     _letting_go_counts_by_agent: dict[str, int]
+    # How many such stops have begun for each agent, so a send in flight can tell that one began after it did.
+    _stops_begun_by_agent: dict[str, int]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1525,6 +1527,7 @@ class AgentManager:
         manager._unrecorded_sends_by_agent = {}
         manager._lost_sends_being_resent = set()
         manager._letting_go_counts_by_agent = {}
+        manager._stops_begun_by_agent = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
@@ -2275,9 +2278,13 @@ class AgentManager:
                 return
             self._pause(_RESENT_TURN_LANDING_POLL_SECONDS)
 
-    def _send_to_harness(self, agent_id: str, harness: HarnessType, text: str) -> SendOutcome:
+    def _send_to_harness(
+        self, agent_id: str, harness: HarnessType, text: str, is_resent_when_unsure: bool
+    ) -> SendOutcome:
         """A file session's delivery (``send_message_kept_until_recorded``). Raises ``SendFailedError`` when refused."""
-        delivery = delivered_or_raise(self.send_message_kept_until_recorded(agent_id, harness, text))
+        delivery = delivered_or_raise(
+            self.send_message_kept_until_recorded(agent_id, harness, text, is_resent_when_unsure)
+        )
         match delivery:
             case SendDelivery.DELIVERED:
                 return SendOutcome.OK
@@ -2287,22 +2294,26 @@ class AgentManager:
                 assert_never(unreachable)
 
     def send_message_kept_until_recorded(
-        self, agent_id: str, harness: HarnessType, text: str
+        self, agent_id: str, harness: HarnessType, text: str, is_resent_when_unsure: bool = True
     ) -> SendDelivery | SendFailure:
         """``send_message_to_agent``; for a harness that can lose a message with its process, the delivered message
         is kept until then, so it can be sent again should the process exit before the transcript holds it."""
         if not get_harness_spec(harness).resends_sends_lost_with_process:
-            return self.send_message_to_agent(AgentId(agent_id), text)
+            return self.send_message_to_agent(AgentId(agent_id), text, is_resent_when_unsure)
         sent_after = time.time() - _TRANSCRIPT_CLOCK_SLACK_SECONDS
-        result = self.send_message_to_agent(AgentId(agent_id), text)
+        stops_begun_before_send = self._stops_begun_of(AgentId(agent_id))
+        result = self.send_message_to_agent(AgentId(agent_id), text, is_resent_when_unsure)
         if isinstance(result, SendDelivery):
-            self._keep_unrecorded_send(agent_id, text, sent_after)
+            self._keep_unrecorded_send(agent_id, text, sent_after, stops_begun_before_send)
         return result
 
-    def _keep_unrecorded_send(self, agent_id: str, text: str, sent_after: float) -> None:
+    def _keep_unrecorded_send(self, agent_id: str, text: str, sent_after: float, stops_begun_before_send: int) -> None:
         now = time.monotonic()
         with self._lock:
-            if agent_id in self._letting_go_counts_by_agent:
+            if (
+                agent_id in self._letting_go_counts_by_agent
+                or self._stops_begun_by_agent.get(agent_id, 0) != stops_begun_before_send
+            ):
                 return
             kept = [
                 send
@@ -2322,9 +2333,11 @@ class AgentManager:
     @contextmanager
     def letting_go_of_unrecorded_sends(self, agent_id: str) -> Generator[None, None, None]:
         """Scope a stop of the agent's turn or process (Stop taking its turn and queue back, the chat app stopping
-        it): the messages delivered to it, before and during the scope, are not sent again when its process ends."""
+        it): the messages delivered to it, before and during the scope, are not sent again when its process ends,
+        and a send already in flight to it makes no more tries, since Stop hands such a message back to the user."""
         with self._lock:
             self._letting_go_counts_by_agent[agent_id] = self._letting_go_counts_by_agent.get(agent_id, 0) + 1
+            self._stops_begun_by_agent[agent_id] = self._stops_begun_by_agent.get(agent_id, 0) + 1
             self._unrecorded_sends_by_agent.pop(agent_id, None)
         try:
             yield
@@ -3630,9 +3643,18 @@ class AgentManager:
         the harness's own words plus mngr's classification of them, which is what lets the chat
         decide what to offer.
         """
+        stops_begun_before_send = self._stops_begun_of(agent_id)
         return self._messenger.send_to_agent(
-            agent_id, message, self.get_agent_matches_by_id(str(agent_id)), is_resent_when_unsure
+            agent_id,
+            message,
+            self.get_agent_matches_by_id(str(agent_id)),
+            is_resent_when_unsure,
+            lambda: self._stops_begun_of(agent_id) != stops_begun_before_send,
         )
+
+    def _stops_begun_of(self, agent_id: AgentId) -> int:
+        with self._lock:
+            return self._stops_begun_by_agent.get(str(agent_id), 0)
 
     def press_key_chord_on_agent(self, agent_id: AgentId, key: str) -> bool:
         """Press a tmux key token (e.g. ``"M-q"``) into the agent's pane, using the live cache.
@@ -3663,6 +3685,7 @@ class AgentManager:
             self._pending_permission_ids_by_agent.pop(agent_id, None)
             self._unrecorded_sends_by_agent.pop(agent_id, None)
             self._resend_locks_by_agent.pop(agent_id, None)
+            self._stops_begun_by_agent.pop(agent_id, None)
             is_own_chat = not self._is_recorded_member_locked(agent_id)
         if is_own_chat:
             self._forget_chat(ChatId(agent_id))
@@ -5188,6 +5211,7 @@ class AgentManager:
                 self._pending_permission_ids_by_agent.pop(agent_id, None)
                 self._unrecorded_sends_by_agent.pop(agent_id, None)
                 self._resend_locks_by_agent.pop(agent_id, None)
+                self._stops_begun_by_agent.pop(agent_id, None)
                 is_own_chat = not self._is_recorded_member_locked(agent_id)
             # An agent that is its own chat takes the chat's per-chat records with it; a
             # member of a recorded chat (its first agent included) leaves the chat standing.
@@ -5373,7 +5397,9 @@ class AgentManager:
         deps = SessionDeps(
             harness=harness,
             state_dir=state_dir,
-            send_to_harness=lambda text: self._send_to_harness(agent_id, harness, text),
+            send_to_harness=lambda text, is_resent_when_unsure: self._send_to_harness(
+                agent_id, harness, text, is_resent_when_unsure
+            ),
             notify_agents_changed=self._broadcast_chats_updated,
             is_harness_starting_up=lambda: is_harness_starting_up(
                 state_dir, spec.startup_ready_marker, spec.process_started_marker_filename

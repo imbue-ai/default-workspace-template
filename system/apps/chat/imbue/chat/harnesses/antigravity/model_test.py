@@ -110,7 +110,7 @@ def _session(model_state_path: Path) -> AntigravityHarnessSession:
             harness=HarnessType.ANTIGRAVITY,
             state_dir=model_state_path.parent,
             model_state_path=model_state_path,
-            send_to_harness=lambda text: SendOutcome.OK,
+            send_to_harness=lambda text, is_resent_when_unsure: SendOutcome.OK,
             notify_agents_changed=lambda: None,
             is_harness_starting_up=lambda: False,
             is_tracked=lambda: True,
