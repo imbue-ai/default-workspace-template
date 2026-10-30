@@ -182,11 +182,11 @@ def _append_compact_summary(server: RunningWorkspace, uuid: str) -> None:
         handle.write(json.dumps(compact_summary_record(uuid, utc_iso_seconds_ago())) + "\n")
 
 
-def _append_typed_compact(server: RunningWorkspace) -> None:
+def _append_compact_command(server: RunningWorkspace) -> None:
     """The record Claude Code writes as a ``/compact`` is submitted, typed by the user or sent by the idle sweep."""
     record = {
         "type": "user",
-        "uuid": "uuid-typed-compact",
+        "uuid": "uuid-compact-command",
         "timestamp": utc_iso_seconds_ago(),
         "message": {"role": "user", "content": "/compact"},
     }
@@ -401,7 +401,7 @@ def test_a_typed_compact_shows_as_a_bubble_with_the_start_chip_under_it_until_th
     chat = _open_chat(page, server)
     expect(chat.locator(".message-user").first).to_contain_text("Hello agent!")
 
-    _append_typed_compact(server)
+    _append_compact_command(server)
     marker = write_compacting_marker(server.agent_info.agent_state_dir, "manual")
 
     bubble = chat.locator(".message-user", has_text="/compact")
@@ -453,7 +453,7 @@ def test_the_idle_sweeps_compact_shows_on_the_start_chip_and_never_as_a_bubble(
     expect(reply).to_be_visible(timeout=15000)
 
     server.chat_state.agent_manager.note_compaction_requested(FIXTURE_AGENT_ID, CompactionCause.IDLE, time.monotonic())
-    _append_typed_compact(server)
+    _append_compact_command(server)
 
     started = _started_chip(chat)
     expect(started.locator(".tool-chip-label")).to_have_text(_STARTED_LABEL_BY_CAUSE["idle"], timeout=15000)

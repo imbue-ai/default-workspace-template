@@ -319,7 +319,7 @@ describe("a compaction's chips in the rows", () => {
 
   /** A `/compact` as Claude Code records it, typed by the user or sent by the idle sweep, and the
    *  expansion it repeats it in after the compaction. */
-  function typedCompact(ts: string): UserMessageEvent[] {
+  function compactCommand(ts: string): UserMessageEvent[] {
     return [
       { ...userMsg(ts, "/compact", "u-compact"), non_turn_tail: true },
       { ...userMsg(ts, "/compact", "u-compact-expansion"), display: "hidden", non_turn_tail: true },
@@ -417,7 +417,7 @@ describe("a compaction's chips in the rows", () => {
       [
         userMsg("t1", "hello"),
         assistantText("t2", "hi there", "end_turn"),
-        ...typedCompact("t3"),
+        ...compactCommand("t3"),
         compacted("t4", "cs-manual", "manual"),
       ],
       true,
@@ -427,7 +427,7 @@ describe("a compaction's chips in the rows", () => {
   });
 
   it("puts the start chip alone where the pair will land while the agent compacts, then the pair", () => {
-    const before = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn"), ...typedCompact("t3")];
+    const before = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn"), ...compactCommand("t3")];
     const during = buildConversationRows("agent-1", before, true, { cause: "manual" });
     expect(during.map((r) => r.key)).toEqual(["u-t1", "a-t2", "u-compact", "compaction-running"]);
     expect(chipRows(during, "compaction-running")).toEqual([["Compacting as requested…"]]);
@@ -444,7 +444,7 @@ describe("a compaction's chips in the rows", () => {
 
   // idle in a Claude chat: the sweep's /compact is recorded like a typed one, but the user never typed it.
   it("shows the idle sweep's /compact on the start chip, not as a bubble, while it runs and once it lands", () => {
-    const before = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn"), ...typedCompact("t3")];
+    const before = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn"), ...compactCommand("t3")];
     const during = buildConversationRows("agent-1", before, true, { cause: "idle" });
     expect(during.map((r) => r.key)).toEqual(["u-t1", "a-t2", "compaction-running"]);
     expect(chipRows(during, "compaction-running")).toEqual([["Compacting while idle…"]]);
@@ -465,7 +465,7 @@ describe("a compaction's chips in the rows", () => {
       [
         userMsg("t1", "go"),
         toolMsg("t2", "c1", "Read the log"),
-        ...typedCompact("t3"),
+        ...compactCommand("t3"),
         compacted("t4", "cs1", "idle"),
       ],
       true,
@@ -477,12 +477,12 @@ describe("a compaction's chips in the rows", () => {
   it("keeps a /compact as a bubble when a message comes between it and the idle compaction, or the compaction running after it is not idle", () => {
     const refused = buildConversationRows(
       "agent-1",
-      [...typedCompact("t1"), userMsg("t2", "never mind"), compacted("t3", "cs-idle", "idle")],
+      [...compactCommand("t1"), userMsg("t2", "never mind"), compacted("t3", "cs-idle", "idle")],
       true,
     );
     expect(refused.map((r) => r.key)).toEqual(["u-compact", "u-t2", "cs-idle"]);
 
-    const pending = buildConversationRows("agent-1", typedCompact("t1"), true, { cause: "manual" });
+    const pending = buildConversationRows("agent-1", compactCommand("t1"), true, { cause: "manual" });
     expect(pending.map((r) => r.key)).toEqual(["u-compact", "compaction-running"]);
   });
 
