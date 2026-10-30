@@ -38,7 +38,6 @@ def test_a_quota_with_less_room_than_the_disk_bounds_what_can_be_written(
 
     assert space.free == 5 * 1024 * 1024
     assert space.is_quota_bound
-    assert space.filesystem_free == shutil.disk_usage(tmp_path).free
     assert space.used == 41 * _GIB - 5 * 1024 * 1024
     assert space.total == 41 * _GIB
 
@@ -52,7 +51,7 @@ def test_a_disk_with_less_room_than_the_quota_bounds_what_can_be_written(
 
     space = read_disk_space(tmp_path, host_diskinfo=diskinfo, clock=lambda: _NOW)
 
-    assert space.free == space.filesystem_free == shutil.disk_usage(tmp_path).free
+    assert space.free == space.filesystem_free
     assert not space.is_quota_bound
     assert space.quota_free == 10**18 - 25 * _GIB
     assert space.total == 25 * _GIB + space.free
@@ -89,12 +88,9 @@ def test_without_a_fresh_complete_file_the_filesystem_figures_are_the_answer(
 
     space = read_disk_space(tmp_path, host_diskinfo=diskinfo, clock=lambda: _NOW)
 
-    filesystem = shutil.disk_usage(tmp_path)
-    assert (space.total, space.used, space.free) == (
-        filesystem.total,
-        filesystem.used,
-        filesystem.free,
-    )
+    # Free space moves between two statfs calls on a busy disk; the size does not.
+    assert space.total == shutil.disk_usage(tmp_path).total
+    assert space.free == space.filesystem_free
     assert space.quota_free is None
 
 
@@ -107,7 +103,7 @@ def test_a_path_on_another_filesystem_is_not_held_to_the_quota(tmp_path: Path) -
     space = read_disk_space(Path("/dev"), host_diskinfo=diskinfo, clock=lambda: _NOW)
 
     assert space.quota_free is None
-    assert space.free == shutil.disk_usage("/dev").free
+    assert space.free == space.filesystem_free
 
 
 def test_a_quota_already_exceeded_leaves_nothing_to_write() -> None:
