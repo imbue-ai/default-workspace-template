@@ -58,8 +58,6 @@ from imbue.system_interface.shell.data_types import LaunchRequest
 from imbue.system_interface.shell.data_types import PageShowRequest
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import WindowLocationReport
-from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchAnswer
-from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchRequest
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_routes import DesktopMetadataRequest
 from imbue.system_interface.shell.desktop_routes import DesktopSettingsRequest
@@ -68,6 +66,8 @@ from imbue.system_interface.shell.desktop_routes import DesktopWallpaperRequest
 from imbue.system_interface.shell.desktop_routes import ShortcutMoveRequest
 from imbue.system_interface.shell.desktop_routes import ShortcutRemoveRequest
 from imbue.system_interface.shell.embedder_messages import EmbedderMessageRelayRequest
+from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchAnswer
+from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchRequest
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
