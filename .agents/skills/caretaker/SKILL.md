@@ -78,7 +78,8 @@ first impression of you is that single message.
    - Use the **`check-app-errors`** skill to look over the workspace's services
      efficiently (`supervisorctl status` plus a few targeted greps of
      `/var/log/supervisor/`).
-   - Check basic system health: disk (`df -h /`), memory and swap (`free -h`),
+   - Check basic system health: disk (`uv run --no-sync disk-headroom`, which
+     also sees a cloud machine's disk quota, where `df` does not), memory and swap (`free -h`),
      CPU load (`uptime`), and whether the OOM guard shed anything
      (`data/.state/oom_priority/events/shed.jsonl`, if present).
    - Check for uncommitted work: `git status` in the workspace repo. Note
@@ -210,8 +211,9 @@ finds something.
    - `yes`: three checks, noting what you find **in your log**, in plain terms:
      - use the **`check-app-errors`** skill to scan the services efficiently
        (`supervisorctl status` + a few targeted greps of `/var/log/supervisor/`);
-     - check basic system health: disk (`df -h /`; if it is nearly full, a
-       quick `du` for the biggest offenders), memory and swap (`free -h`),
+     - check basic system health: disk (`uv run --no-sync disk-headroom`, which
+       also sees a cloud machine's disk quota, where `df` does not; if it is
+       nearly full, a quick `du` for the biggest offenders), memory and swap (`free -h`),
        CPU load (`uptime` -- load persistently above the core count means
        something is spinning), and whether the OOM guard shed any processes
        since the last run (`data/.state/oom_priority/events/shed.jsonl`, if
