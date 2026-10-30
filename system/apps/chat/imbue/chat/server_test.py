@@ -994,6 +994,31 @@ def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass(
         state.shutdown()
 
 
+@pytest.mark.parametrize(
+    ("body_fields", "expected_choice"),
+    [({}, True), ({"is_single_send": True}, False)],
+    ids=["a-plain-send", "a-send-from-a-failure-notice"],
+)
+def test_only_a_send_from_a_failure_notice_goes_out_once(body_fields: dict[str, bool], expected_choice: bool) -> None:
+    agent_id = "agent-00000000000000000000000000000001"
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="test-agent",
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+    messenger = _ResendChoiceRecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", **body_fields})
+
+    assert response.status_code == 200
+    assert messenger.resend_choices == [expected_choice]
+
+
 def test_a_watcher_released_while_it_starts_is_stopped_once_after_its_start() -> None:
     state = build_test_state()
     seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
@@ -1481,7 +1506,7 @@ def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarness
         harness=agent_info.harness,
         state_dir=agent_info.agent_state_dir,
         model_state_path=agent_info.agent_state_dir / "model_state.json",
-        send_to_harness=lambda text: SendOutcome.OK,
+        send_to_harness=lambda text, is_resent_when_unsure: SendOutcome.OK,
         notify_agents_changed=lambda: None,
         is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,

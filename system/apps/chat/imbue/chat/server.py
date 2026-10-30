@@ -658,7 +658,9 @@ def _request_compaction_from_mngr(
     return SendOutcome.OK
 
 
-def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+def _deliver_message(
+    state: ChatAppState, agent_info: AgentInfo, text: str, message_id: str, is_resent_when_unsure: bool = True
+) -> SendOutcome:
     """Deliver one message to an agent the way the message route does, revival included.
 
     A composer ``/compact`` for a harness that cannot take it as text is never sent: mngr is asked
@@ -703,7 +705,7 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
             _wait_until_agent_accepts_input(agent_info, agent_manager, session, message_id)
         if not agent_manager.claim_send_for_delivery(agent_info.id, message_id):
             return SendOutcome.WITHDRAWN
-        outcome = session.send(text, message_id)
+        outcome = session.send(text, message_id, is_resent_when_unsure)
         if outcome is SendOutcome.NOT_READY:
             mark_connecting()
             outcome = _revive_and_retry_send(
@@ -852,7 +854,9 @@ def _send_to_chat(
             outcome = agent_manager.carry_pending_seed(
                 chat_id,
                 send_message_request.message,
-                lambda text: _deliver_message(state, agent_info, text, message_id),
+                lambda text: _deliver_message(
+                    state, agent_info, text, message_id, not send_message_request.is_single_send
+                ),
             )
         except AgentNotFoundError as e:
             # Destroyed while the send was in flight: the chat is gone, not refusing.

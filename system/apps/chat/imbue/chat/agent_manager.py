@@ -2048,9 +2048,13 @@ class AgentManager:
                 _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
         return restarted
 
-    def _send_to_harness(self, agent_id: str, harness: HarnessType, text: str) -> SendOutcome:
+    def _send_to_harness(
+        self, agent_id: str, harness: HarnessType, text: str, is_resent_when_unsure: bool
+    ) -> SendOutcome:
         """A file session's delivery (``send_message_kept_until_recorded``). Raises ``SendFailedError`` when refused."""
-        delivery = delivered_or_raise(self.send_message_kept_until_recorded(agent_id, harness, text))
+        delivery = delivered_or_raise(
+            self.send_message_kept_until_recorded(agent_id, harness, text, is_resent_when_unsure)
+        )
         match delivery:
             case SendDelivery.DELIVERED:
                 return SendOutcome.OK
@@ -2060,14 +2064,14 @@ class AgentManager:
                 assert_never(unreachable)
 
     def send_message_kept_until_recorded(
-        self, agent_id: str, harness: HarnessType, text: str
+        self, agent_id: str, harness: HarnessType, text: str, is_resent_when_unsure: bool = True
     ) -> SendDelivery | SendFailure:
         """``send_message_to_agent``; for a harness that can lose a message with its process, the delivered message
         is kept until then, so it can be sent again should the process exit before the transcript holds it."""
         if not get_harness_spec(harness).resends_sends_lost_with_process:
-            return self.send_message_to_agent(AgentId(agent_id), text)
+            return self.send_message_to_agent(AgentId(agent_id), text, is_resent_when_unsure)
         sent_after = time.time() - _TRANSCRIPT_CLOCK_SLACK_SECONDS
-        result = self.send_message_to_agent(AgentId(agent_id), text)
+        result = self.send_message_to_agent(AgentId(agent_id), text, is_resent_when_unsure)
         if isinstance(result, SendDelivery):
             self._keep_unrecorded_send(agent_id, text, sent_after)
         return result
@@ -5137,7 +5141,9 @@ class AgentManager:
         deps = SessionDeps(
             harness=harness,
             state_dir=state_dir,
-            send_to_harness=lambda text: self._send_to_harness(agent_id, harness, text),
+            send_to_harness=lambda text, is_resent_when_unsure: self._send_to_harness(
+                agent_id, harness, text, is_resent_when_unsure
+            ),
             notify_agents_changed=self._broadcast_chats_updated,
             is_harness_starting_up=lambda: is_harness_starting_up(
                 state_dir, spec.startup_ready_marker, spec.process_started_marker_filename

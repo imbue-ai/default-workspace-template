@@ -901,6 +901,15 @@ describe("message-sent listeners", () => {
       mockRequest.mockResolvedValueOnce({});
       await sendMessage(agent, "again");
       expect(seen).toEqual([agent]);
+      expect(mockRequest).toHaveBeenLastCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ is_single_send: false }) }),
+      );
+
+      mockRequest.mockResolvedValueOnce({});
+      await sendMessage(agent, "once", undefined, true);
+      expect(mockRequest).toHaveBeenLastCalledWith(
+        expect.objectContaining({ body: expect.objectContaining({ is_single_send: true }) }),
+      );
     } finally {
       vi.unstubAllGlobals();
     }

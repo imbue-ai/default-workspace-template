@@ -141,6 +141,13 @@ class SendMessageRequest(FrozenModel):
             "composer if it never committed. '' for legacy callers, which the backend then mints for."
         ),
     )
+    is_single_send: bool = Field(
+        default=False,
+        description=(
+            "Whether the user asked for this send from a failure notice, so it goes out once: a send that "
+            "comes back unconfirmed is not repeated automatically"
+        ),
+    )
     client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
     desktop_id: str = Field(
         default="", description="The id of the desktop the sender was on at send time ('' for legacy callers)"

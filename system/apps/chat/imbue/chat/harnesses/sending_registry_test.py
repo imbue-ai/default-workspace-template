@@ -63,13 +63,15 @@ def test_clear_drops_everything() -> None:
     assert registry.in_flight_texts() == []
 
 
-def _file_session(send_to_harness: "Callable[[str], SendOutcome] | None" = None) -> "FileHarnessSession":
+def _file_session(send_to_harness: "Callable[[str, bool], SendOutcome] | None" = None) -> "FileHarnessSession":
     """A FileHarnessSession over inert deps -- only the Sending surface is exercised."""
     deps = SessionDeps(
         harness=HarnessType.CLAUDE,
         state_dir=Path("/nonexistent"),
         model_state_path=Path("/nonexistent/model_state.json"),
-        send_to_harness=send_to_harness if send_to_harness is not None else lambda text: SendOutcome.OK,
+        send_to_harness=send_to_harness
+        if send_to_harness is not None
+        else lambda text, is_resent_when_unsure: SendOutcome.OK,
         notify_agents_changed=lambda: None,
         is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,
@@ -90,7 +92,7 @@ def test_session_send_tracks_and_resolves_sending_state() -> None:
     holder: list[FileHarnessSession] = []
 
     # Capture the in-flight block DURING the blocking send: the record must be live then.
-    def send_and_observe(text: str) -> SendOutcome:
+    def send_and_observe(text: str, is_resent_when_unsure: bool) -> SendOutcome:
         observed.append(holder[0].in_flight_block())
         return SendOutcome.OK
 
@@ -104,7 +106,7 @@ def test_session_send_tracks_and_resolves_sending_state() -> None:
 
 
 def test_session_send_failure_resolves_the_record_too() -> None:
-    session = _file_session(lambda text: SendOutcome.FAILED)
+    session = _file_session(lambda text, is_resent_when_unsure: SendOutcome.FAILED)
     assert session.send("hi", "stable-42") == SendOutcome.FAILED
     assert session.in_flight_block() == ""
 
@@ -113,7 +115,7 @@ def test_session_is_tap_available_greys_while_sending() -> None:
     during: list[bool] = []
     holder: list[FileHarnessSession] = []
 
-    def send_and_probe(text: str) -> SendOutcome:
+    def send_and_probe(text: str, is_resent_when_unsure: bool) -> SendOutcome:
         during.append(holder[0].is_tap_available(has_queued=True))
         return SendOutcome.OK
 
@@ -130,7 +132,7 @@ def test_session_send_exception_still_resolves_the_record() -> None:
     grey the shoulder tap for the session's lifetime and re-inject the same text into
     every later stop's returned block."""
 
-    def send_and_raise(text: str) -> SendOutcome:
+    def send_and_raise(text: str, is_resent_when_unsure: bool) -> SendOutcome:
         raise RuntimeError("mngr messenger blew up")
 
     session = _file_session(send_and_raise)

@@ -1260,7 +1260,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         try {
           refuseSendToFailedChat(recovery.chatId);
           priorTurnIds = sentUserTurnIds(recovery.chatId);
-          const status = await sendMessage(recovery.chatId, recovery.sentText, messageId);
+          const status = await sendMessage(recovery.chatId, recovery.sentText, messageId, true);
           dropOutgoingNoTurnWillRetire(recovery.chatId, outgoingId, status);
           noteIfResent(recovery.chatId, recovery.sentText, priorTurnIds, status);
           // Landed, so take the restored copy back out of the composer.

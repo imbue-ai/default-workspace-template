@@ -1136,7 +1136,7 @@ describe("MessageInput send failure notice", () => {
     (findButton(after, "Send again")!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.sendMessage).toHaveBeenCalledTimes(2);
-    expect(mocks.sendMessage).toHaveBeenLastCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
+    expect(mocks.sendMessage).toHaveBeenLastCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
     const settled = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(settled)).not.toContain("Couldn't confirm your message arrived");
   });
@@ -1377,7 +1377,7 @@ describe("MessageInput send failure notice", () => {
     const retry = findButton(after, "Retry");
     (retry!.attrs!.onclick as () => void)();
     await flushAsync();
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
   it("force restarts the agent before sending, in that order", async () => {
@@ -1392,7 +1392,7 @@ describe("MessageInput send failure notice", () => {
     await flushAsync();
     expect(mocks.drainToComposer).toHaveBeenCalledWith("agent-1");
     expect(mocks.interruptAgent).toHaveBeenCalledWith("agent-1");
-    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
+    expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
   it("does not send when the restart itself fails", async () => {
