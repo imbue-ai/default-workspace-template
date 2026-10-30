@@ -43,6 +43,7 @@ from app_manifest.registry import SHELL_APP_CONTRACT_PATH, SHELL_CONTEXT_MENU_PA
 from app_manifest.testing import commit_everything, init_git_repository
 from app_schema.api_schema import NO_SCHEMA_KEY
 from loguru import logger
+from workspace_bare_scripts import venv_links
 
 from build_app_skill import scaffold_flask_lib
 
@@ -804,6 +805,12 @@ def _workspace_for_a_real_lock(root: Path) -> Path:
     return root
 
 
+def _remove_venv_target(app: Path) -> None:
+    link = app / ".venv"
+    if link.is_symlink():
+        venv_links.remove_target(Path(os.path.realpath(link)))
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -813,16 +820,19 @@ def _free_port() -> int:
 @pytest.mark.acceptance
 @pytest.mark.timeout(600)
 def test_a_scaffolded_app_is_a_standalone_project_that_boots_from_its_own_venv(
-    tmp_path: Path,
+    tmp_path: Path, request: pytest.FixtureRequest
 ) -> None:
     root = _workspace_for_a_real_lock(tmp_path / "workspace")
     port = _free_port()
     before_lock = (root / "uv.lock").read_text()
 
     result = _scaffold_for_real(root, "widget-check", port)
+    app = root / "system/apps/widget_check"
+    # The app's venv lives beside the real uv cache (the scaffold resolves from the warm
+    # one), so the test removes it rather than leave it to the next sweep.
+    request.addfinalizer(lambda: _remove_venv_target(app))
 
     assert result.returncode == 0, result.stdout + result.stderr
-    app = root / "system/apps/widget_check"
     # Its own lock and a linked venv; the root lock is untouched.
     assert (app / "uv.lock").is_file()
     assert (app / ".venv").is_symlink()
