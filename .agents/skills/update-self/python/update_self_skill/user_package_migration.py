@@ -365,15 +365,23 @@ def _unquoted(word: str) -> str:
 def _exec_words(step: Sequence[str], script: str, relative: str) -> list[str]:
     """``step`` exec'ing ``script`` from the package's own venv."""
     words = list(step)
-    if words[:2] == ["uv", "run"]:
-        # Cut at the script itself, so no option of uv run's, valued or not, survives.
-        words = words[
-            next(
-                index
-                for index, word in enumerate(words)
-                if user_packages.runs_script(_unquoted(word), script)
-            ) :
-        ]
+    script_at = next(
+        index
+        for index, word in enumerate(words)
+        if user_packages.runs_script(_unquoted(word), script)
+    )
+    uv_run_at = next(
+        (
+            index
+            for index in range(script_at - 1)
+            if words[index : index + 2] == ["uv", "run"]
+        ),
+        None,
+    )
+    if uv_run_at is not None:
+        # Cut from `uv run` to the script itself, so no option of uv run's, valued or not,
+        # survives, and whatever wrapped it (`exec`, `nice -n 5`) still does.
+        words = [*words[:uv_run_at], *words[script_at:]]
     own = f"{relative}/.venv/bin/{script}"
     words = [
         own if user_packages.runs_script(_unquoted(word), script) else word

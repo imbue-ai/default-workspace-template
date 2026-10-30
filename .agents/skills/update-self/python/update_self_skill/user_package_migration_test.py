@@ -264,6 +264,7 @@ def test_every_old_program_form_becomes_one_the_standalone_check_accepts(
         "uv run widget-app --port 9",
         "uv run --package widget --frozen widget-app --port 9",
         "uv run --with flask --python 3.12 widget-app --port 9",
+        'bash -c "exec uv run --frozen widget-app --port 9"',
     ],
 )
 def test_a_uv_run_becomes_an_exec_of_the_script_with_none_of_uvs_options(
@@ -283,6 +284,23 @@ def test_a_uv_run_becomes_an_exec_of_the_script_with_none_of_uvs_options(
         "system/apps/widget/.venv/bin/widget-app",
         "--port",
         "9",
+    ]
+
+
+def test_a_wrapper_before_a_uv_run_stays_while_the_uv_run_goes() -> None:
+    rewritten = migration._program_rewrite(
+        'bash -c "exec nice -n 5 uv run --package widget widget-app"',
+        "system/apps/widget",
+        ["widget-app"],
+    )
+
+    assert rewritten is not None
+    assert user_packages.command_steps(rewritten)[-1] == [
+        "exec",
+        "nice",
+        "-n",
+        "5",
+        "system/apps/widget/.venv/bin/widget-app",
     ]
 
 
