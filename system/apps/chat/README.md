@@ -382,7 +382,9 @@ A send mngr reports `agent_not_found` (the agent moved) or `not_submitted`
 (Claude never took it, and mngr cleared it from the input box) is sent again
 once, by discovery or at the same place. One the agent is not accepting yet
 (`not_ready`), or whose host is too loaded to say (`state_unknown`), typed
-nothing, so it is tried again after 1, 2 and 4 seconds before it fails. One mngr
+nothing, so it is tried again after 1, 2 and 4 seconds before it fails. One for
+an agent that was down and would not start (`agent_unreachable`) typed nothing
+either, and is tried once more. One mngr
 could not confirm (`submission_unconfirmed`), or failed in a way it could not
 classify (`unknown`), may or may not have arrived; not sending one that never
 arrived is worse than sending it twice, so it is sent again once at the same

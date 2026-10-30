@@ -259,10 +259,10 @@ def _unclassified_failure() -> MessageResult:
     )
 
 
-def _pane_gone() -> MessageResult:
+def _would_not_start() -> MessageResult:
     return MessageResult(
         failures=[
-            AgentSendFailure(agent_name="alpha", reason="the pane is gone", kind=SendFailureKind.AGENT_UNREACHABLE)
+            AgentSendFailure(agent_name="alpha", reason="start timed out", kind=SendFailureKind.AGENT_UNREACHABLE)
         ]
     )
 
@@ -293,18 +293,16 @@ def _not_found_beside_unconfirmed() -> MessageResult:
 @pytest.mark.parametrize(
     ("known_location_result", "expected_kind"),
     [
-        (_pane_gone, "agent_unreachable"),
         (_delivered_but_blocked, "input_blocked"),
         (_not_found_beside_unconfirmed, "submission_unconfirmed"),
     ],
-    ids=["pane-gone", "delivered-but-blocked", "not-found-beside-unconfirmed"],
+    ids=["delivered-but-blocked", "not-found-beside-unconfirmed"],
 )
 def test_a_failure_another_send_cannot_help_is_returned_as_it_is(
     known_location_result: Callable[[], MessageResult], expected_kind: str
 ) -> None:
-    """A pane that is gone will not be back for the next send, and a blocked send was delivered, so sending again
-    could only deliver it twice. A send that was unconfirmed at one agent and missed another is not the plain
-    ambiguity a resend answers.
+    """A blocked send was delivered, so sending again could only deliver it twice. A send that was unconfirmed at one
+    agent and missed another is not the plain ambiguity a resend answers.
     """
     discover_calls: list[AgentId] = []
     send_calls: list[tuple[AgentMatch, ...]] = []
@@ -565,6 +563,37 @@ def test_a_send_that_stays_impossible_is_returned_as_the_failure_after_the_last_
     assert failure.kind == expected_kind
     assert send_calls == [(known,)] * 4
     assert waits == [1.0, 2.0, 4.0]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("second_result", "expected_kind"),
+    [(MessageResult, None), (_would_not_start, "agent_unreachable")],
+    ids=["started-the-second-time", "would-not-start-again"],
+)
+def test_a_send_to_an_agent_that_would_not_start_is_tried_once_more(
+    second_result: Callable[[], MessageResult], expected_kind: str | None
+) -> None:
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    results = [second_result(), _would_not_start()]
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        raise AssertionError("the agent is where it was, so it is not looked up again")
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        result = results.pop()
+        return _delivered_to(matches) if not result.failures else result
+
+    messenger = MngrMessenger(discover=_discover, send=_send)
+    outcome = messenger.send_to_agent(_AGENT_ID, "hi", (known,))
+    if expected_kind is None:
+        assert outcome is SendDelivery.DELIVERED
+    else:
+        assert isinstance(outcome, SendFailure)
+        assert outcome.kind == expected_kind
+    assert send_calls == [(known,), (known,)]
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
