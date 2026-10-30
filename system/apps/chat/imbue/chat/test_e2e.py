@@ -2331,14 +2331,10 @@ def _refuse_held_verb(page: Page, held: list[Route], detail: str) -> None:
     raise TimeoutError("the verb never reached the route that holds it")
 
 
-@pytest.mark.timeout(60, func_only=False)
-def test_a_rename_reaches_the_window_title_before_the_chat_app_answers(
-    e2e_server: RunningWorkspace, page: Page
-) -> None:
-    """The window takes the typed name as the list does, ahead of the chat app, and gives it back on a refusal."""
-    page.goto(f"{e2e_server.chat_url}{_FIXTURE_ROOT_PATH}")
-    row = page.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
-    expect(page).to_have_title("test-agent", timeout=15000)
+def _expect_window_title_to_follow_a_refused_rename(page: Page, row: Locator, title: str) -> None:
+    """Rename ``row`` away from ``title``: the window takes the typed name ahead of the chat app, and a refusal gives
+    ``title`` back."""
+    expect(page).to_have_title(title, timeout=15000)
     held = _hold_chat_verb(page, "rename")
 
     row.dblclick()
@@ -2348,7 +2344,31 @@ def test_a_rename_reaches_the_window_title_before_the_chat_app_answers(
 
     expect(page).to_have_title("Typed name")
     _refuse_held_verb(page, held, "the name is taken")
-    expect(page).to_have_title("test-agent")
+    expect(page).to_have_title(title)
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_rename_reaches_the_window_title_before_the_chat_app_answers(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """The window takes the typed name as the list does, and gives it back on a refusal."""
+    page.goto(f"{e2e_server.chat_url}{_FIXTURE_ROOT_PATH}")
+    row = page.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
+
+    _expect_window_title_to_follow_a_refused_rename(page, row, "test-agent")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_chat_with_no_agent_yet_wears_its_name_and_a_rename_in_the_window_title(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """A chat awaiting its first send has only a provisional record, whose name the window shows as the list does."""
+    e2e_server.chat_state.agent_manager.remove_agent(FIXTURE_AGENT_ID)
+    page.goto(f"{e2e_server.chat_url}/")
+    row = page.locator(".chat-rail-row")
+    expect(row).to_have_count(1, timeout=15000)
+
+    _expect_window_title_to_follow_a_refused_rename(page, row, row.locator(".chat-rail-title").inner_text())
 
 
 @pytest.mark.timeout(60, func_only=False)

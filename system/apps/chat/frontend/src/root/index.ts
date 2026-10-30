@@ -37,6 +37,7 @@ import {
   getChatById,
   getChats,
   getMainChatId,
+  getProvisionalChat,
   getProvisionalChats,
   hasReceivedChatList,
   initChats,
@@ -107,8 +108,8 @@ let isDrawerOpen = false;
 
 function selectedTitle(): string {
   if (selectedChatId === null) return "";
-  const title = getChatById(selectedChatId)?.title;
-  return title === undefined ? "" : titleWithPendingRename(selectedChatId, title);
+  const title = getChatById(selectedChatId)?.title ?? getProvisionalChat(selectedChatId)?.name ?? "";
+  return titleWithPendingRename(selectedChatId, title);
 }
 
 interface ReportedLocation {
