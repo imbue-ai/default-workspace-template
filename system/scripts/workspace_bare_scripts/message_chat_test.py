@@ -372,6 +372,33 @@ def test_an_unreachable_chat_app_and_no_agent_by_the_id_is_a_failure_not_a_gone_
     assert len(_mngr_calls(fake_mngr)) == 1
 
 
+def test_a_send_reads_the_registry_and_runs_mngr_in_the_repo_root_it_is_given(
+    fake_chat_app: Any, fake_mngr: Path, tmp_path: Path
+) -> None:
+    root = tmp_path / "repo"
+    registry = root / message_chat.DEFAULT_APPS_FILE
+    registry.parent.mkdir(parents=True)
+    registry.write_text(
+        f'[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:{fake_chat_app.server_address[1]}"\n'
+    )
+
+    rc = message_chat.send(
+        _CHAT_ID, "hello", environ={}, clock=_FakeClock(0.0), sleep=[].append, cwd=root
+    )
+
+    assert rc == message_chat.EXIT_DELIVERED
+    assert len(fake_chat_app.posted) == 1
+    assert _mngr_calls(fake_mngr) == []
+
+    registry.write_text('[[apps]]\nname = "chat"\nurl = "http://127.0.0.1:9"\n')
+    message_chat.send(
+        _CHAT_ID, "hello", environ={}, clock=_FakeClock(0.0), sleep=[].append, cwd=root
+    )
+
+    [call] = _mngr_calls(fake_mngr)
+    assert Path(call["cwd"]) == root.resolve()
+
+
 def test_a_404_that_clears_within_the_window_is_delivered_by_the_chat_app(
     fake_chat_app: Any, fake_mngr: Path
 ) -> None:
