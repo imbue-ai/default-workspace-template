@@ -1,1 +1,1 @@
-The comment on the backup's exclusion of the update apply's snapshot directory now lists what that directory holds (the venv, the mngr tool and the built bundles): apps no longer have uv tools of their own to copy aside. Backups are unchanged.
+The comment on the backup's exclusion of the update apply's snapshot directory now lists what that directory holds (the mngr tool's environment, `node_modules` and the built bundles): apps no longer have uv tools of their own to copy aside, and the venv is swapped by link rather than copied. Backups are unchanged.
