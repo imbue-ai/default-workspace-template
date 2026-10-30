@@ -304,23 +304,11 @@ def test_a_failure_another_send_cannot_help_is_returned_as_it_is(
     """A blocked send was delivered, so sending again could only deliver it twice. A send that was unconfirmed at one
     agent and missed another is not the plain ambiguity a resend answers.
     """
-    discover_calls: list[AgentId] = []
     send_calls: list[tuple[AgentMatch, ...]] = []
     known = _make_match()
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        discover_calls.append(agent_id)
-        return (_make_match(host="host-b"),)
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return known_location_result()
-
-    messenger = MngrMessenger(discover=_discover, send=_send)
-    failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,))
+    failure = _scripted_messenger([known_location_result()], send_calls).send_to_agent(_AGENT_ID, "hi", (known,))
     assert isinstance(failure, SendFailure)
     assert failure.kind == expected_kind
-    assert discover_calls == []
     assert send_calls == [(known,)]
 
 
@@ -338,30 +326,18 @@ def _not_submitted() -> MessageResult:
 
 @pytest.mark.usefixtures("isolated_mngr_env")
 @pytest.mark.parametrize(
-    ("second_result", "expected_kind"),
-    [(MessageResult, None), (_not_submitted, "not_submitted")],
+    ("later_results", "expected_kind"),
+    [((), None), ((_not_submitted,), "not_submitted")],
     ids=["taken-the-second-time", "untaken-again"],
 )
 def test_a_message_the_agent_never_took_is_sent_there_once_more(
-    second_result: Callable[[], MessageResult], expected_kind: str | None
+    later_results: tuple[Callable[[], MessageResult], ...], expected_kind: str | None
 ) -> None:
     """The agent cleared the untaken message from its input box, so one more send delivers it once."""
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
-    results = [_not_submitted()]
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("an untaken message is sent where the agent is, not looked up again")
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        if results:
-            return results.pop()
-        result = second_result()
-        return result if result.failures else MessageResult(successful_agents=[str(m.agent_id) for m in matches])
-
-    messenger = MngrMessenger(discover=_discover, send=_send)
-    failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,))
+    results = [_not_submitted(), *(result() for result in later_results)]
+    failure = _scripted_messenger(results, send_calls).send_to_agent(_AGENT_ID, "hi", (known,))
     assert (failure.kind if isinstance(failure, SendFailure) else None) == expected_kind
     assert send_calls == [(known,), (known,)]
 
@@ -371,24 +347,37 @@ def test_a_message_the_agent_never_took_at_a_discovered_location_is_sent_there_o
     """With no known location the agent is looked up, and an untaken send there gets its one more send too."""
     discovered = _make_match(host="host-b")
     send_calls: list[tuple[AgentMatch, ...]] = []
-    results = [_not_submitted()]
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        return (discovered,)
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        if results:
-            return results.pop()
-        return MessageResult(successful_agents=[str(m.agent_id) for m in matches])
-
-    messenger = MngrMessenger(discover=_discover, send=_send)
+    messenger = _scripted_messenger([_not_submitted()], send_calls, discovered=discovered)
     assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is SendDelivery.DELIVERED
     assert send_calls == [(discovered,), (discovered,)]
 
 
 def _delivered_to(matches: Sequence[AgentMatch]) -> MessageResult:
     return MessageResult(successful_agents=[str(match.agent_id) for match in matches])
+
+
+def _scripted_messenger(
+    results: Sequence[MessageResult],
+    send_calls: list[tuple[AgentMatch, ...]],
+    discovered: AgentMatch | None = None,
+    pause: Callable[[float], None] = lambda _seconds: None,
+) -> MngrMessenger:
+    """A messenger whose sends answer with ``results`` in order and then deliver, each recorded in ``send_calls``.
+
+    The agent is found at ``discovered``; with none given, looking it up fails the test.
+    """
+    remaining = list(results)
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        if discovered is None:
+            raise AssertionError("the agent was looked up, and it should have been sent to where it is")
+        return (discovered,)
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        return remaining.pop(0) if remaining else _delivered_to(matches)
+
+    return MngrMessenger(discover=_discover, send=_send, pause=pause)
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
@@ -401,16 +390,7 @@ def test_a_message_that_may_not_have_arrived_is_sent_there_once_more_and_reporte
     """Nothing shows whether the agent took it, so it is sent again where it was sent, and the chat says so."""
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
-    results = [unsure_result()]
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("an unconfirmed message is sent where the agent is, not looked up again")
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return results.pop() if results else _delivered_to(matches)
-
-    messenger = MngrMessenger(discover=_discover, send=_send)
+    messenger = _scripted_messenger([unsure_result()], send_calls)
     assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.RESENT
     assert send_calls == [(known,), (known,)]
 
@@ -435,16 +415,7 @@ def test_a_message_that_may_not_have_arrived_is_never_sent_a_third_time(
     """The second send's failure is the answer: no further send, and no lookup that would lead to one."""
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
-    results = [second_result(), unsure_result()]
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("a message sent twice is not looked up and sent a third time")
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return results.pop()
-
-    messenger = MngrMessenger(discover=_discover, send=_send)
+    messenger = _scripted_messenger([unsure_result(), second_result()], send_calls)
     failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,))
     assert isinstance(failure, SendFailure)
     assert failure.kind == expected_kind
@@ -455,16 +426,7 @@ def test_a_message_that_may_not_have_arrived_is_never_sent_a_third_time(
 def test_an_unconfirmed_message_at_a_discovered_location_is_sent_there_once_more() -> None:
     discovered = _make_match(host="host-b")
     send_calls: list[tuple[AgentMatch, ...]] = []
-    results = [_submission_unconfirmed()]
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        return (discovered,)
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return results.pop() if results else _delivered_to(matches)
-
-    messenger = MngrMessenger(discover=_discover, send=_send)
+    messenger = _scripted_messenger([_submission_unconfirmed()], send_calls, discovered=discovered)
     assert messenger.send_to_agent(_AGENT_ID, "hi", ()) is SendDelivery.RESENT
     assert send_calls == [(discovered,), (discovered,)]
 
@@ -474,16 +436,7 @@ def test_a_message_untaken_and_then_unconfirmed_is_sent_once_more_after_each() -
     """The untaken first send delivered nothing, so the unconfirmed second is the only copy that may have landed."""
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
-    results = [_submission_unconfirmed(), _not_submitted()]
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("the message is sent where the agent is, not looked up again")
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return results.pop() if results else _delivered_to(matches)
-
-    messenger = MngrMessenger(discover=_discover, send=_send)
+    messenger = _scripted_messenger([_not_submitted(), _submission_unconfirmed()], send_calls)
     assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.RESENT
     assert send_calls == [(known,), (known,), (known,)]
 
@@ -499,15 +452,7 @@ def test_a_message_that_may_not_have_arrived_is_returned_as_is_when_its_caller_s
 ) -> None:
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("such a message is not looked up again")
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return unsure_result()
-
-    messenger = MngrMessenger(discover=_discover, send=_send)
+    messenger = _scripted_messenger([unsure_result()], send_calls)
     failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,), is_resent_when_unsure=False)
     assert isinstance(failure, SendFailure)
     assert failure.kind == expected_kind
@@ -523,15 +468,7 @@ def test_a_message_that_may_not_have_arrived_is_returned_as_is_when_its_caller_s
 def test_a_send_a_stop_took_back_is_not_tried_again(first_result: Callable[[], MessageResult]) -> None:
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("the message was handed back, so the agent is not looked up either")
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return first_result()
-
-    messenger = MngrMessenger(discover=_discover, send=_send, pause=lambda _seconds: None)
+    messenger = _scripted_messenger([first_result()], send_calls)
     outcome = messenger.send_to_agent(_AGENT_ID, "hi", (known,), is_taken_back=lambda: True)
     assert isinstance(outcome, SendFailure)
     assert outcome.kind == first_result().failures[0].kind
@@ -561,16 +498,7 @@ def test_a_send_nothing_could_type_yet_is_tried_again_after_a_growing_wait(
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
     waits: list[float] = []
-    results = [waiting_result(), waiting_result()]
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("the agent is where it was, so it is not looked up again")
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return results.pop() if results else _delivered_to(matches)
-
-    messenger = MngrMessenger(discover=_discover, send=_send, pause=waits.append)
+    messenger = _scripted_messenger([waiting_result(), waiting_result()], send_calls, pause=waits.append)
     assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.DELIVERED
     assert send_calls == [(known,)] * 3
     assert waits == [1.0, 2.0]
@@ -588,15 +516,7 @@ def test_a_send_that_stays_impossible_is_returned_as_the_failure_after_the_last_
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
     waits: list[float] = []
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("the agent is where it was, so it is not looked up again")
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return waiting_result()
-
-    messenger = MngrMessenger(discover=_discover, send=_send, pause=waits.append)
+    messenger = _scripted_messenger([waiting_result()] * 4, send_calls, pause=waits.append)
     failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,))
     assert isinstance(failure, SendFailure)
     assert failure.kind == expected_kind
@@ -606,27 +526,17 @@ def test_a_send_that_stays_impossible_is_returned_as_the_failure_after_the_last_
 
 @pytest.mark.usefixtures("isolated_mngr_env")
 @pytest.mark.parametrize(
-    ("second_result", "expected_kind"),
-    [(MessageResult, None), (_would_not_start, "agent_unreachable")],
+    ("later_results", "expected_kind"),
+    [((), None), ((_would_not_start,), "agent_unreachable")],
     ids=["started-the-second-time", "would-not-start-again"],
 )
 def test_a_send_to_an_agent_that_would_not_start_is_tried_once_more(
-    second_result: Callable[[], MessageResult], expected_kind: str | None
+    later_results: tuple[Callable[[], MessageResult], ...], expected_kind: str | None
 ) -> None:
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
-    results = [second_result(), _would_not_start()]
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("the agent is where it was, so it is not looked up again")
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        result = results.pop()
-        return _delivered_to(matches) if not result.failures else result
-
-    messenger = MngrMessenger(discover=_discover, send=_send)
-    outcome = messenger.send_to_agent(_AGENT_ID, "hi", (known,))
+    results = [_would_not_start(), *(result() for result in later_results)]
+    outcome = _scripted_messenger(results, send_calls).send_to_agent(_AGENT_ID, "hi", (known,))
     if expected_kind is None:
         assert outcome is SendDelivery.DELIVERED
     else:
@@ -640,16 +550,7 @@ def test_a_send_that_waited_and_then_went_unconfirmed_is_sent_once_more() -> Non
     """The waits typed nothing, so the unconfirmed send is the only copy that may have landed."""
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
-    results = [_submission_unconfirmed(), _not_ready()]
-
-    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("the agent is where it was, so it is not looked up again")
-
-    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
-        send_calls.append(tuple(matches))
-        return results.pop() if results else _delivered_to(matches)
-
-    messenger = MngrMessenger(discover=_discover, send=_send, pause=lambda _seconds: None)
+    messenger = _scripted_messenger([_not_ready(), _submission_unconfirmed()], send_calls)
     assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.RESENT
     assert send_calls == [(known,)] * 3
 
