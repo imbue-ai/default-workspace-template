@@ -108,5 +108,9 @@ def read_and_remove_values_file(path: Path) -> CredentialValues:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError as e:
         raise ValuesFileError(f"no values file at {path}") from e
+    except OSError as e:
+        raise ValuesFileError(
+            f"the values file at {path} cannot be read: {e.strerror}"
+        ) from e
     path.unlink(missing_ok=True)
     return parse_values_file(text)

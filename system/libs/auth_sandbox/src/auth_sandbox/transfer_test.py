@@ -45,6 +45,9 @@ def test_read_key_strips_the_newline_and_names_only_the_path_when_absent(
         read_key(key_path)
     with pytest.raises(MissingMaterialError, match="no key at"):
         read_key(tmp_path / "absent")
+    (tmp_path / "a-directory").mkdir()
+    with pytest.raises(MissingMaterialError, match="cannot be read"):
+        read_key(tmp_path / "a-directory")
 
 
 def test_reencrypt_argv_puts_the_global_account_option_first_and_no_key_anywhere() -> (

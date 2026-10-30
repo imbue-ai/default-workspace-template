@@ -91,6 +91,10 @@ def read_key(path: Path) -> SecretStr:
         text = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError as e:
         raise MissingMaterialError(f"no key at {path}") from e
+    except OSError as e:
+        raise MissingMaterialError(
+            f"the key at {path} cannot be read: {e.strerror}"
+        ) from e
     if not text:
         raise MissingMaterialError(f"the key file at {path} is empty")
     return SecretStr(text)

@@ -62,8 +62,11 @@ def test_read_and_remove_values_file_deletes_the_file_once_read(tmp_path: Path) 
         "token": "t0k"
     }
     assert not values_path.exists()
-    with pytest.raises(ValuesFileError):
+    with pytest.raises(ValuesFileError, match="no values file"):
         read_and_remove_values_file(values_path)
+    (tmp_path / "a-directory").mkdir()
+    with pytest.raises(ValuesFileError, match="cannot be read"):
+        read_and_remove_values_file(tmp_path / "a-directory")
 
 
 def test_run_set_credentials_builds_the_desktops_argv_from_latchkeys_example() -> None:
