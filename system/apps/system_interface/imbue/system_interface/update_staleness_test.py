@@ -199,30 +199,31 @@ def test_tracker_ignores_moves_that_leave_this_server_current(git_work_dir: Path
 
 def test_tracker_ignores_a_new_app_joining_the_workspace(git_work_dir: Path) -> None:
     # Scaffolding an app -- the routine action the build-app skill documents --
-    # writes the package under ``system/apps/``, writes the program's own
-    # ``system/supervisord.conf.d/<name>.conf`` drop-in, and relocks so the root
-    # lockfile covers the new workspace member.
+    # writes the package under ``system/apps/`` as a standalone project with its
+    # own ``uv.lock``, and the program's own
+    # ``system/supervisord.conf.d/<name>.conf`` drop-in.
     # None of that moves what this process resolved, so the banner must stay
     # down: firing on every app a user builds is how a banner stops being read.
     # Every file ``scaffold_flask_lib.py`` writes is listed, so a rule that
     # later caught any one of them fails here rather than in a user's
     # workspace. The root ``pyproject.toml`` is absent because the scaffold does
-    # not edit it -- the ``system/apps/*`` member glob picks the package up --
-    # which is why it can stay a staleness trigger.
+    # not edit it -- the app is not a root member -- which is why it can stay a
+    # staleness trigger.
     repo = git_work_dir
     tracker = UpdateStalenessTracker.capture(repo_root=repo)
     _commit_files(
         repo,
         "scaffold a new app",
-        "uv.lock",
         "system/supervisord.conf.d/finances.conf",
         "system/apps/finances/pyproject.toml",
+        "system/apps/finances/uv.lock",
         "system/apps/finances/app.toml",
         "system/apps/finances/README.md",
         "system/apps/finances/icon.svg",
         "system/apps/finances/test_finances_ratchets.py",
         "system/apps/finances/src/finances/__init__.py",
         "system/apps/finances/src/finances/runner.py",
+        "system/apps/finances/src/finances/runner_test.py",
     )
     assert tracker.staleness() is None
 
