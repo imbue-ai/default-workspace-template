@@ -5845,8 +5845,13 @@ def _typed_turn(text: str, display: str | None = None, at: str | None = None) ->
     }
 
 
-def _agent_reply(at: str) -> dict[str, Any]:
-    return {"type": "assistant_message", "content": "Hi", "timestamp": at}
+def _agent_reply(at: str | None = None, is_auth_error: bool = False) -> dict[str, Any]:
+    return {
+        "type": "assistant_message",
+        "content": "Login expired" if is_auth_error else "Hi",
+        "is_auth_error": is_auth_error,
+        **({"timestamp": at} if at is not None else {}),
+    }
 
 
 @pytest.mark.parametrize(
