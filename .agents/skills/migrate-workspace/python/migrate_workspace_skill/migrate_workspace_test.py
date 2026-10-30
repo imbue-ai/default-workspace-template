@@ -865,3 +865,37 @@ def test_convert_packages_dry_runs_every_landed_package_that_is_not_standalone(
     assert "`applib` becomes an editable path source (../../libs/applib)" in out
     assert (root / "system/apps/landed/pyproject.toml").read_text() == landed_before
     assert not (root / "system/apps/landed/uv.lock").exists()
+
+
+def test_convert_packages_converts_a_user_lib_before_the_app_that_uses_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    # The app cannot lock on the lib until the lib is standalone, so the lib goes first.
+    root = _with_conversion_scripts(tmp_path / "workspace")
+    (root / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers = ["system/libs/app_schema"]\n\n'
+        "[tool.uv.sources]\napp-schema = { workspace = true }\n"
+    )
+    (root / "uv.lock").write_text("version = 1\n")
+    for relative, text in (
+        ("system/libs/app_schema", '[project]\nname = "app-schema"\n'),
+        (
+            "system/libs/notes_core",
+            '[project]\nname = "notes-core"\ndependencies = ["app-schema"]\n',
+        ),
+        (
+            "system/apps/board",
+            '[project]\nname = "board"\ndependencies = ["notes-core"]\n\n'
+            "[tool.uv.sources]\nnotes-core = { workspace = true }\n",
+        ),
+    ):
+        (root / relative).mkdir(parents=True)
+        (root / relative / "pyproject.toml").write_text(text)
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    monkeypatch.chdir(root)
+
+    code = migrate_workspace.main(["convert-packages", "--dry-run"])
+
+    out = capfd.readouterr().out
+    assert code == 0
+    assert out.index("system/libs/notes_core:") < out.index("system/apps/board:")

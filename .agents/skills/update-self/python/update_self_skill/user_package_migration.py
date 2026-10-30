@@ -571,7 +571,6 @@ def plan_migration(
     if not isinstance(name, str):
         raise MigrationError(f"{relative}/pyproject.toml names no project")
     packages = _package_directories(repo_root)
-    _refuse_unconverted_user_dependencies(repo_root, relative, pyproject, packages)
     root_sources = _root_sources(repo_root)
     own_sources = {
         _normalize(key): value
@@ -647,12 +646,13 @@ def plan_migration(
     return Plan(relative, seed, package_text, root_text, programs, callers, notes)
 
 
-def _refuse_unconverted_user_dependencies(
-    repo_root: Path, relative: str, pyproject: dict, packages: dict[str, str]
-) -> None:
+def _refuse_unconverted_user_dependencies(repo_root: Path, relative: str) -> None:
     """Refuse, before anything is written, a package that depends on a user package still
     taking code from the workspace: uv cannot lock a path dependency whose own
-    ``{ workspace = true }`` sources name a workspace it is no longer a member of."""
+    ``{ workspace = true }`` sources name a workspace it is no longer a member of. A dry
+    run is not refused, so one over a lib and the package using it plans both."""
+    pyproject = _read_toml(repo_root / relative / "pyproject.toml")
+    packages = _package_directories(repo_root)
     others = set(user_packages.user_packages(repo_root)) - {relative}
     for dependency in sorted(
         {_requirement_name(entry) for entry in _declared_requirements(pyproject)}
@@ -784,6 +784,7 @@ def _lock(repo_root: Path, relative: str, run: Run) -> None:
 
 
 def apply(plan: Plan, repo_root: Path, run: Run) -> list[str]:
+    _refuse_unconverted_user_dependencies(repo_root, plan.relative)
     package_dir = repo_root / plan.relative
     (package_dir / "pyproject.toml").write_text(plan.package_text)
     shutil.copyfile(plan.seed, package_dir / "uv.lock")

@@ -1883,6 +1883,20 @@ USER_PACKAGES_SCRIPT = "system/scripts/workspace_bare_scripts/user_packages.py"
 PACKAGE_MIGRATION_SCRIPT = (
     ".agents/skills/update-self/python/update_self_skill/user_package_migration.py"
 )
+# The order the kinds are converted in: a package cannot lock on a user lib that is not
+# converted yet, and apps and services are what use libs.
+_CONVERSION_ORDER = ("system/libs/", "system/services/", "system/apps/")
+
+
+def _conversion_rank(package: str) -> int:
+    return next(
+        (
+            rank
+            for rank, parent in enumerate(_CONVERSION_ORDER)
+            if package.startswith(parent)
+        ),
+        len(_CONVERSION_ORDER),
+    )
 
 
 def _cmd_convert_packages(args: argparse.Namespace) -> int:
@@ -1902,7 +1916,7 @@ def _cmd_convert_packages(args: argparse.Namespace) -> int:
         )
         return 1
     is_any_failed = False
-    for package in listing.stdout.split():
+    for package in sorted(listing.stdout.split(), key=_conversion_rank):
         argv = [sys.executable, PACKAGE_MIGRATION_SCRIPT, "migrate", package]
         if args.dry_run:
             argv.append("--dry-run")
