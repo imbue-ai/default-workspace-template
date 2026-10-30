@@ -13,7 +13,7 @@ _GIB = 1024**3
         pytest.param(
             None,
             snapshot(
-                "free: 40.0 GiB of 100.0 GiB (60.0 GiB used)\nlimited by: the disk (no disk quota applies here)"
+                "free: 40.0 GiB of 100.0 GiB (60.0 GiB used)\nlimited by: the disk (no disk quota is published for it)"
             ),
             id="no quota",
         ),

@@ -26,7 +26,7 @@ def format_disk_space(space: DiskSpace) -> str:
         f"free: {_gib(space.free)} of {_gib(space.total)} ({_gib(space.used)} used)"
     )
     if space.quota_free is None:
-        detail = "limited by: the disk (no disk quota applies here)"
+        detail = "limited by: the disk (no disk quota is published for it)"
     elif space.is_quota_bound:
         detail = (
             f"limited by: the machine's disk quota ({_gib(space.quota_free)} left);"
