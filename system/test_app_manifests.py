@@ -282,11 +282,12 @@ def test_no_app_claims_another_apps_program_as_a_sidecar() -> None:
 
 
 def test_no_two_app_packages_declare_the_same_console_script() -> None:
-    # Every app package installs into the one workspace venv, so two packages declaring one
+    # Every built-in app package installs into the one workspace venv, so two declaring one
     # script name leave one file in its bin directory for whichever installed last. It is also
     # what lets a supervisord command ending in a script name be traced back to the package
     # that runs it, which the sidecar guard above rests on. Checked over every app package,
-    # user-built apps included: they install into the same venv.
+    # user-built apps included: one declaring a built-in's script name would leave that
+    # built-in's program with two packages to trace back to.
     packages_by_script: dict[str, list[str]] = {}
     for package, scripts in _scripts_by_package().items():
         for script_name in scripts:
@@ -417,8 +418,9 @@ def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
 def test_every_built_in_preview_boots_its_programs_entry_point(
     manifest_path: Path,
 ) -> None:
-    # preview_app.py runs ``uv run`` on the preview command, or on the program's name when
-    # the table names none; whatever the venv holds under that name is what boots. Anything
+    # preview_app.py execs the preview command, or the program's name when the table names
+    # none, with the venv's bin first on PATH; whatever the venv holds under that name is
+    # what boots. Anything
     # but the script the app's own program runs previews some other package, or nothing.
     manifest = load_manifest(manifest_path)
     launched = (
