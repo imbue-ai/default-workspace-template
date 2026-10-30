@@ -9,7 +9,7 @@ import type { ChatRow } from "./rows";
 
 const pendingChatIds = new Set<string>();
 
-/** Take ``chatId`` off the list until the chat app answers the delete. */
+/** Take ``chatId`` off the list while its delete is on its way. */
 export function showPendingDelete(chatId: string): void {
   pendingChatIds.add(chatId);
 }
