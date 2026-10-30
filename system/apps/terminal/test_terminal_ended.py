@@ -14,7 +14,11 @@ from collections.abc import Iterator
 from typing import Final
 
 import pytest
-from app_manifest.testing import SHELL_HANDSHAKE_COUNTER_SCRIPT, built_app_contract_source, shell_stand_in_page
+from app_manifest.testing import (
+    SHELL_HANDSHAKE_COUNTER_SCRIPT,
+    built_app_contract_source,
+    shell_stand_in_page,
+)
 from playwright.sync_api import Browser, BrowserContext, Frame, Page, Route, expect
 from terminal_app.dispatch import (
     ENDED_MISSING_FOLDER,

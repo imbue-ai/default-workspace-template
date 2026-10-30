@@ -74,10 +74,21 @@ from browser import manifest as fleet_manifest
 from browser.cdp_client import CdpClient
 from browser.cdp_proxy import BrowserProxy, ProxyServer
 from browser.errors import BrowserNotDrivableError, UnknownBrowserError
-from browser.install_gate import READY_GATE, InstallGate, fortress_unit_failure_this_boot, missing_install_gate
+from browser.install_gate import (
+    READY_GATE,
+    InstallGate,
+    fortress_unit_failure_this_boot,
+    missing_install_gate,
+)
 from browser.names import first_free_numbered_browser_name, is_valid_browser_name
 from browser.oom_retag import notify_chromium_processes_expected
-from browser.primitives import APP_NAME, SESSION_QUERY_KEY, ControlOwner, CrashKind, Lifecycle
+from browser.primitives import (
+    APP_NAME,
+    SESSION_QUERY_KEY,
+    ControlOwner,
+    CrashKind,
+    Lifecycle,
+)
 
 # Errors expected when a target/CDP session goes away underneath us (tab closed,
 # navigation, browser killed). The bounded CDP helpers additionally catch broadly
