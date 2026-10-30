@@ -2,7 +2,8 @@
 /**
  * The rail's status marks: a chat waiting on a background task wears the dashed ring, a working one the breathing
  * dot (pending tasks or not, since the backend reports it working), and an idle one the hollow ring. And the
- * main chat: it leads in its own group, set off from the rest, and its row is marked.
+ * main chat: it leads in its own group, set off from the rest, and its row is marked. And the delete: a confirmed
+ * chat leaves the list before the chat app answers, and comes back with the reason on a refusal.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 

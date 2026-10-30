@@ -158,7 +158,7 @@ function makeMainFromMenu(row: ChatRow): void {
   });
 }
 
-/** What a row's menu needs of the root: the rows, the one shown, and how to show another. */
+/** What a row's menu needs of the root: the rows, the one shown, how to show another, and word of a refused delete. */
 export type RowMenuContext = Pick<ChatRailAttrs, "rows" | "selectedChatId" | "onPick" | "onDeleteRefused">;
 
 /** What a reference to an element of the list needs of the root, as its right-click menu does. */
