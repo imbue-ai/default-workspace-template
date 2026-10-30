@@ -104,7 +104,9 @@ shares one snapshot taken at most every 4 seconds (`stats.SharedSnapshot`), the
 stop history and the guard's log are read only from their last 256 KB and 1 MB
 and only again once they change (on a stop), the page is sent only the fields
 it shows, and a hidden window stops polling. The on-demand disk walk runs one
-`du` per row on a thread, at most one walk at a time (`disk.DiskScanner`).
+`du` per row (one per app directory, and two behind "Everything else": the
+system software and the home folder beside the workspace) on a thread, at most
+one walk at a time (`disk.DiskScanner`).
 
 Stops are paired with the guard's log lines newest first, on pid and process
 name. The log is rotated and the ledger is not, so the oldest stops lose their
