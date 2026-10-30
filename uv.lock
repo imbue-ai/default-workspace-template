@@ -516,6 +516,7 @@ dependencies = [
     { name = "websockets" },
     { name = "werkzeug" },
     { name = "workspace-layout" },
+    { name = "workspace-scripts" },
 ]
 
 [package.dev-dependencies]
@@ -539,6 +540,7 @@ requires-dist = [
     { name = "websockets", specifier = ">=13" },
     { name = "werkzeug", specifier = ">=3.0" },
     { name = "workspace-layout", editable = "system/libs/workspace_layout" },
+    { name = "workspace-scripts", editable = "system/scripts" },
 ]
 
 [package.metadata.requires-dev]
@@ -4668,12 +4670,14 @@ source = { editable = "system/scripts" }
 dependencies = [
     { name = "markdown" },
     { name = "playwright" },
+    { name = "workspace-layout" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "markdown", specifier = ">=3" },
     { name = "playwright", specifier = "==1.58.0" },
+    { name = "workspace-layout", editable = "system/libs/workspace_layout" },
 ]
 
 [[package]]

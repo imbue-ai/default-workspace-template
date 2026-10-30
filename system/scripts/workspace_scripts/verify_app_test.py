@@ -9,6 +9,8 @@ import xmlrpc.client
 from pathlib import Path
 
 import pytest
+from workspace_layout.cli import LayoutCliContext
+from workspace_layout.testing import LoopbackShell, write_registry
 
 from workspace_scripts import verify_app
 
@@ -276,3 +278,36 @@ def test_supervisor_socket_path_honours_the_env_override(
     assert verify_app.supervisor_socket_path() == verify_app.SUPERVISOR_SOCKET
     monkeypatch.setenv(verify_app.SUPERVISOR_SOCKET_ENV, "/tmp/other.sock")
     assert verify_app.supervisor_socket_path() == "/tmp/other.sock"
+
+
+def _layout_context(shell: LoopbackShell, tmp_path: Path) -> LayoutCliContext:
+    return LayoutCliContext(
+        shell_url=shell.url,
+        apps_file=write_registry(tmp_path / "apps.toml", ["notes"]),
+        requester_chat_id=None,
+        registration_timeout_seconds=0.0,
+        read_timeout_seconds=5.0,
+        op_timeout_seconds=5.0,
+    )
+
+
+def test_surface_opens_the_app_beside_the_chat_or_refreshes_its_windows(
+    tmp_path: Path,
+) -> None:
+    with LoopbackShell() as shell:
+        context = _layout_context(shell, tmp_path)
+        verify_app._surface("notes", "open", context)
+        verify_app._surface("notes", "refresh", context)
+
+        assert shell.posted_ops() == [
+            ("open", {"app": "notes", "beside": "self"}),
+            ("refresh", {"app": "notes"}),
+        ]
+
+
+def test_surface_fails_the_call_when_the_shell_refuses(tmp_path: Path) -> None:
+    with LoopbackShell(op_refusal=(409, {"detail": "no desktop"})) as shell:
+        with pytest.raises(SystemExit) as raised:
+            verify_app._surface("notes", "open", _layout_context(shell, tmp_path))
+
+    assert str(raised.value.code).startswith("error: workspace-layout open notes --beside exited ")
