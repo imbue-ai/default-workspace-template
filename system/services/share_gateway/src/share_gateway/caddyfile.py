@@ -32,7 +32,6 @@ from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
 
-
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 
