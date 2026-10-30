@@ -30,7 +30,7 @@ Each skill's Python now lives in its own uv project, `.agents/skills/<name>/pyth
 
 - **Previews start faster:** `preview_app.py` loads the manifest library (and pydantic) only for `up`; `refresh` and `down` work from the preview's recorded state.
 
-- **Docs:** `spec-summary.md` and `type-skill.md` describe the layout, the scaffold and the lazy-import rule, which has no exceptions: code whose signatures name a heavy library's types goes in a module of its own, imported inside the subcommands that need it. `running-python.md` describes the bare and venv tiers, and that a script's imports decide which it is in. update-app's `SKILL.md` says a preview syncs its worktree `--frozen` before every boot, so a dependency change there needs `uv lock` before `refresh`.
+- **Docs:** `spec-summary.md` and `type-skill.md` describe the layout, the scaffold and the lazy-import rule, which has no exceptions: code whose signatures name a heavy library's types goes in a module of its own, imported inside the subcommands that need it. `running-python.md` describes the bare and venv tiers, that a script's imports decide which it is in, and that code calls workspace code by importing it, starting a process only when the call needs one of its own. update-app's `SKILL.md` says a preview syncs its worktree `--frozen` before every boot, so a dependency change there needs `uv lock` before `refresh`.
 
 - **Going live with a merged skill:** a skill with a `python/` project runs from the workspace venv, so `lead-proxy.md`'s provisional go-live and the crystallize, heal and update go-live steps run `uv sync --all-packages --frozen` after the merge.
 

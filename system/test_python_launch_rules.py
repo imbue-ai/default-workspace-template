@@ -14,8 +14,9 @@ Each rule is checked against the real tree and against a planted violation:
   third-party import. A ``uv run <path>.py`` names a script that exists, so a path that
   moved is rewritten wherever it is written down.
 - Code imports packages. Edits to the import path (``sys.path``, ``PYTHONPATH``, pytest's
-  ``pythonpath``) and loading a module from a file path are counted, and the counts only go
-  down.
+  ``pythonpath``), loading a module from a file path, and production code naming one of the
+  workspace's own scripts, modules or commands to run it as a process are counted, and the
+  counts only go down.
 """
 
 from __future__ import annotations
@@ -27,8 +28,10 @@ import shlex
 import subprocess
 import tomllib
 from pathlib import Path, PurePosixPath
+from typing import NamedTuple
 
-from entry_points_testing import BARE_SEARCH_PATHS, REPO_ROOT, is_bare_entry
+from agents_shared.validate_skill import is_entry_module
+from entry_points_testing import BARE_SEARCH_PATHS, REPO_ROOT, is_bare_entry, is_test_file
 from imbue.mngr.interfaces.host import NamedCommand
 from inline_snapshot import snapshot
 from vendor_testing import resolves_into_vendor
@@ -966,3 +969,170 @@ def test_the_path_loading_scan_sees_each_form() -> None:
     )
 
     assert [number for number, _ in _path_loading_lines(text)] == [1, 2, 3, 4, 5, 6]
+
+
+class _OwnPrograms(NamedTuple):
+    """What a launch of the workspace's own code names: a runnable module's path, a package's module after
+    ``-m``, or a command one of its packages declares."""
+
+    scripts: frozenset[str]
+    packages: frozenset[str]
+    commands: frozenset[str]
+
+
+def _tracked_paths(repo_root: Path, pattern: str) -> list[str]:
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", pattern], cwd=repo_root, capture_output=True, text=True, check=True
+    ).stdout.split("\0")
+    return [
+        relative
+        for relative in tracked
+        if relative and "vendor" not in PurePosixPath(relative).parts and (repo_root / relative).is_file()
+    ]
+
+
+def _own_programs(repo_root: Path) -> _OwnPrograms:
+    commands: set[str] = set()
+    for relative in _tracked_paths(repo_root, "*pyproject.toml"):
+        project = tomllib.loads((repo_root / relative).read_text()).get("project", {})
+        commands.update(project.get("scripts", {}))
+    return _OwnPrograms(
+        scripts=frozenset(
+            relative
+            for relative in _tracked_paths(repo_root, "*.py")
+            if not is_test_file(Path(relative)) and is_entry_module(repo_root / relative)
+        ),
+        packages=frozenset(PurePosixPath(relative).parent.name for relative in _tracked_paths(repo_root, "*/__init__.py")),
+        commands=frozenset(commands),
+    )
+
+
+def _names_own_script(written: str, scripts: frozenset[str], *, is_path_part: bool) -> bool:
+    """Whether ``written`` is a path to one of ``scripts``: repo-relative, absolute, or a tail of one.
+
+    A file name alone names a script only as the last part of a path expression (``base / "x.py"``,
+    ``.with_name("x.py")``) and only when no other script shares it: a bare string is how the guard checks spell
+    a script they look for in a command, not one they run.
+    """
+    if not written.endswith(".py") or any(character.isspace() for character in written):
+        return False
+    written = written.removeprefix("./")
+    if "/" not in written:
+        return is_path_part and sum(PurePosixPath(script).name == written for script in scripts) == 1
+    return any(script.endswith(f"/{written}") or written.endswith(f"/{script}") or script == written for script in scripts)
+
+
+def _joined_path(node: ast.BinOp) -> str:
+    """The literal parts of a ``base / "a" / "b.py"`` chain, joined; an unknown base contributes nothing."""
+    parts: list[str] = []
+    current: ast.expr = node
+    while isinstance(current, ast.BinOp) and isinstance(current.op, ast.Div):
+        if isinstance(current.right, ast.Constant) and isinstance(current.right.value, str):
+            parts.insert(0, current.right.value)
+        current = current.left
+    if isinstance(current, ast.Constant) and isinstance(current.value, str):
+        parts.insert(0, current.value)
+    return "/".join(parts)
+
+
+def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return _names_own_script(node.value, programs.scripts, is_path_part=False)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return _names_own_script(_joined_path(node), programs.scripts, is_path_part=True)
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "with_name"
+        and len(node.args) == 1
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
+    ):
+        return _names_own_script(node.args[0].value, programs.scripts, is_path_part=True)
+    if isinstance(node, (ast.List, ast.Tuple)):
+        words = [element.value if isinstance(element, ast.Constant) else None for element in node.elts]
+        return any(
+            word == "-m" and isinstance(after, str) and after.split(".")[0] in programs.packages
+            for word, after in zip(words, words[1:])
+        ) or any(word in programs.commands for word in words if isinstance(word, str))
+    return False
+
+
+def _program_launch_lines(source: str, programs: _OwnPrograms) -> list[int]:
+    return sorted(
+        {
+            node.lineno
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.expr) and _names_own_program(node, programs)
+        }
+    )
+
+
+def _is_test_support(relative: str) -> bool:
+    return is_test_file(Path(relative)) or PurePosixPath(relative).name.endswith("testing.py")
+
+
+def _program_launch_sites(repo_root: Path) -> list[str]:
+    programs = _own_programs(repo_root)
+    sites: list[str] = []
+    for relative in _tracked_python_files(repo_root):
+        if _is_test_support(relative):
+            continue
+        source = (repo_root / relative).read_text()
+        lines = source.splitlines()
+        sites.extend(
+            f"{relative}:{number}: {lines[number - 1].strip()}" for number in _program_launch_lines(source, programs)
+        )
+    return sites
+
+
+def test_prevent_running_the_workspaces_own_code_as_a_process() -> None:
+    sites = _program_launch_sites(REPO_ROOT)
+    assert len(sites) <= snapshot(20), (
+        "These name one of the workspace's own scripts, modules or commands to run it as a process. Import it "
+        "instead, unless the call needs a process of its own (.agents/shared/references/running-python.md, "
+        '"Calling workspace code from Python"):\n' + "\n".join(sites)
+    )
+
+
+def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "tool"\n\n[project.scripts]\ntool-cmd = "pkg.tool:main"\n')
+    package = tmp_path / "pkg"
+    package.mkdir()
+    (package / "__init__.py").write_text("")
+    main_guard = 'if __name__ == "__main__":\n    pass\n'
+    (package / "tool.py").write_text(main_guard)
+    (package / "helpers.py").write_text("")
+    (package / "caller.py").write_text(
+        "\n".join(
+            [
+                "import subprocess, sys",
+                "from pathlib import Path",
+                'subprocess.run([sys.executable, "pkg/tool.py"])',
+                'TOOL = Path("pkg") / "tool.py"',
+                'subprocess.run([sys.executable, "-m", "pkg.tool"])',
+                'subprocess.run(["uv", "run", "--no-sync", "tool-cmd"])',
+                'TOOL_BY_NAME = ROOT / "tool.py"',
+                'SIBLING = Path(__file__).with_name("tool.py")',
+                'HELPERS = "pkg/helpers.py"',
+                'GUARDED_NAME = "tool.py"',
+                'print("run python3 pkg/tool.py by hand")',
+                'subprocess.run([sys.executable, "-m", "pytest"])',
+                'subprocess.run(["mngr", "list"])',
+            ]
+        )
+    )
+    (package / "caller_test.py").write_text('import subprocess, sys\nsubprocess.run([sys.executable, "pkg/tool.py"])\n')
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+
+    sites = _program_launch_sites(tmp_path)
+
+    assert [site.split(": ", 1)[0] for site in sites] == [
+        "pkg/caller.py:3",
+        "pkg/caller.py:4",
+        "pkg/caller.py:5",
+        "pkg/caller.py:6",
+        "pkg/caller.py:7",
+        "pkg/caller.py:8",
+    ]
