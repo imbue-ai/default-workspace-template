@@ -15,7 +15,8 @@ from workspace_bare_scripts import user_packages
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _HOW_TO_FIX = (
     f"Convert it to a standalone project as {user_packages.MIGRATION_REFERENCE} says, "
-    "under 'A user app, service or lib' (start with the migration script's --dry-run). "
+    "under 'A user app, service or lib' (start with "
+    "`uv run --no-sync user-package-migration migrate <package> --dry-run`). "
     "Do not add a user package to the root pyproject's members."
 )
 
@@ -29,7 +30,7 @@ def test_every_user_package_is_standalone_and_its_lock_is_current() -> None:
             if stale is not None:
                 problems.append(
                     f"its uv.lock is out of date with its pyproject.toml ({stale}); relock it "
-                    "with the migration script's `relock`"
+                    f"with `uv run --no-sync user-package-migration relock {relative}`"
                 )
         if problems:
             failures.append(

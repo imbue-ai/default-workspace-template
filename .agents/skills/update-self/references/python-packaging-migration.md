@@ -120,7 +120,7 @@ it runs today:
    in the package's directory, the version from `/var/tmp/pre-merge.uv.lock`),
    and run its checks again. Anything that is not mechanical goes to the lead
    as a question.
-4. **Its commands, run from elsewhere.** The script rewrites
+4. **Its commands, run from elsewhere.** The command rewrites
    `uv run --no-sync <command>` to
    `uv run --no-sync --project system/<kind>/<package> <command>` in tracked
    agent-facing files. Do the same by hand in the user's scheduled jobs
