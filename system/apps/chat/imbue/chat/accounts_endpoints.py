@@ -46,6 +46,7 @@ from imbue.chat.harnesses.registry import list_account_options
 from imbue.chat.identity import forbid_unless_owner
 from imbue.chat.models import ModelOptionsResponse
 from imbue.chat.models import OkResponse
+from imbue.chat.request_helpers import refusal_response
 from imbue.chat.state import get_state
 from imbue.imbue_common.frozen_model import FrozenModel
 
@@ -307,7 +308,8 @@ def start_flow() -> Response:
     except accounts.AccountError as e:
         return _error_response(str(e), status_code=404)
     except FlowError as e:
-        return _error_response(str(e))
+        logger.warning("A sign-in could not be started: {}", e)
+        return refusal_response(str(e), 400, user_facing_message=e.user_facing_message)
     return model_response(started)
 
 

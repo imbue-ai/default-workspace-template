@@ -4,7 +4,7 @@
 starts, but the agent is only registered with the ``AgentManager`` when that
 thread finishes. Every endpoint the freshly opened panel calls resolves the
 agent through that registry, so the panel's first ``/events`` fetch 404s and
-latches into the "No conversation data" view.
+latches into the "nothing to show" view.
 
 The ``provisional_chat_created`` broadcast normally covers that window with the
 page of a chat being created, but it is a transient edge event: the frontend holds
@@ -270,7 +270,7 @@ def test_not_found_panel_recovers_when_the_agent_resolves(
     """A panel that 404s its first events fetch reloads itself once the agent registers.
 
     With ``provisional_chat_created`` dropped, nothing covers the creation window: the
-    panel 404s, shows "No conversation data", and is the state the user is stuck
+    panel 404s, shows the "nothing to show" view, and is the state the user is stuck
     in today. It must leave that state on its own -- no reload, no tab switch --
     once ``chats_updated`` names the agent.
     """

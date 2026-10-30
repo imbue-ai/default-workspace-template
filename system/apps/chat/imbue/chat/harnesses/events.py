@@ -103,8 +103,9 @@ class DisplayKind(StrEnum):
     # ``user_message`` of this kind, stamped with ``compaction_cause`` (a ``CompactionCause`` value,
     # or null when unknown; absent on an event older than the compaction status timeout).
     STATUS = "status"
-    # A one-line notice on the ASSISTANT rail: a tick, a bold lead (``display_label``) and
-    # the plain summary (``display_body``). For a message the agent is told about rather
+    # A one-line notice on the ASSISTANT rail: a tick (a warning mark when ``resolution`` is
+    # ``failed``), a bold lead (``display_label``) and the plain summary (``display_body``), with
+    # ``display_details`` behind See details. For a message the agent is told about rather
     # than one the user sent -- a background task finishing.
     NOTICE = "notice"
     # user_message only: a genuine human turn carrying machine context beside the user's words (a

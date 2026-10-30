@@ -1,7 +1,14 @@
 import m from "mithril";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import type { TranscriptEvent, SubagentMetadata } from "../models/Response";
-import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { openChatPage } from "../shell";
+import { getShellConnection } from "../shellConnection";
+import { plainFailureLinesOf, plainFailureSentence } from "./failure-lines";
+import type { FailureLines } from "./failure-lines";
 import { parseJsonMessage } from "@imbue/workspace-ui/src/models/ws-json";
 import {
   buildConversationRows,
@@ -39,7 +46,9 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   const eventIds = new Set<string>();
   let metadata: SubagentMetadata | null = null;
   let loading = true;
-  let loadingError: string | null = null;
+  let loadingError: FailureLines | null = null;
+  // The chat or its agent is gone, so there is nothing to load again.
+  let isGone = false;
   let eventSource: EventSource | null = null;
 
   // Memoized rows. buildConversationRows walks the whole subagent transcript, so
@@ -82,6 +91,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
   async function fetchSubagentEvents(chatId: string, agentId: string, subagentSessionId: string): Promise<void> {
     loading = true;
     loadingError = null;
+    isGone = false;
 
     try {
       const result = await m.request<SubagentEventsResponse>({
@@ -95,7 +105,9 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       loading = false;
     } catch (error) {
       loading = false;
-      loadingError = describeRequestError(error, "read");
+      const failure = describeRequestFailure(error, "read");
+      isGone = failure.kind === "side_conversation_gone" || failure.kind === "chat_gone";
+      loadingError = plainFailureLinesOf(failure, "This conversation couldn't be loaded", { requestKind: "read" });
     }
   }
 
@@ -162,13 +174,34 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
     ]);
   }
 
+  function load({ chatId, agentId, subagentSessionId }: SubagentViewAttrs): void {
+    void fetchSubagentEvents(chatId, agentId, subagentSessionId).then(() => {
+      if (loadingError === null) connectToStream(chatId, agentId, subagentSessionId);
+      m.redraw();
+    });
+  }
+
+  function renderLoadingError(attrs: SubagentViewAttrs, failure: FailureLines): m.Vnode {
+    if (isGone) {
+      return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
+        m("p", { class: "message-list-error-text text-secondary" }, "This side conversation is no longer available."),
+        m(Button, { sm: true, onclick: () => openChatPage(attrs.chatId) }, "Back to the chat"),
+      ]);
+    }
+    return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3 p-8" }, [
+      m("p", { class: "message-list-error-text text-danger text-center" }, plainFailureSentence(failure)),
+      m("div", { class: "flex items-center gap-2" }, [
+        m(Button, { sm: true, extra: "message-list-reload", onclick: () => load(attrs) }, "Try again"),
+        failure.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
+      ]),
+      m("div", { class: "text-secondary" }, m(SeeDetails, { details: failure.details })),
+    ]);
+  }
+
   return {
     oninit(vnode) {
-      const { chatId, agentId, subagentSessionId } = vnode.attrs;
       engine.setChat(null);
-      fetchSubagentEvents(chatId, agentId, subagentSessionId).then(() => {
-        connectToStream(chatId, agentId, subagentSessionId);
-      });
+      load(vnode.attrs);
     },
 
     onremove() {
@@ -198,12 +231,8 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
           { class: "message-list-loading flex items-center justify-center h-full" },
           m("p", { class: "text-secondary" }, "Loading events..."),
         );
-      } else if (loadingError) {
-        content = m(
-          "div",
-          { class: "message-list-error flex items-center justify-center h-full" },
-          m("p", { class: "text-danger" }, loadingError),
-        );
+      } else if (loadingError !== null) {
+        content = renderLoadingError(vnode.attrs, loadingError);
       } else if (events.length === 0) {
         content = m(
           "div",

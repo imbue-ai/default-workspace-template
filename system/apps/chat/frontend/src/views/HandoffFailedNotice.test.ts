@@ -30,9 +30,6 @@ vi.mock("../models/Handoffs", () => ({
     return state.retryRejects ? Promise.reject(new Error("no such account")) : Promise.resolve({ phase: "switching" });
   },
 }));
-vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
-  describeRequestError: (error: unknown) => (error as Error).message,
-}));
 
 import m from "mithril";
 import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
@@ -78,7 +75,10 @@ describe("the failed-switch notice", () => {
   it("shows the reason and retries on the failed target by default", async () => {
     render();
     expect(ROOT().querySelector(".handoff-failed-title")?.textContent).toBe("Could not start Codex");
-    expect(ROOT().querySelector(".handoff-failed-reason")?.textContent).toContain("no such template");
+    expect(ROOT().querySelector(".handoff-failed-reason")?.textContent).toBe(
+      "Imbue Studio couldn't start this chat on Codex. Try again, or start a new chat.",
+    );
+    expect(ROOT().querySelector(".see-details-text")?.textContent).toContain("no such template");
     const select = ROOT().querySelector<HTMLSelectElement>("select.handoff-retry-account");
     expect(select?.value).toBe("acct-openai");
     expect([...(select?.options ?? [])].map((option) => option.textContent)).toEqual(ACCOUNTS.map((a) => a.label));
@@ -94,7 +94,10 @@ describe("the failed-switch notice", () => {
     });
     render();
     expect(ROOT().querySelector(".handoff-failed-title")?.textContent).toBe("Could not set the model on Codex");
-    expect(ROOT().querySelector(".handoff-failed-reason")?.textContent).toContain("Unknown model 'gpt-6-astra'");
+    expect(ROOT().querySelector(".handoff-failed-reason")?.textContent).toBe(
+      "Codex is running, but the model you picked couldn't be set on it.",
+    );
+    expect(ROOT().querySelector(".see-details-text")?.textContent).toContain("Unknown model 'gpt-6-astra'");
     expect(ROOT().querySelector(".handoff-retry-button")).not.toBeNull();
   });
 
@@ -109,7 +112,12 @@ describe("the failed-switch notice", () => {
     await flush();
     render();
     expect(state.retries).toEqual([["agent-1", "acct-google"]]);
-    expect(ROOT().querySelector(".handoff-retry-error")?.textContent).toBe("no such account");
+    expect(ROOT().querySelector(".handoff-retry-error")?.textContent).toBe(
+      "Couldn't try the move again. Try again. If this persists, report a bug.",
+    );
+    expect([...ROOT().querySelectorAll(".see-details-text")].map((node) => node.textContent).join("\n")).toContain(
+      "no such account",
+    );
     expect(ROOT().querySelector(".handoff-failed-title")).not.toBeNull();
   });
 
@@ -131,7 +139,9 @@ describe("the failed-switch notice", () => {
     });
     render();
     expect(ROOT().querySelector(".handoff-failed-title")?.textContent).toBe("Could not set the model on Claude Code");
-    expect(ROOT().querySelector(".handoff-failed-reason")?.textContent).toContain("Unknown model 'gpt-6-astra'");
+    expect(ROOT().querySelector(".handoff-failed-reason")?.textContent).toBe(
+      "Claude Code is running, but the model you picked couldn't be set on it.",
+    );
   });
 
   it("names the restart and offers only the agent's own harness and lane for a failed rebind", () => {

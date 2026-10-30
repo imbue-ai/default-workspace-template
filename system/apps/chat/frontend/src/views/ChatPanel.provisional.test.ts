@@ -22,6 +22,9 @@ const mocks = vi.hoisted(() => {
     // Whether the transcript load 404'd, and whether the chat app has sent its chat list yet.
     isConversationNotFound: false,
     isChatListReceived: true,
+    loadState: { phase: "idle", error: null } as unknown,
+    destroyChat: vi.fn(async (_chatId: string) => undefined),
+    startChat: vi.fn(async (_chatId: string) => undefined),
     // The ids the account list holds, and the one a new chat would start on.
     accountIds: ["acct-1"] as string[],
     selectedAccountId: "acct-1" as string | null,
@@ -29,6 +32,7 @@ const mocks = vi.hoisted(() => {
   };
 });
 
+vi.mock("../root/verbs", () => ({ destroyChat: mocks.destroyChat, startChat: mocks.startChat }));
 vi.mock("../models/Providers", () => ({
   whenAccountsReadyToChoose: async () => undefined,
   accountForFirstSend: (accountId: string | undefined) => {
@@ -58,7 +62,7 @@ vi.mock("../models/Response", () => ({
   fetchEvents: (chatId: string) => mocks.fetchEvents(chatId),
   fetchForwardEvents: async () => undefined,
   fetchWindowAtOffset: async () => undefined,
-  getConversationLoadState: () => ({ phase: "idle", error: null }),
+  getConversationLoadState: () => mocks.loadState,
   getEventsForChat: () => [],
   getEventCount: () => 0,
   getFirstOffset: () => 0,
@@ -102,6 +106,8 @@ vi.mock("./FastModeNotice", () => ({ FastModeNotice: { view: () => null } }));
 
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { ChatPanel } from "./ChatPanel";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { MESSAGE_LIST_CLASS } from "./conversation-rows";
 
 type AnyVnode = { tag?: unknown; key?: unknown; attrs?: Record<string, unknown>; children?: unknown };
@@ -133,6 +139,14 @@ function findByClass(node: unknown, className: string): AnyVnode | undefined {
 /** A Button by the `extra` class the page marks it with. */
 function findButton(node: unknown, extra: string): AnyVnode | undefined {
   return flatten(node).find((vnode) => vnode.attrs?.extra === extra);
+}
+
+/** What each "See details" in the tree holds. */
+function detailsShown(node: unknown): string {
+  return flatten(node)
+    .filter((vnode) => vnode.tag === SeeDetails)
+    .map((vnode) => String(vnode.attrs?.details ?? ""))
+    .join("\n");
 }
 
 function click(button: AnyVnode | undefined): void {
@@ -326,10 +340,33 @@ describe("ChatPanel over a provisional chat", () => {
     const tree = render();
 
     expect(findByClass(tree, "message-list-create-failed")).toBeTruthy();
-    expect(renderedText(tree)).toContain("mngr create exited with code 1");
+    expect(renderedText(tree)).toContain(
+      "The agent for this chat couldn't be started. Try again, or start a new chat on a different provider.",
+    );
+    expect(renderedText(tree)).not.toContain("mngr create exited with code 1");
+    expect(detailsShown(tree)).toContain("mngr create exited with code 1");
     click(findButton(tree, "message-list-create-retry"));
     await flushAsync();
     expect(mocks.launchChat).toHaveBeenCalledWith(AGENT_ID, "acct-1");
+  });
+
+  it("removes a chat whose create failed", async () => {
+    failed("acct-1", "mngr create exited with code 1");
+    const render = mountPanel();
+
+    click(findButton(render(), "message-list-remove-chat"));
+    await flushAsync();
+
+    expect(mocks.destroyChat).toHaveBeenCalledWith(AGENT_ID);
+  });
+
+  it("asks for a provider, not a retry, for a failed chat that names no account", () => {
+    failed("", "No provider account is signed in for this workspace.");
+    const tree = mountPanel()();
+
+    expect(renderedText(tree)).toContain("Sign in to a provider to start this chat.");
+    expect(findButton(tree, "message-list-create-retry")).toBeUndefined();
+    expect(findButton(tree, "message-list-choose-provider")).toBeTruthy();
   });
 
   it("retries a failed create on the account a new chat would start on once the record's was signed out", async () => {
@@ -370,8 +407,11 @@ describe("ChatPanel over a provisional chat", () => {
 
     const refused = render();
 
-    expect(renderedText(refused)).toContain("mngr create exited with code 1");
-    expect(renderedText(refused)).toContain("account acct-1 is on a lane this build does not have");
+    expect(detailsShown(refused)).toContain("mngr create exited with code 1");
+    expect(renderedText(refused)).toContain(
+      "This chat couldn't be started. Try again. If this persists, report a bug.",
+    );
+    expect(detailsShown(refused)).toContain("account acct-1 is on a lane this build does not have");
 
     mocks.proto = {
       chat_id: AGENT_ID,
@@ -386,8 +426,8 @@ describe("ChatPanel over a provisional chat", () => {
     failed("acct-1", "mngr create exited with code 2");
     const tree = render();
 
-    expect(renderedText(tree)).toContain("mngr create exited with code 2");
-    expect(renderedText(tree)).not.toContain("is on a lane this build does not have");
+    expect(detailsShown(tree)).toContain("mngr create exited with code 2");
+    expect(detailsShown(tree)).not.toContain("is on a lane this build does not have");
   });
 });
 
@@ -412,14 +452,28 @@ describe("ChatPanel over a transcript that 404'd", () => {
 
     const tree = mountPanel()();
 
-    expect(renderedText(tree)).not.toContain("No conversation data");
+    expect(renderedText(tree)).not.toContain("This chat is no longer here.");
     expect(findByClass(tree, "message-list-loading")).toBeTruthy();
   });
 
-  it("says a chat the app does not list has no conversation", () => {
+  it("says a chat the app does not list is no longer here, and offers a new one", () => {
     const tree = mountPanel()();
 
-    expect(renderedText(tree)).toContain("No conversation data");
+    expect(renderedText(tree)).toContain("This chat is no longer here.");
+    expect(renderedText(tree)).not.toContain("Claude session");
+    expect(findButton(tree, "message-list-new-chat")).toBeTruthy();
+  });
+
+  it("offers to start a listed chat whose agent is stopped and has nothing to show", async () => {
+    mocks.chat = chatSnapshotFixture(AGENT_ID, { active_agent: { state: "STOPPED" } });
+    const render = mountPanel();
+
+    const tree = render();
+
+    expect(renderedText(tree)).toContain("This chat has nothing to show yet -- its agent isn't running.");
+    click(findButton(tree, "message-list-start-chat"));
+    await flushAsync();
+    expect(mocks.startChat).toHaveBeenCalledWith(AGENT_ID);
   });
 
   it("keeps a chat that has just come up empty while its transcript is reloaded", async () => {
@@ -437,7 +491,7 @@ describe("ChatPanel over a transcript that 404'd", () => {
 
     const reloading = render();
 
-    expect(renderedText(reloading)).not.toContain("No conversation data");
+    expect(renderedText(reloading)).not.toContain("This chat has nothing to show yet.");
     mocks.isConversationNotFound = false;
     finishReload();
     await flushAsync();
@@ -500,7 +554,54 @@ describe("ChatPanel over a seeded chat", () => {
     const tree = render();
 
     expect(findByClass(tree, "message-list-create-failed")).toBeTruthy();
-    expect(renderedText(tree)).toContain("mngr create exited with code 3");
+    expect(detailsShown(tree)).toContain("mngr create exited with code 3");
     expect(mocks.fetchEvents).not.toHaveBeenCalled();
+  });
+});
+
+describe("ChatPanel over a transcript that could not be loaded", () => {
+  beforeEach(() => {
+    mocks.proto = undefined;
+    mocks.chat = chatSnapshotFixture(AGENT_ID);
+    mocks.outgoingBubbles = [];
+    mocks.isConversationNotFound = false;
+    mocks.isChatListReceived = true;
+  });
+
+  afterEach(() => {
+    mocks.loadState = { phase: "idle", error: null };
+  });
+
+  it("says the workspace didn't answer for a load nothing answered, with Refresh", () => {
+    mocks.loadState = {
+      phase: "error",
+      error: describeRequestFailure(Object.assign(new Error("Request timed out"), { code: 0 }), "read"),
+    };
+
+    const tree = mountPanel()();
+
+    expect(renderedText(findByClass(tree, "message-list-error-text")).trim()).toBe(
+      "The workspace didn't answer. Try again in a moment.",
+    );
+    expect(findButton(tree, "message-list-reload")).toBeTruthy();
+    expect(renderedText(tree)).not.toContain("Error:");
+  });
+
+  it("names what failed for a refused load and keeps the server's text behind See details", () => {
+    mocks.loadState = {
+      phase: "error",
+      error: describeRequestFailure(
+        Object.assign(new Error("{}"), { code: 500, response: { detail: "transcript file is unreadable" } }),
+        "read",
+      ),
+    };
+
+    const tree = mountPanel()();
+
+    expect(renderedText(findByClass(tree, "message-list-error-text")).trim()).toBe(
+      "This conversation couldn't be loaded. Try again. If this persists, report a bug.",
+    );
+    const details = flatten(tree).find((vnode) => vnode.tag === SeeDetails);
+    expect(details?.attrs?.details).toContain("transcript file is unreadable");
   });
 });

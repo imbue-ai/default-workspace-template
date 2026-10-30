@@ -39,6 +39,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Any
 from typing import Final
+from typing import NoReturn
 from typing import assert_never
 
 import pexpect
@@ -95,6 +96,7 @@ from imbue.chat.harnesses.sign_in_relay import read_sign_in_url
 from imbue.chat.harnesses.signed_in import SignedIn
 from imbue.chat.harnesses.signed_in import is_signed_in
 from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.pure import pure
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import LoginCompleted
 
@@ -126,6 +128,16 @@ _SETTLE_QUIET_SECONDS: Final = 0.2
 
 class FlowError(PtyAuthError):
     """A sign-in flow could not be started or advanced."""
+
+    def __init__(self, detail: str, user_facing_message: str | None = None) -> None:
+        super().__init__(detail)
+        # The sentence the chooser shows in place of ``detail``, which then goes behind See details; None where
+        # ``detail`` is shown as it is.
+        self.user_facing_message = user_facing_message
+
+
+# What a sign-in that could not even be started says; what went wrong goes behind See details.
+_SIGN_IN_NOT_STARTED: Final = "Imbue Studio couldn't start the sign-in. Try again. If this persists, report a bug."
 
 
 class FlowState(StrEnum):
@@ -169,7 +181,27 @@ class FlowStatus(FrozenModel):
 
     state: FlowState = Field(description="Pending, ok, or failed")
     detail: str | None = Field(default=None, description="Why it failed, or what it is waiting on")
+    details: str | None = Field(
+        default=None,
+        description=(
+            "What goes behind See details under a failed flow's detail: the provider's own words, or what "
+            "Imbue Studio could not do"
+        ),
+    )
     account_id: str | None = Field(default=None, description="The account it signed in, once it is ok")
+
+
+@pure
+def _cli_failure(copy: str, match: re.Match[str] | None, provider_name: str) -> tuple[str, str | None]:
+    """What a sign-in tool's failure line says on screen, and the tool's own words behind See details.
+
+    A line the lane words itself (``copy`` without ``{1}``) is shown as written; one it only echoes is the tool's own
+    text, which can name files, flags or status codes, so the screen says the provider refused instead.
+    """
+    if "{1}" not in copy:
+        return copy, None
+    words = match.group(1).strip() if match is not None and match.groups() and match.group(1) else None
+    return f"{provider_name} didn't accept that sign-in. Try again, or use a different provider.", words
 
 
 def flow_shape(method: SignInMethod) -> FlowShape:
@@ -214,6 +246,8 @@ class _Session:
     output: str
     state: FlowState
     detail: str | None
+    # A failure's text behind See details, beside ``detail``.
+    failure_details: str | None
     timer: threading.Timer | None
     # Whether the user's code has been handed to the CLI. Only then is it worth asking the
     # harness whether it worked -- the probe is a network call, and before the browser round
@@ -262,6 +296,7 @@ def _new_session(lane: Lane, method: SignInMethod, account_id: str, minted: bool
     session.output = ""
     session.state = FlowState.PENDING
     session.detail = None
+    session.failure_details = None
     session.timer = None
     session.code_submitted = False
     session.last_verdict = None
@@ -353,7 +388,10 @@ class AuthFlowService:
                 # flow and wrote codex's config.toml into the claude account's folder. Every
                 # chat bound there then resolved a claude harness against codex credentials.
                 if existing.lane != lane.id:
-                    raise FlowError(f"that account signs in through {existing.lane}, not {lane.id}")
+                    raise FlowError(
+                        f"that account signs in through {existing.lane}, not {lane.id}",
+                        "That account signs in a different way -- pick it from the provider list instead.",
+                    )
                 account_id = existing.id
                 account_path = accounts.account_dir(account_id, self._home)
             binding = build_account_binding(lane.harness)
@@ -426,8 +464,7 @@ class AuthFlowService:
             deadline_seconds=_APP_SERVER_START_SECONDS,
         )
         if not socket_path.exists():
-            self._fail_locked(session, "Codex did not start its sign-in.")
-            raise FlowError(session.detail or "no app-server")
+            self._fail_to_start_locked(session, "Codex did not start its sign-in.")
         try:
             client = self._connect_login_client(socket_path)
             session.login_client = client
@@ -445,13 +482,10 @@ class AuthFlowService:
             logger.warning("Codex sign-in could not begin: {}", e)
             # A code sign-in is refused when the ChatGPT account has device codes turned off, a
             # setting the user can change.
-            self._fail_locked(
-                session,
-                _DEVICE_LOGIN_REFUSED_DETAIL
-                if method.login is CodexLogin.DEVICE
-                else "Codex could not begin the sign-in.",
-            )
-            raise FlowError(session.detail or "no login") from e
+            if method.login is CodexLogin.DEVICE:
+                self._fail_locked(session, _DEVICE_LOGIN_REFUSED_DETAIL)
+                raise FlowError(_DEVICE_LOGIN_REFUSED_DETAIL, _DEVICE_LOGIN_REFUSED_DETAIL) from e
+            self._fail_to_start_locked(session, f"Codex could not begin the sign-in: {e}")
         threading.Thread(
             target=self._await_login,
             args=(session, client, login_id, method.flow_deadline_s),
@@ -496,8 +530,7 @@ class AuthFlowService:
                 )
                 != 0
             ):
-                self._fail_locked(session, "The sign-in screen did not appear as expected.")
-                raise FlowError(session.detail or "unexpected screen")
+                self._fail_to_start_locked(session, "The sign-in screen did not appear as expected.")
             session.output += (session.process.before or "") + (session.process.after or "")
         else:
             # No anchor to expect, so wait for the screen itself to stop changing. Better
@@ -536,12 +569,11 @@ class AuthFlowService:
                 session.output += (session.process.before or "") + (session.process.after or "")
                 _, copy = method.failures[index - 1]
                 match = re.search(failure_patterns[index - 1], session.output)
-                detail = copy.replace("{1}", match.group(1)) if match is not None and match.groups() else copy
-                self._fail_locked(session, detail)
-                raise FlowError(detail)
+                detail, provider_words = _cli_failure(copy, match, session.lane.provider_name)
+                self._fail_locked(session, detail, provider_words)
+                raise FlowError(provider_words or detail, detail)
             if index != 0:
-                self._fail_locked(session, "Timed out waiting for the sign-in details.")
-                raise FlowError(session.detail or "no value")
+                self._fail_to_start_locked(session, "Timed out waiting for the sign-in details.")
             session.output += (session.process.before or "") + (session.process.after or "")
         # A URL is drained until it can be extracted -- the CLI animates forever afterwards,
         # so there is no quiet gap to wait for. A minted token is drained to process exit,
@@ -552,8 +584,7 @@ class AuthFlowService:
         session.output = drain_pty_stream(session.process, session.output, is_done)
         value = _extract(session.output, method.scrape, method.frame_marker)
         if value is None:
-            self._fail_locked(session, "Could not read the sign-in details from the terminal.")
-            raise FlowError(session.detail or "extraction failed")
+            self._fail_to_start_locked(session, "Could not read the sign-in details from the terminal.")
         if url_file is not None:
             # The CLI may print its manual URL before it runs `$BROWSER`, so the shim's file can
             # land a moment after the scrape. Reading the PTY meanwhile keeps its output whole.
@@ -656,7 +687,12 @@ class AuthFlowService:
         with self._lock:
             session = self._require_locked(flow_id)
             if session.state is not FlowState.PENDING:
-                return FlowStatus(state=session.state, detail=session.detail, account_id=session.account_id)
+                return FlowStatus(
+                    state=session.state,
+                    detail=session.detail,
+                    details=session.failure_details,
+                    account_id=session.account_id,
+                )
             method = session.method
             if isinstance(method, PasteMethod) or session.is_relay_in_flight:
                 return FlowStatus(state=FlowState.PENDING)
@@ -744,9 +780,9 @@ class AuthFlowService:
         for pattern, copy in method.failures:
             match = re.search(pattern, session.output)
             if match is not None:
-                detail = copy.replace("{1}", match.group(1)) if match.groups() else copy
-                self._fail_locked(session, detail)
-                return FlowStatus(state=FlowState.FAILED, detail=detail)
+                detail, provider_words = _cli_failure(copy, match, session.lane.provider_name)
+                self._fail_locked(session, detail, provider_words)
+                return FlowStatus(state=FlowState.FAILED, detail=detail, details=provider_words)
 
         alive = bool(session.process is not None and session.process.isalive())
         if method.success is not None:
@@ -859,10 +895,16 @@ class AuthFlowService:
         self._teardown_locked(session, keep_folder=True)
         return FlowStatus(state=FlowState.OK, account_id=account.id)
 
-    def _fail_locked(self, session: _Session, detail: str) -> None:
+    def _fail_locked(self, session: _Session, detail: str, failure_details: str | None = None) -> None:
         session.state = FlowState.FAILED
         session.detail = detail
+        session.failure_details = failure_details
         self._teardown_locked(session, keep_folder=not session.minted)
+
+    def _fail_to_start_locked(self, session: _Session, reason: str) -> NoReturn:
+        """Fail a sign-in that could not be started, with ``reason`` behind See details."""
+        self._fail_locked(session, _SIGN_IN_NOT_STARTED, reason)
+        raise FlowError(reason, _SIGN_IN_NOT_STARTED)
 
     def _teardown_locked(self, session: _Session, keep_folder: bool) -> None:
         if session.timer is not None:

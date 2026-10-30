@@ -295,6 +295,20 @@ def delivered_or_raise(failure: SendFailure | None) -> bool:
     return True
 
 
+class AgentStartFailedError(SendFailedError):
+    """A send that had to start its agent first, and the start itself failed: nothing is starting, so waiting will not
+    help."""
+
+    def __init__(self, agent_name: str, error: Exception) -> None:
+        super().__init__(
+            f"Could not start agent '{agent_name}' for a send: {error}", str(SendFailureKind.AGENT_UNREACHABLE)
+        )
+
+
+# The reason a send that reached no agent carries when mngr gave none.
+NO_REASON_SEND_FAILURE: Final[str] = "The send reached no agent, and mngr gave no reason."
+
+
 class SendFailure(FrozenModel):
     """Why a send did not land: the harness's own words, plus mngr's classification of them."""
 
@@ -307,8 +321,7 @@ def _first_failure(result: MessageResult) -> SendFailure:
 
     Each of ``result.failures`` carries the reason alone and mngr's classification of it, so
     nothing here parses prose or strips framing -- the notice supplies its own title and sits in
-    the failing agent's own chat. A send can fail with no entry at all (nothing matched the id),
-    which is its own answer.
+    the failing agent's own chat.
     """
     for failure in result.failures:
         if failure.reason:
@@ -324,9 +337,8 @@ def _first_failure(result: MessageResult) -> SendFailure:
             return SendFailure(
                 reason=_without_send_prefix(blocked_message, agent_name), kind=str(SendFailureKind.INPUT_BLOCKED)
             )
-    # Nothing matched the id at all, which is its own answer -- and trying again will not change
-    # it, so it is classified the same as a pane that is gone.
-    return SendFailure(reason="The agent could not be reached.", kind="agent_unreachable")
+    # mngr reported no reason, so nothing says the agent is gone: unclassified, as mngr's own default is.
+    return SendFailure(reason=NO_REASON_SEND_FAILURE, kind=str(SendFailureKind.UNKNOWN))
 
 
 def _without_send_prefix(message: str, agent_name: str) -> str:

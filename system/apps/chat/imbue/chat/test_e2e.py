@@ -1250,7 +1250,7 @@ def test_a_new_chat_with_nothing_signed_in_offers_the_provider_chooser_on_its_ow
         chat_frame = _start_new_chat(page, server)
         expect(chat_frame.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         # Under the chooser, the composer's provider row already says there is no provider to start on.
-        expect(chat_frame.locator(".model-selector-not-connected")).to_have_text("Not connected", timeout=15000)
+        expect(chat_frame.locator(".model-selector-not-connected")).to_have_text("Add a provider", timeout=15000)
         # Neither the shell nor the chat list draws a chooser of its own: the chat's page is the one place it opens.
         assert page.locator('[data-e2e="provider-chooser"]').count() == 0
         assert _chat_root(page).locator('[data-e2e="provider-chooser"]').count() == 0
@@ -1389,8 +1389,8 @@ def test_a_first_message_sent_with_nothing_signed_in_waits_in_the_chat_composer(
 # draws, however briefly, into ``window.__placeholdersSeen``.
 _RECORD_PLACEHOLDERS_SEEN_SCRIPT = """
 (() => {
-  const texts = ["No conversation data", "Loading terminal output", "Starting the chat", "Loading events",
-    "No events yet", "Send a message to start this chat"];
+  const texts = ["This chat is no longer here", "This chat has nothing to show yet", "Loading terminal output",
+    "Starting the chat", "Loading events", "No events yet", "Send a message to start this chat"];
   const seen = new Set();
   window.__placeholdersSeen = [];
   const check = () => {
@@ -1919,7 +1919,10 @@ def test_a_failed_switch_shows_its_reason_and_retries_on_a_third_account(
         notice = chat.locator(".handoff-failed-notice")
         expect(notice).to_be_visible(timeout=30000)
         expect(notice.locator(".handoff-failed-title")).to_have_text("Could not start Codex")
-        expect(notice.locator(".handoff-failed-reason")).to_contain_text("mngr create exited with code 3")
+        expect(notice.locator(".handoff-failed-reason")).to_have_text(
+            "Imbue Studio couldn't start this chat on Codex. Try again, or start a new chat."
+        )
+        expect(notice.locator(".see-details-text")).to_contain_text("mngr create exited with code 3")
         expect(chat.locator(".held-send", has_text="Carry on in Codex")).to_be_visible()
         snapshot = server.chat_state.agent_manager.get_chat_snapshot(FIXTURE_AGENT_ID)
         assert snapshot is not None and snapshot.handoff is not None

@@ -133,18 +133,18 @@ class SuccessorUntrackedError(HandoffStepError):
 def converging_detail(phase: HandoffPhase, target_label: str) -> str:
     """What a verb refused while the chat converges tells the user (the 409's ``detail``, shown as is).
 
-    Names the destination and the phase in plain words rather than the chat's id: the chat
-    rail and the chat page both put this text in front of the user. The destination is the
-    harness for a handoff and the account for a rebind (``HandoffState.target_label``).
+    Names the destination in plain words rather than the chat's id: the chat rail and the chat
+    page both put this text in front of the user. The destination is the harness for a handoff
+    and the account for a rebind (``HandoffState.target_label``).
     """
     match phase:
         case HandoffPhase.DRAINING | HandoffPhase.SUMMARIZING | HandoffPhase.SWITCHING | HandoffPhase.RESTARTING:
-            return (
-                f"This chat is switching to {target_label} and is {phase.value}; "
-                "wait for the switch to finish, then try again."
-            )
+            return f"This chat is still moving to {target_label}. Wait for it to finish, then try again."
         case HandoffPhase.FAILED:
-            return f"This chat's switch to {target_label} failed; retry the switch from the chat before anything else."
+            return (
+                f"This chat did not finish moving to {target_label}. "
+                "Use Try again on the notice above the message box first."
+            )
         case _ as unreachable:
             assert_never(unreachable)
 
@@ -153,8 +153,8 @@ def converging_detail(phase: HandoffPhase, target_label: str) -> str:
 def cancel_refused_detail(target_harness: HarnessType) -> str:
     """What a cancel refused past the point of no return tells the user (the 409's ``detail``, shown as is)."""
     return (
-        f"This chat's switch to {HARNESS_LABEL[target_harness]} can no longer be called off: "
-        "the previous agent is already being replaced."
+        "The switch couldn't be called off -- it's already too far along, so this chat is moving to "
+        f"{HARNESS_LABEL[target_harness]}."
     )
 
 

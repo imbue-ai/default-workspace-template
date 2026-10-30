@@ -4090,7 +4090,17 @@ def test_stop_activity_tracking_clears_caches(agent_manager: AgentManager, tmp_p
 
 def _plain_queued_wire(snapshot: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """The wire shape of queued entries whose content gets no render decision."""
-    return [{**entry, "display": None, "display_label": None, "display_body": None} for entry in snapshot]
+    return [
+        {
+            **entry,
+            "display": None,
+            "display_label": None,
+            "display_body": None,
+            "resolution": None,
+            "display_details": None,
+        }
+        for entry in snapshot
+    ]
 
 
 _QUEUED_BACKGROUND_TASK_REPORT = (
@@ -4154,6 +4164,34 @@ def test_a_queued_background_task_report_carries_its_notice_decision(
         assert queued["display"] == DisplayKind.NOTICE.value
         assert queued["display_label"] == "Background task"
         assert queued["display_body"] == "Wait for the worker (finished)"
+    finally:
+        agent_manager.stop()
+
+
+def test_a_queued_report_of_a_failed_task_carries_its_failed_mark_and_details(
+    agent_manager: AgentManager, broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    _seed_agent(agent_manager, "agent-1")
+    agent_manager._ensure_activity_tracking("agent-1")
+    report = (
+        f"<{BACKGROUND_TASK_REPORT_TAG}>\n<summary>Run the tests (exit code 1)</summary>\n"
+        f"Exit code: 1\n</{BACKGROUND_TASK_REPORT_TAG}>"
+    )
+
+    listener = broadcaster.register()
+    try:
+        agent_manager.update_queued_messages(
+            "agent-1", [{"queued_id": "q1", "content": report, "timestamp": "2026-08-07T00:00:01.000Z"}]
+        )
+
+        latest = _last_chats_updated(_drain(listener))
+        assert latest is not None
+        [queued] = latest["chats"][0]["active_agent"]["queued_messages"]
+        assert queued["display_label"] == "Background task failed"
+        assert queued["display_body"] == "Run the tests"
+        assert queued["resolution"] == "failed"
+        assert queued["display_details"] == "Run the tests: exit code 1"
     finally:
         agent_manager.stop()
 
@@ -6582,7 +6620,7 @@ def test_a_failed_handoff_lists_as_an_error_and_a_retry_creates_the_successor(
         assert snapshot.handoff is not None and snapshot.handoff.error == "mngr create exited with code 3"
         # The stand-in already carries its archival name; the snapshot still says what the chat is called.
         assert (snapshot.title, snapshot.name) == ("Chat 1", "Chat-1")
-        with pytest.raises(ChatConvergingError, match="switch to Codex can no longer be called off"):
+        with pytest.raises(ChatConvergingError, match="it's already too far along, so this chat is moving to Codex"):
             manager.cancel_handoff(chat_id)
         # The trigger already rides the stored prompt: a retried send with its id is not held again.
         assert (
@@ -6930,10 +6968,10 @@ def test_a_rebind_cannot_be_cancelled_holds_sends_and_retries_only_on_its_own_la
         snapshot = manager.get_chat_snapshot(agent_id)
         assert snapshot is not None and snapshot.status.value == "error"
 
-        with pytest.raises(ChatConvergingError, match="cannot be called off"):
+        with pytest.raises(ChatConvergingError, match="couldn't be called off"):
             manager.cancel_handoff(chat_id)
         assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.FAILED
-        with pytest.raises(ChatConvergingError, match="switch to Anthropic 2 \\(Claude Code\\) failed; retry"):
+        with pytest.raises(ChatConvergingError, match="did not finish moving to Anthropic 2 \\(Claude Code\\)"):
             manager.stop_chat(chat_id)
         with pytest.raises(HandoffError, match="same harness and lane"):
             manager.retry_handoff(chat_id, _openai_account())

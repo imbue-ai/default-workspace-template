@@ -5,6 +5,7 @@ import type { ToolCall, ToolResultEvent } from "../models/Response";
 import type { SecretResolution } from "./message-classification";
 import type { SecretCardHandlers, SecretCardState } from "./secret-card";
 import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
+import { framePageInShell } from "../shellConnectionFixture";
 import {
   SECRET_STATUS_RETRY_DELAY_MS,
   SecretStatusCache,
@@ -53,6 +54,7 @@ function idleState(overrides: Partial<SecretCardState> = {}): SecretCardState {
     isDeclining: false,
     isBusy: false,
     error: null,
+    isRequestGone: false,
     ...overrides,
   };
 }
@@ -68,6 +70,7 @@ function recordingHandlers(): SecretCardHandlers & { calls: string[] } {
     onDeclineStart: () => calls.push("decline-start"),
     onDeclineCancel: () => calls.push("decline-cancel"),
     onDeclineConfirm: () => calls.push("decline-confirm"),
+    onAskAgain: () => calls.push("ask-again"),
   };
 }
 
@@ -192,16 +195,50 @@ describe("renderSecretCard", () => {
     expect(handlers.calls).toEqual(["decline-confirm", "decline-cancel"]);
   });
 
-  it("shows the last error under the inputs", () => {
+  it("shows the last error under the inputs, its details collapsed", () => {
+    const shell = framePageInShell(true);
     const root = renderToDom(
       details,
       null,
       null,
       true,
-      idleState({ error: "The chat app could not be reached." }),
+      idleState({
+        error: {
+          body: [
+            "Imbue Studio couldn't save these values in this workspace. Try again. If this persists, report a bug.",
+          ],
+          details: "HTTP 500\nCould not write data/.secrets/svc.env: disk full",
+          isReportable: true,
+        },
+      }),
       recordingHandlers(),
     );
-    expect(root.querySelector(".secret-request-error")?.textContent).toBe("The chat app could not be reached.");
+    expect(root.querySelector(".secret-request-error")?.textContent).toBe(
+      "Imbue Studio couldn't save these values in this workspace. Try again. If this persists, report a bug.",
+    );
+    expect(root.querySelector(".see-details-text")?.textContent).toContain("disk full");
+    (root.querySelector(".report-bug") as HTMLElement).click();
+    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    shell.release();
+  });
+
+  it("offers to ask the agent again for a request that can't be answered any more", () => {
+    const handlers = recordingHandlers();
+    const root = renderToDom(
+      details,
+      null,
+      null,
+      true,
+      idleState({
+        error: { body: ["This request can't be answered any more."], details: null, isReportable: false },
+        isRequestGone: true,
+      }),
+      handlers,
+    );
+    Array.from(root.querySelectorAll("button"))
+      .find((b) => b.textContent === "Ask the agent again")!
+      .click();
+    expect(handlers.calls).toEqual(["ask-again"]);
   });
 
   it.each([
@@ -284,7 +321,7 @@ describe("status hydration", () => {
 });
 
 describe("submit and decline", () => {
-  it("passes the route's own reason on, and never says whether an unanswered answer went through", async () => {
+  it("names what failed for a refusal, its reason behind the details, and never says whether an unanswered answer went through", async () => {
     vi.stubGlobal(
       "fetch",
       vi
@@ -296,15 +333,20 @@ describe("submit and decline", () => {
         .mockResolvedValueOnce(new Response("Bad Gateway", { status: 502 }))
         .mockRejectedValueOnce(new TypeError("Failed to fetch")),
     );
-    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({ ok: true, detail: "" });
-    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({
+    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({ ok: true });
+    const refused = await submitSecret("secret-1", { SVC_TOKEN: "t" });
+    expect(refused).toMatchObject({
       ok: false,
-      detail: "Request secret-1 is not pending",
+      lines: { body: ["These values couldn't be saved."], isReportable: false },
     });
-    expect(await declineSecret("secret-1", "")).toEqual({ ok: false, detail: notAnsweredSentence("change") });
-    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toEqual({
+    expect(refused.ok === false && refused.lines.details).toContain("Request secret-1 is not pending");
+    expect(await declineSecret("secret-1", "")).toMatchObject({
       ok: false,
-      detail: notAnsweredSentence("change"),
+      lines: { body: [notAnsweredSentence("change")] },
+    });
+    expect(await submitSecret("secret-1", { SVC_TOKEN: "t" })).toMatchObject({
+      ok: false,
+      lines: { body: [notAnsweredSentence("change")] },
     });
   });
 });

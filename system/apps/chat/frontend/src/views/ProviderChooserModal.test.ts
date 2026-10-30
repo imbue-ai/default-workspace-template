@@ -57,6 +57,7 @@ import m from "mithril";
 import { closeProviderChooser, isProviderChooserOpen, openProviderChooser } from "../models/Providers";
 import type { UnpickableReason } from "../models/Providers";
 import { PASTE_STEP_LABEL, ProviderChooserModal } from "./ProviderChooserModal";
+import { framePageInShell } from "../shellConnectionFixture";
 import { ACCOUNT_FAILING_NOTE, ACCOUNT_NEUTRAL_NOTE } from "./providerSignInStyles";
 
 /** Render into a real element, not just call `view()`.
@@ -129,7 +130,8 @@ function account(id: string, laneId: string, label: string): ProviderAccount {
 
 beforeEach(() => {
   closeProviderChooser();
-  startFlow.mockClear();
+  startFlow.mockReset();
+  startFlow.mockResolvedValue(undefined);
   requestProviderRelay.mockReset();
   requestProviderRelay.mockResolvedValue(true);
   loadLanesAndAccountsWithRetry.mockReset();
@@ -689,5 +691,109 @@ describe("a sign-in finished in the browser", () => {
     [...root.querySelectorAll("button")].find((b) => b.textContent === "Sign in again")!.click();
 
     expect(startFlow).toHaveBeenCalledExactlyOnceWith("anthropic", "api_key", "a1");
+  });
+});
+
+describe("a failure on the chooser's screens", () => {
+  async function settled(): Promise<void> {
+    for (let index = 0; index < 5; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  async function mounted(): Promise<{ root: HTMLElement; draw: () => void }> {
+    const root = document.createElement("div");
+    const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    draw();
+    await settled();
+    draw();
+    return { root, draw };
+  }
+
+  /** What mithril rejects with for a non-2xx answer. */
+  function rejection(code: number, response: unknown, message = "null"): Error {
+    return Object.assign(new Error(message), { code, response });
+  }
+
+  it("says the providers couldn't be loaded, with the status behind See details", async () => {
+    state.loaded = false;
+    loadLanesAndAccountsWithRetry.mockRejectedValue(rejection(500, null));
+    const shell = framePageInShell(true);
+
+    const { root } = await mounted();
+
+    expect(root.textContent).toContain(
+      "Couldn't load the list of providers. Try again. If this persists, report a bug.",
+    );
+    expect(root.querySelector(".see-details-text")?.textContent).toBe("HTTP 500");
+    (root.querySelector(".report-bug") as HTMLElement).click();
+    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    shell.release();
+  });
+
+  it("says the workspace didn't answer when the provider list got a gateway answer", async () => {
+    state.loaded = false;
+    loadLanesAndAccountsWithRetry.mockRejectedValue(rejection(502, null, "Bad Gateway"));
+
+    const { root } = await mounted();
+
+    expect(root.textContent).toContain("The workspace didn't answer. Try again in a moment.");
+    expect(root.textContent).not.toContain("Report a bug");
+  });
+
+  it("shows the server's sentence for a sign-in that could not start, with its reason behind See details", async () => {
+    startFlow.mockRejectedValue(
+      rejection(400, {
+        detail: "Timed out waiting for the sign-in details.",
+        user_facing_message: "Imbue Studio couldn't start the sign-in. Try again. If this persists, report a bug.",
+        reportable: true,
+      }),
+    );
+    const shell = framePageInShell(true);
+    const { root, draw } = await mounted();
+
+    (root.querySelector('[data-e2e="lane-anthropic"]') as HTMLElement).click();
+    await settled();
+    draw();
+
+    expect(root.textContent).toContain("That didn't work");
+    expect(root.textContent).toContain("Imbue Studio couldn't start the sign-in.");
+    expect(root.textContent).toContain("Report a bug");
+    expect(root.querySelector(".see-details-text")?.textContent).toContain(
+      "Timed out waiting for the sign-in details.",
+    );
+    shell.release();
+  });
+
+  it("words a sign-in refused with no reason itself, never as the rejection's own text", async () => {
+    startFlow.mockRejectedValue(rejection(500, null));
+    const { root, draw } = await mounted();
+
+    (root.querySelector('[data-e2e="lane-anthropic"]') as HTMLElement).click();
+    await settled();
+    draw();
+
+    expect(root.textContent).toContain(
+      "The sign-in didn't complete. Try again, or try another way in. If this persists, report a bug.",
+    );
+    expect(root.querySelector("[data-e2e='status-error'] p")?.textContent).not.toBe("null");
+  });
+
+  it("keeps a failed flow's provider words behind See details", async () => {
+    state.flow = {
+      flow_id: "f1",
+      shape: "url_then_code",
+      status: {
+        state: "failed",
+        detail: "Anthropic didn't accept that sign-in. Try again, or use a different provider.",
+        details: "the callback did not match",
+        account_id: null,
+      },
+    };
+    const { root, draw } = await mounted();
+    (root.querySelector('[data-e2e="lane-anthropic"]') as HTMLElement).click();
+    await settled();
+    draw();
+
+    expect(root.textContent).toContain("Anthropic didn't accept that sign-in.");
+    expect(root.querySelector(".see-details-text")?.textContent).toBe("the callback did not match");
   });
 });

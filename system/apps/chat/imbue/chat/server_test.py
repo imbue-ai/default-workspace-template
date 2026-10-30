@@ -60,6 +60,7 @@ from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
 from imbue.chat.event_queues import AgentEventQueues
 from imbue.chat.harnesses.claude.tap import ClaudeInterruptToComposer
+from imbue.chat.harnesses.claude.tap import PERMISSIONS_WAITING_MARKER_FILENAME
 from imbue.chat.harnesses.codex.ledger import CodexMessageLedger
 from imbue.chat.harnesses.codex.ledger import ShoulderTapResult
 from imbue.chat.harnesses.codex.live_connection import CodexLiveConnection
@@ -82,6 +83,7 @@ from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.models import AgentStateItem
+from imbue.chat.models import ChatPartlyDestroyedError
 from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
@@ -361,6 +363,7 @@ def test_subagent_route_refuses_an_agent_that_is_not_the_chats(
     matched = client.get("/api/chats/agent-123/agents/agent-123/subagents/s1/events")
     assert mismatched.status_code == 404
     assert mismatched.get_json()["detail"] == "Chat 'agent-123' has no agent 'agent-456'"
+    assert mismatched.get_json()["kind"] == "side_conversation_gone"
     assert matched.status_code == 200
     assert matched.get_json() == {"events": [], "metadata": None}
 
@@ -1475,12 +1478,10 @@ def test_send_message_codex_routes_through_the_ledger(tmp_path: Path) -> None:
     assert ledger.sent == [("hi", "m1")]
 
 
-def test_send_message_codex_returns_503_when_the_daemon_is_not_ready(tmp_path: Path) -> None:
-    """No live ledger and a failed revive surface an explicit, retryable not-ready error.
-
-    A NOT_READY send first tries to revive the agent through the same start path the
-    start endpoint uses; when even that fails (here: mngr cannot start it), the honest
-    503 stands."""
+def test_a_send_whose_agent_cannot_be_started_is_not_called_not_ready(tmp_path: Path) -> None:
+    """A NOT_READY send first tries to revive the agent through the same start path the start
+    endpoint uses; when that start fails (here: mngr cannot start it), nothing is starting, so the
+    answer is an agent that could not be started rather than a wait."""
     agent_id = "codex-agent-2"
     agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
     client = _codex_client(agent_info)
@@ -1496,8 +1497,30 @@ def test_send_message_codex_returns_503_when_the_daemon_is_not_ready(tmp_path: P
         patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
     ):
         response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi"})
-    assert response.status_code == 503
+    assert response.status_code == 500
+    body = response.get_json()
+    assert body["kind"] == "agent_unreachable"
+    assert body["user_facing_message"] == (
+        "This chat's agent couldn't be started. Try again. If this persists, report a bug."
+    )
+    assert body["reportable"] is True
+    assert "no such agent" in body["detail"]
     assert started == [agent_info.name]
+
+
+def test_a_send_whose_daemon_never_comes_up_after_a_start_is_still_waking_up(tmp_path: Path) -> None:
+    agent_id = "codex-agent-21"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    client = _codex_client(agent_info)
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch("imbue.chat.server._revive_and_retry_send", lambda *args: SendOutcome.NOT_READY),
+        patch.object(AgentManager, "get_or_create_session", return_value=_codex_session_over(None)),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi"})
+    assert response.status_code == 503
+    assert response.get_json()["kind"] == "not_ready"
+    assert response.get_json()["user_facing_message"] == "This chat is still waking up. Try again in a moment."
 
 
 def test_send_message_codex_revives_a_stopped_agent_then_sends(tmp_path: Path) -> None:
@@ -3525,6 +3548,7 @@ def test_create_chat_with_nothing_signed_in_is_refused_as_needing_a_provider(
     assert response.status_code == 400
     assert response.get_json() == {
         "detail": "Connect an AI provider to start chatting.",
+        "user_facing_message": "Connect an AI provider to start chatting.",
         "kind": "no_provider_account",
     }
 
@@ -3544,10 +3568,8 @@ def test_create_chat_naming_a_signed_out_account_is_refused_in_words(
     response = client.post("/api/chats/create", json={"account_id": removed})
 
     assert response.status_code == 400
-    assert response.get_json() == {
-        "detail": "The account this chat was going to start on was signed out. Choose a provider to start it on.",
-        "kind": "account_signed_out",
-    }
+    sentence = "The account this chat was going to start on was signed out. Choose a provider to start it on."
+    assert response.get_json() == {"detail": sentence, "user_facing_message": sentence, "kind": "account_signed_out"}
 
 
 def test_create_chat_naming_no_account_skips_a_removed_most_recent_one(
@@ -3958,11 +3980,30 @@ def test_directory_with_image_extension_returns_404(client: FlaskClient, tmp_pat
 
 
 def test_nonexistent_path_is_not_a_chat_page(client: FlaskClient, tmp_path: Path) -> None:
-    """A path matching no file is not a chat page either: the chat app has no client-side routes to fall through to."""
+    """A path matching no file is not a chat page either: the chat app has no client-side routes to fall through to.
+    A browser at such an address gets a page with a way back rather than a data body."""
     response = client.get(str(tmp_path / "some" / "client" / "route"))
 
     assert response.status_code == 404
-    assert response.get_json()["detail"] == f"Nothing is served at '{tmp_path / 'some' / 'client' / 'route'}'"
+    assert response.mimetype == "text/html"
+    page = response.get_data(as_text=True)
+    assert "This page isn't part of chat." in page
+    assert 'href="/"' in page
+
+
+def test_an_old_chat_address_gets_a_page_not_a_missing_chat(client: FlaskClient) -> None:
+    for old_address in ("/new", "/send"):
+        response = client.get(old_address)
+
+        assert response.status_code == 404
+        assert "This page isn't part of chat." in response.get_data(as_text=True)
+
+
+def test_an_unknown_api_path_still_answers_with_data(client: FlaskClient) -> None:
+    response = client.get("/api/not-a-route/at-all")
+
+    assert response.status_code == 404
+    assert response.get_json()["detail"] == "Nothing is served at '/api/not-a-route/at-all'"
 
 
 def test_serves_image_with_spaces_in_filename(client: FlaskClient, tmp_path: Path) -> None:
@@ -4290,10 +4331,8 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     for suffix in ("stop", "start", "interrupt", "flush-queue", "drain-to-composer", "model"):
         refused = client.post(f"/api/chats/{first}/{suffix}", json={})
         assert refused.status_code == 409, suffix
-        assert refused.get_json() == {
-            "detail": "This chat is switching to Codex and is summarizing; wait for the switch to finish, then try again.",
-            "phase": "summarizing",
-        }
+        sentence = "This chat is still moving to Codex. Wait for it to finish, then try again."
+        assert refused.get_json() == {"detail": sentence, "user_facing_message": sentence, "phase": "summarizing"}
     again = client.post(f"/api/chats/{first}/handoff", json={"account_id": "acct-openai", "message": "again"})
     assert again.status_code == 409
     listed = client.get("/api/chats").get_json()["chats"]
@@ -4369,6 +4408,10 @@ def test_the_handoff_route_refuses_the_wrong_targets_and_answers_404_for_no_chat
     own_account = client.post(f"/api/chats/{first}/handoff", json={"account_id": signed_in_account, "message": "x"})
     assert own_account.status_code == 400
     assert "already runs on account" in own_account.get_json()["detail"]
+    assert own_account.get_json()["user_facing_message"] == "This chat already runs on that account."
+    assert unknown_account.get_json()["user_facing_message"] == (
+        "That account is signed out. Sign in to it again, or pick another one."
+    )
     assert client.post(f"/api/chats/{first}/handoff/retry", json={"account_id": signed_in_account}).status_code == 400
 
 
@@ -4437,14 +4480,11 @@ def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_
     for suffix in ("stop", "start", "interrupt", "drain-to-composer", "model"):
         refused = client.post(f"/api/chats/{first}/{suffix}", json={})
         assert refused.status_code == 409, suffix
-        assert refused.get_json() == {
-            "detail": "This chat is switching to Anthropic 2 (Claude Code) and is restarting; "
-            "wait for the switch to finish, then try again.",
-            "phase": "restarting",
-        }
+        sentence = "This chat is still moving to Anthropic 2 (Claude Code). Wait for it to finish, then try again."
+        assert refused.get_json() == {"detail": sentence, "user_facing_message": sentence, "phase": "restarting"}
     cancelled = client.post(f"/api/chats/{first}/handoff/cancel")
     assert cancelled.status_code == 409
-    assert "cannot be called off" in cancelled.get_json()["detail"]
+    assert "couldn't be called off" in cancelled.get_json()["user_facing_message"]
     listed = client.get("/api/chats").get_json()["chats"]
     assert [
         (chat["status"], chat["handoff"]["kind"], chat["handoff"]["phase"], chat["handoff"]["target_label"])
@@ -4892,6 +4932,237 @@ def test_intake_apply_for_a_chat_destroyed_meanwhile_is_not_found(
     assert client.get(f"/api/chats/intakes/{token}").status_code == 404
 
 
+def _client_with_a_tracked_chat(
+    messenger: RecordingMngrMessenger, agent_id: str, *, is_agent_list_known: bool = True
+) -> FlaskClient:
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    if is_agent_list_known:
+        manager.note_agent_list_known()
+    with manager._lock:
+        manager._agents[agent_id] = AgentStateItem(
+            id=agent_id, name="Chat-9", state="RUNNING", labels={}, work_dir=None
+        )
+    return create_application(build_test_state(agent_manager=manager)).test_client()
+
+
+def test_a_refused_send_with_no_reason_says_the_agent_did_not_take_it_and_keeps_mngrs_words_as_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    agent_id = "agent-00000000000000000000000000000741"
+    messenger = RecordingMngrMessenger(
+        succeeds=False, failure_reason="The send reached no agent, and mngr gave no reason.", failure_kind="unknown"
+    )
+    client = _client_with_a_tracked_chat(messenger, agent_id)
+
+    response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 500
+    assert response.get_json() == {
+        "detail": "The send reached no agent, and mngr gave no reason.",
+        "user_facing_message": (
+            "This chat's agent did not take your message. It is back in the message box -- try again, "
+            "or use Force to restart the agent and resend."
+        ),
+        "kind": "unknown",
+    }
+
+
+def test_a_send_to_an_unreachable_agent_points_at_force_rather_than_a_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    agent_id = "agent-00000000000000000000000000000742"
+    messenger = RecordingMngrMessenger(
+        succeeds=False, failure_reason="the pane is gone", failure_kind="agent_unreachable"
+    )
+    client = _client_with_a_tracked_chat(messenger, agent_id)
+
+    body = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"}).get_json()
+
+    assert body["kind"] == "agent_unreachable"
+    assert "use Force to restart the agent" in body["user_facing_message"]
+    assert "try again" not in body["user_facing_message"]
+    assert body["detail"] == "the pane is gone"
+
+
+def test_a_send_to_a_chat_that_is_gone_says_so_and_names_the_case() -> None:
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    chat_id = "agent-00000000000000000000000000000743"
+
+    response = client.post(f"/api/chats/{chat_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 404
+    assert response.get_json() == {
+        "detail": f"Chat '{chat_id}' not found",
+        "user_facing_message": "This chat is no longer here.",
+        "kind": "chat_gone",
+    }
+
+
+def test_before_the_agent_list_is_read_a_send_is_told_the_workspace_is_still_starting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    agent_id = "agent-00000000000000000000000000000744"
+    client = _client_with_a_tracked_chat(RecordingMngrMessenger(), agent_id, is_agent_list_known=False)
+
+    body = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"}).get_json()
+
+    assert body["kind"] == "chat_starting"
+    assert body["user_facing_message"] == "This workspace is still starting up. Try again in a few seconds."
+    assert "reportable" not in body
+
+
+def test_a_failed_first_listing_with_no_observer_is_told_apart_from_the_start_up_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    with patch("imbue.chat.agent_manager.discover_agents", side_effect=MngrError("mngr list failed")):
+        manager.start_without_observe()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    response = client.post("/api/chats/agent-00000000000000000000000000000745/message", json={"message": "hello"})
+
+    assert response.status_code == 503
+    assert response.get_json()["kind"] == "agent_list_unreadable"
+    assert response.get_json()["user_facing_message"] == (
+        "Chat couldn't load this workspace's chats. Restart the workspace. If this persists, report a bug."
+    )
+    assert response.get_json()["reportable"] is True
+
+
+def test_an_intake_before_the_agent_list_is_read_says_chat_is_still_starting() -> None:
+    manager = AgentManager.build(WebSocketBroadcaster())
+    test_client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    response = test_client.post("/api/chats/intake", json={"message": "hi", "target": "new_chat"})
+
+    assert response.get_json()["user_facing_message"] == (
+        "Chat is still starting in this workspace. Try again in a few seconds."
+    )
+
+
+def test_an_intake_for_a_chat_that_is_gone_asks_for_another_chat(client: FlaskClient) -> None:
+    response = _intake(client, message="hi", target="chat", chat_id="agent-nobody")
+
+    assert response.status_code == 404
+    assert response.get_json()["user_facing_message"] == (
+        "That chat is no longer here. Pick another chat, or start a new one."
+    )
+
+
+def test_an_intake_sent_to_a_chat_whose_account_was_signed_out_says_so_rather_than_asking_for_a_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    agent_id = "agent-00000000000000000000000000000749"
+    client, messenger = _client_with_account_labeled_chat(tmp_path, monkeypatch, agent_id, "signed-out-account-8813")
+
+    response = _intake(client, message="hi", target="chat", chat_id=agent_id, is_delivery_awaited=True)
+
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body["kind"] == "account_signed_out"
+    assert body["user_facing_message"] == (
+        "You signed out of the account this chat runs on. Choose a provider to continue it on."
+    )
+    assert "reportable" not in body
+    assert messenger.sent == []
+
+
+def test_an_unexpected_exception_reads_as_something_going_wrong_with_the_exception_kept_as_detail(
+    client: FlaskClient,
+) -> None:
+    with patch("imbue.chat.server._find_active_agent", side_effect=RuntimeError("boom in the route")):
+        response = client.post("/api/chats/agent-00000000000000000000000000000746/start", json={})
+
+    assert response.status_code == 500
+    assert response.get_json() == {
+        "detail": "Internal server error: boom in the route",
+        "user_facing_message": "Something went wrong in this chat. Try again. If this persists, report a bug.",
+        "reportable": True,
+    }
+
+
+def test_a_refused_create_says_what_to_do_for_its_cause(
+    client: FlaskClient, app: Flask, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    monkeypatch.setenv("MNGR_AGENT_ID", "agent-123")
+    _register_agent(app, "agent-123", "primary", "RUNNING")
+
+    unusable_name = client.post("/api/chats/create", json={"name": "!!!"})
+    gone_account = client.post("/api/chats/create", json={"account_id": "acct-removed-earlier"})
+    relaunch_renamed = client.post(
+        "/api/chats/create", json={"chat_id": "agent-00000000000000000000000000000747", "name": "Renamed"}
+    )
+
+    assert unusable_name.status_code == 400
+    assert unusable_name.get_json()["user_facing_message"] == "Pick a name with at least one letter or number."
+    assert "no usable characters" in unusable_name.get_json()["detail"]
+    assert gone_account.get_json()["user_facing_message"] == (
+        "The account this chat was going to start on was signed out. Choose a provider to start it on."
+    )
+    assert gone_account.get_json()["kind"] == "account_signed_out"
+    assert relaunch_renamed.status_code == 400
+    assert relaunch_renamed.get_json()["user_facing_message"] == (
+        "This chat couldn't be started. Try again. If this persists, report a bug."
+    )
+    assert "a launch cannot rename" in relaunch_renamed.get_json()["detail"]
+
+
+def test_a_delete_that_removed_the_agents_but_not_the_folder_says_the_chat_may_come_back(client: FlaskClient) -> None:
+    chat_id = "agent-00000000000000000000000000000748"
+    agent_info = _agent_info(agent_id=chat_id, name="half-gone")
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(
+            AgentManager,
+            "destroy_chat",
+            side_effect=ChatPartlyDestroyedError("Destroyed the agents of chat, but its folder could not be removed"),
+        ),
+    ):
+        response = client.post(f"/api/chats/{chat_id}/destroy")
+
+    assert response.status_code == 500
+    assert response.get_json()["kind"] == "partly_deleted"
+    assert "If the chat comes back later, delete it again." in response.get_json()["user_facing_message"]
+
+
+def test_a_tap_refused_while_a_permission_request_waits_says_to_answer_it(client: FlaskClient, tmp_path: Path) -> None:
+    state_dir, config_dir = _claude_tap_dirs(tmp_path)
+    (state_dir / PERMISSIONS_WAITING_MARKER_FILENAME).write_text("")
+    agent_info = _agent_info(agent_state_dir=state_dir, claude_config_dir=config_dir)
+    watcher = _FakeClaudeTapWatcher([[{"queued_id": "q1", "content": "hi"}]])
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=watcher),
+    ):
+        response = client.post("/api/chats/agent-123/shoulder-tap-atomic")
+
+    assert response.status_code == 409
+    assert response.get_json()["kind"] == "permissions_waiting"
+    assert response.get_json()["user_facing_message"] == (
+        "This chat is waiting on a permission request. Answer it, then try again."
+    )
+
+
+def test_deleting_a_chat_whose_create_failed_drops_it(app: Flask) -> None:
+    manager = state_of(app).agent_manager
+    manager.note_agent_list_known()
+    seed_failed_chat(manager, ChatId("failed-1"), "Chat 1")
+    client = app.test_client()
+
+    response = client.post("/api/chats/failed-1/destroy")
+
+    assert response.status_code == 200
+    assert manager.get_provisional_chat("failed-1") is None
+    assert client.post("/api/chats/failed-1/destroy").status_code == 404
+
+
 def _manager_with_known_agents() -> tuple[AgentManager, RecordingMngrMessenger]:
     messenger = RecordingMngrMessenger()
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
@@ -5012,37 +5283,6 @@ def test_a_compact_command_the_agent_refused_shows_no_compaction(tmp_path: Path)
         assert response.get_json()["kind"] == messenger.failure_kind
         assert messenger.sent == [(agent_id, "/compact")]
         assert agent_id not in manager._compaction_pending_by_agent
-    finally:
-        state.shutdown()
-
-
-@pytest.mark.parametrize(
-    ("kind", "is_worded_for_people"),
-    [
-        pytest.param("input_blocked", True, id="input_blocked"),
-        pytest.param("agent_unreachable", True, id="agent_unreachable"),
-        pytest.param("unknown", False, id="unclassified"),
-    ],
-)
-def test_a_refused_send_passes_a_classified_reason_on_as_a_sentence_for_people(
-    tmp_path: Path, kind: str, is_worded_for_people: bool
-) -> None:
-    agent_id = f"agent-{uuid4().hex}"
-    agent_info, _ = make_agent_fixture(tmp_path, agent_id=agent_id)
-    reason = f"The agent is waiting on a dialog {uuid4().hex}."
-    messenger = RecordingMngrMessenger(succeeds=False, failure_reason=reason, failure_kind=kind)
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
-    manager.note_agent_list_known()
-    state = build_test_state(agent_manager=manager)
-    try:
-        with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-            response = (
-                create_application(state).test_client().post(f"/api/chats/{agent_id}/message", json={"message": "hi"})
-            )
-
-        assert response.status_code == 500
-        worded = {"user_facing_message": reason} if is_worded_for_people else {}
-        assert response.get_json() == {"detail": reason, "kind": kind, **worded}
     finally:
         state.shutdown()
 
@@ -5209,8 +5449,10 @@ def test_a_compaction_mngr_did_not_start_leaves_no_compaction_showing(
         agent_id,
     ):
         assert response.status_code == status_code
-        declined = {"user_facing_message": failure.reason} if status_code == 409 else {}
-        assert response.get_json() == {"detail": failure.reason, **declined, "kind": failure.kind}
+        body = response.get_json()
+        assert (body["detail"], body["kind"]) == (failure.reason, failure.kind)
+        if status_code == 409:
+            assert body["user_facing_message"] == failure.reason
         assert messenger.compactions == [(agent_id, None)]
         assert agent_id not in manager._compaction_pending_by_agent
 

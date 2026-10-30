@@ -77,6 +77,9 @@ import {
 } from "./selection";
 import type { SlotFill } from "./selection";
 import { prependToComposer } from "../views/MessageInput";
+import { plainFailureLines } from "../views/failure-lines";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { RootNoticeView, describeIntakeApplyFailure, raiseRootNotice } from "./rootNotice";
 import { wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 const ROOT_TITLE = "Chats";
@@ -275,12 +278,26 @@ function takeApplied(applied: AppliedIntake): void {
 /** Apply a held intake on the chat it resolved to, or on ``pickedChatId``; a token already gone (another client
  *  applied it, or it expired) leaves the chat shown as it stands, which for a token path naming a chat is that
  *  chat. */
-async function applyIntake(token: string, pickedChatId: string | null): Promise<void> {
+async function applyIntake(token: string, pickedChatId: string | null, intake: PendingIntake): Promise<void> {
   try {
     takeApplied(await applyPendingIntake(token, pickedChatId));
   } catch (error) {
-    if (!(error instanceof PendingIntakeGoneError)) alert(`Could not take the message: ${(error as Error).message}`);
-    settleIntake(selectedChatId);
+    if (error instanceof PendingIntakeGoneError) {
+      settleIntake(selectedChatId);
+      return;
+    }
+    const failure = describeRequestFailure(error);
+    const chatId = pickedChatId ?? intake.chatId;
+    // A refusal means the message went nowhere, so it goes into the chat's composer to be sent again; with no answer
+    // it may have arrived, so it is not put there too.
+    const isDrafted = failure.cause !== "not_answered" && chatId !== null;
+    settleIntake(chatId ?? selectedChatId);
+    if (isDrafted && chatId !== null) draftInto(chatId, intake.message);
+    raiseRootNotice({
+      title: "Couldn't send your message",
+      lines: describeIntakeApplyFailure(error, isDrafted),
+      retry: null,
+    });
   }
 }
 
@@ -293,8 +310,18 @@ async function takeIntake(token: string): Promise<void> {
   try {
     intake = await fetchPendingIntake(token);
   } catch (error) {
-    if (!(error instanceof PendingIntakeGoneError)) alert(`Could not read the message: ${(error as Error).message}`);
     settleIntake(selectedChatId);
+    if (!(error instanceof PendingIntakeGoneError)) {
+      // A failed read leaves the message held, so reading it again can pick it up.
+      raiseRootNotice({
+        title: "Couldn't pick up your message",
+        lines: plainFailureLines(error, "Couldn't pick up the message you sent", { requestKind: "read" }),
+        retry: () => {
+          pendingToken = token;
+          void takeIntake(token);
+        },
+      });
+    }
     return;
   }
   if (intake.needsPick) {
@@ -302,7 +329,7 @@ async function takeIntake(token: string): Promise<void> {
     m.redraw();
     return;
   }
-  await applyIntake(token, null);
+  await applyIntake(token, null, intake);
 }
 
 /** Open the provider chooser a URL asked for, once the accounts have loaded (the chooser lists them). The
@@ -320,7 +347,7 @@ function pickFor(chatId: string): void {
   const pick = pendingPick;
   pendingPick = null;
   if (pick === null) return;
-  void applyIntake(pick.token, chatId);
+  void applyIntake(pick.token, chatId, pick.intake);
 }
 
 function dismissPick(): void {
@@ -435,6 +462,7 @@ const ChatRoot: m.Component = {
               onPick: pickFor,
               onDismiss: dismissPick,
             }),
+        m(RootNoticeView, { connection }),
         // Opened over the whole root when its URL asks for it; a chat page opens its own from its composer.
         isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
       ],

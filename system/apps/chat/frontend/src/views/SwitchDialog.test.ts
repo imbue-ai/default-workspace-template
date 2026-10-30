@@ -60,7 +60,7 @@ vi.mock("../models/Handoffs", () => ({
 vi.mock("../shell", () => ({
   startChatOnAccount: (...args: unknown[]) => {
     state.started.push(args);
-    return Promise.resolve(state.isStartAccepted);
+    return state.isStartAccepted ? Promise.resolve() : Promise.reject(new Error("Chat creation refused"));
   },
 }));
 vi.mock("./MessageInput", () => ({
@@ -78,6 +78,7 @@ vi.mock("./MessageInput", () => ({
   },
   restoreComposerDraft: (_chatId: string, taken: unknown) => state.restored.push(taken),
   raiseFailureNotice: (_chatId: string, notice: unknown) => state.notices.push(notice),
+  raiseNewChatFailure: (_chatId: string, error: unknown) => state.notices.push({ newChatFailure: error }),
 }));
 vi.mock("../models/AccountModelOptions", () => ({
   fetchAccountModelOptions: () =>
@@ -88,6 +89,7 @@ vi.mock("../models/AccountModelOptions", () => ({
 
 import m from "mithril";
 import type { ChatSnapshot } from "../models/Chats";
+import type { FailureLines } from "./failure-lines";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, getPendingPick, setPendingAccount } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
@@ -277,10 +279,21 @@ describe("the switch dialog", () => {
   it("reports a refused immediate switch through the composer's notice", async () => {
     state.events = [WELCOME];
     const { switchChat } = await import("../models/Handoffs");
-    vi.mocked(switchChat).mockRejectedValueOnce(new Error("no such account"));
+    const sentence = "That account is signed out. Sign in to it again, or pick another one.";
+    vi.mocked(switchChat).mockRejectedValueOnce(
+      Object.assign(new Error("{}"), {
+        code: 400,
+        response: { detail: "no such account: acct-openai", user_facing_message: sentence },
+      }),
+    );
     beginSwitchTo("agent-1", CODEX as ProviderAccount);
     await flush();
-    expect(state.notices).toEqual([{ title: "Couldn't switch to OpenAI (Codex)", detail: "no such account" }]);
+    const [notice] = state.notices as { title: string; describe: (e: unknown) => FailureLines; error: unknown }[];
+    expect(notice.title).toBe("Couldn't switch to OpenAI (Codex)");
+    expect(notice.describe(notice.error).body).toEqual([
+      "This chat couldn't be moved to OpenAI (Codex). It's still running where it was.",
+      sentence,
+    ]);
   });
 
   it("asks a chat with context, and arms the switch with the model picked", async () => {
@@ -425,6 +438,27 @@ describe("the switch dialog", () => {
         attachments: [{ localId: "a1", fileName: "plan.pdf" }],
       },
     ]);
+    expect(state.notices).toEqual([{ newChatFailure: new Error("Chat creation refused") }]);
+  });
+
+  it("offers a new chat on the target, not another try, for a fresh chat that can't be moved there", async () => {
+    state.events = [WELCOME];
+    const { switchChat } = await import("../models/Handoffs");
+    vi.mocked(switchChat).mockRejectedValueOnce(
+      Object.assign(new Error("{}"), {
+        code: 400,
+        response: {
+          detail: "Chat 'agent-1' cannot change to account acct-openai in place; it is on another harness or lane",
+          user_facing_message: "This chat can't be moved to that account. Start a new chat on it instead.",
+          kind: "cannot_move_to_account",
+        },
+      }),
+    );
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    await flush();
+    const [notice] = state.notices as { retry?: unknown; action?: { label: string } }[];
+    expect(notice.retry).toBeUndefined();
+    expect(notice.action?.label).toBe("Start a new chat");
   });
 
   it("says the models could not be loaded rather than that the harness has none", async () => {
@@ -435,9 +469,10 @@ describe("the switch dialog", () => {
     render();
     const text = ROOT().textContent ?? "";
     expect(text).toContain(
-      "Couldn't load the list of models. Try again. If this persists, report a bug. Codex starts on its default model",
+      "Couldn't load the list of models. Try again. If this persists, report a bug. Codex will start on its " +
+        "default model, and you can change it once it's running.",
     );
-    expect(ROOT().querySelector(".see-details pre")?.textContent).toBe("the daemon is not answering");
+    expect(ROOT().querySelector(".see-details-text")?.textContent).toContain("the daemon is not answering");
     // The switch itself needs no model, so the dialog stays usable.
     expect(text).toContain("Switch this chat");
   });
@@ -449,8 +484,8 @@ describe("the switch dialog", () => {
     await flush();
     render();
     expect(ROOT().querySelector(".switch-dialog-models-failed p")?.textContent).toBe(
-      "The workspace didn't answer. Try again in a moment. Codex starts on its default model; you can change it once " +
-        "it is running.",
+      "The workspace didn't answer. Try again in a moment. Codex will start on its default model, and you can change " +
+        "it once it's running.",
     );
   });
 

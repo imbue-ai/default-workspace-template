@@ -85,6 +85,8 @@ export interface DisplayDecision {
   display?: UserMessageEvent["display"] | null;
   display_label?: string | null;
   display_body?: string | null;
+  resolution?: UserMessageEvent["resolution"] | null;
+  display_details?: string | null;
 }
 
 /** One message the chat app holds while the chat switches or is still being created (the backend's

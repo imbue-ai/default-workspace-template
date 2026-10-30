@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 
 // Capture mithril's request so the test drives the backend without a real network
 // call and asserts the POST body/order. redraw is a no-op; apiUrl is identity so
@@ -260,7 +261,7 @@ describe("effectiveChoice", () => {
       Object.assign(new Error("[object Object]"), { code: 409, response: { detail, phase: "summarizing" } }),
     );
     const failures: Array<[string, string]> = [];
-    addModelChoiceFailureListener((chatId, reason) => failures.push([chatId, reason]));
+    addModelChoiceFailureListener((chatId, error) => failures.push([chatId, describeRequestError(error)]));
 
     setModelChoice("a10", { model_id: "sonnet", effort: "medium", fast: false }, SONNET, ["model"]);
     expect(effectiveChoice("a10", live("claude-opus-4-8", "high", false, OPUS))?.isPending).toBe(true);

@@ -98,6 +98,9 @@ import {
   type MenuRow,
 } from "@imbue/workspace-ui/src/components/menu";
 import { slidersGlyph } from "../glyphs";
+import { postJson } from "@imbue/workspace-ui/src/models/http";
+import { describeMenuStopFailure } from "./composer-failures";
+import { raiseFailureNotice } from "./MessageInput";
 import { accountRow, emptyAccountRowState } from "./accountRow";
 import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import * as css from "./modelProviderMenuStyles";
@@ -139,7 +142,7 @@ function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
 }
 
-/** The chip with no provider signed in: it says so, and a press opens the provider chooser. */
+/** The chip with no provider signed in: it offers to add one, and a press opens the provider chooser. */
 function notConnectedChip(onSignedIn?: (accountId: string) => void): m.Vnode {
   return m(
     "button",
@@ -149,7 +152,7 @@ function notConnectedChip(onSignedIn?: (accountId: string) => void): m.Vnode {
       ...hoverTooltipAttrs("Connect a model provider", "above"),
       onclick: () => openProviderChooser(onSignedIn === undefined ? {} : { onSignedIn }),
     },
-    "Not connected",
+    "Add a provider",
   );
 }
 
@@ -749,15 +752,17 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
    *  start brings back. No confirmation -- it is one message away from undone. The agent list
    *  catches up through the observe stream. */
   function stopAgent(targetChatId: string): void {
-    void fetch(apiUrl(`/api/chats/${encodeURIComponent(targetChatId)}/stop`), { method: "POST" })
-      .then(async (response) => {
-        if (response.ok) return;
-        const data = (await response.json().catch(() => ({}))) as { detail?: string };
-        alert(`Failed to stop the agent: ${data.detail ?? `HTTP ${response.status}`}`);
-      })
-      .catch((e: Error) => {
-        alert(`Failed to stop the agent: ${e.message}`);
+    const stop = (): Promise<void> => postJson(apiUrl(`/api/chats/${encodeURIComponent(targetChatId)}/stop`), {});
+    stop().catch((error: unknown) => {
+      // Told on the composer's notice. A stop is safe to repeat, so Try again is offered even when nothing
+      // answered and the first one may have run.
+      raiseFailureNotice(targetChatId, {
+        title: "Couldn't stop the agent",
+        describe: describeMenuStopFailure,
+        error,
+        retry: stop,
       });
+    });
   }
 
   /** A row of the submenu that is still fetching its contents. */

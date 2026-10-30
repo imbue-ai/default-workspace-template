@@ -30,6 +30,9 @@ import { kebabGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
 import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
 import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
+import { describeDeleteFailure, describeRunVerbFailure, raiseRootNotice } from "./rootNotice";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { addChatsUpdatedListener, removeChatsUpdatedListener } from "../models/Chats";
 import { isAgentStarted, startsWithMainChat } from "./rows";
 import {
   DEFAULT_RAIL_WIDTH_PX,
@@ -154,9 +157,12 @@ function pruneDeleting(rows: readonly ChatRow[]): void {
 function setRunningFromMenu(row: ChatRow, isRunning: boolean): void {
   const verb = isRunning ? startChat : stopChat;
   verb(row.chatId).catch((error: unknown) => {
-    alert(
-      `Could not ${isRunning ? "restart" : "stop"} "${row.title}".\n\n${error instanceof Error ? error.message : String(error)}`,
-    );
+    // A stop or a start is safe to repeat, so Try again is offered even when nothing answered.
+    raiseRootNotice({
+      title: isRunning ? "Couldn't restart the chat" : "Couldn't stop the chat",
+      lines: describeRunVerbFailure(error, row.title, isRunning),
+      retry: describeRequestFailure(error).kind === "chat_gone" ? null : () => setRunningFromMenu(row, isRunning),
+    });
   });
 }
 
@@ -191,14 +197,38 @@ function deleteFromMenu(attrs: RowMenuContext, row: ChatRow): void {
   const next = attrs.rows.find(
     (candidate) => candidate.chatId !== row.chatId && !deletingChatIds.has(candidate.chatId),
   );
+  if (row.chatId === attrs.selectedChatId && next !== undefined) attrs.onPick(next.chatId);
+  deleteChat(row);
+}
+
+function deleteChat(row: ChatRow): void {
   deletingChatIds.add(row.chatId);
   m.redraw();
-  if (row.chatId === attrs.selectedChatId && next !== undefined) attrs.onPick(next.chatId);
   destroyChat(row.chatId).catch((error: unknown) => {
-    deletingChatIds.delete(row.chatId);
+    const failure = describeRequestFailure(error);
+    if (failure.cause === "not_answered") {
+      // The delete may have run: the row stays marked until the next list update says whether the chat is still
+      // there.
+      unmarkOnNextUpdate(row.chatId);
+    } else {
+      deletingChatIds.delete(row.chatId);
+    }
     m.redraw();
-    alert(`Could not delete "${row.title}".\n\n${error instanceof Error ? error.message : String(error)}`);
+    raiseRootNotice({
+      title: "Couldn't delete the chat",
+      lines: describeDeleteFailure(error, row.title),
+      retry: failure.cause === "not_answered" || failure.cause === "user_facing" ? null : () => deleteChat(row),
+    });
   });
+}
+
+function unmarkOnNextUpdate(chatId: string): void {
+  const listener = (): void => {
+    removeChatsUpdatedListener(listener);
+    deletingChatIds.delete(chatId);
+    m.redraw();
+  };
+  addChatsUpdatedListener(listener);
 }
 
 /** The rows a chat's menu offers, ending with ``referenceRows``: the reference rows for the element right-clicked,

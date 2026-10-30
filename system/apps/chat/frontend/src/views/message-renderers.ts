@@ -22,6 +22,7 @@ import { ToolChipGroup, type ChipEntry } from "./ToolChipGroup";
 import { AutocompactNotice } from "./AutocompactNotice";
 import { compactionChips, type CompactionPart } from "./compaction-chips";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
 import { BADGE_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 /** A permission-request tool call's own verdict: its own request id's entry in
@@ -489,13 +490,14 @@ function renderReauthAction(chatId: string): m.Children {
   ]);
 }
 
-/** The grey note shown under a provider-fault API error: the failure is the model
- *  provider's, not ours. Wording nudged by kind; every harness's provider faults
- *  land here since they stamp the same is_provider_fault flag. */
-function providerFaultNote(kind: string | null): string {
-  const cause =
-    kind === "api_error" ? "the model provider's servers hit an error" : "the model provider's servers are overloaded";
-  return `This isn't Imbue Studio's fault -- ${cause}. Try again in a moment.`;
+/** What a failed turn says when the provider's own text is not a sentence for people, and under a provider's own
+ *  sentence about its servers failing. No blame either way: the turn may have gone through Imbue's own model proxy. */
+const PROVIDER_TROUBLE_LINE = "The model provider is having trouble. Try again in a moment.";
+
+/** Whether a failed turn's text is a response body or a status line (a 401 body, "API Error: 500 ...") rather than
+ *  a sentence the provider wrote for people, so it belongs behind "See details" rather than on screen. */
+export function isRawFailureText(text: string): boolean {
+  return /[{}]|\bAPI Error:|^\s*\d{3}\b|\b(?:status|HTTP)\s*\d{3}\b/i.test(text);
 }
 
 /** The tiny muted "thinking" toggle atop an assistant message whose harness recorded
@@ -652,28 +654,30 @@ function appendEventParts(
   if (textContent) {
     flushChips();
     if (event.is_api_error || event.is_auth_error) {
-      // A model API error: render the failure text in light red, and for a
-      // provider-side fault (5xx / overloaded) add a grey "not Imbue Studio's fault" note.
+      // A model API error, in light red. The provider's own sentence is shown as written; a response body or a
+      // status line gives way to a plain line of ours and goes behind "See details".
       //
       // An auth error gets a button as well. It is the one failure the user can actually
       // fix, and the fix is not obvious from the provider's wording -- which is usually a
       // raw 401 body. Inline rather than a modal, so it waits to be clicked instead of
       // throwing a sign-in screen over whatever the user was doing.
+      const isRaw = isRawFailureText(textContent);
       children.push(
         m("div", { class: "message-api-error rounded-md bg-danger/8 px-[0.75em] py-[0.5em] text-danger" }, [
-          m(MarkdownContent, {
-            content: textContent,
-            requestedAt: event.timestamp,
-            expansionKeyPrefix: event.event_id,
-          }),
-          event.is_provider_fault
-            ? m(
-                "div",
-                { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" },
-                providerFaultNote(event.api_error_kind),
-              )
+          isRaw
+            ? event.is_auth_error
+              ? null
+              : m("p", { class: "message-api-error-lead" }, PROVIDER_TROUBLE_LINE)
+            : m(MarkdownContent, {
+                content: textContent,
+                requestedAt: event.timestamp,
+                expansionKeyPrefix: event.event_id,
+              }),
+          !isRaw && event.is_provider_fault
+            ? m("div", { class: "message-api-error-note mt-[0.4em] text-[0.85em] text-faint" }, PROVIDER_TROUBLE_LINE)
             : null,
           event.is_auth_error ? renderReauthAction(chatId) : null,
+          isRaw ? m("div", { class: "mt-[0.4em] text-faint" }, m(SeeDetails, { details: textContent })) : null,
         ]),
       );
     } else {
@@ -715,7 +719,7 @@ function appendEventParts(
       const details = parseSecretRequest(toolCall, result);
       const note = details ? (secretNotesByRequestId.get(details.requestId) ?? null) : null;
       flushChips();
-      children.push(m(SecretCard, { toolCall, toolResult: result, resolution, note }));
+      children.push(m(SecretCard, { toolCall, toolResult: result, resolution, note, chatId }));
       continue;
     }
     pendingChips.push({ kind: "tool", call: toolCall, eventId: event.event_id });

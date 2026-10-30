@@ -105,6 +105,11 @@ observe`, its own supervised service) writes, and serves:
   after the restart. `agent_events` (`{"is_stream_healthy", "detail"}`) says
   whether lifecycle events are actually reaching this instance; `status` stays
   `ok` either way.
+- `GET /_static/app_contract.js`: the shell's built app contract module, for the
+  page `/` and the chat pages answer when this app's frontend is not built. That
+  page has no frontend code of its own; it imports the module to offer "Report a
+  bug" through the shell, shown only when the shell's handshake says Imbue Studio
+  can open one. `404` when the shell's frontend is not built either.
 - `GET /api/schema`: the OpenAPI document of these routes, built from the app's url map
   (`system/libs/app_schema`), with the request and response models of the routes that
   validate with pydantic published as schemas; the manifest's `api_schema_path`, which the

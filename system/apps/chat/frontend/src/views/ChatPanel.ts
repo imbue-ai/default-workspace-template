@@ -56,14 +56,16 @@ import {
   removeChatsUpdatedListener,
 } from "../models/Chats";
 import type { ProvisionalChat } from "../models/Chats";
-import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
 import { accountForFirstSend, openProviderChooser, whenAccountsReadyToChoose } from "../models/Providers";
 import { maybeApplyFastModeLimit } from "./fast-mode-limit";
 import { FastModeNotice } from "./FastModeNotice";
 import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
-import { MessageInput } from "./MessageInput";
+import { MessageInput, startNewChatInPlaceOf } from "./MessageInput";
+import { isAgentProcessDead } from "./agentLiveness";
+import { getShellConnection } from "../shellConnection";
+import { destroyChat, startChat } from "../root/verbs";
 import { ModelProviderMenu } from "./ModelProviderMenu";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
@@ -88,17 +90,16 @@ import { SwitchDialog } from "./SwitchDialog";
 import { hasOpenHandoffRequest, isTailTurnSettled, liveCompactionOf } from "./turn-grouping";
 import { closeRunningCompactionChips } from "./compaction-chips";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { joinDetailLines, plainFailureLines, plainFailureLinesOf, plainFailureSentence } from "./failure-lines";
+import type { FailureLines } from "./failure-lines";
 
-// The terminal output a page shows in place of a transcript: what mngr printed when a create
-// failed, or the tmux screen of an agent with no session. Shared so the two read the same.
 // The one quiet line an empty conversation shows while its chat starts, and once it is up.
 const STARTING_STATUS = "Starting your chat…";
 const READY_STATUS = "Your chat is ready.";
 const EMPTY_CONVERSATION_STATUS_CLASS =
   "message-list-status pointer-events-none absolute inset-x-0 top-1/3 text-center text-sm text-secondary";
-
-const TERMINAL_OUTPUT_CLASS =
-  "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono";
 
 function getChatTerminalUrl(chatId: string): string {
   // The ttyd dispatch script is invoked as `bash -c "$SCRIPT" <args...>` where
@@ -294,7 +295,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // A launch of this provisional chat (the page's Try again) in flight, and how the last one
   // was refused.
   let launchInFlight = false;
-  let launchError: string | null = null;
+  let launchError: FailureLines | null = null;
+  // A Remove this chat (a failed create) or a Start this chat (a stopped agent with nothing to show) in flight, and
+  // how the last one failed.
+  let pageActionInFlight = false;
+  let pageActionError: FailureLines | null = null;
 
   async function fetchScreenCapture(chatId: string): Promise<void> {
     if (screenAttemptedChatId === chatId) {
@@ -343,11 +348,38 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     try {
       await launchChat(chatId, accountId);
     } catch (error) {
-      launchError = describeRequestError(error);
+      launchError = plainFailureLines(error, "This chat couldn't be started", {
+        notAnswered: "The workspace didn't answer, so Imbue Studio can't tell whether this chat started.",
+      });
     } finally {
       launchInFlight = false;
       m.redraw();
     }
+  }
+
+  /** Run a page-level action (``run``), telling its failure with ``whatFailed``. */
+  function runPageAction(run: () => Promise<void>, whatFailed: string): void {
+    if (pageActionInFlight) return;
+    pageActionInFlight = true;
+    pageActionError = null;
+    run()
+      .catch((error: unknown) => {
+        pageActionError = plainFailureLines(error, whatFailed);
+      })
+      .finally(() => {
+        pageActionInFlight = false;
+        m.redraw();
+      });
+  }
+
+  /** A failure line under a page's controls, with its details collapsed beneath it. */
+  function renderFailureLines(lines: FailureLines | null, extraClass: string): m.Children {
+    if (lines === null) return null;
+    return m("div", { class: `${extraClass} flex flex-col items-center gap-1 text-center` }, [
+      m("p", { class: "text-danger text-sm" }, plainFailureSentence(lines)),
+      m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
+      lines.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
+    ]);
   }
 
   /** A conversation with nothing in it yet -- being created, loading, or empty -- drawn as the
@@ -448,26 +480,54 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // post-launch-paths plan section 3.7): an empty conversation over the composer, whose send launches it.
       return renderEmptyConversation("message-list-empty message-list-awaiting", renderOutgoingMessages(chatId));
     }
+    const hasAccount = provisional.account_id !== "";
     return m(
       "div",
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
       [
         ...renderFailedCreateHeldSends(chatId),
         m("p", { class: "type-heading text-primary" }, "This chat could not be started"),
-        m("pre", { class: `${TERMINAL_OUTPUT_CLASS} whitespace-pre-wrap` }, provisional.error ?? "mngr create failed"),
-        launchError !== null ? m("p", { class: "text-danger text-sm" }, launchError) : null,
-        provisional.account_id !== ""
-          ? m(
-              Button,
-              {
-                variant: "primary",
-                extra: "message-list-create-retry",
-                readonly: launchInFlight,
-                onclick: () => void relaunch(chatId, provisional.account_id),
-              },
-              launchInFlight ? "Starting…" : "Try again",
-            )
-          : null,
+        m(
+          "p",
+          { class: "message-list-create-failed-text text-secondary text-center" },
+          hasAccount
+            ? "The agent for this chat couldn't be started. Try again, or start a new chat on a different provider."
+            : "Sign in to a provider to start this chat.",
+        ),
+        m("div", { class: "text-secondary" }, m(SeeDetails, { details: provisional.error })),
+        renderFailureLines(launchError, "message-list-create-retry-failed"),
+        renderFailureLines(pageActionError, "message-list-remove-failed"),
+        m("div", { class: "flex items-center gap-2" }, [
+          hasAccount
+            ? m(
+                Button,
+                {
+                  variant: "primary",
+                  extra: "message-list-create-retry",
+                  readonly: launchInFlight,
+                  onclick: () => void relaunch(chatId, provisional.account_id),
+                },
+                launchInFlight ? "Starting…" : "Try again",
+              )
+            : m(
+                Button,
+                {
+                  variant: "primary",
+                  extra: "message-list-choose-provider",
+                  onclick: () => openProviderChooser({ onSignedIn: (accountId) => void launchOn(chatId, accountId) }),
+                },
+                "Choose a provider",
+              ),
+          m(
+            Button,
+            {
+              extra: "message-list-remove-chat",
+              readonly: pageActionInFlight,
+              onclick: () => runPageAction(() => destroyChat(chatId), "This chat couldn't be removed"),
+            },
+            "Remove this chat",
+          ),
+        ]),
       ],
     );
   }
@@ -602,6 +662,51 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     return hasReceivedChatList() && !(notFoundRetryInFlight && currentChatId === chatId);
   }
 
+  /** A chat whose conversation the chat app does not have: gone, stopped, or with nothing in it yet. The agent's
+   *  terminal screen, and why it could not be read, are behind See details. */
+  function renderNothingToShow(chatId: string): m.Vnode {
+    const agent = getChatById(chatId)?.active_agent;
+    const screenDetails = screenLoading
+      ? null
+      : joinDetailLines([
+          screenContent,
+          screenError === null ? null : `Could not read the agent's terminal: ${screenError}`,
+        ]);
+    const isGone = agent === undefined;
+    const isStopped = agent !== undefined && isAgentProcessDead(agent.state);
+    return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
+      m(
+        "p",
+        { class: "message-list-not-found-text text-secondary text-center" },
+        isGone
+          ? "This chat is no longer here."
+          : isStopped
+            ? "This chat has nothing to show yet -- its agent isn't running."
+            : "This chat has nothing to show yet.",
+      ),
+      isGone
+        ? m(
+            Button,
+            { sm: true, extra: "message-list-new-chat", onclick: () => startNewChatInPlaceOf(chatId) },
+            "Start a new chat",
+          )
+        : isStopped
+          ? m(
+              Button,
+              {
+                sm: true,
+                extra: "message-list-start-chat",
+                readonly: pageActionInFlight,
+                onclick: () => runPageAction(() => startChat(chatId), "This chat couldn't be started"),
+              },
+              pageActionInFlight ? "Starting…" : "Start this chat",
+            )
+          : null,
+      renderFailureLines(pageActionError, "message-list-start-failed"),
+      m("div", { class: "text-secondary" }, m(SeeDetails, { details: screenDetails })),
+    ]);
+  }
+
   function renderMessages(chatId: string): m.Vnode {
     // A provisional record short-circuits the load: there is no agent to read yet. A load that
     // raced ahead of the record (a page opened before the socket replayed it) 404s and latches
@@ -626,17 +731,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
     if (isConversationNotFound(chatId)) {
       fetchScreenCapture(chatId);
-      return m("div", { class: "message-list-not-found flex flex-col items-center justify-center h-full gap-4 p-8" }, [
-        m("p", { class: "type-heading text-primary" }, "No conversation data"),
-        m("p", { class: "text-secondary" }, "This agent has no Claude session. It may have crashed on startup."),
-        screenLoading
-          ? m("p", { class: "text-secondary" }, "Loading terminal output...")
-          : screenContent
-            ? m("pre", { class: `${TERMINAL_OUTPUT_CLASS} whitespace-pre` }, screenContent)
-            : screenError
-              ? m("p", { class: "text-secondary text-sm" }, `Could not capture terminal: ${screenError}`)
-              : null,
-      ]);
+      return renderNothingToShow(chatId);
     }
 
     // A message the user just sent counts as content even before any event
@@ -667,9 +762,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
 
     if (hasNothingToShow && load.error !== null) {
-      return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3" }, [
-        m("p", { class: "text-danger" }, load.error),
-        m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) }, "Refresh"),
+      const lines = plainFailureLinesOf(load.error, "This conversation couldn't be loaded", { requestKind: "read" });
+      return m("div", { class: "message-list-error flex flex-col items-center justify-center h-full gap-3 p-8" }, [
+        m("p", { class: "message-list-error-text text-danger text-center" }, plainFailureSentence(lines)),
+        m("div", { class: "flex items-center gap-2" }, [
+          m(Button, { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) }, "Refresh"),
+          lines.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
+        ]),
+        m("div", { class: "text-secondary" }, m(SeeDetails, { details: lines.details })),
       ]);
     }
 
@@ -684,13 +784,30 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         ? null
         : m(
             "div",
-            { class: "message-list-stale-notice flex items-center gap-3 border-b border-default px-3 py-1.5" },
+            {
+              class:
+                "message-list-stale-notice flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-default px-3 py-1.5",
+            },
             [
-              m("span", { class: "text-sm text-danger" }, `Couldn't refresh this conversation: ${load.error}`),
+              m(
+                "span",
+                { class: "text-sm text-danger" },
+                "Couldn't refresh this conversation -- what you see may be out of date.",
+              ),
               m(
                 Button,
                 { sm: true, extra: "message-list-reload", onclick: () => reloadAfterFailure(chatId) },
                 "Refresh",
+              ),
+              m(
+                "div",
+                { class: "basis-full text-secondary" },
+                m(SeeDetails, {
+                  details: joinDetailLines([
+                    load.error.cause === "user_facing" ? load.error.userFacingMessage : null,
+                    load.error.details,
+                  ]),
+                }),
               ),
             ],
           );
@@ -923,6 +1040,11 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 m(HandoffFailedNotice, { chatId }),
                 m(MessageInput, {
                   chatId,
+                  onTurnOnSourceView: isListed
+                    ? () => {
+                        if (!isFlipped) toggleSourceView();
+                      }
+                    : undefined,
                   leading:
                     isCompact && isListed
                       ? m(ModelProviderMenu, {

@@ -65,9 +65,16 @@ export function describeRequestError(error: unknown, requestKind?: RequestKind):
  * Anything unrecognised (an older backend, a kind added later) reads as "unknown", for which
  * callers offer nothing kind-specific.
  */
-export type SendFailureKind = "input_blocked" | "not_ready" | "agent_unreachable" | "unknown";
+export type SendFailureKind =
+  "input_blocked" | "not_ready" | "agent_unreachable" | "account_signed_out" | "chat_gone" | "unknown";
 
-const KNOWN_SEND_FAILURE_KINDS: ReadonlySet<string> = new Set(["input_blocked", "not_ready", "agent_unreachable"]);
+const KNOWN_SEND_FAILURE_KINDS: ReadonlySet<string> = new Set([
+  "input_blocked",
+  "not_ready",
+  "agent_unreachable",
+  "account_signed_out",
+  "chat_gone",
+]);
 
 export function describeRequestErrorKind(error: unknown): SendFailureKind {
   if (error === null || typeof error !== "object") {

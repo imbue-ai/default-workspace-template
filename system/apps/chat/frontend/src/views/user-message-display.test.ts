@@ -131,3 +131,48 @@ describe("user-message-display prompt bubbles", () => {
     expect(markdownContents(inner)).toEqual([ATTACHMENT]);
   });
 });
+
+describe("user-message-display background-task notices", () => {
+  function noticeEvent(fields: Partial<UserMessageEvent>): UserMessageEvent {
+    return {
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: "evt-notice",
+      source: "claude",
+      role: "user",
+      content: "<task-notification>...</task-notification>",
+      display: "notice",
+      ...fields,
+    } as UserMessageEvent;
+  }
+
+  function mounted(event: UserMessageEvent): HTMLElement {
+    const root = document.createElement("div");
+    m.render(root, m(StableUserMessage, { event }));
+    return root;
+  }
+
+  it("marks a failed task with a warning rather than the tick, its exit code behind See details", () => {
+    const root = mounted(
+      noticeEvent({
+        display_label: "Background task failed",
+        display_body: 'Background command "build" completed',
+        resolution: "failed",
+        display_details: "exit code 2",
+      }),
+    );
+    expect(root.querySelector(".text-warning")).not.toBeNull();
+    expect(root.querySelector(".text-accent")).toBeNull();
+    expect(root.textContent).toContain('Background task failed: Background command "build" completed');
+    expect(root.querySelector(".see-details-text")?.textContent).toBe("exit code 2");
+  });
+
+  it("gives a notice with no summary its lead alone, and a finished task the tick with no details", () => {
+    const bare = mounted(noticeEvent({ display_label: "A background task finished.", display_body: "" }));
+    expect(bare.querySelector(".message-notice")?.textContent).toBe("A background task finished.");
+
+    const finished = mounted(noticeEvent({ display_label: "Background task completed", display_body: "Built it" }));
+    expect(finished.querySelector(".text-accent")).not.toBeNull();
+    expect(finished.querySelector(".see-details")).toBeNull();
+  });
+});

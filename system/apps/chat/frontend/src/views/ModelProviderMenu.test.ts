@@ -178,7 +178,20 @@ vi.mock("./SwitchDialog", async (importOriginal) => ({
   openSwitchDialog: (_chatId: string, account: { id: string }) => reopened.push(account.id),
 }));
 
+// A failed Stop agent is told on the composer's notice.
+const raisedNotices: {
+  chatId: string;
+  notice: { title: string; describe: (e: unknown) => FailureLines; error: unknown; retry?: () => Promise<void> };
+}[] = [];
+vi.mock("./MessageInput", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./MessageInput")>()),
+  raiseFailureNotice: (chatId: string, notice: (typeof raisedNotices)[number]["notice"]) =>
+    raisedNotices.push({ chatId, notice }),
+}));
+
 import m from "mithril";
+
+import type { FailureLines } from "./failure-lines";
 
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
@@ -339,37 +352,37 @@ describe("the combo card", () => {
     expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
   });
 
-  it("says a chat with no agent yet is not connected when no provider is signed in, and opens the chooser", () => {
+  it("offers to add a provider for a chat with no agent yet when none is signed in, and opens the chooser", () => {
     agentState.agent = null;
     agentState.provisional = { account_id: "" };
     providerState.accounts = [];
     render();
-    expect(screenText()).toContain("Not connected");
+    expect(screenText()).toContain("Add a provider");
     click(".model-selector-not-connected");
     expect(chooserOpens).toEqual([{ hasOnSignedIn: false }]);
   });
 
-  it("does not call a chat not connected before the account list has loaded", () => {
+  it("does not offer to add a provider before the account list has loaded", () => {
     providerState.isLoaded = false;
     providerState.accounts = [];
     agentState.agent = null;
     agentState.provisional = { account_id: "" };
     render();
-    expect(screenText()).not.toContain("Not connected");
+    expect(screenText()).not.toContain("Add a provider");
     expect(ROOT().querySelector(".model-selector-loading")).not.toBeNull();
     agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "" } });
     settingsState.choice = null;
     render();
-    expect(screenText()).not.toContain("Not connected");
+    expect(screenText()).not.toContain("Add a provider");
     expect(ROOT().querySelector(".model-selector-loading")).not.toBeNull();
   });
 
-  it("says a running chat with no provider signed in is not connected, and switches it onto the one signed in", () => {
+  it("offers to add a provider for a running chat with none signed in, and switches it onto the one signed in", () => {
     agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "" } });
     settingsState.choice = null;
     providerState.accounts = [];
     render();
-    expect(screenText()).toContain("Not connected");
+    expect(screenText()).toContain("Add a provider");
     click(".model-selector-not-connected");
     expect(chooserOpens).toEqual([{ hasOnSignedIn: true }]);
   });
@@ -1303,6 +1316,33 @@ describe("the phone layout's card", () => {
       matched: model,
       pending: null,
     };
+  });
+
+  it("tells a refused Stop agent on the composer's notice, with Try again, rather than in an alert", async () => {
+    raisedNotices.length = 0;
+    const body = JSON.stringify({ detail: "Failed to stop agent 'sunny-hollow': mngr exited with code 1" });
+    const fetchMock = vi.fn(async () => ({ ok: false, status: 500, text: async () => body }));
+    vi.stubGlobal("fetch", fetchMock);
+    renderPhone();
+    tap("[data-composer-settings]");
+    const stopRow = [...document.querySelectorAll<HTMLElement>("button, [role='menuitem']")].find(
+      (node) => node.textContent?.trim() === "Stop agent",
+    );
+    stopRow!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const [{ chatId, notice }] = raisedNotices;
+    expect(chatId).toBe("a1");
+    expect(notice.title).toBe("Couldn't stop the agent");
+    const lines = notice.describe(notice.error);
+    expect(lines.body).toEqual([
+      "Couldn't stop the agent. It's still running. Try again. If this persists, report a bug.",
+    ]);
+    expect(lines.details).toContain("mngr exited with code 1");
+    await notice.retry!().catch(() => undefined);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
   });
 
   it("opens from a settings button instead of the chip", () => {

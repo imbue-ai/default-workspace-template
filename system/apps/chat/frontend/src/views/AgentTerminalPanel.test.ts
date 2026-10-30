@@ -34,6 +34,7 @@ import m from "mithril";
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture } from "../models/chatSnapshotFixture";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
+import { framePageInShell } from "../shellConnectionFixture";
 
 const ATTRS = { chatId: "agent-1", url: "http://localhost/terminal/", title: "terminal" };
 
@@ -56,7 +57,7 @@ describe("the agent terminal's liveness gate", () => {
     agentState.agent = null;
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })),
+      vi.fn(async () => ({ ok: true, status: 200, text: async () => "{}", json: async () => ({}) })),
     );
   });
 
@@ -127,20 +128,28 @@ describe("the agent terminal's liveness gate", () => {
 
   it("surfaces a failed start on the stopped face instead of failing silently", async () => {
     agentState.agent = chatSnapshotFixture("agent-1", { active_agent: { name: "sunny-hollow", state: "STOPPED" } });
+    const body = JSON.stringify({ detail: "Failed to start agent 'sunny-hollow': no such agent" });
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => ({ ok: false, status: 500, json: async () => ({ detail: "no such agent" }) })),
+      vi.fn(async () => ({ ok: false, status: 500, text: async () => body, json: async () => JSON.parse(body) })),
     );
+    const shell = framePageInShell(true);
     const root = mountPanel();
     await settle();
 
-    // The auto-start on open already failed; the face must say so.
+    // The auto-start on open already failed; the face must say so, in a sentence of ours, with the server's words
+    // behind See details.
+    const sentence = "The agent couldn't be started. Try again. If this persists, report a bug.";
     expect(root.querySelector(".agent-terminal-stopped")).not.toBeNull();
-    expect(root.querySelector(".agent-terminal-start-error")?.textContent).toContain("no such agent");
+    expect(root.querySelector(".agent-terminal-start-error")?.textContent).toBe(sentence);
+    expect(root.querySelector(".see-details-text")?.textContent).toContain("no such agent");
+    (root.querySelector(".agent-terminal-report-bug") as HTMLElement).click();
+    expect(shell.posted("shell:report-bug")).toHaveLength(1);
+    shell.release();
 
     // A retry from the button that fails again keeps reporting, not silently resetting.
     (root.querySelector(".agent-terminal-start") as HTMLElement).click();
     await settle();
-    expect(root.querySelector(".agent-terminal-start-error")?.textContent).toContain("no such agent");
+    expect(root.querySelector(".agent-terminal-start-error")?.textContent).toBe(sentence);
   });
 });

@@ -47,6 +47,11 @@ def test_a_credential_failure_is_recognised(text: str) -> None:
         pytest.param("500 Internal Server Error", id="server-fault"),
         pytest.param("I cannot help with that request.", id="model-refusal"),
         pytest.param("The tool call failed: file not found", id="tool-failure"),
+        pytest.param(
+            '400 {"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"messages: text content blocks must be non-empty"}}',
+            id="ordinary-refused-request",
+        ),
     ],
 )
 def test_an_error_signing_in_cannot_fix_is_not_flagged(text: str) -> None:
@@ -65,6 +70,11 @@ def test_an_error_signing_in_cannot_fix_is_not_flagged(text: str) -> None:
         pytest.param("ExceededBudget", id="litellm-budget-code"),
         pytest.param("Authentication Error, Invalid proxy server token passed", id="litellm-proxy-token"),
         pytest.param("usage_limit_exceeded", id="codex-quota"),
+        pytest.param(
+            '400 {"type":"error","error":{"type":"invalid_request_error","message":"You have reached your specified '
+            'API usage limits. You will regain access on 2026-11-01 at 00:00 UTC."}}',
+            id="anthropic-usage-limits",
+        ),
     ],
 )
 def test_folded_claude_and_quota_patterns(text: str) -> None:

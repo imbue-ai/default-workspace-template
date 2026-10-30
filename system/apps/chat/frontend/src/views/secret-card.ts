@@ -18,8 +18,16 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
 import { postJson } from "@imbue/workspace-ui/src/models/http";
-import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
+import { describeRequestErrorKind, describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { ReportBugButton } from "@imbue/workspace-ui/src/components/FailureButtons";
+import { getShellConnection } from "../shellConnection";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
+import { mintMessageId, sendMessage } from "../models/Response";
+import { describeSendFailure } from "./composer-failures";
+import { plainFailureLinesOf, plainFailureSentence } from "./failure-lines";
+import type { FailureLines } from "./failure-lines";
+import { raiseFailureNotice } from "./MessageInput";
 import type { SecretResolution } from "./message-classification";
 import { isSecretRequestCall } from "./message-classification";
 import { FIELD_PART } from "@imbue/workspace-ui/src/themes/parts";
@@ -157,24 +165,58 @@ export const secretStatusCache = new SecretStatusCache();
 
 // Submit and decline
 
-async function postAnswer(path: string, body: unknown): Promise<{ ok: boolean; detail: string }> {
+/** How a submit or decline ended: done, or the failure as the card tells it, with the route's name for the case. */
+export type SecretAnswerOutcome =
+  { readonly ok: true } | { readonly ok: false; readonly lines: FailureLines; readonly kind: string | null };
+
+async function postAnswer(path: string, body: unknown, whatFailed: string): Promise<SecretAnswerOutcome> {
   try {
     await postJson<unknown>(apiUrl(path), body);
-    return { ok: true, detail: "" };
+    return { ok: true };
   } catch (error) {
-    return { ok: false, detail: describeRequestError(error) };
+    const failure = describeRequestFailure(error);
+    return { ok: false, lines: plainFailureLinesOf(failure, whatFailed), kind: failure.kind };
   }
 }
 
-export function submitSecret(
-  requestId: string,
-  values: Record<string, string>,
-): Promise<{ ok: boolean; detail: string }> {
-  return postAnswer(`/api/secret-requests/${encodeURIComponent(requestId)}/submit`, { values });
+export function submitSecret(requestId: string, values: Record<string, string>): Promise<SecretAnswerOutcome> {
+  return postAnswer(
+    `/api/secret-requests/${encodeURIComponent(requestId)}/submit`,
+    { values },
+    "These values couldn't be saved",
+  );
 }
 
-export function declineSecret(requestId: string, note: string): Promise<{ ok: boolean; detail: string }> {
-  return postAnswer(`/api/secret-requests/${encodeURIComponent(requestId)}/decline`, note ? { note } : {});
+export function declineSecret(requestId: string, note: string): Promise<SecretAnswerOutcome> {
+  return postAnswer(
+    `/api/secret-requests/${encodeURIComponent(requestId)}/decline`,
+    note ? { note } : {},
+    "This request couldn't be declined",
+  );
+}
+
+/** The longest decline note the chat app takes. */
+export const MAX_DECLINE_NOTE_LENGTH = 2000;
+
+// The verdict a refusal for an already-answered request names, so the card turns to it.
+const ANSWERED_VERDICT_BY_KIND: Readonly<Record<string, SecretResolution>> = {
+  already_stored: "stored",
+  already_declined: "declined",
+};
+
+/** Ask the chat's agent to file a request again that can no longer be answered. */
+async function askAgentToRequestAgain(chatId: string, envPath: string): Promise<void> {
+  const message = `Your request for the values in ${envPath} can't be answered any more. Please file the request again.`;
+  try {
+    await sendMessage(chatId, message, mintMessageId());
+  } catch (error) {
+    raiseFailureNotice(chatId, {
+      title: "Couldn't send your message",
+      describe: describeSendFailure,
+      error,
+      kind: describeRequestErrorKind(error),
+    });
+  }
 }
 
 // Rendering
@@ -188,7 +230,9 @@ export interface SecretCardState {
   note: string;
   isDeclining: boolean;
   isBusy: boolean;
-  error: string | null;
+  error: FailureLines | null;
+  /** The request is gone, so the agent has to be asked to file it again. */
+  isRequestGone: boolean;
 }
 
 export interface SecretCardHandlers {
@@ -199,6 +243,7 @@ export interface SecretCardHandlers {
   onDeclineStart: () => void;
   onDeclineCancel: () => void;
   onDeclineConfirm: () => void;
+  onAskAgain: () => void;
 }
 
 const CARD_CLASS = "secret-request max-w-[560px] rounded-lg border bg-composer px-3.5 py-3";
@@ -292,6 +337,7 @@ function renderDeclineForm(state: SecretCardState, handlers: SecretCardHandlers)
       ...FIELD_PART,
       type: "text",
       value: state.note,
+      maxlength: MAX_DECLINE_NOTE_LENGTH,
       placeholder: "Optional note for the agent",
       disabled: state.isBusy,
       "data-e2e": "secret-decline-note",
@@ -383,7 +429,24 @@ export function renderSecretCard(
     ]),
     state.isDeclining ? renderDeclineForm(state, handlers) : renderInputs(details, state, handlers),
     state.error
-      ? m("div", { class: "secret-request-error mt-2 text-(length:--font-size-helper) text-danger" }, state.error)
+      ? m("div", { class: "mt-2 flex flex-col gap-1" }, [
+          m(
+            "div",
+            { class: "secret-request-error text-(length:--font-size-helper) text-danger" },
+            plainFailureSentence(state.error),
+          ),
+          m("div", { class: "text-secondary" }, m(SeeDetails, { details: state.error.details })),
+          m("div", { class: "flex items-center gap-2" }, [
+            state.isRequestGone
+              ? m(
+                  Button,
+                  { variant: "secondary", sm: true, onclick: () => handlers.onAskAgain() },
+                  "Ask the agent again",
+                )
+              : null,
+            state.error.isReportable ? m(ReportBugButton, { connection: getShellConnection(), sm: true }) : null,
+          ]),
+        ])
       : null,
     state.isDeclining
       ? null
@@ -403,6 +466,8 @@ export function SecretCard(): m.Component<{
   resolution: SecretResolution | null;
   /** The decline note the transcript carried, when it did. */
   note: string | null;
+  /** The chat whose agent filed the request, for asking it to file one again. */
+  chatId: string;
 }> {
   const state: SecretCardState = {
     valueByVariable: {},
@@ -411,15 +476,17 @@ export function SecretCard(): m.Component<{
     isDeclining: false,
     isBusy: false,
     error: null,
+    isRequestGone: false,
   };
 
   async function run(
     requestId: string,
-    action: () => Promise<{ ok: boolean; detail: string }>,
+    action: () => Promise<SecretAnswerOutcome>,
     verdict: SecretResolution,
   ): Promise<void> {
     state.isBusy = true;
     state.error = null;
+    state.isRequestGone = false;
     m.redraw();
     const outcome = await action();
     state.isBusy = false;
@@ -428,14 +495,21 @@ export function SecretCard(): m.Component<{
       state.valueByVariable = {};
       secretStatusCache.note(requestId, verdict);
     } else {
-      state.error = outcome.detail;
+      const answered = outcome.kind === null ? undefined : ANSWERED_VERDICT_BY_KIND[outcome.kind];
+      if (answered !== undefined) {
+        // Someone answered it already (another window): the card shows how.
+        state.valueByVariable = {};
+        secretStatusCache.note(requestId, answered);
+      }
+      state.error = outcome.lines;
+      state.isRequestGone = outcome.kind === "request_gone";
     }
     m.redraw();
   }
 
   return {
     view(vnode) {
-      const { toolCall, toolResult, resolution, note } = vnode.attrs;
+      const { toolCall, toolResult, resolution, note, chatId } = vnode.attrs;
       const details = parseSecretRequest(toolCall, toolResult);
       const effectiveResolution = resolution ?? (details ? secretStatusCache.known(details.requestId) : null);
       const handlers: SecretCardHandlers = {
@@ -461,6 +535,12 @@ export function SecretCard(): m.Component<{
         onDeclineConfirm: () => {
           if (details === null) return;
           void run(details.requestId, () => declineSecret(details.requestId, state.note.trim()), "declined");
+        },
+        onAskAgain: () => {
+          if (details === null) return;
+          state.error = null;
+          state.isRequestGone = false;
+          void askAgentToRequestAgain(chatId, details.envPath);
         },
       };
       return renderSecretCard(details, effectiveResolution, note, toolResult !== null, state, handlers);

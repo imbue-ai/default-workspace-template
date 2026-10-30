@@ -437,10 +437,7 @@ def execute_claude_shoulder_tap(
     # it through mngr's locked message API, so holding it across ``press_chord`` would deadlock.
     with try_message_lock() as is_lock_held:
         if not is_lock_held:
-            return ClaudeTapResult(
-                status=ClaudeTapStatus.SEND_IN_FLIGHT,
-                detail="A message send to the agent is in flight; try the shoulder tap again.",
-            )
+            return ClaudeTapResult(status=ClaudeTapStatus.SEND_IN_FLIGHT)
         # Drain a queue that already flushed at natural turn end, then read the settled mirror.
         watcher.get_all_events()
         mirror_is_empty = len(watcher.get_queued_messages()) == 0

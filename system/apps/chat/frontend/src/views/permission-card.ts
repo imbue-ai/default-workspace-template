@@ -16,7 +16,10 @@ import { OPEN_REQUEST_MODAL } from "@minds/embed-contract";
 import type { ContractMessage } from "@minds/embed-contract";
 import { PERMISSION_RESOLUTIONS, sendToEmbedder, setEmbedderMessageHandler } from "@imbue/workspace-ui/src/embed";
 import type { ToolCall, ToolResultEvent } from "../models/Response";
-import { getEventDetailState, requestEventDetail } from "../models/Response";
+import { getEventDetailState, mintMessageId, requestEventDetail, sendMessage } from "../models/Response";
+import { describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
+import { describeSendFailure } from "./composer-failures";
+import { raiseFailureNotice } from "./MessageInput";
 import type { ScopeInfo } from "./latchkey-scope-info";
 import { getScopeInfo } from "./latchkey-scope-info";
 import type { PermissionResolution } from "./message-classification";
@@ -391,6 +394,7 @@ export function renderPermissionCard(
   hasResult: boolean,
   rawOpen: boolean,
   onToggleRaw: () => void,
+  onAskAgentAgain: (() => void) | null = null,
 ): m.Vnode {
   const title = permissionTitle(details, scopeInfo);
   const rawToggle = renderRawToggle(rawText, rawOpen, onToggleRaw);
@@ -418,6 +422,22 @@ export function renderPermissionCard(
         renderPermissionVerdict(resolution),
         rawToggle ? m("div", { class: "permission-request-receipt-toggle ml-auto shrink-0" }, rawToggle) : null,
       ]),
+      resolution === "error"
+        ? m("div", { class: "permission-request-error-note mt-2 flex flex-wrap items-center gap-2" }, [
+            m(
+              "span",
+              { class: "text-(length:--font-size-helper) text-secondary" },
+              "Couldn't complete -- this request wasn't answered, so the agent didn't get permission.",
+            ),
+            onAskAgentAgain === null
+              ? null
+              : m(
+                  Button,
+                  { sm: true, extra: "permission-request-ask-again", onclick: onAskAgentAgain },
+                  "Ask the agent to try again",
+                ),
+          ])
+        : null,
       rawBlock,
     ]);
   }
@@ -532,7 +552,25 @@ export function PermissionCard(): m.Component<{
         () => {
           rawOpen = !rawOpen;
         },
+        () => void askAgentToTryAgain(chatId, permissionTitle(details, scopeInfo) ?? GENERIC_PERMISSION_TITLE),
       );
     },
   };
+}
+
+/** Tell the chat's agent its permission request ended without an answer, so it files it again. */
+async function askAgentToTryAgain(chatId: string, requestTitle: string): Promise<void> {
+  const message =
+    `Your permission request (${requestTitle}) didn't complete, so you don't have that permission. ` +
+    "Please request it again.";
+  try {
+    await sendMessage(chatId, message, mintMessageId());
+  } catch (error) {
+    raiseFailureNotice(chatId, {
+      title: "Couldn't send your message",
+      describe: describeSendFailure,
+      error,
+      kind: describeRequestErrorKind(error),
+    });
+  }
 }

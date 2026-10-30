@@ -6,7 +6,8 @@
  * replaces it, so a send reads as sent at once (contract A2). Where the send is (on
  * its way, or waiting for the agent to come up) is the status row under it
  * (ActivityIndicator), not the bubble. A failed send is NOT rendered here -- the composer handles that (popup +
- * text restored), and the bubble is dropped.
+ * text restored), and the bubble is dropped. A send the backend accepted whose arrival never
+ * came is captioned as possibly undelivered.
  */
 import m from "mithril";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
@@ -19,6 +20,7 @@ import {
   USER_BUBBLE_CLASS,
   USER_MESSAGE_PART,
   USER_MESSAGE_ROW_CLASS,
+  noticeOutcomeOf,
   renderNoticeRow,
 } from "./user-message-display";
 
@@ -38,9 +40,13 @@ export interface NotYetRealBubble {
   isGroupSpaced?: boolean;
   /** Marker classes added to the row, for a caller whose bubbles a test or a style picks out. */
   extraRowClass?: string;
+  /** Nothing has confirmed the message arrived, long after it should have. */
+  isUnconfirmed?: boolean;
   /** The backend's render decision for the text; a notice (a background-task report) draws as one. */
   displayDecision?: DisplayDecision;
 }
+
+export const UNCONFIRMED_CAPTION = "This message may not have been delivered.";
 
 /** A user message that is not yet a real turn, drawn as the user bubble it will become, or as the
  *  one-line notice when the backend decided its text renders as one (a background-task report).
@@ -56,12 +62,19 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
     .filter((part) => part !== null)
     .join(" ");
   if (isNotice) {
-    return renderNoticeRow(bubble.key, rowClass, cls);
+    return renderNoticeRow(bubble.key, rowClass, cls, noticeOutcomeOf(bubble.displayDecision ?? {}));
   }
   return m("div", { class: rowClass, key: bubble.key }, [
     m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
       m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
     ]),
+    bubble.isUnconfirmed === true
+      ? m(
+          "div",
+          { class: "outgoing-message-unconfirmed mt-1 text-(length:--font-size-helper) text-warning" },
+          UNCONFIRMED_CAPTION,
+        )
+      : null,
   ]);
 }
 
@@ -69,6 +82,7 @@ function renderOutgoingBubble(outgoing: OutgoingMessage): m.Vnode {
   return renderNotYetRealBubble({
     key: outgoing.id,
     content: outgoing.content,
+    isUnconfirmed: outgoing.isUnconfirmed,
     displayDecision: outgoing.displayDecision,
   });
 }

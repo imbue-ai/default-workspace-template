@@ -4,6 +4,8 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
+from app_manifest.registry import APP_CONTRACT_ROUTE
+from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from flask.testing import FlaskClient
 from workspace_layout.testing import FakeShell
 
@@ -114,7 +116,25 @@ def test_a_chat_page_without_a_bundle_is_the_not_built_placeholder(tmp_path: Pat
 
     assert response.status_code == 200
     assert response.headers[FRONTEND_BUILT_HEADER] == "false"
-    assert "not built" in response.text
+    assert "Chat isn't available in this workspace right now." in response.text
+
+
+def test_the_chat_origin_serves_the_shells_app_contract_for_the_not_built_page(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    client, _ = _client(tmp_path / "static", _agent_id())
+
+    missing = client.get(APP_CONTRACT_ROUTE)
+    built = tmp_path / SHELL_APP_CONTRACT_PATH
+    built.parent.mkdir(parents=True)
+    built.write_text("export function connectToShell() {}\n")
+    served = client.get(APP_CONTRACT_ROUTE)
+
+    assert missing.status_code == 404
+    assert served.status_code == 200
+    assert served.mimetype == "text/javascript"
+    assert served.text == "export function connectToShell() {}\n"
 
 
 def test_the_health_route_reports_the_bundle(tmp_path: Path) -> None:

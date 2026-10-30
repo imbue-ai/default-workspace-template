@@ -310,8 +310,7 @@ def test_the_relabel_and_start_argv_are_accepted_by_the_live_cli() -> None:
 
 def test_a_rebind_cancel_refusal_names_the_account() -> None:
     assert rebind_cancel_refused_detail("Anthropic 2 (Claude Code)") == (
-        "This chat's switch to Anthropic 2 (Claude Code) cannot be called off: "
-        "the agent restarts on the new account as soon as the switch is confirmed."
+        "The switch couldn't be called off -- this chat is already moving to Anthropic 2 (Claude Code)."
     )
 
 
