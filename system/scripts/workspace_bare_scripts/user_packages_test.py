@@ -10,7 +10,7 @@ from workspace_bare_scripts import user_packages
 
 _OWN_LINE = (
     'python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "'
-    "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure . system/apps/widget"
+    "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/widget"
     " && uv sync --locked --project system/apps/widget"
     " && python3 system/scripts/forward_port.py --manifest system/apps/widget/app.toml"
     " --url http://localhost:8091"
