@@ -515,6 +515,45 @@ def test_a_message_that_may_not_have_arrived_is_returned_as_is_when_its_caller_s
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    "first_result",
+    [_not_ready, _state_unknown, _not_submitted, _would_not_start, _submission_unconfirmed, _unclassified_failure],
+    ids=["not-ready", "state-unknown", "not-submitted", "would-not-start", "unconfirmed", "unclassified"],
+)
+def test_a_send_a_stop_took_back_is_not_tried_again(first_result: Callable[[], MessageResult]) -> None:
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        raise AssertionError("the message was handed back, so the agent is not looked up either")
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        return first_result()
+
+    messenger = MngrMessenger(discover=_discover, send=_send, pause=lambda _seconds: None)
+    outcome = messenger.send_to_agent(_AGENT_ID, "hi", (known,), is_taken_back=lambda: True)
+    assert isinstance(outcome, SendFailure)
+    assert outcome.kind == first_result().failures[0].kind
+    assert send_calls == [(known,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_send_a_stop_took_back_after_it_missed_the_agent_is_not_looked_up_again() -> None:
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        raise AssertionError("the message was handed back, so the agent is not looked up")
+
+    messenger = MngrMessenger(
+        discover=_discover,
+        send=lambda matches, message, ctx: _not_found_on_host(),
+        pause=lambda _seconds: None,
+    )
+    outcome = messenger.send_to_agent(_AGENT_ID, "hi", (_make_match(),), is_taken_back=lambda: True)
+    assert isinstance(outcome, SendFailure)
+    assert outcome.kind == SendFailureKind.AGENT_NOT_FOUND
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
 @pytest.mark.parametrize("waiting_result", [_not_ready, _state_unknown], ids=["not-ready", "state-unknown"])
 def test_a_send_nothing_could_type_yet_is_tried_again_after_a_growing_wait(
     waiting_result: Callable[[], MessageResult],

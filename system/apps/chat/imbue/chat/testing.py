@@ -793,6 +793,8 @@ class RecordingMngrMessenger(MngrMessenger):
 
     sent: list[tuple[str, str]] = []
     pressed: list[tuple[str, str]] = []
+    # What each send was given to tell whether a stop took it back, in send order.
+    taken_back_checks: list[Callable[[], bool]] = []
     # Each compaction requested, as ``(agent_id, instructions)``.
     compactions: list[tuple[str, str | None]] = []
     succeeds: bool = True
@@ -811,8 +813,10 @@ class RecordingMngrMessenger(MngrMessenger):
         message: str,
         known_locations: Sequence[AgentMatch],
         is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
     ) -> SendDelivery | SendFailure:
         self.sent.append((str(agent_id), message))
+        self.taken_back_checks.append(is_taken_back)
         return self.delivery if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
@@ -839,9 +843,10 @@ class SummaryWritingMngrMessenger(RecordingMngrMessenger):
         message: str,
         known_locations: Sequence[AgentMatch],
         is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
     ) -> SendDelivery | SendFailure:
         write_summary_for_request(message)
-        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
 
 
 def scripted_send_mngr_messenger(
@@ -889,8 +894,9 @@ class VanishedAgentMngrMessenger(RecordingMngrMessenger):
         message: str,
         known_locations: Sequence[AgentMatch],
         is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
     ) -> SendDelivery | SendFailure:
-        super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure)
+        super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
         raise AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}")
 
 

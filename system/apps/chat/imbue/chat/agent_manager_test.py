@@ -6021,6 +6021,17 @@ def test_messages_delivered_before_or_during_a_stop_are_not_sent_again(broadcast
     assert chat.resent == []
 
 
+def test_a_stop_takes_back_the_sends_in_flight_when_it_began_and_no_later_one() -> None:
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    agent_id = MngrAgentId()
+    manager.send_message_to_agent(agent_id, "before the stop")
+    with manager.letting_go_of_unrecorded_sends(str(agent_id)):
+        manager.send_message_to_agent(agent_id, "during the stop")
+    manager.send_message_to_agent(agent_id, "after the stop")
+    assert [is_taken_back() for is_taken_back in messenger.taken_back_checks] == [True, False, False]
+
+
 def test_stopping_a_chat_lets_go_of_the_sends_kept_for_resending(
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:

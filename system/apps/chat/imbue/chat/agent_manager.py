@@ -1271,6 +1271,8 @@ class AgentManager:
     _lost_sends_being_resent: set[tuple[str, str]]
     # How many stops of each agent's turn or process are under way (``letting_go_of_unrecorded_sends``).
     _letting_go_counts_by_agent: dict[str, int]
+    # How many such stops have begun for each agent, so a send in flight can tell that one began after it did.
+    _stops_begun_by_agent: dict[str, int]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1444,6 +1446,7 @@ class AgentManager:
         manager._unrecorded_sends_by_agent = {}
         manager._lost_sends_being_resent = set()
         manager._letting_go_counts_by_agent = {}
+        manager._stops_begun_by_agent = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
@@ -2099,9 +2102,11 @@ class AgentManager:
     @contextmanager
     def letting_go_of_unrecorded_sends(self, agent_id: str) -> Generator[None, None, None]:
         """Scope a stop of the agent's turn or process (Stop taking its turn and queue back, the chat app stopping
-        it): the messages delivered to it, before and during the scope, are not sent again when its process ends."""
+        it): the messages delivered to it, before and during the scope, are not sent again when its process ends,
+        and a send already in flight to it makes no more tries, since Stop hands such a message back to the user."""
         with self._lock:
             self._letting_go_counts_by_agent[agent_id] = self._letting_go_counts_by_agent.get(agent_id, 0) + 1
+            self._stops_begun_by_agent[agent_id] = self._stops_begun_by_agent.get(agent_id, 0) + 1
             self._unrecorded_sends_by_agent.pop(agent_id, None)
         try:
             yield
@@ -3398,8 +3403,19 @@ class AgentManager:
         the harness's own words plus mngr's classification of them, which is what lets the chat
         decide what to offer.
         """
+        with self._lock:
+            stops_begun_before_send = self._stops_begun_by_agent.get(str(agent_id), 0)
+
+        def is_taken_back() -> bool:
+            with self._lock:
+                return self._stops_begun_by_agent.get(str(agent_id), 0) != stops_begun_before_send
+
         return self._messenger.send_to_agent(
-            agent_id, message, self.get_agent_matches_by_id(str(agent_id)), is_resent_when_unsure
+            agent_id,
+            message,
+            self.get_agent_matches_by_id(str(agent_id)),
+            is_resent_when_unsure,
+            is_taken_back,
         )
 
     def press_key_chord_on_agent(self, agent_id: AgentId, key: str) -> bool:
@@ -3431,6 +3447,7 @@ class AgentManager:
             self._pending_permission_ids_by_agent.pop(agent_id, None)
             self._unrecorded_sends_by_agent.pop(agent_id, None)
             self._resend_locks_by_agent.pop(agent_id, None)
+            self._stops_begun_by_agent.pop(agent_id, None)
             is_own_chat = not self._is_recorded_member_locked(agent_id)
         if is_own_chat:
             self._forget_chat(ChatId(agent_id))
@@ -4956,6 +4973,7 @@ class AgentManager:
                 self._pending_permission_ids_by_agent.pop(agent_id, None)
                 self._unrecorded_sends_by_agent.pop(agent_id, None)
                 self._resend_locks_by_agent.pop(agent_id, None)
+                self._stops_begun_by_agent.pop(agent_id, None)
                 is_own_chat = not self._is_recorded_member_locked(agent_id)
             # An agent that is its own chat takes the chat's per-chat records with it; a
             # member of a recorded chat (its first agent included) leaves the chat standing.

@@ -386,7 +386,9 @@ transcript into that line (`frontend/src/models/ResentSends.ts`). A send still
 unconfirmed the second time is not sent a third: its failure gets the
 "Couldn't confirm your message arrived" notice. Antigravity's flush, which sends
 again a block it did not see land on its own later pass, asks for no such
-repeat (`is_resent_when_unsure=False`). Since mngr
+repeat (`is_resent_when_unsure=False`). A stop of the agent ends all of these
+repeats: Stop hands the in-flight message back to the composer, so nothing more
+is sent. Since mngr
 counts a Claude message as delivered once Claude shows it, which during its
 startup hooks is before it is written down, the chat app keeps each delivered
 Claude send until the agent's process ends: when the process exits (lifecycle
