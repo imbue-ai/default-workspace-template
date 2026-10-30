@@ -43,10 +43,10 @@ def latchkey_binary() -> str:
 
 
 @pytest.fixture
-def sandbox(
+def booted_sandbox(
     tmp_path: Path, latchkey_binary: str, monkeypatch: pytest.MonkeyPatch
 ) -> SandboxPaths:
-    """A booted sandbox's runtime dir: keys, the template config, and a sign-in's worth of credentials."""
+    """A booted sandbox's runtime dir before any sign-in: the keys and the template config, no store."""
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
     paths = SandboxPaths(runtime_dir=tmp_path / "run")
     paths.incoming_dir.mkdir(parents=True)
@@ -62,18 +62,24 @@ def sandbox(
         ],
     )
     assert result.exit_code == 0, result.output
-    sandbox_key = SecretStr(paths.latchkey_key_path.read_text().strip())
+    return paths
+
+
+@pytest.fixture
+def sandbox(booted_sandbox: SandboxPaths, latchkey_binary: str) -> SandboxPaths:
+    """The booted sandbox with a sign-in's worth of credentials stored."""
+    sandbox_key = _sandbox_key(booted_sandbox)
     store_credential(
-        latchkey_binary, paths.latchkey_directory, sandbox_key, "github", None
+        latchkey_binary, booted_sandbox.latchkey_directory, sandbox_key, "github", None
     )
     store_credential(
         latchkey_binary,
-        paths.latchkey_directory,
+        booted_sandbox.latchkey_directory,
         sandbox_key,
         "slack",
         "me@example.com",
     )
-    return paths
+    return booted_sandbox
 
 
 def _transfer_key(paths: SandboxPaths) -> SecretStr:
@@ -118,6 +124,69 @@ def test_import_lands_the_machines_browser_state_in_the_sandbox_store_under_the_
         "github": [""],
         "slack": ["me@example.com"],
     }
+
+
+def test_import_into_a_store_less_sandbox_then_sign_in_then_export_as_every_real_sign_in_does(
+    booted_sandbox: SandboxPaths, latchkey_binary: str
+) -> None:
+    # Spec 6.2: the import runs before any sign-in, into a directory holding only the template config.
+    fabricate_browser_state(
+        latchkey_binary,
+        booted_sandbox.incoming_dir,
+        _transfer_key(booted_sandbox),
+        _STATE,
+    )
+    assert sorted(
+        path.name for path in booted_sandbox.latchkey_directory.iterdir()
+    ) == ["config.json"]
+
+    imported = CliRunner().invoke(
+        import_browser_state_command,
+        [
+            "--runtime-dir",
+            str(booted_sandbox.runtime_dir),
+            "--latchkey-binary",
+            latchkey_binary,
+        ],
+    )
+
+    assert imported.exit_code == 0, imported.output
+    assert (
+        read_browser_state(
+            latchkey_binary,
+            booted_sandbox.latchkey_browser_state_path,
+            _sandbox_key(booted_sandbox),
+        )
+        == _STATE
+    )
+
+    # The sign-in then stores the service's credential beside the imported state, and the export
+    # carries both.
+    store_credential(
+        latchkey_binary,
+        booted_sandbox.latchkey_directory,
+        _sandbox_key(booted_sandbox),
+        "slack",
+        "me@example.com",
+    )
+    exported = CliRunner().invoke(
+        export_command,
+        [
+            "slack",
+            "--runtime-dir",
+            str(booted_sandbox.runtime_dir),
+            "--latchkey-binary",
+            latchkey_binary,
+        ],
+    )
+
+    assert exported.exit_code == 0, exported.output
+    assert json.loads(exported.output)["browser_state"] == str(
+        booted_sandbox.exported_browser_state_path
+    )
+    assert list_accounts(
+        latchkey_binary, booted_sandbox.export_dir, _transfer_key(booted_sandbox)
+    ) == {"slack": ["me@example.com"]}
 
 
 def test_export_writes_one_services_bundle_the_machine_merges_under_its_own_key(
