@@ -254,6 +254,36 @@ def test_a_uv_run_becomes_an_exec_of_the_script_with_none_of_uvs_options(
     ]
 
 
+def test_a_programs_shell_steps_keep_their_expansions_redirections_and_operators() -> (
+    None
+):
+    # Modelled on the built-in agent-observer program: a step that may fail with a warning,
+    # then the app. Every step but the sync and the app's own is kept as written.
+    command = (
+        "python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "
+        '"cd \\"$WIDGET_DIR\\" 2>/dev/null || echo \'no dir\' >&2; '
+        'uv sync --all-packages --frozen && exec .venv/bin/widget-app --port $WIDGET_PORT"'
+    )
+
+    rewritten = migration._program_rewrite(
+        command, "system/apps/widget", ["widget-app"]
+    )
+
+    assert rewritten is not None
+    words = user_packages.split_words(rewritten)
+    assert words[: words.index("bash")] == user_packages.split_words(command)[:3]
+    assert words[words.index("-c") + 1] == (
+        "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/widget"
+        " && uv sync --locked --project system/apps/widget"
+        " && { cd \"$WIDGET_DIR\" 2>/dev/null || echo 'no dir' >&2;"
+        " exec system/apps/widget/.venv/bin/widget-app --port $WIDGET_PORT; }"
+    )
+    assert (
+        user_packages.program_problems(rewritten, "system/apps/widget", ["widget-app"])
+        == []
+    )
+
+
 def test_a_program_that_runs_another_packages_script_is_left_alone() -> None:
     assert (
         migration._program_rewrite(

@@ -37,6 +37,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,8 @@ RATCHET_TEST_DEPENDENCY = "imbue-common[testing]"
 _RATCHET_IMPORTS = ("imbue.imbue_common.ratchet_testing", "inline_snapshot")
 _AGENT_FACING_SUFFIXES = (".md", ".toml", ".sh", ".conf", ".py")
 _TABLE_HEADER = re.compile(r"^\s*\[")
+# What separates the steps of a program's `bash -c` script, as user_packages splits them.
+_SCRIPT_SEPARATOR = re.compile(r"(&&|\|\||;|\n)")
 
 
 class MigrationError(Exception):
@@ -259,7 +262,7 @@ def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str
     )
     if shell_at is not None:
         prefix = words[:shell_at]
-        steps = user_packages.command_steps(command)[1 if prefix else 0 :]
+        rewritten = _rewrite_script(words[shell_at + 2], relative, scripts)
     else:
         start = next(
             (
@@ -272,43 +275,21 @@ def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str
         )
         if start is None:
             return None
-        prefix, steps = words[:start], [words[start:]]
-    rewritten: list[str] = []
-    found = False
-    for step in steps:
-        if step[:2] == ["uv", "sync"]:
-            continue
-        script = next(
-            (s for s in scripts if any(user_packages.runs_script(w, s) for w in step)),
-            None,
+        prefix, step = words[:start], words[start:]
+        script = _script_in(step, scripts)
+        # No shell ran these words before, so each is quoted to stay one literal word.
+        rewritten = (
+            None
+            if script is None
+            else " ".join(map(_quote, _exec_words(step, script, relative)))
         )
-        if script is None:
-            rewritten.append(" ".join(map(_quote, step)))
-            continue
-        found = True
-        if step[:2] == ["uv", "run"]:
-            # Cut at the script itself, so no option of uv run's, valued or not, survives.
-            step = step[
-                next(
-                    index
-                    for index, word in enumerate(step)
-                    if user_packages.runs_script(word, script)
-                ) :
-            ]
-        own = f"{relative}/.venv/bin/{script}"
-        new_step = [
-            own if user_packages.runs_script(word, script) else word for word in step
-        ]
-        if new_step[0] != "exec":
-            new_step = ["exec", *new_step]
-        rewritten.append(" ".join(map(_quote, new_step)))
-    if not found:
+    if rewritten is None:
         return None
     script_text = " && ".join(
         [
             f"python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project {relative}",
             f"uv sync --locked --project {relative}",
-            *rewritten,
+            rewritten,
         ]
     )
     return " ".join(
@@ -316,9 +297,95 @@ def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str
             *map(_quote, prefix),
             "bash",
             "-c",
-            '"' + script_text.replace('"', '\\"') + '"',
+            '"' + script_text.replace("\\", "\\\\").replace('"', '\\"') + '"',
         ]
     )
+
+
+def _script_in(words: Sequence[str], scripts: Sequence[str]) -> str | None:
+    return next(
+        (
+            s
+            for s in scripts
+            if any(user_packages.runs_script(_unquoted(w), s) for w in words)
+        ),
+        None,
+    )
+
+
+def _unquoted(word: str) -> str:
+    return word.strip("'\"")
+
+
+def _exec_words(step: Sequence[str], script: str, relative: str) -> list[str]:
+    """``step`` exec'ing ``script`` from the package's own venv."""
+    words = list(step)
+    if words[:2] == ["uv", "run"]:
+        # Cut at the script itself, so no option of uv run's, valued or not, survives.
+        words = words[
+            next(
+                index
+                for index, word in enumerate(words)
+                if user_packages.runs_script(_unquoted(word), script)
+            ) :
+        ]
+    own = f"{relative}/.venv/bin/{script}"
+    words = [
+        own if user_packages.runs_script(_unquoted(word), script) else word
+        for word in words
+    ]
+    return words if words[0] == "exec" else ["exec", *words]
+
+
+def _rewrite_script(script: str, relative: str, scripts: Sequence[str]) -> str | None:
+    """A ``bash -c`` script with its ``uv sync`` steps dropped and the step running one of
+    ``scripts`` exec'ing it from the package's venv; ``None`` when no step runs one.
+
+    Every other step is kept as written, so its quoting, expansions and redirections
+    survive. A dropped sync counts as having succeeded (the new up-front sync replaces it):
+    ``X && sync SEP Y`` becomes ``X SEP Y`` and any other ``X ? sync ? Y`` becomes
+    ``X; Y``. Steps joined by anything but ``&&`` are grouped, so the up-front sync gates
+    the whole script and not only its first step.
+    """
+    pieces = _SCRIPT_SEPARATOR.split(script)
+    kept: list[tuple[str, str]] = []
+    pending: str | None = None
+    found = False
+    for index in range(0, len(pieces), 2):
+        if kept:
+            separator = ";" if pieces[index - 1] == "\n" else pieces[index - 1]
+            pending = separator if pending is None or pending == "&&" else ";"
+        text = pieces[index].strip()
+        words = user_packages.split_words(text)
+        if not words or words[:2] == ["uv", "sync"]:
+            continue
+        found_script = _script_in(words, scripts)
+        if found_script is not None:
+            found = True
+            text = " ".join(_exec_words(_raw_words(text), found_script, relative))
+        kept.append((pending or "", text))
+        pending = None
+    if not found:
+        return None
+    body = kept[0][1] + "".join(
+        ("; " if separator == ";" else f" {separator} ") + text
+        for separator, text in kept[1:]
+    )
+    if any(separator != "&&" for separator, _ in kept[1:]):
+        return f"{{ {body}; }}"
+    return body
+
+
+def _raw_words(text: str) -> list[str]:
+    """``text``'s words as written, quotes kept, so re-joining them changes nothing a
+    shell would read differently."""
+    lexer = shlex.shlex(text, posix=False)
+    lexer.whitespace_split = True
+    lexer.commenters = ""
+    try:
+        return list(lexer)
+    except ValueError:
+        return text.split()
 
 
 def _quote(word: str) -> str:
