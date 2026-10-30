@@ -799,10 +799,29 @@ resumes), and how to honor a rollback request are in
 
 ### 5c. Carry out the report-driven remainder
 
+**After a successful apply, anything of the user's that is broken gets fixed,
+not reported.** This holds for every update. When something of theirs does not
+work on the landed tree -- a user program not RUNNING after the restart
+(`supervisorctl status`), a user app that fails its health route, a user skill
+that no longer imports, a consumer the report names that the update broke:
+
+1. Say what you are fixing in one short chat line ("One of your apps didn't
+   come back after the update -- fixing it now."). Nothing else changes in the
+   app or in `run.json`: the run is still in progress.
+2. Dispatch a repair worker with the evidence (the program's status and the
+   tail of its stderr log, the failing check's output, what the update changed
+   that it touches), through `launch-task` as in Step 4, with
+   `references/python-packaging-migration.md` named when the failure is one of
+   its symptoms.
+3. Finish the run (the rest of this step, then Step 6) once it is fixed, or once
+   the worker gives up. A give-up is still recorded as `UPDATED`, with a
+   `--detail` line naming what is still broken and what was tried, and the
+   results message says the same in plain words.
+
 - **`shared_runtime` live consumers** -- the apply's restart has already put
   every built-in service on the merged code. What the report can still name is
   a *user-created* consumer (an app or skill of theirs reading something the
-  update changed): check it, and carry any breakage into the results message.
+  update changed): check it, and fix any breakage as above.
 - **`Dockerfile`** -- apply the live-applicable hunks the report calls out
   (version pins live in `setup_system.sh`, already re-run; keep
   `agent_types.claude.version` in `.mngr/settings.toml` in sync). An

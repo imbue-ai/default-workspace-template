@@ -353,13 +353,27 @@ resources. Use `rsync` over the SSH session with an `--exclude` for each.
 **Creations.** Each app lands under `system/apps/<package>/` and gets a
 `[program:<name>]` block in `system/supervisord.conf.d/<name>.conf` that runs
 `system/scripts/forward_port.py` before its own start command, and re-registers its
-port that way -- never by copying the old registry file, which is runtime state. No
-root `pyproject.toml` entry: the `system/apps/*` member glob picks the package up.
-Land the app in the shape `build-app` writes today -- a program command ending in
-`exec .venv/bin/<name>` -- rather than carrying over a source command that runs it
-under `uv run`. Then `uv sync --all-packages` (never a bare `uv sync`: that is
-root-closure-scoped, and it prunes the member and deletes the console script the
-program line runs) and `supervisorctl reread && supervisorctl update`. An app that will not come up gets
+port that way -- never by copying the old registry file, which is runtime state.
+Land the app in the shape `build-app` writes today, a standalone uv project with its
+own lock and venv. Once every app, service and library is in place, convert them with
+update-self's migration script, dry run first, seeding each lock from the source
+workspace's `uv.lock` (the versions they ran on):
+
+```bash
+uv run --no-sync .agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py \
+    convert-packages --dry-run
+uv run --no-sync .agents/skills/migrate-workspace/python/migrate_workspace_skill/migrate_workspace.py \
+    convert-packages --shared-lock <the source workspace's uv.lock, copied here>
+```
+
+It skips a package that is already standalone. For each other one it writes its program line (link and sync its own project, then exec from its own
+`.venv/bin`) in place of a source command that runs it under `uv run` or from the
+root venv, and never adds it to the root `pyproject.toml`
+(`.agents/skills/update-self/references/python-packaging-migration.md`, "A user
+app, service or lib", covers an undeclared import it surfaces). The same goes for a
+user service or library the source workspace had under `system/`, which the same
+command converts. Then
+`supervisorctl reread && supervisorctl update`. An app that will not come up gets
 a **bounded** repair attempt (read its stderr log, fix the obvious break, retry
 once or twice); whatever is still broken becomes an explicit summary item naming
 what you tried.

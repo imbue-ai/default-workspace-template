@@ -14,7 +14,9 @@ How each shows up during the update:
 |---|---|
 | `system/test_entry_point_import_cost.py` cannot import a user skill's script (a PEP 723 dependency missing from the root venv) | [A user skill with scripts](#a-user-skill-with-scripts) |
 | `uv lock --check` / `uv sync` fails: "Workspace member `.agents/skills/<name>/python` is missing a `pyproject.toml`", or `system/test_meta_ratchets.py::test_every_skill_python_dir_has_a_pyproject` fails | [A packaged skill](#a-packaged-skill), step 1 |
+| `system/test_user_packages_are_standalone.py` fails on a package under `system/apps`, `system/services` or `system/libs` | [A user app, service or lib](#a-user-app-service-or-lib) |
 | `system/test_python_launch_rules.py::test_no_supervisord_program_runs_under_uv_run` names a user drop-in | [A user service](#a-user-service) |
+| `test_no_one_off_runs_a_user_packages_command_from_the_root_venv` names a user file | [A user app, service or lib](#a-user-app-service-or-lib), step 4 |
 | `test_no_plain_uv_run_in_agent_facing_files`, `test_python3_invocations_name_bare_entry_points` or `test_uv_run_invocations_name_scripts_that_exist` names a user file | [Commands in the user's docs](#commands-in-the-users-docs) |
 | `system/test_entry_point_import_cost.py` names a user skill's entry | [A packaged skill](#a-packaged-skill), last step |
 | `test_prevent_sys_path_edits` or `test_prevent_loading_modules_by_file_path` fails and lists a user file | [A packaged skill](#a-packaged-skill), step 2 |
@@ -76,17 +78,75 @@ plus `_skill`; a skill whose `scripts/` holds only shell scripts needs none of t
    function that uses it; code whose signatures name that library's types goes
    in a module of its own, imported inside the subcommands that need it.
 
+## A user app, service or lib
+
+Every Python package the user's agents made under `system/apps`,
+`system/services` or `system/libs` is now its own uv project: its own
+`pyproject.toml`, `uv.lock` and `.venv`, outside the root workspace, whose
+`members` now names only the built-in packages
+(`.agents/shared/references/running-python.md`, "User packages are standalone
+projects"). Until one is converted it has no lock of its own, its program runs
+it from the root venv, and `system/test_user_packages_are_standalone.py` names
+what is missing. The migration script converts it and keeps it on the versions
+it runs today:
+
+1. **Dry run, and put its output in your report.** For each package the test
+   names:
+
+   ```bash
+   python3 .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/<kind>/<package> --dry-run
+   ```
+
+   It lists what it would change: the sources that become editable path
+   sources, the dev dependency its tests get, its removal from the root
+   `pyproject.toml`, and the program line and documents it rewrites.
+2. **Migrate it**, seeding its lock from the shared lock it ran on before the
+   merge (`<rollback point>` is the commit the workspace was on before this
+   update's merge):
+
+   ```bash
+   git show <rollback point>:uv.lock > /var/tmp/pre-merge.uv.lock
+   python3 .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/<kind>/<package> --shared-lock /var/tmp/pre-merge.uv.lock
+   ```
+
+   It locks the package (holding any package the root pins from git to the
+   root's pin), relocks the root, and links and syncs the package's venv.
+3. **Fix what it could not, if it is mechanical.** The usual one is an import
+   the package never declared, which it got from the shared venv: the program
+   fails to start with `ModuleNotFoundError`, or its suite fails to import.
+   Declare it at the version the shared lock had (`uv add '<package>==<version>'`
+   in the package's directory, the version from `/var/tmp/pre-merge.uv.lock`),
+   and run its checks again. Anything that is not mechanical goes to the lead
+   as a question.
+4. **Its commands, run from elsewhere.** The script rewrites
+   `uv run --no-sync <command>` to
+   `uv run --no-sync --project system/<kind>/<package> <command>` in tracked
+   agent-facing files. Do the same by hand in the user's scheduled jobs
+   (`data/.state/cron.d/*`, which no check scans), then reinstall each one live.
+5. **Check it like any changed package:** its own suite from its directory
+   (`uv run --no-sync pytest`), and an isolated boot for an app or service
+   (`serve_isolated_instance.py up ... --project system/<kind>/<package>`).
+
+If a shared library it uses or the mngr pin moves later, its lock goes stale
+(`uv lock --check` fails in the standalone test); relock it with the same
+script's `relock system/<kind>/<package>`.
+
+Never add a user package to the root `members` to make it run again: that puts
+it back on the shared lock, which is what this change takes it off.
+
 ## A user service
 
-A `system/supervisord.conf.d/<name>.conf` whose `command=` runs `uv run <name>`
-(often behind the `oom_tag_service.py` prefix) becomes:
+A user service is a user package like any other (the section above). Its
+program line ends up in the standalone form, keeping whatever OOM tag and other
+`bash -c` steps it had:
 
 ```ini
-command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "uv sync --all-packages --frozen && exec .venv/bin/<name>"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/services/<package> && uv sync --locked --project system/services/<package> && exec system/services/<package>/.venv/bin/<name>"
 ```
 
-keeping whatever OOM tag and other `bash -c` steps it had. After the apply the
-program picks it up on its next restart.
+The migration script writes it from a `uv run <name>` line as well as a
+`.venv/bin/<name>` one. After the apply the program picks it up on its next
+restart.
 
 ## Commands in the user's docs
 

@@ -317,9 +317,20 @@ is a `question` gate (Step 6). Record which branch applied, with its evidence,
 in your report.
 
 - **Environment gate first**, whenever a manifest or lockfile is in the
-  merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
-  is a precise blocker (an unparseable root lock means no service in the
-  workspace can start); fix it before running anything else. A failure here
+  merged set: `uv lock --check` then `uv sync --all-packages` at the root, and
+  for each user package (`python3 system/scripts/workspace_bare_scripts/user_packages.py list`;
+  each is a standalone project with its own lock) `uv lock --check --project <package>`.
+  A failure here is a precise blocker (an unparseable root lock means no service
+  in the workspace can start); fix it before running anything else. A user
+  package whose lock is stale after the merge (a shared library it uses or the
+  mngr pin moved) is relocked with
+  `python3 .agents/skills/update-self/python/update_self_skill/user_package_migration.py relock <package>`,
+  never by hand-editing its lock. A user package that is not standalone yet (the
+  update that made them standalone; `system/test_user_packages_are_standalone.py`
+  names it) is converted with the same script's `migrate`, after its `--dry-run`,
+  whose output goes in your report, per `references/python-packaging-migration.md`
+  ("A user app, service or lib"). Each converted package then gets this step's
+  suites, and an app or service its isolated boot, from its own venv. A failure here
   or in the suites below on the workspace's own skills, apps, services or docs
   that the update's changelog ties to a changed rule (for example a user
   skill's PEP 723 script that `system/test_entry_point_import_cost.py` cannot

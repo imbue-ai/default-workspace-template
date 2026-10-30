@@ -633,6 +633,11 @@ def main(argv: Sequence[str] | None = None, run: Run = run_subprocess) -> int:
                 + (f"; pinned {', '.join(pinned)} to the root's" if pinned else "")
             )
             return 0
+        if relative in user_packages.user_packages(repo_root) and not (
+            user_packages.standalone_problems(repo_root, relative)
+        ):
+            print(f"{relative}: already a standalone project; nothing to do")
+            return 0
         plan = plan_migration(repo_root, relative, args.shared_lock, run)
         print(describe(plan, repo_root))
         if args.dry_run:

@@ -9,6 +9,7 @@ and its labels, port reconciliation, and the audit patterns.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -813,3 +814,54 @@ def test_shared_options_survive_being_passed_before_the_subcommand() -> None:
         migrate_workspace.DEFAULT_CHECKPOINT_DIR
     )
     assert getattr(neither, "refresh", False) is False
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[5]
+
+
+def _with_conversion_scripts(root: Path) -> Path:
+    """A landed workspace with the two scripts convert-packages runs by their paths."""
+    shutil.copytree(
+        _REPO_ROOT / ".agents/skills/update-self/python/update_self_skill",
+        root / ".agents/skills/update-self/python/update_self_skill",
+        ignore=shutil.ignore_patterns("__pycache__", "*_test.py"),
+    )
+    for name in ("user_packages.py", "venv_links.py", "__init__.py"):
+        target = root / "system/scripts/workspace_bare_scripts" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(_REPO_ROOT / "system/scripts/workspace_bare_scripts" / name, target)
+    return root
+
+
+def test_convert_packages_dry_runs_every_landed_package_that_is_not_standalone(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    root = _with_conversion_scripts(tmp_path / "workspace")
+    (root / "pyproject.toml").write_text(
+        '[tool.uv.workspace]\nmembers = ["system/libs/applib"]\n\n'
+        "[tool.uv.sources]\napplib = { workspace = true }\n"
+    )
+    (root / "uv.lock").write_text("version = 1\n")
+    for relative, text in (
+        ("system/libs/applib", '[project]\nname = "applib"\n'),
+        (
+            "system/apps/landed",
+            '[project]\nname = "landed"\ndependencies = ["applib"]\n',
+        ),
+        ("system/apps/already", '[project]\nname = "already"\n'),
+    ):
+        (root / relative).mkdir(parents=True)
+        (root / relative / "pyproject.toml").write_text(text)
+    (root / "system/apps/already/uv.lock").write_text("version = 1\n")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    monkeypatch.chdir(root)
+    landed_before = (root / "system/apps/landed/pyproject.toml").read_text()
+
+    code = migrate_workspace.main(["convert-packages", "--dry-run"])
+
+    out = capfd.readouterr().out
+    assert code == 0
+    assert "system/apps/already: already a standalone project; nothing to do" in out
+    assert "`applib` becomes an editable path source (../../libs/applib)" in out
+    assert (root / "system/apps/landed/pyproject.toml").read_text() == landed_before
+    assert not (root / "system/apps/landed/uv.lock").exists()

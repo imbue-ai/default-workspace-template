@@ -1857,7 +1857,53 @@ def build_parser() -> argparse.ArgumentParser:
     )
     recreate_parser.set_defaults(func=_cmd_recreate_agents)
 
+    convert_parser = sub.add_parser(
+        "convert-packages",
+        help="Convert every landed user app, service and lib to a standalone uv project.",
+    )
+    convert_parser.add_argument(
+        "--shared-lock",
+        default=None,
+        help="The source workspace's uv.lock, the versions its packages ran on.",
+    )
+    convert_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print each package's changes; make none.",
+    )
+    convert_parser.set_defaults(func=_cmd_convert_packages)
+
     return parser
+
+
+# The landed user packages are converted by update-self's migration script, the one
+# writer of the standalone layout for packages that predate it; both run by their paths.
+USER_PACKAGES_SCRIPT = "system/scripts/workspace_bare_scripts/user_packages.py"
+PACKAGE_MIGRATION_SCRIPT = (
+    ".agents/skills/update-self/python/update_self_skill/user_package_migration.py"
+)
+
+
+def _cmd_convert_packages(args: argparse.Namespace) -> int:
+    repo_root = Path.cwd()
+    listed = subprocess.run(
+        ["python3", USER_PACKAGES_SCRIPT, "list"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+    is_any_failed = False
+    for package in listed:
+        argv = ["python3", PACKAGE_MIGRATION_SCRIPT, "migrate", package]
+        if args.dry_run:
+            argv.append("--dry-run")
+        if args.shared_lock is not None:
+            argv.extend(["--shared-lock", args.shared_lock])
+        is_any_failed |= (
+            subprocess.run(argv, cwd=repo_root, check=False).returncode != 0
+        )
+    return 1 if is_any_failed else 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:
