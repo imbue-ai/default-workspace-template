@@ -1,9 +1,11 @@
 import asyncio
+import concurrent.futures
 import json
 import os
 import queue
 import signal
 import subprocess
+import threading
 import time
 from collections import deque
 from collections.abc import Callable, Sequence
@@ -1891,6 +1893,37 @@ def test_message_agent_logs_a_send_that_was_not_delivered(
     [warning] = warnings
     assert reason in warning
     assert "riley" in warning
+
+
+def test_a_wake_still_waiting_on_its_send_leaves_the_default_executor_free(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A send waits as long as the chat's harness takes to accept the text, so a wake must not hold a
+    thread of the default executor, which the browser's own start and stop work runs on."""
+    started = threading.Event()
+    released = threading.Event()
+
+    def waiting_send(chat_id: str, text: str, *, cwd: Path) -> int:
+        started.set()
+        released.wait(timeout=10)
+        return message_chat.EXIT_DELIVERED
+
+    monkeypatch.setattr(message_chat, "send", waiting_send)
+
+    async def wake_then_use_the_default_executor() -> str:
+        asyncio.get_running_loop().set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=1))
+        wake = asyncio.create_task(
+            bsession.LiveBrowser(browser_id="b1")._message_agent("agent-1", "riley", "the browser is yours")
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while not started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert started.is_set()
+            return await asyncio.wait_for(asyncio.to_thread(lambda: "ran"), timeout=2)
+        finally:
+            released.set()
+            await wake
+
+    assert asyncio.run(wake_then_use_the_default_executor()) == "ran"
 
 
 # the one browser: ensure, the window sweep, and the cap on restore

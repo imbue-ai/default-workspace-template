@@ -46,6 +46,8 @@ Cloud / litellm proxy (``ANTHROPIC_BASE_URL``) path is intentionally unsupported
 """
 
 import asyncio
+import concurrent.futures
+import functools
 import json
 import os
 import queue
@@ -392,6 +394,11 @@ def _repo_root() -> Path:
         if (candidate / "system" / "scripts").is_dir() and (candidate / "system" / "libs").is_dir():
             return candidate
     return Path.cwd()
+
+
+# The wakes' own threads: a send has no read timeout, so a slow one must not hold a thread of the
+# default executor the browser's own start and stop work runs on.
+_WAKE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(thread_name_prefix="browser-wake")
 
 # Per-browser persistent Chromium profiles (cookies/logins/history) live here, on the
 # workspace volume under $MNGR_HOST_DIR -- Tier A durability: they survive stop/start
@@ -1400,8 +1407,11 @@ class LiveBrowser(MutableModel):
         resumes its turn exactly as before. The chat is addressed by its chat id, never by an
         agent's name."""
         try:
-            returncode = await asyncio.to_thread(
-                message_chat.send, agent_id, message_chat.wrap_browser_fleet_nudge(text), cwd=_repo_root()
+            returncode = await asyncio.get_running_loop().run_in_executor(
+                _WAKE_EXECUTOR,
+                functools.partial(
+                    message_chat.send, agent_id, message_chat.wrap_browser_fleet_nudge(text), cwd=_repo_root()
+                ),
             )
         except OSError as e:
             logger.warning(
