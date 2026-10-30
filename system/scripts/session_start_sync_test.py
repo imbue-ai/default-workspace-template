@@ -31,12 +31,22 @@ def _locked_project(root: Path) -> str:
     return (root / "uv.lock").read_text()
 
 
+def _cache_dir(root: Path) -> Path:
+    return root.parent / "cache" / "uv"
+
+
 def _run_hook(root: Path) -> subprocess.CompletedProcess[str]:
-    # Offline: the probe project has no dependencies, so nothing here needs an index.
+    # Offline: the probe project has no dependencies, so nothing here needs an index. The
+    # cache is the test's own, so the venv the hook links lands beside it, not in the real one.
     return subprocess.run(
         ["bash", str(_HOOK)],
         cwd=root,
-        env={**os.environ, "UV_OFFLINE": "1", "VIRTUAL_ENV": ""},
+        env={
+            **os.environ,
+            "UV_OFFLINE": "1",
+            "VIRTUAL_ENV": "",
+            "UV_CACHE_DIR": str(_cache_dir(root)),
+        },
         capture_output=True,
         text=True,
         timeout=120,
@@ -52,7 +62,7 @@ def test_an_in_sync_lock_syncs_silently(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout == ""
     assert (tmp_path / "uv.lock").read_text() == lock_before
-    assert (tmp_path / ".venv").is_dir()
+    _assert_linked_venv(tmp_path)
 
 
 def test_a_drifted_lock_is_left_alone_and_reported_once(tmp_path: Path) -> None:
@@ -65,4 +75,14 @@ def test_a_drifted_lock_is_left_alone_and_reported_once(tmp_path: Path) -> None:
     assert "uv.lock is out of date with pyproject.toml" in result.stdout
     assert len(result.stdout.splitlines()) == 1
     assert (tmp_path / "uv.lock").read_text() == lock_before
-    assert (tmp_path / ".venv").is_dir()
+    _assert_linked_venv(tmp_path)
+
+
+def _assert_linked_venv(root: Path) -> None:
+    """The synced venv is a link to a target beside the uv cache."""
+    venv = root / ".venv"
+    assert venv.is_symlink() and venv.is_dir()
+    assert (
+        Path(os.path.realpath(venv)).parent
+        == Path(os.path.realpath(_cache_dir(root).parent)) / "venvs"
+    )
