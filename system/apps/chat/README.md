@@ -369,12 +369,19 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
-A message is sent again automatically only where the chat app knows it was not
-processed, and never twice. A send mngr reports
-`agent_not_found` (the agent moved) or `not_submitted` (Claude never took it, and
-mngr cleared it from the input box) is sent again once, by discovery or at the
-same place; one mngr could not confirm (`submission_unconfirmed`) is never sent
-again by the chat app, and the page says it may already have arrived. Since mngr
+A send mngr reports `agent_not_found` (the agent moved) or `not_submitted`
+(Claude never took it, and mngr cleared it from the input box) is sent again
+once, by discovery or at the same place. One mngr could not confirm
+(`submission_unconfirmed`) may or may not have arrived; not sending one that
+never arrived is worse than sending it twice, so it is sent again once at the
+same place, and the route answers a send that then lands
+`{"status": "resent"}`. The page shows "Sent again" under the message, with a
+"?" saying the agent may see it twice, and folds a second copy that reaches the
+transcript into that line (`frontend/src/models/ResentSends.ts`). A send still
+unconfirmed the second time is not sent a third: its failure gets the
+"Couldn't confirm your message arrived" notice. Antigravity's flush, which sends
+again a block it did not see land on its own later pass, asks for no such
+repeat (`is_resent_when_unconfirmed=False`). Since mngr
 counts a Claude message as delivered once Claude shows it, which during its
 startup hooks is before it is written down, the chat app keeps each delivered
 Claude send until the agent's process ends: when the process exits (lifecycle

@@ -36,6 +36,7 @@ import {
 import type { ProviderAccount } from "../models/Providers";
 import { beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
+import { noteResentSend } from "../models/ResentSends";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
 import {
   accountForFirstSend,
@@ -125,6 +126,19 @@ const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
 function dropOutgoingNoTurnWillRetire(chatId: string, outgoingId: string, status: SendStatus | null): void {
   if (status === "compaction_requested" || status === "withdrawn") {
     dropOutgoing(chatId, outgoingId);
+  }
+}
+
+/** Have the message's row say the chat app sent it a second time, when it did: mngr could not confirm the
+ *  first, which may have reached the agent too. */
+function noteIfResent(
+  chatId: string,
+  sentText: string,
+  priorTurnIds: ReadonlySet<string>,
+  status: SendStatus | null,
+): void {
+  if (status === "resent") {
+    noteResentSend(chatId, sentText, priorTurnIds);
   }
 }
 
@@ -828,7 +842,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             }
             if (!awaiting.is_seeded) {
               await launchChat(chatId, accountId);
-              await sendMessage(chatId, finalText, messageId);
+              priorTurnIds = sentUserTurnIds(chatId);
+              noteIfResent(chatId, finalText, priorTurnIds, await sendMessage(chatId, finalText, messageId));
               refocusAfterSend();
               return;
             }
@@ -861,6 +876,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // agent the chat is switching to), so its "Sending…" bubble is removed by the arriving
           // transcript turn, queued snapshot, or held-send snapshot (see OutgoingMessages).
           dropOutgoingNoTurnWillRetire(chatId, outgoingId, status);
+          noteIfResent(chatId, finalText, priorTurnIds, status);
         } catch (err) {
           // The backend confirms delivery before resolving, so a rejection means the message was
           // NOT accepted. A /compact the server declined to run gets the declined-command notice
@@ -1246,6 +1262,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           priorTurnIds = sentUserTurnIds(recovery.chatId);
           const status = await sendMessage(recovery.chatId, recovery.sentText, messageId);
           dropOutgoingNoTurnWillRetire(recovery.chatId, outgoingId, status);
+          noteIfResent(recovery.chatId, recovery.sentText, priorTurnIds, status);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
           stopWatchingUnconfirmedTurn(recovery);

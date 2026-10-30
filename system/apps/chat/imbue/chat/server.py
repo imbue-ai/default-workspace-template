@@ -66,7 +66,9 @@ from imbue.chat.activity_state import is_lifecycle_dead
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
 from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_tmux_session_name
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_discovery import start_agent
@@ -596,6 +598,9 @@ COMPACT_WHILE_STOPPED_DETAIL: Final[str] = "The agent isn't running. Send it a m
 COMPACTION_REQUESTED_SEND_STATUS: Final[str] = "compaction_requested"
 # The message route's status for a send Stop took back while its agent came up: nothing reached the agent.
 WITHDRAWN_SEND_STATUS: Final[str] = "withdrawn"
+# The message route's status for a send delivered by a second send, mngr having been unable to confirm the
+# first, which may have landed too.
+RESENT_SEND_STATUS: Final[str] = "resent"
 # The refusals that are the chat's own decision not to send, answered 409 rather than as a failure.
 _DECLINED_SEND_FAILURE_KINDS: Final[frozenset[str]] = frozenset(
     {NOTHING_TO_COMPACT_SEND_FAILURE_KIND, COMPACT_UNAVAILABLE_SEND_FAILURE_KIND}
@@ -711,9 +716,9 @@ def _deliver_message(state: ChatAppState, agent_info: AgentInfo, text: str, mess
         # lifecycle that is true rather than one that says the agent they just messaged is dead.
         # Inside the connecting scope, so the chat never reads as stopped and not connecting,
         # which would let the stopped-chat release drop the watcher of the chat it revived.
-        if outcome is SendOutcome.OK:
+        if outcome.is_delivered:
             agent_manager.note_agent_alive(agent_info.id)
-    if outcome is SendOutcome.OK and compact_handling is ComposerCompactHandling.FORWARDED_TO_HARNESS:
+    if outcome.is_delivered and compact_handling is ComposerCompactHandling.FORWARDED_TO_HARNESS:
         agent_manager.note_compaction_requested(agent_info.id, CompactionCause.MANUAL, requested_at)
     return outcome
 
@@ -771,6 +776,10 @@ class _SendAccepted(FrozenModel):
     is_withdrawn: bool = Field(
         default=False, description="Whether Stop took the send back while its agent came up, so nothing was delivered"
     )
+    is_resent: bool = Field(
+        default=False,
+        description="Whether it was delivered by a second send, mngr having been unable to confirm the first",
+    )
 
 
 def _consider_naming_chat(state: ChatAppState, chat_id: ChatId, message: str) -> None:
@@ -824,6 +833,7 @@ def _send_to_chat(
         chat_id, message_id, send_message_request.message, _held_send_origin(send_message_request)
     )
     is_compaction_requested = False
+    is_resent = False
     if held_phase is None:
         # Resolved after the hold said the chat is not converging: a handoff that finished between
         # the caller's lookup and the hold would leave that lookup naming the retiring agent, which
@@ -879,12 +889,13 @@ def _send_to_chat(
             _composer_compact_handling_of(agent_info, send_message_request.message)
             is ComposerCompactHandling.REQUESTED_FROM_MNGR
         )
+        is_resent = outcome is SendOutcome.RESENT
         _report_unreported_runner_ends(state, chat_id)
     record_client_message_activity(state.shell, chat_id, send_message_request, state.is_secondary)
     # Recorded after the delivery, once the revived process (if any) is up and its pid can be
     # found.
     agent_manager.record_message_sent(chat_id)
-    return _SendAccepted(held_phase=held_phase, is_compaction_requested=is_compaction_requested)
+    return _SendAccepted(held_phase=held_phase, is_compaction_requested=is_compaction_requested, is_resent=is_resent)
 
 
 def _report_unreported_runner_ends(state: ChatAppState, chat_id: ChatId) -> None:
@@ -979,6 +990,8 @@ def _send_message_endpoint(chat_id: str) -> Response:
         status = WITHDRAWN_SEND_STATUS
     elif accepted.is_compaction_requested:
         status = COMPACTION_REQUESTED_SEND_STATUS
+    elif accepted.is_resent:
+        status = RESENT_SEND_STATUS
     else:
         status = "ok"
     return model_response(SendMessageResponse(status=status))
@@ -1110,7 +1123,7 @@ def _set_model_choice_endpoint(chat_id: str) -> Response:
     result = resolver.switch(
         identity,
         frozenset(req.axes),
-        lambda line: agent_manager.send_message_to_agent(AgentId(agent_info.id), line) is None,
+        lambda line: isinstance(agent_manager.send_message_to_agent(AgentId(agent_info.id), line), SendDelivery),
     )
     if not result.ok:
         detail = result.detail or f"Failed to switch model for agent '{agent_info.name}'"
@@ -1406,11 +1419,13 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
         return error_response(str(e), 500)
 
     if block:
-        resend_failure = agent_manager.send_message_kept_until_recorded(agent_info.id, agent_info.harness, block)
-        if resend_failure is not None:
+        resend = agent_manager.send_message_kept_until_recorded(agent_info.id, agent_info.harness, block)
+        if isinstance(resend, SendFailure):
             # The harness said why; passing that on rather than a generic sentence is the whole
             # point of carrying it this far.
-            return model_response(SendFailureResponse(detail=resend_failure.reason, kind=resend_failure.kind), 500)
+            return model_response(SendFailureResponse(detail=resend.reason, kind=resend.kind), 500)
+        if resend is SendDelivery.RESENT:
+            return model_response(SendMessageResponse(status=RESENT_SEND_STATUS))
 
     return model_response(SendMessageResponse(status="ok"))
 
@@ -1459,7 +1474,9 @@ def _shoulder_tap_atomic_endpoint(chat_id: str) -> Response:
         press_chord=lambda: agent_manager.press_key_chord_on_agent(
             AgentId(agent_info.id), get_harness_spec(agent_info.harness).cancel_chord
         ),
-        send_recovery=lambda text: agent_manager.send_message_to_agent(AgentId(agent_info.id), text) is None,
+        send_recovery=lambda text: isinstance(
+            agent_manager.send_message_to_agent(AgentId(agent_info.id), text), SendDelivery
+        ),
     )
     if outcome.error_detail is not None:
         return error_response(outcome.error_detail, outcome.error_status_code)
@@ -1532,7 +1549,7 @@ def _resend_background_task_report(agent_info: AgentInfo, report: str) -> bool:
     except SendFailedError as send_failure:
         logger.warning("Could not re-send a background-task report to {}: {}", agent_info.name, send_failure.detail)
         return False
-    if outcome is not SendOutcome.OK:
+    if not outcome.is_delivered:
         logger.warning("Could not re-send a background-task report to {}: {}", agent_info.name, outcome)
         return False
     return True

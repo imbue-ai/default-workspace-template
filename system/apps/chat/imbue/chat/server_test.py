@@ -9,6 +9,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -43,6 +44,7 @@ from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
 from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_manager import AgentManager
@@ -129,9 +131,11 @@ from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -957,6 +961,39 @@ def _fake_watcher(
     )
 
 
+class _ResendChoiceRecordingMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger that also records whether each send may be sent again when unconfirmed."""
+
+    resend_choices: list[bool] = []
+
+    def send_to_agent(
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unconfirmed: bool = True,
+    ) -> SendDelivery | SendFailure:
+        self.resend_choices.append(is_resent_when_unconfirmed)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unconfirmed)
+
+
+def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass() -> None:
+    """The flush retries a block it did not see land only while no turn is open, so mngr's send is not repeated."""
+    messenger = _ResendChoiceRecordingMngrMessenger()
+    state = build_test_state(agent_manager=AgentManager.build(WebSocketBroadcaster(), messenger=messenger))
+    flush_sends: list[Callable[[str], bool]] = []
+    fake_watcher = _fake_watcher(lambda: [], lambda: None)
+    fake_watcher.set_flush_hooks = lambda send, _is_alive: flush_sends.append(send)
+    try:
+        with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
+            state.get_or_create_watcher(_agent_info(harness=HarnessType.ANTIGRAVITY))
+        (flush_send,) = flush_sends
+        assert flush_send("held block") is True
+        assert messenger.resend_choices == [False]
+    finally:
+        state.shutdown()
+
+
 def test_a_watcher_released_while_it_starts_is_stopped_once_after_its_start() -> None:
     state = build_test_state()
     seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
@@ -1078,6 +1115,30 @@ def test_send_message_success() -> None:
     # The endpoint routes through AgentManager.send_message_to_agent, which addresses
     # the agent by id (the live cache supplies the known location as the 3rd arg).
     assert messenger.sent == [(agent_id, "hello")]
+
+
+def test_a_send_delivered_by_a_second_send_answers_resent() -> None:
+    """mngr could not confirm the first send and the chat sent it again, so the page is told, to say so."""
+    agent_id = "agent-00000000000000000000000000000001"
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="test-agent",
+        state="RUNNING",
+        agent_state_dir=Path("/tmp/test"),
+        claude_config_dir=Path("/tmp/.claude"),
+    )
+    messenger = RecordingMngrMessenger(delivery=SendDelivery.RESENT)
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "resent"}
+    assert messenger.sent == [(agent_id, "hello")]
+    # Delivered all the same: kept to be sent again should the agent's process exit before recording it.
+    assert [send.text for send in manager._unrecorded_sends_by_agent.get(agent_id, [])] == ["hello"]
 
 
 def test_a_send_to_a_chat_launched_at_sign_in_carries_the_seeded_conversation_once(
@@ -1420,7 +1481,7 @@ def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarness
         harness=agent_info.harness,
         state_dir=agent_info.agent_state_dir,
         model_state_path=agent_info.agent_state_dir / "model_state.json",
-        send_to_harness=lambda text: True,
+        send_to_harness=lambda text: SendOutcome.OK,
         notify_agents_changed=lambda: None,
         is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,
@@ -2570,7 +2631,7 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
         patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
-        patch.object(AgentManager, "send_message_to_agent", return_value=None) as mock_send,
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.DELIVERED) as mock_send,
     ):
         response = client.post("/api/chats/agent-123/flush-queue")
 
@@ -2581,6 +2642,20 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
     assert mock_send.call_count == 1
     assert mock_send.call_args.args[1] == "first message\nsecond message"
     assert fake_watcher.clear_calls == [True]
+
+
+def test_flush_queue_answers_resent_for_a_block_delivered_by_a_second_send(client: FlaskClient) -> None:
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=_agent_info()),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("queued text")),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.RESENT),
+    ):
+        response = client.post("/api/chats/agent-123/flush-queue")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "resent"
 
 
 def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> None:
@@ -2653,7 +2728,7 @@ def test_a_restart_route_lets_go_of_the_sends_kept_for_resending(app: Flask, cli
         patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("queued text")),
         patch("imbue.chat.server.run_local_command_modern_version", side_effect=restart),
         patch.object(AgentManager, "reset_activity_state"),
-        patch.object(AgentManager, "send_message_to_agent", return_value=None),
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.DELIVERED),
     ):
         response = client.post(f"/api/chats/{agent_info.id}/{route}")
 

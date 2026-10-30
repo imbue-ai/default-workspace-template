@@ -6,6 +6,7 @@ import os
 from collections.abc import Callable
 from collections.abc import Sequence
 from datetime import datetime
+from enum import auto
 from pathlib import Path
 from typing import Final
 
@@ -16,6 +17,7 @@ from imbue.chat.harnesses.harness_type import DEFAULT_HARNESS
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.harness_type import parse_harness
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
+from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.pure import pure
 from imbue.mngr.api.find import AgentMatch
@@ -282,17 +284,14 @@ class SendFailedError(Exception):
         super().__init__(detail)
 
 
-def delivered_or_raise(failure: SendFailure | None) -> bool:
-    """Turn a send's reason into an exception, or report delivery.
+class SendDelivery(UpperCaseStrEnum):
+    """How a send that reached its agent got there."""
 
-    ``SessionDeps.send_to_harness`` is typed as returning a bool and is shared with paths that
-    have no way to show a reason, so the chat path raises rather than widening that contract.
-    The session's send already treats an exception as an expected exit (it resolves its
-    in-flight record in a ``finally`` and lets the request fail with the draft kept).
-    """
-    if failure is not None:
-        raise SendFailedError(failure.reason, failure.kind)
-    return True
+    # mngr confirmed it, or settled it from the agent's screen.
+    DELIVERED = auto()
+    # mngr could not confirm the first send, so it was sent once more, and that one landed. The
+    # first may have landed too, so the agent may hold the message twice.
+    RESENT = auto()
 
 
 class SendFailure(FrozenModel):
@@ -300,6 +299,18 @@ class SendFailure(FrozenModel):
 
     reason: str
     kind: str
+
+
+def delivered_or_raise(result: SendDelivery | SendFailure) -> SendDelivery:
+    """Turn a send's reason into an exception, or report how it was delivered.
+
+    The chat path raises rather than returning the reason: the session's send already treats an
+    exception as an expected exit (it resolves its in-flight record in a ``finally`` and lets the
+    request fail with the draft kept), and the endpoint turns it into the failure the composer shows.
+    """
+    if isinstance(result, SendFailure):
+        raise SendFailedError(result.reason, result.kind)
+    return result
 
 
 def _first_failure(result: MessageResult) -> SendFailure:
@@ -355,16 +366,44 @@ def _is_location_miss(result: MessageResult) -> bool:
 
 
 @pure
+def _is_every_failure_of_kind(result: MessageResult, kind: SendFailureKind) -> bool:
+    """Whether the send failed for every agent it reached, each time for ``kind``, and blocked none."""
+    return (
+        not result.blocked_agents
+        and len(result.failures) > 0
+        and all(failure.kind == kind for failure in result.failures)
+    )
+
+
+@pure
 def _is_untaken(result: MessageResult) -> bool:
     """Whether every agent the send reached left the message untaken, and cleared it from its input box.
 
     Nothing was delivered and nothing is left to append to, so the message may be sent again at once.
     """
-    return (
-        not result.blocked_agents
-        and len(result.failures) > 0
-        and all(failure.kind == SendFailureKind.NOT_SUBMITTED for failure in result.failures)
-    )
+    return _is_every_failure_of_kind(result, SendFailureKind.NOT_SUBMITTED)
+
+
+@pure
+def _is_unconfirmed(result: MessageResult) -> bool:
+    """Whether no agent the send reached confirmed it, and none showed whether it took it.
+
+    The message may have arrived or not. Not sending one that never arrived is worse than sending
+    one twice, so such a send is sent once more.
+    """
+    return _is_every_failure_of_kind(result, SendFailureKind.SUBMISSION_UNCONFIRMED)
+
+
+class _SendAttempt(FrozenModel):
+    """What one send through ``MngrMessenger`` came to, its repeats included."""
+
+    result: MessageResult
+    is_resent_after_unconfirmed: bool
+
+
+def _delivery_of(attempt: _SendAttempt) -> SendDelivery:
+    """How a send that reached its agent got there."""
+    return SendDelivery.RESENT if attempt.is_resent_after_unconfirmed else SendDelivery.DELIVERED
 
 
 def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) -> MessageResult:
@@ -432,49 +471,63 @@ class MngrMessenger(FrozenModel):
     compact: CompactFn = _compact
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unconfirmed: bool = True,
+    ) -> SendDelivery | SendFailure:
         """Send to the agent with ``agent_id`` at ``known_locations``, else discovery.
 
-        Returns None when the message was delivered, or the reason it was not. The reason is
-        the harness's own words -- "the agent is in shell mode with an unsubmitted command",
-        say -- and it exists to be shown to the user, who can usually act on it. Reducing it to
-        a bool here would leave the UI with nothing to report but the fact of failure.
+        Returns how the message was delivered, or the reason it was not. The reason is the
+        harness's own words -- "the agent is in shell mode with an unsubmitted command", say --
+        and it exists to be shown to the user, who can usually act on it. Reducing it to a bool
+        here would leave the UI with nothing to report but the fact of failure.
 
         ``known_locations`` (the caller's already-resolved location, from the live
         observe cache) is messaged directly -- no discovery. With no known location, or
         when that send finds the agent is not there (the location went stale: destroyed,
         recreated, or moved hosts), it falls back to a full mngr discovery. Any other
-        failure at the known location is returned as is, never sent again (see
-        ``_is_location_miss``), except a message the agent never took and cleared from its input
-        box, which is sent once more wherever it was sent (``_is_untaken``). The id is globally
-        unique, so discovery resolves to exactly the intended agent, never fanning out across
-        same-named agents on other hosts. STOPPED agents are auto-started (`is_start_desired=True`).
+        failure at the known location is returned as is (see ``_is_location_miss``), with two
+        exceptions, each sent once more wherever it was sent: a message the agent never took and
+        cleared from its input box (``_is_untaken``), and, unless ``is_resent_when_unconfirmed``
+        is off, one mngr could not confirm (``_is_unconfirmed``), which is ``SendDelivery.RESENT``
+        when that second send lands. A second unconfirmed send is returned as the failure, so a
+        message is never sent a third time. The id is globally unique, so discovery resolves to
+        exactly the intended agent, never fanning out across same-named agents on other hosts.
+        STOPPED agents are auto-started (`is_start_desired=True`).
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
             if known_locations:
-                result = self._send_once_more_if_untaken(known_locations, message, mngr_ctx)
-                if result.successful_agents:
-                    return None
-                if not _is_location_miss(result):
-                    return _first_failure(result)
+                attempt = self._send_with_repeats(known_locations, message, mngr_ctx, is_resent_when_unconfirmed)
+                if attempt.result.successful_agents:
+                    return _delivery_of(attempt)
+                if attempt.is_resent_after_unconfirmed or not _is_location_miss(attempt.result):
+                    return _first_failure(attempt.result)
             matches = self.discover(agent_id, mngr_ctx)
-            result = self._send_once_more_if_untaken(matches, message, mngr_ctx)
-            if result.successful_agents:
-                return None
-            return _first_failure(result)
+            attempt = self._send_with_repeats(matches, message, mngr_ctx, is_resent_when_unconfirmed)
+            if attempt.result.successful_agents:
+                return _delivery_of(attempt)
+            return _first_failure(attempt.result)
         finally:
             cg.__exit__(None, None, None)
 
-    def _send_once_more_if_untaken(
-        self, matches: Sequence[AgentMatch], message: str, mngr_ctx: MngrContext
-    ) -> MessageResult:
-        """Send to ``matches``, and once more when the agent never took the message (``_is_untaken``)."""
+    def _send_with_repeats(
+        self,
+        matches: Sequence[AgentMatch],
+        message: str,
+        mngr_ctx: MngrContext,
+        is_resent_when_unconfirmed: bool,
+    ) -> _SendAttempt:
+        """Send to ``matches``, once more when the agent never took the message (``_is_untaken``), and once more
+        when mngr could not confirm it (``_is_unconfirmed``, unless ``is_resent_when_unconfirmed`` is off)."""
         result = self.send(matches, message, mngr_ctx)
         if _is_untaken(result):
-            return self.send(matches, message, mngr_ctx)
-        return result
+            result = self.send(matches, message, mngr_ctx)
+        if is_resent_when_unconfirmed and _is_unconfirmed(result):
+            return _SendAttempt(result=self.send(matches, message, mngr_ctx), is_resent_after_unconfirmed=True)
+        return _SendAttempt(result=result, is_resent_after_unconfirmed=False)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.

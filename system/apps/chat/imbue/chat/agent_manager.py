@@ -14,6 +14,7 @@ from typing import Any
 from typing import Final
 from typing import Self
 from typing import TypeVar
+from typing import assert_never
 from uuid import uuid4
 
 from chat_background_tasks.markers import TaskSource
@@ -42,6 +43,7 @@ from imbue.chat.activity_state import is_working_activity_state
 from imbue.chat.activity_state import parse_iso_timestamp_to_epoch
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
@@ -2046,20 +2048,29 @@ class AgentManager:
                 _loguru_logger.warning("Could not restart {} after re-auth: {}", name, result.stderr.strip()[:300])
         return restarted
 
-    def _send_to_harness(self, agent_id: str, harness: HarnessType, text: str) -> bool:
+    def _send_to_harness(self, agent_id: str, harness: HarnessType, text: str) -> SendOutcome:
         """A file session's delivery (``send_message_kept_until_recorded``). Raises ``SendFailedError`` when refused."""
-        return delivered_or_raise(self.send_message_kept_until_recorded(agent_id, harness, text))
+        delivery = delivered_or_raise(self.send_message_kept_until_recorded(agent_id, harness, text))
+        match delivery:
+            case SendDelivery.DELIVERED:
+                return SendOutcome.OK
+            case SendDelivery.RESENT:
+                return SendOutcome.RESENT
+            case _ as unreachable:
+                assert_never(unreachable)
 
-    def send_message_kept_until_recorded(self, agent_id: str, harness: HarnessType, text: str) -> SendFailure | None:
+    def send_message_kept_until_recorded(
+        self, agent_id: str, harness: HarnessType, text: str
+    ) -> SendDelivery | SendFailure:
         """``send_message_to_agent``; for a harness that can lose a message with its process, the delivered message
         is kept until then, so it can be sent again should the process exit before the transcript holds it."""
         if not get_harness_spec(harness).resends_sends_lost_with_process:
             return self.send_message_to_agent(AgentId(agent_id), text)
         sent_after = time.time() - _TRANSCRIPT_CLOCK_SLACK_SECONDS
-        failure = self.send_message_to_agent(AgentId(agent_id), text)
-        if failure is None:
+        result = self.send_message_to_agent(AgentId(agent_id), text)
+        if isinstance(result, SendDelivery):
             self._keep_unrecorded_send(agent_id, text, sent_after)
-        return failure
+        return result
 
     def _keep_unrecorded_send(self, agent_id: str, text: str, sent_after: float) -> None:
         now = time.monotonic()
@@ -2166,7 +2177,7 @@ class AgentManager:
         finally:
             with self._lock:
                 self._lost_sends_being_resent.discard(resent)
-        if outcome is not SendOutcome.OK:
+        if not outcome.is_delivered:
             _loguru_logger.warning(
                 "Resending {}'s message lost when its process exited did not land ({})", agent_info.name, outcome.value
             )
@@ -2695,7 +2706,7 @@ class AgentManager:
         result = resolver.switch(
             identity,
             frozenset(ModelAxis),
-            lambda line: self.send_message_to_agent(AgentId(agent_info.id), line) is None,
+            lambda line: isinstance(self.send_message_to_agent(AgentId(agent_info.id), line), SendDelivery),
         )
         if not result.ok:
             raise ModelApplyError(result.detail or f"Failed to set the model for agent '{agent_info.name}'")
@@ -2944,7 +2955,7 @@ class AgentManager:
         is_delivered = False
         try:
             outcome = deliver(text)
-            is_delivered = outcome is SendOutcome.OK
+            is_delivered = outcome.is_delivered
         finally:
             if is_seed_carried:
                 self._end_seed_carry(chat_id, is_delivered=is_delivered)
@@ -3370,16 +3381,22 @@ class AgentManager:
             self._broadcast_chats_updated()
         return tuple(withdrawable.values())
 
-    def send_message_to_agent(self, agent_id: AgentId, message: str) -> SendFailure | None:
+    def send_message_to_agent(
+        self, agent_id: AgentId, message: str, is_resent_when_unconfirmed: bool = True
+    ) -> SendDelivery | SendFailure:
         """Send a message to the agent with ``agent_id``, using the live location cache.
 
         The single entry point for messaging an agent: it reads this manager's
         event-fed location for the id and hands it to the `MngrMessenger`, so the
         message skips a fresh mngr discovery whenever the location is already known.
-        Returns None when the message was delivered, or the failure -- the harness's own words
-        plus mngr's classification of them, which is what lets the chat decide what to offer.
+        Returns how the message was delivered (``SendDelivery.RESENT`` for one sent again because
+        mngr could not confirm it, unless ``is_resent_when_unconfirmed`` is off), or the failure --
+        the harness's own words plus mngr's classification of them, which is what lets the chat
+        decide what to offer.
         """
-        return self._messenger.send_to_agent(agent_id, message, self.get_agent_matches_by_id(str(agent_id)))
+        return self._messenger.send_to_agent(
+            agent_id, message, self.get_agent_matches_by_id(str(agent_id)), is_resent_when_unconfirmed
+        )
 
     def press_key_chord_on_agent(self, agent_id: AgentId, key: str) -> bool:
         """Press a tmux key token (e.g. ``"M-q"``) into the agent's pane, using the live cache.

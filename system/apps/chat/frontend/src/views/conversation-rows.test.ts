@@ -305,6 +305,36 @@ describe("buildConversationRows", () => {
   });
 });
 
+describe("a message the chat app sent again", () => {
+  function hasClass(node: unknown, className: string): boolean {
+    if (node == null || typeof node !== "object") return false;
+    if (Array.isArray(node)) return node.some((child) => hasClass(child, className));
+    const vnode = node as { attrs?: { className?: unknown; class?: unknown }; children?: unknown };
+    const classes = `${String(vnode.attrs?.className ?? "")} ${String(vnode.attrs?.class ?? "")}`.split(/\s+/);
+    return classes.includes(className) || hasClass(vnode.children, className);
+  }
+
+  it("carries the sent-again line on its first copy and shows no second bubble for the second", () => {
+    const events: TranscriptEvent[] = [
+      userMsg("t1", "did you get this?", "copy-1"),
+      assistantText("t2", "Yes.", "end_turn"),
+      userMsg("t3", "did you get this?", "copy-2"),
+      assistantText("t4", "Yes, again.", "end_turn"),
+    ];
+    const rows = buildConversationRows("chat-resent", events, true, null, {
+      notedTurnIds: new Set(["copy-1"]),
+      foldedTurnIds: new Set(["copy-2"]),
+    });
+    expect(rows.map((row) => row.key)).toEqual(["copy-1", "a-t2", "a-t4"]);
+    expect(hasClass(rows[0].render(), "message-resent-note")).toBe(true);
+  });
+
+  it("draws no line without a resent send", () => {
+    const rows = buildConversationRows("chat-resent", [userMsg("t1", "hello", "only")], true);
+    expect(hasClass(rows[0].render(), "message-resent-note")).toBe(false);
+  });
+});
+
 describe("a compaction's chips in the rows", () => {
   function compacted(ts: string, id: string, cause: CompactionCause | null): UserMessageEvent {
     return {

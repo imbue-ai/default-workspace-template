@@ -728,8 +728,18 @@ export function sentUserTurnIds(chatId: string): ReadonlySet<string> {
  * send from another window) is not this one.
  */
 export function hasUserTurnLandedSince(chatId: string, text: string, priorTurnIds: ReadonlySet<string>): boolean {
+  return userTurnIdsLandedSince(getEventsForChat(chatId), text, priorTurnIds).length > 0;
+}
+
+/** The ids of the user turns among ``events`` holding exactly ``text`` that are not among ``priorTurnIds`` and
+ *  came after all of them, oldest first (see ``hasUserTurnLandedSince``). */
+export function userTurnIdsLandedSince(
+  events: readonly TranscriptEvent[],
+  text: string,
+  priorTurnIds: ReadonlySet<string>,
+): string[] {
   const wanted = text.trim();
-  const events = getEventsForChat(chatId);
+  const landed: string[] = [];
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
     if (!isSentUserTurn(event)) {
@@ -737,13 +747,13 @@ export function hasUserTurnLandedSince(chatId: string, text: string, priorTurnId
     }
     // Everything before a turn that was already there was already there too.
     if (priorTurnIds.has(event.event_id)) {
-      return false;
+      break;
     }
     if (event.content.trim() === wanted) {
-      return true;
+      landed.unshift(event.event_id);
     }
   }
-  return false;
+  return landed;
 }
 
 // Per chat, the agent's latest work (a reply, a tool call or its result) the live stream brought this
@@ -1112,10 +1122,11 @@ export function announceMessageSent(chatId: string): void {
   }
 }
 
-/** How the message route took a send: delivered ("ok"), held while the chat switches agents ("held"),
+/** How the message route took a send: delivered ("ok"), delivered by a second send because the first could
+ *  not be confirmed and may have landed too ("resent"), held while the chat switches agents ("held"),
  *  run as a compaction instead of being sent ("compaction_requested", a `/compact` no transcript
  *  turn will echo), or taken back by Stop while the agent came up ("withdrawn", nothing delivered). */
-export type SendStatus = "ok" | "held" | "compaction_requested" | "withdrawn";
+export type SendStatus = "ok" | "resent" | "held" | "compaction_requested" | "withdrawn";
 
 /** Send a message to a chat; resolves with how the route took it, or null when there was nothing to send. */
 export async function sendMessage(chatId: string, message: string, messageId?: string): Promise<SendStatus | null> {
