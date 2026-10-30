@@ -43,7 +43,7 @@ CACHE_HINTS: Final[dict[str, str]] = {
     ".npm": "Node packages",
     ".local/share/uv": "Python packages",
     ".local/share/pnpm": "Node packages",
-    "/var/cache/user": "downloads and build caches",
+    str(ROOT_DIR / OFF_VOLUME_CACHE_DIR): "downloads and build caches",
 }
 # How many of the workspace's folders the row lists, and the least a listed item holds.
 WORKSPACE_ITEM_COUNT: Final[int] = 8
