@@ -1262,7 +1262,6 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           priorTurnIds = sentUserTurnIds(recovery.chatId);
           const status = await sendMessage(recovery.chatId, recovery.sentText, messageId, true);
           dropOutgoingNoTurnWillRetire(recovery.chatId, outgoingId, status);
-          noteIfResent(recovery.chatId, recovery.sentText, priorTurnIds, status);
           // Landed, so take the restored copy back out of the composer.
           clearRestoredMessage(recovery.chatId, recovery.text, recovery.attachments);
           stopWatchingUnconfirmedTurn(recovery);

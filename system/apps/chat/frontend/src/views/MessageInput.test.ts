@@ -1094,17 +1094,6 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.noteResentSend).not.toHaveBeenCalled();
   });
 
-  it("notes a Send again the chat app delivered by sending it again", async () => {
-    mocks.noteResentSend.mockClear();
-    mocks.sendMessage.mockRejectedValueOnce({ kind: "submission_unconfirmed", toString: () => "unconfirmed" });
-    const component = MessageInput();
-    const after = await typeAndSend(component, "agent-1", "hello");
-    mocks.sendMessage.mockResolvedValueOnce("resent");
-    (findButton(after, "Send again")!.attrs!.onclick as () => void)();
-    await flushAsync();
-    expect(mocks.noteResentSend).toHaveBeenCalledWith("agent-1", "hello", new Set(["turn-before-the-send"]));
-  });
-
   it("asks the user to check the agent before sending an unconfirmed message again", async () => {
     // The chat app has already sent it twice without confirmation, and the agent may have either
     // copy: a plain Retry or a Force (restart and resend) could deliver it a third time.
