@@ -287,6 +287,32 @@ def test_a_uv_run_becomes_an_exec_of_the_script_with_none_of_uvs_options(
     ]
 
 
+def test_an_older_scaffolds_registration_by_name_is_kept_as_written() -> None:
+    # Those scaffolds named the console script after the app, and passed that name to the
+    # registration step too.
+    registration = (
+        "python3 system/scripts/forward_port.py --url http://localhost:8091"
+        " --name widget-app --program widget-app"
+    )
+    rewritten = migration._program_rewrite(
+        "python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "
+        f'"{registration} && uv run widget-app"',
+        "system/apps/widget",
+        ["widget-app"],
+    )
+
+    assert rewritten is not None
+    steps = user_packages.command_steps(rewritten)
+    assert steps[-2:] == [
+        registration.split(),
+        ["exec", "system/apps/widget/.venv/bin/widget-app"],
+    ]
+    assert (
+        user_packages.program_problems(rewritten, "system/apps/widget", ["widget-app"])
+        == []
+    )
+
+
 def test_a_wrapper_before_a_uv_run_stays_while_the_uv_run_goes() -> None:
     rewritten = migration._program_rewrite(
         'bash -c "exec nice -n 5 uv run --package widget widget-app"',

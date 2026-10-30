@@ -157,6 +157,18 @@ def runs_script(word: str, script: str) -> bool:
     )
 
 
+# An app's registration, which older scaffolds passed the app's name to (`--name <name>
+# --program <name>`), the name its console script shares.
+_REGISTRATION_SCRIPT = "forward_port.py"
+
+
+def is_registration_step(words: Sequence[str]) -> bool:
+    """Whether a step runs ``forward_port.py``, which registers an app and never runs it."""
+    return any(
+        PurePosixPath(word.strip("'\"")).name == _REGISTRATION_SCRIPT for word in words
+    )
+
+
 def _own_entry_point(word: str, relative: str, script: str) -> bool:
     return word.endswith(f"{relative}/.venv/bin/{script}")
 
@@ -183,6 +195,8 @@ def program_problems(command: str, relative: str, scripts: Sequence[str]) -> lis
     from the package's own ``.venv/bin``. ``[]`` too for a line that runs none of them."""
     steps = command_steps(command)
     for exec_index, step in enumerate(steps):
+        if is_registration_step(step):
+            continue
         script = next(
             (s for s in scripts if any(runs_script(word, s) for word in step)), None
         )

@@ -412,7 +412,11 @@ def _rewrite_script(script: str, relative: str, scripts: Sequence[str]) -> str |
         words = user_packages.split_words(text)
         if not words or words[:2] == ["uv", "sync"]:
             continue
-        found_script = _script_in(words, scripts)
+        found_script = (
+            None
+            if user_packages.is_registration_step(words)
+            else _script_in(words, scripts)
+        )
         if found_script is not None:
             found = True
             text = " ".join(_exec_words(_raw_words(text), found_script, relative))

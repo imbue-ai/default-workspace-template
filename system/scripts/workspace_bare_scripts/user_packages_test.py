@@ -121,6 +121,10 @@ def test_an_old_layout_package_names_every_problem(tmp_path: Path) -> None:
         'bash -c "cd /home/user/workspace; uv sync --directory system/apps/widget --locked'
         " && echo starting && exec nice -n 5"
         ' /home/user/workspace/system/apps/widget/.venv/bin/widget-app --port 1"',
+        # An older scaffold's registration, which names the app as its script is named.
+        'bash -c "uv sync --locked --project system/apps/widget && python3'
+        " system/scripts/forward_port.py --url http://localhost:8091 --name widget-app"
+        ' --program widget-app && exec system/apps/widget/.venv/bin/widget-app"',
     ],
 )
 def test_a_program_line_is_judged_by_what_it_runs(command: str) -> None:
