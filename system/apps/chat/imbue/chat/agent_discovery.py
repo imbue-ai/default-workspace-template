@@ -389,6 +389,15 @@ def _is_untaken(result: MessageResult) -> bool:
 
 
 @pure
+def _is_unstarted(result: MessageResult) -> bool:
+    """Whether every agent the send reached was down and would not start.
+
+    Nothing was typed, and a start can fail for a passing reason, so the message may be sent again at once.
+    """
+    return _is_every_failure_of_kind(result, SendFailureKind.AGENT_UNREACHABLE)
+
+
+@pure
 def _is_unsure(result: MessageResult) -> bool:
     """Whether nothing shows if the send reached its agents: mngr could not confirm it, or failed in a way it
     could not classify, after which the text may have been typed.
@@ -504,8 +513,9 @@ class MngrMessenger(FrozenModel):
         failure at the known location is returned as is (see ``_is_location_miss``), with these
         exceptions, each repeated wherever it was sent. An agent not accepting messages yet, or a
         host too loaded to say, is tried again with a short backoff (``_is_worth_waiting_out``). A
-        message the agent never took and cleared from its input box is sent once more
-        (``_is_untaken``). And unless ``is_resent_when_unsure`` is off, one nothing shows reached
+        message the agent never took and cleared from its input box, or one for an agent that was
+        down and would not start, is sent once more (``_is_untaken``, ``_is_unstarted``). And unless
+        ``is_resent_when_unsure`` is off, one nothing shows reached
         the agent is sent once more (``_is_unsure``), which is ``SendDelivery.RESENT`` when that
         second send lands; its failure is returned, so such a message is never sent a third time.
         The id is globally unique, so discovery resolves to exactly the intended agent, never fanning
@@ -536,15 +546,15 @@ class MngrMessenger(FrozenModel):
         is_resent_when_unsure: bool,
     ) -> _SendAttempt:
         """Send to ``matches``, again while it is worth waiting (``_is_worth_waiting_out``), once more when the agent
-        never took the message (``_is_untaken``), and once more when nothing shows it arrived (``_is_unsure``, unless
-        ``is_resent_when_unsure`` is off)."""
+        never took the message or would not start (``_is_untaken``, ``_is_unstarted``), and once more when nothing
+        shows it arrived (``_is_unsure``, unless ``is_resent_when_unsure`` is off)."""
         result = self.send(matches, message, mngr_ctx)
         for delay_seconds in _WAIT_OUT_DELAYS_SECONDS:
             if not _is_worth_waiting_out(result):
                 break
             self.pause(delay_seconds)
             result = self.send(matches, message, mngr_ctx)
-        if _is_untaken(result):
+        if _is_untaken(result) or _is_unstarted(result):
             result = self.send(matches, message, mngr_ctx)
         if is_resent_when_unsure and _is_unsure(result):
             return _SendAttempt(result=self.send(matches, message, mngr_ctx), is_resent_when_unsure=True)
