@@ -128,23 +128,34 @@ def test_the_probe_catches_a_top_level_heavy_import(tmp_path: Path) -> None:
     assert _heavy_imports(entry, bare=False) == {"pydantic"}
 
 
-@pytest.mark.timeout(60)
-def test_a_package_module_run_by_path_is_probed(
-    tmp_path: Path,
-) -> None:
-    project = tmp_path / ".agents" / "skills" / "probe" / "python"
-    package = project / "probe_skill"
+def _skill_with_a_heavy_entry(repo_root: Path, name: str, marker: str) -> Path:
+    skill = repo_root / ".agents" / "skills" / name
+    package = skill / "python" / f"{name}_skill"
     package.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(f"---\nname: {name}\n{marker}---\n")
     (package / "__init__.py").write_text("")
     (package / "lib.py").write_text("import pydantic\n")
     (package / "cli.py").write_text(
         "import pydantic\n\n\ndef main() -> None:\n    pass\n\n\n"
         'if __name__ == "__main__":\n    main()\n'
     )
+    return package / "cli.py"
+
+
+@pytest.mark.timeout(60)
+def test_a_package_module_run_by_path_is_probed_unless_its_skill_is_a_third_partys(
+    tmp_path: Path,
+) -> None:
+    ours = _skill_with_a_heavy_entry(
+        tmp_path, "probe", "metadata:\n  crystallized: true\n"
+    )
+    _skill_with_a_heavy_entry(
+        tmp_path, "installed", "metadata:\n  author: someone-else\n"
+    )
 
     [entry] = module_entry_points(tmp_path)
 
-    assert entry == package / "cli.py"
+    assert entry == ours
     assert _heavy_imports(entry, bare=False) == {"pydantic"}
 
 
