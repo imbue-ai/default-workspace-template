@@ -883,8 +883,9 @@ def migrate(
     is_dry_run: bool,
     run: Run = run_subprocess,
 ) -> int:
-    """Convert the user package at ``relative``, printing what it changes (and, for a dry
-    run, changing nothing); 0 once it is standalone or already was, 1 when it is not."""
+    """Convert the user package at ``relative``, printing what it changes; 0 once it is
+    standalone or already was, 1 when it is not. A dry run changes nothing and answers 0
+    once it has printed the plan, 1 when the package cannot be planned."""
     if relative in user_packages.user_packages(repo_root) and not (
         user_packages.standalone_problems(repo_root, relative)
     ):
