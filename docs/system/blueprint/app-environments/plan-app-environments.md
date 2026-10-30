@@ -145,13 +145,12 @@
   - `lock_check(pkg)`.
 - **`system/test_user_packages_are_standalone.py` (new):** runs `standalone_problems` and `uv lock --check` on every user package. Its failure message points at `python-packaging-migration.md`.
 - **`system/test_app_manifests.py`:** reads the built-in list from `members`, and fails when an upstream package under `system/{apps,services,libs}` isn't listed.
-- **`.agents/skills/update-self/python/update_self_skill/user_package_migration.py` (new), marked `CLEANUP:`.** It can be removed once we're reasonably confident no old templates or workspaces still need migrating. Commands:
+- **`.agents/skills/update-self/python/update_self_skill/user_package_migration.py` (new), marked `CLEANUP:`, run as update-self's `user-package-migration` command.** It can be removed once we're reasonably confident no old templates or workspaces still need migrating. Commands:
   - `migrate <pkg> [--dry-run] [--shared-lock <pre-merge uv.lock>]`: seeds the package's lock, converts sources, keeps root-sourced direct dependencies on the root pin, removes the package from the root dependencies and sources, rewrites the program line, links and syncs the venv;
   - `relock <pkg>`: `uv lock`, which keeps existing versions, plus pin alignment.
 - **`.agents/skills/update-self/references/`:**
   - `python-packaging-migration.md` gets a new "A user app, service or lib" section (symptom: the standalone test; steps: dry run, migrate, fix undeclared imports, gate otherwise, rewrite callers to `uv run --no-sync --project`). Its "A user service" section is rewritten to the standalone end state.
-  - `update-self-worker.md`: the environment gate runs `uv lock --check` per user package, relocks through the script, and puts dry-run output in the report.
-  - `results-message.md`: at most one plain sentence about the restructuring.
+  - `update-self-worker.md`: the environment gate runs `uv lock --check` per user package, relocks through the command, and puts dry-run output in the report.
 - **`.agents/skills/update-self/SKILL.md`:** step 5c's "carry user breakage into the results" becomes the fix-after-apply rule (one chat line, a repair worker, and `UPDATED` with a detail if it gives up).
 - **build-app:**
   - `scaffold_flask_lib.py`: a standalone project (path dependency on `app-schema`, no `imbue-common` source); copies the root `uv.lock` in and runs `uv lock`; runs `ensure`, then `uv sync --locked`; writes the `ensure`-sync-exec program line; no root `uv sync --all-packages`.
