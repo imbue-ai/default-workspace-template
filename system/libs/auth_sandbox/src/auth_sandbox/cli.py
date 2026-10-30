@@ -118,7 +118,10 @@ def _exit_on_sandbox_failure() -> Generator[None, None, None]:
 @click.option(
     "--account",
     default=None,
-    help="Re-sign in to this stored account rather than adding one.",
+    help=(
+        "The account to store the credential under, for a service that cannot tell who logged in; a service "
+        "that can refuses an account the sandbox's fresh store does not hold, so the chrome names none there."
+    ),
 )
 @_runtime_dir_option
 @_latchkey_binary_option

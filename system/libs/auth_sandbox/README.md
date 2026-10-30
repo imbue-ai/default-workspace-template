@@ -12,6 +12,7 @@ All four are on `PATH` in the image (console scripts of this package, linked int
 Keys travel in files and on stdin, never in an argument; nothing here prints a key.
 
 - `auth-sandbox-sign-in <service> [--account A]`: runs latchkey's browser sign-in on the Screen, exactly as the desktop's Approve does (`imbue.mngr_latchkey.core.Latchkey`: `initialize()`, whose config merge keeps the template's browser entry, then `auth_browser(service, account)` with Imbue's Google OAuth client, the Notion MCP redirect pin and the `browser-prepare` fallback).
+  `--account` names the account the credential is stored under, which only a service that cannot tell who logged in needs (and the chrome passes only to one): latchkey refuses a named account its store does not hold for a service that detects the login account, and the sandbox's store is fresh.
   Exits 0 when the credential is stored in the sandbox's store, else 1 with latchkey's reason as the last line on stderr (a cancelled login, a refused permission under `--strict`, a service that needs typed credentials).
 - `auth-sandbox-set-credentials <service> --account A --values-file PATH`: for a service without a browser sign-in (`authOptions` of `set` only).
   The file is a JSON object `{"values": {"<placeholder>": "<value>", ...}, "set_credentials_example": "..."}`; the example is optional and is otherwise asked of latchkey (`services info --offline`), falling back to the generic bearer form.
