@@ -57,7 +57,7 @@ def parse_host_diskinfo(text: str) -> tuple[HostQuota, float] | None:
     for line in text.splitlines():
         key, _, rest = line.partition(":")
         value = rest.strip()
-        if value.isdigit():
+        if value.isdecimal():
             values[key] = int(value)
     if not {"QuotaLimitBytes", "QuotaUsedBytes", "Timestamp"} <= values.keys():
         return None

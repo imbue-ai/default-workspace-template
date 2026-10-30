@@ -67,6 +67,10 @@ def test_a_disk_with_less_room_than_the_quota_bounds_what_can_be_written(
         pytest.param(
             "QuotaLimitBytes: x\nQuotaUsedBytes: y\nTimestamp: z\n", id="garbled"
         ),
+        pytest.param(
+            "QuotaLimitBytes: \u00b2\nQuotaUsedBytes: 1\nTimestamp: 1793250000\n",
+            id="digit int() cannot parse",
+        ),
     ],
 )
 def test_without_a_fresh_complete_file_the_filesystem_figures_are_the_answer(
