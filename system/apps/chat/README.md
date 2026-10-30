@@ -753,7 +753,8 @@ compaction reading `idle` after the app restarts, since the sweep's `/compact`
 leaves `last_compaction.json` saying manual. The cause is attached in memory as
 the event is stored and streamed, so a page reload keeps it, but a compaction
 older than 10 minutes when the app first reads it has no cause and shows the
-unknown text.
+unknown text. The page then cannot tell the sweep's `/compact` before it from a
+typed one, so that `/compact` shows as a bubble.
 
 Under the chip row holding the latest idle compaction of whichever chat is open,
 a notice says "Idle chats now compact automatically to keep replies fast and
