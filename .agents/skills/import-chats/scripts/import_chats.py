@@ -21,7 +21,7 @@ A sync of a large account takes a while: run it through ``system/scripts/run_in_
 
 ``status`` prints the status file.
 
-The store is the datalib skill's (``data/.skills/datalib/``), shared with anything else the user
+The store is the datalib skill's (``data/.skills/datalib/Default/``), shared with anything else the user
 mirrors there. A source this script adds gets an ingest step (the download into the raw store
 ``<group>/ingest/entities.doltlite_db``), a ``render_markdown`` step and a ``keyword_index`` step,
 and the last two are turned off before the config holding them is put in place: a first import
@@ -57,6 +57,7 @@ import argparse
 import contextlib
 import datetime
 import fcntl
+import importlib.util
 import json
 import os
 import re
@@ -69,11 +70,13 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-DATA_ROOT = Path("data") / ".skills" / "datalib"
+# The datalib skill's libraries folder, and in it the library the skill and the Datalib app use.
+DATA_ROOT = Path("data") / ".skills" / "datalib" / "Default"
 STATUS_PATH = Path("data") / ".skills" / "import-chats" / "status.json"
 INSTALL_SCRIPT = (
     Path(".agents") / "skills" / "datalib" / "scripts" / "install_datalib.sh"
 )
+DATALIB_LAUNCHER = Path("system") / "apps" / "datalib" / "launch_datalib_http.py"
 SYNC_REQUESTER = "import-chats"
 
 STATE_IMPORTING = "importing"
@@ -1023,10 +1026,28 @@ def _record_failed(
         )
 
 
+# CLEANUP: drop with move_store_into_library in the Datalib app's launcher, once every workspace that imported
+# chats while the store sat at data/.skills/datalib itself (before the libraries folder, October 2026) has
+# imported or started the app since.
+def move_store_into_library(launcher: Path, data_root: Path) -> None:
+    """Move a store an earlier import wrote at the libraries folder itself into ``data_root``, with the Datalib
+    app's own move, so the import and the app keep sharing one store. Nothing moves when there is no such store."""
+    spec = importlib.util.spec_from_file_location("launch_datalib_http", launcher)
+    if spec is None or spec.loader is None:
+        raise ImportChatsError(f"cannot load the Datalib app's launcher {launcher}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        module.move_store_into_library(data_root.parent, data_root)
+    except module.DatalibLaunchError as e:
+        raise ImportChatsError(str(e)) from e
+
+
 def sync(
     named: Sequence[ChatSource],
     datalib: Datalib,
     install_script: Path,
+    datalib_launcher: Path,
     status_path: Path,
     run: Callable[..., subprocess.CompletedProcess],
     stream: Callable[
@@ -1055,6 +1076,7 @@ def sync(
         ):
             install_datalib(install_script, run)
             with config_lock(status_path):
+                move_store_into_library(datalib_launcher, datalib.data_root)
                 ensure_sources(datalib, named, run)
             result = _run_dag(named, datalib, stream, progress)
     except ImportChatsError as e:
@@ -1185,6 +1207,7 @@ def main(
                 _sources(arguments.source),
                 Datalib(bin_dir=bin_dir, data_root=DATA_ROOT),
                 INSTALL_SCRIPT,
+                DATALIB_LAUNCHER,
                 STATUS_PATH,
                 run,
             )

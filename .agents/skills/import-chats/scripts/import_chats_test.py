@@ -19,6 +19,9 @@ from pathlib import Path
 import pytest
 
 _SCRIPT = Path(__file__).parent / "import_chats.py"
+_DATALIB_LAUNCHER = (
+    Path(__file__).resolve().parents[4] / "system/apps/datalib/launch_datalib_http.py"
+)
 _spec = importlib.util.spec_from_file_location("import_chats", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
 import_chats = importlib.util.module_from_spec(_spec)
@@ -221,6 +224,7 @@ class _SyncWorkspace:
             named,
             self.datalib,
             Path("install_datalib.sh"),
+            _DATALIB_LAUNCHER,
             self.status_path,
             run,
             stream=_streaming(run) if stream is None else stream,
@@ -808,6 +812,34 @@ def test_a_sync_installs_adds_the_sources_runs_their_downloads_and_records_what_
     assert "2 conversations" in (index_dir / "chatgpt-chats.md").read_text()
 
 
+def test_a_store_an_earlier_import_wrote_at_the_libraries_folder_moves_into_the_library(
+    tmp_path: Path, workspace: _SyncWorkspace
+) -> None:
+    libraries = tmp_path / "libraries"
+    libraries.mkdir()
+    (libraries / "config.toml").write_text(import_chats.source_stanza(CLAUDE))
+    _raw_store(libraries, CLAUDE, [("a", "A", None)])
+    datalib = import_chats.Datalib(
+        bin_dir=workspace.datalib.bin_dir, data_root=libraries / "Default"
+    )
+    summary = _run_summary({"step": "claude_chats/ingest", "status": "succeeded"})
+
+    import_chats.sync(
+        [CLAUDE, CHATGPT],
+        datalib,
+        Path("install_datalib.sh"),
+        _DATALIB_LAUNCHER,
+        workspace.status_path,
+        _FakeDatalib(stderr=summary),
+        stream=_streaming(_FakeDatalib(stderr=summary)),
+    )
+
+    assert sorted(path.name for path in libraries.iterdir()) == ["Default"]
+    groups = tomllib.loads(datalib.config_path.read_text())["groups"]
+    assert [group["id"] for group in groups] == ["claude_chats", "chatgpt_chats"]
+    assert workspace.record("claude")["conversations"] == 1
+
+
 def test_a_later_sync_of_one_source_leaves_the_other_in_the_config(
     workspace: _SyncWorkspace,
 ) -> None:
@@ -1112,6 +1144,7 @@ def test_a_sync_whose_status_cannot_be_recorded_is_an_import_error_naming_the_fi
             [CLAUDE],
             workspace.datalib,
             Path("install_datalib.sh"),
+            _DATALIB_LAUNCHER,
             status_path,
             _FakeDatalib(),
         )

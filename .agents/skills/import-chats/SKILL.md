@@ -23,7 +23,7 @@ python3 .agents/skills/import-chats/scripts/import_chats.py status
 ```
 
 `sync` installs datalib the first time (through the datalib skill's installer, a minute or
-two of downloading), adds each source to datalib's store at `data/.skills/datalib/` if it
+two of downloading), adds each source to datalib's store at `data/.skills/datalib/Default/` if it
 is not there yet, downloads the conversations, and records each source's progress in
 `data/.skills/import-chats/status.json`, which the Getting Started page reads to show the
 user how the import is going. An import only downloads: it does not render pages or build a
@@ -31,7 +31,7 @@ search index until the user asks for search (see "Turning search on").
 
 datalib is not announced to users. Do not name it, the skills, or the store to the user
 unless they ask how the import works, do not open or install the Datalib app, and do not
-hand-edit the `claude_chats` and `chatgpt_chats` entries of `data/.skills/datalib/config.toml`
+hand-edit the `claude_chats` and `chatgpt_chats` entries of `data/.skills/datalib/Default/config.toml`
 except as "Turning search on" says. The store may hold other sources the user mirrors with
 datalib; leave those alone.
 
@@ -137,8 +137,8 @@ site's API returned it; a row with no `payload` was listed but not downloaded ye
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-CLAUDE_DB=data/.skills/datalib/claude_chats/ingest/entities.doltlite_db
-CHATGPT_DB=data/.skills/datalib/chatgpt_chats/ingest/entities.doltlite_db
+CLAUDE_DB=data/.skills/datalib/Default/claude_chats/ingest/entities.doltlite_db
+CHATGPT_DB=data/.skills/datalib/Default/chatgpt_chats/ingest/entities.doltlite_db
 
 # Find conversations by title or by anything said in them (a plain scan; fine at this size).
 datalib-doltlite -readonly -json "$CLAUDE_DB" "SELECT id, name, updated_at FROM conversations
@@ -176,14 +176,14 @@ which is why an import leaves it off. For each source they want it for (`claude_
 
 ```bash
 export PATH="$HOME/.local/bin:$PATH"
-CONFIG=data/.skills/datalib/config.toml
+CONFIG=data/.skills/datalib/Default/config.toml
 datalib-dag turn-on "$CONFIG" claude_chats/render_markdown
 python3 system/scripts/run_in_background.py --description "Make Claude chats searchable" --keep-host-awake -- \
   datalib-dag "$CONFIG" --sync claude_chats/render_markdown --by "${MINDS_CHAT_ID:-import-chats}"
 ```
 
 That writes one markdown page per conversation under
-`data/.skills/datalib/<group>/render_markdown/` (an `all.md` in a directory per conversation),
+`data/.skills/datalib/Default/<group>/render_markdown/` (an `all.md` in a directory per conversation),
 which `rg` searches, and the next import links each page from the index. From then on every
 import renders what it downloads. If the config also has a `unified_document_index` group (the
 user mirrors other things with datalib), turn on `<group>/keyword_index` too and add the
