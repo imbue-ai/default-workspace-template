@@ -430,7 +430,7 @@ After phase 11, an existing workspace is upgraded through update-self and exerci
 - Read-only sharing of one chat.
 - Chat-internal cleanups from the old plan (per-chat channel consolidation, chooser refactoring, proto-agent broadcasts), which are invisible to the shell once chat is an app.
 - Full per-app generalization of the update apply.
-- Converting a pre-manifest user app to the manifest form (an offer the update-app skill can make with the user present, never an unattended update), and taking apps out of the root uv workspace, which one lockfile and one set of commands argue against.
+- Converting a pre-manifest user app to the manifest form (an offer the update-app skill can make with the user present, never an unattended update).
 - Migrating the terminal, browser, and files instance sources onto a common implementation beyond the library.
 
 ## 12. Open questions
