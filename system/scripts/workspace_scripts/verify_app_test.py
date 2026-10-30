@@ -310,4 +310,6 @@ def test_surface_fails_the_call_when_the_shell_refuses(tmp_path: Path) -> None:
         with pytest.raises(SystemExit) as raised:
             verify_app._surface("notes", "open", _layout_context(shell, tmp_path))
 
-    assert str(raised.value.code).startswith("error: workspace-layout open notes --beside exited ")
+    assert str(raised.value.code).startswith(
+        "error: workspace-layout open notes --beside exited "
+    )

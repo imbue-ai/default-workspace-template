@@ -665,23 +665,30 @@ def _edits_sys_path(source: str) -> bool:
     return False
 
 
+def _tracked_paths(repo_root: Path, pattern: str) -> list[str]:
+    tracked = subprocess.run(
+        ["git", "ls-files", "-z", "--", pattern], cwd=repo_root, capture_output=True, text=True, check=True
+    ).stdout.split("\0")
+    return [
+        relative
+        for relative in tracked
+        if relative
+        and "vendor" not in PurePosixPath(relative).parts
+        and not _is_in_third_party_skill(relative, repo_root)
+        and (repo_root / relative).is_file()
+    ]
+
+
 def _tracked_python_files(repo_root: Path) -> list[str]:
     """The template's own tracked ``.py`` files, tests included.
 
     Vendored code and third-party skills are left out, and so is this file,
     whose planted cases would count.
     """
-    tracked = subprocess.run(
-        ["git", "ls-files", "-z", "--", "*.py"], cwd=repo_root, capture_output=True, text=True, check=True
-    ).stdout.split("\0")
     return sorted(
         relative
-        for relative in tracked
-        if relative
-        and "vendor" not in PurePosixPath(relative).parts
-        and relative != "system/test_python_launch_rules.py"
-        and not _is_in_third_party_skill(relative, repo_root)
-        and (repo_root / relative).is_file()
+        for relative in _tracked_paths(repo_root, "*.py")
+        if relative != "system/test_python_launch_rules.py"
     )
 
 
@@ -933,20 +940,6 @@ class _OwnPrograms(NamedTuple):
     scripts: frozenset[str]
     packages: frozenset[str]
     commands: frozenset[str]
-
-
-def _tracked_paths(repo_root: Path, pattern: str) -> list[str]:
-    tracked = subprocess.run(
-        ["git", "ls-files", "-z", "--", pattern], cwd=repo_root, capture_output=True, text=True, check=True
-    ).stdout.split("\0")
-    return [
-        relative
-        for relative in tracked
-        if relative
-        and "vendor" not in PurePosixPath(relative).parts
-        and not _is_in_third_party_skill(relative, repo_root)
-        and (repo_root / relative).is_file()
-    ]
 
 
 def _own_programs(repo_root: Path) -> _OwnPrograms:

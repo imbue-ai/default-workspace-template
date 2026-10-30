@@ -48,8 +48,9 @@ The connect timeout is short so an unreachable chat app is detected fast.
 
 ``--browser-fleet`` wraps the text in the browser fleet's sentinel, which the
 chat transcript renders as a collapsed "Browser fleet" chip instead of a user
-bubble; the browser app's wake-up nudges use it. The tag is pinned against the
-chat app's copy by a test there.
+bubble; the browser app's wake-up nudges are wrapped the same way, calling
+``wrap_browser_fleet_nudge`` and ``send`` in-process. The tag is pinned against
+the chat app's copy by a test there.
 
 ``--create`` makes a new chat instead of messaging one, through the chat app's
 create route, so the chat is what a launcher-started chat would be: the app mints its id,
