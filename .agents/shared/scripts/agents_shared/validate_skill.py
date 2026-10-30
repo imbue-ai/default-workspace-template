@@ -94,11 +94,8 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], list[str]]:
 
 
 def _skill_metadata(skill_dir: Path) -> dict[str, Any]:
-    """The ``metadata`` mapping of the skill's SKILL.md frontmatter, or an empty one.
-
-    A SKILL.md that is missing or whose frontmatter does not parse carries no marker;
-    ``validate`` reports the parse error for a skill of the workspace's own.
-    """
+    """The ``metadata`` mapping of the skill's SKILL.md frontmatter; empty when the SKILL.md is
+    missing or its frontmatter does not parse (``validate`` reports that)."""
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.is_file():
         return {}
@@ -115,15 +112,31 @@ def is_built_in_skill(skill_dir: Path) -> bool:
     return _skill_metadata(skill_dir).get("author") == "imbue"
 
 
-def is_workspace_skill(skill_dir: Path) -> bool:
-    """Whether the workspace holds the skill to its own checks.
+# Beside ``skills/`` in ``.agents``: the skills installed or copied in from elsewhere, by name,
+# each with where it came from. The workspace keeps them as they came, so its checks leave
+# them out.
+THIRD_PARTY_SKILLS_FILE_NAME = "third-party-skills.toml"
 
-    A built-in skill (``metadata.author: imbue``) or one made in this workspace
-    (``metadata.crystallized: true``) is; any other skill came from a third party and is
-    kept as it came, so the import-cost, type and launch checks leave it out.
-    """
-    metadata = _skill_metadata(skill_dir)
-    return metadata.get("author") == "imbue" or metadata.get("crystallized") is True
+
+def third_party_skills(agents_dir: Path) -> dict[str, str]:
+    """The skills ``.agents/third-party-skills.toml`` lists, mapped to where each came from."""
+    listing = agents_dir / THIRD_PARTY_SKILLS_FILE_NAME
+    if not listing.is_file():
+        return {}
+    skills = tomllib.loads(listing.read_text(encoding="utf-8")).get("skills", {})
+    if not isinstance(skills, dict) or not all(
+        isinstance(source, str) and source for source in skills.values()
+    ):
+        raise ValueError(
+            f"{listing}: [skills] must map each skill's name to where it came from, a "
+            'non-empty string (pdf = "https://github.com/anthropics/skills")'
+        )
+    return skills
+
+
+def is_third_party_skill(skill_dir: Path) -> bool:
+    """Whether ``.agents/third-party-skills.toml`` lists the skill, so the checks leave it out."""
+    return skill_dir.name in third_party_skills(skill_dir.parent.parent)
 
 
 def package_name(skill_name: str) -> str:

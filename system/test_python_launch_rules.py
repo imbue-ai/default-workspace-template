@@ -30,7 +30,7 @@ import tomllib
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
-from agents_shared.validate_skill import is_entry_module, is_workspace_skill
+from agents_shared.validate_skill import is_entry_module, third_party_skills
 from entry_points_testing import (
     BARE_SEARCH_PATHS,
     REPO_ROOT,
@@ -295,12 +295,12 @@ def _is_scanned(relative: str, suffixes: tuple[str, ...]) -> bool:
 
 
 def _is_in_third_party_skill(relative: str, repo_root: Path) -> bool:
-    """Whether a file belongs to a skill the workspace keeps as it came, not ours to police."""
+    """Whether a file belongs to a skill listed as a third party's, kept as it came: not ours to police."""
     parts = PurePosixPath(relative).parts
     return (
         parts[:2] == (".agents", "skills")
         and len(parts) > 3
-        and not is_workspace_skill(repo_root / ".agents" / "skills" / parts[2])
+        and parts[2] in third_party_skills(repo_root / ".agents")
     )
 
 
@@ -783,15 +783,14 @@ def test_prevent_sys_path_edits() -> None:
     )
 
 
-def test_a_third_party_skill_is_not_counted_whatever_its_layout(tmp_path: Path) -> None:
+def test_a_listed_third_party_skill_is_not_counted_whatever_its_layout(tmp_path: Path) -> None:
     edit = "import sys\nsys.path.insert(0, 'x')\n"
-    markers = {"ours": "metadata:\n  crystallized: true\n", "third-party": ""}
-    for skill, marker in markers.items():
+    for skill in ("ours", "installed"):
         (tmp_path / ".agents" / "skills" / skill / "scripts").mkdir(parents=True)
-        (tmp_path / ".agents" / "skills" / skill / "SKILL.md").write_text(f"---\nname: {skill}\n{marker}---\n")
         (tmp_path / ".agents" / "skills" / skill / "scripts" / "run.py").write_text(edit)
-    (tmp_path / ".agents" / "skills" / "third-party" / "python").mkdir()
-    (tmp_path / ".agents" / "skills" / "third-party" / "python" / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / ".agents" / "skills" / "installed" / "python").mkdir()
+    (tmp_path / ".agents" / "skills" / "installed" / "python" / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / ".agents" / "third-party-skills.toml").write_text('[skills]\ninstalled = "https://example.com/skills"\n')
     (tmp_path / "system").mkdir()
     (tmp_path / "system" / "tool.py").write_text(edit)
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -922,7 +921,6 @@ def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(
     module = tmp_path / ".agents" / "skills" / "probe" / "python" / "probe_skill" / "probe.py"
     module.parent.mkdir(parents=True)
     (module.parent.parent / "pyproject.toml").write_text("[project]\n")
-    (tmp_path / ".agents" / "skills" / "probe" / "SKILL.md").write_text("---\nname: probe\nmetadata:\n  crystallized: true\n---\n")
     module.write_text(
         "import sys\nfrom pathlib import Path\n\n"
         "if not __package__:\n"
