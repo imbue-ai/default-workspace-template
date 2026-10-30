@@ -251,6 +251,7 @@ def scan(
     other = max(0, disk_used - counted)
     # Measured as its top-level entries because the home directory itself can be a link (imbue_cloud's
     # /home/user points into the volume), which du would count as nothing.
+    home_rest: Measured | None
     try:
         home_entries = sorted(
             path
@@ -258,8 +259,9 @@ def scan(
             if path != workspace and path not in home_caches
         )
     except OSError:
-        home_entries = []
-    home_rest = measure(home_entries, home_caches)
+        home_rest = None
+    else:
+        home_rest = measure(home_entries, home_caches)
     system = measure([root], [home, off_volume_cache, *SYSTEM_EXCLUDES])
     other_items: list[dict[str, Any]] = []
     if system is not None and system.total:

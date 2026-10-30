@@ -195,12 +195,17 @@ def test_a_row_that_cannot_be_measured_is_reported_missing_and_the_rest_never_go
     assert rows[-1]["bytes"] == 0 and rows[-1]["items"] == []
 
 
+# The home tree's du fails, or its listing does (a home that is not a directory cannot be listed).
+@pytest.mark.parametrize("listing_fails", [False, True])
 def test_a_home_tree_that_cannot_be_measured_is_not_listed_as_space_that_cannot_be_freed(
-    tmp_path: Path,
+    tmp_path: Path, listing_fails: bool
 ) -> None:
     home = tmp_path / "home"
-    (home / "workspace").mkdir(parents=True)
-    (home / ".mngr").mkdir()
+    if listing_fails:
+        home.write_text("")
+    else:
+        home.mkdir()
+        (home / ".mngr").mkdir()
 
     def measure(paths: list[Path], excludes: list[Path]) -> disk.Measured | None:
         if paths == [home / ".mngr"]:
@@ -208,7 +213,7 @@ def test_a_home_tree_that_cannot_be_measured_is_not_listed_as_space_that_cannot_
         return disk.Measured(10 * _MIB, {})
 
     rows, missing = disk.scan(
-        100 * _MIB, home / "workspace", home, measure, tmp_path / "root"
+        100 * _MIB, tmp_path / "workspace", home, measure, tmp_path / "root"
     )
 
     assert missing == []
