@@ -1035,7 +1035,7 @@ def _joined_path(node: ast.BinOp) -> str:
     return "/".join(parts)
 
 
-def _names_own_program(node: ast.AST, programs: _OwnPrograms) -> bool:
+def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return _names_own_script(node.value, programs.scripts, is_path_part=False)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
@@ -1059,7 +1059,13 @@ def _names_own_program(node: ast.AST, programs: _OwnPrograms) -> bool:
 
 
 def _program_launch_lines(source: str, programs: _OwnPrograms) -> list[int]:
-    return sorted({node.lineno for node in ast.walk(ast.parse(source)) if _names_own_program(node, programs)})
+    return sorted(
+        {
+            node.lineno
+            for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.expr) and _names_own_program(node, programs)
+        }
+    )
 
 
 def _is_test_support(relative: str) -> bool:
