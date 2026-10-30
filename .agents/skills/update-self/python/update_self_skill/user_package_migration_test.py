@@ -338,7 +338,7 @@ def test_a_programs_shell_steps_keep_their_expansions_redirections_and_operators
     # then the app. Every step but the sync and the app's own is kept as written.
     command = (
         "python3 system/services/oom_priority/bin/oom_tag_service.py user bash -c "
-        '"cd \\"$WIDGET_DIR\\" 2>/dev/null || echo \'no dir\' >&2; '
+        '"mkdir -p \\"$WIDGET_DIR\\" 2>/dev/null || echo \'no dir\' >&2; '
         'uv sync --all-packages --frozen && exec .venv/bin/widget-app --port $WIDGET_PORT"'
     )
 
@@ -352,7 +352,7 @@ def test_a_programs_shell_steps_keep_their_expansions_redirections_and_operators
     assert words[words.index("-c") + 1] == (
         "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project system/apps/widget"
         " && uv sync --locked --project system/apps/widget"
-        " && { cd \"$WIDGET_DIR\" 2>/dev/null || echo 'no dir' >&2;"
+        " && { mkdir -p \"$WIDGET_DIR\" 2>/dev/null || echo 'no dir' >&2;"
         " exec system/apps/widget/.venv/bin/widget-app --port $WIDGET_PORT; }"
     )
     assert (
@@ -365,6 +365,20 @@ def test_a_program_that_runs_another_packages_script_is_left_alone() -> None:
     assert (
         migration._program_rewrite(
             "python3 system/services/oom_priority/bin/oom_tag_service.py chat .venv/bin/chat-app",
+            "system/apps/widget",
+            ["widget-app"],
+        )
+        is None
+    )
+
+
+def test_a_program_that_changes_directory_before_its_script_is_left_for_a_hand_rewrite() -> (
+    None
+):
+    # The exec's venv path is repo-relative, so after the `cd` it would name nothing.
+    assert (
+        migration._program_rewrite(
+            'bash -c "cd system/apps/widget && exec uv run widget-app"',
             "system/apps/widget",
             ["widget-app"],
         )

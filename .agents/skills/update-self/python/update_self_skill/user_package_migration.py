@@ -58,6 +58,7 @@ _AGENT_FACING_SUFFIXES = (".md", ".toml", ".sh", ".conf", ".py")
 _TABLE_HEADER = re.compile(r"^\s*\[")
 # What separates the steps of a program's `bash -c` script, as user_packages splits them.
 _SCRIPT_SEPARATOR = re.compile(r"(&&|\|\||;|\n)")
+_DIRECTORY_CHANGES = frozenset({"cd", "pushd"})
 
 
 class MigrationError(Exception):
@@ -400,11 +401,15 @@ def _rewrite_script(script: str, relative: str, scripts: Sequence[str]) -> str |
     ``X && sync SEP Y`` becomes ``X SEP Y`` and any other ``X ? sync ? Y`` becomes
     ``X; Y``. Steps joined by anything but ``&&`` are grouped, so the up-front sync gates
     the whole script and not only its first step.
+
+    ``None`` too when a step before the script's changes directory: the venv path the
+    exec names is relative to the repo root, so the line is left for a hand rewrite.
     """
     pieces = _SCRIPT_SEPARATOR.split(script)
     kept: list[tuple[str, str]] = []
     pending: str | None = None
     found = False
+    changes_directory = False
     for index in range(0, len(pieces), 2):
         if kept:
             separator = ";" if pieces[index - 1] == "\n" else pieces[index - 1]
@@ -419,8 +424,12 @@ def _rewrite_script(script: str, relative: str, scripts: Sequence[str]) -> str |
             else _script_in(words, scripts)
         )
         if found_script is not None:
+            if changes_directory:
+                return None
             found = True
             text = " ".join(_exec_words(_raw_words(text), found_script, relative))
+        elif words[0] in _DIRECTORY_CHANGES:
+            changes_directory = True
         kept.append((pending or "", text))
         pending = None
     if not found:
