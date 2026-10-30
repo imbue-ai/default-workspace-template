@@ -3,8 +3,9 @@
 Walking the disk is slow under gVisor and the figures go stale at once, so nothing here runs on a timer:
 ``DiskScanner.start`` runs one walk on a thread of the app, the result is kept with its time until the app
 stops, and the page says when it was taken. Each row is one ``du`` (GNU: the container is Linux) whose
-per-path lines are also the folders the row lists; the app directories are one each and the system
-software behind the last row one more; the rest of the disk's used space is that last row.
+per-path lines are also the folders the row lists; the app directories are one each, and the system
+software and the home tree beside the workspace behind the last row one each; the rest of the disk's used
+space is that last row.
 """
 
 import subprocess
