@@ -432,14 +432,16 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   naming the chat's instances API.
 - **E15 Rollback that does not restore health (exit 3).** Only in a workspace you can
   afford to break: after an apply with the flag of a chat change that also edits its
-  `pyproject.toml` (a `description` change in `system/apps/chat/pyproject.toml`, so the
-  apply copies the venv aside), sabotage the kept venv copy
-  (`data/.state/update-apply/snapshots/venv`: delete its `bin/chat-app`) so the restore
-  yields an unbootable chat, then Roll back. Sabotaging only the kept bundle does not
-  do it: the chat still boots, without its page, and the rollback exits 0. Pass: the
-  outcome says "did not come back healthy", `emergency.json` exists, reloading the shell
-  shows the staleness banner, exit 3 in the log. Recover by hand (`git revert` of the
-  revert, rebuild) and confirm the banner clears.
+  `pyproject.toml` (a `description` change in `system/apps/chat/pyproject.toml`, so a
+  rollback re-syncs the venv from the restored tree), break the venv in a way that sync
+  does not repair: delete the `flask` package directory from the `site-packages` of the
+  venv `.venv` links to, leaving its `dist-info` (uv judges what is installed by its
+  metadata, so `uv sync --frozen` does not reinstall it). Then Roll back. Sabotaging only
+  the kept bundle does not do it: the chat still boots, without its page, and the
+  rollback exits 0. Pass: the outcome says "did not come back healthy", `emergency.json`
+  exists, reloading the shell shows the staleness banner, exit 3 in the log. Recover by
+  hand (`git revert` of the revert, `uv sync --all-packages --frozen --reinstall-package
+  flask`, rebuild) and confirm the banner clears.
 - **E16 update-self keeps no notice.** Run the update-self apply (no flag, `--ff-only`)
   on a trivial fast-forward: no `last-good.json`, no band, `run.json` updated as before.
 - **E17 Settled verdict.** In E2's apply output, the phase timings show the post-restart
@@ -544,11 +546,12 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
   holds for an untouched point; after a rollback that failed, the copies must survive Close.
 - **D5's `--timeout` is the worker's own completion time.** Pass one the stand-in can meet,
   or accept `timed_out: true` beside the right `branch`.
-- **An app's environment copy is the venv's.** Every critical app runs from the workspace
-  venv, which the apply copies aside only when a backend manifest or an app's
-  `pyproject.toml` changed, so a chat-only or frontend apply holds bundles only (F3). E15,
-  and E20 and E24's environment variants, need an apply that changes one (an app's
-  `pyproject.toml` will do).
+- **An app's environment is the venv, which is never copied.** Every critical app runs
+  from the workspace venv, which the apply re-syncs (into a fresh target, swapped in by
+  link) only when a backend manifest or a built-in app's `pyproject.toml` changed, and a
+  rollback of such an apply re-syncs it from the restored tree. A chat-only or frontend
+  apply touches bundles only (F3). E15, and E20 and E24's environment variants, need an
+  apply that changes one (a built-in app's `pyproject.toml` will do).
 
 ### B. The shared script
 
@@ -604,10 +607,11 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
 - **E20 An app's `pyproject.toml` touches every critical app.** Apply a harmless edit to
   `system/apps/system_interface/pyproject.toml` (a `description` change) with the flag.
   Pass: the plan counts the change as an app pyproject, so the apply re-syncs the
-  workspace venv every app runs from; the record's `apps` and `programs` name `chat`,
-  `system_interface`, and `terminal`; `snapshots` include the venv and not the mngr tool
-  environment; band on chat and terminal tabs and the shell's banner. Roll back: all
-  three restart onto the restored venv, each instances API is held to the settled verdict,
+  workspace venv every app runs from into a fresh target and swaps it in by link; the
+  record's `apps` and `programs` name `chat`, `system_interface`, and `terminal`;
+  `snapshots` hold neither the venv nor the mngr tool environment; band on chat and
+  terminal tabs and the shell's banner. Roll back: all three restart onto the venv the
+  rollback re-syncs from the restored tree, each instances API is held to the settled verdict,
   every band shows the outcome. Before, the record named the shell alone and the rollback
   left the chat and terminal running the updated code over the restored environment.
 - **E21 A startup-only change, through the banner.** E8 through the UI: a comment change
