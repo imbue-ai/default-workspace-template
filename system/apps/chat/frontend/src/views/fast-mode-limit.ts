@@ -36,11 +36,10 @@ import { getChatFastMode, setFastMode } from "../models/ModelSettings";
 import type { TranscriptEvent } from "../models/Response";
 import { SEED_SOURCE } from "../models/Response";
 import {
+  isLandedSweepCompactCommand,
   isTurnUserMessage,
   resolutionOf,
   secretResolutionOf,
-  sweepCompactCommandIds,
-  sweepCompactCommands,
 } from "./message-classification";
 
 // The chat whose switch raised the notice, or null while none is showing.
@@ -49,12 +48,12 @@ let noticeChatId: string | null = null;
 /** How many turns the user has actually taken with an agent in this conversation. */
 export function countUserTurns(events: readonly TranscriptEvent[]): number {
   let count = 0;
-  const sweepCommandIds = sweepCompactCommandIds(sweepCompactCommands(events, null));
-  for (const event of events) {
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
     if (event.type !== "user_message") {
       continue;
     }
-    if (event.source === SEED_SOURCE || sweepCommandIds.has(event.event_id)) {
+    if (event.source === SEED_SOURCE || isLandedSweepCompactCommand(events, i)) {
       continue;
     }
     if (!isTurnUserMessage(event)) {

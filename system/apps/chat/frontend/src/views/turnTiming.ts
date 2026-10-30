@@ -12,7 +12,7 @@
  */
 
 import type { TranscriptEvent } from "../models/Response";
-import { isNonBoundaryUserMessage, sweepCompactCommandIds, sweepCompactCommands } from "./message-classification";
+import { isLandedSweepCompactCommand, isNonBoundaryUserMessage } from "./message-classification";
 
 /** The span of the transcript's latest turn, in epoch milliseconds. */
 export interface TurnSpan {
@@ -32,11 +32,10 @@ export function latestTurnSpan(events: readonly TranscriptEvent[]): TurnSpan | n
   let lastWorkAt: number | null = null;
   let lastWorkEventId: string | null = null;
   let hasAgentWork = false;
-  const sweepCommandIds = sweepCompactCommandIds(sweepCompactCommands(events, null));
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
     const at = Date.parse(event.timestamp);
-    if (event.type === "user_message" && !isNonBoundaryUserMessage(event) && !sweepCommandIds.has(event.event_id)) {
+    if (event.type === "user_message" && !isNonBoundaryUserMessage(event) && !isLandedSweepCompactCommand(events, i)) {
       if (Number.isNaN(at)) return null;
       return {
         openingEventId: event.event_id,

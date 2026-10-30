@@ -180,6 +180,24 @@ export interface SweepCompactCommands {
   running: UserMessageEvent | null;
 }
 
+/** The `/compact` at `index` when it is one the timeline shows (not its hidden expansion), else null. */
+function shownCompactCommandAt(events: readonly TranscriptEvent[], index: number): UserMessageEvent | null {
+  const e = events[index];
+  return e.type === "user_message" && !isNonBoundaryUserMessage(e) && isCompactCommand(e) ? e : null;
+}
+
+/** The compaction the message at `index` directly precedes, past only messages that render nowhere:
+ *  its status event, null when anything else comes first, or undefined when nothing has followed yet. */
+function compactionAfter(events: readonly TranscriptEvent[], index: number): UserMessageEvent | null | undefined {
+  for (let i = index + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e.type !== "user_message") return null;
+    if (isStatusUserMessage(e)) return e;
+    if (!isNonBoundaryUserMessage(e)) return null;
+  }
+  return undefined;
+}
+
 /** Find the idle sweep's `/compact`s: Claude Code records one as a user message the user never typed,
  *  so it is no turn of the conversation. A `/compact` is the sweep's when the compaction it directly
  *  precedes is idle; one the user typed stays theirs. `liveCause` is the cause of the compaction
@@ -189,18 +207,24 @@ export function sweepCompactCommands(
   liveCause: CompactionCause | null,
 ): SweepCompactCommands {
   const byCompactionId = new Map<string, UserMessageEvent>();
-  let command: UserMessageEvent | null = null;
-  for (const e of events) {
-    if (e.type !== "user_message") {
-      command = null;
-    } else if (isStatusUserMessage(e)) {
-      if (command !== null && e.compaction_cause === "idle") byCompactionId.set(e.event_id, command);
-      command = null;
-    } else if (!isNonBoundaryUserMessage(e)) {
-      command = isCompactCommand(e) ? e : null;
+  let running: UserMessageEvent | null = null;
+  for (let i = 0; i < events.length; i++) {
+    const command = shownCompactCommandAt(events, i);
+    if (command === null) continue;
+    const compaction = compactionAfter(events, i);
+    if (compaction === undefined) {
+      if (liveCause === "idle") running = command;
+    } else if (compaction?.compaction_cause === "idle") {
+      byCompactionId.set(compaction.event_id, command);
     }
   }
-  return { byCompactionId, running: liveCause === "idle" ? command : null };
+  return { byCompactionId, running };
+}
+
+/** True when the message at `index` is the idle sweep's `/compact` for a compaction that has landed
+ *  (see `sweepCompactCommands`), read forward from that message alone. */
+export function isLandedSweepCompactCommand(events: readonly TranscriptEvent[], index: number): boolean {
+  return shownCompactCommandAt(events, index) !== null && compactionAfter(events, index)?.compaction_cause === "idle";
 }
 
 /** The event ids of the idle sweep's `/compact`s (see `sweepCompactCommands`). */
