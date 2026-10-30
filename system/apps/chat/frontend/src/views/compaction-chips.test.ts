@@ -24,10 +24,25 @@ function compactionEvent(cause?: CompactionCause | null, summary?: string): User
   };
 }
 
+/** The `/compact` the idle sweep sent, as Claude Code records it. */
+const SWEEP_COMMAND: UserMessageEvent = {
+  timestamp: "2026-01-01T00:00:00Z",
+  type: "user_message",
+  event_id: "evt-command",
+  source: "claude",
+  role: "user",
+  content: "/compact",
+  non_turn_tail: true,
+};
+
 let root: HTMLElement;
 
-function mount(event: UserMessageEvent | null, cause: CompactionCause | null = null): void {
-  const part = event === null ? runningCompaction(cause) : landedCompaction(event, false);
+function mount(
+  event: UserMessageEvent | null,
+  cause: CompactionCause | null = null,
+  command: UserMessageEvent | null = null,
+): void {
+  const part = event === null ? runningCompaction(cause, command) : landedCompaction(event, false, command);
   m.render(root, m(ToolChipGroup, { chips: compactionChips(part), toolResults: new Map(), chatId: "agent-x" }));
 }
 
@@ -36,10 +51,14 @@ function chipLabels(): string[] {
 }
 
 /** Open the chip at `index` and return its panel's body: what follows the header. */
-function openPanelBody(event: UserMessageEvent | null, index: number): Element[] {
-  mount(event);
+function openPanelBody(
+  event: UserMessageEvent | null,
+  index: number,
+  command: UserMessageEvent | null = null,
+): Element[] {
+  mount(event, "idle", command);
   root.querySelectorAll<HTMLButtonElement>(".tool-chip")[index].click();
-  mount(event);
+  mount(event, "idle", command);
   const panel = root.querySelector(".tool-chip-detail.compaction-detail");
   expect(panel).not.toBeNull();
   return Array.from(panel!.children).slice(1);
@@ -96,15 +115,35 @@ describe("a compaction's chips", () => {
     ["native", "Your agent triggered compaction. You can ask it about its current setting, or tell it to change it."],
     [null, "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu."],
     [undefined, "Compacted to keep replies fast and cheap. Idle compaction is under Auto-compact in the model menu."],
-  ] as const)("opens on the explanation for cause %s, then a dashed rule, then the summary", (cause, text) => {
-    for (const index of [0, 1]) {
-      const [explanation, separated, ...rest] = openPanelBody(compactionEvent(cause, SUMMARY), index);
-      expect(explanation.classList.contains("compaction-explanation")).toBe(true);
+  ] as const)(
+    "opens both chips on the explanation for cause %s, and the finish chip then on the summary",
+    (cause, text) => {
+      const [startExplanation, ...startRest] = openPanelBody(compactionEvent(cause, SUMMARY), 0);
+      expect(startExplanation.classList.contains("compaction-explanation")).toBe(true);
+      expect(startExplanation.querySelector("p")?.textContent).toBe(text);
+      expect(startRest).toEqual([]);
+
+      const [explanation, separated, ...rest] = openPanelBody(compactionEvent(cause, SUMMARY), 1);
       expect(explanation.querySelector("p")?.textContent).toBe(text);
       expect(separated.className).toContain("border-t border-dashed");
       expect(separated.querySelector(".compaction-summary")?.textContent).toBe(SUMMARY);
       expect(rest).toEqual([]);
+    },
+  );
+
+  it("shows the sweep's /compact on the start chip, under the explanation, while it runs and once it lands", () => {
+    for (const event of [null, compactionEvent("idle", SUMMARY)]) {
+      const [explanation, separated, ...rest] = openPanelBody(event, 0, SWEEP_COMMAND);
+      expect(explanation.classList.contains("compaction-explanation")).toBe(true);
+      expect(separated.className).toContain("border-t border-dashed");
+      expect(separated.querySelector(".compaction-command")?.textContent).toBe("/compact");
+      expect(rest).toEqual([]);
+      expect(root.querySelector(".compaction-summary")).toBeNull();
     }
+    // The finish chip keeps the summary, not the command.
+    openPanelBody(compactionEvent("idle", SUMMARY), 1, SWEEP_COMMAND);
+    expect(root.querySelector(".compaction-summary")?.textContent).toBe(SUMMARY);
+    expect(root.querySelector(".compaction-command")).toBeNull();
   });
 
   it("titles each chip's panel with that chip's label and glyph", () => {

@@ -67,6 +67,8 @@
  * tool calls beside it, or follows the wrap-up reply when it landed after one
  * (`trailing_status`). While the agent compacts, the compaction running now is
  * placed the same way, at the end of the transcript, until its event lands.
+ * The `/compact` the idle sweep sends a Claude agent breaks nothing either: it
+ * shows on its compaction's start chip, not as a bubble.
  *
  * This module reads no timestamps. Pending placeholders are ordered by
  * transcript position; grouping and the positioning of any transitioned step
@@ -83,7 +85,7 @@ import type {
   CompactionCause,
 } from "../models/Response";
 import type { HandoffState } from "../models/Chats";
-import { landedCompaction, runningCompaction, type CompactionPart } from "./compaction-chips";
+import { landedCompaction, RUNNING_COMPACTION_ID, runningCompaction, type CompactionPart } from "./compaction-chips";
 import type { RunPart } from "./message-renderers";
 import { COMPACTING_STATE } from "../models/activityState";
 import { SEED_HARNESS } from "../models/Response";
@@ -92,6 +94,7 @@ import type { RequestResolution } from "./message-classification";
 import { isFiledPermissionRequest } from "./permission-card";
 import { isFiledSecretRequest, parseSecretRequest } from "./secret-card";
 import {
+  isCompactCommand,
   isHandoffSummaryRequest,
   isNonBoundaryUserMessage,
   isNoticeUserMessage,
@@ -583,6 +586,30 @@ function autocompactNoticeAnchorId(events: readonly TranscriptEvent[]): string |
   return null;
 }
 
+/** The `/compact` the idle sweep sent for each idle compaction, by the compaction's event id, or by
+ *  `RUNNING_COMPACTION_ID` for the one running now. Claude Code records the sweep's command as a
+ *  user message the user never typed, so it shows on the compaction's start chip instead of as a
+ *  bubble. A command pairs with the compaction it directly precedes; one the user typed stays theirs. */
+function idleCompactCommands(
+  events: readonly TranscriptEvent[],
+  liveCompaction: LiveCompaction | null,
+): Map<string, UserMessageEvent> {
+  const commands = new Map<string, UserMessageEvent>();
+  let command: UserMessageEvent | null = null;
+  for (const e of events) {
+    if (e.type !== "user_message") {
+      command = null;
+    } else if (isStatusUserMessage(e)) {
+      if (command !== null && e.compaction_cause === "idle") commands.set(e.event_id, command);
+      command = null;
+    } else if (!isNonBoundaryUserMessage(e)) {
+      command = isCompactCommand(e) ? e : null;
+    }
+  }
+  if (command !== null && liveCompaction?.cause === "idle") commands.set(RUNNING_COMPACTION_ID, command);
+  return commands;
+}
+
 /** Walk the visible transcript into ordered sections. `toolResults` resolves tk
  *  command outputs (and is reused by the renderer). `isTailSettled` (see
  *  `isTailTurnSettled`) settles the spinner on the tail section. `liveCompaction` (see
@@ -596,6 +623,8 @@ export function buildSections(
 ): SectionView[] {
   const { deco, knownSteps, createdOrder } = buildDecorationMap(events, toolResults);
   const noticeAnchorId = autocompactNoticeAnchorId(events);
+  const compactCommands = idleCompactCommands(events, liveCompaction);
+  const compactCommandIds = new Set([...compactCommands.values()].map((command) => command.event_id));
 
   const builders: SectionBuilder[] = [];
   let current: SectionBuilder | null = null;
@@ -722,12 +751,14 @@ export function buildSections(
       }
       if (isStatusUserMessage(e)) {
         if (current === null) current = ensureSection(null, "section-pre");
-        current.entries.push({ kind: "status", part: landedCompaction(e, e.event_id === noticeAnchorId) });
+        const command = compactCommands.get(e.event_id) ?? null;
+        current.entries.push({ kind: "status", part: landedCompaction(e, e.event_id === noticeAnchorId, command) });
         continue;
       }
-      if (isNonBoundaryUserMessage(e)) {
+      if (isNonBoundaryUserMessage(e) || compactCommandIds.has(e.event_id)) {
         // Skill expansions and hidden framework injections (/welcome, image notes, resume
-        // markers) render nowhere on the user rail, so they are dropped here.
+        // markers) render nowhere on the user rail, so they are dropped here, as is the idle
+        // sweep's /compact, which its compaction's start chip shows.
         continue;
       }
 
@@ -787,7 +818,8 @@ export function buildSections(
   // The compaction running now goes where its event will land: at the end of the transcript.
   if (liveCompaction !== null && !endsOnLandedCompaction(events)) {
     if (current === null) current = ensureSection(null, "section-pre");
-    current.entries.push({ kind: "status", part: runningCompaction(liveCompaction.cause) });
+    const command = compactCommands.get(RUNNING_COMPACTION_ID) ?? null;
+    current.entries.push({ kind: "status", part: runningCompaction(liveCompaction.cause, command) });
   }
 
   // Pending roster: created steps that never transitioned anywhere, in

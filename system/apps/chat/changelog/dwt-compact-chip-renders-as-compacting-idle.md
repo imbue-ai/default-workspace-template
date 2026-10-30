@@ -1,0 +1,1 @@
+An idle compaction in a Claude chat no longer shows the `/compact` the idle sweep sent as a user bubble: the command shows on the "Compacting while idle…" chip instead, which opens on why it ran and then that `/compact`. The "Compacted" chip opens on why it ran and then the summary; the start chip of every compaction no longer repeats the summary.

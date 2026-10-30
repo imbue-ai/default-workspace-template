@@ -156,6 +156,15 @@ export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean
   return content === HANDOFF_SUMMARY_COMMAND || content.startsWith(`${HANDOFF_SUMMARY_COMMAND} `);
 }
 
+/** The slash command that compacts a Claude agent's context, typed by the user or sent by the idle sweep. */
+const COMPACT_COMMAND = "/compact";
+
+/** True for a `/compact` as Claude Code records it when it is submitted. */
+export function isCompactCommand(event: ClassifiableUserMessage): boolean {
+  const content = event.content.trim();
+  return content === COMPACT_COMMAND || content.startsWith(`${COMPACT_COMMAND} `);
+}
+
 // Permission REQUEST (a tool call)
 
 /** True when a tool call is an agent permission request (a POST to the reserved
