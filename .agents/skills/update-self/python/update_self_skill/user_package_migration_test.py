@@ -331,6 +331,24 @@ def test_a_wrapper_before_a_uv_run_stays_while_the_uv_run_goes() -> None:
     ]
 
 
+@pytest.mark.parametrize(
+    "step",
+    ["PORT=9 exec widget-app", "PORT=9 widget-app", "PORT=9 uv run widget-app"],
+)
+def test_a_steps_variable_assignment_stays_in_front_of_its_exec(step: str) -> None:
+    # `exec PORT=9 ...` would exec a command named `PORT=9`, and the app never starts.
+    rewritten = migration._program_rewrite(
+        f'bash -c "{step}"', "system/apps/widget", ["widget-app"]
+    )
+
+    assert rewritten is not None
+    assert user_packages.command_steps(rewritten)[-1] == [
+        "PORT=9",
+        "exec",
+        "system/apps/widget/.venv/bin/widget-app",
+    ]
+
+
 def test_a_programs_shell_steps_keep_their_expansions_redirections_and_operators() -> (
     None
 ):

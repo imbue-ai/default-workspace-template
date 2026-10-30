@@ -59,6 +59,8 @@ _TABLE_HEADER = re.compile(r"^\s*\[")
 # What separates the steps of a program's `bash -c` script, as user_packages splits them.
 _SCRIPT_SEPARATOR = re.compile(r"(&&|\|\||;|\n)")
 _DIRECTORY_CHANGES = frozenset({"cd", "pushd"})
+# A shell variable assignment, which sets the variable for the command after it.
+_ASSIGNMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=")
 
 
 class MigrationError(Exception):
@@ -389,7 +391,13 @@ def _exec_words(step: Sequence[str], script: str, relative: str) -> list[str]:
         own if user_packages.runs_script(_unquoted(word), script) else word
         for word in words
     ]
-    return words if words[0] == "exec" else ["exec", *words]
+    # `PORT=1 exec cmd` passes PORT to cmd; `exec PORT=1 cmd` execs a command named `PORT=1`.
+    assignments = 0
+    while assignments < len(words) and _ASSIGNMENT.match(words[assignments]):
+        assignments += 1
+    if words[assignments] == "exec":
+        return words
+    return [*words[:assignments], "exec", *words[assignments:]]
 
 
 def _rewrite_script(script: str, relative: str, scripts: Sequence[str]) -> str | None:
