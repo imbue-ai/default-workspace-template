@@ -1,12 +1,14 @@
 import asyncio
+import concurrent.futures
 import json
 import os
 import queue
 import signal
 import subprocess
+import threading
 import time
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +28,7 @@ from workspace_layout.windows import WindowClosedHint
 
 
 async def _noop_wake(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
-    """Stand-in for ``_wake_agent`` in tests: skip the real ``message_chat.py`` subprocess."""
+    """Stand-in for ``_wake_agent`` in tests: skip the real chat messenger send."""
 
 
 def _running_browser(browser_id: str) -> bsession.LiveBrowser:
@@ -1862,14 +1864,25 @@ def test_message_agent_goes_through_the_chat_messenger_by_id_as_a_browser_fleet_
     assert (cwd / "system" / "scripts" / "message_chat.py").is_file()
 
 
-def test_message_agent_logs_a_send_that_was_not_delivered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The messenger's exit code is the failure signal, so anything but delivered leaves a warning
-    naming it and the agent; the wake itself stays best-effort and raises nothing."""
+def _blocked_send(chat_id: str, text: str, *, cwd: Path) -> int:
+    return message_chat.EXIT_DELIVERED_BUT_BLOCKED
 
-    def blocked_send(chat_id: str, text: str, *, cwd: Path) -> int:
-        return message_chat.EXIT_DELIVERED_BUT_BLOCKED
 
-    monkeypatch.setattr(message_chat, "send", blocked_send)
+def _send_on_a_full_disk(chat_id: str, text: str, *, cwd: Path) -> int:
+    raise OSError(28, "No space left on device")
+
+
+@pytest.mark.parametrize(
+    ("fake_send", "reason"),
+    [(_blocked_send, "answered 7"), (_send_on_a_full_disk, "No space left on device")],
+    ids=["not-delivered", "send-raised"],
+)
+def test_message_agent_logs_a_send_that_was_not_delivered(
+    monkeypatch: pytest.MonkeyPatch, fake_send: Callable[..., int], reason: str
+) -> None:
+    """A send that ends in anything but delivered, or that cannot run at all, leaves a warning
+    naming why and the agent; the wake itself stays best-effort and raises nothing."""
+    monkeypatch.setattr(message_chat, "send", fake_send)
     warnings: list[str] = []
     sink_id = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
     try:
@@ -1878,8 +1891,39 @@ def test_message_agent_logs_a_send_that_was_not_delivered(monkeypatch: pytest.Mo
         logger.remove(sink_id)
 
     [warning] = warnings
-    assert "answered 7" in warning
+    assert reason in warning
     assert "riley" in warning
+
+
+def test_a_wake_still_waiting_on_its_send_leaves_the_default_executor_free(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A send waits as long as the chat's harness takes to accept the text, so a wake must not hold a
+    thread of the default executor, which the browser's own start and stop work runs on."""
+    started = threading.Event()
+    released = threading.Event()
+
+    def waiting_send(chat_id: str, text: str, *, cwd: Path) -> int:
+        started.set()
+        released.wait(timeout=10)
+        return message_chat.EXIT_DELIVERED
+
+    monkeypatch.setattr(message_chat, "send", waiting_send)
+
+    async def wake_then_use_the_default_executor() -> str:
+        asyncio.get_running_loop().set_default_executor(concurrent.futures.ThreadPoolExecutor(max_workers=1))
+        wake = asyncio.create_task(
+            bsession.LiveBrowser(browser_id="b1")._message_agent("agent-1", "riley", "the browser is yours")
+        )
+        try:
+            deadline = time.monotonic() + 5
+            while not started.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert started.is_set()
+            return await asyncio.wait_for(asyncio.to_thread(lambda: "ran"), timeout=2)
+        finally:
+            released.set()
+            await wake
+
+    assert asyncio.run(wake_then_use_the_default_executor()) == "ran"
 
 
 # the one browser: ensure, the window sweep, and the cap on restore

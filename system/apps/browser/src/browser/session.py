@@ -46,6 +46,8 @@ Cloud / litellm proxy (``ANTHROPIC_BASE_URL``) path is intentionally unsupported
 """
 
 import asyncio
+import concurrent.futures
+import functools
 import json
 import os
 import queue
@@ -393,6 +395,11 @@ def _repo_root() -> Path:
             return candidate
     return Path.cwd()
 
+
+# The wakes' own threads: a send has no read timeout, so a slow one must not hold a thread of the
+# default executor the browser's own start and stop work runs on.
+_WAKE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(thread_name_prefix="browser-wake")
+
 # Per-browser persistent Chromium profiles (cookies/logins/history) live here, on the
 # workspace volume under $MNGR_HOST_DIR -- Tier A durability: they survive stop/start
 # and restart of a single workspace (lost only on a permanent delete). They are covered
@@ -595,7 +602,7 @@ class LiveBrowser(MutableModel):
     # When a resume-queue agent was handed the browser but hasn't sent a command
     # yet (the claim window); 0.0 once it claims (or when no grant is pending).
     _granted_at: float = PrivateAttr(default=0.0)
-    # Strong refs to in-flight fire-and-forget tasks (the _wake_agent subprocess, the
+    # Strong refs to in-flight fire-and-forget tasks (the _wake_agent send, the
     # crash announcement). asyncio keeps only weak references to bare create_task()
     # results, so without this they could be garbage-collected before they run.
     _bg_tasks: set[Any] = PrivateAttr(default_factory=set)
@@ -1399,9 +1406,18 @@ class LiveBrowser(MutableModel):
         a bare user bubble. This is display-only -- the agent still receives the message and
         resumes its turn exactly as before. The chat is addressed by its chat id, never by an
         agent's name."""
-        returncode = await asyncio.to_thread(
-            message_chat.send, agent_id, message_chat.wrap_browser_fleet_nudge(text), cwd=_repo_root()
-        )
+        try:
+            returncode = await asyncio.get_running_loop().run_in_executor(
+                _WAKE_EXECUTOR,
+                functools.partial(
+                    message_chat.send, agent_id, message_chat.wrap_browser_fleet_nudge(text), cwd=_repo_root()
+                ),
+            )
+        except OSError as e:
+            logger.warning(
+                "could not message agent {} for browser {} ({})", agent_name or agent_id, self.browser_id, e
+            )
+            return
         if returncode != message_chat.EXIT_DELIVERED:
             logger.warning(
                 "the chat messenger answered {} messaging agent {} for browser {}; the message may not have landed",
