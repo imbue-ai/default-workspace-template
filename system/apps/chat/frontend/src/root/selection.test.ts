@@ -47,7 +47,16 @@ describe("slotFill", () => {
     isChoosing: false,
     isCompact: false,
     isShown: true,
+    isDeletePending: false,
   };
+
+  it("asks for no new chat while a delete is on its way, and still shows a chat that is listed", () => {
+    expect(slotFill({ ...empty, isDeletePending: true })).toEqual({ kind: "keep" });
+    expect(slotFill({ ...empty, isDeletePending: true, chatIds: ["agent-1"] })).toEqual({
+      kind: "select",
+      chatId: "agent-1",
+    });
+  });
 
   it("shows the head of the list (the main chat, else the most recent) when nothing is selected", () => {
     expect(slotFill({ ...empty, chatIds: ["agent-welcome", "agent-new", "agent-old"] })).toEqual({

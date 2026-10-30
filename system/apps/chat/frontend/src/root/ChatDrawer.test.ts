@@ -33,7 +33,7 @@ const ROWS = [row("agent-1", "Plan the launch"), row("agent-2", "Fix the tests",
 const PANEL_WIDTH = 300;
 
 let root: HTMLElement | null = null;
-let onPick = vi.fn<(chatId: string) => void>();
+let onPick = vi.fn<(chatId: string | null) => void>();
 let onDismiss = vi.fn<() => void>();
 
 function rail(isTouch: boolean): ChatRailAttrs {

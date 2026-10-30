@@ -65,6 +65,7 @@ import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
+import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
@@ -137,7 +138,7 @@ const emptyListChatBackoff = new ReconnectBackoff();
 /** The rail's rows in display order: the main chat first, then the most recent. */
 function railRows(): ChatRow[] {
   return groupedRows(
-    withPendingTitles(rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId())),
+    withPendingTitles(withoutPendingDeletes(rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId()))),
     startedHere,
   );
 }
@@ -150,6 +151,7 @@ function slotFillFor(chatId: string | null): SlotFill {
     isChoosing: pendingToken !== null || pendingPick !== null,
     isCompact: compactQuery.matches,
     isShown: isRootShown,
+    isDeletePending: hasPendingDelete(),
   });
 }
 
@@ -339,6 +341,7 @@ function onChatsUpdated(): void {
     if (rows.some((row) => row.chatId === chatId && row.lastActiveMs !== null)) startedHere.delete(chatId);
   }
   const listed = new Set(rows.map((row) => row.chatId));
+  settlePendingDeletes(listed);
   for (const chatId of listed) awaitingListing.delete(chatId);
   const isKept = (chatId: string): boolean => listed.has(chatId) || awaitingListing.has(chatId);
   if (pool !== null) {
@@ -355,6 +358,10 @@ function onChatsUpdated(): void {
 }
 
 const ChatRoot: m.Component = {
+  onupdate() {
+    // A rename reaches the window's title as it reaches the list, ahead of any chat list carrying it.
+    reportLocation();
+  },
   view() {
     const rows = railRows();
     const isCompact = compactQuery.matches;
@@ -448,7 +455,8 @@ function railAttrs(rows: readonly ChatRow[], isCompact: boolean): ChatRailAttrs 
     selectedChatId,
     isInDrawer: isCompact,
     isTouch: isCompact && touchQuery.matches,
-    onPick: (chatId: string) => select(chatId),
+    onPick: select,
+    onDeleteRefused: fillSlot,
     onNew: () => void openNewChat(),
     referenceScope: scopeOfHandshake(handshake),
     onDraftReference: draftReference,
