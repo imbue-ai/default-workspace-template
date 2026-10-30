@@ -9561,23 +9561,33 @@ def test_the_preflight_boots_the_entry_points_supervisord_runs() -> None:
 def test_an_apply_that_changes_a_user_package_syncs_it_in_place_and_its_failure_stops_only_it(
     apply_repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The fixture's root members name only its built-in apps, so these two are user packages.
-    for name in ("widget", "gadget"):
+    # The fixture's root members name only its built-in apps, so these are user packages.
+    for name in ("widget", "gadget", "gizmo"):
         _write_app(apply_repo, name, name, f"{name}-app", False)
     runner = _apply_runner(
-        "M\tsystem/apps/widget/uv.lock\nM\tsystem/apps/gadget/pyproject.toml\n",
+        "M\tsystem/apps/widget/uv.lock\nM\tsystem/apps/gadget/pyproject.toml\n"
+        "M\tsystem/apps/gizmo/uv.lock\n",
         apply_repo,
     )
     runner.respond(
         ("uv", "sync", "--locked", "--project", "system/apps/gadget"),
         _Result(returncode=1, stderr="error: the lockfile needs to be updated"),
     )
+    # gizmo's venv cannot be linked: a file holds the path its target would take.
+    gizmo_target = venv_links.target_for(
+        update_environment._venvs_root(apply_repo, runner),
+        apply_repo / "system/apps/gizmo",
+    )
+    gizmo_target.parent.mkdir(parents=True, exist_ok=True)
+    gizmo_target.write_text("not a venv")
 
     assert _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo) == 0
 
     assert runner.ran("uv", "sync", "--locked", "--project", "system/apps/widget")
     assert runner.ran("uv", "sync", "--locked", "--project", "system/apps/gadget")
+    assert not runner.ran("uv", "sync", "--locked", "--project", "system/apps/gizmo")
     assert (apply_repo / "system/apps/widget/.venv").is_symlink()
     err = capsys.readouterr().err
     assert "uv sync --locked --project system/apps/gadget failed" in err
     assert "the lockfile needs to be updated" in err
+    assert "warning: system/apps/gizmo:" in err

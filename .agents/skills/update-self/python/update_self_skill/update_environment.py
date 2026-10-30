@@ -876,10 +876,10 @@ def sync_changed_user_packages(
     root = _venvs_root(repo_root, runner)
     failed: list[str] = []
     for package in changed:
-        venv_links.ensure_link(
-            repo_root / package, root, venv_links.PROJECT_SYNC, _link_runner(runner)
-        )
         try:
+            venv_links.ensure_link(
+                repo_root / package, root, venv_links.PROJECT_SYNC, _link_runner(runner)
+            )
             run_checked(
                 runner,
                 expend(["uv", "sync", "--locked", "--project", package]),
@@ -887,11 +887,11 @@ def sync_changed_user_packages(
                 f"uv sync --locked --project {package}",
                 timeout=timeout,
             )
-        except ApplyFailed as exc:
+        except (ApplyFailed, OSError) as exc:
             failed.append(package)
             sys.stderr.write(
-                f"warning: {exc}; its program fails to start until it is fixed, and "
-                "nothing else is affected.\n"
+                f"warning: {package}: {exc}; its program fails to start until it is "
+                "fixed, and nothing else is affected.\n"
             )
     return failed
 
