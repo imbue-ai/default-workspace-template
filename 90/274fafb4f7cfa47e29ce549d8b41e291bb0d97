@@ -1,6 +1,6 @@
 {
   "recipe:1722492dd8b3e081": {
-    "image_id": "im-Oy1yAgnWw1bvZypPK6aovr",
+    "image_id": "im-AtVY0qzHxpJ1MFLGwaa2zH",
     "recipe": {
       "builder": {
         "modal": {
@@ -20,8 +20,8 @@
       "format": 2,
       "sandbox_init_cmd": "default-workspace-template-seed && bash /home/user/workspace/system/scripts/offload_sandbox_init.sh"
     },
-    "config_path": "offload-modal-system-interface.toml",
+    "config_path": "offload-modal.toml",
     "offload_version": "0.10.0",
-    "built_at": "2026-10-30T02:03:17Z"
+    "built_at": "2026-10-30T03:29:25Z"
   }
 }
