@@ -72,4 +72,7 @@ else
     echo "auth-sandbox boot: the Screen's stack did not start early; a viewer's first load starts it" >&2
 fi
 
+# A trapped signal interrupts the first wait while supervisord is still stopping its children; the
+# second one lets it drain, so this script exits with supervisord rather than ahead of it.
+wait "$SUPERVISORD_PID" || true
 wait "$SUPERVISORD_PID"
