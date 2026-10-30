@@ -1,8 +1,9 @@
 """The commands owner-exec runs on the chrome's behalf, each a thin entry point over the modules beside it.
 
 Exit codes: 0 when the command did what it says; 1 when latchkey refused (its reason, condensed, is the last
-line on stderr, which the dialog shows); 2 when a material the command needs is missing or malformed. Nothing
-here prints a key, and no key is ever in an argument.
+line on stderr, which the dialog shows); 3 when a material the command needs is missing or malformed (2 is
+click's own code for a usage error, which no retry in the sandbox cures). Nothing here prints a key, and no key
+is ever in an argument.
 """
 
 import json
@@ -41,7 +42,7 @@ from auth_sandbox.template_config import render_template_config
 from auth_sandbox.transfer import export_credentials, import_browser_state
 
 EXIT_REFUSED = 1
-EXIT_MISSING_MATERIAL = 2
+EXIT_MISSING_MATERIAL = 3
 
 _runtime_dir_option = click.option(
     "--runtime-dir",

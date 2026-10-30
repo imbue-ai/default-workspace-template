@@ -33,12 +33,12 @@ def test_sign_in_without_a_sandbox_key_names_the_missing_file_and_runs_nothing(
 
 def test_set_credentials_needs_an_account_and_a_values_file(tmp_path: Path) -> None:
     runner = CliRunner()
-    assert (
-        runner.invoke(
-            set_credentials_command, ["aws", "--values-file", str(tmp_path / "v.json")]
-        ).exit_code
-        == 2
-    )
+    # click's usage-error code, which the missing-material code stays apart from.
+    usage_error = runner.invoke(
+        set_credentials_command, ["aws", "--values-file", str(tmp_path / "v.json")]
+    ).exit_code
+    assert usage_error == 2
+    assert usage_error != EXIT_MISSING_MATERIAL
     (tmp_path / "v.json").write_text("not json")
     (tmp_path / "latchkey_key").write_text("key\n")
     result = runner.invoke(

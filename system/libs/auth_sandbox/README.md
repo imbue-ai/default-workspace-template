@@ -21,7 +21,7 @@ Keys travel in files and on stdin, never in an argument; nothing here prints a k
 - `auth-sandbox-export <service> [--account A]`: re-encrypts the service's credentials (and the browser state, when the sandbox holds one) into `/run/auth-sandbox/export/` under the transfer key and prints the paths it wrote: `{"credentials": ..., "data_format_version": ..., "browser_state": ... | null}`.
   The chrome reads those files over owner-exec and hands them to the workspace VM's `mngr-latchkey apply-state` with the transfer key.
 
-Exit codes: 0 done; 1 latchkey refused (its reason on stderr); 2 a material the command needs is missing or malformed (a key file, the incoming state, the values file).
+Exit codes: 0 done; 1 latchkey refused (its reason on stderr); 3 a material the command needs is missing or malformed (a key file, the incoming state, the values file). 2 is click's usage-error code, which a malformed invocation exits with.
 
 A fifth script, `auth-sandbox-render-config`, runs at image build only: it writes the template `config.json`.
 
