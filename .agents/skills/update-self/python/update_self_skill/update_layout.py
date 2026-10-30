@@ -129,8 +129,9 @@ MNGR_PLUGIN_KEY = "mngr"
 
 # Every ``system/apps/<package>/`` with an ``app.toml`` manifest is an app; the
 # manifest names it and says whether it is critical (held to its health in the
-# apply). Every Python app under it, manifest or not, is a member of the root
-# uv workspace and runs from the workspace venv.
+# apply). A built-in Python app under it is a member of the root uv workspace and
+# runs from the workspace venv; any other package there is a user package, a
+# standalone project with its own lock and venv (user_packages.py).
 APPS_DIR = "system/apps"
 
 MANIFEST_FILENAME = "app.toml"
