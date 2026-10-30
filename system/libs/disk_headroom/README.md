@@ -17,8 +17,8 @@ workspace, or a machine that publishes none), the filesystem's own figures are
 the answer. Paths on another filesystem, such as the `/tmp` RAM disk, are never
 held to the quota.
 
-The library is stdlib-only, so scripts that run under a bare `python3` can put
-`src` on `sys.path` and import it.
+The reader, `disk_headroom.space`, is stdlib-only, so scripts that run under a
+bare `python3` can put `src` on `sys.path` and import it.
 
 ## API
 

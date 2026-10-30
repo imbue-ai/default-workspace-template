@@ -121,21 +121,21 @@ def test_a_quota_already_exceeded_leaves_nothing_to_write() -> None:
         pytest.param(
             None,
             snapshot(
-                "free: 40.0 GiB of 100.0 GiB (60.0 GiB used)\nlimited by: the disk (no disk quota applies here)\n"
+                "free: 40.0 GiB of 100.0 GiB (60.0 GiB used)\nlimited by: the disk (no disk quota applies here)"
             ),
             id="no quota",
         ),
         pytest.param(
             HostQuota(limit=40 * _GIB, used=38 * _GIB),
             snapshot(
-                "free: 2.0 GiB of 40.0 GiB (38.0 GiB used)\nlimited by: the machine's disk quota (2.0 GiB left); the disk itself reports 40.0 GiB free\n"
+                "free: 2.0 GiB of 40.0 GiB (38.0 GiB used)\nlimited by: the machine's disk quota (2.0 GiB left); the disk itself reports 40.0 GiB free"
             ),
             id="quota bound",
         ),
         pytest.param(
             HostQuota(limit=200 * _GIB, used=60 * _GIB),
             snapshot(
-                "free: 40.0 GiB of 100.0 GiB (60.0 GiB used)\nlimited by: the disk (40.0 GiB free); the machine's disk quota has 140.0 GiB left\n"
+                "free: 40.0 GiB of 100.0 GiB (60.0 GiB used)\nlimited by: the disk (40.0 GiB free); the machine's disk quota has 140.0 GiB left"
             ),
             id="disk bound",
         ),

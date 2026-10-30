@@ -5,12 +5,11 @@ which on a cloud machine reports the filesystem's free space and never the
 disk quota that may run out first.
 """
 
-import argparse
 import json
-import sys
-from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
+
+import click
 
 from disk_headroom.space import DiskSpace, read_disk_space
 
@@ -38,32 +37,23 @@ def format_disk_space(space: DiskSpace) -> str:
             f"limited by: the disk ({_gib(space.filesystem_free)} free);"
             f" the machine's disk quota has {_gib(space.quota_free)} left"
         )
-    return f"{headline}\n{detail}\n"
+    return f"{headline}\n{detail}"
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="disk-headroom",
-        description="How much the workspace can still write to the disk holding PATH.",
-    )
-    parser.add_argument(
-        "path",
-        nargs="?",
-        default="/",
-        type=Path,
-        help="A path on the disk to measure (default: /).",
-    )
-    parser.add_argument(
-        "--json", action="store_true", help="Print the figures, in bytes, as JSON."
-    )
-    args = parser.parse_args(argv)
+@click.command(
+    help="How much the workspace can still write to the disk holding PATH (default: /)."
+)
+@click.argument("path", required=False, default="/", type=click.Path(path_type=Path))
+@click.option(
+    "--json", "is_json", is_flag=True, help="Print the figures, in bytes, as JSON."
+)
+def main(path: Path, is_json: bool) -> None:
     try:
-        space = read_disk_space(args.path)
+        space = read_disk_space(path)
     except OSError as exc:
-        sys.stderr.write(f"disk-headroom: cannot read {args.path}: {exc}\n")
-        return 1
-    if args.json:
-        sys.stdout.write(
+        raise click.ClickException(f"cannot read {path}: {exc}") from exc
+    if is_json:
+        click.echo(
             json.dumps(
                 {
                     "total": space.total,
@@ -74,12 +64,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "is_quota_bound": space.is_quota_bound,
                 }
             )
-            + "\n"
         )
     else:
-        sys.stdout.write(format_disk_space(space))
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())
+        click.echo(format_disk_space(space))

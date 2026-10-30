@@ -1,10 +1,13 @@
 [project]
 name = "disk-headroom"
 version = "0.1.0"
-description = "How much the workspace can still write to its disk: the filesystem's free space, or the cloud machine's disk quota when that runs out first. Stdlib-only so scripts can import it under a bare python3."
+description = "How much the workspace can still write to its disk: the filesystem's free space, or the cloud machine's disk quota when that runs out first. Its reader (disk_headroom.space) is stdlib-only so scripts can import it under a bare python3."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    # The command only; disk_headroom.space imports nothing outside the standard library.
+    "click>=8.1",
+]
 
 [project.scripts]
 disk-headroom = "disk_headroom.cli:main"
