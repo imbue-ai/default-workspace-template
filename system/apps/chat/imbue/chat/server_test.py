@@ -30,6 +30,7 @@ from mngr_cli_contract.contract import assert_mngr_argv_valid
 from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
+from watchdog.observers.api import BaseObserver
 from werkzeug.test import TestResponse
 
 from imbue.chat.accounts import INDEX_VERSION
@@ -693,6 +694,54 @@ def _claude_agent_info_with_one_message(tmp_path: Path, agent_id: str, state: st
     )
 
 
+def test_every_chat_on_one_account_watches_through_one_observer_holding_one_watch_of_its_projects_tree(
+    tmp_path: Path,
+) -> None:
+    """The chats of one account all watch that account's projects tree; the app watches it once, through one
+    observer, however many of them are open."""
+    state = build_test_state()
+    account_dir = tmp_path / "account"
+    (account_dir / "projects" / "hash123").mkdir(parents=True)
+    observers_before = {thread for thread in threading.enumerate() if isinstance(thread, BaseObserver)}
+    try:
+        for index in range(4):
+            agent_id = f"account-chat-{index}"
+            agent_state_dir = tmp_path / agent_id
+            agent_state_dir.mkdir()
+            (agent_state_dir / "claude_session_id_history").write_text(f"s{index}\n")
+            info = AgentInfo(
+                id=agent_id,
+                name=agent_id,
+                state="RUNNING",
+                agent_state_dir=agent_state_dir,
+                claude_config_dir=account_dir,
+            )
+            state.get_or_create_watcher(info)
+
+        def app_observers() -> list[BaseObserver]:
+            return [
+                thread
+                for thread in threading.enumerate()
+                if isinstance(thread, BaseObserver) and thread not in observers_before
+            ]
+
+        def watch_count(path: Path) -> int:
+            return sum(
+                1 for observer in app_observers() for emitter in observer.emitters if emitter.watch.path == str(path)
+            )
+
+        # Each chat's own state dir is watched once its watcher has subscribed to everything.
+        wait_until_true(
+            lambda: all(watch_count(tmp_path / f"account-chat-{index}") == 1 for index in range(4)),
+            5.0,
+            "every chat's watches in place",
+        )
+        assert watch_count(account_dir / "projects") == 1
+        assert len(app_observers()) == 1
+    finally:
+        state.shutdown()
+
+
 def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -> None:
     """Eviction releases the watcher (resident transcript, watch thread); a later read
     rebuilds it from disk transparently -- the chat-memory lifecycle's two halves."""
@@ -951,6 +1000,7 @@ def _fake_watcher(
         notify_idle=lambda: [],
         notify_busy=lambda: None,
         set_flush_hooks=lambda _send, _is_alive: None,
+        set_watch_observer=lambda _watch_observer: None,
         get_all_events=get_all_events,
         start=start,
         stop=stop,
@@ -4113,6 +4163,44 @@ def test_websocket_replays_the_provisional_chats_before_the_agent_list(
     assert first["chat_id"] == failed.chat_id
     assert first["phase"] == ProvisionalChatPhase.FAILED.value
     assert second["type"] == "chats_updated"
+
+
+@pytest.mark.timeout(15)
+def test_a_page_that_connects_before_the_first_agent_listing_gets_its_chat_list_from_that_listing(
+    config: Config, signed_in_account: str, tmp_path: Path, messenger: RecordingMngrMessenger
+) -> None:
+    """The app serves while it first reads the agent list. A page connected by then is replayed what the app
+    holds but no chat list -- an empty one would read as every chat gone -- and gets the list the read pushes."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger, chat_files_root=tmp_path / "chats")
+    app = create_application(build_test_state(config=config, agent_manager=manager))
+    failed = seed_failed_chat(manager, ChatId("failed-1"), "Chat 1")
+
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            replayed = json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))
+            assert ws.receive(timeout=0.5) is None
+            manager._adopt_initial_listing(
+                [
+                    AgentInfo(
+                        id="listed-chat",
+                        name="listed-chat",
+                        state="RUNNING",
+                        agent_state_dir=tmp_path / "listed-chat",
+                        claude_config_dir=tmp_path / "claude_config",
+                        labels={"user_created": "true"},
+                    )
+                ]
+            )
+            pushed = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT))]
+            while pushed[-1]["type"] != "chats_updated":
+                pushed.append(json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)))
+        finally:
+            close_ws(ws)
+
+    assert replayed["type"] == "provisional_chat_created"
+    assert replayed["chat_id"] == failed.chat_id
+    assert "listed-chat" in {chat["chat_id"] for chat in pushed[-1]["chats"]}
 
 
 def _write_claude_session(claude_config_dir: Path, session_id: str, events: list[dict[str, Any]]) -> None:
