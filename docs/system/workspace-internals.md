@@ -19,7 +19,8 @@ Users make "creations". There are conventions for the common kinds:
 - an **app**: something the user opens as a tab and interacts with. Lives
   under `system/apps/<package>/` beside its `app.toml` manifest (name, display
   name, icon, instances, priority, criticality, program), runs as a supervisord
-  program from the workspace venv, registers its manifest and port
+  program from a venv (the workspace venv for a built-in app, its own for one
+  the user's agents build, a standalone uv project), registers its manifest and port
   via `forward_port.py --manifest`, and is served at its own browser origin: the
   app's name is prefixed as a hostname label on the workspace host, so
   locally the app lives at `http://<name>.<host-id>.localhost:8421/` (the
