@@ -8,7 +8,10 @@
  * fields (and a tool call's `display`). This module only MAPS those fields onto
  * the frontend's `UserMessageKind` catalogue (see message-kinds.ts for how each
  * kind renders) -- it never sniffs message text or tool input, and adding a new
- * specially-rendered message is a backend rule, not a frontend regex.
+ * specially-rendered message is a backend rule, not a frontend regex. The one
+ * exception is the slash commands sent to an agent (`/handoff-summary`, `/compact`),
+ * recognised by their text: what each means depends on where it sits in the
+ * transcript, which only the transcript walk can see.
  */
 
 import type { DisplayDecision } from "../models/Chats";
