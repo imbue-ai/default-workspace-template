@@ -6,9 +6,9 @@ block, run by its own path, or a stub: a top-level ``.py`` file in a scripts dir
 its package, kept where something outside the release calls a fixed path or the script runs with
 no venv and imports its own package. An entry's tier is its package's -- an entry into a bare
 package runs under the system ``python3`` with no venv (stdlib only), any other runs from the
-root venv (``uv run --no-sync``) -- except for the bare modules of venv packages listed below,
-a bare skill's single script, and a few standalone stdlib scripts outside the scripts
-directories. See .agents/shared/references/running-python.md.
+root venv (``uv run --no-sync``) -- except for the bare modules of venv packages and the venv
+modules of bare packages listed below, a bare skill's single script, and a few standalone
+stdlib scripts outside the scripts directories. See .agents/shared/references/running-python.md.
 """
 
 from __future__ import annotations
@@ -61,6 +61,18 @@ BARE_MODULES = (
     / "scripts"
     / "agents_shared"
     / "preview_wrapper_server.py",
+)
+
+# Modules of bare packages that run from the root venv instead: run by their path, they import
+# their own package by name, which only the venv's install of it resolves.
+VENV_MODULES_OF_BARE_PACKAGES = (
+    REPO_ROOT
+    / ".agents"
+    / "skills"
+    / "update-self"
+    / "python"
+    / "update_self_skill"
+    / "user_package_migration.py",
 )
 
 # The only directories bare code may put on sys.path: where the bare packages and the
@@ -184,6 +196,8 @@ def is_bare_entry(path: Path) -> bool:
         return path.is_file()
     if path in BARE_MODULES:
         return path.is_file()
+    if path in VENV_MODULES_OF_BARE_PACKAGES:
+        return False
     if path.parent.name == "scripts" and bare_skill_module(path.parent.parent) == path:
         return True
     if (path.parent / "__init__.py").is_file():
