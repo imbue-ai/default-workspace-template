@@ -147,19 +147,22 @@ def test_the_package_caches_are_counted_once_and_in_no_other_item(
     (root / real_cache / "uv" / "wheels").write_bytes(b"x" * 3 * _MIB)
     (root / linked_cache).parent.mkdir(parents=True, exist_ok=True)
     (root / linked_cache).symlink_to(root / real_cache)
+    # A cache nested under a home entry, which the home tree's walk leaves out by --exclude.
+    (home / ".local" / "share" / "uv").mkdir(parents=True)
+    (home / ".local" / "share" / "uv" / "python").write_bytes(b"x" * 2 * _MIB)
 
     rows, missing = disk.scan(100 * _MIB, home / "workspace", home, disk.du_bytes, root)
 
     assert missing == []
     by_id = {row["id"]: row for row in rows}
-    assert 3 * _MIB <= by_id["caches"]["bytes"] < 4 * _MIB
-    assert by_id["caches"]["items"] == [
-        {
-            "name": listed_as,
-            "hint": "downloads and build caches",
-            "bytes": by_id["caches"]["bytes"],
-        }
+    assert 5 * _MIB <= by_id["caches"]["bytes"] < 6 * _MIB
+    cache_items = by_id["caches"]["items"]
+    assert [(item["name"], item["hint"]) for item in cache_items] == [
+        (listed_as, "downloads and build caches"),
+        (".local/share/uv", "Python packages"),
     ]
+    assert 3 * _MIB <= cache_items[0]["bytes"] < 4 * _MIB
+    assert 2 * _MIB <= cache_items[1]["bytes"] < 3 * _MIB
     software, home_data = by_id["other"]["items"][:2]
     assert software["name"] == "System software"
     assert _MIB <= software["bytes"] < 2 * _MIB
