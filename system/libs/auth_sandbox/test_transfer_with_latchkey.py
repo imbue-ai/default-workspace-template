@@ -9,9 +9,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from click.testing import CliRunner
-from pydantic import SecretStr
-
 from auth_sandbox.cli import (
     EXIT_REFUSED,
     export_command,
@@ -27,6 +24,8 @@ from auth_sandbox.testing import (
     store_credential,
 )
 from auth_sandbox.transfer import reencrypt_argv, reencrypt_environment
+from click.testing import CliRunner
+from pydantic import SecretStr
 
 _STATE: dict[str, object] = {"cookies": [{"name": "sid", "value": "1"}], "origins": []}
 

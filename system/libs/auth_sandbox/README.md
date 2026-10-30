@@ -74,4 +74,4 @@ The steps are plain data over a small sandbox interface, and the tests run them 
 ## Tests
 
 `uv run pytest system/libs/auth_sandbox` runs the unit tests over fakes (`mock_latchkey_test.py`).
-`test_transfer_with_latchkey.py` runs the import and export commands against the real `latchkey` on `PATH` (the version `setup_system.sh` pins) with fabricated stores and browser states, and skips when there is none.
+`test_transfer_with_latchkey.py`, at the library's root with the ratchets, runs the import and export commands against the real `latchkey` on `PATH` (the version `setup_system.sh` pins) with fabricated stores and browser states, and skips when there is none.
