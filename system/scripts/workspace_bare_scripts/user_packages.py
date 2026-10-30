@@ -39,7 +39,7 @@ MIGRATION_REFERENCE = (
     ".agents/skills/update-self/references/python-packaging-migration.md"
 )
 
-_SHELLS = frozenset({"bash", "sh", "zsh", "dash"})
+SHELLS = frozenset({"bash", "sh", "zsh", "dash"})
 _STEP_SEPARATOR = re.compile(r"&&|\|\||;|\n")
 
 
@@ -127,7 +127,7 @@ def command_steps(command: str) -> list[list[str]]:
     """
     words = split_words(command)
     for index, word in enumerate(words[:-2]):
-        if PurePosixPath(word).name in _SHELLS and words[index + 1] in ("-c", "-lc"):
+        if PurePosixPath(word).name in SHELLS and words[index + 1] in ("-c", "-lc"):
             steps = [words[:index]] if index else []
             for part in _STEP_SEPARATOR.split(words[index + 2]):
                 part_words = split_words(part.strip())

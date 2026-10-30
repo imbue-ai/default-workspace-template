@@ -232,6 +232,7 @@ def test_a_dry_run_says_what_it_would_change_and_changes_nothing(
         _OLD_PROGRAM,
         'bash -c "uv sync --all-packages --frozen && exec nice -n 5 .venv/bin/widget-app"',
         'bash -c "exec python3 system/scripts/with_secrets.py data/.secrets/w.env -- .venv/bin/widget-app"',
+        'dash -c "uv sync --all-packages --frozen && exec .venv/bin/widget-app"',
     ],
 )
 def test_every_old_program_form_becomes_one_the_standalone_check_accepts(

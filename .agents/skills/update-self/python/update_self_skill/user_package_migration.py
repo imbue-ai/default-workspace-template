@@ -301,7 +301,8 @@ def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str
         (
             index
             for index, word in enumerate(words[:-2])
-            if Path(word).name in ("bash", "sh") and words[index + 1] in ("-c", "-lc")
+            if Path(word).name in user_packages.SHELLS
+            and words[index + 1] in ("-c", "-lc")
         ),
         None,
     )
