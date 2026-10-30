@@ -120,7 +120,7 @@ def is_workspace_skill(skill_dir: Path) -> bool:
 
     A built-in skill (``metadata.author: imbue``) or one made in this workspace
     (``metadata.crystallized: true``) is; any other skill came from a third party and is
-    kept as it came, so the import-cost and launch checks leave it out.
+    kept as it came, so the import-cost, type and launch checks leave it out.
     """
     metadata = _skill_metadata(skill_dir)
     return metadata.get("author") == "imbue" or metadata.get("crystallized") is True

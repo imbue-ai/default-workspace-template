@@ -118,8 +118,8 @@ metadata:
 
 The marker is how the workspace tells its own skills from a third party's. A
 skill marked `metadata.crystallized: true`, or a built-in one (marked
-`metadata.author: imbue`), is held to the root suite's import-cost and launch
-checks. Any other skill is kept as it came and left out of them, so a
+`metadata.author: imbue`), is held to the root suite's import-cost, type and
+launch checks. Any other skill is kept as it came and left out of them, so a
 skill written here without the scaffold needs the marker added by hand.
 
 Omit `allowed-tools`, `license`, and `compatibility` unless you have a

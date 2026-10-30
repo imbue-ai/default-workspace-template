@@ -2,8 +2,8 @@
 
 A skill is the workspace's own when its SKILL.md frontmatter carries ``metadata.author: imbue``
 (built in) or ``metadata.crystallized: true`` (made in this workspace). Any other skill came
-from a third party and is kept as it came, so the import-cost and launch checks leave it out
-(``validate_skill.is_workspace_skill``).
+from a third party and is kept as it came, so the import-cost, type and launch checks leave it
+out (``validate_skill.is_workspace_skill``).
 
     uv run --no-sync .agents/shared/scripts/agents_shared/skill_ownership.py unmarked
 
