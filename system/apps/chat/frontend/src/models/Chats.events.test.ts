@@ -205,23 +205,6 @@ describe("the provisional chats over the socket", () => {
     expect(manager.getProvisionalChat("agent-1")).toBeUndefined();
   });
 
-  it("tells the chat list's listeners of a discard, though the list that follows it is unchanged", () => {
-    const listener = vi.fn();
-    push({ type: "chats_updated", chats: [] });
-    push({ type: "provisional_chat_created", ...proto("agent-1", "awaiting_first_send") });
-    manager.addChatsUpdatedListener(listener);
-
-    push({ type: "chats_updated", chats: [] });
-    expect(listener).not.toHaveBeenCalled();
-
-    push({ type: "provisional_chat_completed", chat_id: "agent-1", success: false, error: null });
-    push({ type: "chats_updated", chats: [] });
-    expect(listener).toHaveBeenCalledTimes(1);
-
-    push({ type: "chats_updated", chats: [] });
-    expect(listener).toHaveBeenCalledTimes(1);
-  });
-
   it("drops a record a reconnect's replay does not carry and releases the send held for it", async () => {
     push({ type: "chats_updated", chats: [] });
     push({ type: "provisional_chat_created", ...proto("agent-1", "creating") });

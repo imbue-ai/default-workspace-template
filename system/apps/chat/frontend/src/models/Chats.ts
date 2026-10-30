@@ -373,10 +373,8 @@ function handleEvent(event: WsEvent): void {
         // The chat itself arrives on the chats_updated push, which is what settles waiters.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
       } else if (event.error === null) {
-        // Discarded before it launched: gone, with nothing to show. The chat list push that follows reads the same as
-        // the last one, since the list never named this chat, but a page listing the provisional chats lost a row.
+        // Discarded before it launched: gone, with nothing to show.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
-        lastChatsSerialized = "";
         settleRegistration(event.chat_id, new Error("The chat was closed before it started"));
       } else {
         const error = event.error;
