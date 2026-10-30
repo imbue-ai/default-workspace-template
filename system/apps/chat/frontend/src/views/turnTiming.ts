@@ -4,10 +4,11 @@
  * A turn starts at the user message that opened it: any message that opens a section of the
  * progress timeline (the user's own words, a system chip the agent resumes after, a permission
  * verdict), not a skill expansion, a framework injection inside the turn, or the idle sweep's
- * `/compact` (see `sweepCompactCommands`). It ends at the agent's
- * last reply, tool call or tool result after that message -- not at a compaction that ran once the
- * agent was idle, which lands later without opening a turn. Both are the transcript's own
- * timestamps, so a reloaded page reads the same turn the same way.
+ * `/compact` once its compaction has landed (see `sweepCompactCommands`). While that compaction
+ * runs, the `/compact` opens the latest turn, so the status row counts the compaction from it. A
+ * turn ends at the agent's last reply, tool call or tool result after that message -- not at a
+ * compaction that ran once the agent was idle, which lands later without opening a turn. Both are
+ * the transcript's own timestamps, so a reloaded page reads the same turn the same way.
  */
 
 import type { TranscriptEvent } from "../models/Response";
