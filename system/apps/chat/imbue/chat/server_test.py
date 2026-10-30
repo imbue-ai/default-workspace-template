@@ -978,6 +978,13 @@ class _ResendChoiceRecordingMngrMessenger(RecordingMngrMessenger):
         return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
 
 
+def _client_over(messenger: RecordingMngrMessenger) -> tuple[AgentManager, FlaskClient]:
+    """A chat app whose agent list is known and whose sends go to ``messenger``, with a client for its routes."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    return manager, create_application(build_test_state(agent_manager=manager)).test_client()
+
+
 def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass() -> None:
     """The flush retries a block it did not see land only while no turn is open, so mngr's send is not repeated."""
     messenger = _ResendChoiceRecordingMngrMessenger()
@@ -1001,20 +1008,11 @@ def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass(
     ids=["a-plain-send", "a-send-from-a-failure-notice"],
 )
 def test_only_a_send_from_a_failure_notice_goes_out_once(body_fields: dict[str, bool], expected_choice: bool) -> None:
-    agent_id = "agent-00000000000000000000000000000001"
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
-        claude_config_dir=Path("/tmp/.claude"),
-    )
+    agent_info = _agent_info()
     messenger = _ResendChoiceRecordingMngrMessenger()
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
-    manager.note_agent_list_known()
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    _manager, client = _client_over(messenger)
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", **body_fields})
+        response = client.post(f"/api/chats/{agent_info.id}/message", json={"message": "hello", **body_fields})
 
     assert response.status_code == 200
     assert messenger.resend_choices == [expected_choice]
@@ -1145,26 +1143,17 @@ def test_send_message_success() -> None:
 
 def test_a_send_delivered_by_a_second_send_answers_resent() -> None:
     """mngr could not confirm the first send and the chat sent it again, so the page is told, to say so."""
-    agent_id = "agent-00000000000000000000000000000001"
-    agent_info = AgentInfo(
-        id=agent_id,
-        name="test-agent",
-        state="RUNNING",
-        agent_state_dir=Path("/tmp/test"),
-        claude_config_dir=Path("/tmp/.claude"),
-    )
+    agent_info = _agent_info()
     messenger = RecordingMngrMessenger(delivery=SendDelivery.RESENT)
-    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
-    manager.note_agent_list_known()
-    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    manager, client = _client_over(messenger)
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
-        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hello"})
+        response = client.post(f"/api/chats/{agent_info.id}/message", json={"message": "hello"})
 
     assert response.status_code == 200
     assert response.get_json() == {"status": "resent"}
-    assert messenger.sent == [(agent_id, "hello")]
+    assert messenger.sent == [(agent_info.id, "hello")]
     # Delivered all the same: kept to be sent again should the agent's process exit before recording it.
-    assert [send.text for send in manager._unrecorded_sends_by_agent.get(agent_id, [])] == ["hello"]
+    assert [send.text for send in manager._unrecorded_sends_by_agent.get(agent_info.id, [])] == ["hello"]
 
 
 def test_a_send_to_a_chat_launched_at_sign_in_carries_the_seeded_conversation_once(
