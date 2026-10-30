@@ -896,7 +896,7 @@ def migrate(
         if is_dry_run:
             return 0
         pinned = apply(plan, repo_root, run)
-    except MigrationError as exc:
+    except (MigrationError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
     if pinned:

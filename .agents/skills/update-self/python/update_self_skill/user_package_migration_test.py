@@ -174,9 +174,33 @@ class _UvWhoseSyncFails(_Uv):
         return super().__call__(command, cwd)
 
 
+class _UvWhoseSyncCannotStart(_Uv):
+    """``_Uv``, but the package's ``uv sync`` cannot be started at all."""
+
+    def __call__(self, command: Sequence[str], cwd: Path) -> migration.Completed:
+        if list(command)[:2] == ["uv", "sync"]:
+            self.calls.append(list(command))
+            raise FileNotFoundError(2, "No such file or directory", "uv")
+        return super().__call__(command, cwd)
+
+
+@pytest.mark.parametrize(
+    ("uv_class", "reason"),
+    [
+        (_UvWhoseSyncFails, "network unreachable"),
+        (_UvWhoseSyncCannotStart, "No such file or directory"),
+    ],
+    ids=["sync-failed", "sync-cannot-start"],
+)
 def test_a_migration_that_fails_part_way_puts_every_file_back(
-    workspace: Path, tmp_path: Path
+    workspace: Path,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    uv_class: type[_Uv],
+    reason: str,
 ) -> None:
+    # convert-packages migrates each package in-process, so a failure that is not the
+    # migration's own still has to come back as 1 for it to go on to the next package.
     written = [
         workspace / "pyproject.toml",
         workspace / "uv.lock",
@@ -185,7 +209,7 @@ def test_a_migration_that_fails_part_way_puts_every_file_back(
         workspace / ".agents/skills/report/SKILL.md",
     ]
     before = {path: path.read_bytes() for path in written}
-    uv = _UvWhoseSyncFails(tmp_path / "cache" / "uv")
+    uv = uv_class(tmp_path / "cache" / "uv")
 
     code = migration.main(
         [
@@ -200,6 +224,7 @@ def test_a_migration_that_fails_part_way_puts_every_file_back(
     )
 
     assert code == 1
+    assert reason in capsys.readouterr().err
     # It got as far as relocking the root before the sync failed.
     assert ["uv", "lock"] in uv.calls
     assert {path: path.read_bytes() for path in written} == before
