@@ -55,8 +55,9 @@ The app owns its origin (`<name>-<suffix>.<workspace coordinate>`), its icon, it
 The registered `name` is the developer-facing identifier: the supervisord program, the entry point, the origin label prefix, the share-grant key, and the key minds routes by.
 It is not renameable (stable app ids and renaming are deferred, section 11); `display_name` is what users see and may change freely.
 
-Every Python app, built-in or user-built, runs from the workspace venv, which is its only install (contracts section 14): every app is a member of the root uv workspace's `system/apps/*` glob, so one repo, one lockfile, and one set of build and test commands cover them all.
-An app's supervisord program line execs its entry point from `.venv/bin` rather than through `uv run`, as the services' lines do.
+The built-in apps run from the workspace venv, their one install (contracts section 14): each is named in the root uv workspace's `members`, so they share one lockfile and are reviewed and tested together upstream.
+Every user-built app (and service and library) is instead a standalone uv project with its own lock and venv, so a dependency one adds never moves the versions the chat or another app runs on (`docs/system/blueprint/app-environments/plan-app-environments.md`).
+A built-in app's supervisord program line execs its entry point from `.venv/bin`, and a user app's from its own `.venv/bin` after syncing its own project; neither runs through `uv run`.
 The terminal and files apps are small Python launchers around ttyd and dufs, so they run the same way.
 No app has a uv tool environment of its own: a second install that the program lines never run drifts from the venv, and anything that boots it instead (the update's pre-flight) tests an install the restart does not run.
 Converting a pre-manifest app to the manifest form is something the update-app skill may offer the next time the user edits that app, with the user present (section 11).

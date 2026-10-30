@@ -84,17 +84,22 @@ scope file; `app-manifest references --for-path <path>` runs the lookup the
 other way, from an owned path back to the app that claims it. Registration
 ignores both tables, so a stale reference can never stop the app.
 
-Every Python app runs from the workspace venv, the one install of it:
-`uv sync --all-packages` (run by `system/scripts/build_workspace.sh`, by the
-build-app scaffold for a new app, and by the update-self apply when an app's
-`pyproject.toml` or `uv.lock` changes) installs each package here editable, and
-an app's program line execs its entry point from `.venv/bin` rather than
-through `uv run`.
-Python packages here are picked up by the workspace's `system/apps/*` uv member
-glob, so one lockfile covers the whole tree and nothing in the root
-`pyproject.toml` needs editing for a user-built app. The built-in apps are
-also root dependencies, so a sync without `--all-packages` keeps their entry
-points; adding or removing a built-in app means editing its entry there too.
+The built-in apps run from the workspace venv: each is named in the root
+`pyproject.toml`'s `[tool.uv.workspace] members` and is also a root dependency
+(so a sync without `--all-packages` keeps its entry point), shares the one
+`uv.lock`, and has its program line exec its entry point from `.venv/bin`.
+`uv sync --all-packages` (run by `system/scripts/build_workspace.sh`, and by the
+update-self apply when a built-in app's `pyproject.toml` or `uv.lock` changes)
+installs each here editable. Adding or removing a built-in app means editing
+both root entries.
+
+Every app the user's agents build here is instead a standalone uv project, not
+a root member: its own `pyproject.toml`, `uv.lock` and `.venv` (a link beside
+the uv cache), shared code through editable path sources, and a program line
+that syncs its own project with `--locked` before it execs from its own
+`.venv/bin`. A dependency it adds changes only its own lock, so it can never move
+the chat's or another app's versions. The build-app scaffold sets this up, and
+`.agents/shared/references/running-python.md` has the rules.
 
 An app that needs a continuously running background component keeps that
 service's code in its own folder here, named `<app>-<role>` in supervisord;

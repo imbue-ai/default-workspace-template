@@ -67,9 +67,10 @@ is named `<app>-<role>`.
   web UI -- the special app that hosts the other tabs), `chat/` (the agent
   chats), `terminal/`, `files/`, `browser/`, `routines/` (Routines),
   `system_monitor/` (System Monitor),
-  and every user-built app, each with an `app.toml` manifest; every
-  Python app is a member of the uv workspace via the `system/apps/*` glob
-  and runs from the workspace venv)
+  and every user-built app, each with an `app.toml` manifest; every built-in
+  app is a member of the root uv workspace, named in its `members`, and runs
+  from the root venv; every user-built app, service or library under `system/`
+  is a standalone uv project with its own `uv.lock` and `.venv`)
 - `system/services/` - Standalone background services (`caretaker/`,
   `share_gateway/`, `host_backup/`, `env_converge/`, `oom_priority/`)
 - `system/libs/` - Support libraries, including `bootstrap/` (first-boot
@@ -116,7 +117,10 @@ is named `<app>-<role>`.
   (each records its link in a sibling `.owner.json`). The update apply syncs a
   manifest change into a fresh target, pre-flights from it, and switches the
   link just before its restart; a rollback switches it back. A target on a
-  different filesystem from the cache gets a warning in the boot log.
+  different filesystem from the cache gets a warning in the boot log. Every
+  user package's own `.venv` is a link the same way: the boot window links each
+  without syncing it, its program syncs it at start, and worker setup and the
+  build sync each (`system/scripts/workspace_bare_scripts/user_packages.py`).
 - `system/vendor/tk/` - A vendored copy of the
   [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script
   (also callable as `tk`) manages tickets stored as markdown. We point
