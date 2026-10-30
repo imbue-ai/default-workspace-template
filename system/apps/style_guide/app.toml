@@ -1,0 +1,25 @@
+# The Style Guide app: one page cataloguing the workspace's design system. It renders the shared library
+# (system/libs/workspace_ui) itself and reads the tokens out of that library's base.css at build time, so a new
+# token shows up here with no edit to this app. It stores nothing.
+name = "style-guide"
+display_name = "Style Guide"
+description = "Every color, type role and shared control of the workspace's design system, drawn live from the library the other apps use."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+critical = false
+# One static page: the shell stops it once no window shows it and starts it again on the next request.
+stop_when_no_windows = true
+# A reference page for whoever designs the workspace's look; nothing is lost when the memory guard sheds it.
+priority = "user"
+# Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its System group.
+system = true
+
+# Built only from the shared components and the design tokens, so every theme styles it with no work of its own
+# (docs/system/blueprint/workspace-themes/, section 7). Under a theme it is a live sample of that theme.
+[theming]
+mode = "tokens"
+
+# A preview serves the page on a free port. The app keeps nothing under data/.apps/, so there is nothing to copy.
+[preview]
+env = {STYLE_GUIDE_APP_PORT = "{port:main}", STYLE_GUIDE_APP_HOST = "{host}"}
+health_path = "/api/health"

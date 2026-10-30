@@ -10,10 +10,6 @@ request with canned text, so no credential or network is needed.
 from __future__ import annotations
 
 import json
-import os
-import shutil
-import subprocess
-import tempfile
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -26,20 +22,17 @@ from playwright.sync_api import Page
 from playwright.sync_api import expect
 
 from imbue.chat.agent_discovery import AgentInfo
-from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import create_application
 from imbue.chat.testing import ServedApp
-from imbue.chat.testing import StandInAnthropicApi
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import is_chat_frontend_built
 from imbue.chat.testing import is_e2e_browser_installed
-from imbue.chat.testing import prepare_isolated_mngr_host_dir
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import serve_app
-from imbue.chat.testing import skip_unless_pinned_claude
+from imbue.chat.testing import stand_in_real_claude_agent
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
@@ -60,15 +53,7 @@ _REPLY_TEXT = "pong"
 _SUMMARY_TEXT = "Stand-in summary: the user asked for a one-word reply and got it."
 # The pinned Claude Code's compaction prompt, which asks for an analysis block and then a summary block.
 _COMPACTION_PROMPT = "Your task is to create a detailed summary of the conversation so far"
-_CREATE_TIMEOUT_SECONDS = 300.0
 _TURN_TIMEOUT_MS = 120_000
-
-
-def _skip_unless_runnable() -> None:
-    skip_unless_pinned_claude()
-    for binary in ("mngr", "tmux", "git"):
-        if shutil.which(binary) is None:
-            pytest.skip(f"{binary} not on PATH")
 
 
 def _is_compaction_request(body: dict[str, Any]) -> bool:
@@ -87,112 +72,6 @@ class _CompactionHoldingReplies:
         self.compaction_requested.set()
         self.release.wait(timeout=120.0)
         return f"<analysis>Stand-in analysis.</analysis>\n<summary>{_SUMMARY_TEXT}</summary>"
-
-
-def _subprocess_env() -> dict[str, str]:
-    """This process's environment without the conftest's own-agent identity, which would make mngr act as that agent."""
-    return {key: value for key, value in os.environ.items() if not key.startswith("MNGR_AGENT_")}
-
-
-@contextmanager
-def _private_tmux_server(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
-    """Point every tmux call (mngr's subprocesses and its in-process sends) at a server of this test's own.
-
-    The directory is short because tmux refuses a socket path over about 100 bytes. The server's sessions are
-    killed by name at the end, never with ``kill-server``.
-    """
-    tmux_dir = Path(tempfile.mkdtemp(prefix="cmp", dir="/tmp"))
-    monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_dir))
-    socket_path = tmux_dir / f"tmux-{os.getuid()}" / "default"
-    try:
-        yield
-    finally:
-        if socket_path.exists():
-            listed = subprocess.run(
-                ["tmux", "-S", str(socket_path), "list-sessions", "-F", "#{session_name}"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            for session_name in listed.stdout.split():
-                subprocess.run(
-                    ["tmux", "-S", str(socket_path), "kill-session", "-t", f"={session_name}"],
-                    capture_output=True,
-                    timeout=30,
-                )
-        shutil.rmtree(tmux_dir, ignore_errors=True)
-
-
-def _make_project(project_dir: Path) -> None:
-    project_dir.mkdir()
-    git_env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "test",
-        "GIT_AUTHOR_EMAIL": "test@test.com",
-        "GIT_COMMITTER_NAME": "test",
-        "GIT_COMMITTER_EMAIL": "test@test.com",
-    }
-    subprocess.run(["git", "init", "-q", str(project_dir)], check=True, timeout=30)
-    subprocess.run(
-        ["git", "-C", str(project_dir), "commit", "-q", "--allow-empty", "-m", "init"],
-        check=True,
-        env=git_env,
-        timeout=30,
-    )
-
-
-def _prepare_mngr_profile(host_dir: Path, api: StandInAnthropicApi) -> None:
-    """An isolated mngr profile whose Claude agents start without dialogs and talk to ``api``.
-
-    The URL and key go in the agent's settings ``env``, which Claude Code applies over its process environment
-    (``test_claude_settings_env_auth.py``), so a key the agent's login shell exports cannot replace the stand-in's.
-    """
-    prepare_isolated_mngr_host_dir(host_dir)
-    with (host_dir / "profiles" / "isolated" / "settings.toml").open("a") as settings:
-        settings.write(
-            "\n[agent_types.claude]\nauto_dismiss_dialogs_at_startup = true\n"
-            "\n[agent_types.claude.settings_overrides.env]\n"
-            f'ANTHROPIC_BASE_URL = "{api.base_url}"\n'
-            f'ANTHROPIC_API_KEY = "{_STAND_IN_API_KEY}"\n'
-        )
-
-
-@contextmanager
-def _real_claude_agent(project_dir: Path, log_path: Path, agent_name: str) -> Generator[AgentInfo, None, None]:
-    try:
-        with open(log_path, "ab") as log:
-            created = subprocess.run(
-                [
-                    "mngr",
-                    "create",
-                    agent_name,
-                    "--type",
-                    "claude",
-                    "--no-connect",
-                    "--transfer",
-                    "none",
-                    "--yes",
-                ],
-                cwd=project_dir,
-                env=_subprocess_env(),
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                timeout=_CREATE_TIMEOUT_SECONDS,
-            )
-        assert created.returncode == 0, f"mngr create failed:\n{log_path.read_text()[-4000:]}"
-        (agent,) = [candidate for candidate in discover_agents() if candidate.name == agent_name]
-        yield agent
-    finally:
-        with open(log_path, "ab") as log:
-            subprocess.run(
-                ["mngr", "destroy", agent_name, "--force"],
-                cwd=project_dir,
-                env=_subprocess_env(),
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                timeout=120,
-            )
 
 
 @contextmanager
@@ -215,24 +94,17 @@ def _chat_app_over(agent: AgentInfo, chats_root: Path) -> Generator[ServedApp, N
 def test_a_compact_typed_in_a_real_claude_chat_shows_compacting_then_lands_the_chips(
     tmp_path: Path, page: Page, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    _skip_unless_runnable()
-    project_dir = tmp_path / "project"
-    _make_project(project_dir)
     replies = _CompactionHoldingReplies()
-    # mngr approves the key it finds in its own environment, so claude asks nothing about it.
-    monkeypatch.setenv("ANTHROPIC_API_KEY", _STAND_IN_API_KEY)
-    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
-
-    with (
-        StandInAnthropicApi(reply_for=replies) as api,
-        _private_tmux_server(monkeypatch),
-    ):
-        _prepare_mngr_profile(Path(os.environ["MNGR_HOST_DIR"]), api)
+    with stand_in_real_claude_agent(
+        tmp_path / "project",
+        tmp_path / "mngr.log",
+        f"compaction-probe-{uuid4().hex}",
+        replies,
+        _STAND_IN_API_KEY,
+        monkeypatch,
+    ) as (api, agent):
         try:
-            with (
-                _real_claude_agent(project_dir, tmp_path / "mngr.log", f"compaction-probe-{uuid4().hex}") as agent,
-                _chat_app_over(agent, tmp_path / "chats") as served,
-            ):
+            with _chat_app_over(agent, tmp_path / "chats") as served:
                 page.goto(f"{served.http_url}{chat_root_path(ChatId(agent.id))}")
                 chat = page.frame_locator(f'iframe.chat-root-frame[data-chat-id="{agent.id}"]')
                 textbox = chat.locator(".message-input-textbox")

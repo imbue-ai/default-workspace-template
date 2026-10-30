@@ -1,7 +1,7 @@
 """Stream the reply an agent is writing to the pages showing its chat, before its transcript has it.
 
-Claude records a reply only once it has finished writing it, so the chat would otherwise show a
-reply seconds after the agent's terminal does. One thread asks each watcher whose chat the user
+Claude, Codex, Pi and Antigravity record a reply only once they have finished writing it, so the chat
+would otherwise show a reply seconds after the agent's terminal does. One thread asks each watcher whose chat the user
 is looking at for its draft (``AgentSessionWatcher.read_reply_draft``) a few times a second and sends
 any change on the chat's stream as an ``assistant_draft`` frame: ``{"type": "assistant_draft",
 "agent_id", "after_event_id", "text"}``, with ``text`` empty once there is no draft. The frame is
@@ -10,8 +10,10 @@ end of the transcript until the reply itself lands.
 
 The work is bounded by what the user is looking at: only a chat a page streams *and* reports
 shown and focused (its presence, ``presence.py``) is read, so background chats, chats in a hidden
-or unfocused window, and chats the chat root keeps loaded out of sight cost nothing; and a
-looked-at Claude agent with no turn in flight costs one stat of its ``active`` marker per pass.
+or unfocused window, and chats the chat root keeps loaded out of sight cost nothing; a looked-at
+Claude agent with no turn in flight costs one stat of its ``active`` marker per pass, a Codex
+agent one read of the reply its live connection already holds, a Pi agent one read of a small file,
+and an Antigravity agent one read of what its last scan kept.
 """
 
 import threading
@@ -24,8 +26,9 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
-from imbue.chat.harnesses.session_watcher import CapturePaneCallback
 from imbue.chat.harnesses.session_watcher import ReplyDraft
+from imbue.chat.harnesses.session_watcher import ReplyDraftSources
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.concurrency_group.errors import ProcessError
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
 from imbue.imbue_common.mutable_model import MutableModel
@@ -41,13 +44,15 @@ _CAPTURE_TIMEOUT_SECONDS: Final[float] = 5.0
 class ReplyDraftReader(Protocol):
     """The slice of a session watcher the publisher reads; every ``AgentSessionWatcher`` has it."""
 
-    def read_reply_draft(self, capture_pane: CapturePaneCallback) -> ReplyDraft | None: ...
+    def read_reply_draft(self, sources: ReplyDraftSources) -> ReplyDraft | None: ...
 
 
 # ``(chat id, agent id, watcher)`` for each agent with a watcher whose chat the user is looking at.
 ListWatchedAgents = Callable[[], list[tuple[str, str, ReplyDraftReader]]]
 # Captures one agent's pane by agent id.
 CaptureAgentPane = Callable[[str], str | None]
+# Reads the reply one agent's live connection is streaming, by agent id.
+ReadAgentStreamedReply = Callable[[str], StreamedReply | None]
 # Sends one frame on a chat's streams.
 BroadcastToChat = Callable[[str, dict[str, Any]], None]
 
@@ -87,6 +92,9 @@ class ReplyDraftPublisher(MutableModel):
         frozen=True, description="The watchers of the agents whose chats the user is looking at"
     )
     capture_agent_pane: CaptureAgentPane = Field(frozen=True, description="Captures one agent's pane by agent id")
+    read_agent_streamed_reply: ReadAgentStreamedReply = Field(
+        frozen=True, description="Reads the reply one agent's live connection is streaming, by agent id"
+    )
     broadcast_to_chat: BroadcastToChat = Field(frozen=True, description="Sends one frame on a chat's streams")
 
     # The last draft sent per agent, and the chat it went to, so an unchanged draft sends nothing.
@@ -112,7 +120,7 @@ class ReplyDraftPublisher(MutableModel):
         seen_agent_ids: set[str] = set()
         for chat_id, agent_id, watcher in self.list_watched_agents():
             seen_agent_ids.add(agent_id)
-            draft = watcher.read_reply_draft(self._bind_capture(agent_id))
+            draft = watcher.read_reply_draft(self._bind_sources(agent_id))
             if draft is None:
                 continue
             published = self._published_by_agent.get(agent_id)
@@ -129,8 +137,11 @@ class ReplyDraftPublisher(MutableModel):
             if draft.text != "":
                 self.broadcast_to_chat(chat_id, reply_draft_frame(agent_id, ReplyDraft(after_event_id="", text="")))
 
-    def _bind_capture(self, agent_id: str) -> CapturePaneCallback:
-        return lambda: self.capture_agent_pane(agent_id)
+    def _bind_sources(self, agent_id: str) -> ReplyDraftSources:
+        return ReplyDraftSources(
+            capture_pane=lambda: self.capture_agent_pane(agent_id),
+            read_streamed_reply=lambda: self.read_agent_streamed_reply(agent_id),
+        )
 
     def _run(self) -> None:
         while not self._stop_event.wait(timeout=REPLY_DRAFT_POLL_INTERVAL_SECONDS):
