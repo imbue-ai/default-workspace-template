@@ -284,7 +284,7 @@ class SendFailedError(Exception):
 
     ``kind`` is mngr's classification of the failure, which is what lets the chat decide what to
     offer: trying again can clear a blocked input and cannot conjure back a pane that is gone.
-    Unknown when mngr did not classify it, which the chat treats as it always has.
+    Unknown when mngr did not classify it.
     """
 
     def __init__(self, detail: str, kind: str = "unknown") -> None:
