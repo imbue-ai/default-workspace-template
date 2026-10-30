@@ -334,13 +334,18 @@ describe("a compaction's chips in the rows", () => {
     return [v, ...vnodes(v.children)];
   }
 
-  /** Each chip row a row renders, as its chips: a call by its id, a status chip by its label. */
-  function chipRows(rows: RowDescriptor[], key: string): string[][] {
+  /** Each chip row a row renders, as its chips. */
+  function rowChips(rows: RowDescriptor[], key: string): ChipEntry[][] {
     const row = rows.find((r) => r.key === key);
     expect(row).toBeDefined();
     return vnodes(row!.render())
       .filter((v) => v.tag === ToolChipGroup)
-      .map((v) => (v.attrs!.chips as ChipEntry[]).map((c) => (c.kind === "tool" ? c.call.tool_call_id : c.label)));
+      .map((v) => v.attrs!.chips as ChipEntry[]);
+  }
+
+  /** Each chip row a row renders, as its chips: a call by its id, a status chip by its label. */
+  function chipRows(rows: RowDescriptor[], key: string): string[][] {
+    return rowChips(rows, key).map((chips) => chips.map((c) => (c.kind === "tool" ? c.call.tool_call_id : c.label)));
   }
 
   function hasNotice(rows: RowDescriptor[], key: string): boolean {
@@ -447,10 +452,9 @@ describe("a compaction's chips in the rows", () => {
     const landed = buildConversationRows("agent-1", [...before, compacted("t4", "cs-idle", "idle")], true);
     expect(landed.map((r) => r.key)).toEqual(["u-t1", "a-t2", "cs-idle"]);
     expect(chipRows(landed, "cs-idle")).toEqual([["Compacting while idle…", "Compacted"]]);
-    const commands = vnodes(landed.find((r) => r.key === "cs-idle")!.render())
-      .filter((v) => v.tag === ToolChipGroup)
-      .flatMap((v) => (v.attrs!.chips as ChipEntry[]).map((c) => (c.kind === "status" ? c.sections : [])))
+    const commands = rowChips(landed, "cs-idle")
       .flat()
+      .flatMap((c) => (c.kind === "status" ? c.sections : []))
       .filter((section) => section.kind === "output" && section.marker === "compaction-command");
     expect(commands).toEqual([{ kind: "output", marker: "compaction-command", text: "/compact" }]);
   });
