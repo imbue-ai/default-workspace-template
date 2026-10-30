@@ -259,6 +259,26 @@ def _unclassified_failure() -> MessageResult:
     )
 
 
+def _pane_gone() -> MessageResult:
+    return MessageResult(
+        failures=[
+            AgentSendFailure(agent_name="alpha", reason="the pane is gone", kind=SendFailureKind.AGENT_UNREACHABLE)
+        ]
+    )
+
+
+def _not_ready() -> MessageResult:
+    return MessageResult(
+        failures=[AgentSendFailure(agent_name="alpha", reason="still starting", kind=SendFailureKind.NOT_READY)]
+    )
+
+
+def _state_unknown() -> MessageResult:
+    return MessageResult(
+        failures=[AgentSendFailure(agent_name="alpha", reason="host too loaded", kind=SendFailureKind.STATE_UNKNOWN)]
+    )
+
+
 def _delivered_but_blocked() -> MessageResult:
     return MessageResult(blocked_agents=[("alpha", "Claude is waiting for you to confirm a model switch.")])
 
@@ -273,21 +293,18 @@ def _not_found_beside_unconfirmed() -> MessageResult:
 @pytest.mark.parametrize(
     ("known_location_result", "expected_kind"),
     [
-        (_unclassified_failure, "unknown"),
+        (_pane_gone, "agent_unreachable"),
         (_delivered_but_blocked, "input_blocked"),
         (_not_found_beside_unconfirmed, "submission_unconfirmed"),
     ],
-    ids=["unclassified", "delivered-but-blocked", "not-found-beside-unconfirmed"],
+    ids=["pane-gone", "delivered-but-blocked", "not-found-beside-unconfirmed"],
 )
-def test_a_failure_that_may_have_typed_the_message_is_never_sent_again(
+def test_a_failure_another_send_cannot_help_is_returned_as_it_is(
     known_location_result: Callable[[], MessageResult], expected_kind: str
 ) -> None:
-    """Besides an untaken or an unconfirmed send, only a location miss earns a second send; any other failure is
-    returned as it is.
-
-    A blocked send was delivered, and an unclassified failure may have typed the message, so discovering the agent
-    again and resending could deliver it twice. A send that was unconfirmed at one agent and missed another is not
-    the plain ambiguity a resend answers.
+    """A pane that is gone will not be back for the next send, and a blocked send was delivered, so sending again
+    could only deliver it twice. A send that was unconfirmed at one agent and missed another is not the plain
+    ambiguity a resend answers.
     """
     discover_calls: list[AgentId] = []
     send_calls: list[tuple[AgentMatch, ...]] = []
@@ -377,11 +394,16 @@ def _delivered_to(matches: Sequence[AgentMatch]) -> MessageResult:
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
-def test_an_unconfirmed_message_is_sent_there_once_more_and_reported_as_resent() -> None:
-    """mngr could not tell whether the agent took it, so it is sent again where it was sent, and the chat says so."""
+@pytest.mark.parametrize(
+    "unsure_result", [_submission_unconfirmed, _unclassified_failure], ids=["unconfirmed", "unclassified"]
+)
+def test_a_message_that_may_not_have_arrived_is_sent_there_once_more_and_reported_as_resent(
+    unsure_result: Callable[[], MessageResult],
+) -> None:
+    """Nothing shows whether the agent took it, so it is sent again where it was sent, and the chat says so."""
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
-    results = [_submission_unconfirmed()]
+    results = [unsure_result()]
 
     def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
         raise AssertionError("an unconfirmed message is sent where the agent is, not looked up again")
@@ -397,21 +419,25 @@ def test_an_unconfirmed_message_is_sent_there_once_more_and_reported_as_resent()
 
 @pytest.mark.usefixtures("isolated_mngr_env")
 @pytest.mark.parametrize(
+    "unsure_result", [_submission_unconfirmed, _unclassified_failure], ids=["unconfirmed", "unclassified"]
+)
+@pytest.mark.parametrize(
     ("second_result", "expected_kind"),
     [
         (_submission_unconfirmed, "submission_unconfirmed"),
+        (_unclassified_failure, "unknown"),
         (_not_found_on_host, "agent_not_found"),
         (_not_submitted, "not_submitted"),
     ],
-    ids=["unconfirmed-again", "not-found-the-second-time", "untaken-the-second-time"],
+    ids=["unconfirmed-again", "unclassified-the-second-time", "not-found-the-second-time", "untaken-the-second-time"],
 )
-def test_an_unconfirmed_message_is_never_sent_a_third_time(
-    second_result: Callable[[], MessageResult], expected_kind: str
+def test_a_message_that_may_not_have_arrived_is_never_sent_a_third_time(
+    unsure_result: Callable[[], MessageResult], second_result: Callable[[], MessageResult], expected_kind: str
 ) -> None:
     """The second send's failure is the answer: no further send, and no lookup that would lead to one."""
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
-    results = [second_result(), _submission_unconfirmed()]
+    results = [second_result(), unsure_result()]
 
     def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
         raise AssertionError("a message sent twice is not looked up and sent a third time")
@@ -465,22 +491,99 @@ def test_a_message_untaken_and_then_unconfirmed_is_sent_once_more_after_each() -
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")
-def test_an_unconfirmed_message_is_returned_as_is_when_its_caller_sends_it_again_itself() -> None:
+@pytest.mark.parametrize(
+    ("unsure_result", "expected_kind"),
+    [(_submission_unconfirmed, "submission_unconfirmed"), (_unclassified_failure, "unknown")],
+    ids=["unconfirmed", "unclassified"],
+)
+def test_a_message_that_may_not_have_arrived_is_returned_as_is_when_its_caller_sends_it_again_itself(
+    unsure_result: Callable[[], MessageResult], expected_kind: str
+) -> None:
     known = _make_match()
     send_calls: list[tuple[AgentMatch, ...]] = []
 
     def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
-        raise AssertionError("an unconfirmed message is not looked up again")
+        raise AssertionError("such a message is not looked up again")
 
     def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
         send_calls.append(tuple(matches))
-        return _submission_unconfirmed()
+        return unsure_result()
 
     messenger = MngrMessenger(discover=_discover, send=_send)
-    failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,), is_resent_when_unconfirmed=False)
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,), is_resent_when_unsure=False)
     assert isinstance(failure, SendFailure)
-    assert failure.kind == "submission_unconfirmed"
+    assert failure.kind == expected_kind
     assert send_calls == [(known,)]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize("waiting_result", [_not_ready, _state_unknown], ids=["not-ready", "state-unknown"])
+def test_a_send_nothing_could_type_yet_is_tried_again_after_a_growing_wait(
+    waiting_result: Callable[[], MessageResult],
+) -> None:
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    waits: list[float] = []
+    results = [waiting_result(), waiting_result()]
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        raise AssertionError("the agent is where it was, so it is not looked up again")
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        return results.pop() if results else _delivered_to(matches)
+
+    messenger = MngrMessenger(discover=_discover, send=_send, pause=waits.append)
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.DELIVERED
+    assert send_calls == [(known,)] * 3
+    assert waits == [1.0, 2.0]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+@pytest.mark.parametrize(
+    ("waiting_result", "expected_kind"),
+    [(_not_ready, "not_ready"), (_state_unknown, "state_unknown")],
+    ids=["not-ready", "state-unknown"],
+)
+def test_a_send_that_stays_impossible_is_returned_as_the_failure_after_the_last_wait(
+    waiting_result: Callable[[], MessageResult], expected_kind: str
+) -> None:
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    waits: list[float] = []
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        raise AssertionError("the agent is where it was, so it is not looked up again")
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        return waiting_result()
+
+    messenger = MngrMessenger(discover=_discover, send=_send, pause=waits.append)
+    failure = messenger.send_to_agent(_AGENT_ID, "hi", (known,))
+    assert isinstance(failure, SendFailure)
+    assert failure.kind == expected_kind
+    assert send_calls == [(known,)] * 4
+    assert waits == [1.0, 2.0, 4.0]
+
+
+@pytest.mark.usefixtures("isolated_mngr_env")
+def test_a_send_that_waited_and_then_went_unconfirmed_is_sent_once_more() -> None:
+    """The waits typed nothing, so the unconfirmed send is the only copy that may have landed."""
+    known = _make_match()
+    send_calls: list[tuple[AgentMatch, ...]] = []
+    results = [_submission_unconfirmed(), _not_ready()]
+
+    def _discover(agent_id: AgentId, ctx: MngrContext) -> Sequence[AgentMatch]:
+        raise AssertionError("the agent is where it was, so it is not looked up again")
+
+    def _send(matches: Sequence[AgentMatch], message: str, ctx: MngrContext) -> MessageResult:
+        send_calls.append(tuple(matches))
+        return results.pop() if results else _delivered_to(matches)
+
+    messenger = MngrMessenger(discover=_discover, send=_send, pause=lambda _seconds: None)
+    assert messenger.send_to_agent(_AGENT_ID, "hi", (known,)) is SendDelivery.RESENT
+    assert send_calls == [(known,)] * 3
 
 
 @pytest.mark.usefixtures("isolated_mngr_env")

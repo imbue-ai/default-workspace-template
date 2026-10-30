@@ -199,7 +199,7 @@ class ChatAppState(MutableModel):
                 # here could type into the turn the first one opened.
                 lambda text: isinstance(
                     self.agent_manager.send_message_to_agent(
-                        AgentId(agent_info.id), text, is_resent_when_unconfirmed=False
+                        AgentId(agent_info.id), text, is_resent_when_unsure=False
                     ),
                     SendDelivery,
                 ),
