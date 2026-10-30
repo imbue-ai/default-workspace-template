@@ -167,7 +167,7 @@ export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean
 /** The slash command that compacts a Claude agent's context, typed by the user or sent by the idle sweep. */
 const COMPACT_COMMAND = "/compact";
 
-/** True for a `/compact` as Claude Code records it when it is submitted. */
+/** True for either record Claude Code makes of a `/compact`: the one submitted and its expansion. */
 function isCompactCommand(event: ClassifiableUserMessage): boolean {
   return isSlashCommand(event, COMPACT_COMMAND);
 }
