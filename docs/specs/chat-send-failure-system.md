@@ -86,7 +86,7 @@ Below all four sits the tmux pipeline the send-keys harnesses drive (claude and 
 
 | kind | means | workspace offers |
 | --- | --- | --- |
-| `agent_unreachable` | the pane is gone | Cancel, Force -- Retry withheld, it cannot work |
+| `agent_unreachable` | the agent was down and the send could not start it; nothing was typed | the chat app tries once more itself; only when that fails too: Cancel, Force -- Retry withheld, since Force's restart is the stronger way to bring it up |
 | `input_blocked` | a dialog or shell mode holds the input | Cancel, Retry, Force |
 | `not_ready` | the harness is still coming up; nothing was typed | the chat app tries again itself, after 1, 2 and 4 seconds; only when the last try fails too: Cancel, Retry |
 | `state_unknown` | mngr could not read the agent's state, usually on a host too loaded to answer in time; nothing was typed | the chat app tries again the same way; only when the last try fails too: read as `unknown` |
@@ -107,7 +107,7 @@ This applies to the harnesses whose sends mngr types into a TUI: Claude (where m
 
 `agent_not_found` and `not_submitted` reach the notice only when the chat app's own resend missed too: it looks the agent up again after `agent_not_found`, and sends once more to the same place after `not_submitted`. Nothing was delivered either way, so the `unknown` kind's plain Retry is already the right offer, and the chat gives them no handling of their own.
 
-`not_ready` and `state_unknown` mean mngr refused before typing anything, and both usually pass within seconds, so the chat app waits them out rather than showing a notice for a moment's delay. It tries again after 1, 2 and 4 seconds, and only a failure on the last try reaches the notice. None of these tries can double a message.
+`not_ready` and `state_unknown` mean mngr refused before typing anything, so the chat app tries again after 1, 2 and 4 seconds, and only a failure on the last try reaches the notice. `state_unknown` is read before anything else in a send, so those tries take seconds. Each `not_ready` try goes through mngr's own 30-second wait for the input box, so they can take about two minutes. `agent_unreachable` means the send found the agent down and could not start it; a start can fail for a passing reason, so the chat app tries once more at once. None of these tries can double a message.
 
 ## What Retry and Force actually are
 
