@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from auth_sandbox.cli import (
@@ -29,6 +30,27 @@ def test_sign_in_without_a_sandbox_key_names_the_missing_file_and_runs_nothing(
     assert result.exit_code == EXIT_MISSING_MATERIAL
     assert "latchkey_key" in result.output
     assert not (tmp_path / "latchkey").exists()
+
+
+def test_sign_in_with_a_latchkey_it_cannot_run_is_missing_material_not_a_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A binary that is absent is a defect of the sandbox no retry in it cures, so it must not share
+    # the refusal's code, which the chrome retries in the same sandbox.
+    monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
+    (tmp_path / "latchkey_key").write_text("key\n")
+    result = CliRunner().invoke(
+        sign_in_command,
+        [
+            "slack",
+            "--runtime-dir",
+            str(tmp_path),
+            "--latchkey-binary",
+            "/nonexistent/latchkey",
+        ],
+    )
+    assert result.exit_code == EXIT_MISSING_MATERIAL
+    assert "/nonexistent/latchkey" in result.output
 
 
 def test_set_credentials_needs_an_account_and_a_values_file(tmp_path: Path) -> None:

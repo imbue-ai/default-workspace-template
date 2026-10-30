@@ -1,9 +1,10 @@
 """The commands owner-exec runs on the chrome's behalf, each a thin entry point over the modules beside it.
 
 Exit codes: 0 when the command did what it says; 1 when latchkey refused (its reason, condensed, is the last
-line on stderr, which the dialog shows); 3 when a material the command needs is missing or malformed (2 is
-click's own code for a usage error, which no retry in the sandbox cures). Nothing here prints a key, and no key
-is ever in an argument.
+line on stderr, which the dialog shows); 3 when a material the command needs is missing or malformed: a key
+file, the incoming state, the values file, or the latchkey binary and its config themselves (2 is click's own
+code for a usage error, which no retry in the sandbox cures). Nothing here prints a key, and no key is ever in
+an argument.
 """
 
 import json
@@ -97,15 +98,17 @@ def _finish(outcome: SignInOutcome) -> None:
 def _exit_on_sandbox_failure() -> Generator[None, None, None]:
     """Turn a command's failure into the exit code of the module docstring, its message on stderr.
 
-    A material that is missing or malformed (a key file, the incoming state, the values file) exits 3; a
-    ``latchkey`` refusal, from the desktop's wrapper or from a re-encrypt child, exits 1.
+    A material that is missing or malformed exits 3: a key file, the incoming state, the values file, and the
+    ``latchkey`` the desktop's wrapper cannot run (``Latchkey.initialize`` raises ``LatchkeyError`` for a binary
+    that is absent or too old and for a config it cannot write; a refusal of its own it answers as a result, not
+    an exception). A ``latchkey`` child that refused (a re-encrypt of a service it has no store for) exits 1.
     """
     try:
         yield
-    except (MissingMaterialError, ValuesFileError) as e:
+    except (MissingMaterialError, ValuesFileError, LatchkeyError) as e:
         click.echo(str(e), err=True)
         sys.exit(EXIT_MISSING_MATERIAL)
-    except (LatchkeyError, LatchkeyCommandError) as e:
+    except LatchkeyCommandError as e:
         click.echo(str(e), err=True)
         sys.exit(EXIT_REFUSED)
 
