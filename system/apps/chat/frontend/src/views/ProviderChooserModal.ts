@@ -63,10 +63,9 @@ import {
   getLanes,
   getUnpickableAccount,
   isPickingAccount,
-  loadAccounts,
+  loadLanesAndAccountsWithRetry,
   pickAccount,
   takeChooserAccountId,
-  loadLanes,
   startFlow,
   submitCode,
   submitKey,
@@ -391,8 +390,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     busy = true;
     error = null;
     try {
-      await loadLanes();
-      await loadAccounts();
+      await loadLanesAndAccountsWithRetry();
     } catch (e) {
       const lines = plainFailureLines(e, "Couldn't load the list of providers", { requestKind: "read" });
       error = { message: plainFailureSentence(lines), details: lines.details, isReportable: lines.isReportable };
@@ -409,7 +407,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         statusScreen("error", "Could not load providers", error.message, failureMark(error)),
         m("div", { class: css.FOOTER_ROW }, [
           reportBugButton(error),
-          m(Button, { variant: "primary", disabled: busy, onclick: () => void load() }, "Try again"),
+          m(
+            Button,
+            { variant: "primary", disabled: busy, "data-e2e": "retry-providers", onclick: () => void load() },
+            "Try again",
+          ),
         ]),
       ];
     }

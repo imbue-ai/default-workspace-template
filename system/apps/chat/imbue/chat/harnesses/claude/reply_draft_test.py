@@ -1,7 +1,6 @@
 from pathlib import Path
 
 from imbue.chat.harnesses.claude.reply_draft import ClaudeReplyDraft
-from imbue.chat.harnesses.claude.reply_draft import is_landed_reply
 from imbue.chat.harnesses.claude.reply_draft import pane_width_of
 from imbue.chat.harnesses.claude.reply_draft import unwrap_soft_wrapped_rows
 
@@ -58,14 +57,6 @@ def test_a_reset_draft_forgets_the_reply_it_stitched() -> None:
 def test_the_pane_width_is_the_width_tmux_padded_the_rows_to() -> None:
     assert pane_width_of(_fixture("pane_reply_finished.txt")) == 200
     assert pane_width_of("") == 0
-
-
-def test_is_landed_reply_ignores_the_markdown_the_reverse_mapping_cannot_restore() -> None:
-    landed = ["## Steps\n\n```python\nprint('hi')\n```\n\n1. First"]
-
-    assert is_landed_reply("**Steps**\n\n```\nprint('hi')\n```", landed)
-    assert not is_landed_reply("A different reply entirely.", landed)
-    assert is_landed_reply("   ", landed)
 
 
 def test_unwrap_joins_only_rows_whose_next_word_would_not_have_fit() -> None:

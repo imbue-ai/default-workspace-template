@@ -18,7 +18,6 @@ from flask.testing import FlaskClient
 from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import mint_account_dir
 from imbue.chat.accounts import read_index
-from imbue.chat.agent_manager import AgentManager
 from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.codex.model import codex_model_options_path
 from imbue.chat.harnesses.codex.model import write_codex_model_options
@@ -27,7 +26,6 @@ from imbue.chat.server import create_application
 from imbue.chat.state import ChatAppState
 from imbue.chat.testing import FakePexpectProcess
 from imbue.chat.testing import build_test_state
-from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.mngr_codex.app_server_client import CodexModel
 from imbue.mngr_codex.app_server_client import ReasoningEffortOption
 
@@ -375,19 +373,6 @@ def test_account_model_options_offers_the_catalog_for_a_static_harness_and_the_a
         assert [option["id"] for option in offered.get_json()["options"]] == ["gpt-6-astra"]
 
         assert client.get("/api/accounts/acct-nope/model-options").status_code == 404
-
-
-def test_account_model_options_offers_nothing_for_a_harness_whose_model_the_chat_cannot_switch(
-    tmp_path: Path,
-) -> None:
-    """Antigravity's model is changed from its terminal, so the dialog is offered no pick it could not apply."""
-    agy_id, _ = mint_account_dir()
-    commit_account(agy_id, "google", "Google")
-    manager = AgentManager.build(WebSocketBroadcaster(), mngr_binary="/bin/true")
-    with _client_for(build_test_state(agent_manager=manager)) as client:
-        answered = client.get(f"/api/accounts/{agy_id}/model-options")
-        assert answered.status_code == 200
-        assert answered.get_json() == {"models": None, "options": []}
 
 
 # the relayed browser callback

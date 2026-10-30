@@ -31,7 +31,7 @@ const state: {
 
 const startFlow = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => undefined));
 const requestProviderRelay = vi.hoisted(() => vi.fn(async (..._args: unknown[]) => true));
-const loadLanes = vi.hoisted(() => vi.fn(async () => undefined));
+const loadLanesAndAccountsWithRetry = vi.hoisted(() => vi.fn(async () => undefined));
 
 vi.mock("../models/providerRelay", () => ({ requestProviderRelay }));
 
@@ -43,8 +43,7 @@ vi.mock("../models/Providers", async (importOriginal) => ({
   getAccounts: () => state.accounts,
   areLanesLoaded: () => state.loaded,
   getFlow: () => state.flow,
-  loadLanes,
-  loadAccounts: async () => undefined,
+  loadLanesAndAccountsWithRetry,
   deleteAccount: async () => undefined,
   startFlow,
   submitCode: async () => undefined,
@@ -133,10 +132,10 @@ beforeEach(() => {
   closeProviderChooser();
   startFlow.mockReset();
   startFlow.mockResolvedValue(undefined);
-  loadLanes.mockReset();
-  loadLanes.mockResolvedValue(undefined);
   requestProviderRelay.mockReset();
   requestProviderRelay.mockResolvedValue(true);
+  loadLanesAndAccountsWithRetry.mockReset();
+  loadLanesAndAccountsWithRetry.mockResolvedValue(undefined);
   state.lanes = [lane()];
   state.accounts = [];
   state.loaded = true;
@@ -273,6 +272,35 @@ describe("the provider chooser", () => {
       status: { state: "ok", detail: null, account_id: "a1" },
     };
     expect(() => render()).not.toThrow();
+  });
+});
+
+describe("a provider list that cannot be loaded", () => {
+  async function settled(): Promise<void> {
+    for (let index = 0; index < 5; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  it("offers Try again under the hook the e2e runner presses, and loads the list again", async () => {
+    state.loaded = false;
+    loadLanesAndAccountsWithRetry.mockRejectedValueOnce(new Error("Service Unavailable"));
+    const root = document.createElement("div");
+    const draw = (): void => m.render(root, m(ProviderChooserModal as never, { onDismiss: () => undefined }));
+    draw();
+    await settled();
+    draw();
+
+    const retry = root.querySelector("[data-e2e=retry-providers]");
+    expect(root.textContent).toContain("Could not load providers");
+    expect(retry?.textContent).toBe("Try again");
+
+    state.loaded = true;
+    (retry as HTMLButtonElement).click();
+    await settled();
+    draw();
+
+    expect(loadLanesAndAccountsWithRetry).toHaveBeenCalledTimes(2);
+    expect(root.querySelector("[data-e2e=retry-providers]")).toBeNull();
+    expect(root.querySelector("[data-e2e=lane-anthropic]")).not.toBeNull();
   });
 });
 
@@ -687,7 +715,7 @@ describe("a failure on the chooser's screens", () => {
 
   it("says the providers couldn't be loaded, with the status behind See details", async () => {
     state.loaded = false;
-    loadLanes.mockRejectedValue(rejection(500, null));
+    loadLanesAndAccountsWithRetry.mockRejectedValue(rejection(500, null));
     const shell = framePageInShell(true);
 
     const { root } = await mounted();
@@ -703,7 +731,7 @@ describe("a failure on the chooser's screens", () => {
 
   it("says the workspace didn't answer when the provider list got a gateway answer", async () => {
     state.loaded = false;
-    loadLanes.mockRejectedValue(rejection(502, null, "Bad Gateway"));
+    loadLanesAndAccountsWithRetry.mockRejectedValue(rejection(502, null, "Bad Gateway"));
 
     const { root } = await mounted();
 

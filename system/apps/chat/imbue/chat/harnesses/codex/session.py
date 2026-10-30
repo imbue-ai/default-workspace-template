@@ -36,6 +36,7 @@ from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.harnesses.session import ShoulderTapOutcome
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import TransportClosedError
 
@@ -172,6 +173,12 @@ class CodexHarnessSession(AgentHarnessSession):
     def is_sending(self) -> bool:
         ledger = self._live_ledger()
         return ledger.is_sending() if ledger is not None else False
+
+    def read_streamed_reply(self) -> StreamedReply | None:
+        connection = self._connection
+        if connection is None or not connection.is_alive:
+            return None
+        return connection.read_streamed_reply()
 
     def in_flight_block(self) -> str:
         # The ledger returns its own not-yet-committed messages through the interrupt itself
