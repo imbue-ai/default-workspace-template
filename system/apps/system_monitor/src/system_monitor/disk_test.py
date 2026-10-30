@@ -4,6 +4,8 @@ real ``du``, and the scanner that runs one walk at a time."""
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from system_monitor import disk
 
 _MIB = 1024 * 1024
@@ -83,17 +85,59 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
         },
         {
             "name": "Other files on the machine's disk",
-            "hint": "outside this workspace",
+            "hint": "not part of this workspace, so it cannot be freed from here",
             "bytes": 2400 * _MIB,
         },
     ]
     # The workspace is measured as its top-level entries in one du, without the app data and
-    # uploads that get rows of their own; the system software without the home tree.
+    # uploads that get rows of their own; the system software without the home tree and the caches.
     assert measured[0] == (
         sorted(workspace.iterdir()),
         [workspace / "data" / ".apps", workspace / "data" / "uploads"],
     )
-    assert measured[-1] == ([root], [home, *disk.SYSTEM_EXCLUDES])
+    assert measured[-1] == (
+        [root],
+        [home, root / disk.OFF_VOLUME_CACHE_DIR, *disk.SYSTEM_EXCLUDES],
+    )
+
+
+@pytest.mark.parametrize(
+    ("real_cache", "linked_cache", "listed_as"),
+    [
+        # docker, modal and imbue_cloud: ~/.cache links to the off-volume cache.
+        ("var/cache/user", "home/user/.cache", "/var/cache/user"),
+        # lima: the off-volume cache links to ~/.cache, a subvolume on the data disk.
+        ("home/user/.cache", "var/cache/user", ".cache"),
+    ],
+)
+def test_the_package_caches_are_counted_once_and_not_as_system_software(
+    tmp_path: Path, real_cache: str, linked_cache: str, listed_as: str
+) -> None:
+    root = tmp_path / "root"
+    home = root / "home" / "user"
+    (home / "workspace").mkdir(parents=True)
+    (root / "usr" / "bin").mkdir(parents=True)
+    (root / "usr" / "bin" / "tool").write_bytes(b"x" * _MIB)
+    (root / real_cache / "uv").mkdir(parents=True)
+    (root / real_cache / "uv" / "wheels").write_bytes(b"x" * 3 * _MIB)
+    (root / linked_cache).parent.mkdir(parents=True, exist_ok=True)
+    (root / linked_cache).symlink_to(root / real_cache)
+
+    rows, missing = disk.scan(100 * _MIB, home / "workspace", home, disk.du_bytes, root)
+
+    assert missing == []
+    by_id = {row["id"]: row for row in rows}
+    assert 3 * _MIB <= by_id["caches"]["bytes"] < 4 * _MIB
+    assert by_id["caches"]["items"] == [
+        {
+            "name": listed_as,
+            "hint": "downloads and build caches",
+            "bytes": by_id["caches"]["bytes"],
+        }
+    ]
+    software = by_id["other"]["items"][0]
+    assert software["name"] == "System software"
+    assert _MIB <= software["bytes"] < 2 * _MIB
 
 
 def test_a_row_that_cannot_be_measured_is_reported_missing_and_the_rest_never_goes_negative(

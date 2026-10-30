@@ -1,0 +1,1 @@
+The System Monitor spec's disk breakdown table (`docs/system/specs/system-monitor.md` section 4.4) lists `/var/cache/user` among the package caches and leaves it out of the system software, and says the rest of the disk cannot be freed from inside the workspace.

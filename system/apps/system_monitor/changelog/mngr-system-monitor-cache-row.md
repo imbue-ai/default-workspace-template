@@ -1,0 +1,3 @@
+The disk breakdown's Package caches row now counts `/var/cache/user`, where the workspace's environment points uv's, npm's and other tools' caches (`XDG_CACHE_HOME`). On docker, modal and imbue_cloud workspaces `~/.cache` is a link to it, which `du` does not follow, so those caches were counted as "System software" instead (745 MiB on one imbue_cloud workspace). The system software figure now leaves them out, and on lima, where the link runs the other way, the caches are still counted once.
+
+The "Other files on the machine's disk" item now says that space is not part of this workspace and cannot be freed from it.

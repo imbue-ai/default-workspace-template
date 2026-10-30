@@ -25,6 +25,9 @@ CACHE_DIRS: Final[tuple[Path, ...]] = (
     Path(".local/share/uv"),
     Path(".local/share/pnpm"),
 )
+# Where the workspace's environment puts uv's, npm's and other tools' caches (XDG_CACHE_HOME), off the
+# home volume; relative to the root.
+OFF_VOLUME_CACHE_DIR: Final[Path] = Path("var/cache/user")
 # What the top-level folders of the workspace hold, for the ones a user would not know.
 WORKSPACE_FOLDER_HINTS: Final[dict[str, str]] = {
     ".venv": "installed packages, rebuilt on demand",
@@ -40,6 +43,7 @@ CACHE_HINTS: Final[dict[str, str]] = {
     ".npm": "Node packages",
     ".local/share/uv": "Python packages",
     ".local/share/pnpm": "Node packages",
+    "/var/cache/user": "downloads and build caches",
 }
 # How many of the workspace's folders the row lists, and the least a listed item holds.
 WORKSPACE_ITEM_COUNT: Final[int] = 8
@@ -221,7 +225,10 @@ def scan(
         }
     )
     counted += rows[-1]["bytes"]
-    caches = measure([home / cache for cache in CACHE_DIRS], [])
+    # Depending on the provider, ~/.cache links to the off-volume cache or the other way round, and du
+    # does not follow a link it is handed, so the caches are counted once.
+    off_volume_cache = root / OFF_VOLUME_CACHE_DIR
+    caches = measure([*(home / cache for cache in CACHE_DIRS), off_volume_cache], [])
     counted += row(
         "caches",
         "Package caches",
@@ -232,14 +239,14 @@ def scan(
             CACHE_HINTS,
             lambda path: str(path.relative_to(home))
             if path.is_relative_to(home)
-            else path.name,
+            else str(ROOT_DIR / path.relative_to(root)),
             None,
         ),
     )
     # The rest of the disk: the machine's system software (the workspace's tools, measured
     # without the home tree, which the rows above hold) and whatever else is on the disk.
     other = max(0, disk_used - counted)
-    system = measure([root], [home, *SYSTEM_EXCLUDES])
+    system = measure([root], [home, off_volume_cache, *SYSTEM_EXCLUDES])
     other_items: list[dict[str, Any]] = []
     if system is not None and system.total:
         software = min(other, system.total)
@@ -254,7 +261,7 @@ def scan(
             other_items.append(
                 {
                     "name": "Other files on the machine's disk",
-                    "hint": "outside this workspace",
+                    "hint": "not part of this workspace, so it cannot be freed from here",
                     "bytes": other - software,
                 }
             )
