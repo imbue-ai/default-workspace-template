@@ -150,10 +150,15 @@ export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
  *  ``HANDOFF_SUMMARY_COMMAND``); the transcript walk opens the handoff node on it. */
 const HANDOFF_SUMMARY_COMMAND = "/handoff-summary";
 
+/** True when the message invokes `command`, with or without arguments. */
+function isSlashCommand(event: ClassifiableUserMessage, command: string): boolean {
+  const content = event.content.trim();
+  return content === command || content.startsWith(`${command} `);
+}
+
 /** True for the chat app's own summary request: the user message that starts a handoff's summary turn. */
 export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean {
-  const content = event.content.trim();
-  return content === HANDOFF_SUMMARY_COMMAND || content.startsWith(`${HANDOFF_SUMMARY_COMMAND} `);
+  return isSlashCommand(event, HANDOFF_SUMMARY_COMMAND);
 }
 
 /** The slash command that compacts a Claude agent's context, typed by the user or sent by the idle sweep. */
@@ -161,8 +166,7 @@ const COMPACT_COMMAND = "/compact";
 
 /** True for a `/compact` as Claude Code records it when it is submitted. */
 function isCompactCommand(event: ClassifiableUserMessage): boolean {
-  const content = event.content.trim();
-  return content === COMPACT_COMMAND || content.startsWith(`${COMPACT_COMMAND} `);
+  return isSlashCommand(event, COMPACT_COMMAND);
 }
 
 /** The `/compact`s the idle sweep sent a Claude agent, each paired with the compaction it started. */
