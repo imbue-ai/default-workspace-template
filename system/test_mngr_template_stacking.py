@@ -169,8 +169,8 @@ def test_worker_template_installs_no_worker_skill_and_keeps_the_venv() -> None:
     assert (
         "python3 system/scripts/workspace_bare_scripts/venv_links.py ensure . "
         "$(python3 system/scripts/workspace_bare_scripts/user_packages.py list) ; "
-        "uv sync --all-packages --frozen ; "
-        "python3 system/scripts/workspace_bare_scripts/user_packages.py sync"
+        "uv sync --all-packages --frozen && "
+        "(python3 system/scripts/workspace_bare_scripts/user_packages.py sync || true)"
     ) in commands
     assert "MNGR_AGENT_ROLE=worker" in result["env"]
 
