@@ -123,7 +123,7 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
         ("home/user/.cache", "var/cache/user", ".cache"),
     ],
 )
-# imbue_cloud: /home/user links to the volume's home, which the system walk leaves out with /mngr-vol.
+# imbue_cloud: /home/user links into the volume, which is outside the root the system walk measures.
 @pytest.mark.parametrize("home_is_a_link", [False, True])
 def test_the_package_caches_are_counted_once_and_in_no_other_item(
     tmp_path: Path,
