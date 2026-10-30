@@ -1,0 +1,653 @@
+"""Convert a user package from the shared workspace to a standalone uv project.
+
+CLEANUP: remove this module, its test and the "A user app, service or lib" section of
+``references/python-packaging-migration.md`` once no old template or workspace still has a
+user package under ``system/`` that is a root workspace member (the layout before
+``docs/system/blueprint/app-environments/``).
+
+A user package of the old layout is a member of the root workspace: it has no lock of its
+own, resolves shared code through ``{ workspace = true }`` sources (its own or the root's),
+and its program runs it from the root venv. ``migrate`` turns it into what the scaffold
+writes today, keeping the versions it runs on:
+
+1. its ``uv.lock`` is seeded from the shared lock it ran on (``--shared-lock``, the root
+   ``uv.lock`` from before the update's merge; else the current one), so ``uv lock`` keeps
+   every version it can;
+2. every source the root workspace gave it -- a ``{ workspace = true }`` one of its own, or
+   a workspace member it depends on through the root's sources -- becomes an editable path
+   source, so the shared code stays live;
+3. it gets a dev group its tests run from (``imbue-common[testing]``) and its own pytest
+   root, when it has tests;
+4. it leaves the root ``pyproject.toml``'s dependencies and sources;
+5. its program line links its venv, syncs its own project ``--locked`` and execs from its
+   own ``.venv/bin``, and each one-off of its commands written in a tracked agent-facing
+   file names its project (``uv run --no-sync --project <package> <command>``);
+6. it is locked, every package the root sources from git that it declares directly is held
+   to the root's pin, and its venv is linked and synced.
+
+``--dry-run`` prints what it would change and changes nothing. ``relock`` re-runs step 6's
+lock and pin alignment, for a package whose shared libraries or mngr pin moved.
+
+Run from the repo root: ``python3 .agents/skills/update-self/python/update_self_skill/user_package_migration.py migrate system/apps/<package> --dry-run``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tomllib
+from collections.abc import Callable, Sequence
+from pathlib import Path
+from typing import NamedTuple
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from update_self_skill import user_packages, venv_links
+
+# What a package's tests need in its own venv: pytest, or, for tests that use the
+# workspace's ratchet helpers (as build-app's scaffold writes them), imbue-common's testing
+# extra, which carries pytest, inline-snapshot and import-linter.
+PYTEST_DEPENDENCY = "pytest"
+RATCHET_TEST_DEPENDENCY = "imbue-common[testing]"
+_RATCHET_IMPORTS = ("imbue.imbue_common.ratchet_testing", "inline_snapshot")
+_AGENT_FACING_SUFFIXES = (".md", ".toml", ".sh", ".conf", ".py")
+_TABLE_HEADER = re.compile(r"^\s*\[")
+
+
+class MigrationError(Exception):
+    """The package cannot be converted as it stands; the message says why."""
+
+
+class Completed(NamedTuple):
+    returncode: int
+    stdout: str
+    stderr: str
+
+
+Run = Callable[[Sequence[str], Path], Completed]
+
+
+def run_subprocess(command: Sequence[str], cwd: Path) -> Completed:
+    result = subprocess.run(
+        list(command), cwd=cwd, capture_output=True, text=True, check=False
+    )
+    return Completed(result.returncode, result.stdout, result.stderr)
+
+
+def _normalize(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _requirement_name(requirement: str) -> str:
+    match = re.match(r"\s*([A-Za-z0-9][A-Za-z0-9._-]*)", requirement)
+    return _normalize(match.group(1)) if match else ""
+
+
+def _read_toml(path: Path) -> dict:
+    with path.open("rb") as handle:
+        return tomllib.load(handle)
+
+
+def _table(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
+def _declared_requirements(pyproject: dict) -> list[str]:
+    requirements = list(_table(pyproject.get("project")).get("dependencies") or [])
+    for group in _table(pyproject.get("dependency-groups")).values():
+        requirements.extend(entry for entry in group or [] if isinstance(entry, str))
+    for group in _table(
+        _table(pyproject.get("project")).get("optional-dependencies")
+    ).values():
+        requirements.extend(group or [])
+    return [entry for entry in requirements if isinstance(entry, str)]
+
+
+def _member_directories(repo_root: Path) -> dict[str, str]:
+    """Each root workspace member's distribution name, mapped to its repo-relative directory."""
+    found: dict[str, str] = {}
+    for pattern in user_packages.built_in_members(repo_root):
+        for directory in sorted(repo_root.glob(pattern)):
+            pyproject_path = directory / "pyproject.toml"
+            if not pyproject_path.is_file():
+                continue
+            name = _table(_read_toml(pyproject_path).get("project")).get("name")
+            if isinstance(name, str):
+                found[_normalize(name)] = directory.relative_to(repo_root).as_posix()
+    return found
+
+
+def _root_sources(repo_root: Path) -> dict[str, dict]:
+    sources = _table(
+        _table(_read_toml(repo_root / "pyproject.toml").get("tool")).get("uv")
+    ).get("sources")
+    return {
+        _normalize(name): value
+        for name, value in _table(sources).items()
+        if isinstance(value, dict)
+    }
+
+
+def _inline_table(value: dict) -> str:
+    parts = []
+    for key, item in value.items():
+        if isinstance(item, bool):
+            rendered = "true" if item else "false"
+        elif isinstance(item, str):
+            rendered = '"' + item.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        else:
+            raise MigrationError(f"cannot write the source value {key} = {item!r}")
+        parts.append(f"{key} = {rendered}")
+    return "{ " + ", ".join(parts) + " }"
+
+
+def _table_span(lines: list[str], header: str) -> tuple[int, int] | None:
+    """The ``[start, end)`` line span of the table ``header`` (its header line included)."""
+    for index, line in enumerate(lines):
+        if line.strip() == header:
+            end = index + 1
+            while end < len(lines) and not _TABLE_HEADER.match(lines[end]):
+                end += 1
+            return index, end
+    return None
+
+
+def _set_sources(text: str, sources: dict[str, dict], changed: set[str]) -> str:
+    """``text`` with ``[tool.uv.sources]`` holding ``sources``: the ``changed`` names rewritten
+    (or added), every other line of the table kept as it was."""
+    lines = text.splitlines(keepends=True)
+    span = _table_span(lines, "[tool.uv.sources]")
+    if span is None:
+        body = [
+            f"{name} = {_inline_table(sources[name])}\n" for name in sorted(changed)
+        ]
+        separator = (
+            "" if text.endswith("\n\n") else ("\n" if text.endswith("\n") else "\n\n")
+        )
+        return text + separator + "[tool.uv.sources]\n" + "".join(body)
+    start, end = span
+    kept: list[str] = []
+    for line in lines[start + 1 : end]:
+        key = line.split("=", 1)[0].strip()
+        if "=" in line and _normalize(key) in changed:
+            continue
+        kept.append(line)
+    while kept and not kept[-1].strip():
+        kept.pop()
+    added = [f"{name} = {_inline_table(sources[name])}\n" for name in sorted(changed)]
+    return (
+        "".join(lines[: start + 1] + kept + added + ["\n"] + lines[end:]).rstrip("\n")
+        + "\n"
+    )
+
+
+def _add_dev_requirement(text: str, requirement: str) -> str:
+    lines = text.splitlines(keepends=True)
+    span = _table_span(lines, "[dependency-groups]")
+    if span is None:
+        separator = "" if text.endswith("\n\n") else "\n"
+        return text + separator + f'[dependency-groups]\ndev = ["{requirement}"]\n'
+    start, end = span
+    for index in range(start + 1, end):
+        if re.match(r"^\s*dev\s*=\s*\[", lines[index]):
+            lines[index] = re.sub(
+                r"\[", f'[\n    "{requirement}",', lines[index], count=1
+            )
+            return "".join(lines)
+    lines.insert(end, f'dev = ["{requirement}"]\n')
+    return "".join(lines)
+
+
+def _add_pytest_root(text: str) -> str:
+    separator = "" if text.endswith("\n\n") else "\n"
+    return text + separator + '[tool.pytest.ini_options]\ntestpaths = ["."]\n'
+
+
+def _remove_from_root(text: str, name: str) -> str:
+    """The root pyproject without ``name`` among its dependencies or sources."""
+    pattern = re.compile(
+        rf'^\s*"{re.escape(name)}(\[[^\]]*\])?"\s*,?\s*(#.*)?\n'
+        rf"|^{re.escape(name)}\s*=\s*\{{[^}}]*\}}\s*(#.*)?\n",
+        re.MULTILINE,
+    )
+    return pattern.sub("", text)
+
+
+def _test_files(package_dir: Path) -> list[Path]:
+    return [
+        path
+        for path in package_dir.rglob("*.py")
+        if ".venv" not in path.parts
+        and (path.name.endswith("_test.py") or path.name.startswith("test_"))
+    ]
+
+
+def _test_dependency(test_files: Sequence[Path]) -> str:
+    uses_ratchets = any(
+        marker in path.read_text(errors="replace")
+        for path in test_files
+        for marker in _RATCHET_IMPORTS
+    )
+    return RATCHET_TEST_DEPENDENCY if uses_ratchets else PYTEST_DEPENDENCY
+
+
+class Plan(NamedTuple):
+    relative: str
+    seed: Path
+    package_text: str
+    root_text: str
+    program_files: dict[Path, str]
+    caller_files: dict[Path, str]
+    notes: list[str]
+
+
+def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str | None:
+    """The standalone form of a program command that runs one of ``scripts``, or ``None``:
+    its prefix (an OOM tag, say) kept, then ``bash -c`` linking and syncing the package's
+    own project before the steps it ran, with the script exec'd from the package's venv."""
+    words = user_packages.split_words(command)
+    shell_at = next(
+        (
+            index
+            for index, word in enumerate(words[:-2])
+            if Path(word).name in ("bash", "sh") and words[index + 1] in ("-c", "-lc")
+        ),
+        None,
+    )
+    if shell_at is not None:
+        prefix = words[:shell_at]
+        steps = user_packages.command_steps(command)[1 if prefix else 0 :]
+    else:
+        start = next(
+            (
+                index
+                for index, word in enumerate(words)
+                if word == "uv"
+                or any(user_packages.runs_script(word, s) for s in scripts)
+            ),
+            None,
+        )
+        if start is None:
+            return None
+        prefix, steps = words[:start], [words[start:]]
+    rewritten: list[str] = []
+    found = False
+    for step in steps:
+        if step[:2] == ["uv", "sync"]:
+            continue
+        script = next(
+            (s for s in scripts if any(user_packages.runs_script(w, s) for w in step)),
+            None,
+        )
+        if script is None:
+            rewritten.append(" ".join(map(_quote, step)))
+            continue
+        found = True
+        if step[:2] == ["uv", "run"]:
+            index = 2
+            while index < len(step) and step[index].startswith("-"):
+                index += (
+                    2 if step[index] in ("--project", "--directory", "--with") else 1
+                )
+            step = step[index:]
+        own = f"{relative}/.venv/bin/{script}"
+        new_step = [
+            own if user_packages.runs_script(word, script) else word for word in step
+        ]
+        if new_step[0] != "exec":
+            new_step = ["exec", *new_step]
+        rewritten.append(" ".join(map(_quote, new_step)))
+    if not found:
+        return None
+    script_text = " && ".join(
+        [
+            f"python3 system/scripts/workspace_bare_scripts/venv_links.py ensure-project {relative}",
+            f"uv sync --locked --project {relative}",
+            *rewritten,
+        ]
+    )
+    return " ".join(
+        [
+            *map(_quote, prefix),
+            "bash",
+            "-c",
+            '"' + script_text.replace('"', '\\"') + '"',
+        ]
+    )
+
+
+def _quote(word: str) -> str:
+    return (
+        word
+        if re.fullmatch(r"[A-Za-z0-9_./:=,@%+-]+", word)
+        else "'" + word.replace("'", "'\"'\"'") + "'"
+    )
+
+
+def _rewrite_programs(
+    repo_root: Path, relative: str, scripts: Sequence[str]
+) -> dict[Path, str]:
+    rewritten: dict[Path, str] = {}
+    dropins = repo_root / user_packages.SUPERVISORD_DROPIN_DIR
+    for conf in sorted(dropins.glob("*.conf")) if dropins.is_dir() else []:
+        text = conf.read_text()
+        out: list[str] = []
+        changed = False
+        for line in text.splitlines(keepends=True):
+            match = re.match(r"^(\s*command\s*=\s*)(.*?)(\s*)$", line, re.DOTALL)
+            if match and user_packages.program_problems(
+                match.group(2), relative, scripts
+            ):
+                new = _program_rewrite(match.group(2), relative, scripts)
+                if new is not None:
+                    out.append(f"{match.group(1)}{new}\n")
+                    changed = True
+                    continue
+            out.append(line)
+        if changed:
+            rewritten[conf] = "".join(out)
+    return rewritten
+
+
+def _tracked_files(repo_root: Path, run: Run) -> list[Path]:
+    result = run(["git", "ls-files", "-z"], repo_root)
+    return [repo_root / name for name in result.stdout.split("\0") if name]
+
+
+def _rewrite_callers(
+    repo_root: Path, relative: str, scripts: Sequence[str], run: Run
+) -> dict[Path, str]:
+    pattern = re.compile(
+        r"\buv run((?:\s+--(?!project|directory)[\w-]+)*)\s+("
+        + "|".join(map(re.escape, scripts))
+        + r")(?![\w-])"
+    )
+    rewritten: dict[Path, str] = {}
+    if not scripts:
+        return rewritten
+    for path in _tracked_files(repo_root, run):
+        relative_path = path.relative_to(repo_root).as_posix()
+        if relative_path.startswith(relative + "/") or not relative_path.endswith(
+            _AGENT_FACING_SUFFIXES
+        ):
+            continue
+        if "changelog" in path.parts or not path.is_file():
+            continue
+        text = path.read_text(errors="replace")
+        new = pattern.sub(
+            lambda m: f"uv run{m.group(1) or ' --no-sync'} --project {relative} {m.group(2)}",
+            text,
+        )
+        if new != text:
+            rewritten[path] = new
+    return rewritten
+
+
+def plan_migration(
+    repo_root: Path, relative: str, shared_lock: Path | None, run: Run
+) -> Plan:
+    package_dir = repo_root / relative
+    if not (package_dir / "pyproject.toml").is_file():
+        raise MigrationError(f"{relative} has no pyproject.toml")
+    if relative not in user_packages.user_packages(repo_root):
+        raise MigrationError(
+            f"{relative} is a root workspace member, not a user package; the root members name "
+            "only built-in packages"
+        )
+    package_text = (package_dir / "pyproject.toml").read_text()
+    pyproject = tomllib.loads(package_text)
+    name = _table(pyproject.get("project")).get("name")
+    if not isinstance(name, str):
+        raise MigrationError(f"{relative}/pyproject.toml names no project")
+    members = _member_directories(repo_root)
+    root_sources = _root_sources(repo_root)
+    own_sources = {
+        _normalize(key): value
+        for key, value in _table(
+            _table(_table(pyproject.get("tool")).get("uv")).get("sources")
+        ).items()
+        if isinstance(value, dict)
+    }
+    notes: list[str] = []
+    changed: dict[str, dict] = {}
+    for requirement in _declared_requirements(pyproject):
+        dependency = _requirement_name(requirement)
+        own = own_sources.get(dependency)
+        through_root = (
+            own is None and root_sources.get(dependency, {}).get("workspace") is True
+        )
+        if (own is not None and own.get("workspace") is True) or through_root:
+            if dependency not in members:
+                raise MigrationError(
+                    f"{relative} takes `{dependency}` from the workspace, but no root member is named "
+                    f"`{dependency}`"
+                )
+            changed[dependency] = {
+                "path": os.path.relpath(repo_root / members[dependency], package_dir),
+                "editable": True,
+            }
+    test_files = _test_files(package_dir)
+    if test_files:
+        dependency = _test_dependency(test_files)
+        declared = {
+            _requirement_name(requirement)
+            for requirement in _declared_requirements(pyproject)
+        }
+        if _requirement_name(dependency) not in declared:
+            package_text = _add_dev_requirement(package_text, dependency)
+            notes.append(
+                f"adds `{dependency}` to its dev group, so its tests run from its own venv"
+            )
+        if not _table(_table(pyproject.get("tool")).get("pytest")).get("ini_options"):
+            package_text = _add_pytest_root(package_text)
+            notes.append("makes its directory its tests' own pytest root")
+    if changed:
+        package_text = _set_sources(
+            package_text, {**own_sources, **changed}, set(changed)
+        )
+        notes.extend(
+            f"`{dependency}` becomes an editable path source ({source['path']})"
+            for dependency, source in sorted(changed.items())
+        )
+    _verify_package(package_text, relative, set(changed))
+    root_before = (repo_root / "pyproject.toml").read_text()
+    root_text = _remove_from_root(root_before, _normalize(name))
+    if root_text != root_before:
+        notes.append(f"`{name}` leaves the root pyproject's dependencies and sources")
+    _verify_root(root_text, _normalize(name))
+    scripts = user_packages.console_scripts(package_dir)
+    programs = _rewrite_programs(repo_root, relative, scripts)
+    callers = _rewrite_callers(repo_root, relative, scripts, run)
+    seed = shared_lock if shared_lock is not None else repo_root / "uv.lock"
+    if not seed.is_file():
+        raise MigrationError(f"the shared lock to seed from, {seed}, does not exist")
+    return Plan(relative, seed, package_text, root_text, programs, callers, notes)
+
+
+def _verify_package(text: str, relative: str, converted: set[str]) -> None:
+    try:
+        sources = _table(
+            _table(_table(tomllib.loads(text).get("tool")).get("uv")).get("sources")
+        )
+    except tomllib.TOMLDecodeError as exc:
+        raise MigrationError(
+            f"rewriting {relative}/pyproject.toml would not parse: {exc}"
+        ) from exc
+    for name, value in sources.items():
+        if isinstance(value, dict) and value.get("workspace") is True:
+            raise MigrationError(
+                f"{relative}/pyproject.toml would still take `{name}` from the workspace"
+            )
+    missing = converted - {_normalize(name) for name in sources}
+    if missing:
+        raise MigrationError(
+            f"{relative}/pyproject.toml would lose the sources for {sorted(missing)}"
+        )
+
+
+def _verify_root(text: str, name: str) -> None:
+    try:
+        root = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise MigrationError(
+            f"rewriting the root pyproject.toml would not parse: {exc}"
+        ) from exc
+    dependencies = _table(root.get("project")).get("dependencies") or []
+    if any(
+        _requirement_name(entry) == name
+        for entry in dependencies
+        if isinstance(entry, str)
+    ):
+        raise MigrationError(
+            f"`{name}` is still a root dependency in a form this cannot remove"
+        )
+    sources = _table(_table(_table(root.get("tool")).get("uv")).get("sources"))
+    if name in {_normalize(key) for key in sources}:
+        raise MigrationError(
+            f"`{name}` still has a root source in a form this cannot remove"
+        )
+
+
+def describe(plan: Plan, repo_root: Path) -> str:
+    lines = [f"{plan.relative}:", f"  seeds its uv.lock from {plan.seed}"]
+    lines.extend(f"  {note}" for note in plan.notes)
+    for path in sorted({*plan.program_files, *plan.caller_files}):
+        lines.append(f"  rewrites {path.relative_to(repo_root)}")
+    lines.append(
+        "  then locks it (holding root-pinned packages to the root's pin) and syncs its venv"
+    )
+    return "\n".join(lines)
+
+
+def align_pins(repo_root: Path, relative: str, run: Run) -> list[str]:
+    """Hold each package the root sources from git, and that ``relative`` declares directly,
+    to the root's source: a package with none of its own and none through a shared library
+    would otherwise resolve from the index. Returns the packages it pinned."""
+    package_dir = repo_root / relative
+    pyproject = _read_toml(package_dir / "pyproject.toml")
+    lock = _read_toml(package_dir / "uv.lock")
+    locked = {
+        _normalize(entry["name"]): entry.get("source", {})
+        for entry in lock.get("package", [])
+    }
+    pinned: dict[str, dict] = {}
+    for dependency in {
+        _requirement_name(requirement)
+        for requirement in _declared_requirements(pyproject)
+    }:
+        root_source = _root_sources(repo_root).get(dependency)
+        if root_source is None or "git" not in root_source:
+            continue
+        locked_git = str(locked.get(dependency, {}).get("git", ""))
+        if (
+            not locked_git.startswith(root_source["git"])
+            or root_source.get("rev", "") not in locked_git
+        ):
+            pinned[dependency] = root_source
+    if pinned:
+        text = (package_dir / "pyproject.toml").read_text()
+        own = _table(_table(_table(pyproject.get("tool")).get("uv")).get("sources"))
+        text = _set_sources(
+            text, {**{_normalize(k): v for k, v in own.items()}, **pinned}, set(pinned)
+        )
+        (package_dir / "pyproject.toml").write_text(text)
+        _lock(repo_root, relative, run)
+    return sorted(pinned)
+
+
+def _link_runner(run: Run) -> venv_links.Run:
+    def link_run(command: Sequence[str], /, *, cwd: Path) -> venv_links.Completed:
+        return run(command, cwd)
+
+    return link_run
+
+
+def _lock(repo_root: Path, relative: str, run: Run) -> None:
+    result = run(["uv", "lock", "--project", relative], repo_root)
+    if result.returncode != 0:
+        raise MigrationError(
+            f"`uv lock --project {relative}` failed:\n{(result.stderr or result.stdout).strip()}"
+        )
+
+
+def apply(plan: Plan, repo_root: Path, run: Run) -> list[str]:
+    package_dir = repo_root / plan.relative
+    (package_dir / "pyproject.toml").write_text(plan.package_text)
+    shutil.copyfile(plan.seed, package_dir / "uv.lock")
+    root_changed = plan.root_text != (repo_root / "pyproject.toml").read_text()
+    (repo_root / "pyproject.toml").write_text(plan.root_text)
+    for path, text in {**plan.program_files, **plan.caller_files}.items():
+        path.write_text(text)
+    _lock(repo_root, plan.relative, run)
+    pinned = align_pins(repo_root, plan.relative, run)
+    if root_changed:
+        result = run(["uv", "lock"], repo_root)
+        if result.returncode != 0:
+            raise MigrationError(
+                f"`uv lock` at the root failed:\n{(result.stderr or result.stdout).strip()}"
+            )
+    venv_links.ensure(None, [package_dir], run=_link_runner(run))
+    result = run(["uv", "sync", "--locked", "--project", plan.relative], repo_root)
+    if result.returncode != 0:
+        raise MigrationError(
+            f"`uv sync --locked --project {plan.relative}` failed:\n{(result.stderr or result.stdout).strip()}"
+        )
+    return pinned
+
+
+def main(argv: Sequence[str] | None = None, run: Run = run_subprocess) -> int:
+    parser = argparse.ArgumentParser(
+        description="Convert a user package to a standalone uv project."
+    )
+    parser.add_argument("--repo-root", type=Path, default=Path.cwd())
+    commands = parser.add_subparsers(dest="command", required=True)
+    migrate = commands.add_parser("migrate", help="convert one user package")
+    migrate.add_argument("package", help="its directory, e.g. system/apps/<package>")
+    migrate.add_argument(
+        "--dry-run", action="store_true", help="print the changes; make none"
+    )
+    migrate.add_argument(
+        "--shared-lock",
+        type=Path,
+        default=None,
+        help="the root uv.lock the package ran on (from before the update's merge) to seed its lock",
+    )
+    relock = commands.add_parser(
+        "relock", help="relock a standalone user package and align its pins"
+    )
+    relock.add_argument("package")
+    args = parser.parse_args(argv)
+    repo_root = args.repo_root.resolve()
+    relative = args.package.rstrip("/")
+    try:
+        if args.command == "relock":
+            _lock(repo_root, relative, run)
+            pinned = align_pins(repo_root, relative, run)
+            print(
+                f"{relative}: relocked"
+                + (f"; pinned {', '.join(pinned)} to the root's" if pinned else "")
+            )
+            return 0
+        plan = plan_migration(repo_root, relative, args.shared_lock, run)
+        print(describe(plan, repo_root))
+        if args.dry_run:
+            return 0
+        pinned = apply(plan, repo_root, run)
+        if pinned:
+            print(f"  pinned {', '.join(pinned)} to the root's source")
+        problems = user_packages.standalone_problems(repo_root, relative)
+        for problem in problems:
+            print(f"  still not standalone: {problem}")
+        return 1 if problems else 0
+    except MigrationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

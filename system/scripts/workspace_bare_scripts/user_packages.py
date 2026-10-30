@@ -112,7 +112,7 @@ def program_commands(repo_root: Path) -> list[ProgramLine]:
     return lines
 
 
-def _split(text: str) -> list[str]:
+def split_words(text: str) -> list[str]:
     try:
         return shlex.split(text)
     except ValueError:
@@ -125,12 +125,12 @@ def command_steps(command: str) -> list[list[str]]:
     A ``bash -c "<script>"`` anywhere in the words (after an OOM-tag prefix, say) is
     replaced by its script's steps, split on ``&&``, ``||``, ``;`` and newlines.
     """
-    words = _split(command)
+    words = split_words(command)
     for index, word in enumerate(words[:-2]):
         if PurePosixPath(word).name in _SHELLS and words[index + 1] in ("-c", "-lc"):
             steps = [words[:index]] if index else []
             for part in _STEP_SEPARATOR.split(words[index + 2]):
-                part_words = _split(part.strip())
+                part_words = split_words(part.strip())
                 if part_words:
                     steps.append(part_words)
             return steps
@@ -148,7 +148,7 @@ def console_scripts(package_dir: Path) -> list[str]:
     )
 
 
-def _runs_script(word: str, script: str) -> bool:
+def runs_script(word: str, script: str) -> bool:
     path = PurePosixPath(word)
     return word == script or (
         path.name == script
@@ -184,7 +184,7 @@ def program_problems(command: str, relative: str, scripts: Sequence[str]) -> lis
     steps = command_steps(command)
     for exec_index, step in enumerate(steps):
         script = next(
-            (s for s in scripts if any(_runs_script(word, s) for word in step)), None
+            (s for s in scripts if any(runs_script(word, s) for word in step)), None
         )
         if script is None:
             continue
