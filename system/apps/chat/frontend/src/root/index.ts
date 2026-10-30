@@ -116,7 +116,7 @@ interface ReportedLocation {
   title: string;
 }
 
-// The last location told to the shell: every chat list push re-derives it, and only a change goes up.
+// The last location told to the shell: every chat list push and redraw re-derives it, and only a change goes up.
 let reportedLocation: ReportedLocation | null = null;
 
 function reportLocation(): void {
@@ -171,7 +171,7 @@ function select(chatId: string | null): void {
 }
 
 /** Fill an empty slot now that something it depends on changed (the chat list arrived, the root came on screen, the
- *  layout left the phone width). */
+ *  layout left the phone width, a delete was refused). */
 function fillSlot(): void {
   if (selectedChatId === null && slotFillFor(null).kind !== "keep") select(null);
 }
