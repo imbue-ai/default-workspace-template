@@ -571,6 +571,7 @@ def plan_migration(
     if not isinstance(name, str):
         raise MigrationError(f"{relative}/pyproject.toml names no project")
     packages = _package_directories(repo_root)
+    _refuse_unconverted_user_dependencies(repo_root, relative, pyproject, packages)
     root_sources = _root_sources(repo_root)
     own_sources = {
         _normalize(key): value
@@ -644,6 +645,36 @@ def plan_migration(
     if not seed.is_file():
         raise MigrationError(f"the shared lock to seed from, {seed}, does not exist")
     return Plan(relative, seed, package_text, root_text, programs, callers, notes)
+
+
+def _refuse_unconverted_user_dependencies(
+    repo_root: Path, relative: str, pyproject: dict, packages: dict[str, str]
+) -> None:
+    """Refuse, before anything is written, a package that depends on a user package still
+    taking code from the workspace: uv cannot lock a path dependency whose own
+    ``{ workspace = true }`` sources name a workspace it is no longer a member of."""
+    others = set(user_packages.user_packages(repo_root)) - {relative}
+    for dependency in sorted(
+        {_requirement_name(entry) for entry in _declared_requirements(pyproject)}
+    ):
+        directory = packages.get(dependency)
+        if directory not in others:
+            continue
+        sources = _table(
+            _table(
+                _table(
+                    _read_toml(repo_root / directory / "pyproject.toml").get("tool")
+                ).get("uv")
+            ).get("sources")
+        )
+        if any(
+            isinstance(value, dict) and value.get("workspace") is True
+            for value in sources.values()
+        ):
+            raise MigrationError(
+                f"{relative} depends on the user package {directory}, which is not standalone "
+                f"yet; migrate {directory} first, then {relative}"
+            )
 
 
 def _verify_package(text: str, relative: str, converted: set[str]) -> None:

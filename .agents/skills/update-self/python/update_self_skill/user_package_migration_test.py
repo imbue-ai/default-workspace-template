@@ -555,6 +555,35 @@ def test_a_user_package_on_a_user_lib_gets_a_path_source_to_it(tmp_path: Path) -
     }
 
 
+def test_a_package_on_a_user_lib_not_converted_yet_is_refused_before_anything_is_written(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # uv cannot lock a path dependency that still takes code from the workspace, so the
+    # lib has to go first; refusing in the plan keeps the app from being half-migrated.
+    root = tmp_path / "workspace"
+    _write(root / "pyproject.toml", "[tool.uv.workspace]\nmembers = []\n")
+    _write(root / "uv.lock", "version = 1\n")
+    _write(
+        root / "system/libs/notes_core/pyproject.toml",
+        '[project]\nname = "notes-core"\ndependencies = ["app-schema"]\n\n'
+        "[tool.uv.sources]\napp-schema = { workspace = true }\n",
+    )
+    board = _write(
+        root / "system/apps/board/pyproject.toml",
+        '[project]\nname = "board"\ndependencies = ["notes-core"]\n\n'
+        "[tool.uv.sources]\nnotes-core = { workspace = true }\n",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    before = board.read_text()
+
+    code = migration.main(["--repo-root", str(root), "migrate", "system/apps/board"])
+
+    assert code == 1
+    assert "migrate system/libs/notes_core first" in capsys.readouterr().err
+    assert board.read_text() == before
+    assert not (root / "system/apps/board/uv.lock").exists()
+
+
 def test_ratchet_tests_get_the_testing_extra_though_the_package_declares_imbue_common(
     workspace: Path,
 ) -> None:

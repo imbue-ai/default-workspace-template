@@ -111,6 +111,8 @@ it runs today:
 
    It locks the package (holding any package the root pins from git to the
    root's pin), relocks the root, and links and syncs the package's venv.
+   Migrate a user lib before the packages that use it: the script refuses a
+   package whose user lib is not converted yet, and names the lib.
 3. **Fix what it could not, if it is mechanical.** The usual one is an import
    the package never declared, which it got from the shared venv: the program
    fails to start with `ModuleNotFoundError`, or its suite fails to import.
