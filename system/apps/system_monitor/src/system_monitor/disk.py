@@ -132,7 +132,7 @@ def _items(
 def _measure_home_rest(
     home: Path, workspace: Path, home_caches: list[Path], measure: Measure
 ) -> Measured | None:
-    """The home tree beside the workspace and its caches; None when it cannot be listed or measured."""
+    """The home tree less the workspace and the caches; None when it cannot be listed or measured."""
     # Measured as its top-level entries because the home directory itself can be a link (imbue_cloud's
     # /home/user points into the volume), which du would count as nothing.
     try:
@@ -297,7 +297,7 @@ def scan(
         ),
     )
     # The rest of the disk: the machine's system software (the workspace's tools, measured
-    # without the home tree and the off-volume cache), the home tree beside the workspace and its
+    # without the home tree and the off-volume cache), the home tree less the workspace and the
     # caches (the chats' records and logs, worktrees, settings), and whatever else is on the disk.
     other = max(0, disk_used - counted)
     home_rest = _measure_home_rest(home, workspace, home_caches, measure)
