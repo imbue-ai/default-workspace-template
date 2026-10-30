@@ -141,6 +141,8 @@ def test_the_package_caches_and_the_home_folder_are_each_counted_once(
     (root / "usr" / "bin" / "tool").write_bytes(b"x" * _MIB)
     (home / ".mngr").mkdir()
     (home / ".mngr" / "log").write_bytes(b"x" * 2 * _MIB)
+    # A loose file counts toward the home folder's row but is not listed among its folders.
+    (home / ".claude.json").write_bytes(b"x" * _MIB)
     (root / real_cache / "uv").mkdir(parents=True)
     (root / real_cache / "uv" / "wheels").write_bytes(b"x" * 3 * _MIB)
     (root / linked_cache).parent.mkdir(parents=True, exist_ok=True)
@@ -161,7 +163,7 @@ def test_the_package_caches_and_the_home_folder_are_each_counted_once(
     ]
     assert 3 * _MIB <= cache_items[0]["bytes"] < 4 * _MIB
     assert 2 * _MIB <= cache_items[1]["bytes"] < 3 * _MIB
-    assert 2 * _MIB <= by_id["home"]["bytes"] < 3 * _MIB
+    assert 3 * _MIB <= by_id["home"]["bytes"] < 4 * _MIB
     assert [item["name"] for item in by_id["home"]["items"]] == [".mngr"]
     software = by_id["other"]["items"][0]
     assert software["name"] == "System software"

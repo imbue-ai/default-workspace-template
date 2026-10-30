@@ -136,6 +136,24 @@ def _items(
     return items[:limit] if limit is not None else items
 
 
+def _folder_items(
+    measured: Measured | None,
+    is_folder: Callable[[Path], bool],
+    hints: dict[str, str],
+) -> list[dict[str, Any]]:
+    """A row's largest folders among its measured top-level entries; its loose files count toward the row
+    but are not listed."""
+    if measured is None:
+        return []
+    folders = {path: size for path, size in measured.by_path.items() if is_folder(path)}
+    return _items(
+        Measured(measured.total, folders),
+        hints,
+        lambda path: path.name,
+        FOLDER_ITEM_COUNT,
+    )
+
+
 def _measure_home_folder(
     home: Path, workspace: Path, home_caches: list[Path], measure: Measure
 ) -> Measured | None:
@@ -231,20 +249,8 @@ def scan(
         "Workspace files",
         "documents, project folders, the workspace's own code",
         workspace_measured,
-        _items(
-            Measured(
-                workspace_measured.total,
-                {
-                    path: size
-                    for path, size in workspace_measured.by_path.items()
-                    if path in folders
-                },
-            )
-            if workspace_measured is not None
-            else None,
-            WORKSPACE_FOLDER_HINTS,
-            lambda path: path.name,
-            FOLDER_ITEM_COUNT,
+        _folder_items(
+            workspace_measured, lambda path: path in folders, WORKSPACE_FOLDER_HINTS
         ),
     )
     counted += row(
@@ -307,9 +313,7 @@ def scan(
         "Chats, logs and settings",
         "kept beside the workspace's files",
         home_folder,
-        _items(
-            home_folder, HOME_FOLDER_HINTS, lambda path: path.name, FOLDER_ITEM_COUNT
-        ),
+        _folder_items(home_folder, Path.is_dir, HOME_FOLDER_HINTS),
     )
     other = max(0, disk_used - counted)
     system = measure([root], [home, off_volume_cache, *SYSTEM_EXCLUDES])
