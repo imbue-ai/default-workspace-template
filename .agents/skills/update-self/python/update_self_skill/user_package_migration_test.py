@@ -164,6 +164,38 @@ def test_migrate_converts_an_old_layout_app_to_a_standalone_project(
     assert ["uv", "sync", "--locked", "--project", "system/apps/widget"] in uv.calls
 
 
+def test_a_uv_run_program_line_ends_standalone_and_its_comment_names_the_project(
+    workspace: Path, tmp_path: Path
+) -> None:
+    # The drop-in is both a program and an agent-facing file: its command line and its
+    # comment are each rewritten, the one-off rewrite on top of the program's.
+    conf = workspace / user_packages.SUPERVISORD_DROPIN_DIR / "widget.conf"
+    conf.write_text(
+        "# Check it with `uv run --no-sync widget-app --report`.\n"
+        "[program:widget]\n"
+        "command=python3 system/services/oom_priority/bin/oom_tag_service.py user"
+        " uv run widget-app --port 9\n"
+    )
+
+    code = migration.main(
+        [
+            "--repo-root",
+            str(workspace),
+            "migrate",
+            "system/apps/widget",
+            "--shared-lock",
+            str(tmp_path / "pre-merge.lock"),
+        ],
+        run=_Uv(tmp_path / "cache" / "uv"),
+    )
+
+    assert code == 0
+    assert user_packages.standalone_problems(workspace, "system/apps/widget") == []
+    assert conf.read_text().splitlines()[0] == (
+        "# Check it with `uv run --no-sync --project system/apps/widget widget-app --report`."
+    )
+
+
 def test_a_dry_run_says_what_it_would_change_and_changes_nothing(
     workspace: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

@@ -427,8 +427,17 @@ def _tracked_files(repo_root: Path, run: Run) -> list[Path]:
 
 
 def _rewrite_callers(
-    repo_root: Path, relative: str, scripts: Sequence[str], run: Run
+    repo_root: Path,
+    relative: str,
+    scripts: Sequence[str],
+    run: Run,
+    programs: dict[Path, str],
 ) -> dict[Path, str]:
+    """Each tracked agent-facing file with its one-offs of ``scripts`` naming the project.
+
+    A file ``programs`` already rewrites is read as rewritten, so a drop-in's comments get
+    this rewrite on top of its standalone program line rather than in place of it.
+    """
     pattern = re.compile(
         r"\buv run((?:\s+--(?!project|directory)[\w-]+)*)\s+("
         + "|".join(map(re.escape, scripts))
@@ -445,7 +454,7 @@ def _rewrite_callers(
             continue
         if "changelog" in path.parts or not path.is_file():
             continue
-        text = path.read_text(errors="replace")
+        text = programs.get(path) or path.read_text(errors="replace")
         new = pattern.sub(
             lambda m: f"uv run{m.group(1) or ' --no-sync'} --project {relative} {m.group(2)}",
             text,
@@ -529,7 +538,7 @@ def plan_migration(
     _verify_root(root_text, _normalize(name))
     scripts = user_packages.console_scripts(package_dir)
     programs = _rewrite_programs(repo_root, relative, scripts)
-    callers = _rewrite_callers(repo_root, relative, scripts, run)
+    callers = _rewrite_callers(repo_root, relative, scripts, run, programs)
     seed = shared_lock if shared_lock is not None else repo_root / "uv.lock"
     if not seed.is_file():
         raise MigrationError(f"the shared lock to seed from, {seed}, does not exist")
