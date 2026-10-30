@@ -91,7 +91,7 @@ things in), but one suffices if the emergency scenarios (E15) are run last.
   under both the workspace venv the chat runs from (`.venv/bin/python`) and the environment
   the observer runs in (the interpreter on the shebang line of the `mngr` its cmdline
   names). The observer runs `mngr` by bare name, so under supervisord, whose PATH
-  `uv run bootstrap` leads with `.venv/bin`, that is normally the venv's own; it is a mngr
+  bootstrap leads with `.venv/bin`, that is normally the venv's own; it is a mngr
   tool only when PATH reached one, and a workspace can hold two, the one under `/root`
   and one under `/home/user`, which can differ.
 - **S0.2 Baseline health.** `supervisorctl status` shows `agent-observer`, `chat`,
