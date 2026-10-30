@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -184,11 +185,15 @@ def test_launch_builds_a_valid_mngr_create_for_worktree_mode(
     )
     # Claude's folder-trust dialog is pre-dismissed for the new work dir, the way the
     # account seeding pre-trusts the workspace checkout; without it the create's
-    # first-message send refuses while the dialog is up.
+    # first-message send refuses while the dialog is up. Claude matches a folder's
+    # trust against the realpath of its cwd, and /home/user is a symlink in an
+    # imbue_cloud workspace, so the key is the resolved path.
     trust_config = json.loads(
         (workspace_root / "accounts" / "acct-claude" / ".claude.json").read_text()
     )
-    assert "/home/user/worktrees/my-task" in trust_config.get("projects", {})
+    assert os.path.realpath("/home/user/worktrees/my-task") in trust_config.get(
+        "projects", {}
+    )
 
 
 def test_the_narrowing_env_var_is_accepted_by_mngrs_env_override_layer() -> None:

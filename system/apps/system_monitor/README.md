@@ -114,14 +114,9 @@ lines. Taken in that order they find none, so a later stop's line that reused
 their pid can never mislabel them; they keep a plainer description with no
 command.
 
-Two known limits:
-
-- A pid in the agent-pid registry is trusted while a process holds it. If an
-  agent exits and an unrelated process reuses its pid before the next agent
-  launch prunes the registry, that process counts as the agent's chat.
-- Code checkers are recognised by command-line fragments of the common language
-  servers (`programs.CODE_CHECKER_MARKERS`); one not in that list counts under
-  the chat or program that started it.
+One known limit: code checkers are recognised by command-line fragments of the
+common language servers (`programs.CODE_CHECKER_MARKERS`); one not in that list
+counts under the chat or program that started it.
 
 The app describes its own HTTP API at `GET /api/schema` (the manifest's
 `api_schema_path`), an OpenAPI document built from its routes by
