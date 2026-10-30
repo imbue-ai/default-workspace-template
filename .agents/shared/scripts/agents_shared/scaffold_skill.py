@@ -8,10 +8,7 @@ installed in the root venv, and finishes with ``validate_skill``'s checks.
 Run from the repo root:
 
     uv run --no-sync .agents/shared/scripts/agents_shared/scaffold_skill.py <name> \\
-        --description "<what it does and when to use it>" [--python]
-
-The new skill is marked ``metadata.crystallized: true``, made in this workspace, so the
-workspace holds it to its own checks.
+        --description "<what it does and when to use it>" [--python] [--crystallized]
 
 Exits 0 and prints the skill's directory when every step passed. Exits 1 with the failing
 step on stderr; a failure after the files were written leaves them in place to fix.
@@ -86,15 +83,13 @@ def entry_point(repo_root: Path, name: str) -> Path:
     return skill_dir(repo_root, name) / "python" / package_name(name) / "run.py"
 
 
-def _skill_md(name: str, description: str, *, has_python: bool) -> str:
-    frontmatter = [
-        "---",
-        f"name: {name}",
-        f"description: {_yaml_string(description)}",
-        "metadata:",
-        "  crystallized: true",
-        "---",
-    ]
+def _skill_md(
+    name: str, description: str, *, has_python: bool, is_crystallized: bool
+) -> str:
+    frontmatter = ["---", f"name: {name}", f"description: {_yaml_string(description)}"]
+    if is_crystallized:
+        frontmatter += ["metadata:", "  crystallized: true"]
+    frontmatter.append("---")
     body = ["", f"# {name}", "", description, ""]
     if has_python:
         body += [
@@ -120,6 +115,7 @@ def write_skill(
     description: str,
     *,
     has_python: bool,
+    is_crystallized: bool,
 ) -> Path:
     """Write the new skill's files; refuse a bad name or a skill that already exists."""
     if not NAME_PATTERN.fullmatch(name):
@@ -131,7 +127,9 @@ def write_skill(
         raise ScaffoldError(f"{directory} already exists")
     directory.mkdir(parents=True)
     (directory / "SKILL.md").write_text(
-        _skill_md(name, description, has_python=has_python)
+        _skill_md(
+            name, description, has_python=has_python, is_crystallized=is_crystallized
+        )
     )
     if has_python:
         package = package_name(name)
@@ -180,10 +178,17 @@ def scaffold(
     description: str,
     *,
     has_python: bool,
+    is_crystallized: bool,
     runner: CommandRunner = _run_uv,
 ) -> Path:
     """Write the skill, install its package when it has one, and validate it."""
-    directory = write_skill(repo_root, name, description, has_python=has_python)
+    directory = write_skill(
+        repo_root,
+        name,
+        description,
+        has_python=has_python,
+        is_crystallized=is_crystallized,
+    )
     error = validate(directory)
     if error is not None:
         # Nothing has been installed yet, so the arguments are what is wrong.
@@ -215,6 +220,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="Give the skill a python/ uv project with a run.py entry point.",
     )
     parser.add_argument(
+        "--crystallized",
+        action="store_true",
+        help="Mark the skill metadata.crystallized, as the skill lifecycle does.",
+    )
+    parser.add_argument(
         "--repo-root",
         default=".",
         help="The repository root (default: current directory).",
@@ -226,6 +236,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.name,
             args.description,
             has_python=args.python,
+            is_crystallized=args.crystallized,
         )
     except ScaffoldError as exc:
         sys.stderr.write(f"scaffold_skill: {exc}\n")

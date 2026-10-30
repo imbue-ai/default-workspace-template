@@ -4,23 +4,15 @@ The release that moved every skill's Python into a package in the skill's
 `python/` project (and moved one-off commands to `uv run --no-sync`) changes rules the workspace's own
 creations were written under. Built-in code arrives already converted; this
 reference is for what the *user's* skills, services and docs need when the
-update's checks fail on them, and for deciding which skills are the user's. The
-rules themselves are in `.agents/shared/references/running-python.md` and
+update's checks fail on them. The rules themselves are in
+`.agents/shared/references/running-python.md` and
 `.agents/shared/references/spec-summary.md` ("Packaging").
 
-## Which skills are the workspace's own
+## A skill that came from elsewhere
 
-The checks hold a skill to the workspace's rules only when its SKILL.md
-frontmatter carries `metadata.crystallized: true` (made in this workspace) or
-`metadata.author: imbue` (built in). A skill with neither is taken for a third
-party's: it is kept as it came, and the checks leave it out. A skill this
-workspace's agents wrote may carry neither, so decide for each skill
-
-```bash
-uv run --no-sync .agents/shared/scripts/agents_shared/skill_ownership.py unmarked
-```
-
-prints whether it was made here:
+The checks cover every skill in `.agents/skills/` except the ones
+`.agents/third-party-skills.toml` lists. So when a check fails on a skill,
+first decide whether this workspace made it:
 
 - **Its history**: `git log --format='%h %ad %s' --date=short -- .agents/skills/<name>`.
   A skill written here usually arrives in a commit saying it was made, and
@@ -33,15 +25,18 @@ prints whether it was made here:
   commit's time with the `find-transcripts` skill, and read whether the agent
   wrote the skill or fetched it.
 
-Made here: add `crystallized: true` under `metadata:` in its frontmatter (the
-checks then cover it, and any failure on it is fixed below). Came from
-elsewhere: leave it untouched. Still open after all three: mark it. A third
-party's skill marked by mistake can at worst fail a check you see, while one of
-the user's left unmarked goes unchecked without a sign.
+Came from elsewhere: add it under `[skills]` in `.agents/third-party-skills.toml`
+with where it came from (`<name> = "<URL, or how it arrived>"`) and leave the
+skill untouched; the checks then skip it. Made here: fix it by the sections
+below. Still open after all three: treat it as made here. Fixing a third
+party's skill by mistake leaves a copy that has drifted from its source, which
+you can see, while listing one of the user's by mistake leaves it unchecked
+without a sign.
 
 ## What fails, and where to fix it
 
-How each failure shows up during the update:
+How each failure shows up during the update (for one on a skill, decide first,
+above, whether the skill is the user's):
 
 | Symptom | Section |
 |---|---|

@@ -316,12 +316,7 @@ you believe something should run in a situation the rule does not cover, that
 is a `question` gate (Step 6). Record which branch applied, with its evidence,
 in your report.
 
-- **Unmarked skills first**, whenever
-  `uv run --no-sync .agents/shared/scripts/agents_shared/skill_ownership.py unmarked`
-  prints any: decide for each whether the workspace made it, by "Which skills
-  are the workspace's own" in `references/python-packaging-migration.md`. A
-  skill you mark is your own edit, so the conditions below select its checks.
-- **Environment gate**, whenever a manifest or lockfile is in the
+- **Environment gate first**, whenever a manifest or lockfile is in the
   merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
   is a precise blocker (an unparseable root lock means no service in the
   workspace can start); fix it before running anything else. A failure on the

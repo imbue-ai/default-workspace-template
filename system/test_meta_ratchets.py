@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import tomlkit
+from agents_shared.validate_skill import third_party_skills
 from inline_snapshot import snapshot
 from vendor_testing import resolves_into_vendor
 
@@ -186,6 +187,20 @@ def test_every_skill_python_dir_has_a_pyproject() -> None:
         "These skill python/ dirs have no pyproject.toml, which breaks uv for the whole workspace. "
         "Give each one (see .agents/shared/references/spec-summary.md, Packaging):\n"
         + "\n".join(f"  - {m}" for m in missing)
+    )
+
+
+def test_every_listed_third_party_skill_is_in_the_tree() -> None:
+    skills_root = _REPO_ROOT / ".agents" / "skills"
+    gone = sorted(
+        name
+        for name in third_party_skills(_REPO_ROOT / ".agents")
+        if not (skills_root / name).is_dir()
+    )
+    assert not gone, (
+        ".agents/third-party-skills.toml lists skills that are not in .agents/skills/. Remove their "
+        "entries: a skill of the workspace's own given the same name later would be left out of "
+        "its checks:\n" + "\n".join(f"  - {name}" for name in gone)
     )
 
 

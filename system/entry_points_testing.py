@@ -18,7 +18,7 @@ from pathlib import Path
 
 from agents_shared.validate_skill import (
     bare_skill_module,
-    is_workspace_skill,
+    is_third_party_skill,
     package_entry_modules,
 )
 
@@ -88,11 +88,11 @@ STANDALONE_BARE_SCRIPTS = (
 
 
 def workspace_skill_dirs(repo_root: Path = REPO_ROOT) -> list[Path]:
-    """The skills held to the workspace's checks: a third party's skill is left as it came."""
+    """The skills held to the workspace's checks: every one but those listed as third parties'."""
     return [
         skill_dir
         for skill_dir in sorted((repo_root / ".agents" / "skills").glob("*/"))
-        if is_workspace_skill(skill_dir)
+        if not is_third_party_skill(skill_dir)
     ]
 
 
