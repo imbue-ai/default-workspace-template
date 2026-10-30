@@ -50,6 +50,8 @@ build_inputs = [
     # Read by those two to pick the mngr tool's plugins.
     "system/config/mngr_plugins.toml",
     "system/scripts/workspace_bare_scripts/tool_env.py",
+    # Lists and syncs the user packages in build_workspace.sh.
+    "system/scripts/workspace_bare_scripts/user_packages.py",
     # The code the install_mngr.py entry stub imports.
     "system/scripts/workspace_bare_scripts/__init__.py",
     "system/scripts/workspace_bare_scripts/install_mngr.py",
