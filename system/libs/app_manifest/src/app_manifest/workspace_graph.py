@@ -33,9 +33,9 @@ _NAME_SEPARATOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"[-_.]+")
 
 
 class PythonMember(FrozenModel):
-    """A uv workspace member."""
+    """A Python package of the workspace: a uv workspace member, or a user package."""
 
-    directory: RepoRelativePath = Field(description="The member's directory")
+    directory: RepoRelativePath = Field(description="The package's directory")
     name: NonEmptyStr = Field(description="Its normalized distribution name")
     dependencies: tuple[str, ...] = Field(description="Normalized names of everything it depends on")
 
@@ -138,21 +138,36 @@ def read_python_members(repo_root: Path) -> tuple[PythonMember, ...]:
     members: list[PythonMember] = []
     for pattern in _string_list(workspace.get("members")):
         for member_directory in sorted(repo_root.glob(pattern)):
-            pyproject_path = member_directory / "pyproject.toml"
-            if member_directory in excluded or not pyproject_path.is_file():
+            if member_directory in excluded:
                 continue
-            pyproject = _read_toml(pyproject_path)
-            name = _table(pyproject.get("project")).get("name")
-            if not isinstance(name, str) or not name:
-                continue
-            members.append(
-                PythonMember(
-                    directory=RepoRelativePath(member_directory.relative_to(repo_root).as_posix()),
-                    name=NonEmptyStr(normalize_distribution_name(name)),
-                    dependencies=_declared_dependency_names(pyproject),
-                )
-            )
+            member = _read_python_package(repo_root, member_directory)
+            if member is not None:
+                members.append(member)
     return tuple(members)
+
+
+def read_user_package_members(repo_root: Path, directories: Sequence[str]) -> tuple[PythonMember, ...]:
+    """Each user package (``directories``, from :func:`read_user_packages`) with what it
+    depends on: not a workspace member, but a consumer of whatever it depends on by path."""
+    packages = (_read_python_package(repo_root, repo_root / directory) for directory in directories)
+    return tuple(package for package in packages if package is not None)
+
+
+def _read_python_package(repo_root: Path, directory: Path) -> PythonMember | None:
+    """The package whose ``pyproject.toml`` is in ``directory``; None without one, or one
+    that names no project."""
+    pyproject_path = directory / "pyproject.toml"
+    if not pyproject_path.is_file():
+        return None
+    pyproject = _read_toml(pyproject_path)
+    name = _table(pyproject.get("project")).get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    return PythonMember(
+        directory=RepoRelativePath(directory.relative_to(repo_root).as_posix()),
+        name=NonEmptyStr(normalize_distribution_name(name)),
+        dependencies=_declared_dependency_names(pyproject),
+    )
 
 
 @pure
@@ -180,7 +195,7 @@ def _reverse_transitive_closure(
 
 @pure
 def python_consumers(members: Sequence[PythonMember]) -> dict[str, tuple[str, ...]]:
-    """Each member directory's consumers: the members that depend on it, directly or transitively."""
+    """Each package directory's consumers: the packages that depend on it, directly or transitively."""
     directory_by_name = {str(member.name): str(member.directory) for member in members}
     edges = {
         str(member.directory): [

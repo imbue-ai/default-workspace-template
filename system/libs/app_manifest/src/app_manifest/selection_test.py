@@ -642,13 +642,14 @@ def test_a_catch_up_runs_nothing_for_a_documentation_creation(workspace: Path) -
     assert selection.commands == ()
 
 
-def _user_package(workspace: Path, *, has_tests: bool) -> None:
+def _user_package(workspace: Path, *, has_tests: bool, dependencies: str = "[]") -> None:
     # The fixture's root members glob system/libs and system/apps, so a package under
     # system/services is a user package: a standalone project the root does not name.
     write_repo_file(
         workspace,
         "system/services/poller/pyproject.toml",
-        '[project]\nname = "poller"\n\n[tool.hatch.build.targets.wheel]\npackages = ["src/poller"]\n',
+        f'[project]\nname = "poller"\ndependencies = {dependencies}\n\n'
+        '[tool.hatch.build.targets.wheel]\npackages = ["src/poller"]\n',
     )
     write_repo_file(workspace, "system/services/poller/src/poller/__init__.py", "")
     write_repo_file(workspace, "system/services/poller/src/poller/poll.py", "INTERVAL = 1\n")
@@ -673,6 +674,18 @@ def test_a_user_package_runs_its_own_suite_from_its_own_directory(workspace: Pat
         for argument in command.argv
     )
     assert not any(command.kind == "import_check" for command in selection.commands)
+
+
+def test_a_change_to_a_library_a_user_package_depends_on_runs_the_user_packages_suite(workspace: Path) -> None:
+    _user_package(workspace, has_tests=True, dependencies='["corelib"]')
+
+    selection = _select(workspace, ["system/libs/corelib/src/corelib/core.py"])
+
+    own = [command for command in selection.commands if command.working_directory == "system/services/poller"]
+    assert [command.argv[:4] for command in own] == [("uv", "run", "--no-sync", "pytest")]
+    assert any(
+        "system/services/poller depends on system/libs/corelib" in str(reason.detail) for reason in own[0].reasons
+    )
 
 
 def test_a_changed_package_with_no_tests_gets_an_import_check_in_its_own_environment(

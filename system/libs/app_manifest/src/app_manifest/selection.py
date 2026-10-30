@@ -1,7 +1,7 @@
 """Which test suites a set of changed paths calls for, and the commands that run them.
 
 Selection reads only what the workspace declares: a changed path inside a package or skill
-runs that unit's suite, plus the suites of the workspace members that depend on the package
+runs that unit's suite, plus the suites of the packages (workspace members and user packages) that depend on it
 (``pyproject.toml``), the npm packages that depend on it (``package.json``), and the apps whose
 manifests reference it (``[[references]]``); a package the root project depends on also runs
 the full root suite, the root project's own tests. A supervisord block runs the app whose
@@ -63,6 +63,7 @@ from app_manifest.workspace_graph import read_own_root_units
 from app_manifest.workspace_graph import read_python_members
 from app_manifest.workspace_graph import read_root_dependencies
 from app_manifest.workspace_graph import read_root_ignored_directories
+from app_manifest.workspace_graph import read_user_package_members
 from app_manifest.workspace_graph import read_user_packages
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -251,6 +252,9 @@ class RepoLayout(FrozenModel):
         description="The own-root suites whose pytest configuration measures coverage"
     )
     python_members: tuple[PythonMember, ...] = Field(description="The uv workspace members")
+    user_package_members: tuple[PythonMember, ...] = Field(
+        description="The user packages, which consume what they depend on by path like members do"
+    )
     root_dependent_members: frozenset[str] = Field(
         description="The member directories the root project depends on directly"
     )
@@ -323,7 +327,7 @@ class _SelectionContext(FrozenModel):
     """What every per-path selection reads, computed once per selection."""
 
     layout: RepoLayout = Field(description="The tree")
-    python_consumers: Mapping[str, tuple[str, ...]] = Field(description="Each member's consumers")
+    python_consumers: Mapping[str, tuple[str, ...]] = Field(description="Each package's consumers")
     npm_consumers: Mapping[str, tuple[str, ...]] = Field(description="Each npm package's consumers")
     lockfile: LockfileChange | None = Field(description="The lockfile change, when it could be read")
 
@@ -396,14 +400,8 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
     repo_root = repo_root.resolve()
     tracked_files = frozenset(str(path) for path in list_tracked_files(repo_root))
     python_members = read_python_members(repo_root)
-    own_root_units = tuple(
-        sorted(
-            {
-                *read_own_root_units(repo_root, python_members),
-                *read_user_packages(repo_root, python_members),
-            }
-        )
-    )
+    user_packages = read_user_packages(repo_root, python_members)
+    own_root_units = tuple(sorted({*read_own_root_units(repo_root, python_members), *user_packages}))
     # No suite collects the tests of a directory the root run ignores and that is not an own
     # root, and naming one to the root run would override its --ignore.
     uncollected_directories = [
@@ -426,6 +424,7 @@ def load_repo_layout(repo_root: Path) -> RepoLayout:
         own_root_units=own_root_units,
         coverage_measured_units=read_coverage_measured_units(repo_root, own_root_units),
         python_members=python_members,
+        user_package_members=read_user_package_members(repo_root, user_packages),
         root_dependent_members=frozenset(
             str(member.directory) for member in python_members if member.name in root_dependencies
         ),
@@ -522,7 +521,7 @@ def _referenced_directory_requests(layout: RepoLayout, path: str, app_directory:
 
 def _select_for_unit(context: _SelectionContext, path: str, unit: str) -> _PathOutcome:
     """A package's or skill's own suite, or only the changed test file in an app with its own
-    pytest root; for a package's non-test file, also the suites of the members that depend on it
+    pytest root; for a package's non-test file, also the suites of the packages that depend on it
     and of the directories an app's manifest references, and whether the root project depends on
     the package or on one of those members. A non-test file in an app's frontend selects nothing
     here."""
@@ -1106,7 +1105,7 @@ def select_tests(
     lockfile, lockfile_failure = _read_lockfile_change(paths, lockfile_texts)
     context = _SelectionContext(
         layout=layout,
-        python_consumers=python_consumers(layout.python_members),
+        python_consumers=python_consumers((*layout.python_members, *layout.user_package_members)),
         npm_consumers=npm_consumers(layout.npm_packages),
         lockfile=lockfile,
     )
