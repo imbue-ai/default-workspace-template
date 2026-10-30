@@ -156,7 +156,11 @@ def _rest_of_disk_items(
     items: list[dict[str, Any]] = []
     if software:
         items.append(
-            {"name": "System software", "hint": "the workspace's tools", "bytes": software}
+            {
+                "name": "System software",
+                "hint": "the workspace's tools",
+                "bytes": software,
+            }
         )
     if home_data:
         items.append(
