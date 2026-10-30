@@ -1,9 +1,11 @@
 """Convert a user package from the shared workspace to a standalone uv project.
 
-CLEANUP: remove this module, its test and the "A user app, service or lib" section of
-``references/python-packaging-migration.md`` once no old template or workspace still has a
-user package under ``system/`` that is a root workspace member (the layout before
-``docs/system/blueprint/app-environments/``).
+CLEANUP: remove this module, its test, its ``user-package-migration`` entry in this
+project's ``pyproject.toml``, migrate-workspace's ``convert-packages`` (which imports it, and
+is why migrate-workspace depends on ``update-self-skill``) and the "A user app, service or
+lib" section of ``references/python-packaging-migration.md`` once no old template or
+workspace still has a user package under ``system/`` that is a root workspace member (the
+layout before ``docs/system/blueprint/app-environments/``).
 
 A user package of the old layout is a member of the root workspace: it has no lock of its
 own, resolves shared code through ``{ workspace = true }`` sources (its own or the root's),
