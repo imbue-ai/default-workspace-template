@@ -4,7 +4,6 @@ import os
 import queue
 import signal
 import subprocess
-import sys
 import time
 from collections import deque
 from collections.abc import Sequence
@@ -22,6 +21,7 @@ from mock_cdp_client_test import (
     RecordingCdpClient,
     TabClosingCdpClient,
 )
+from workspace_bare_scripts import message_chat
 from workspace_layout.windows import WindowClosedHint
 
 
@@ -1842,48 +1842,34 @@ def test_a_new_browser_lands_on_a_blank_page() -> None:
 def test_message_agent_goes_through_the_chat_messenger_by_id_as_a_browser_fleet_nudge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The wake rides ``system/scripts/message_chat.py`` (the chat app, with ``mngr message`` as
-    its own backoff), addressed by the agent's id and marked ``--browser-fleet`` so the transcript
+    """The wake rides the chat messenger (the chat app, with ``mngr message`` as its own
+    backoff), addressed by the agent's id and wrapped as a browser-fleet nudge so the transcript
     renders it as a collapsed chip; the agent's name is never the address."""
-    spawned: list[tuple[tuple[str, ...], dict[str, object]]] = []
+    sent: list[tuple[str, str, Path]] = []
 
-    class _Done:
-        async def wait(self) -> int:
-            return 0
+    def fake_send(chat_id: str, text: str, *, cwd: Path) -> int:
+        sent.append((chat_id, text, cwd))
+        return message_chat.EXIT_DELIVERED
 
-    async def fake_exec(*argv: str, **kwargs: object) -> _Done:
-        spawned.append((argv, kwargs))
-        return _Done()
-
-    monkeypatch.setattr(bsession.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(message_chat, "send", fake_send)
     browser = bsession.LiveBrowser(browser_id="b1")
 
     asyncio.run(browser._message_agent("agent-0123456789abcdef0123456789abcdef", "riley", "the browser is yours"))
 
-    [(argv, kwargs)] = spawned
-    assert argv == (
-        sys.executable,
-        str(Path("system") / "scripts" / "message_chat.py"),
-        "agent-0123456789abcdef0123456789abcdef",
-        "--browser-fleet",
-        "--message",
-        "the browser is yours",
-    )
-    assert Path(str(kwargs["cwd"])).joinpath("system", "scripts", "message_chat.py").is_file()
+    [(chat_id, text, cwd)] = sent
+    assert chat_id == "agent-0123456789abcdef0123456789abcdef"
+    assert text == message_chat.wrap_browser_fleet_nudge("the browser is yours")
+    assert (cwd / "system" / "scripts" / "message_chat.py").is_file()
 
 
-def test_message_agent_logs_a_messenger_that_exits_nonzero(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The messenger's exit status is the failure signal (its output goes to DEVNULL), so a nonzero one
-    leaves a warning naming it and the agent; the wake itself stays best-effort and raises nothing."""
+def test_message_agent_logs_a_send_that_was_not_delivered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The messenger's exit code is the failure signal, so anything but delivered leaves a warning
+    naming it and the agent; the wake itself stays best-effort and raises nothing."""
 
-    class _Blocked:
-        async def wait(self) -> int:
-            return 7
+    def blocked_send(chat_id: str, text: str, *, cwd: Path) -> int:
+        return message_chat.EXIT_DELIVERED_BUT_BLOCKED
 
-    async def fake_exec(*argv: str, **kwargs: object) -> _Blocked:
-        return _Blocked()
-
-    monkeypatch.setattr(bsession.asyncio, "create_subprocess_exec", fake_exec)
+    monkeypatch.setattr(message_chat, "send", blocked_send)
     warnings: list[str] = []
     sink_id = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
     try:
@@ -1892,7 +1878,7 @@ def test_message_agent_logs_a_messenger_that_exits_nonzero(monkeypatch: pytest.M
         logger.remove(sink_id)
 
     [warning] = warnings
-    assert "exited 7" in warning
+    assert "answered 7" in warning
     assert "riley" in warning
 
 

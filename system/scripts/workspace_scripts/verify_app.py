@@ -23,7 +23,6 @@ import json
 import os
 import re
 import socket
-import subprocess
 import sys
 import time
 import urllib.error
@@ -33,6 +32,12 @@ import xmlrpc.client
 from collections.abc import Callable
 from pathlib import Path
 from typing import Optional
+
+from workspace_layout.cli import (
+    LayoutCliContext,
+    context_from_environment,
+    run_layout_cli,
+)
 
 LOCALHOST_PORT_RE = re.compile(r"http://(?:localhost|127\.0\.0\.1):(\d+)")
 SUPERVISOR_URL_RE = re.compile(r"--url\s+http://(?:localhost|127\.0\.0\.1):(\d+)")
@@ -255,21 +260,12 @@ def _restart_program(sup, name: str) -> Callable[[], Optional[str]]:
     return early_death
 
 
-def _surface(repo_root: Path, name: str, mode: str) -> None:
+def _surface(name: str, mode: str, context: LayoutCliContext) -> None:
     """Open the app's window beside the chat, or refresh its open windows, through workspace-layout."""
     args = ["open", name, "--beside"] if mode == "open" else ["refresh", "--app", name]
-    done = subprocess.run(
-        ["uv", "run", "--no-sync", "workspace-layout", *args],
-        cwd=repo_root,
-        capture_output=True,
-        text=True,
-    )
-    output = (done.stdout + done.stderr).strip()
-    if done.returncode != 0:
-        sys.exit(
-            f"error: workspace-layout {' '.join(args)} exited {done.returncode}:\n{output}"
-        )
-    print(f"workspace-layout {mode}: {output or 'ok'}")
+    returncode = run_layout_cli(args, context)
+    if returncode != 0:
+        sys.exit(f"error: workspace-layout {' '.join(args)} exited {returncode}")
 
 
 def _poll_health_for_reload(
@@ -520,7 +516,12 @@ def main() -> None:
 
     # 4. Surface the verified page
     if args.open or args.refresh:
-        _surface(repo_root, app_name, "open" if args.open else "refresh")
+        context = context_from_environment()
+        _surface(
+            app_name,
+            "open" if args.open else "refresh",
+            context._replace(apps_file=repo_root / context.apps_file),
+        )
 
 
 if __name__ == "__main__":
