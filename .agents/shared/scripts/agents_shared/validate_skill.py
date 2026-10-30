@@ -93,6 +93,39 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], list[str]]:
     return parsed, body_lines
 
 
+def _skill_metadata(skill_dir: Path) -> dict[str, Any]:
+    """The ``metadata`` mapping of the skill's SKILL.md frontmatter, or an empty one.
+
+    A SKILL.md that is missing or whose frontmatter does not parse carries no marker;
+    ``validate`` reports the parse error for a skill of the workspace's own.
+    """
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        return {}
+    try:
+        frontmatter, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8"))
+    except ValueError:
+        return {}
+    metadata = frontmatter.get("metadata")
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def is_built_in_skill(skill_dir: Path) -> bool:
+    """Whether the skill ships with the template: its frontmatter has ``metadata.author: imbue``."""
+    return _skill_metadata(skill_dir).get("author") == "imbue"
+
+
+def is_workspace_skill(skill_dir: Path) -> bool:
+    """Whether the workspace holds the skill to its own checks.
+
+    A built-in skill (``metadata.author: imbue``) or one made in this workspace
+    (``metadata.crystallized: true``) is; any other skill came from a third party and is
+    kept as it came, so the import-cost and launch checks leave it out.
+    """
+    metadata = _skill_metadata(skill_dir)
+    return metadata.get("author") == "imbue" or metadata.get("crystallized") is True
+
+
 def package_name(skill_name: str) -> str:
     return skill_name.replace("-", "_") + "_skill"
 

@@ -30,7 +30,7 @@ import tomllib
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
-from agents_shared.validate_skill import is_entry_module
+from agents_shared.validate_skill import is_entry_module, is_workspace_skill
 from entry_points_testing import BARE_SEARCH_PATHS, is_bare_entry, is_test_file
 from imbue.mngr.interfaces.host import NamedCommand
 from inline_snapshot import snapshot
@@ -255,6 +255,16 @@ def _is_scanned(relative: str, suffixes: tuple[str, ...]) -> bool:
     return relative.endswith(suffixes)
 
 
+def _is_in_third_party_skill(relative: str, repo_root: Path) -> bool:
+    """Whether a file belongs to a skill the workspace keeps as it came, not ours to police."""
+    parts = PurePosixPath(relative).parts
+    return (
+        parts[:2] == (".agents", "skills")
+        and len(parts) > 3
+        and not is_workspace_skill(repo_root / ".agents" / "skills" / parts[2])
+    )
+
+
 def _scanned_files(
     suffixes: tuple[str, ...] = _UV_RUN_SCANNED_SUFFIXES, repo_root: Path = _REPO_ROOT
 ) -> list[Path]:
@@ -276,6 +286,7 @@ def _scanned_files(
         for relative in tracked
         if relative
         and _is_scanned(relative, suffixes)
+        and not _is_in_third_party_skill(relative, repo_root)
         and (repo_root / relative).is_file()
         and not resolves_into_vendor(repo_root / relative, repo_root)
     ]
@@ -654,20 +665,10 @@ def _edits_sys_path(source: str) -> bool:
     return False
 
 
-def _is_in_unpackaged_skill(relative: str, repo_root: Path) -> bool:
-    """Whether a file belongs to a skill with no ``python/`` project: a third-party or plain-scripts skill, not ours to police."""
-    parts = PurePosixPath(relative).parts
-    return (
-        parts[:2] == (".agents", "skills")
-        and len(parts) > 3
-        and not (repo_root / ".agents" / "skills" / parts[2] / "python" / "pyproject.toml").is_file()
-    )
-
-
 def _tracked_python_files(repo_root: Path) -> list[str]:
     """The template's own tracked ``.py`` files, tests included.
 
-    Vendored code and skills without a ``python/`` project are left out, and so is this file,
+    Vendored code and third-party skills are left out, and so is this file,
     whose planted cases would count.
     """
     tracked = subprocess.run(
@@ -679,7 +680,7 @@ def _tracked_python_files(repo_root: Path) -> list[str]:
         if relative
         and "vendor" not in PurePosixPath(relative).parts
         and relative != "system/test_python_launch_rules.py"
-        and not _is_in_unpackaged_skill(relative, repo_root)
+        and not _is_in_third_party_skill(relative, repo_root)
         and (repo_root / relative).is_file()
     )
 
@@ -698,7 +699,7 @@ def _pytest_configs_setting_pythonpath(repo_root: Path) -> list[str]:
         for relative in tracked
         if PurePosixPath(relative).name in _PYTEST_CONFIG_NAMES
         and "vendor" not in PurePosixPath(relative).parts
-        and not _is_in_unpackaged_skill(relative, repo_root)
+        and not _is_in_third_party_skill(relative, repo_root)
         and (repo_root / relative).is_file()
         and _PYTHONPATH_SETTING_RE.search((repo_root / relative).read_text(errors="replace"))
     )
@@ -721,19 +722,21 @@ def test_prevent_sys_path_edits() -> None:
     )
 
 
-def test_a_skill_without_a_python_project_is_not_counted(tmp_path: Path) -> None:
+def test_a_third_party_skill_is_not_counted_whatever_its_layout(tmp_path: Path) -> None:
     edit = "import sys\nsys.path.insert(0, 'x')\n"
-    for skill in ("packaged", "third-party"):
+    markers = {"ours": "metadata:\n  crystallized: true\n", "third-party": ""}
+    for skill, marker in markers.items():
         (tmp_path / ".agents" / "skills" / skill / "scripts").mkdir(parents=True)
+        (tmp_path / ".agents" / "skills" / skill / "SKILL.md").write_text(f"---\nname: {skill}\n{marker}---\n")
         (tmp_path / ".agents" / "skills" / skill / "scripts" / "run.py").write_text(edit)
-    (tmp_path / ".agents" / "skills" / "packaged" / "python").mkdir()
-    (tmp_path / ".agents" / "skills" / "packaged" / "python" / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / ".agents" / "skills" / "third-party" / "python").mkdir()
+    (tmp_path / ".agents" / "skills" / "third-party" / "python" / "pyproject.toml").write_text("[project]\n")
     (tmp_path / "system").mkdir()
     (tmp_path / "system" / "tool.py").write_text(edit)
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
-    assert _sys_path_editors(tmp_path) == [".agents/skills/packaged/scripts/run.py", "system/tool.py"]
+    assert _sys_path_editors(tmp_path) == [".agents/skills/ours/scripts/run.py", "system/tool.py"]
 
 
 def test_the_sys_path_scan_sees_each_form_of_edit() -> None:
@@ -858,6 +861,7 @@ def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(
     module = tmp_path / ".agents" / "skills" / "probe" / "python" / "probe_skill" / "probe.py"
     module.parent.mkdir(parents=True)
     (module.parent.parent / "pyproject.toml").write_text("[project]\n")
+    (tmp_path / ".agents" / "skills" / "probe" / "SKILL.md").write_text("---\nname: probe\nmetadata:\n  crystallized: true\n---\n")
     module.write_text(
         "import sys\nfrom pathlib import Path\n\n"
         "if not __package__:\n"
@@ -938,7 +942,10 @@ def _tracked_paths(repo_root: Path, pattern: str) -> list[str]:
     return [
         relative
         for relative in tracked
-        if relative and "vendor" not in PurePosixPath(relative).parts and (repo_root / relative).is_file()
+        if relative
+        and "vendor" not in PurePosixPath(relative).parts
+        and not _is_in_third_party_skill(relative, repo_root)
+        and (repo_root / relative).is_file()
     ]
 
 
