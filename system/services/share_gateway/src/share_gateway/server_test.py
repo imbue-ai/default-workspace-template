@@ -1,6 +1,8 @@
 import base64
 import hashlib
+import html
 import json
+import re
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -25,6 +27,7 @@ from share_gateway.identity import RequesterIdentity
 from share_gateway.materials import ShareMaterials
 from share_gateway.server import PAGE_CONTENT_SECURITY_POLICY
 from share_gateway.server import PendingLoginRegistry
+from share_gateway.server import UnansweredAddressWaits
 from share_gateway.server import build_gateway_app
 from share_gateway.server import forwarded_client_ip
 from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
@@ -42,11 +45,21 @@ _BROKER_KEY = rsa.generate_private_key(public_exponent=65537, key_size=2048)
 # name, and the gateway maps label -> name via this registry.
 _AUTH_LABEL = "auth-x7k9q2w1"
 _APPS = [
-    RegisteredApp("system_interface", "system_interface-shell111", "127.0.0.1", 8000, is_grantable=False),
-    RegisteredApp("web", "web-web111111", "127.0.0.1", 5001, is_grantable=True),
-    RegisteredApp("files", "files-files111", "127.0.0.1", 5002, is_grantable=True),
-    RegisteredApp("terminal", "terminal-term1111", "127.0.0.1", 7681, is_grantable=True),
-    RegisteredApp("terminal-pty", "terminal-pty-pty11111", "127.0.0.1", 7683, is_grantable=False),
+    RegisteredApp(
+        "system_interface",
+        "system_interface-shell111",
+        "127.0.0.1",
+        8000,
+        is_grantable=False,
+        program="system_interface",
+        is_critical=True,
+    ),
+    RegisteredApp("web", "web-web111111", "127.0.0.1", 5001, is_grantable=True, program="web", is_critical=False),
+    RegisteredApp("files", "files-files111", "127.0.0.1", 5002, is_grantable=True, program="", is_critical=False),
+    RegisteredApp("terminal", "terminal-term1111", "127.0.0.1", 7681, is_grantable=True, program="", is_critical=False),
+    RegisteredApp(
+        "terminal-pty", "terminal-pty-pty11111", "127.0.0.1", 7683, is_grantable=False, program="", is_critical=False
+    ),
 ]
 _LABELS = build_label_to_name(_APPS)
 _SHELL_HOST = f"system_interface-shell111.{_DOMAIN}"
@@ -71,14 +84,28 @@ email_domains = []
 _BOB_USER_ID = "user-bob-4471"
 
 
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 5371.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
 class _GatewayHarness:
     def __init__(
-        self, app: Flask, client: FlaskClient, grants_path: Path, pending_logins: PendingLoginRegistry
+        self,
+        app: Flask,
+        client: FlaskClient,
+        grants_path: Path,
+        pending_logins: PendingLoginRegistry,
+        clock: _ManualClock,
     ) -> None:
         self.app = app
         self.client = client
         self.grants_path = grants_path
         self.pending_logins = pending_logins
+        self.clock = clock
 
 
 def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str = _CHROME_ORIGIN) -> _GatewayHarness:
@@ -92,6 +119,7 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str
         chrome_origin=chrome_origin,
     )
     pending_logins = PendingLoginRegistry()
+    clock = _ManualClock()
     app = build_gateway_app(
         materials=materials,
         grants_path=grants_path,
@@ -102,10 +130,11 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str
         ),
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=pending_logins,
+        unanswered_waits=UnansweredAddressWaits(clock=clock),
         auth_label=_AUTH_LABEL,
         get_registered_apps=lambda: _APPS,
     )
-    return _GatewayHarness(app, app.test_client(), grants_path, pending_logins)
+    return _GatewayHarness(app, app.test_client(), grants_path, pending_logins, clock)
 
 
 def _cookie_value(set_cookie_header: str) -> str:
@@ -209,13 +238,62 @@ def test_unauthenticated_non_html_request_gets_401(tmp_path: Path) -> None:
     assert resp.status_code == 401
 
 
-def test_unknown_label_is_forbidden(tmp_path: Path) -> None:
+def test_unknown_label_says_nothing_is_shared_there_rather_than_refusing_the_account(tmp_path: Path) -> None:
     harness = _make_harness(tmp_path)
     _install_session(harness.client, "bob@example.com")
 
     resp = harness.client.get("/_auth/verify", headers=_verify_headers(host=f"unknown-00000000.{_DOMAIN}"))
 
     assert resp.status_code == 403
+    page = resp.get_data(as_text=True)
+    assert "Nothing is shared at this address right now" in page
+    assert "your account" not in page
+
+
+def test_a_visitor_refused_by_the_grants_is_told_so_and_offered_another_account(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "carol@example.com")
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers(uri="/desk?view=2"))
+
+    assert resp.status_code == 403
+    page = resp.get_data(as_text=True)
+    assert "This page hasn't been shared with your account" in page
+    switch_link = _switch_account_link(page)
+    assert switch_link.startswith(f"{_AUTH_ORIGIN}/_auth/switch-account?")
+    assert parse_qs(urlsplit(switch_link).query)["next"] == [f"https://{_SHELL_HOST}/desk?view=2"]
+
+
+def test_switching_account_ends_the_session_and_asks_the_broker_which_account_to_use(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _install_session(harness.client, "carol@example.com")
+    refused = harness.client.get("/_auth/verify", headers=_verify_headers(uri="/desk"))
+    switch_link = _switch_account_link(refused.get_data(as_text=True))
+
+    resp = harness.client.get(switch_link.removeprefix(_AUTH_ORIGIN))
+
+    assert resp.status_code == 302
+    query = _broker_query(resp)
+    assert query["next"] == [f"https://{_SHELL_HOST}/desk"]
+    assert "confirmed" not in query
+    nonce = harness.pending_logins.mint(is_retry=False)
+    signed_in = harness.client.get(f"/_auth/callback?token={_mint_handoff(nonce)}&state={nonce}")
+    set_by_sign_in = set_cookies_by_name(signed_in)
+    cleared = set_cookies_by_name(resp)
+    assert set(cleared) == set(set_by_sign_in) == {SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME}
+    for name, header in cleared.items():
+        assert _cookie_value(header) == ""
+        assert "Max-Age=0" in header
+        assert _cookie_attributes(header) == _cookie_attributes(set_by_sign_in[name])
+
+
+def test_switching_account_drops_a_foreign_next(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get("/_auth/switch-account?next=https://evil.example.com/")
+
+    assert resp.status_code == 302
+    assert _broker_query(resp)["next"] == [""]
 
 
 def test_workspace_grant_allows_shell_and_services_and_strips_cookie(tmp_path: Path) -> None:
@@ -405,6 +483,18 @@ def test_callback_clamps_foreign_next_to_the_shell_label(tmp_path: Path) -> None
     assert resp.headers["Location"] == f"https://{_SHELL_HOST}/"
 
 
+def _cookie_attributes(set_cookie_header: str) -> set[str]:
+    """The attributes that identify which stored cookie a Set-Cookie replaces."""
+    attributes = {part.strip() for part in set_cookie_header.split(";")[1:]}
+    return {attribute for attribute in attributes if not attribute.startswith(("Max-Age=", "Expires="))}
+
+
+def _switch_account_link(page: str) -> str:
+    match = re.search(r'<a href="([^"]*)">Sign in with a different account</a>', page)
+    assert match is not None
+    return html.unescape(match.group(1))
+
+
 def _broker_query(response: TestResponse) -> dict[str, list[str]]:
     location = response.headers["Location"]
     assert location.startswith(f"{_BROKER_URL}/share/authorize?")
@@ -528,9 +618,13 @@ def test_callback_heals_wrong_audience_and_nonce_mismatch_but_refuses_a_stranger
     # A verified visitor with no grant is the one case that is a plain refusal.
     nonce_three = harness.pending_logins.mint(is_retry=False)
     stranger = _mint_handoff(nonce_three, email="stranger@nowhere.dev", jti="jti-stranger")
-    refused = harness.client.get(f"/_auth/callback?token={stranger}&state={nonce_three}")
+    refused = harness.client.get(
+        f"/_auth/callback?token={stranger}&state={nonce_three}&next=https://{_WEB_HOST}/panel"
+    )
     assert refused.status_code == 403
-    assert "Not shared with you" in refused.get_data(as_text=True)
+    page = refused.get_data(as_text=True)
+    assert "This page hasn't been shared with your account" in page
+    assert parse_qs(urlsplit(_switch_account_link(page)).query)["next"] == [f"https://{_WEB_HOST}/panel"]
 
 
 def test_callback_with_a_missing_grants_file_shows_the_misconfigured_page(tmp_path: Path) -> None:
@@ -851,3 +945,63 @@ def test_foreign_preflight_still_requires_a_session(tmp_path: Path) -> None:
     )
 
     assert resp.status_code == 401
+
+
+def _unresponsive_page(harness: _GatewayHarness, host: str) -> str:
+    resp = harness.client.get("/_auth/unresponsive", headers={"Host": host})
+    assert resp.status_code == 503
+    return resp.get_data(as_text=True)
+
+
+def _wait_out_a_minute(harness: _GatewayHarness, host: str) -> str:
+    """Reload the not-responding page every three seconds for a minute; answers the last page."""
+    page = _unresponsive_page(harness, host)
+    for _reload in range(20):
+        harness.clock.now += 3.0
+        page = _unresponsive_page(harness, host)
+    return page
+
+
+def test_an_app_that_stops_answering_is_waited_on_then_reported_as_not_responding(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+
+    first = _unresponsive_page(harness, _WEB_HOST)
+    last = _wait_out_a_minute(harness, _WEB_HOST)
+
+    assert "isn't responding yet" in first
+    assert 'http-equiv="refresh"' in first
+    assert "Let the person who shared it know, then try again." in last
+    assert 'http-equiv="refresh"' not in last
+    assert ">Try again</a>" in last
+
+
+@pytest.mark.parametrize("host", [_SHELL_HOST, _FILES_HOST], ids=["critical-app", "app-without-a-program"])
+def test_an_app_the_workspace_never_restarts_on_its_own_says_the_owner_may_need_to_restart_it(
+    tmp_path: Path, host: str
+) -> None:
+    harness = _make_harness(tmp_path)
+
+    last = _wait_out_a_minute(harness, host)
+
+    assert "The workspace owner may need to restart it." in last
+    assert ">Try again</a>" in last
+
+
+def test_the_wait_starts_over_once_the_address_has_gone_quiet(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    assert "Let the person who shared it know" in _wait_out_a_minute(harness, _WEB_HOST)
+
+    # A press of Try again soon after is still the same outage.
+    harness.clock.now += 10.0
+    assert "Let the person who shared it know" in _unresponsive_page(harness, _WEB_HOST)
+
+    # Long enough without a request that the app may have answered in between: a fresh wait.
+    harness.clock.now += 45.0
+    assert "isn't responding yet" in _unresponsive_page(harness, _WEB_HOST)
+
+
+def test_each_address_waits_on_its_own(tmp_path: Path) -> None:
+    harness = _make_harness(tmp_path)
+    _wait_out_a_minute(harness, _WEB_HOST)
+
+    assert "isn't responding yet" in _unresponsive_page(harness, _TERMINAL_HOST)

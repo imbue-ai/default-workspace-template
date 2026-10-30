@@ -107,12 +107,23 @@ def verify_session_from_cookies(
 
 def set_session_cookie(response: Response, cookie_value: str, workspace_domain: str) -> None:
     """Attach both copies of the workspace session cookie (see the module docstring)."""
+    _set_both_session_cookies(response, cookie_value, SESSION_LIFETIME_SECONDS, workspace_domain)
+
+
+def clear_session_cookie(response: Response, workspace_domain: str) -> None:
+    """Expire both copies of the workspace session cookie, ending the session in this browser."""
+    _set_both_session_cookies(response, "", 0, workspace_domain)
+
+
+def _set_both_session_cookies(response: Response, cookie_value: str, max_age: int, workspace_domain: str) -> None:
+    # A cookie is only replaced by one with the same name, domain, path and partition, so expiring
+    # one has to repeat every attribute it was set with.
     for cookie_name in _SESSION_COOKIE_NAMES:
         is_partitioned = cookie_name == PARTITIONED_SESSION_COOKIE_NAME
         response.set_cookie(
             cookie_name,
             cookie_value,
-            max_age=SESSION_LIFETIME_SECONDS,
+            max_age=max_age,
             domain=workspace_domain,
             path="/",
             secure=True,

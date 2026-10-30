@@ -34,6 +34,16 @@ three things running:
    registered service's local backend (from `data/.state/apps.toml`; the
    Caddyfile re-renders and hot-reloads when the registry changes), and
    unknown-but-plausible service origins to an auto-retrying loading page.
+   A registered service whose backend will not take the connection (crashed,
+   stopped and not yet parked by the shell, or released by the shell and not
+   yet bound by the app) gets a separate not-responding page instead: it
+   reloads every 3 seconds while the address has gone unanswered for less
+   than a minute, then stops and says the page is not responding, with a
+   "Try again" button. For an app
+   the shell never starts on demand (a critical app, a row with no program, a
+   non-loopback address) it adds that the workspace owner may need to restart
+   it. The minute is counted per address across all visitors, and starts over
+   after 30 seconds with no such request.
    Every response it sends, a service's or its own, carries the browser
    hardening headers (`Strict-Transport-Security`, `X-Content-Type-Options:
    nosniff`, `Referrer-Policy: same-origin`, and a `frame-ancestors` policy
@@ -95,9 +105,19 @@ refusal, and logs every denial (never the token) to the service's stderr:
   telling the visitor the owner must fix the workspace's sharing settings.
   `/_auth/verify` answers the same way for a non-owner mid-session; the owner
   is never grant-checked, so they still get in.
-- A verified account with no grant is **"Not shared with you"** (403). So is
-  one whose only grants are per-service grants on internal apps (see
-  "Grants") or on apps not registered, since those admit it nowhere.
+- A verified account with no grant is **"Not shared with you"** (403: "This
+  page hasn't been shared with your account. Ask the person who shared it to
+  give you access, then reload this page."). So is one whose only grants are
+  per-service grants on internal apps (see "Grants") or on apps not
+  registered, since those admit it nowhere, and, on any later request, a
+  session with no grant for the app it is opening. The page links to
+  `/_auth/switch-account` on the auth origin, which expires both session
+  cookies and sends the visitor through the broker without `confirmed=1`, so
+  the broker asks which account to continue as and offers a different one.
+- An address that is not one of this workspace's origins (an old or mistyped
+  link, an app whose registration was removed) is **"Nothing shared here"**
+  (403: "Nothing is shared at this address right now. Check the link with the
+  person who sent it."), before any session check.
 
 ## When the stack cannot come up
 

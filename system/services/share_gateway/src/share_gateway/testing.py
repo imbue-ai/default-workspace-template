@@ -25,6 +25,7 @@ from share_gateway.handoff import SingleUseJtiRegistry
 from share_gateway.materials import ShareMaterials
 from share_gateway.runner import build_agent_admitter
 from share_gateway.server import PendingLoginRegistry
+from share_gateway.server import UnansweredAddressWaits
 from share_gateway.server import build_gateway_app
 
 
@@ -140,6 +141,7 @@ def build_agent_test_app(
         jwks_cache=JwksCache(f"https://accounts.{workspace_domain}/share/jwks.json", preloaded_keys_by_kid={}),
         jti_registry=SingleUseJtiRegistry(),
         pending_logins=PendingLoginRegistry(),
+        unanswered_waits=UnansweredAddressWaits(),
         auth_label=auth_label,
         get_registered_apps=lambda: apps,
         admit_agent=build_agent_admitter(context, lambda: list(apps)),

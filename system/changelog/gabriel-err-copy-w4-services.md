@@ -1,0 +1,1 @@
+The stop-when-no-windows spec now says that caddy sends a share visitor whose app's backend refuses the connection to the gateway's not-responding page (which gives up after a minute) instead of the auto-refreshing loading page.

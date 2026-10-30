@@ -7,10 +7,12 @@ service's unguessable ``<label>.<domain>`` origin to that service's local
 backend, the dedicated ``auth-<rand>.<domain>`` label to the gateway's public
 ``/_auth/*`` surface (the login callback) and the ``/_agent/*`` surface
 (visiting agents), and unknown-but-plausible service
-origins to the gateway's auto-retrying loading page, which a registered service
-caddy cannot reach gets too (the moment between an app stopping and the shell
-parking its port, or between the shell releasing the port and the app binding
-it; the stop-when-no-windows spec, section 5.7). The bare workspace domain
+origins to the gateway's auto-retrying loading page. A registered service caddy
+cannot reach gets the gateway's not-responding page instead, which retries for
+about a minute and then says the app is not answering (it covers the moment
+between an app stopping and the shell parking its port, or between the shell
+releasing the port and the app binding it, the stop-when-no-windows spec,
+section 5.7, as well as an app that has crashed for good). The bare workspace domain
 is intentionally unrouted (no frpc claim), so scanners that learn it from
 Certificate Transparency reach nothing.
 
@@ -30,6 +32,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from urllib.parse import urlsplit
 
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
 
 class RegisteredApp:
     """One ``[[apps]]`` row from ``data/.state/apps.toml``."""
@@ -41,6 +45,8 @@ class RegisteredApp:
         backend_host: str,
         backend_port: int,
         is_grantable: bool,
+        program: str = "",
+        is_critical: bool = False,
         description: str = "",
         api_schema_path: str = "",
     ) -> None:
@@ -51,6 +57,8 @@ class RegisteredApp:
         # Whether a per-service grant may admit a visitor to this app; an
         # internal app is reachable only through a workspace-level grant.
         self.is_grantable = is_grantable
+        self.program = program
+        self.is_critical = is_critical
         # What the app's manifest says it is for, and where on its origin it
         # describes its API (contracts.md section 2); both empty when undeclared.
         self.description = description
@@ -79,6 +87,7 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
             continue
         # A missing key or a literal ``false`` is grantable; any other value reads as internal.
         is_grantable = entry.get("internal", False) is False
+        program = entry.get("program")
         description = entry.get("description", "")
         api_schema_path = entry.get("api_schema_path", "")
         apps.append(
@@ -88,11 +97,28 @@ def parse_registered_apps(apps_toml_text: str) -> list[RegisteredApp]:
                 backend_host=parsed.hostname,
                 backend_port=parsed.port,
                 is_grantable=is_grantable,
+                program=program if isinstance(program, str) else "",
+                is_critical=entry.get("critical", False) is True,
                 description=description if isinstance(description, str) else "",
                 api_schema_path=api_schema_path if isinstance(api_schema_path, str) else "",
             )
         )
     return apps
+
+
+def is_started_on_demand(app: RegisteredApp, apps: Sequence[RegisteredApp]) -> bool:
+    """Whether the workspace shell starts this app again when a request arrives for it while it is down.
+
+    The same rule as the shell's own (``stoppable_program_of`` and ``parking_target_of`` in
+    system_interface's shell): a supervised program that is not critical and not shared with a
+    critical app, on a loopback address the shell can hold. Anything else stays down until someone
+    restarts it.
+    """
+    if not app.program or app.is_critical:
+        return False
+    if any(other.is_critical and other.program == app.program for other in apps):
+        return False
+    return app.backend_host in _LOOPBACK_HOSTS
 
 
 def build_label_to_name(apps: Sequence[RegisteredApp]) -> dict[str, str]:
@@ -247,15 +273,15 @@ https://*.{workspace_domain}:{https_port} {{
         reverse_proxy {gateway_backend}
     }}
 
-    # A registered service whose backend refuses the connection (a stopped app
-    # whose port the shell has not parked yet, or one it just released for the
-    # app to bind) gets the auto-retrying loading page rather than a bare 502;
-    # the visitor's next request reaches the app, or the shell's parker, which
-    # starts it. The parker's own 503 is a backend answer, not a caddy error,
-    # and passes through as it does locally.
+    # A registered service whose backend refuses the connection gets the
+    # gateway's not-responding page rather than a bare 502. It is a path of its
+    # own, apart from the route-not-loaded fallback below, because only the
+    # gateway can tell how long the address has gone unanswered. The parker's
+    # own 503 is a backend answer, not a caddy error, and passes through as it
+    # does locally.
     handle_errors 502 {{
 {error_hardening_headers}
-        rewrite * /_auth/loading
+        rewrite * /_auth/unresponsive
         reverse_proxy {gateway_backend}
     }}
 

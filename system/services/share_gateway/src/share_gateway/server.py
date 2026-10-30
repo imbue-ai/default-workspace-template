@@ -17,6 +17,7 @@ the "Sign-in link expired" page.
 
 import base64
 import hashlib
+import html
 import json
 import secrets
 import threading
@@ -35,6 +36,7 @@ from werkzeug.datastructures import Headers
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_grantable_service_names
 from share_gateway.caddyfile import build_label_to_name
+from share_gateway.caddyfile import is_started_on_demand
 from share_gateway.grants import Grants
 from share_gateway.grants import GrantsError
 from share_gateway.grants import load_grants
@@ -53,6 +55,7 @@ from share_gateway.identity import render_identity_header
 from share_gateway.log import log
 from share_gateway.materials import ShareMaterials
 from share_gateway.origin_policy import is_request_origin_allowed
+from share_gateway.session_cookie import clear_session_cookie
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.session_cookie import set_session_cookie
 from share_gateway.session_cookie import strip_session_cookie
@@ -71,8 +74,10 @@ _SHELL_SERVICE_NAME = "system_interface"
 
 # The stylesheet the gateway's own pages inline; the page policy admits it by hash.
 _PAGE_STYLE = (
-    "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;\n"
-    "height:100vh;margin:0;color:#334155}div{text-align:center}"
+    "body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;"
+    "height:100vh;margin:0;color:#334155}div{text-align:center;max-width:32rem;padding:0 1rem}"
+    "a.button{display:inline-block;margin-top:0.5rem;padding:0.5rem 1rem;border-radius:0.375rem;"
+    "background:#334155;color:#fff;text-decoration:none}"
 )
 _PAGE_STYLE_HASH = base64.b64encode(hashlib.sha256(_PAGE_STYLE.encode("utf-8")).digest()).decode("ascii")
 
@@ -83,35 +88,88 @@ PAGE_CONTENT_SECURITY_POLICY = (
     f"default-src 'none'; style-src 'sha256-{_PAGE_STYLE_HASH}'; base-uri 'none'; form-action 'none'"
 )
 
-_LOADING_PAGE = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><meta http-equiv="refresh" content="3">
-<title>Loading...</title>
-<style>{_PAGE_STYLE}</style></head>
-<body><div><h1>Starting up&hellip;</h1>
-<p>This service is not ready yet. The page retries automatically.</p></div></body></html>
-"""
 
-_FORBIDDEN_PAGE = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Not shared with you</title>
-<style>{_PAGE_STYLE}</style></head>
-<body><div><h1>Not shared with you</h1>
-<p>This workspace exists, but your account has not been granted access to this page.</p></div></body></html>
-"""
+def _page_html(title: str, body_html: str, refresh_seconds: int | None = None) -> str:
+    """One of the gateway's own full-page answers: a heading and a few lines, centred."""
+    refresh = f'<meta http-equiv="refresh" content="{refresh_seconds}">' if refresh_seconds is not None else ""
+    return (
+        f'<!DOCTYPE html>\n<html><head><meta charset="utf-8">{refresh}\n'
+        f"<title>{html.escape(title)}</title>\n<style>{_PAGE_STYLE}</style></head>\n"
+        f"<body><div>{body_html}</div></body></html>\n"
+    )
 
-_EXPIRED_LOGIN_PAGE = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Sign-in link expired</title>
-<style>{_PAGE_STYLE}</style></head>
-<body><div><h1>Sign-in link expired</h1>
-<p>This sign-in link was already used or has expired. Open the workspace link again.</p></div></body></html>
-"""
 
-_MISCONFIGURED_PAGE = f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Sharing is misconfigured</title>
-<style>{_PAGE_STYLE}</style></head>
-<body><div><h1>Sharing is misconfigured</h1>
-<p>This workspace's sharing settings could not be read, so nobody can be let in right now.
-The workspace owner needs to fix the workspace's sharing settings.</p></div></body></html>
-"""
+_LOADING_PAGE = _page_html(
+    "Loading...",
+    "<h1>Starting up&hellip;</h1>\n<p>This service is not ready yet. The page retries automatically.</p>",
+    refresh_seconds=3,
+)
+
+# A press reloads the address the visitor was opening: the gateway's pages are served in place of
+# an app's own page, at that page's address.
+_TRY_AGAIN_BUTTON = '<a class="button" href="">Try again</a>'
+
+_UNRESPONSIVE_WAITING_PAGE = _page_html(
+    "Waiting for this page",
+    "<h1>Waiting for this page</h1>\n<p>This page isn't responding yet. It will open as soon as it answers.</p>",
+    refresh_seconds=3,
+)
+
+_UNRESPONSIVE_PAGE = _page_html(
+    "This page isn't responding",
+    "<h1>This page isn't responding</h1>\n"
+    "<p>This page isn't responding right now. Let the person who shared it know, then try again.</p>\n"
+    f"{_TRY_AGAIN_BUTTON}",
+)
+
+_UNRESPONSIVE_NOT_RESTARTED_PAGE = _page_html(
+    "This app isn't responding",
+    "<h1>This app isn't responding</h1>\n"
+    "<p>This app isn't responding. The workspace owner may need to restart it.</p>\n"
+    f"{_TRY_AGAIN_BUTTON}",
+)
+
+_NOTHING_SHARED_HERE_PAGE = _page_html(
+    "Nothing shared here",
+    "<h1>Nothing shared here</h1>\n"
+    "<p>Nothing is shared at this address right now. Check the link with the person who sent it.</p>",
+)
+
+_ORIGIN_REFUSED_PAGE = _page_html(
+    "Not shared with you",
+    "<h1>Not shared with you</h1>\n"
+    "<p>This workspace exists, but your account has not been granted access to this page.</p>",
+)
+
+_EXPIRED_LOGIN_PAGE = _page_html(
+    "Sign-in link expired",
+    "<h1>Sign-in link expired</h1>\n"
+    "<p>This sign-in link was already used or has expired. Open the workspace link again.</p>",
+)
+
+_MISCONFIGURED_PAGE = _page_html(
+    "Sharing is misconfigured",
+    "<h1>Sharing is misconfigured</h1>\n"
+    "<p>This workspace's sharing settings could not be read, so nobody can be let in right now.\n"
+    "The workspace owner needs to fix the workspace's sharing settings.</p>",
+)
+
+# How long an address may go unanswered before the not-responding page stops retrying, and how
+# long a pause between its requests ends one wait and starts the next. The pause outlasts both the
+# page's own 3-second reload and the shell's 15-second could-not-start page, which a visitor
+# alternates with while the shell tries to start an app.
+_UNRESPONSIVE_GIVE_UP_SECONDS = 60.0
+_UNRESPONSIVE_WAIT_GAP_SECONDS = 30.0
+
+
+def _not_shared_with_account_page(switch_account_url: str) -> str:
+    return _page_html(
+        "Not shared with you",
+        "<h1>Not shared with you</h1>\n"
+        "<p>This page hasn't been shared with your account. "
+        "Ask the person who shared it to give you access, then reload this page.</p>\n"
+        f'<p><a href="{html.escape(switch_account_url)}">Sign in with a different account</a></p>',
+    )
 
 
 def _html_page(page: str, status: int) -> Response:
@@ -160,6 +218,30 @@ class PendingLoginRegistry:
         return pending_login
 
 
+class UnansweredAddressWaits:
+    """How long each shared address has gone without its app answering, across every visitor.
+
+    Each request caddy hands the gateway because an app's backend would not take the connection
+    counts as one more moment of the same wait, unless the last one was long enough ago that the
+    app may have answered in between, which starts a new wait.
+    """
+
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        self._clock = clock
+        self._first_and_last_by_host: dict[str, tuple[float, float]] = {}
+        self._lock = threading.Lock()
+
+    def seconds_waiting(self, host: str) -> float:
+        """Record one unanswered request for ``host``; answer how long its current wait has lasted."""
+        now = self._clock()
+        with self._lock:
+            first, last = self._first_and_last_by_host.get(host, (now, now))
+            if now - last > _UNRESPONSIVE_WAIT_GAP_SECONDS:
+                first = now
+            self._first_and_last_by_host[host] = (first, now)
+        return now - first
+
+
 def _is_html_navigation(method: str, accept_header: str, is_websocket_upgrade: bool) -> bool:
     return method.upper() == "GET" and not is_websocket_upgrade and "text/html" in accept_header.lower()
 
@@ -188,6 +270,7 @@ def build_gateway_app(
     jwks_cache: JwksCache,
     jti_registry: SingleUseJtiRegistry,
     pending_logins: PendingLoginRegistry,
+    unanswered_waits: UnansweredAddressWaits,
     auth_label: str,
     # Reads the registered services (from apps.toml) fresh on each call, so a
     # service registered while shared is recognized without rebuilding the app.
@@ -205,8 +288,16 @@ def build_gateway_app(
 
     auth_host = f"{auth_label}.{workspace_domain}"
 
-    def _forbidden() -> Response:
-        return _html_page(_FORBIDDEN_PAGE, status=403)
+    def _nothing_shared_here() -> Response:
+        return _html_page(_NOTHING_SHARED_HERE_PAGE, status=403)
+
+    def _origin_refused() -> Response:
+        return _html_page(_ORIGIN_REFUSED_PAGE, status=403)
+
+    def _not_shared_with_account(requested_url: str) -> Response:
+        switch_query = urlencode({"next": requested_url if _is_workspace_url(requested_url) else ""})
+        switch_account_url = f"{auth_origin}/_auth/switch-account?{switch_query}"
+        return _html_page(_not_shared_with_account_page(switch_account_url), status=403)
 
     def _expired_login() -> Response:
         return _html_page(_EXPIRED_LOGIN_PAGE, status=403)
@@ -273,6 +364,35 @@ def build_gateway_app(
     def loading() -> Response:
         return _html_page(_LOADING_PAGE, status=503)
 
+    @app.get("/_auth/unresponsive")
+    def unresponsive() -> Response:
+        # Caddy rewrites the path but keeps the Host, so the address the visitor was opening is
+        # still known here. Read raw: werkzeug's parsed host is empty for a label with an
+        # underscore, which the shell's has.
+        host = request.headers.get("Host", "")
+        if unanswered_waits.seconds_waiting(host) < _UNRESPONSIVE_GIVE_UP_SECONDS:
+            return _html_page(_UNRESPONSIVE_WAITING_PAGE, status=503)
+        registered_apps = get_registered_apps()
+        _is_ours, service_name = service_for_host(
+            host, workspace_domain, build_label_to_name(registered_apps), auth_label
+        )
+        app_entry = next((entry for entry in registered_apps if entry.name == service_name), None)
+        if app_entry is not None and not is_started_on_demand(app_entry, registered_apps):
+            return _html_page(_UNRESPONSIVE_NOT_RESTARTED_PAGE, status=503)
+        return _html_page(_UNRESPONSIVE_PAGE, status=503)
+
+    @app.get("/_auth/switch-account")
+    def switch_account() -> Response:
+        # Ending the gateway's session alone would sign the visitor straight back in as the same
+        # account: the broker remembers it. Sending them through the broker unconfirmed makes it
+        # ask which account to continue as, with a way to use a different one.
+        next_url = request.args.get("next", "")
+        response = _redirect_to_broker(
+            next_url if _is_workspace_url(next_url) else "", is_confirmed=False, is_retry=False
+        )
+        clear_session_cookie(response, workspace_domain)
+        return response
+
     @app.get("/_auth/verify")
     def verify() -> Response:
         host = request.headers.get("X-Forwarded-Host", "")
@@ -283,7 +403,7 @@ def build_gateway_app(
         is_ours, service_name = service_for_host(host, workspace_domain, label_to_name, auth_label)
         if not is_ours:
             _log_denied("hostname is not one of this workspace's origins", host)
-            return _forbidden()
+            return _nothing_shared_here()
 
         # Upgrade is hop-by-hop, so caddy passes it explicitly (see the
         # forward_auth block in the rendered Caddyfile).
@@ -301,7 +421,7 @@ def build_gateway_app(
             chrome_origin,
         ):
             _log_denied("request Origin is not allowed", host)
-            return _forbidden()
+            return _origin_refused()
 
         # A CORS preflight from the hosted chrome must reach the service so it
         # can answer with its CORS headers -- and preflights never carry
@@ -356,7 +476,7 @@ def build_gateway_app(
                 identity.user_id, identity.email, service_name, build_grantable_service_names(registered_apps)
             ):
                 _log_denied("session identity has no grant admitting it to this service", host)
-                return _forbidden()
+                return _not_shared_with_account(_requested_url(host, forwarded_uri))
             _upgrade_invite(grants, identity)
 
         # Expose the caller's identity so caddy can copy it to the backend. It is
@@ -406,7 +526,7 @@ def build_gateway_app(
             _log_denied(
                 f"signed-in account {handoff.user_id} has no grant admitting it anywhere on this workspace", auth_host
             )
-            return _forbidden()
+            return _not_shared_with_account(next_url)
         _upgrade_invite(grants, handoff)
 
         response = Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})
