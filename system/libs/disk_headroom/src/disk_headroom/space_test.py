@@ -43,15 +43,17 @@ def test_a_quota_with_less_room_than_the_disk_bounds_what_can_be_written(
 def test_a_disk_with_less_room_than_the_quota_bounds_what_can_be_written(
     tmp_path: Path,
 ) -> None:
-    # The quota leaves more room than any test machine's disk has free.
+    # The quota leaves a terabyte more than this disk has free; some sandboxes
+    # report exabytes free, so no fixed figure is safely larger.
     diskinfo = tmp_path / ".host-diskinfo"
-    _write_diskinfo(diskinfo, limit=10**18, used=25 * _GIB, published_at=_NOW)
+    limit = 25 * _GIB + shutil.disk_usage(tmp_path).free + 1024**4
+    _write_diskinfo(diskinfo, limit=limit, used=25 * _GIB, published_at=_NOW)
 
     space = read_disk_space(tmp_path, host_diskinfo=diskinfo, clock=lambda: _NOW)
 
     assert space.free == space.filesystem_free
     assert not space.is_quota_bound
-    assert space.quota_free == 10**18 - 25 * _GIB
+    assert space.quota_free == limit - 25 * _GIB
     assert space.total == 25 * _GIB + space.free
 
 
