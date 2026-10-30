@@ -110,7 +110,13 @@ from typing import Callable, NamedTuple, Sequence
 # disk_headroom library in this repo; this script runs under a bare python3.
 sys.path.insert(
     0,
-    str(Path(__file__).resolve().parents[3] / "system" / "libs" / "disk_headroom" / "src"),
+    str(
+        Path(__file__).resolve().parents[3]
+        / "system"
+        / "libs"
+        / "disk_headroom"
+        / "src"
+    ),
 )
 
 from disk_headroom.space import read_disk_space

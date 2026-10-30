@@ -23,7 +23,9 @@ def _gib(count: int) -> str:
 
 def format_disk_space(space: DiskSpace) -> str:
     """Two lines: what can still be written, and which limit it comes from."""
-    headline = f"free: {_gib(space.free)} of {_gib(space.total)} ({_gib(space.used)} used)"
+    headline = (
+        f"free: {_gib(space.free)} of {_gib(space.total)} ({_gib(space.used)} used)"
+    )
     if space.quota_free is None:
         detail = "limited by: the disk (no disk quota applies here)"
     elif space.is_quota_bound:
@@ -45,9 +47,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         description="How much the workspace can still write to the disk holding PATH.",
     )
     parser.add_argument(
-        "path", nargs="?", default="/", type=Path, help="A path on the disk to measure (default: /)."
+        "path",
+        nargs="?",
+        default="/",
+        type=Path,
+        help="A path on the disk to measure (default: /).",
     )
-    parser.add_argument("--json", action="store_true", help="Print the figures, in bytes, as JSON.")
+    parser.add_argument(
+        "--json", action="store_true", help="Print the figures, in bytes, as JSON."
+    )
     args = parser.parse_args(argv)
     try:
         space = read_disk_space(args.path)

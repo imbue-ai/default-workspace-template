@@ -61,7 +61,9 @@ def parse_host_diskinfo(text: str) -> tuple[HostQuota, float] | None:
             values[key] = int(value)
     if not {"QuotaLimitBytes", "QuotaUsedBytes", "Timestamp"} <= values.keys():
         return None
-    return HostQuota(limit=values["QuotaLimitBytes"], used=values["QuotaUsedBytes"]), float(values["Timestamp"])
+    return HostQuota(
+        limit=values["QuotaLimitBytes"], used=values["QuotaUsedBytes"]
+    ), float(values["Timestamp"])
 
 
 def read_host_quota(host_diskinfo: Path, now_seconds: float) -> HostQuota | None:
@@ -91,11 +93,16 @@ def is_on_same_filesystem(path: Path, other: Path) -> bool:
         path_stats, other_stats = os.statvfs(path), os.statvfs(other)
     except OSError:
         return False
-    return (path_stats.f_blocks * path_stats.f_frsize) == (other_stats.f_blocks * other_stats.f_frsize)
+    return (path_stats.f_blocks * path_stats.f_frsize) == (
+        other_stats.f_blocks * other_stats.f_frsize
+    )
 
 
 def compute_disk_space(
-    filesystem_total: int, filesystem_used: int, filesystem_free: int, quota: HostQuota | None
+    filesystem_total: int,
+    filesystem_used: int,
+    filesystem_free: int,
+    quota: HostQuota | None,
 ) -> DiskSpace:
     """The figures for a path on a filesystem reading those three, whose writes count against ``quota``.
 
