@@ -401,6 +401,7 @@ def _run_mngr(
     text: str | None,
     argv_after_file: list[str],
     capture_stdout: bool,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess[str] | None:
     """Run ``mngr``, with ``text`` in a file named by ``--message-file``; None when there is no ``mngr`` to run.
 
@@ -418,6 +419,7 @@ def _run_mngr(
         return subprocess.run(
             [*argv_before_file, *message_argv, *argv_after_file],
             check=False,
+            cwd=cwd,
             stdout=subprocess.PIPE if capture_stdout else None,
             text=True,
         )
@@ -445,7 +447,7 @@ def _script_exit_for_mngr_exit(returncode: int) -> int:
     return EXIT_FAILED
 
 
-def send_through_mngr(chat_id: str, text: str) -> int:
+def send_through_mngr(chat_id: str, text: str, cwd: Path | None = None) -> int:
     """The backoff: ``mngr message --start`` straight to the agent, its verdict in this script's codes.
 
     ``EXIT_CHAT_GONE`` when mngr has no agent by that id: it then exits 0 having sent nothing
@@ -458,6 +460,7 @@ def send_through_mngr(chat_id: str, text: str) -> int:
         text,
         ["--format", "jsonl"],
         capture_stdout=True,
+        cwd=cwd,
     )
     if completed is None:
         return EXIT_FAILED
@@ -624,14 +627,17 @@ def send(
     environ: Mapping[str, str] | None = None,
     clock: Callable[[], float] = time.monotonic,
     sleep: Callable[[float], None] = time.sleep,
+    cwd: Path | None = None,
 ) -> int:
     """Send ``text`` to the chat, through the chat app or else ``mngr message``; returns the exit code.
 
     The codes are this script's: delivered, delivered but blocked on a dialog, failed, or
-    the chat is gone. What happened is printed, as the script prints it.
+    the chat is gone. What happened is printed, as the script prints it. ``cwd`` is the repo
+    root the app registry is read from and ``mngr`` runs in, the current directory by default.
     """
     resolved_environ = os.environ if environ is None else environ
-    base_url = chat_app_url(resolved_environ, Path.cwd())
+    resolved_cwd = Path.cwd() if cwd is None else cwd
+    base_url = chat_app_url(resolved_environ, resolved_cwd)
     result = send_through_chat_app(
         base_url, chat_id, text, uuid.uuid4().hex, clock, sleep
     )
@@ -657,7 +663,7 @@ def send(
                 f"Falling back to `mngr message` for chat {chat_id}: {result.detail}",
                 file=sys.stderr,
             )
-            returncode = send_through_mngr(chat_id, text)
+            returncode = send_through_mngr(chat_id, text, resolved_cwd)
             if returncode == EXIT_CHAT_GONE and result.outcome is Outcome.UNREACHABLE:
                 # Only the chat app knows which chats exist; the id names the chat's first agent,
                 # which is not the chat once a handoff has retired it. So mngr missing that agent

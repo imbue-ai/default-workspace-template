@@ -110,6 +110,31 @@ like the rest. A skill that needs a dependency, or a second module, uses the
 You never need to know which tier a script is in: follow the rule at the top
 (`uv run --no-sync`, unless the instruction says `python3`).
 
+## Calling workspace code from Python
+
+Code that needs another part of the workspace imports it, declaring its
+package in its own `pyproject.toml`. It does not start one of the workspace's
+own scripts, modules or commands as a process (`python3 <path>.py`,
+`sys.executable` and a path, `-m <module>`, `uv run --no-sync <command>`) to
+get what an import gives: each run costs an interpreter start, and its
+arguments and results become command-line words and printed text that no type
+check reads.
+
+Start a process only when the call needs one of its own:
+
+- the code is the other tier's: bare code calling venv-tier code, or a step
+  that must still run when the venv is missing or broken;
+- the work must outlive its caller (a detached run, a rollback that restarts
+  the caller), or be cut off at a deadline without taking the caller with it;
+- the code to run is another tree's: the target release's staged copy, or the
+  checkout's current one where an import would load the copy the caller
+  started with;
+- the process is the point: a wrapper that execs the command it is given, or
+  a server.
+
+A test counts the places that name one of the workspace's own programs to
+run, and the count only goes down.
+
 ## Long-running processes: sync, then `exec` the entry point
 
 A supervisord program (or anything else that stays up) runs its entry point
