@@ -56,7 +56,8 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
         ("uploads", 1200 * _MIB),
         ("apps", 900 * _MIB),
         ("caches", 3000 * _MIB),
-        ("other", 3900 * _MIB),
+        ("home", 1000 * _MIB),
+        ("other", 2900 * _MIB),
     ]
     by_id = {row["id"]: row for row in rows}
     # The workspace's folders, largest first, with what the user would not know explained;
@@ -78,18 +79,15 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
         {"name": ".cache", "hint": "downloads and build caches", "bytes": 2400 * _MIB},
         {"name": ".local/share/uv", "hint": "Python packages", "bytes": 600 * _MIB},
     ]
-    # The rest: the machine's system software, the home tree beside the workspace, then whatever
-    # else the disk holds.
+    assert by_id["home"]["items"] == [
+        {"name": ".mngr", "hint": "chats' records and logs", "bytes": 1000 * _MIB},
+    ]
+    # The rest: the machine's system software, then whatever else the disk holds.
     assert by_id["other"]["items"] == [
         {
             "name": "System software",
             "hint": "the workspace's tools",
             "bytes": 1500 * _MIB,
-        },
-        {
-            "name": "Chats, logs and settings",
-            "hint": "kept beside the workspace's files",
-            "bytes": 1000 * _MIB,
         },
         {
             "name": "Other files on the machine's disk",
@@ -125,7 +123,7 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
 )
 # imbue_cloud: /home/user links into the volume, which is outside the root the system walk measures.
 @pytest.mark.parametrize("home_is_a_link", [False, True])
-def test_the_package_caches_are_counted_once_and_in_no_other_item(
+def test_the_package_caches_and_the_home_folder_are_each_counted_once(
     tmp_path: Path,
     real_cache: str,
     linked_cache: str,
@@ -163,11 +161,11 @@ def test_the_package_caches_are_counted_once_and_in_no_other_item(
     ]
     assert 3 * _MIB <= cache_items[0]["bytes"] < 4 * _MIB
     assert 2 * _MIB <= cache_items[1]["bytes"] < 3 * _MIB
-    software, home_data = by_id["other"]["items"][:2]
+    assert 2 * _MIB <= by_id["home"]["bytes"] < 3 * _MIB
+    assert [item["name"] for item in by_id["home"]["items"]] == [".mngr"]
+    software = by_id["other"]["items"][0]
     assert software["name"] == "System software"
     assert _MIB <= software["bytes"] < 2 * _MIB
-    assert home_data["name"] == "Chats, logs and settings"
-    assert 2 * _MIB <= home_data["bytes"] < 3 * _MIB
 
 
 def test_a_row_that_cannot_be_measured_is_reported_missing_and_the_rest_never_goes_negative(
@@ -190,7 +188,7 @@ def test_a_row_that_cannot_be_measured_is_reported_missing_and_the_rest_never_go
         100, workspace, tmp_path / "home", measure, tmp_path / "root"
     )
 
-    assert missing == ["workspace", "apps"]
+    assert missing == ["workspace", "apps", "home"]
     assert [row["id"] for row in rows] == ["uploads", "apps", "caches", "other"]
     # The App data row keeps the apps it could measure.
     assert rows[1]["items"] == [{"name": "recipe-box", "hint": "", "bytes": 9000}]
@@ -219,14 +217,16 @@ def test_a_home_tree_that_cannot_be_measured_is_not_listed_as_space_that_cannot_
         100 * _MIB, tmp_path / "workspace", home, measure, tmp_path / "root"
     )
 
-    assert missing == []
-    # Without the home tree's size the rest of the disk is not split into what can and cannot be freed.
+    assert missing == ["home"]
+    # Without the home folder's size the rest of the disk is not called something that cannot be freed.
     assert rows[-1]["items"] == [
         {"name": "System software", "hint": "the workspace's tools", "bytes": 10 * _MIB}
     ]
 
 
-def test_a_system_walk_that_fails_still_lists_the_home_tree(tmp_path: Path) -> None:
+def test_a_system_walk_that_fails_leaves_the_rest_of_the_disk_unlisted(
+    tmp_path: Path,
+) -> None:
     home, root = tmp_path / "home", tmp_path / "root"
     (home / ".mngr").mkdir(parents=True)
 
@@ -238,17 +238,11 @@ def test_a_system_walk_that_fails_still_lists_the_home_tree(tmp_path: Path) -> N
     rows, missing = disk.scan(100 * _MIB, tmp_path / "workspace", home, measure, root)
 
     assert missing == []
-    assert rows[-1]["items"] == [
-        {
-            "name": "Chats, logs and settings",
-            "hint": "kept beside the workspace's files",
-            "bytes": 10 * _MIB,
-        }
-    ]
+    assert rows[-1]["items"] == []
 
 
-# lima: the system software is on the boot disk, not the data disk the workspace and home tree are on.
-def test_system_software_on_another_disk_leaves_the_home_tree_whole(
+# lima: the system software is on the boot disk, not the data disk the workspace and home folder are on.
+def test_system_software_bigger_than_the_rest_of_the_disk_is_not_listed(
     tmp_path: Path,
 ) -> None:
     home, root = tmp_path / "home", tmp_path / "root"
@@ -260,19 +254,8 @@ def test_system_software_on_another_disk_leaves_the_home_tree_whole(
     rows, missing = disk.scan(100 * _MIB, tmp_path / "workspace", home, measure, root)
 
     assert missing == []
-    # The rows above take 30 MiB of the 100: the home tree keeps its 10, the system software the 60 left.
-    assert rows[-1]["items"] == [
-        {
-            "name": "System software",
-            "hint": "the workspace's tools",
-            "bytes": 60 * _MIB,
-        },
-        {
-            "name": "Chats, logs and settings",
-            "hint": "kept beside the workspace's files",
-            "bytes": 10 * _MIB,
-        },
-    ]
+    # The rows above take 40 MiB of the 100, which leaves less than the 500 MiB system walk.
+    assert rows[-1]["bytes"] == 60 * _MIB and rows[-1]["items"] == []
 
 
 def test_du_measures_a_tree_less_its_excludes_and_a_missing_path_is_nothing(

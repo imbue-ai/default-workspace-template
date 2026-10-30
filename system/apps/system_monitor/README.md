@@ -22,9 +22,10 @@ seconds. The design is `docs/system/specs/system-monitor.md`.
   laptop's disk; a cloud machine's is its data disk); "See what's using the
   disk", which measures the disk only when asked (walking it is slow under
   gVisor and the figures go stale at once): workspace files with the folders
-  under them, uploads, each app's data, each package cache, and everything
-  else (the system software, the chats, logs and settings kept beside the
-  workspace's files, and the rest of the machine's disk), as of when
+  under them, uploads, each app's data, each package cache, the chats, logs
+  and settings kept in the home folder beside the workspace's files (with the
+  folders under them), and everything else (the system software and the rest
+  of the machine's disk), as of when
   it ran; and the state of the backups (read from the backup service's events
   and settings, never by running restic), with a link to that service's README.
 
@@ -104,9 +105,9 @@ shares one snapshot taken at most every 4 seconds (`stats.SharedSnapshot`), the
 stop history and the guard's log are read only from their last 256 KB and 1 MB
 and only again once they change (on a stop), the page is sent only the fields
 it shows, and a hidden window stops polling. The on-demand disk walk runs one
-`du` per row (one per app directory, and two behind "Everything else": the
-system software and the home folder beside the workspace) on a thread, at most
-one walk at a time (`disk.DiskScanner`).
+`du` per row (one per app directory, and the system software behind
+"Everything else") on a thread, at most one walk at a time
+(`disk.DiskScanner`).
 
 Stops are paired with the guard's log lines newest first, on pid and process
 name. The log is rotated and the ledger is not, so the oldest stops lose their
