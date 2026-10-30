@@ -115,3 +115,27 @@ def test_strip_session_cookie_removes_only_ours() -> None:
     assert strip_session_cookie("imbue_machine_session=xyz") == ""
     assert strip_session_cookie("a=1; b=2") == "a=1; b=2"
     assert strip_session_cookie("") == ""
+
+
+def test_set_session_cookie_host_only_sets_both_copies_without_a_domain() -> None:
+    # An auth sandbox shares its workspace domain with every other sandbox of its region, so
+    # its cookies are scoped to the one host that set them: no Domain attribute on either copy,
+    # everything else as on a workspace.
+    app = Flask(__name__)
+    with app.test_request_context():
+        response = Response(status=302)
+        set_session_cookie(response, "cookie-value", _DOMAIN, is_host_only=True)
+        by_name = set_cookies_by_name(response)
+    assert set(by_name) == {SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME}
+    for header in by_name.values():
+        assert "=cookie-value;" in header
+        assert "Domain=" not in header
+        assert "Secure" in header
+        assert "HttpOnly" in header
+        assert f"Max-Age={30 * 24 * 3600}" in header
+    assert "SameSite=Lax" in by_name[SESSION_COOKIE_NAME]
+    assert "SameSite=None" in by_name[PARTITIONED_SESSION_COOKIE_NAME]
+    assert "Partitioned" in by_name[PARTITIONED_SESSION_COOKIE_NAME]
+    # The value verifies exactly as a domain-scoped one does: the scope is the browser's business.
+    value = mint_session_cookie_value(_SECRET, _OWNER, _DOMAIN)
+    assert verify_session_from_cookies(_SECRET, {SESSION_COOKIE_NAME: value}, _DOMAIN) == _OWNER

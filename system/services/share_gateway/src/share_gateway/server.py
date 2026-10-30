@@ -352,7 +352,9 @@ def build_gateway_app(
         if identity is None:
             accept_header = request.headers.get("Accept", "")
             if _is_html_navigation(method, accept_header, is_websocket_upgrade):
-                return _redirect_to_broker(_requested_url(host, forwarded_uri), is_confirmed=False, is_retry=False)
+                return _redirect_to_broker(
+                    _requested_url(host, forwarded_uri), is_confirmed=False, is_retry=False, visited_host=host
+                )
             _log_denied("no session on a non-HTML request", host)
             return Response("authentication required", status=401, mimetype="text/plain")
 
@@ -425,7 +427,10 @@ def build_gateway_app(
 
         response = Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})
         set_session_cookie(
-            response, mint_session_cookie_value(signing_secret, handoff, workspace_domain), workspace_domain
+            response,
+            mint_session_cookie_value(signing_secret, handoff, workspace_domain),
+            workspace_domain,
+            is_host_only=materials.is_cookie_host_only,
         )
         return response
 
@@ -440,7 +445,9 @@ def build_gateway_app(
             return Response(status=302, headers={"Location": _post_login_redirect_target(next_url)})
         if is_retry:
             return _expired_login()
-        return _redirect_to_broker(next_url if _is_workspace_url(next_url) else "", is_confirmed=True, is_retry=True)
+        return _redirect_to_broker(
+            next_url if _is_workspace_url(next_url) else "", is_confirmed=True, is_retry=True, visited_host=request.host
+        )
 
     def _post_login_redirect_target(next_url: str) -> str:
         # Bounce onward to the origin the visitor was reaching, but only if it
@@ -454,15 +461,30 @@ def build_gateway_app(
         shell_label = next((label for label, name in label_to_name.items() if name == _SHELL_SERVICE_NAME), None)
         return f"https://{shell_label}.{workspace_domain}/" if shell_label else auth_origin
 
-    def _redirect_to_broker(next_url: str, is_confirmed: bool, is_retry: bool) -> Response:
+    def _callback_origin_for(visited_host: str) -> str:
+        # A domain-wide session cookie is set once, by the dedicated auth
+        # origin (the only label serving /_auth/callback). Host-only cookies
+        # (an auth sandbox, whose domain every sandbox of the region shares)
+        # belong to the host that set them, so the callback has to run on the
+        # host being visited, where caddy serves it too; a host that is not one
+        # of this share's falls back to the auth origin.
+        if not materials.is_cookie_host_only:
+            return auth_origin
+        normalized = visited_host.strip().lower().rstrip(".").rsplit(":", 1)[0]
+        is_ours, _service = service_for_host(
+            normalized, workspace_domain, build_label_to_name(get_registered_apps()), auth_label
+        )
+        return f"https://{normalized}" if is_ours else auth_origin
+
+    def _redirect_to_broker(next_url: str, is_confirmed: bool, is_retry: bool, visited_host: str) -> Response:
         nonce = pending_logins.mint(is_retry=is_retry)
-        # The broker delivers its post-login callback to the dedicated auth
-        # origin (the only label serving /_auth/callback), then bounces to
-        # ``next`` (the origin the visitor was actually reaching).
+        # The broker delivers its post-login callback to the callback origin
+        # (see _callback_origin_for), then bounces to ``next`` (the origin the
+        # visitor was actually reaching).
         query: dict[str, str] = {
             "machine_domain": workspace_domain,
             "next": next_url,
-            "callback_origin": auth_origin,
+            "callback_origin": _callback_origin_for(visited_host),
             "state": nonce,
         }
         if is_confirmed:

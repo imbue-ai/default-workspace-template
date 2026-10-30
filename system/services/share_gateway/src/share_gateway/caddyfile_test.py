@@ -31,7 +31,11 @@ label = "my-app-cccc3333"
 _CHROME_ORIGIN = "https://minds.imbue.com"
 
 
-def _render(apps_toml: str = _APPS_TOML, chrome_origin: str = _CHROME_ORIGIN) -> str:
+def _render(
+    apps_toml: str = _APPS_TOML,
+    chrome_origin: str = _CHROME_ORIGIN,
+    is_callback_served_on_every_host: bool = False,
+) -> str:
     return render_caddyfile(
         workspace_domain=_DOMAIN,
         apps=parse_registered_apps(apps_toml),
@@ -41,6 +45,7 @@ def _render(apps_toml: str = _APPS_TOML, chrome_origin: str = _CHROME_ORIGIN) ->
         https_port=8443,
         gateway_port=8791,
         chrome_origin=chrome_origin,
+        is_callback_served_on_every_host=is_callback_served_on_every_host,
     )
 
 
@@ -174,6 +179,19 @@ def test_caddyfile_confines_auth_surface_to_the_dedicated_auth_label() -> None:
     assert "header Referrer-Policy same-origin" in rendered
 
 
+def test_caddyfile_serves_the_login_callback_on_every_host_only_for_host_only_cookies() -> None:
+    # A domain-wide share keeps the callback confined to the auth label.
+    assert "handle /_auth/callback {" not in _render()
+
+    # Host-only cookies belong to the host that set them, so the callback that
+    # sets them is routed to the gateway on every host, ahead of the auth step.
+    rendered = _render(is_callback_served_on_every_host=True)
+    assert "handle /_auth/callback {" in rendered
+    assert rendered.index("handle /_auth/callback {") < rendered.index("forward_auth 127.0.0.1:8791")
+    callback_block = rendered[rendered.index("handle /_auth/callback {") :].split("}", 1)[0]
+    assert "reverse_proxy 127.0.0.1:8791" in callback_block
+
+
 def test_caddyfile_appends_frame_ancestors_allowing_own_family_and_chrome() -> None:
     rendered = _render()
 
@@ -250,6 +268,7 @@ def test_render_caddyfile_routes_the_agent_surface_and_strips_the_admission_toke
         https_port=8443,
         gateway_port=8791,
         chrome_origin="",
+        is_callback_served_on_every_host=False,
     )
     auth_block = rendered[rendered.index("@auth host auth-x7k9q2w1.alpha.example.com") :]
     assert "handle /_agent/* {" in auth_block.split("handle {")[0]

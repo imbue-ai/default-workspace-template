@@ -41,6 +41,20 @@ def test_parse_share_materials_defaults_chrome_origin_to_empty_when_absent() -> 
     assert materials.chrome_origin == ""
 
 
+def test_parse_share_materials_reads_the_host_only_cookie_flag() -> None:
+    # Off unless share.env says SHARE_COOKIE_HOST_ONLY=1 exactly: a workspace's cookies stay domain-wide.
+    without_flag = parse_share_materials(_VALID)
+    assert without_flag is not None
+    assert without_flag.is_cookie_host_only is False
+    with_flag = parse_share_materials(_VALID + "export SHARE_COOKIE_HOST_ONLY=1\n")
+    assert with_flag is not None
+    assert with_flag.is_cookie_host_only is True
+    assert with_flag.workspace_domain == without_flag.workspace_domain
+    other_value = parse_share_materials(_VALID + "export SHARE_COOKIE_HOST_ONLY=0\n")
+    assert other_value is not None
+    assert other_value.is_cookie_host_only is False
+
+
 def test_parse_share_materials_rejects_missing_or_malformed_keys() -> None:
     assert parse_share_materials("") is None
     assert parse_share_materials("export SHARE_WORKSPACE_DOMAIN=x") is None
