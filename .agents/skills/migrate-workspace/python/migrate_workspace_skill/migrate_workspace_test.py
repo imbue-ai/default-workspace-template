@@ -890,7 +890,7 @@ def test_convert_packages_goes_on_past_a_package_it_cannot_convert(
 ) -> None:
     root = tmp_path / "workspace"
     root.mkdir()
-    (root / "pyproject.toml").write_text('[tool.uv.workspace]\nmembers = []\n')
+    (root / "pyproject.toml").write_text("[tool.uv.workspace]\nmembers = []\n")
     (root / "uv.lock").write_text("version = 1\n")
     for relative, text in (
         ("system/libs/unnamed", "[tool.uv]\npackage = false\n"),
