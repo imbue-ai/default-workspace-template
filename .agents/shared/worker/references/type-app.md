@@ -54,7 +54,7 @@ App specifics:
   (the shell's `static/` is gitignored), so build them once before its
   browser tests: `(cd system && npm ci && npm run build)`.
 
-  The gate is `harden-creation.md`'s "The test gate": `select-tests` turns the
+  The gate is `harden-creation.md`'s "The test gate": `run-tests` turns the
   app's `[[references]]` into the suites that exercise them (a referenced
   skill's tests run when the app's surface moves), along with everything else
   the change reaches.

@@ -353,18 +353,18 @@ in your report.
     git diff --name-only --no-renames "$MERGE" HEAD; } | sed '/^[[:space:]]*$/d' | sort -u \
       > data/.tasks/update-self/validate-paths.txt
   [ -s data/.tasks/update-self/validate-paths.txt ] \
-      && uv run --frozen --package app-manifest app-manifest select-tests \
+      && uv run --frozen --package app-manifest app-manifest run-tests \
           --diff-base "$MERGE^1" \
           $(sed 's/^/--path /' data/.tasks/update-self/validate-paths.txt)
   ```
 
   Commit your own edits first: the `git diff` line reads commits.
   `--diff-base` here only names what a merged `uv.lock` is compared against,
-  so a lock that upgraded a package selects the suites that depend on it. Run
-  every printed line, in order, plus `uv run ruff check` when a Python file is
-  in the list, and handle a failing test and a shed command the way
-  `.agents/shared/worker/references/harden-creation.md` ("The test gate")
-  says, naming a flaky test under your report's Validation; the tree before
+  so a lock that upgraded a package selects the suites that depend on it.
+  `run-tests` runs every command it selects, in order; run `uv run ruff check`
+  too when a Python file is in the list, and handle each failed, flaky or shed
+  command the way `.agents/shared/worker/references/harden-creation.md` ("The
+  test gate") says, naming a flaky test under your report's Validation; the tree before
   your change, for attributing a failure, is `$MERGE^1` (a test absent there
   arrived with the update). mngr's own suite runs in its repo, not here.
 - **Isolated-service boots** for each service with a file in the merged set,
@@ -569,7 +569,7 @@ the workspace's commits as your edits.
   impacted creation in `data/.tasks/update-self/catchup-impacted.txt`, one
   stand-in file per line, as 4b's `impacted-paths.txt` does.
 - **Environment gate** when a manifest or lockfile changed in `$PRE..HEAD`.
-- **Suites**: commit first, then run every printed line:
+- **Suites**: commit first, then run the gate:
 
   ```bash
   PRE=$(git rev-parse "$(git log --first-parent --merges -1 --format=%H --fixed-strings \
@@ -578,7 +578,7 @@ the workspace's commits as your edits.
     cat data/.tasks/update-self/catchup-impacted.txt 2>/dev/null; } \
       | sed '/^[[:space:]]*$/d' | sort -u > data/.tasks/update-self/catchup-paths.txt
   [ -s data/.tasks/update-self/catchup-paths.txt ] \
-      && uv run --frozen --package app-manifest app-manifest select-tests \
+      && uv run --frozen --package app-manifest app-manifest run-tests \
           --diff-base "$PRE" \
           $(sed 's/^/--path /' data/.tasks/update-self/catchup-paths.txt)
   ```

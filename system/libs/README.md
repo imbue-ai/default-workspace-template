@@ -30,9 +30,9 @@ README for details.
   daemon; see the github-sync skill).
 - `mngr_cli_contract/` - Shared validator that checks mngr CLI argvs against
   the live mngr command tree.
-- `pytest_executable_tmp/` - Test-only pytest plugin that keeps a session's
-  temporary files where a stub executable written there can run, or stops
-  the session before any test starts.
+- `pytest_executable_tmp/` - Test-only pytest plugin that stops a session
+  before any test starts when a stub executable written under its temporary
+  files could not run.
 - `pytest_workspace_env/` - Test-only pytest plugin that clears the
   environment an mngr agent runs with before any test code runs, and, with
   `DWT_REQUIRE_WORKSPACE_ENV=1` set, fails rather than skips any test (the CI

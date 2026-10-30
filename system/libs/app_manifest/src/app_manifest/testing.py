@@ -10,9 +10,15 @@ from typing import Final
 
 from werkzeug.test import TestResponse
 
+from app_manifest.primitives import RepoRelativePath
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_MODULE_PATHS
 from app_manifest.selection import ALWAYS_RUN_GUARDS
+from app_manifest.selection import ChangedPathClass
+from app_manifest.selection import SelectionReason
+from app_manifest.selection import SuiteCommand
+from app_manifest.selection import SuiteKind
+from imbue.imbue_common.primitives import NonEmptyStr
 
 APP_ICON_MARKUP: Final[str] = (
     '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M2 2h20v20H2z"/></svg>'
@@ -262,6 +268,18 @@ def remove_shell_modules(repo_root: Path) -> None:
     """Delete the shell's built modules, as a fresh worktree lacks them."""
     for module_path in SHELL_MODULE_PATHS:
         (repo_root / module_path).unlink()
+
+
+def suite_command(kind: SuiteKind, working_directory: str, argv: Sequence[str]) -> SuiteCommand:
+    """A selection's command for the runner's tests, which never read why it was selected."""
+    reason = SelectionReason(
+        path=RepoRelativePath("suite/test_cases.py"),
+        path_class=ChangedPathClass.TEST_FILE,
+        detail=NonEmptyStr("own tests"),
+    )
+    return SuiteCommand(
+        kind=kind, working_directory=NonEmptyStr(working_directory), argv=tuple(argv), reasons=(reason,)
+    )
 
 
 def selection_lock(requests_version: str) -> str:

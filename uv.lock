@@ -219,6 +219,7 @@ dependencies = [
     { name = "flask" },
     { name = "imbue-common" },
     { name = "loguru" },
+    { name = "oom-priority" },
     { name = "pathspec" },
     { name = "pydantic" },
     { name = "werkzeug" },
@@ -235,6 +236,7 @@ requires-dist = [
     { name = "flask", specifier = ">=3.0" },
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=193448eceb595ff5155ffa53e0f8e08c57a42e01" },
     { name = "loguru", specifier = ">=0.7" },
+    { name = "oom-priority", editable = "system/services/oom_priority" },
     { name = "pathspec", specifier = ">=1.1" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
@@ -3170,7 +3172,6 @@ version = "0.1.0"
 source = { editable = "system/libs/pytest_executable_tmp" }
 dependencies = [
     { name = "imbue-common" },
-    { name = "pydantic" },
     { name = "pytest" },
 ]
 
@@ -3182,7 +3183,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=193448eceb595ff5155ffa53e0f8e08c57a42e01" },
-    { name = "pydantic", specifier = ">=2.0" },
     { name = "pytest", specifier = ">=8.0" },
 ]
 

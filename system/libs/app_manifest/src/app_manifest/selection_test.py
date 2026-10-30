@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
+from inline_snapshot import snapshot
 
 from app_manifest.errors import SuiteSelectionError
 from app_manifest.primitives import RepoRelativePath
@@ -12,7 +13,9 @@ from app_manifest.selection import SuiteSelection
 from app_manifest.selection import load_repo_layout
 from app_manifest.selection import render_command_line
 from app_manifest.selection import render_selection
+from app_manifest.selection import rerun_command
 from app_manifest.selection import select_tests
+from app_manifest.selection import select_tests_for_paths
 from app_manifest.testing import build_selection_workspace
 from app_manifest.testing import commit_everything
 from app_manifest.testing import declare_root_dependency
@@ -629,3 +632,21 @@ def test_a_catch_up_runs_nothing_for_a_documentation_creation(workspace: Path) -
     selection = select_tests(load_repo_layout(workspace), [], None, reach)
 
     assert selection.commands == ()
+
+
+def test_a_rerun_of_some_tests_of_a_suite_with_a_coverage_floor_skips_it_and_includes_every_marker(
+    workspace: Path,
+) -> None:
+    selection = select_tests_for_paths(workspace, ["system/apps/chat/frontend/src/main.ts"], None)
+    (marker_run,) = [command for command in selection.commands if command.working_directory == "system/apps/chat"]
+
+    rerun = rerun_command(
+        marker_run,
+        ["imbue/chat/test_page.py::test_renders"],
+        marker_run.working_directory in selection.coverage_measured_roots,
+    )
+
+    assert rerun is not None
+    assert render_command_line(rerun) == snapshot(
+        "(cd system/apps/chat && uv run pytest --no-cov -m '' imbue/chat/test_page.py::test_renders)"
+    )

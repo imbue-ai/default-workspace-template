@@ -57,16 +57,16 @@ that this branch fired and shows the evidence for all three conditions.
 
 Follow the "Review gates" section of
 `.agents/shared/worker/references/harden-creation.md`, with one difference in
-its test gate: 4b's suites step already ran it. That step's `select-tests`
+its test gate: 4b's suites step already ran it. That step's `run-tests`
 read every path in this scope (the merged set, your own edits, a regenerated
 lockfile) and more, so do not select again with another base. Never run
-`select-tests --diff-base "$TARGET_REF"`: that diff is everything the workspace
+`run-tests --diff-base "$TARGET_REF"`: that diff is everything the workspace
 ever changed, not what this update reconciled, and it repeats suites 4b already
 ran. What you commit after 4b's suites run (a customization re-fit, a gate
-fix) is tested by what it reaches: `select-tests --diff-base <the commit
-before the first of them>`, every line of it. Those lines are the whole gate
-for those commits; a suite they did not print is a widening, and goes through
-the `question` gate like any other.
+fix) is tested by what it reaches: `run-tests --diff-base <the commit
+before the first of them>`. What that runs is the whole gate for those
+commits; a suite it does not run is a widening, and goes through the
+`question` gate like any other.
 
 The gate's scope is **every file whose merged content differs from the target
 release**: the conflicts you resolved with any hand-written content, your own

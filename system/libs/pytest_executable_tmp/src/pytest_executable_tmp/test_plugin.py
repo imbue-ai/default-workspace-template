@@ -66,7 +66,6 @@ def test_a_session_whose_temp_root_can_run_files_uses_it_unchanged(
 
     assert result.returncode == 0, result.stdout + result.stderr
     assert Path(marker.read_text()).is_relative_to(temp_root.resolve())
-    assert "temporary files:" not in result.stdout
 
 
 def test_an_explicit_temp_root_that_cannot_run_files_stops_the_session_before_any_test(

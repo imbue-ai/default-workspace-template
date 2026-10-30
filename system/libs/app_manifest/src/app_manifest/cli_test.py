@@ -6,6 +6,7 @@ from click.testing import CliRunner
 from click.testing import Result
 
 from app_manifest.cli import app_manifest_cli
+from app_manifest.suite_run import SUMMARY_FILE_NAME
 from app_manifest.testing import APP_ICON_MARKUP
 from app_manifest.testing import build_news_workspace
 from app_manifest.testing import build_selection_workspace
@@ -919,6 +920,69 @@ def test_select_tests_needs_a_diff_or_paths(tmp_path: Path) -> None:
     assert ref_without_base.exit_code != 0
     assert scope_file_and_base.exit_code != 0
     assert "--scope-file names the change on its own" in scope_file_and_base.output
+
+
+def test_select_tests_all_runs_every_suite_with_all_its_markers(tmp_path: Path) -> None:
+    build_selection_workspace(tmp_path)
+
+    result = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--all"])
+
+    assert result.exit_code == 0, result.output
+    lines = [line for line in result.output.splitlines() if not line.startswith("#")]
+    assert "uv run pytest" in lines
+    assert any(line.startswith("(cd system/apps/chat && uv run pytest -m '' ") for line in lines)
+    assert "(cd system && npm run build)" in lines
+
+
+@pytest.mark.parametrize(
+    "conflicting",
+    [["--diff-base", "main"], ["--path", "README.md"], ["--scope-file", "scope.json"]],
+)
+def test_all_refuses_to_be_combined_with_another_way_of_naming_the_change(
+    tmp_path: Path, conflicting: list[str]
+) -> None:
+    result = _run_cli(["run-tests", "--repo-root", str(tmp_path), "--all", *conflicting])
+
+    assert result.exit_code == 2
+    assert "--all selects every suite on its own" in result.output
+
+
+def test_run_tests_with_nothing_selected_passes_and_still_writes_the_summary(tmp_path: Path) -> None:
+    build_selection_workspace(tmp_path)
+    output_directory = tmp_path / "run-output"
+
+    # A change to documentation only selects nothing, so the run passes without running anything.
+    nothing = _run_cli(
+        [
+            "run-tests",
+            "--repo-root",
+            str(tmp_path),
+            "--path",
+            "system/libs/corelib/README.md",
+            "--output-dir",
+            str(output_directory),
+        ]
+    )
+
+    assert nothing.exit_code == 0, nothing.output
+    assert "0 commands" in nothing.output
+    summary = json.loads((output_directory / SUMMARY_FILE_NAME).read_text())
+    assert summary["runs"] == [] and summary["is_passing"] is True
+
+
+def test_run_tests_keeps_only_the_ten_newest_runs_in_its_default_output_root(tmp_path: Path) -> None:
+    build_selection_workspace(tmp_path)
+    runs_root = tmp_path / "data" / ".tasks" / "run-tests"
+    old_runs = [runs_root / f"20260101T0000{second:02d}000000Z" for second in range(12)]
+    for old_run in old_runs:
+        old_run.mkdir(parents=True)
+
+    result = _run_cli(["run-tests", "--repo-root", str(tmp_path), "--path", "system/libs/corelib/README.md"])
+
+    assert result.exit_code == 0, result.output
+    new_run = Path(result.output.splitlines()[0].removeprefix("output: "))
+    assert sorted(runs_root.iterdir()) == [*old_runs[3:], new_run]
+    assert (new_run / SUMMARY_FILE_NAME).is_file()
 
 
 def test_pass_scope_needs_a_diff_base_for_a_lead_ref(tmp_path: Path) -> None:

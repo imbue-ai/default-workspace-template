@@ -325,13 +325,34 @@ clones, fetched pages, thumbnails, model or package caches -- mark it:
 
 ### The test gate
 
-The gate is whatever the pass's change can reach, and a command prints it.
+The gate is whatever the pass's change can reach, and a command runs it.
 From the repo root, after committing everything, regenerate the scope file
 with the command in "The scope file" above, then:
 
 ```bash
-uv run app-manifest select-tests --scope-file "$SCOPE_FILE"
+uv run app-manifest run-tests --scope-file "$SCOPE_FILE"
 ```
+
+It runs every command the change calls for, in order, each from its own
+directory: the frontend build the browser tests need comes first, and each
+pytest root runs on its own. It prints where it keeps its output, a line as
+each command starts, and at the end each command's outcome with its output
+file; the same goes into `summary.json` there, rewritten as each command
+ends. It exits non-zero when any command failed or was shed. What it
+selects, and why, is in `system/libs/app_manifest/README.md` ("Selecting
+tests"): the repo guards, the changed packages' and skills' own suites with
+their ratchets, the suites of whatever declares a dependency on them, the
+browser tests too of an app whose Python changed, only the `browser` and
+`frontend` tests of the chat app or the shell when its frontend alone
+changed (any other app runs whole), each changed test file of those two on
+its own, and the frontend checks. A path of the pass's outside every
+package and skill, or in a package the root project depends on, brings in
+the full root suite; that is the gate working, not a gap.
+`app-manifest select-tests`, with the same arguments, prints the commands
+without running them. The selector reads commits, like the scope file. It
+refuses to run while the working tree holds an uncommitted or untracked
+change, naming it, and refuses a scope file whose diff does not run to
+`HEAD`; regenerate the file and run it again.
 
 The change it selects for is what the pass is responsible for: the changed
 files some creation's footprint accounts for, and every one of the pass's own
@@ -339,49 +360,39 @@ changes, inside a footprint or not: what your branch changed and the files of
 the change you are hardening ("The scope file" above). Other work that landed in the window (the
 scope file's `others`) selects nothing, except that the lead's work you merged
 in runs the suites of the pass's creations it reaches ("Catching up to a moved
-base"). The selector reads commits, like the
-scope file. It refuses to run while the working tree holds an uncommitted or
-untracked change, naming it, and refuses a scope file whose diff does not run
-to `HEAD`; regenerate the file and run it again.
+base").
 
-It prints shell lines, each under a comment naming the changed paths behind
-it. Run every line, in order, each as its own command: they include the
-frontend build the browser tests need, and passing two pytest roots to one
-invocation breaks collection. What it selects, and why, is in
-`system/libs/app_manifest/README.md` ("Selecting tests"): the repo guards, the
-changed packages' and skills' own suites with their ratchets, the suites of
-whatever declares a dependency on them, the browser tests too of an app whose
-Python changed, only the `browser` and `frontend` tests of the chat app or the
-shell when its frontend alone changed (any other app runs whole), each changed
-test file of those two on its own, and the frontend checks. A path of the
-pass's outside every package and skill, or in a package the root project
-depends on, brings in the full root suite; that is the gate working, not a
-gap. Do not drop any line of it.
+Each command ends one of four ways:
 
-**A failing test.** Rerun only the tests that failed (their node ids, from the
-same directory the line ran in) before anything else. Add `--no-cov` when the
-line's run reported coverage (the chat app's, the shell's and Getting
-Started's do): a run of only some tests fails the coverage floor. In the chat
-app's or the shell's suite add `-m ''` too, or a browser test named in it is
-deselected (AGENTS.md). A test that passes on that rerun without any change of
-yours is flaky, not broken: name it on your report's `Flaky tests:` line
-(your lead reports or tickets it) and move on, without rerunning its suite.
-Check the shed ledger for its run first (below): a failure the ledger shows
-was shed is a shed, handled as one, not a flaky test. Other than a shed
-command's rerun, a suite runs whole again only after you commit a fix, and
-then as whatever the fix reaches:
-`select-tests --diff-base <the commit before the fix>`. Everything in that
-range is your own commits, so it needs no scope file. Those lines are that
-commit's whole gate; a suite they did not print is a widening, and goes
-through the `question` gate like any other.
+- **passed**.
+- **flaky**: its tests failed, and passed when rerun on their own, without
+  any change of yours. Name them on your report's `Flaky tests:` line (your
+  lead reports or tickets them) and move on.
+- **failed**, with the tests still failing after that rerun when it was a
+  pytest run, or `coverage floor not reached` when its suite's coverage fell
+  under the floor (the rerun cannot clear that). Any tests it lists as
+  `passed on rerun` are flaky: name them as for a flaky command. Fix what
+  your change broke, commit the fix, and run the gate again as whatever the
+  fix reaches: `run-tests --diff-base <the commit before the fix>`.
+  Everything in that range is your own commits, so it needs no scope file.
+  That is the fix's whole gate; a suite it does not run is a widening, and
+  goes through the `question` gate like any other.
+- **shed**: killed by a signal while the memory guard recorded a shed, which
+  the outcome lists. That is memory pressure, never a failure to fix in the
+  code ("A shed command" below).
+
+A failed or flaky command that lists memory-guard kills may be a shed that
+surfaced as ordinary test errors (a browser that vanished mid-test). Neither
+fix it nor report it as flaky yet: rerun it as a shed command ("A shed
+command" below) once memory has settled. A real failure fails again.
 
 **A failing test you would change.** Before editing a test that failed, run
 it on the tree before your change: with everything committed, `git checkout
---detach "$DIFF_BASE"`, rerun its node id the way the line ran it but with
-`uv run --no-sync` (your branch's venv stays), then check your branch back
-out. Say in your report whether your change caused the failure or it was
-already there; a fix to a test that already failed is reported as a fix to a
-pre-existing failure, not as part of your gate.
+--detach "$DIFF_BASE"`, run the `rerun these` command `run-tests` printed for
+its command, with `uv run --no-sync` in place of `uv run` (your branch's venv
+stays), then check your branch back out. Say in your report whether your change caused the failure or it
+was already there; a fix to a test that already failed is reported as a fix
+to a pre-existing failure, not as part of your gate.
 
 **A suite the selector left out.** The selector reads only declarations:
 `pyproject.toml` and `package.json` dependencies, `uv.lock`, the programs in
@@ -412,36 +423,18 @@ uv run app-manifest select-tests --diff-base <breaking commit>^ --diff-ref <brea
 If the test's suite is not among the lines, declare the coupling that would
 have selected it, the same way.
 
-**A command that dies from a signal.** Exit status 137 or 143, or `Killed`
-with no failure output, is not a test failure until the shed ledger says it is
-not a shed. Note the time before each command (`date -u
-+%Y-%m-%dT%H:%M:%S`), and on a signal death look for sheds since then, with
-the time you noted written into the lookup (a shell variable does not survive
-from one command to the next):
-
-```bash
-STARTED_AT=2026-09-24T11:00:00  # the time you noted before the command
-jq -c --arg since "$STARTED_AT" \
-    'select(.type == "process_shed" and .timestamp >= $since)' \
-    /home/user/workspace/data/.state/oom_priority/events/shed.jsonl
-```
-
-A record whose `pid` or `comm` is the command or one of its children (pytest,
-an xdist worker, node, a browser) means the command was shed for memory
-pressure: that is a shed, never a failure to fix in the code. A shed child can
-also surface as ordinary test errors (a browser that vanished mid-test), so
-run the same check when failures look unrelated to your change. Then judge
-whether a rerun would be shed again, from the ledger (are shed records still
-arriving, for processes other than yours?) and from the free memory the guard
-acts on,
+**A shed command.** Judge whether a rerun would be shed again, from the
+ledger (`/home/user/workspace/data/.state/oom_priority/events/shed.jsonl`:
+are shed records still arriving, for processes other than yours?) and from
+the free memory the guard acts on,
 `python3 system/services/oom_priority/bin/memory_candidates.py --free-memory`
 (is it recovering since the shed, or still falling?). Not `/proc/meminfo` or
 `free`: under a memory cap they read far more free memory than the guard
-sees. If things are settling, rerun the shed command. If they are not, or
-the rerun is shed too, ask your lead with a `question` gate
-(`worker-reporting.md`) naming the command, the ledger records, and the free
-memory you saw; your lead frees memory with the user, and answers when you can
-rerun.
+sees. If things are settling, rerun the shed command from the repo root
+exactly as `run-tests` printed it. If they are not, or the rerun is shed too,
+ask your lead with a `question` gate (`worker-reporting.md`) naming the
+command, the ledger records, and the free memory you saw; your lead frees
+memory with the user, and answers when you can rerun.
 
 Memory pressure is never a reason to skip a command of the gate, or to report
 `done` without it.
@@ -498,7 +491,7 @@ starting over.
    CATCH_UP_SCOPE="$(dirname "$SCOPE_FILE")/catch-up-scope.json"
    uv run app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) \
        --diff-base "$PRE" --lead-ref "$LEAD_HEAD" --out "$CATCH_UP_SCOPE" || exit 1
-   uv run app-manifest select-tests --scope-file "$CATCH_UP_SCOPE"
+   uv run app-manifest run-tests --scope-file "$CATCH_UP_SCOPE"
    ```
 
    The commit you merged is the fork point now, so what came in with it is

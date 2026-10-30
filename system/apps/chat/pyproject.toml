@@ -48,7 +48,7 @@ dev = [
     # Shared mngr CLI argv validator used by the per-feature contract tests
     # (agent_manager_test, claude_auth_test, server_test).
     "mngr-cli-contract",
-    # Keeps tmp_path somewhere a stub executable can run (a workspace container mounts /tmp noexec).
+    # Stops a session whose tmp_path could not run a stub executable (a noexec mount).
     "pytest-executable-tmp",
     # Fails a test that skips where the environment is meant to be complete
     # (the CI job that runs the suites inside the workspace image).

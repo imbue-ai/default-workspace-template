@@ -186,6 +186,9 @@ class SuiteKind(LowerCaseStrEnum):
     TYPE_CHECK = auto()
 
 
+_PYTEST_KINDS: Final[frozenset[SuiteKind]] = frozenset({SuiteKind.ALWAYS_RUN, SuiteKind.FULL_ROOT, SuiteKind.PYTEST})
+
+
 class SelectionReason(FrozenModel):
     """One changed path's part in selecting a command."""
 
@@ -222,6 +225,9 @@ class SuiteSelection(FrozenModel):
     )
     notes: tuple[str, ...] = Field(
         description="Anything the selection could not settle, for the reader"
+    )
+    coverage_measured_roots: tuple[str, ...] = Field(
+        description="The own-root suites with a coverage floor, which a run of only some of their tests misses"
     )
 
 
@@ -1123,6 +1129,7 @@ def select_tests(
             ),
             is_full_root=False,
             notes=tuple(notes),
+            coverage_measured_roots=tuple(sorted(layout.coverage_measured_units)),
         )
 
     if lockfile_failure is not None:
@@ -1179,6 +1186,7 @@ def select_tests(
         paths=tuple(classified),
         is_full_root=is_full_root,
         notes=tuple(notes),
+        coverage_measured_roots=tuple(sorted(layout.coverage_measured_units)),
     )
 
 
@@ -1221,7 +1229,7 @@ def _refuse_uncommitted_changes(repo_root: Path) -> None:
     if uncommitted:
         raise SuiteSelectionError(
             "the working tree has changes the diff does not include; commit them, or remove "
-            "any that are not part of the change, then run select-tests again: "
+            "any that are not part of the change, then run this again: "
             + ", ".join(uncommitted)
         )
 
@@ -1249,7 +1257,7 @@ def select_tests_for_pass_scope(repo_root: Path, scope: PassScope) -> SuiteSelec
     if diff.ref != head:
         raise SuiteSelectionError(
             f"the pass scope file's diff runs to {diff.ref}, but HEAD is {head}; run pass-scope "
-            "again, then select-tests"
+            "again, then this"
         )
     _refuse_uncommitted_changes(repo_root)
     others = frozenset(diff.others)
@@ -1282,6 +1290,31 @@ def select_tests_for_paths(
         read_lockfile_texts(repo_root, lockfile_base, None),
         None,
     )
+
+
+def select_every_test(repo_root: Path) -> SuiteSelection:
+    """Every suite, run as a change to every tracked file would run it: the frontend checks, the
+    full root suite, and each own-root suite with all its markers."""
+    repo_root = repo_root.resolve()
+    layout = load_repo_layout(repo_root)
+    lockfile_path = repo_root / LOCKFILE
+    # Comparing the lockfile with itself reads it as changed but upgrading nothing.
+    lockfile_text = _read_text(lockfile_path) if lockfile_path.is_file() else ""
+    return select_tests(layout, sorted(layout.tracked_files), (lockfile_text, lockfile_text), None)
+
+
+@pure
+def rerun_command(command: SuiteCommand, test_ids: Sequence[str], is_coverage_measured: bool) -> SuiteCommand | None:
+    """The command that reruns only ``test_ids`` of a pytest run, from its directory, or None for a
+    command that is not one. Every marker is included, so a test its marker run would deselect still
+    runs, and a suite with a coverage floor skips it, as for any run of only some of a suite's tests."""
+    if command.kind not in _PYTEST_KINDS or "pytest" not in command.argv:
+        return None
+    # The runner the command used, through pytest itself, without the targets and options after it.
+    runner = command.argv[: command.argv.index("pytest") + 1]
+    coverage = (_NO_COVERAGE_FLAG,) if is_coverage_measured else ()
+    argv = (*runner, *coverage, "-m", _ALL_MARKERS_EXPRESSION, *test_ids)
+    return _command(SuiteKind.PYTEST, command.working_directory, argv, command.reasons)
 
 
 @pure
