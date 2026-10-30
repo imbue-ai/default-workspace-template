@@ -7,6 +7,10 @@
  * prose), and chips. Step nodes carry their own grouped events; expanding a step
  * reveals that grouped work. The wrap-up reply renders below the timeline.
  *
+ * The steps not started yet (the tail section's pending roster) fold into one "Up next" row at the end of the
+ * timeline: a faint line names the first few, and pressing it shows them all, laid out like a step's revealed
+ * work.
+ *
  * This component renders structure it is given; it does no grouping or
  * ordering itself.
  */
@@ -111,6 +115,22 @@ function renderExpandedStepBody(step: StepNode, toolResults: Map<string, ToolRes
   return m("div", { class: "pv-expanded markdown-content mt-2.5 text-(length:--font-size-body)" }, children);
 }
 
+/** The label of the row the steps not started yet fold into. */
+export const PENDING_STEPS_LABEL = "Up next";
+
+/** How many of the steps not started yet the Up next row names while collapsed. */
+const NAMED_PENDING_COUNT = 3;
+
+/** The Up next row's subtext: the next steps' titles, in order, with "…" when there are more. */
+export function nextPendingTitles(pendingSteps: StepNode[]): string {
+  const named = pendingSteps.slice(0, NAMED_PENDING_COUNT).map((step) => step.title);
+  return pendingSteps.length > NAMED_PENDING_COUNT ? `${named.join(", ")}, …` : named.join(", ");
+}
+
+function isPendingStep(item: TimelineItem): boolean {
+  return item.kind === "step" && item.step.status === "pending";
+}
+
 export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
   // Per-step expand state lives in the shared in-memory expansion store, keyed
   // by section id + ticket_id: component state would be lost every time the
@@ -121,6 +141,77 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
 
   function stepKey(ticket_id: string): string {
     return `step:${blockKeyPrefix}:${ticket_id}`;
+  }
+
+  function pendingRowKey(): string {
+    return `pending:${blockKeyPrefix}`;
+  }
+
+  /** The row the steps not started yet fold into: a pending badge, the label, a chevron, and while collapsed a faint
+   *  line naming the next few. Expanded, the steps show below the label in the wrapper a step's revealed work uses
+   *  (renderStepNode, renderExpandedStepBody), one title per line. */
+  function renderPendingRow(pendingSteps: StepNode[]): m.Vnode {
+    const isExpanded = isBlockExpanded(pendingRowKey());
+    const nodeClasses = [
+      "pv-tl-node",
+      "pv-tl-node--pending",
+      "pv-tl-node--pending-group",
+      "pv-tl-node--last pb-0",
+      TIMELINE_NODE_CLASS,
+    ].join(" ");
+    return m("div", { class: nodeClasses, key: "pending-group" }, [
+      m("div", { class: TIMELINE_BULLET_CLASS }, statusIcon("pending", false)),
+      m("div", { class: TIMELINE_BODY_CLASS }, [
+        m(
+          "button",
+          {
+            type: "button",
+            class: timelineTitleClass("upcoming"),
+            "aria-expanded": isExpanded ? "true" : "false",
+            onclick: () => toggleBlockExpanded(pendingRowKey()),
+          },
+          [
+            PENDING_STEPS_LABEL,
+            m(
+              "span",
+              { class: `${TIMELINE_CHEVRON_CLASS} ${timelineChevronStateClass(isExpanded)}` },
+              m.trust("&rsaquo;"),
+            ),
+          ],
+        ),
+        // Faint and on one line, like a step's summary; hidden while the steps themselves are shown below.
+        isExpanded
+          ? null
+          : m(
+              "div",
+              {
+                class:
+                  "pv-tl-pending-next mt-[3px] truncate pl-0.5 text-(length:--font-size-helper) leading-normal text-faint",
+              },
+              nextPendingTitles(pendingSteps),
+            ),
+        isExpanded
+          ? m(
+              "div",
+              { class: "pv-tl-expanded mt-1.5" },
+              m(
+                "div",
+                { class: "pv-expanded mt-2.5 text-(length:--font-size-body)" },
+                pendingSteps.map((step, idx) =>
+                  m(
+                    "div",
+                    {
+                      class: `pv-pending-item ${timelineTitleClass("upcoming")} ${idx === 0 ? "" : "mt-4"}`,
+                      key: step.ticket_id,
+                    },
+                    step.title,
+                  ),
+                ),
+              ),
+            )
+          : null,
+      ]),
+    ]);
   }
 
   function renderStepNode(
@@ -177,13 +268,18 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
       const { items, trailing_reply, toolResults, chatId, id } = vnode.attrs;
       blockKeyPrefix = id ?? "";
 
-      // Index of the last node on the thread (a step or a handoff), so only it gets the `--last` cap.
+      // The steps not started yet fold into one row after the others.
+      const pendingSteps = items.flatMap((item) => (isPendingStep(item) && item.kind === "step" ? [item.step] : []));
+      const shownItems = items.filter((item) => !isPendingStep(item));
+
+      // Index of the last node on the thread (a step or a handoff), so only it gets the `--last` cap; with an Up next
+      // row, that row is last instead.
       let lastStepIdx = -1;
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].kind === "step" || items[i].kind === "handoff") lastStepIdx = i;
+      for (let i = 0; i < shownItems.length && pendingSteps.length === 0; i++) {
+        if (shownItems[i].kind === "step" || shownItems[i].kind === "handoff") lastStepIdx = i;
       }
 
-      const timelineNodes: m.Children[] = items.map((item, idx) => {
+      const timelineNodes: m.Children[] = shownItems.map((item, idx) => {
         if (item.kind === "step") {
           return renderStepNode(item.step, idx === lastStepIdx, toolResults, chatId);
         }
@@ -258,7 +354,11 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
               class: "pv-timeline-thread absolute top-2 bottom-0 left-[7.5px] w-px bg-default",
               "aria-hidden": "true",
             }),
-            m("div.pv-timeline-nodes", timelineNodes),
+            m("div.pv-timeline-nodes", [
+              ...timelineNodes,
+              // Spread rather than a null hole: the nodes are keyed, and mithril refuses a mix.
+              ...(pendingSteps.length > 0 ? [renderPendingRow(pendingSteps)] : []),
+            ]),
           ]),
           trailing_reply.length > 0
             ? trailing_reply.map((ev) =>

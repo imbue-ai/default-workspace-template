@@ -715,6 +715,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const agentIsIdle = activityState === "IDLE";
     const tailTurnSettled = isTailTurnSettled(activityState);
     const liveCompaction = liveCompactionOf(activityState, chat?.active_agent.compaction_cause);
+    const chatSteps = chat?.active_agent.message_steps ?? [];
+    const hiddenStepIds = chat?.active_agent.hidden_step_ids ?? [];
 
     // A new chat starts on fast mode; once it has run the workspace's turn limit,
     // switch it to standard speed. Checked here because this is where the loaded
@@ -727,15 +729,18 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // held events, the settled flag and the running compaction -- captured by the
     // render version (bumped on any data mutation) plus those two -- so a
     // scroll-only redraw reuses the cached rows.
+    // The chat app's message steps and hidden steps feed the walk too, so they are part of the key.
     const renderKey =
       `${chatId}|${getRenderVersion(chatId)}|${tailTurnSettled ? 1 : 0}|` +
-      `${liveCompaction === null ? "-" : (liveCompaction.cause ?? "unknown")}`;
+      `${liveCompaction === null ? "-" : (liveCompaction.cause ?? "unknown")}|` +
+      chatSteps.map((step) => `${step.step_id}:${step.status}:${step.title}`).join("|") +
+      `|hidden:${hiddenStepIds.join(",")}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
       if (liveCompaction === null) closeRunningCompactionChips();
-      cachedRows = buildConversationRows(chatId, events, tailTurnSettled, liveCompaction);
+      cachedRows = buildConversationRows(chatId, events, tailTurnSettled, liveCompaction, chatSteps, hiddenStepIds);
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;

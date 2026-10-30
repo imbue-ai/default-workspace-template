@@ -2167,3 +2167,64 @@ describe("secret requests", () => {
     expect(live[0].events.map((e) => e.event_id)).toEqual(["a-w-after"]);
   });
 });
+
+describe("the chat app's message steps and hidden steps", () => {
+  const resultsOf = (events: TranscriptEvent[]): Map<string, ToolResultEvent> => {
+    const toolResults = new Map<string, ToolResultEvent>();
+    for (const e of events) if (e.type === "tool_result") toolResults.set(e.tool_call_id, e);
+    return toolResults;
+  };
+
+  // A message step the chat app wrote waits in the latest section's pending roster before the agent starts it.
+  it("adds a written message step the agent has not started to the latest section as pending", () => {
+    const events = [
+      userMsg("t0", "go", "u1"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Build the page")),
+      userMsg("t2", "add a quiz", "u2"),
+    ];
+    const sections = buildSections(events, resultsOf(events), false, null, [
+      { step_id: "wor-step-q1qb", title: "Add a quiz", status: "open" },
+    ]);
+    const tail = stepItems(sections[sections.length - 1].items);
+    expect(tail.map((s) => `${s.ticket_id}:${s.status}`)).toEqual(["s1:active", "wor-step-q1qb:pending"]);
+    expect(tail[1].title).toBe("Add a quiz");
+  });
+
+  // Once the agent has started it, the transcript places the step; the snapshot adds no pending copy.
+  it("does not add a pending copy of a message step the agent already started", () => {
+    const events = [
+      userMsg("t0", "add a quiz", "u1"),
+      tkMsg("t1", "tk start wor-step-q1qb", "k1"),
+      result("t1", "k1", startOut("wor-step-q1qb", "Add a quiz")),
+    ];
+    const sections = buildSections(events, resultsOf(events), false, null, [
+      { step_id: "wor-step-q1qb", title: "Add a quiz", status: "open" },
+    ]);
+    expect(stepItems(sections[0].items).map((s) => `${s.ticket_id}:${s.status}`)).toEqual(["wor-step-q1qb:active"]);
+  });
+
+  // A step a later message called off never shows, and its work renders as if no step were open.
+  it("leaves out a hidden step and shows its work inline", () => {
+    const events = [
+      userMsg("t0", "go", "u1"),
+      tkMsg("t1", "tk start s1", "k1"),
+      result("t1", "k1", startOut("s1", "Add a quiz")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+    ];
+    const sections = buildSections(events, resultsOf(events), false, null, [], ["s1"]);
+    expect(stepItems(sections[0].items)).toEqual([]);
+    expect(sections[0].items.map((i) => i.kind)).toEqual(["ungrouped"]);
+  });
+
+  it("leaves out a hidden step that was only declared", () => {
+    const events = [
+      userMsg("t0", "go", "u1"),
+      tkMsg("t1", "tk create --step 'Add a quiz'", "tc"),
+      result("t1", "tc", "Created cod-step-quiz: Add a quiz"),
+    ];
+    const sections = buildSections(events, resultsOf(events), false, null, [], ["cod-step-quiz"]);
+    expect(stepItems(sections[0].items)).toEqual([]);
+  });
+});

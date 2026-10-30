@@ -1,0 +1,5 @@
+- tk gains `tk cancel <id> "<reason>"`, which records in a sidecar next to the ticket that a step is no longer wanted, and `tk create --id <id>`, which creates a ticket under a reserved id and never writes over an existing one. A cancel holds until the step is started again: `tk steps` marks the step, `tk show` shows the cancel, and `tk start` says it overrides it.
+
+- Claude agents are told, beside each message sent while they were busy, the id of the step the chat is making for it (`system/scripts/agent_message_steps.py`, wired in `.claude/settings.json`; `CHAT_MESSAGE_STEP_RESERVATIONS_DIR` in `.mngr/settings.toml`). A `tk start` or `tk close` of that id waits until the step exists, and says when the chat's model judged the message not a task, or a repeat or call-off of an open step. The agent is told these decisions come from a quick model that sees one message at a time, and that it may override them.
+
+- AGENTS.md describes these cases. The rule that only one step is in progress at a time is unchanged.

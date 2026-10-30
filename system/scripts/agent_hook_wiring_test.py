@@ -33,6 +33,9 @@ _PI_SCRIPT_RE = re.compile(r'join\(SCRIPTS,\s*"([^"]+)"\)')
 # pi's step nudge is a `tool_result` handler in tk_workflow.ts rather than a
 # `tool_call` guard, because the reminder has to ride the tool's result.
 _PRETOOLUSE_SCRIPTS_PI_CARRIES_ELSEWHERE = {"agent_require_steps_pretool.sh"}
+# The wait for a message step the chat app is still writing pairs with the UserPromptSubmit hook that tells the
+# agent the step's id, which only claude wires; an agent on another harness never holds such an id.
+_PRETOOLUSE_SCRIPTS_CLAUDE_ONLY = {"agent_message_steps.py"}
 
 
 def _hook_commands(config: dict[str, Any], event: str) -> list[str]:
@@ -75,7 +78,7 @@ def test_claude_and_codex_run_the_same_pretooluse_guards() -> None:
     that have no codex counterpart -- see tool-call-policies.md, category C.)"""
     claude = json.loads(_CLAUDE_SETTINGS.read_text())
     codex = json.loads(_CODEX_HOOKS.read_text())
-    claude_guards = _referenced_scripts(_hook_commands(claude, "PreToolUse"))
+    claude_guards = _referenced_scripts(_hook_commands(claude, "PreToolUse")) - _PRETOOLUSE_SCRIPTS_CLAUDE_ONLY
     codex_guards = _referenced_scripts(_hook_commands(codex, "PreToolUse"))
     assert claude_guards == codex_guards
 
@@ -84,7 +87,7 @@ def test_pi_runs_the_same_pretooluse_scripts_as_claude() -> None:
     """policy_guards.ts reaches the hook scripts without a hook config, so a guard
     added to `.claude/settings.json` and forgotten there is otherwise invisible."""
     claude = json.loads(_CLAUDE_SETTINGS.read_text())
-    claude_guards = _referenced_scripts(_hook_commands(claude, "PreToolUse"))
+    claude_guards = _referenced_scripts(_hook_commands(claude, "PreToolUse")) - _PRETOOLUSE_SCRIPTS_CLAUDE_ONLY
     pi_guards = set(_PI_SCRIPT_RE.findall(_PI_POLICY_GUARDS.read_text()))
     assert pi_guards == claude_guards - _PRETOOLUSE_SCRIPTS_PI_CARRIES_ELSEWHERE
     for name in pi_guards:
