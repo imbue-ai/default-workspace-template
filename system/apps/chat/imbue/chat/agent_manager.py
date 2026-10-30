@@ -3403,20 +3403,18 @@ class AgentManager:
         the harness's own words plus mngr's classification of them, which is what lets the chat
         decide what to offer.
         """
-        with self._lock:
-            stops_begun_before_send = self._stops_begun_by_agent.get(str(agent_id), 0)
-
-        def is_taken_back() -> bool:
-            with self._lock:
-                return self._stops_begun_by_agent.get(str(agent_id), 0) != stops_begun_before_send
-
+        stops_begun_before_send = self._stops_begun_of(agent_id)
         return self._messenger.send_to_agent(
             agent_id,
             message,
             self.get_agent_matches_by_id(str(agent_id)),
             is_resent_when_unsure,
-            is_taken_back,
+            lambda: self._stops_begun_of(agent_id) != stops_begun_before_send,
         )
+
+    def _stops_begun_of(self, agent_id: AgentId) -> int:
+        with self._lock:
+            return self._stops_begun_by_agent.get(str(agent_id), 0)
 
     def press_key_chord_on_agent(self, agent_id: AgentId, key: str) -> bool:
         """Press a tmux key token (e.g. ``"M-q"``) into the agent's pane, using the live cache.
