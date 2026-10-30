@@ -48,8 +48,9 @@ CACHE_HINTS: Final[dict[str, str]] = {
 # How many of the workspace's folders the row lists, and the least a listed item holds.
 WORKSPACE_ITEM_COUNT: Final[int] = 8
 MIN_ITEM_BYTES: Final[int] = 1024 * 1024
-# What is not the machine's system software: the home tree (the rows above), kernel and memory
-# filesystems, and the container engines' own stores where a machine keeps them on this disk.
+# What is not the machine's system software: the home tree and the off-volume cache (the rows
+# above), kernel and memory filesystems, and the container engines' own stores where a machine
+# keeps them on this disk.
 SYSTEM_EXCLUDES: Final[tuple[Path, ...]] = (
     Path("/proc"),
     Path("/sys"),
@@ -244,7 +245,8 @@ def scan(
         ),
     )
     # The rest of the disk: the machine's system software (the workspace's tools, measured
-    # without the home tree, which the rows above hold) and whatever else is on the disk.
+    # without the home tree and the off-volume cache, which the rows above hold) and whatever else is
+    # on the disk.
     other = max(0, disk_used - counted)
     system = measure([root], [home, off_volume_cache, *SYSTEM_EXCLUDES])
     other_items: list[dict[str, Any]] = []
