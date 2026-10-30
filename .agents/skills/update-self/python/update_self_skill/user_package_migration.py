@@ -297,8 +297,9 @@ class Plan(NamedTuple):
 
 def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str | None:
     """The standalone form of a program command that runs one of ``scripts``, or ``None``:
-    its prefix (an OOM tag, say) kept, then ``bash -c`` linking and syncing the package's
-    own project before the steps it ran, with the script exec'd from the package's venv."""
+    its prefix (an OOM tag, say) kept, then the shell it ran under (``bash -c`` when it
+    had none) linking and syncing the package's own project before the steps it ran, with
+    the script exec'd from the package's venv."""
     words = user_packages.split_words(command)
     shell_at = next(
         (
@@ -309,8 +310,10 @@ def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str
         ),
         None,
     )
+    shell = ["bash", "-c"]
     if shell_at is not None:
         prefix = words[:shell_at]
+        shell = words[shell_at : shell_at + 2]
         rewritten = _rewrite_script(words[shell_at + 2], relative, scripts)
     else:
         start = next(
@@ -343,9 +346,7 @@ def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str
     )
     return " ".join(
         [
-            *map(_quote, prefix),
-            "bash",
-            "-c",
+            *map(_quote, [*prefix, *shell]),
             '"' + script_text.replace("\\", "\\\\").replace('"', '\\"') + '"',
         ]
     )

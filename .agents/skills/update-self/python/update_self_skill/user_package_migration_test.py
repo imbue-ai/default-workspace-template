@@ -379,6 +379,25 @@ def test_a_programs_shell_steps_keep_their_expansions_redirections_and_operators
     )
 
 
+@pytest.mark.parametrize(
+    ("shell", "flag"), [("bash", "-lc"), ("dash", "-c"), ("/bin/zsh", "-c")]
+)
+def test_a_program_keeps_the_shell_it_ran_under(shell: str, flag: str) -> None:
+    # A login shell sources the profile the program's environment comes from.
+    rewritten = migration._program_rewrite(
+        f'{shell} {flag} "source ~/.profile && exec widget-app"',
+        "system/apps/widget",
+        ["widget-app"],
+    )
+
+    assert rewritten is not None
+    assert user_packages.split_words(rewritten)[:2] == [shell, flag]
+    assert (
+        user_packages.program_problems(rewritten, "system/apps/widget", ["widget-app"])
+        == []
+    )
+
+
 def test_a_program_that_runs_another_packages_script_is_left_alone() -> None:
     assert (
         migration._program_rewrite(
