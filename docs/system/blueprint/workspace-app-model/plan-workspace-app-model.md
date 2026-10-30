@@ -361,7 +361,7 @@ The chat app retags chat agents dynamically, fed by `shell:shown` and `shell:hid
 
 ### 8.3 Updates
 
-The update apply re-syncs the workspace venv every app runs from when a backend manifest or any app's `pyproject.toml` changed, holds every app whose manifest says `critical = true` and `instances = true` to its instances API after the restart (beside the shell's health route), and restarts every app whose manifest says `critical = true` on a rollback alongside the shell (onto the venv's pre-apply copy when the apply re-synced it).
+The update apply re-syncs the workspace venv the built-in apps run from when a backend manifest or a built-in app's `pyproject.toml` changed (a user app's own project is synced in place), holds every app whose manifest says `critical = true` and `instances = true` to its instances API after the restart (beside the shell's health route), and restarts every app whose manifest says `critical = true` on a rollback alongside the shell (onto the venv's pre-apply copy when the apply re-synced it).
 A program the merge adds needs no `supervisorctl reread` step: the apply restarts the services agent, whose bootstrap window execs a fresh supervisord that reads the merged program table.
 The apply also pre-flights the merged chat app beside the shell (`.venv/bin/chat-app --preflight`, the entry point the chat's program runs, in a boot that reconciles no accounts, runs no agent manager, and registers nothing), since the chat is the process that imports mngr and the harness plugins.
 Full per-app generalization of the apply is deferred (section 11).

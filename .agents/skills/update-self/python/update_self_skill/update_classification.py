@@ -304,19 +304,22 @@ def _is_backend_manifest(path: str) -> bool:
     return path in ("uv.lock", "pyproject.toml", PLUGIN_MANIFEST_PATH)
 
 
-def _is_app_pyproject(path: str) -> bool:
-    """Whether ``path`` is an app's ``pyproject.toml``, which only the workspace venv
-    installs.
+def _is_app_pyproject(path: str, user_package_directories: Collection[str]) -> bool:
+    """Whether ``path`` is a built-in app's ``pyproject.toml``, which only the workspace
+    venv installs.
 
-    The venv is the only install of each app, and a change to an app's console
+    The venv is the only install of each built-in app, and a change to an app's console
     scripts reaches it only through a sync, even when the lockfile does not move. The
-    mngr tool reads nothing an app declares, so it is left alone.
+    mngr tool reads nothing an app declares, so it is left alone. A user app (one of
+    ``user_package_directories``) is a standalone project with its own venv, which the
+    workspace venv's sync never installs.
     """
     parts = path.split("/")
     return (
         len(parts) == 4
         and f"{parts[0]}/{parts[1]}" == APPS_DIR
         and parts[3] == "pyproject.toml"
+        and "/".join(parts[:3]) not in user_package_directories
     )
 
 
@@ -330,8 +333,8 @@ class ApplyPlan(NamedTuple):
     they need different work. ``backend_manifest`` is the root ``pyproject.toml``
     or the plugin manifest, which the mngr tool's reinstall reads, or the
     ``uv.lock`` that follows the pin, so it reinstalls the tool and re-syncs the venv;
-    ``app_pyproject`` is any app's ``pyproject.toml``, the shell's included,
-    which only the venv installs; ``resyncs_venv`` is either. ``provisioner`` is
+    ``app_pyproject`` is a built-in app's ``pyproject.toml``, the shell's included,
+    which only the venv installs (a user app's is its own project's); ``resyncs_venv`` is either. ``provisioner`` is
     the pinned-toolchain re-run, keyed on the files the provisioner reads.
     """
 
@@ -358,11 +361,13 @@ class ApplyPlan(NamedTuple):
 def plan_apply(
     paths: Sequence[str],
     provisioner_inputs: Collection[str],
+    user_package_directories: Collection[str],
 ) -> ApplyPlan:
     """Classify the merged diff's ``paths`` into an :class:`ApplyPlan`.
 
-    ``provisioner_inputs`` is :func:`read_provisioner_inputs` for the tree being
-    applied. The frontend build
+    ``provisioner_inputs`` is :func:`read_provisioner_inputs` and
+    ``user_package_directories`` is ``user_packages.user_packages``, both for the tree
+    being applied. The frontend build
     output (``static/``) and ``node_modules`` are gitignored and never appear
     in a diff; they are covered by snapshots, not the plan.
     """
@@ -392,7 +397,7 @@ def plan_apply(
             frontend_src = True
         elif _is_backend_manifest(path):
             backend_manifest = True
-        elif _is_app_pyproject(path):
+        elif _is_app_pyproject(path, user_package_directories):
             app_pyproject = True
         elif (
             path.startswith(f"{SYSTEM_INTERFACE_DIR}/imbue/")

@@ -1986,8 +1986,13 @@ def _make_apply_repo(tmp_path: Path) -> Path:
     # A live workspace has its dependencies installed; a tree without them is the
     # exception, and the tests that want it remove this.
     _finish_npm_install(repo_root / update_layout.NPM_ROOT_DIR / "node_modules")
-    # The workspace's mngr pin, as build_workspace.sh and the refresh both read it.
+    # The workspace's mngr pin, as build_workspace.sh and the refresh both read it, and
+    # its built-in apps named as root members, so any other app here is a user package.
+    members = ", ".join(
+        f'"{update_layout.APPS_DIR}/{package}"' for package, *_ in _APP_FIXTURES
+    )
     (repo_root / update_layout.PYPROJECT_PATH).write_text(
+        f"[tool.uv.workspace]\nmembers = [{members}]\n\n"
         "[tool.uv.sources]\n"
         f'imbue-mngr = {{ git = "{_MNGR_GIT}", rev = "{_MNGR_REV}", subdirectory = "libs/mngr" }}\n'
     )
@@ -2461,8 +2466,12 @@ _DOCS_DIFF = "M\tREADME.md\nM\t.agents/changelog/some-entry.md\n"
 _PROVISIONER_INPUTS = update_classification.read_provisioner_inputs(_WORKSPACE_ROOT)
 
 
+# A user app: a standalone project the root members do not name, with a venv of its own.
+_USER_APP = "system/apps/weather_dashboard"
+
+
 def _plan(paths: list[str]) -> update_classification.ApplyPlan:
-    return update_classification.plan_apply(paths, _PROVISIONER_INPUTS)
+    return update_classification.plan_apply(paths, _PROVISIONER_INPUTS, [_USER_APP])
 
 
 @pytest.mark.parametrize(
@@ -2470,8 +2479,10 @@ def _plan(paths: list[str]) -> update_classification.ApplyPlan:
     [
         ("system/apps/system_interface/pyproject.toml", False, True),
         ("system/apps/browser/pyproject.toml", False, True),
-        # A user-built app installs into the same venv the template's apps do.
-        ("system/apps/weather_dashboard/pyproject.toml", False, True),
+        # A built-in app the release adds installs into the venv like the others.
+        ("system/apps/notebook/pyproject.toml", False, True),
+        # A user app's own sync installs it; the workspace venv never holds it.
+        (f"{_USER_APP}/pyproject.toml", False, False),
         ("uv.lock", True, False),
         ("pyproject.toml", True, False),
         # Not a Python manifest, but it decides which plugins the mngr tool's
@@ -9550,7 +9561,7 @@ def test_the_preflight_boots_the_entry_points_supervisord_runs() -> None:
 def test_an_apply_that_changes_a_user_package_syncs_it_in_place_and_its_failure_stops_only_it(
     apply_repo: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # This fixture's root names no members, so every app under system/apps is a user package.
+    # The fixture's root members name only its built-in apps, so these two are user packages.
     for name in ("widget", "gadget"):
         _write_app(apply_repo, name, name, f"{name}-app", False)
     runner = _apply_runner(

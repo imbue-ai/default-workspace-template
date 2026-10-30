@@ -33,7 +33,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Collection, NamedTuple, Sequence
 
-from update_self_skill import tool_env
+from update_self_skill import tool_env, user_packages
 from update_self_skill.update_apply_contract import (
     ENV_DRI_AGENT,
     PHASE_BUILT,
@@ -1110,6 +1110,7 @@ def apply_update(
     plan = plan_apply(
         [path for _, path in name_status],
         read_provisioner_inputs(repo_root),
+        user_packages.user_packages(repo_root),
     )
 
     unresolved_frontend_failure: str | None = None
@@ -1986,7 +1987,11 @@ def _run_rollback(
     ).splitlines()
     # The venv is never copied aside (the apply swapped a fresh one in and deleted the
     # old), so an update that re-synced it is undone by syncing the restored tree.
-    if plan_apply(changed, read_provisioner_inputs(repo_root)).resyncs_venv:
+    if plan_apply(
+        changed,
+        read_provisioner_inputs(repo_root),
+        user_packages.user_packages(repo_root),
+    ).resyncs_venv:
         try:
             sync_workspace_venv(repo_root, runner, keep_protected)
         except (ApplyFailed, OSError, RuntimeError) as exc:
@@ -2232,6 +2237,7 @@ def recover(
     plan = plan_apply(
         [path for _, path in name_status],
         read_provisioner_inputs(repo_root),
+        user_packages.user_packages(repo_root),
     )
     try:
         # Before anything commits: an apply killed inside its merge left the
