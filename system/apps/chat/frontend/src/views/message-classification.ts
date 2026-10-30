@@ -12,7 +12,7 @@
  */
 
 import type { DisplayDecision } from "../models/Chats";
-import type { ToolCall, UserMessageEvent } from "../models/Response";
+import type { CompactionCause, ToolCall, TranscriptEvent, UserMessageEvent } from "../models/Response";
 import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
 
 /** The slice of a user_message the classification reads. */
@@ -160,9 +160,47 @@ export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean
 const COMPACT_COMMAND = "/compact";
 
 /** True for a `/compact` as Claude Code records it when it is submitted. */
-export function isCompactCommand(event: ClassifiableUserMessage): boolean {
+function isCompactCommand(event: ClassifiableUserMessage): boolean {
   const content = event.content.trim();
   return content === COMPACT_COMMAND || content.startsWith(`${COMPACT_COMMAND} `);
+}
+
+/** The `/compact`s the idle sweep sent a Claude agent, each paired with the compaction it started. */
+export interface SweepCompactCommands {
+  /** By the landed compaction's event id. */
+  byCompactionId: Map<string, UserMessageEvent>;
+  /** The one that started the compaction running now, if any. */
+  running: UserMessageEvent | null;
+}
+
+/** Find the idle sweep's `/compact`s: Claude Code records one as a user message the user never typed,
+ *  so it is no turn of the conversation. A `/compact` is the sweep's when the compaction it directly
+ *  precedes is idle; one the user typed stays theirs. `liveCause` is the cause of the compaction
+ *  running now, or null when none is running or its cause is unknown. */
+export function sweepCompactCommands(
+  events: readonly TranscriptEvent[],
+  liveCause: CompactionCause | null,
+): SweepCompactCommands {
+  const byCompactionId = new Map<string, UserMessageEvent>();
+  let command: UserMessageEvent | null = null;
+  for (const e of events) {
+    if (e.type !== "user_message") {
+      command = null;
+    } else if (isStatusUserMessage(e)) {
+      if (command !== null && e.compaction_cause === "idle") byCompactionId.set(e.event_id, command);
+      command = null;
+    } else if (!isNonBoundaryUserMessage(e)) {
+      command = isCompactCommand(e) ? e : null;
+    }
+  }
+  return { byCompactionId, running: liveCause === "idle" ? command : null };
+}
+
+/** The event ids of the idle sweep's `/compact`s (see `sweepCompactCommands`). */
+export function sweepCompactCommandIds(commands: SweepCompactCommands): Set<string> {
+  const ids = new Set([...commands.byCompactionId.values()].map((command) => command.event_id));
+  if (commands.running !== null) ids.add(commands.running.event_id);
+  return ids;
 }
 
 // Permission REQUEST (a tool call)

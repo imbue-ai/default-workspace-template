@@ -3,14 +3,15 @@
  *
  * A turn starts at the user message that opened it: any message that opens a section of the
  * progress timeline (the user's own words, a system chip the agent resumes after, a permission
- * verdict), not a skill expansion or a framework injection inside the turn. It ends at the agent's
+ * verdict), not a skill expansion, a framework injection inside the turn, or the idle sweep's
+ * `/compact` (see `sweepCompactCommands`). It ends at the agent's
  * last reply, tool call or tool result after that message -- not at a compaction that ran once the
  * agent was idle, which lands later without opening a turn. Both are the transcript's own
  * timestamps, so a reloaded page reads the same turn the same way.
  */
 
 import type { TranscriptEvent } from "../models/Response";
-import { isNonBoundaryUserMessage } from "./message-classification";
+import { isNonBoundaryUserMessage, sweepCompactCommandIds, sweepCompactCommands } from "./message-classification";
 
 /** The span of the transcript's latest turn, in epoch milliseconds. */
 export interface TurnSpan {
@@ -30,10 +31,11 @@ export function latestTurnSpan(events: readonly TranscriptEvent[]): TurnSpan | n
   let lastWorkAt: number | null = null;
   let lastWorkEventId: string | null = null;
   let hasAgentWork = false;
+  const sweepCommandIds = sweepCompactCommandIds(sweepCompactCommands(events, null));
   for (let i = events.length - 1; i >= 0; i--) {
     const event = events[i];
     const at = Date.parse(event.timestamp);
-    if (event.type === "user_message" && !isNonBoundaryUserMessage(event)) {
+    if (event.type === "user_message" && !isNonBoundaryUserMessage(event) && !sweepCommandIds.has(event.event_id)) {
       if (Number.isNaN(at)) return null;
       return {
         openingEventId: event.event_id,
