@@ -16,8 +16,8 @@ writes today, keeping the versions it runs on:
 2. every source the root workspace gave it -- a ``{ workspace = true }`` one of its own, or
    a workspace member it depends on through the root's sources -- becomes an editable path
    source, so the shared code stays live;
-3. it gets a dev group its tests run from (``imbue-common[testing]``) and its own pytest
-   root, when it has tests;
+3. it gets a dev dependency its tests run with (``pytest``, or ``imbue-common[testing]``
+   for tests that use the ratchet helpers) and its own pytest root, when it has tests;
 4. it leaves the root ``pyproject.toml``'s dependencies and sources;
 5. its program line links its venv, syncs its own project ``--locked`` and execs from its
    own ``.venv/bin``, and each one-off of its commands written in a tracked agent-facing
