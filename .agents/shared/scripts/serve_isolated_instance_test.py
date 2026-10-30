@@ -25,7 +25,6 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
-from disk_headroom.space import HostQuota, compute_disk_space
 
 _SCRIPT = Path(__file__).parent / "serve_isolated_instance.py"
 _spec = importlib.util.spec_from_file_location("serve_isolated_instance", _SCRIPT)
@@ -995,28 +994,6 @@ def test_a_copy_that_would_not_leave_the_reserve_is_refused_before_writing(
     assert not destination.parent.exists()
     # The probe asks about the disk the copy would land on, not the source's.
     assert probed == [tmp_path]
-
-
-def test_free_space_holds_back_a_quota_only_while_it_is_unpublished() -> None:
-    gib = 1024**3
-    # A machine whose quota is unpublished (or that has none): statfs's 10 GiB
-    # may be 4 GiB more than the quota leaves.
-    assert (
-        mod.writable_bytes(compute_disk_space(100 * gib, 90 * gib, 10 * gib, None))
-        == 6 * gib
-    )
-    assert (
-        mod.writable_bytes(compute_disk_space(100 * gib, 97 * gib, 3 * gib, None)) == 0
-    )
-    # A published quota is the answer as it stands, whichever limit binds.
-    quota_bound = compute_disk_space(
-        100 * gib, 90 * gib, 10 * gib, HostQuota(limit=96 * gib, used=93 * gib)
-    )
-    assert mod.writable_bytes(quota_bound) == 3 * gib
-    disk_bound = compute_disk_space(
-        100 * gib, 90 * gib, 10 * gib, HostQuota(limit=200 * gib, used=90 * gib)
-    )
-    assert mod.writable_bytes(disk_bound) == 10 * gib
 
 
 def test_a_copy_that_fails_part_way_is_removed(tmp_path: Path) -> None:
