@@ -181,7 +181,11 @@ class AgentHarnessSession(ABC):
 
     @abstractmethod
     def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
-        """Deliver one message, owning its whole Sending lifecycle (contract A1)."""
+        """Deliver one message, owning its whole Sending lifecycle (contract A1).
+
+        ``is_resent_when_unsure`` says whether a send mngr cannot confirm may be sent once more. Only a session
+        that delivers through mngr's send can come back unconfirmed; any other ignores it.
+        """
 
     def is_sending(self) -> bool:
         """Whether any send is currently in flight (greys the shoulder-tap button)."""
