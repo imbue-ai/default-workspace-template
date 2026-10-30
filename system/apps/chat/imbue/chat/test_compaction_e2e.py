@@ -183,7 +183,7 @@ def _append_compact_summary(server: RunningWorkspace, uuid: str) -> None:
 
 
 def _append_typed_compact(server: RunningWorkspace) -> None:
-    """The record Claude Code writes as a ``/compact`` is submitted, which the page shows as the user's bubble."""
+    """The record Claude Code writes as a ``/compact`` is submitted, typed by the user or sent by the idle sweep."""
     record = {
         "type": "user",
         "uuid": "uuid-typed-compact",

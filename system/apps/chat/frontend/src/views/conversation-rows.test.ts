@@ -317,7 +317,8 @@ describe("a compaction's chips in the rows", () => {
     };
   }
 
-  /** The `/compact` the user typed, and the expansion Claude Code repeats it in after the compaction. */
+  /** A `/compact` as Claude Code records it, typed by the user or sent by the idle sweep, and the
+   *  expansion it repeats it in after the compaction. */
   function typedCompact(ts: string): UserMessageEvent[] {
     return [
       { ...userMsg(ts, "/compact", "u-compact"), non_turn_tail: true },
