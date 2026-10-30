@@ -9,7 +9,8 @@ is ever in an argument.
 import json
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Generator, Mapping
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -19,7 +20,6 @@ from loguru import logger
 
 from auth_sandbox.environment import identity_from_environ, sign_in_environment
 from auth_sandbox.errors import (
-    AuthSandboxError,
     LatchkeyCommandError,
     MissingMaterialError,
     ValuesFileError,
@@ -93,9 +93,21 @@ def _finish(outcome: SignInOutcome) -> None:
     sys.exit(EXIT_REFUSED)
 
 
-def _fail(error: AuthSandboxError | LatchkeyError, exit_code: int) -> None:
-    click.echo(str(error), err=True)
-    sys.exit(exit_code)
+@contextmanager
+def _exit_on_sandbox_failure() -> Generator[None, None, None]:
+    """Turn a command's failure into the exit code of the module docstring, its message on stderr.
+
+    A material that is missing or malformed (a key file, the incoming state, the values file) exits 3; a
+    ``latchkey`` refusal, from the desktop's wrapper or from a re-encrypt child, exits 1.
+    """
+    try:
+        yield
+    except (MissingMaterialError, ValuesFileError) as e:
+        click.echo(str(e), err=True)
+        sys.exit(EXIT_MISSING_MATERIAL)
+    except (LatchkeyError, LatchkeyCommandError) as e:
+        click.echo(str(e), err=True)
+        sys.exit(EXIT_REFUSED)
 
 
 @click.command()
@@ -113,14 +125,8 @@ def sign_in_command(
     """Run latchkey's browser sign-in for SERVICE on the Screen, storing the credential in the sandbox."""
     _quiet_logging()
     paths = SandboxPaths(runtime_dir=runtime_dir)
-    try:
+    with _exit_on_sandbox_failure():
         outcome = run_sign_in(_build_latchkey(paths, latchkey_binary), service, account)
-    except MissingMaterialError as e:
-        _fail(e, EXIT_MISSING_MATERIAL)
-        return
-    except LatchkeyError as e:
-        _fail(e, EXIT_REFUSED)
-        return
     _finish(outcome)
 
 
@@ -147,17 +153,11 @@ def set_credentials_command(
     """Store typed credentials for SERVICE from a values file, as the desktop's credential form does."""
     _quiet_logging()
     paths = SandboxPaths(runtime_dir=runtime_dir)
-    try:
+    with _exit_on_sandbox_failure():
         values = read_and_remove_values_file(values_file)
         outcome = run_set_credentials(
             _build_latchkey(paths, latchkey_binary), service, account, values
         )
-    except (MissingMaterialError, ValuesFileError) as e:
-        _fail(e, EXIT_MISSING_MATERIAL)
-        return
-    except LatchkeyError as e:
-        _fail(e, EXIT_REFUSED)
-        return
     _finish(outcome)
 
 
@@ -168,16 +168,10 @@ def import_browser_state_command(runtime_dir: Path, latchkey_binary: str) -> Non
     """Re-encrypt the incoming browser state (under the transfer key) into the sandbox's latchkey directory."""
     _quiet_logging()
     paths = SandboxPaths(runtime_dir=runtime_dir)
-    try:
+    with _exit_on_sandbox_failure():
         written = import_browser_state(
             SubprocessReencryptRunner(), paths, latchkey_binary, os.environ
         )
-    except MissingMaterialError as e:
-        _fail(e, EXIT_MISSING_MATERIAL)
-        return
-    except LatchkeyCommandError as e:
-        _fail(e, EXIT_REFUSED)
-        return
     click.echo(json.dumps({"browser_state": str(written)}))
 
 
@@ -196,7 +190,7 @@ def export_command(
     """Re-encrypt SERVICE's credentials and the browser state under the transfer key; print the paths as JSON."""
     _quiet_logging()
     paths = SandboxPaths(runtime_dir=runtime_dir)
-    try:
+    with _exit_on_sandbox_failure():
         bundle = export_credentials(
             SubprocessReencryptRunner(),
             paths,
@@ -205,12 +199,6 @@ def export_command(
             service,
             account,
         )
-    except MissingMaterialError as e:
-        _fail(e, EXIT_MISSING_MATERIAL)
-        return
-    except LatchkeyCommandError as e:
-        _fail(e, EXIT_REFUSED)
-        return
     click.echo(
         json.dumps(
             {
