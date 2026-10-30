@@ -2,8 +2,8 @@
 
 The root ``[tool.ty.src]`` covers the agent skills and their shared scripts, ``system/scripts``
 and the root-level tests, checked against the root venv (every other package under ``system/``
-runs its own ``test_no_type_errors``). A third party's skill is kept as it came, so the check
-excludes it (``validate_skill.is_workspace_skill``).
+runs its own ``test_no_type_errors``). A skill ``.agents/third-party-skills.toml`` lists is kept
+as it came, so the check excludes it.
 
 The bare tier -- what the system ``python3`` runs with no venv -- is checked a second time
 against an environment with no third-party packages at all, so an import it cannot make at
@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from agents_shared.validate_skill import is_workspace_skill
+from agents_shared.validate_skill import third_party_skills
 from entry_points_testing import (
     BARE_MODULES,
     BARE_PACKAGES,
@@ -160,9 +160,8 @@ def _check_root(repo_root: Path = REPO_ROOT) -> subprocess.CompletedProcess[str]
     """The root project's check, with each third party's skill excluded (ty adds a command
     line ``--exclude`` to the configured ones)."""
     excludes = [
-        f"{skill_dir.relative_to(repo_root).as_posix()}/"
-        for skill_dir in sorted((repo_root / ".agents" / "skills").glob("*/"))
-        if not is_workspace_skill(skill_dir)
+        f".agents/skills/{name}/"
+        for name in sorted(third_party_skills(repo_root / ".agents"))
     ]
     return _run_ty(
         [argument for pattern in excludes for argument in ("--exclude", pattern)],
@@ -179,20 +178,20 @@ def test_the_root_project_has_no_type_errors() -> None:
 
 
 @pytest.mark.timeout(600)
-def test_the_root_check_leaves_out_a_third_partys_skill_but_keeps_the_configured_excludes(
+def test_the_root_check_leaves_out_a_listed_third_party_skill_but_keeps_the_configured_excludes(
     tmp_path: Path,
 ) -> None:
     (tmp_path / "pyproject.toml").write_text(
         '[tool.ty.src]\ninclude = [".agents"]\nexclude = [".agents/skills/*/scripts/*_test.py"]\n'
     )
+    (tmp_path / ".agents").mkdir()
+    (tmp_path / ".agents" / "third-party-skills.toml").write_text(
+        '[skills]\ninstalled = "https://example.com/skills"\n'
+    )
     wrong = "def count() -> int:\n    return 'none'\n"
-    for name, marker in (
-        ("ours", "metadata:\n  crystallized: true\n"),
-        ("installed", ""),
-    ):
+    for name in ("ours", "installed"):
         scripts = tmp_path / ".agents" / "skills" / name / "scripts"
         scripts.mkdir(parents=True)
-        (scripts.parent / "SKILL.md").write_text(f"---\nname: {name}\n{marker}---\n")
         (scripts / "tool.py").write_text(wrong)
         (scripts / "tool_test.py").write_text(wrong)
 
