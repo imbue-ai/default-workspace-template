@@ -602,7 +602,7 @@ class LiveBrowser(MutableModel):
     # When a resume-queue agent was handed the browser but hasn't sent a command
     # yet (the claim window); 0.0 once it claims (or when no grant is pending).
     _granted_at: float = PrivateAttr(default=0.0)
-    # Strong refs to in-flight fire-and-forget tasks (the _wake_agent subprocess, the
+    # Strong refs to in-flight fire-and-forget tasks (the _wake_agent send, the
     # crash announcement). asyncio keeps only weak references to bare create_task()
     # results, so without this they could be garbage-collected before they run.
     _bg_tasks: set[Any] = PrivateAttr(default_factory=set)
