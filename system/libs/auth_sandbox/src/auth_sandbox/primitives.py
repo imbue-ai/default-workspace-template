@@ -40,8 +40,7 @@ SCREEN_PULSE_SERVER: Final[str] = f"unix:{SCREEN_RUNTIME_DIR}/pulse.sock"
 SCREEN_SERVICE_URL: Final[str] = "http://127.0.0.1:8090"
 
 # The non-secret environment the connector passes at sandbox create (spec 5.2) that the boot script and
-# the commands read from the process environment (it also passes AUTH_SANDBOX_ID and
-# AUTH_SANDBOX_CONNECTOR_URL, which nothing here reads).
+# the commands read from the process environment.
 HOST_ID_ENV_VAR: Final[str] = "AUTH_SANDBOX_HOST_ID"
 REGION_ENV_VAR: Final[str] = "AUTH_SANDBOX_REGION"
 WORKSPACE_HOST_ID_ENV_VAR: Final[str] = "AUTH_SANDBOX_WORKSPACE_HOST_ID"

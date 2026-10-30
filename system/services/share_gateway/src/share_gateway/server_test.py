@@ -467,7 +467,7 @@ def test_callback_on_an_auth_sandbox_sets_host_only_cookies_that_still_verify(
 ) -> None:
     # SHARE_COOKIE_HOST_ONLY=1 (an auth sandbox, whose workspace domain every sandbox of the
     # region shares): both copies are set without a Domain attribute, so the browser scopes
-    # them to the host that set them, and the verify path reads them exactly as before.
+    # them to the host that set them, and the verify path reads them as it reads domain-wide ones.
     harness = _make_harness(tmp_path, is_cookie_host_only=True)
     nonce = harness.pending_logins.mint(is_retry=False)
     token = _mint_handoff(nonce)

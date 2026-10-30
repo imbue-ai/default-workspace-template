@@ -7,9 +7,6 @@ from inline_snapshot import snapshot
 _DIR = Path(__file__).parent
 
 
-# --- Code safety ---
-
-
 def test_prevent_todos() -> None:
     rc.check_todos(_DIR, snapshot(0))
 
@@ -38,9 +35,6 @@ def test_prevent_bare_print() -> None:
     rc.check_bare_print(_DIR, snapshot(0))
 
 
-# --- Exception handling ---
-
-
 def test_prevent_bare_except() -> None:
     rc.check_bare_except(_DIR, snapshot(0))
 
@@ -53,18 +47,12 @@ def test_prevent_builtin_exception_raises() -> None:
     rc.check_builtin_exception_raises(_DIR, snapshot(0))
 
 
-# --- Import style ---
-
-
 def test_prevent_inline_imports() -> None:
     rc.check_inline_imports(_DIR, snapshot(0))
 
 
 def test_prevent_relative_imports() -> None:
     rc.check_relative_imports(_DIR, snapshot(0))
-
-
-# --- Banned libraries and patterns ---
 
 
 def test_prevent_asyncio_import() -> None:
