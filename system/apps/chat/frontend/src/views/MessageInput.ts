@@ -23,6 +23,7 @@ import {
   sendMessage,
   sentUserTurnIds,
 } from "../models/Response";
+import type { SendStatus } from "../models/Response";
 import { cancelHandoff, switchChat } from "../models/Handoffs";
 import { addModelChoiceFailureListener } from "../models/ModelSettings";
 import {
