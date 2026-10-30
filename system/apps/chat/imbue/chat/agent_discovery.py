@@ -521,14 +521,13 @@ class MngrMessenger(FrozenModel):
         host too loaded to say, is tried again with a short backoff (``_is_worth_waiting_out``). A
         message the agent never took and cleared from its input box, or one for an agent that was
         down and would not start, is sent once more (``_is_untaken``, ``_is_unstarted``). And unless
-        ``is_resent_when_unsure`` is off, one nothing shows reached
-        the agent is sent once more (``_is_unsure``), which is ``SendDelivery.RESENT`` when that
-        second send lands; its failure is returned, so such a message is never sent a third time.
-        None of these sends goes out once ``is_taken_back`` says a stop has handed the message back
-        to the user, nor does the send at a discovered location: the failure so far is returned.
-        The id is globally unique, so discovery resolves to exactly the intended agent, never fanning
-        out across same-named agents on other hosts.
-        STOPPED agents are auto-started (`is_start_desired=True`).
+        ``is_resent_when_unsure`` is off, one nothing shows reached the agent is sent once more
+        (``_is_unsure``), which is ``SendDelivery.RESENT`` when that second send lands; its failure
+        is returned, so such a message is never sent a third time. None of these sends goes out once
+        ``is_taken_back`` says a stop has handed the message back to the user, nor does the send at a
+        discovered location: the failure so far is returned. The id is globally unique, so discovery
+        resolves to exactly the intended agent, never fanning out across same-named agents on other
+        hosts. STOPPED agents are auto-started (`is_start_desired=True`).
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
