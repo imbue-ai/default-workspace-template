@@ -109,18 +109,38 @@ def _declared_requirements(pyproject: dict) -> list[str]:
     return [entry for entry in requirements if isinstance(entry, str)]
 
 
-def _member_directories(repo_root: Path) -> dict[str, str]:
-    """Each root workspace member's distribution name, mapped to its repo-relative directory."""
+def _package_directories(repo_root: Path) -> dict[str, str]:
+    """Each package a workspace source could have named, by distribution name, mapped to its
+    repo-relative directory: the root workspace's members, and the user packages, which the
+    old layout's globs made members too (a user app on a user lib, say)."""
+    directories = [
+        directory
+        for pattern in user_packages.built_in_members(repo_root)
+        for directory in sorted(repo_root.glob(pattern))
+    ]
+    directories.extend(
+        repo_root / relative for relative in user_packages.user_packages(repo_root)
+    )
     found: dict[str, str] = {}
-    for pattern in user_packages.built_in_members(repo_root):
-        for directory in sorted(repo_root.glob(pattern)):
-            pyproject_path = directory / "pyproject.toml"
-            if not pyproject_path.is_file():
-                continue
-            name = _table(_read_toml(pyproject_path).get("project")).get("name")
-            if isinstance(name, str):
-                found[_normalize(name)] = directory.relative_to(repo_root).as_posix()
+    for directory in directories:
+        pyproject_path = directory / "pyproject.toml"
+        if not pyproject_path.is_file():
+            continue
+        name = _table(_read_toml(pyproject_path).get("project")).get("name")
+        if isinstance(name, str):
+            found[_normalize(name)] = directory.relative_to(repo_root).as_posix()
     return found
+
+
+def _requirement_extras(requirement: str) -> frozenset[str]:
+    match = re.match(r"\s*[A-Za-z0-9][A-Za-z0-9._-]*\s*\[([^\]]*)\]", requirement)
+    if match is None:
+        return frozenset()
+    return frozenset(
+        _normalize(extra.strip())
+        for extra in match.group(1).split(",")
+        if extra.strip()
+    )
 
 
 def _root_sources(repo_root: Path) -> dict[str, dict]:
@@ -480,7 +500,7 @@ def plan_migration(
     name = _table(pyproject.get("project")).get("name")
     if not isinstance(name, str):
         raise MigrationError(f"{relative}/pyproject.toml names no project")
-    members = _member_directories(repo_root)
+    packages = _package_directories(repo_root)
     root_sources = _root_sources(repo_root)
     own_sources = {
         _normalize(key): value
@@ -498,23 +518,26 @@ def plan_migration(
             own is None and root_sources.get(dependency, {}).get("workspace") is True
         )
         if (own is not None and own.get("workspace") is True) or through_root:
-            if dependency not in members:
+            if dependency not in packages:
                 raise MigrationError(
-                    f"{relative} takes `{dependency}` from the workspace, but no root member is named "
-                    f"`{dependency}`"
+                    f"{relative} takes `{dependency}` from the workspace, but no package under the "
+                    f"workspace is named `{dependency}`"
                 )
             changed[dependency] = {
-                "path": os.path.relpath(repo_root / members[dependency], package_dir),
+                "path": os.path.relpath(repo_root / packages[dependency], package_dir),
                 "editable": True,
             }
     test_files = _test_files(package_dir)
     if test_files:
         dependency = _test_dependency(test_files)
-        declared = {
-            _requirement_name(requirement)
+        # Declared with every extra it needs: a plain `imbue-common` lacks the testing extra.
+        needed = _requirement_extras(dependency)
+        is_declared = any(
+            _requirement_name(requirement) == _requirement_name(dependency)
+            and needed <= _requirement_extras(requirement)
             for requirement in _declared_requirements(pyproject)
-        }
-        if _requirement_name(dependency) not in declared:
+        )
+        if not is_declared:
             package_text = _add_dev_requirement(package_text, dependency)
             notes.append(
                 f"adds `{dependency}` to its dev group, so its tests run from its own venv"

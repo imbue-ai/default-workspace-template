@@ -403,3 +403,50 @@ def test_a_package_with_tests_gets_what_they_run_with_and_its_own_pytest_root(
     pyproject = tomllib.loads(plan.package_text)
     assert pyproject["dependency-groups"]["dev"] == [dependency]
     assert pyproject["tool"]["pytest"]["ini_options"] == {"testpaths": ["."]}
+
+
+def test_a_user_package_on_a_user_lib_gets_a_path_source_to_it(tmp_path: Path) -> None:
+    # The old layout's globs made the user's own lib a member too, so an app reached it
+    # through a workspace source; both are user packages now.
+    root = tmp_path / "workspace"
+    _write(root / "pyproject.toml", "[tool.uv.workspace]\nmembers = []\n")
+    _write(root / "uv.lock", "version = 1\n")
+    _write(
+        root / "system/libs/notes_core/pyproject.toml",
+        '[project]\nname = "notes-core"\n',
+    )
+    _write(
+        root / "system/apps/board/pyproject.toml",
+        '[project]\nname = "board"\ndependencies = ["notes-core"]\n\n'
+        "[tool.uv.sources]\nnotes-core = { workspace = true }\n",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+
+    plan = migration.plan_migration(
+        root, "system/apps/board", None, migration.run_subprocess
+    )
+
+    assert tomllib.loads(plan.package_text)["tool"]["uv"]["sources"] == {
+        "notes-core": {"path": "../../libs/notes_core", "editable": True}
+    }
+
+
+def test_ratchet_tests_get_the_testing_extra_though_the_package_declares_imbue_common(
+    workspace: Path,
+) -> None:
+    pyproject = workspace / "system/apps/widget/pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace('["applib"]', '["applib", "imbue-common"]')
+    )
+    _write(
+        workspace / "system/apps/widget/test_widget_ratchets.py",
+        "from imbue.imbue_common.ratchet_testing import standard_ratchet_checks as rc\n",
+    )
+
+    plan = migration.plan_migration(
+        workspace, "system/apps/widget", None, migration.run_subprocess
+    )
+
+    assert tomllib.loads(plan.package_text)["dependency-groups"]["dev"] == [
+        "imbue-common[testing]"
+    ]
