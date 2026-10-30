@@ -227,6 +227,12 @@ export function isLandedSweepCompactCommand(events: readonly TranscriptEvent[], 
   return shownCompactCommandAt(events, index) !== null && compactionAfter(events, index)?.compaction_cause === "idle";
 }
 
+/** True when the message at `index` is a `/compact` nothing has followed yet, so it is not known
+ *  whether the idle sweep sent it. */
+export function isUnresolvedCompactCommand(events: readonly TranscriptEvent[], index: number): boolean {
+  return shownCompactCommandAt(events, index) !== null && compactionAfter(events, index) === undefined;
+}
+
 /** The event ids of the idle sweep's `/compact`s (see `sweepCompactCommands`). */
 export function sweepCompactCommandIds(commands: SweepCompactCommands): Set<string> {
   const ids = new Set([...commands.byCompactionId.values()].map((command) => command.event_id));

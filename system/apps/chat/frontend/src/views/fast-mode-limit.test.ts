@@ -115,14 +115,17 @@ describe("countUserTurns", () => {
     expect(countUserTurns(events)).toBe(2);
   });
 
-  it("counts a typed /compact but not the one the idle sweep sent", () => {
+  it("counts a typed /compact but not the one the idle sweep sent, nor one nothing has followed yet", () => {
+    const compact = userMsg("/compact", "compact", { non_turn_tail: true });
     const compactThen = (cause: "idle" | "manual"): TranscriptEvent[] => [
       ...conversation(1),
-      userMsg("/compact", `compact-${cause}`, { non_turn_tail: true }),
+      compact,
       userMsg("Context was compacted", `status-${cause}`, { display: "status", compaction_cause: cause }),
     ];
     expect(countUserTurns(compactThen("idle"))).toBe(1);
     expect(countUserTurns(compactThen("manual"))).toBe(2);
+    expect(countUserTurns([...conversation(1), compact])).toBe(1);
+    expect(countUserTurns([...conversation(1), compact, userMsg("never mind", "after")])).toBe(3);
   });
 });
 

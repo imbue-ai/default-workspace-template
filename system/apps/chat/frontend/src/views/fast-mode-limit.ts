@@ -18,9 +18,9 @@
  * turn the user took: the registry marks chips and notices as no turn, and verdicts are excluded on
  * top of that (the app talking to itself). So are the turns of a seeded chat's seed segment: those
  * were written before any agent ran, so they bought no fast turns. Nor is the `/compact` the idle
- * sweep sends a Claude agent once its compaction has landed: the user never sent it, and it shows on
- * its compaction's chip. While that compaction runs, the count cannot tell it from a typed one; the
- * automatic switch reads the count only once the agent is idle again.
+ * sweep sends a Claude agent: the user never sent it, and it shows on its compaction's chip. Until
+ * something follows a `/compact`, the count cannot tell the sweep's from a typed one, so it leaves
+ * it out; the agent can read idle before the compaction's event reaches the page.
  */
 
 import m from "mithril";
@@ -40,6 +40,7 @@ import { SEED_SOURCE } from "../models/Response";
 import {
   isLandedSweepCompactCommand,
   isTurnUserMessage,
+  isUnresolvedCompactCommand,
   resolutionOf,
   secretResolutionOf,
 } from "./message-classification";
@@ -55,7 +56,11 @@ export function countUserTurns(events: readonly TranscriptEvent[]): number {
     if (event.type !== "user_message") {
       continue;
     }
-    if (event.source === SEED_SOURCE || isLandedSweepCompactCommand(events, i)) {
+    if (
+      event.source === SEED_SOURCE ||
+      isLandedSweepCompactCommand(events, i) ||
+      isUnresolvedCompactCommand(events, i)
+    ) {
       continue;
     }
     if (!isTurnUserMessage(event)) {
