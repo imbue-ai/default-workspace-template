@@ -5839,13 +5839,8 @@ def _typed_turn(text: str, display: str | None = None, at: str | None = None) ->
     }
 
 
-def _agent_reply(is_auth_error: bool = False, at: str | None = None) -> dict[str, Any]:
-    return {
-        "type": "assistant_message",
-        "content": "Login expired" if is_auth_error else "Hi",
-        "is_auth_error": is_auth_error,
-        **({"timestamp": at} if at is not None else {}),
-    }
+def _agent_reply(at: str) -> dict[str, Any]:
+    return {"type": "assistant_message", "content": "Hi", "timestamp": at}
 
 
 class _FixedTranscriptReader(ListTranscriptReader):
@@ -6015,7 +6010,7 @@ def _recorded_at(epoch_seconds: float) -> str:
             [_typed_turn("first\nsecond", at=_recorded_at(250.0))], [], id="recorded-after-both-in-other-words"
         ),
         pytest.param([_typed_turn("first")], [], id="a-message-it-cannot-place"),
-        pytest.param([{**_agent_reply(), "timestamp": _recorded_at(250.0)}], ["first", "second"], id="only-a-reply"),
+        pytest.param([_agent_reply(at=_recorded_at(250.0))], ["first", "second"], id="only-a-reply"),
     ],
 )
 def test_the_sends_a_transcript_does_not_hold_are_those_after_its_last_user_message(
