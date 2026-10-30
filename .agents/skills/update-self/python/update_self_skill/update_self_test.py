@@ -6723,6 +6723,31 @@ def test_an_app_only_rollback_resyncs_the_venv_only_when_it_has_none_to_switch_b
     assert not runner.ran("uv", "tool", "install")
 
 
+def test_a_backend_manifest_rollback_resyncs_the_venv_it_cannot_switch_back(
+    apply_repo: Path,
+) -> None:
+    # The mngr tool's copy comes back, so nothing reinstalls it, but there is no venv to
+    # switch back to: only a sync from the restored tree undoes the forward one.
+    pinned_env = tool_env.tools_dir(tool_env.tool_home()) / update_layout.MNGR_TOOL_NAME
+    pinned_env.mkdir(parents=True)
+    runner = _apply_runner(_BACKEND_MANIFEST_DIFF, apply_repo)
+    spawner = _FakeSpawner(output="ImportError: boom", exited=True)
+
+    code = _apply(
+        runner,
+        _FakeHttp(lambda url: 200 if _is_live(url) else None),
+        spawner,
+        apply_repo,
+    )
+
+    assert code == 2
+    # The forward calls are wrapped expendable; recovery's are not.
+    assert [c for c in runner.raw_calls if c[:2] == ["uv", "sync"]] == [
+        ["uv", "sync", "--all-packages", "--frozen"]
+    ]
+    assert not [c for c in runner.raw_calls if c[:3] == ["uv", "tool", "install"]]
+
+
 def test_a_rollback_restores_the_tool_env_the_last_resort_reinstalled(
     apply_repo: Path,
 ) -> None:

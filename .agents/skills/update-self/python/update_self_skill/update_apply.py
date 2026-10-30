@@ -810,7 +810,7 @@ def _recover_running_state(
                 destinations,
                 is_mngr_source_required=False,
             )
-        elif plan.app_pyproject and not is_venv_restored:
+        elif not is_venv_restored:
             sync_workspace_venv(repo_root, runner, keep_protected)
         if live_service_restarted:
             run_checked(
