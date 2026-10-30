@@ -196,29 +196,34 @@ def test_a_row_that_cannot_be_measured_is_reported_missing_and_the_rest_never_go
     assert rows[-1]["bytes"] == 0 and rows[-1]["items"] == []
 
 
-# The home tree's du fails, or its listing does (a home that is not a directory cannot be listed).
-@pytest.mark.parametrize("listing_fails", [False, True])
-def test_a_home_tree_that_cannot_be_measured_is_not_listed_as_space_that_cannot_be_freed(
-    tmp_path: Path, listing_fails: bool
+# The home tree's du fails, or its listing does (a home that is not a directory cannot be listed), or
+# the workspace's du does.
+@pytest.mark.parametrize(
+    ("failing", "missing_row"),
+    [("home_du", "home"), ("home_listing", "home"), ("workspace_du", "workspace")],
+)
+def test_a_row_that_cannot_be_measured_is_not_listed_as_space_that_cannot_be_freed(
+    tmp_path: Path, failing: str, missing_row: str
 ) -> None:
-    home = tmp_path / "home"
-    if listing_fails:
+    home, workspace = tmp_path / "home", tmp_path / "workspace"
+    if failing == "home_listing":
         home.write_text("")
     else:
         home.mkdir()
         (home / ".mngr").mkdir()
+    failing_paths = {"home_du": [home / ".mngr"], "workspace_du": [workspace]}.get(
+        failing
+    )
 
     def measure(paths: list[Path], excludes: list[Path]) -> disk.Measured | None:
-        if paths == [home / ".mngr"]:
+        if paths == failing_paths:
             return None
         return disk.Measured(10 * _MIB, {})
 
-    rows, missing = disk.scan(
-        100 * _MIB, tmp_path / "workspace", home, measure, tmp_path / "root"
-    )
+    rows, missing = disk.scan(100 * _MIB, workspace, home, measure, tmp_path / "root")
 
-    assert missing == ["home"]
-    # Without the home folder's size the rest of the disk is not called something that cannot be freed.
+    assert missing == [missing_row]
+    # The missing row's bytes are in the rest, so the rest is not called something that cannot be freed.
     assert rows[-1]["items"] == [
         {"name": "System software", "hint": "the workspace's tools", "bytes": 10 * _MIB}
     ]

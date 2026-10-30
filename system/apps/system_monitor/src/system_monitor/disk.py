@@ -155,7 +155,7 @@ def _measure_home_folder(
 
 
 def _rest_of_disk_items(
-    other: int, system: Measured | None, is_home_measured: bool
+    other: int, system: Measured | None, is_every_row_measured: bool
 ) -> list[dict[str, Any]]:
     """What the Everything else row's bytes break down into: the system software, then whatever else is
     on the disk."""
@@ -172,8 +172,8 @@ def _rest_of_disk_items(
                 "bytes": system.total,
             }
         )
-    # Without the home folder's row the rest would hold it, which can be freed from here.
-    if is_home_measured and other - system.total:
+    # A row that could not be measured leaves its bytes in the rest, and those can be freed from here.
+    if is_every_row_measured and other - system.total:
         items.append(
             {
                 "name": "Other files on the machine's disk",
@@ -319,7 +319,7 @@ def scan(
             "label": "Everything else",
             "hint": "the workspace's system software and the rest of the machine's disk",
             "bytes": other,
-            "items": _rest_of_disk_items(other, system, home_folder is not None),
+            "items": _rest_of_disk_items(other, system, not missing),
         }
     )
     return rows, missing
