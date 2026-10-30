@@ -3618,7 +3618,7 @@ class AgentManager:
         return tuple(withdrawable.values())
 
     def send_message_to_agent(
-        self, agent_id: AgentId, message: str, is_resent_when_unconfirmed: bool = True
+        self, agent_id: AgentId, message: str, is_resent_when_unsure: bool = True
     ) -> SendDelivery | SendFailure:
         """Send a message to the agent with ``agent_id``, using the live location cache.
 
@@ -3626,12 +3626,12 @@ class AgentManager:
         event-fed location for the id and hands it to the `MngrMessenger`, so the
         message skips a fresh mngr discovery whenever the location is already known.
         Returns how the message was delivered (``SendDelivery.RESENT`` for one sent again because
-        mngr could not confirm it, unless ``is_resent_when_unconfirmed`` is off), or the failure --
+        mngr could not confirm it, unless ``is_resent_when_unsure`` is off), or the failure --
         the harness's own words plus mngr's classification of them, which is what lets the chat
         decide what to offer.
         """
         return self._messenger.send_to_agent(
-            agent_id, message, self.get_agent_matches_by_id(str(agent_id)), is_resent_when_unconfirmed
+            agent_id, message, self.get_agent_matches_by_id(str(agent_id)), is_resent_when_unsure
         )
 
     def press_key_chord_on_agent(self, agent_id: AgentId, key: str) -> bool:

@@ -817,7 +817,7 @@ class RecordingMngrMessenger(MngrMessenger):
         agent_id: AgentId,
         message: str,
         known_locations: Sequence[AgentMatch],
-        is_resent_when_unconfirmed: bool = True,
+        is_resent_when_unsure: bool = True,
     ) -> SendDelivery | SendFailure:
         self.sent.append((str(agent_id), message))
         return self.delivery if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
@@ -845,10 +845,10 @@ class SummaryWritingMngrMessenger(RecordingMngrMessenger):
         agent_id: AgentId,
         message: str,
         known_locations: Sequence[AgentMatch],
-        is_resent_when_unconfirmed: bool = True,
+        is_resent_when_unsure: bool = True,
     ) -> SendDelivery | SendFailure:
         write_summary_for_request(message)
-        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unconfirmed)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure)
 
 
 def scripted_send_mngr_messenger(
@@ -895,9 +895,9 @@ class VanishedAgentMngrMessenger(RecordingMngrMessenger):
         agent_id: AgentId,
         message: str,
         known_locations: Sequence[AgentMatch],
-        is_resent_when_unconfirmed: bool = True,
+        is_resent_when_unsure: bool = True,
     ) -> SendDelivery | SendFailure:
-        super().send_to_agent(agent_id, message, known_locations, is_resent_when_unconfirmed)
+        super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure)
         raise AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}")
 
 
