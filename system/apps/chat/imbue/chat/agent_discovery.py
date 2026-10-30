@@ -245,6 +245,11 @@ CompactFn = Callable[[AgentId, str | None, MngrContext], None]
 _WAIT_OUT_DELAYS_SECONDS: Final[tuple[float, ...]] = (1.0, 2.0, 4.0)
 
 
+def _is_never_taken_back() -> bool:
+    """For a send no stop can take back."""
+    return False
+
+
 def _discover_locations(agent_id: AgentId, mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
     """Resolve an agent id to its location via a full mngr discovery.
 
@@ -278,8 +283,8 @@ class SendFailedError(Exception):
     the returned reason instead, so this changes nothing for them.
 
     ``kind`` is mngr's classification of the failure, which is what lets the chat decide what to
-    offer: trying again can clear a blocked input and cannot conjure back a pane that is gone.
-    Unknown when mngr did not classify it, which the chat treats as it always has.
+    offer: trying again can clear a blocked input, where only a restart is left for an agent that would not start.
+    Unknown when mngr did not classify it.
     """
 
     def __init__(self, detail: str, kind: str = "unknown") -> None:
@@ -419,12 +424,12 @@ class _SendAttempt(FrozenModel):
     """What one send through ``MngrMessenger`` came to, its repeats included."""
 
     result: MessageResult
-    is_resent_when_unsure: bool
+    is_resent: bool
 
 
 def _delivery_of(attempt: _SendAttempt) -> SendDelivery:
     """How a send that reached its agent got there."""
-    return SendDelivery.RESENT if attempt.is_resent_when_unsure else SendDelivery.DELIVERED
+    return SendDelivery.RESENT if attempt.is_resent else SendDelivery.DELIVERED
 
 
 def _press_to(matches: Sequence[AgentMatch], key: str, mngr_ctx: MngrContext) -> MessageResult:
@@ -498,6 +503,7 @@ class MngrMessenger(FrozenModel):
         message: str,
         known_locations: Sequence[AgentMatch],
         is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = _is_never_taken_back,
     ) -> SendDelivery | SendFailure:
         """Send to the agent with ``agent_id`` at ``known_locations``, else discovery.
 
@@ -515,23 +521,26 @@ class MngrMessenger(FrozenModel):
         host too loaded to say, is tried again with a short backoff (``_is_worth_waiting_out``). A
         message the agent never took and cleared from its input box, or one for an agent that was
         down and would not start, is sent once more (``_is_untaken``, ``_is_unstarted``). And unless
-        ``is_resent_when_unsure`` is off, one nothing shows reached
-        the agent is sent once more (``_is_unsure``), which is ``SendDelivery.RESENT`` when that
-        second send lands; its failure is returned, so such a message is never sent a third time.
-        The id is globally unique, so discovery resolves to exactly the intended agent, never fanning
-        out across same-named agents on other hosts.
-        STOPPED agents are auto-started (`is_start_desired=True`).
+        ``is_resent_when_unsure`` is off, one nothing shows reached the agent is sent once more
+        (``_is_unsure``), which is ``SendDelivery.RESENT`` when that second send lands; its failure
+        is returned, so such a message is never sent a third time. None of these sends goes out once
+        ``is_taken_back`` says a stop has handed the message back to the user, nor does the send at a
+        discovered location: the failure so far is returned. The id is globally unique, so discovery
+        resolves to exactly the intended agent, never fanning out across same-named agents on other
+        hosts. STOPPED agents are auto-started (`is_start_desired=True`).
         """
         mngr_ctx, cg = _get_mngr_context()
         try:
             if known_locations:
-                attempt = self._send_with_repeats(known_locations, message, mngr_ctx, is_resent_when_unsure)
+                attempt = self._send_with_repeats(
+                    known_locations, message, mngr_ctx, is_resent_when_unsure, is_taken_back
+                )
                 if attempt.result.successful_agents:
                     return _delivery_of(attempt)
-                if attempt.is_resent_when_unsure or not _is_location_miss(attempt.result):
+                if attempt.is_resent or not _is_location_miss(attempt.result) or is_taken_back():
                     return _first_failure(attempt.result)
             matches = self.discover(agent_id, mngr_ctx)
-            attempt = self._send_with_repeats(matches, message, mngr_ctx, is_resent_when_unsure)
+            attempt = self._send_with_repeats(matches, message, mngr_ctx, is_resent_when_unsure, is_taken_back)
             if attempt.result.successful_agents:
                 return _delivery_of(attempt)
             return _first_failure(attempt.result)
@@ -544,21 +553,25 @@ class MngrMessenger(FrozenModel):
         message: str,
         mngr_ctx: MngrContext,
         is_resent_when_unsure: bool,
+        is_taken_back: Callable[[], bool],
     ) -> _SendAttempt:
         """Send to ``matches``, again while it is worth waiting (``_is_worth_waiting_out``), once more when the agent
         never took the message or would not start (``_is_untaken``, ``_is_unstarted``), and once more when nothing
-        shows it arrived (``_is_unsure``, unless ``is_resent_when_unsure`` is off)."""
+        shows it arrived (``_is_unsure``, unless ``is_resent_when_unsure`` is off). No repeat goes out once
+        ``is_taken_back`` says so."""
         result = self.send(matches, message, mngr_ctx)
         for delay_seconds in _WAIT_OUT_DELAYS_SECONDS:
             if not _is_worth_waiting_out(result):
                 break
             self.pause(delay_seconds)
+            if is_taken_back():
+                return _SendAttempt(result=result, is_resent=False)
             result = self.send(matches, message, mngr_ctx)
-        if _is_untaken(result) or _is_unstarted(result):
+        if (_is_untaken(result) or _is_unstarted(result)) and not is_taken_back():
             result = self.send(matches, message, mngr_ctx)
-        if is_resent_when_unsure and _is_unsure(result):
-            return _SendAttempt(result=self.send(matches, message, mngr_ctx), is_resent_when_unsure=True)
-        return _SendAttempt(result=result, is_resent_when_unsure=False)
+        if is_resent_when_unsure and _is_unsure(result) and not is_taken_back():
+            return _SendAttempt(result=self.send(matches, message, mngr_ctx), is_resent=True)
+        return _SendAttempt(result=result, is_resent=False)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         """Press ``key`` into the agent with ``agent_id`` at ``known_locations``, else discovery.

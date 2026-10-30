@@ -113,7 +113,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
 }
 
 /** What the "?" beside "Sent again" says. */
-export const RESENT_NOTE_HELP =
+const RESENT_NOTE_HELP =
   "Imbue Studio couldn't confirm the agent received this message, so it sent it again. " +
   "If the first copy arrived too, the agent may see it twice.";
 

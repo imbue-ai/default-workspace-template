@@ -81,8 +81,8 @@ export function isUnansweredRequest(error: unknown): boolean {
  * a kind to what the user is offered lives here, in the workspace.
  *
  * Anything unrecognised (an older backend, a kind added later) reads as "unknown", for which
- * callers offer nothing kind-specific. mngr's "agent_not_found" is one of these on purpose:
- * nothing was typed, so the unknown kind's plain Retry is already the right offer.
+ * callers offer nothing kind-specific. mngr's "agent_not_found", "not_submitted" and "state_unknown"
+ * are among these on purpose: nothing was delivered or typed that a plain Retry could double.
  */
 export type SendFailureKind =
   "input_blocked" | "not_ready" | "agent_unreachable" | "submission_unconfirmed" | "unknown";

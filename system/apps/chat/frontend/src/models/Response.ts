@@ -1129,7 +1129,12 @@ export function announceMessageSent(chatId: string): void {
 export type SendStatus = "ok" | "resent" | "held" | "compaction_requested" | "withdrawn";
 
 /** Send a message to a chat; resolves with how the route took it, or null when there was nothing to send. */
-export async function sendMessage(chatId: string, message: string, messageId?: string): Promise<SendStatus | null> {
+export async function sendMessage(
+  chatId: string,
+  message: string,
+  messageId?: string,
+  isSingleSend = false,
+): Promise<SendStatus | null> {
   const trimmed = message.trim();
   const id = messageId ?? mintMessageId();
   if (!trimmed) {
@@ -1152,6 +1157,7 @@ export async function sendMessage(chatId: string, message: string, messageId?: s
         body: {
           message: trimmed,
           message_id: id,
+          is_single_send: isSingleSend,
           client_id: getClientId(),
           desktop_id: getActiveDesktopId(),
           is_repeat: attempt > 0,
