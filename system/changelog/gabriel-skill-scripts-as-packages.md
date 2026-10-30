@@ -14,8 +14,6 @@ This release turns the workspace's scripts into packages. An existing workspace'
 
 - The CI changelog job runs the gate (`system/scripts/workspace_scripts/check_changelog_entries.py`) from a `uv sync --frozen --package workspace-scripts` venv.
 
-- CI checks, in the template's own repository only, that every skill carries `metadata.author: imbue` (`.agents/shared/scripts/agents_shared/check_built_in_skills.py`).
-
 - New root checks:
   - `system/test_entry_point_import_cost.py` fails an entry point -- an entry file, or a package module with its own `if __name__ == "__main__":` block -- that loads pydantic, loguru, click, tenacity, httpx or asyncio at import, with no exceptions. A heavy module that another one it loads imports counts toward that one, so it names pydantic rather than the asyncio pydantic loads on Python 3.12.
   - `system/test_external_entry_paths.py` runs every path that Imbue Studio, CI and older update-self releases call by path. The bare paths run with no site-packages; the one venv-tier path, launch-task's `create_worker.py`, runs from the root venv.
