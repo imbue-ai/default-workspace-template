@@ -2431,7 +2431,9 @@ def test_deleting_the_only_chat_while_it_awaits_its_first_send_opens_a_new_one(
     new_row = page.locator(f'.chat-rail-row:not([data-chat-id="{deleted_chat_id}"])')
     expect(new_row).to_have_count(1, timeout=15000)
     expect(rows).to_have_count(1)
-    assert _selection_of(page.url) == new_row.get_attribute("data-chat-id")
+    new_chat_id = new_row.get_attribute("data-chat-id")
+    assert new_chat_id is not None
+    expect(page).to_have_url(f"{e2e_server.chat_url}{chat_root_path(ChatId(new_chat_id))}")
     expect(page.locator(f'iframe.chat-root-frame[data-chat-id="{deleted_chat_id}"]')).to_have_count(0)
 
 
