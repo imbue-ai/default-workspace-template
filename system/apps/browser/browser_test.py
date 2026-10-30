@@ -6,7 +6,7 @@ import signal
 import subprocess
 import time
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -1862,14 +1862,25 @@ def test_message_agent_goes_through_the_chat_messenger_by_id_as_a_browser_fleet_
     assert (cwd / "system" / "scripts" / "message_chat.py").is_file()
 
 
-def test_message_agent_logs_a_send_that_was_not_delivered(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The messenger's exit code is the failure signal, so anything but delivered leaves a warning
-    naming it and the agent; the wake itself stays best-effort and raises nothing."""
+def _blocked_send(chat_id: str, text: str, *, cwd: Path) -> int:
+    return message_chat.EXIT_DELIVERED_BUT_BLOCKED
 
-    def blocked_send(chat_id: str, text: str, *, cwd: Path) -> int:
-        return message_chat.EXIT_DELIVERED_BUT_BLOCKED
 
-    monkeypatch.setattr(message_chat, "send", blocked_send)
+def _send_on_a_full_disk(chat_id: str, text: str, *, cwd: Path) -> int:
+    raise OSError(28, "No space left on device")
+
+
+@pytest.mark.parametrize(
+    ("fake_send", "reason"),
+    [(_blocked_send, "answered 7"), (_send_on_a_full_disk, "No space left on device")],
+    ids=["not-delivered", "send-raised"],
+)
+def test_message_agent_logs_a_send_that_was_not_delivered(
+    monkeypatch: pytest.MonkeyPatch, fake_send: Callable[..., int], reason: str
+) -> None:
+    """A send that ends in anything but delivered, or that cannot run at all, leaves a warning
+    naming why and the agent; the wake itself stays best-effort and raises nothing."""
+    monkeypatch.setattr(message_chat, "send", fake_send)
     warnings: list[str] = []
     sink_id = logger.add(lambda message: warnings.append(str(message)), level="WARNING")
     try:
@@ -1878,7 +1889,7 @@ def test_message_agent_logs_a_send_that_was_not_delivered(monkeypatch: pytest.Mo
         logger.remove(sink_id)
 
     [warning] = warnings
-    assert "answered 7" in warning
+    assert reason in warning
     assert "riley" in warning
 
 

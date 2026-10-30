@@ -1399,9 +1399,15 @@ class LiveBrowser(MutableModel):
         a bare user bubble. This is display-only -- the agent still receives the message and
         resumes its turn exactly as before. The chat is addressed by its chat id, never by an
         agent's name."""
-        returncode = await asyncio.to_thread(
-            message_chat.send, agent_id, message_chat.wrap_browser_fleet_nudge(text), cwd=_repo_root()
-        )
+        try:
+            returncode = await asyncio.to_thread(
+                message_chat.send, agent_id, message_chat.wrap_browser_fleet_nudge(text), cwd=_repo_root()
+            )
+        except OSError as e:
+            logger.warning(
+                "could not message agent {} for browser {} ({})", agent_name or agent_id, self.browser_id, e
+            )
+            return
         if returncode != message_chat.EXIT_DELIVERED:
             logger.warning(
                 "the chat messenger answered {} messaging agent {} for browser {}; the message may not have landed",
