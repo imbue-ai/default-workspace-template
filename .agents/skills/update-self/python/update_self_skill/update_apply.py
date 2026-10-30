@@ -86,6 +86,7 @@ from update_self_skill.update_environment import (
     restore_snapshots,
     run_provisioner,
     switch_venv,
+    sync_changed_user_packages,
     sync_workspace_venv,
     take_snapshots,
     undo_venv_swap,
@@ -1221,6 +1222,13 @@ def apply_update(
                 ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
                 environment=fresh_venv,
             )
+        sync_changed_user_packages(
+            repo_root,
+            [path for _, path in name_status],
+            runner,
+            expend,
+            ENVIRONMENT_REFRESH_TIMEOUT_SECONDS,
+        )
         for stale in remove_shadowing_mngr_installs(runner, sweep_homes):
             sys.stderr.write(
                 f"refresh: removed {stale}, a stale mngr install that shadowed the refreshed one\n"

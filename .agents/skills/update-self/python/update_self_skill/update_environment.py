@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Collection, Mapping, NamedTuple, Sequence
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from update_self_skill import tool_env, venv_links
+from update_self_skill import tool_env, user_packages, venv_links
 from update_self_skill.update_apply_contract import (
     SnapshotRecord,
     VenvSwap,
@@ -847,6 +847,53 @@ def _venvs_root(repo_root: Path, runner: Runner) -> Path:
     return venv_links.venvs_root(
         venv_links.uv_cache_dir(_link_runner(runner), repo_root)
     )
+
+
+def sync_changed_user_packages(
+    repo_root: Path,
+    paths: Sequence[str],
+    runner: Runner,
+    expend: ExpendWrapper,
+    timeout: float | None = None,
+) -> list[str]:
+    """Sync, in place, every user package whose ``pyproject.toml`` or ``uv.lock`` the merge
+    changed (a migration or a relock); returns the ones whose sync failed.
+
+    A user package is a standalone project, so its venv is its own: a failure is reported
+    and stops only that package, never the apply. Its program's own sync at start covers
+    the rest, a rollback's restored tree included.
+    """
+    changed = sorted(
+        {
+            package
+            for package in user_packages.user_packages(repo_root)
+            for path in paths
+            if path in (f"{package}/pyproject.toml", f"{package}/uv.lock")
+        }
+    )
+    if not changed:
+        return []
+    root = _venvs_root(repo_root, runner)
+    failed: list[str] = []
+    for package in changed:
+        venv_links.ensure_link(
+            repo_root / package, root, venv_links.PROJECT_SYNC, _link_runner(runner)
+        )
+        try:
+            run_checked(
+                runner,
+                expend(["uv", "sync", "--locked", "--project", package]),
+                repo_root,
+                f"uv sync --locked --project {package}",
+                timeout=timeout,
+            )
+        except ApplyFailed as exc:
+            failed.append(package)
+            sys.stderr.write(
+                f"warning: {exc}; its program fails to start until it is fixed, and "
+                "nothing else is affected.\n"
+            )
+    return failed
 
 
 # Where a real ``.venv`` directory waits while the link that replaces it is proved.
