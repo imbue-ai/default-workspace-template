@@ -36,6 +36,11 @@ const STATUS_BY_PROVISIONAL_PHASE: Readonly<Record<ProvisionalChatPhase, string>
 
 const PROVISIONAL_TITLE = "New chat";
 
+/** The name a chat that is not an agent yet is shown by. */
+export function provisionalTitle(chat: ProvisionalChat): string {
+  return chat.name === "" ? PROVISIONAL_TITLE : chat.name;
+}
+
 export function rowsFromSnapshots(
   chats: readonly ChatSnapshot[],
   provisional: readonly ProvisionalChat[],
@@ -56,7 +61,7 @@ export function rowsFromSnapshots(
     if (known.has(chat.chat_id)) continue;
     rows.push({
       chatId: chat.chat_id,
-      title: chat.name === "" ? PROVISIONAL_TITLE : chat.name,
+      title: provisionalTitle(chat),
       status: STATUS_BY_PROVISIONAL_PHASE[chat.phase],
       labels: {},
       agentIds: [],

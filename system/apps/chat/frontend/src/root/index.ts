@@ -68,7 +68,7 @@ import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
 import { hasPendingDelete, settlePendingDeletes, withoutPendingDeletes } from "./pendingDeletes";
 import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
-import { groupedRows, rowsFromSnapshots } from "./rows";
+import { groupedRows, provisionalTitle, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
 import {
   intakeTokenFromSearch,
@@ -108,7 +108,8 @@ let isDrawerOpen = false;
 
 function selectedTitle(): string {
   if (selectedChatId === null) return "";
-  const title = getChatById(selectedChatId)?.title ?? getProvisionalChat(selectedChatId)?.name ?? "";
+  const provisional = getProvisionalChat(selectedChatId);
+  const title = getChatById(selectedChatId)?.title ?? (provisional === undefined ? "" : provisionalTitle(provisional));
   return titleWithPendingRename(selectedChatId, title);
 }
 
