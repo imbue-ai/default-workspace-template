@@ -129,6 +129,58 @@ def _items(
     return items[:limit] if limit is not None else items
 
 
+def _measure_home_rest(
+    home: Path, workspace: Path, home_caches: list[Path], measure: Measure
+) -> Measured | None:
+    """The home tree beside the workspace and its caches; None when it cannot be listed or measured."""
+    # Measured as its top-level entries because the home directory itself can be a link (imbue_cloud's
+    # /home/user points into the volume), which du would count as nothing.
+    try:
+        home_entries = sorted(
+            path
+            for path in home.iterdir()
+            if path != workspace and path not in home_caches
+        )
+    except OSError:
+        return None
+    return measure(home_entries, home_caches)
+
+
+def _rest_of_disk_items(
+    other: int, system: Measured | None, home_rest: Measured | None
+) -> list[dict[str, Any]]:
+    """What the Everything else row's ``other`` bytes break down into: the system software, the home tree
+    beside the workspace, and whatever else is on the disk."""
+    if system is None or not system.total:
+        return []
+    software = min(other, system.total)
+    items: list[dict[str, Any]] = [
+        {"name": "System software", "hint": "the workspace's tools", "bytes": software}
+    ]
+    # Without the home tree's size the rest of the disk cannot be told apart from it, so neither
+    # is listed rather than the home tree being called something that cannot be freed.
+    if home_rest is None:
+        return items
+    home_data = min(other - software, home_rest.total)
+    if home_data:
+        items.append(
+            {
+                "name": "Chats, logs and settings",
+                "hint": "kept beside the workspace's files",
+                "bytes": home_data,
+            }
+        )
+    if other - software - home_data:
+        items.append(
+            {
+                "name": "Other files on the machine's disk",
+                "hint": "not part of this workspace, so it cannot be freed from here",
+                "bytes": other - software - home_data,
+            }
+        )
+    return items
+
+
 def scan(
     disk_used: int,
     workspace: Path = WORKSPACE_DIR,
@@ -250,57 +302,15 @@ def scan(
     # without the home tree and the off-volume cache), the home tree beside the workspace and its
     # caches (the chats' records and logs, worktrees, settings), and whatever else is on the disk.
     other = max(0, disk_used - counted)
-    # Measured as its top-level entries because the home directory itself can be a link (imbue_cloud's
-    # /home/user points into the volume), which du would count as nothing.
-    home_rest: Measured | None
-    try:
-        home_entries = sorted(
-            path
-            for path in home.iterdir()
-            if path != workspace and path not in home_caches
-        )
-    except OSError:
-        home_rest = None
-    else:
-        home_rest = measure(home_entries, home_caches)
+    home_rest = _measure_home_rest(home, workspace, home_caches, measure)
     system = measure([root], [home, off_volume_cache, *SYSTEM_EXCLUDES])
-    other_items: list[dict[str, Any]] = []
-    if system is not None and system.total:
-        software = min(other, system.total)
-        other_items.append(
-            {
-                "name": "System software",
-                "hint": "the workspace's tools",
-                "bytes": software,
-            }
-        )
-        # Without the home tree's size the rest of the disk cannot be told apart from it, so neither
-        # is listed rather than the home tree being called something that cannot be freed.
-        if home_rest is not None:
-            home_data = min(other - software, home_rest.total)
-            if home_data:
-                other_items.append(
-                    {
-                        "name": "Chats, logs and settings",
-                        "hint": "kept beside the workspace's files",
-                        "bytes": home_data,
-                    }
-                )
-            if other - software - home_data:
-                other_items.append(
-                    {
-                        "name": "Other files on the machine's disk",
-                        "hint": "not part of this workspace, so it cannot be freed from here",
-                        "bytes": other - software - home_data,
-                    }
-                )
     rows.append(
         {
             "id": "other",
             "label": "Everything else",
             "hint": "the workspace's system software, chats, logs and settings, and the rest of the machine's disk",
             "bytes": other,
-            "items": other_items,
+            "items": _rest_of_disk_items(other, system, home_rest),
         }
     )
     return rows, missing
