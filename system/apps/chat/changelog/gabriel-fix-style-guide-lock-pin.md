@@ -1,1 +1,1 @@
-Two compaction browser tests are marked flaky so CI retries them while their causes are fixed: the one-time Auto-compact notice (MIND-636, a transcript-watcher priming race) and the Compacting strip clearing when its marker goes (MIND-646).
+The browser test of the Compacting strip clearing when its marker goes is marked flaky, so CI retries it while its cause is found (MIND-646).
