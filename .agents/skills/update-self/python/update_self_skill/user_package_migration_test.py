@@ -555,8 +555,17 @@ def test_a_user_package_on_a_user_lib_gets_a_path_source_to_it(tmp_path: Path) -
     }
 
 
+@pytest.mark.parametrize(
+    "lib_sources",
+    [
+        "\n[tool.uv.sources]\napp-schema = { workspace = true }\n",
+        # The older scaffold's shape: no sources of its own, the root's gave it app-schema.
+        "",
+    ],
+    ids=["own-workspace-source", "root-sources-only"],
+)
 def test_a_package_on_a_user_lib_not_converted_yet_is_refused_before_anything_is_written(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], lib_sources: str
 ) -> None:
     # uv cannot lock a path dependency that still takes code from the workspace, so the
     # lib has to go first; refusing in the plan keeps the app from being half-migrated.
@@ -565,8 +574,7 @@ def test_a_package_on_a_user_lib_not_converted_yet_is_refused_before_anything_is
     _write(root / "uv.lock", "version = 1\n")
     _write(
         root / "system/libs/notes_core/pyproject.toml",
-        '[project]\nname = "notes-core"\ndependencies = ["app-schema"]\n\n'
-        "[tool.uv.sources]\napp-schema = { workspace = true }\n",
+        '[project]\nname = "notes-core"\ndependencies = ["app-schema"]\n' + lib_sources,
     )
     board = _write(
         root / "system/apps/board/pyproject.toml",

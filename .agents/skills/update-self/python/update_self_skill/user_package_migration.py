@@ -647,10 +647,11 @@ def plan_migration(
 
 
 def _refuse_unconverted_user_dependencies(repo_root: Path, relative: str) -> None:
-    """Refuse, before anything is written, a package that depends on a user package still
-    taking code from the workspace: uv cannot lock a path dependency whose own
-    ``{ workspace = true }`` sources name a workspace it is no longer a member of. A dry
-    run is not refused, so one over a lib and the package using it plans both."""
+    """Refuse, before anything is written, a package that depends on a user package not
+    converted yet: uv cannot lock a path dependency that still takes code from the
+    workspace, through ``{ workspace = true }`` sources of its own or the root's sources it
+    is no longer a member to receive. Either way it has no ``uv.lock`` of its own, or such a
+    source. A dry run is not refused, so one over a lib and the package using it plans both."""
     pyproject = _read_toml(repo_root / relative / "pyproject.toml")
     packages = _package_directories(repo_root)
     others = set(user_packages.user_packages(repo_root)) - {relative}
@@ -667,7 +668,7 @@ def _refuse_unconverted_user_dependencies(repo_root: Path, relative: str) -> Non
                 ).get("uv")
             ).get("sources")
         )
-        if any(
+        if not (repo_root / directory / "uv.lock").is_file() or any(
             isinstance(value, dict) and value.get("workspace") is True
             for value in sources.values()
         ):
