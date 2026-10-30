@@ -42,6 +42,12 @@ _LATCHKEY_VERSION_PIN_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\$\{LATCHKEY_VERSION:=([0-9][0-9.]*)\}"
 )
 _SYMLINK_LIST_PATH: Final[str] = "/tmp/auth-sandbox-symlinks"
+# The environment a latchkey invocation needs to run at all in the image: the CLI refuses to start
+# without an encryption key (there is no system keychain in a sandbox), and the usage ping stays off.
+# Every build-time invocation points at a throwaway directory, so nothing of it lands in the image.
+_OFFLINE_LATCHKEY_ENVIRONMENT: Final[str] = (
+    'LATCHKEY_DIRECTORY="$d" LATCHKEY_ENCRYPTION_KEY="$(openssl rand -base64 32)" LATCHKEY_DISABLE_COUNTING=1'
+)
 
 # Bounds per step: the Screen unit downloads the stack and Fortress (hundreds of MB); everything else is quick.
 _SEED_TIMEOUT_SECONDS: Final[int] = 300
@@ -141,7 +147,10 @@ def build_steps(settings: ImageBuildSettings) -> tuple[BuildStep, ...]:
         ),
         BuildStep(
             description=f"check the image carries latchkey {settings.latchkey_version}",
-            command=f'test "$(latchkey --version)" = {shlex.quote(settings.latchkey_version)}',
+            command=(
+                f'd="$(mktemp -d)" && v="$({_OFFLINE_LATCHKEY_ENVIRONMENT} latchkey --version)" && rm -rf "$d"'
+                f' && test "$v" = {shlex.quote(settings.latchkey_version)}'
+            ),
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
         ),
         BuildStep(
@@ -169,8 +178,7 @@ def build_steps(settings: ImageBuildSettings) -> tuple[BuildStep, ...]:
             description="check latchkey accepts the template's browser entry as it stands",
             command=(
                 f'd="$(mktemp -d)" && cp {config} "$d/config.json"'
-                ' && LATCHKEY_DIRECTORY="$d" LATCHKEY_ENCRYPTION_KEY="$(openssl rand -base64 32)"'
-                " LATCHKEY_DISABLE_COUNTING=1 latchkey ensure-browser --source existing-config"
+                f" && {_OFFLINE_LATCHKEY_ENVIRONMENT} latchkey ensure-browser --source existing-config"
                 ' && rm -rf "$d"'
             ),
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,

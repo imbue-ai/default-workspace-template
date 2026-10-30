@@ -41,7 +41,12 @@ def test_build_steps_seed_then_screen_then_the_sign_in_pieces_each_checked() -> 
         "ENV_CONVERGE_WORKSPACE_DIR=/home/user/workspace bash /home/user/workspace/system/scripts/env.d/2000-screen.sh"
     )
     assert f"test -x {FORTRESS_LAUNCHER_PATH}" in commands[2]
-    assert commands[3] == 'test "$(latchkey --version)" = 3.19.3'
+    # The version is read under a throwaway key: the CLI refuses to start without one in a sandbox,
+    # and an assignment prefixed to `test` would never reach the substitution that runs latchkey.
+    assert commands[3] == (
+        'd="$(mktemp -d)" && v="$(LATCHKEY_DIRECTORY="$d" LATCHKEY_ENCRYPTION_KEY="$(openssl rand -base64 32)"'
+        ' LATCHKEY_DISABLE_COUNTING=1 latchkey --version)" && rm -rf "$d" && test "$v" = 3.19.3'
+    )
     assert "import auth_sandbox.cli, imbue.mngr_latchkey.core" in commands[4]
     install = commands[5]
     assert (

@@ -120,7 +120,6 @@ def main() -> int:
             timeout=_BUILD_SANDBOX_TIMEOUT_SECONDS,
             cpu=_BUILD_CPU,
             memory=_BUILD_MEMORY_MB,
-            environment_name=args.environment_name,
         )
         try:
             image_id = run_build(ModalBuildSandbox(sandbox=sandbox), settings)
