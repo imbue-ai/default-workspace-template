@@ -93,25 +93,6 @@ def _split_frontmatter(text: str) -> tuple[dict[str, Any], list[str]]:
     return parsed, body_lines
 
 
-def _skill_metadata(skill_dir: Path) -> dict[str, Any]:
-    """The ``metadata`` mapping of the skill's SKILL.md frontmatter; empty when the SKILL.md is
-    missing or its frontmatter does not parse (``validate`` reports that)."""
-    skill_md = skill_dir / "SKILL.md"
-    if not skill_md.is_file():
-        return {}
-    try:
-        frontmatter, _ = _split_frontmatter(skill_md.read_text(encoding="utf-8"))
-    except ValueError:
-        return {}
-    metadata = frontmatter.get("metadata")
-    return metadata if isinstance(metadata, dict) else {}
-
-
-def is_built_in_skill(skill_dir: Path) -> bool:
-    """Whether the skill ships with the template: its frontmatter has ``metadata.author: imbue``."""
-    return _skill_metadata(skill_dir).get("author") == "imbue"
-
-
 # Beside ``skills/`` in ``.agents``: the skills installed or copied in from elsewhere, by name,
 # each with where it came from. The workspace keeps them as they came, so its checks leave
 # them out.
