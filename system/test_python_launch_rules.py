@@ -31,7 +31,12 @@ from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
 from agents_shared.validate_skill import is_entry_module
-from entry_points_testing import BARE_SEARCH_PATHS, REPO_ROOT, is_bare_entry, is_test_file
+from entry_points_testing import (
+    BARE_SEARCH_PATHS,
+    REPO_ROOT,
+    is_bare_entry,
+    is_test_file,
+)
 from imbue.mngr.interfaces.host import NamedCommand
 from inline_snapshot import snapshot
 from vendor_testing import resolves_into_vendor
