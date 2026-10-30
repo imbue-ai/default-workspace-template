@@ -3,8 +3,9 @@
 
 The guard below runs before anything is imported and parses on any Python 3: a workspace
 whose system python3 is older than the 3.12 floor (a local Lima workspace from before
-2026-09-14, on Debian 12) cannot run this release's update code, so the staged copy says so
-and exits with its own code instead of failing somewhere inside the update.
+2026-09-14, on Debian 12) cannot run this release's update code, so the staged copy exits
+with its own code and prints what the update pass does instead, which only such a
+workspace's lead needs to read.
 """
 
 import sys
@@ -20,8 +21,23 @@ UPDATE_IMPOSSIBLE_EXIT_CODE = 75
 if sys.version_info < (3, 12):
     sys.stderr.write(
         "update-self: this workspace's system Python is {}.{}, older than the 3.12 this "
-        "update needs, so it cannot be updated in place. Move its work to a new workspace "
-        "with the migrate-workspace skill instead.\n".format(*sys.version_info[:2])
+        "update needs, so it cannot be updated in place. Stop the update pass here: apply "
+        "nothing and dispatch no worker. Then:\n"
+        "1. Record the verdict with the workspace's own copy of update-self (this copy "
+        "refuses every subcommand under this Python):\n"
+        "   python3 .agents/skills/update-self/scripts/update_self.py run-status verdict "
+        'NEEDS_RECREATION --detail "System Python too old to update in place."\n'
+        "   If that copy rejects run-status as an invalid choice, it predates minds-v0.4.3 "
+        "and recorded no run, so skip this.\n"
+        '2. Tell the user as "Migration-required updates" in {} says: the update needs a '
+        "new workspace, and the migrate-workspace skill moves their work to it.\n"
+        "3. Release the updating-workspace lease: "
+        'tk close "$UPDATE_LEASE_ID" "Update pass finished."\n'
+        "There is no history bridge or tracking ticket to clean up yet.\n".format(
+            sys.version_info[0],
+            sys.version_info[1],
+            Path(__file__).resolve().parents[1] / "references" / "apply-outcomes.md",
+        )
     )
     sys.exit(UPDATE_IMPOSSIBLE_EXIT_CODE)
 

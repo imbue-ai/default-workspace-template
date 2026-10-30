@@ -1,6 +1,6 @@
-- **Python floor:** every skill's scripts are type-checked by the root project, and the skill projects require Python 3.12.
+- **Python floor:** the root project type-checks every skill's scripts except a third party's skill, and the skill projects require Python 3.12.
 
-- **update-self on an older Python:** the staged `update_self.py` now checks the interpreter before importing anything. On a workspace whose system Python is older than 3.12 (a local workspace from before 2026-09-14), it exits with code 75 and says the update is impossible. Step 3a then treats that as a migration-required update and offers `migrate-workspace`.
+- **update-self on an older Python:** the staged `update_self.py` now checks the interpreter before importing anything. On a workspace whose system Python is older than 3.12 (a local workspace from before 2026-09-14), it exits with code 75 and prints the whole procedure: stop the pass, record a `NEEDS_RECREATION` verdict with the workspace's own copy, tell the user it is a migration-required update (`migrate-workspace` moves their work), and release the update lease. Step 3a says only to stop and follow what a failing re-check prints.
 
 - **Migration reference:** a new section on fixing ty errors in a workspace's own skills and apps. The update-self worker fixes them during the update, except an error whose only fix changes behavior the user can see, which it raises with the user instead. The command rewrites also cover the user's scheduled jobs in `data/.state/cron.d/`, which no check scans.
 
