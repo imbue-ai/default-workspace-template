@@ -971,10 +971,10 @@ class _ResendChoiceRecordingMngrMessenger(RecordingMngrMessenger):
         agent_id: AgentId,
         message: str,
         known_locations: Sequence[AgentMatch],
-        is_resent_when_unconfirmed: bool = True,
+        is_resent_when_unsure: bool = True,
     ) -> SendDelivery | SendFailure:
-        self.resend_choices.append(is_resent_when_unconfirmed)
-        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unconfirmed)
+        self.resend_choices.append(is_resent_when_unsure)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure)
 
 
 def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass() -> None:
