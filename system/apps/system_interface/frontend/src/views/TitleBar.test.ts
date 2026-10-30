@@ -21,6 +21,7 @@ function render(overrides: Partial<TitleBarAttrs> = {}): HTMLElement {
     app: appRecord("docs"),
     state: "NORMAL",
     isFocused: true,
+    canRefresh: true,
     isMenuOpen: false,
     sizeMenuTrigger: {},
     onControl: vi.fn(),
@@ -87,12 +88,19 @@ describe("TitleBar", () => {
     expect(focused.querySelector('[data-control="maximize"]')?.className).toContain("ml-1");
   });
 
+  it("draws no Refresh for a window that cannot refresh, and keeps its Window menu", () => {
+    const bar = render({ canRefresh: false });
+    expect(bar.querySelector('[data-control="refresh"]')).toBeNull();
+    expect(bar.querySelector('[data-control="menu"]')).not.toBeNull();
+  });
+
   it("keeps each control's element when the window it is pressed on takes focus", () => {
     let isFocused = false;
     const attrs: Omit<TitleBarAttrs, "isFocused"> = {
       title: "Plan",
       app: appRecord("docs"),
       state: "NORMAL",
+      canRefresh: true,
       isMenuOpen: false,
       sizeMenuTrigger: {},
       onControl: vi.fn(),

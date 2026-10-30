@@ -4,9 +4,9 @@
  * ``catalog/README.md`` for the document itself).
  *
  * One fetch per page load: the page shows "Loading templates..." until the fetch answers, the
- * shelves when it does, and "Failed to load templates." when the app has nothing to give (a failed
- * fetch is retried the next time the page mounts). An app with no catalog URL configured answers a
- * null catalog, and the page omits the section.
+ * shelves when it does, and that the templates couldn't be loaded when the app has nothing to give,
+ * with a Try again that asks the app to fetch afresh rather than wait out its hold after a failure.
+ * An app with no catalog URL configured answers a null catalog, and the page omits the section.
  *
  * The pure helpers below (shelf resolution, the "All templates" row, the template search, the
  * write-up's paragraphs) are exported so they can be tested without a DOM or a socket.
@@ -66,10 +66,7 @@ export interface ResolvedShelf {
 }
 
 export type TemplateCatalogState =
-  | { kind: "loading" }
-  | { kind: "loaded"; catalog: TemplateCatalog; isStale: boolean }
-  | { kind: "failed" }
-  | { kind: "disabled" };
+  { kind: "loading" } | { kind: "loaded"; catalog: TemplateCatalog } | { kind: "failed" } | { kind: "disabled" };
 
 export const TEMPLATES_CATALOG_PATH = "/api/templates-catalog";
 
@@ -79,8 +76,10 @@ const ALL_TEMPLATES_SHELF_TITLE = "All templates";
 
 interface CatalogResponse {
   catalog: TemplateCatalog | null;
-  is_stale?: boolean;
 }
+
+// Asks the app to fetch the catalog now, past the hold it keeps after a failed fetch.
+const RETRY_QUERY = "?retry=1";
 
 // pure helpers
 /**
@@ -128,24 +127,33 @@ export function getTemplateCatalogState(): TemplateCatalogState {
 /** Fetch the catalog once per page load; a failed fetch is tried again on the next call. */
 export function ensureTemplateCatalogRequested(): void {
   if (isRequested && state.kind !== "failed") return;
+  requestTemplateCatalog(false);
+}
+
+/** The failure line's Try again: fetch again now, and have the app fetch afresh too. */
+export function retryTemplateCatalog(): void {
+  requestTemplateCatalog(true);
+}
+
+function requestTemplateCatalog(isRetry: boolean): void {
   isRequested = true;
   state = { kind: "loading" };
-  void fetchTemplateCatalog().then((next) => {
+  void fetchTemplateCatalog(isRetry).then((next) => {
     state = next;
     m.redraw();
   });
 }
 
-async function fetchTemplateCatalog(): Promise<TemplateCatalogState> {
+async function fetchTemplateCatalog(isRetry: boolean): Promise<TemplateCatalogState> {
   try {
-    const response = await fetch(apiUrl(TEMPLATES_CATALOG_PATH));
+    const response = await fetch(apiUrl(TEMPLATES_CATALOG_PATH) + (isRetry ? RETRY_QUERY : ""));
     if (!response.ok) {
       console.warn(`[getting-started] could not load the template catalog: HTTP ${response.status}`);
       return { kind: "failed" };
     }
     const data = (await response.json()) as CatalogResponse;
     if (data.catalog === null) return { kind: "disabled" };
-    return { kind: "loaded", catalog: data.catalog, isStale: data.is_stale === true };
+    return { kind: "loaded", catalog: data.catalog };
   } catch (e) {
     console.warn("[getting-started] could not load the template catalog", e);
     return { kind: "failed" };

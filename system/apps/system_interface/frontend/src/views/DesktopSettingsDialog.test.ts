@@ -3,6 +3,10 @@ import "../testing/dom";
 import { mountView, unmountViews } from "@imbue/workspace-ui/src/testing/mount";
 import m from "mithril";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { failureSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
+import { HttpError } from "@imbue/workspace-ui/src/models/http";
+import { describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
+import { noticeOf } from "../model/failures";
 import { appRecord, desktopRecord, themeCatalog, themeRecord } from "../testing/records";
 import {
   DesktopSettingsDialog,
@@ -14,11 +18,21 @@ import type { DesktopSettingsDialogAttrs } from "./DesktopSettingsDialog";
 
 afterEach(unmountViews);
 
+const reportBug = vi.fn();
+
+/** A refusal of a change as the REST helper throws it. */
+function refusedWith(status: number, body: unknown, rawText: string | null = null): HttpError {
+  return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
+}
+
 function render(overrides: Partial<DesktopSettingsDialogAttrs> = {}): DesktopSettingsDialogAttrs {
   const attrs: DesktopSettingsDialogAttrs = {
     desktop: desktopRecord("home", { name: "Home" }),
     wallpapers: [],
     isDeleting: false,
+    isOnlyDesktop: false,
+    wordFailure: (whatFailed, error) =>
+      noticeOf(failureSentence(describeRequestFailure(error), whatFailed), [], reportBug),
     onSave: vi.fn(async () => undefined),
     onDelete: vi.fn(async () => undefined),
     onCancel: vi.fn(),
@@ -221,6 +235,47 @@ describe("DesktopSettingsDialog", () => {
     expect(attrs.onCancel).not.toHaveBeenCalled();
     pressEscape();
     expect(attrs.onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("withholds Delete from the only desktop and says why", () => {
+    const attrs = render({ isOnlyDesktop: true });
+    const deleteButton = card().querySelector(".desktop-settings-delete") as HTMLButtonElement;
+    expect(deleteButton.disabled).toBe(true);
+    expect(deleteButton.parentElement?.getAttribute("data-hover-tooltip")).toBe(
+      "You can't delete your only desktop. Add another one first.",
+    );
+    deleteButton.click();
+    m.redraw.sync();
+    expect(card().querySelector(".desktop-settings-confirm-delete")).toBeNull();
+    expect(attrs.onDelete).not.toHaveBeenCalled();
+  });
+
+  it("says which press failed, with the shell's reason behind See details, and keeps the step that failed", async () => {
+    render({ onSave: vi.fn(async () => Promise.reject(refusedWith(500, null, ""))) });
+    (card().querySelector(".desktop-settings-save") as HTMLButtonElement).click();
+    await settled();
+    expect(card().querySelector(".desktop-settings-error-message")?.textContent).toBe(
+      "These settings couldn't be saved. Try again. If this persists, report a bug.",
+    );
+    expect(card().querySelector(".see-details pre")?.textContent).toBe("HTTP 500");
+    const reportButton = card().querySelector(".desktop-settings-error-action") as HTMLButtonElement;
+    expect(reportButton.textContent).toBe("Report a bug");
+    reportButton.click();
+    expect(reportBug).toHaveBeenCalledTimes(1);
+    unmountViews();
+
+    // The shell's own sentence (another window deleted the other desktop meanwhile) stands as it is.
+    const lastOne = refusedWith(409, {
+      detail: "Desktop 'Home' is the last one and cannot be deleted",
+      user_facing_message: "You can't delete your only desktop. Add another one first.",
+    });
+    render({ isDeleting: true, onDelete: vi.fn(async () => Promise.reject(lastOne)) });
+    (card().querySelector(".desktop-settings-confirm-delete") as HTMLButtonElement).click();
+    await settled();
+    expect(card().querySelector(".desktop-settings-error-message")?.textContent).toBe(
+      "You can't delete your only desktop. Add another one first.",
+    );
+    expect(card().querySelector(".desktop-settings-confirm-delete")).not.toBeNull();
   });
 
   it("confirming the delete asks for it once", async () => {

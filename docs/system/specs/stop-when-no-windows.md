@@ -138,11 +138,11 @@ And a bind that fails with address-in-use means something is listening on the ap
 
 ### 5.3 The loading page
 
-The parker answers `503 Service Unavailable` with `Retry-After` set to the page's own refresh (2 seconds; 15 for the failure page below), `Cache-Control: no-store`, and an HTML body that says the app is starting and carries `<meta http-equiv="refresh" content="2">`, so a window's frame reloads itself until the app answers.
+The parker answers `503 Service Unavailable` with `Retry-After` set to 2 seconds (15 for the failure page below), `Cache-Control: no-store`, and an HTML body that says the app is starting and carries `<meta http-equiv="refresh" content="2">`, so a window's frame reloads itself until the app answers.
 A fetch from a page gets the same 503 and retries on its own terms.
 Nothing here depends on the shell's liveness sweep: the page reloads into the app the moment the app binds.
 
-When the app fails to start (section 5.5), the page instead says the app could not start, names `supervisorctl tail <program> stderr` as where to look, and refreshes every 15 seconds; each refresh is a new request, so the next wake attempt is the user's reload.
+When the app fails to start (section 5.5), the page instead says "<display name> couldn't start." (and, when the wake budget refused the wake, that it failed to start several times in the last few minutes and to try again in a few minutes), with a Try again button that reloads, an "Ask an agent to look at it" button (shown once the shell that frames the page has greeted it, which it asks with `shell:start-with-text`, naming the app and its log), and `supervisorctl tail <program> stderr` behind a collapsed "See details". It does not refresh itself: each reload is a new request and so a new wake, which spends the budget, so the next wake attempt is the user's Try again.
 
 ### 5.4 The lifecycle manager
 

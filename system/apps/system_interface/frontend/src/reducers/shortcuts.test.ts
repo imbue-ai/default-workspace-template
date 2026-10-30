@@ -42,11 +42,11 @@ describe("resolveLaunchRun", () => {
     const state = stateWith();
     expect(resolveLaunchRun(state, "gone", "new", "focus")).toEqual({
       kind: "unavailable",
-      reason: "gone is not registered",
+      reason: { kind: "app_gone" },
     });
     expect(resolveLaunchRun(state, "docs", "odd", "focus")).toEqual({
       kind: "unavailable",
-      reason: "Docs has no launch path odd",
+      reason: { kind: "launch_gone", displayName: "Docs" },
     });
   });
 
@@ -59,7 +59,7 @@ describe("resolveLaunchRun", () => {
     const loaded = reduceDesktopState(connecting, { type: "apps_updated", apps: [] });
     expect(resolveLaunchRun(loaded, "docs", "new", "focus")).toEqual({
       kind: "unavailable",
-      reason: "docs is not registered",
+      reason: { kind: "app_gone" },
     });
   });
 });

@@ -543,10 +543,17 @@ backend with nothing to serve. In that state `/` serves a placeholder, and
 because the placeholder is a string in the backend rather than part of the
 bundle, it still works when nothing else does.
 
-The placeholder is the workspace's general recovery surface, so it hands over a
-**terminal** rather than a repair. It embeds the already-running terminal app
-in a frame, and suggests creating an agent to do the work if the reader would
-rather not:
+The placeholder is the workspace's general recovery surface, so it hands over
+an **agent** and a **terminal** rather than a repair. "Ask an agent to fix
+this" sends the agent the message the command below carries, through the
+workspace's primary text action (Chat's New Chat on a stock workspace), and
+frames the agent's chat on the page. Behind "See details" are the command, for
+whoever would rather run it themselves, and a session of the already-running
+terminal app in a frame, made when the details are first opened. With no app to
+ask an agent through, the button is not offered and the details start open; with
+no terminal, the details say so. The page cannot post to another app's origin,
+so both launches go through the shell's `POST /api/not-built/launch` (desktop
+contracts.md section 5.1), which answers where the launched page is. The command:
 
 ```
 env -u TMUX mngr create --connect --template chat --label user_created=true --message "i'm seeing \"this workspace's interface needs to be rebuilt, can you fix it?\""
@@ -592,22 +599,23 @@ page's own repair block -- so the suggestion cannot drift into creating somethin
 that is not a chat, into a line that does not run, or into a line other than the
 one a reader copies.
 
-A shell rather than a "rebuild" button because a button has to be right about
-what went wrong: the states that strand a workspace here are dominated by ones
-where a build dispatched from the server would fail too (no registry, no
-memory, a lockfile that does not resolve), and it would fail with nowhere to
-report it, on a page with no application to render the failure. It would also
-inherit the server's memory band and be protected ahead of the user's chats and
-agents. Nothing is spawned either way: the terminal app is supervised, always
-running, and sits at a *lower* (more protected) memory band than this server,
-so the page points at something that outlives it.
+An agent and a shell rather than a "rebuild" button because a button has to be
+right about what went wrong: the states that strand a workspace here are
+dominated by ones where a build dispatched from the server would fail too (no
+registry, no memory, a lockfile that does not resolve), and it would fail with
+nowhere to report it, on a page with no application to render the failure. It
+would also inherit the server's memory band and be protected ahead of the
+user's chats and agents. The server builds nothing: the agent and the terminal
+session run in apps that are supervised, always running, and at a *lower* (more
+protected) memory band than this server, so the page hands the work to
+something that outlives it.
 
-The terminal's origin label is minted per workspace, so the page cannot carry
-it; the server reads it from the app registry (`data/.state/apps.toml`) at
-render time and the page's own script derives the origin from the browser's
-location, mirroring `system/libs/workspace_ui/src/origin.ts`. When there is no
-terminal registered -- the terminal app starts alongside the other apps, not
-before them -- the frame stays hidden and the prose stands alone.
+App origin labels are minted per workspace, so the page cannot carry them; the
+launch route answers the launched app's label and the page's own script derives
+the origin from the browser's location, mirroring
+`system/libs/workspace_ui/src/origin.ts`. When there is no terminal registered
+-- the terminal app starts alongside the other apps, not before them -- the
+details say the terminal isn't running yet and the command stands alone.
 
 The page returns to the interface on its own once a bundle exists, so a
 rollback (or a build run in that terminal) needs no further action. It polls the

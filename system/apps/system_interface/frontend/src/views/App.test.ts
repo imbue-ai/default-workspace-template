@@ -736,13 +736,16 @@ describe("the desktop shortcut rows", () => {
     await settle();
     expect(shownApps()).toEqual(["docs"]);
     const toastMessages = (): string[] => store.toasts.current().map((toast) => toast.message);
-    expect(toastMessages()).toEqual(["Could not remove the shortcut."]);
+    expect(toastMessages()).toEqual(["Couldn't remove this shortcut, so it's back."]);
 
     void store.addShortcut("docs", "other", "focus");
     expect(shownApps()).toEqual(["docs", "docs"]);
     await settle();
     expect(shownApps()).toEqual(["docs"]);
-    expect(toastMessages()).toEqual(["Could not remove the shortcut.", "Could not add the shortcut."]);
+    expect(toastMessages()).toEqual([
+      "Couldn't remove this shortcut, so it's back.",
+      "Couldn't add this shortcut, so it's been taken off again.",
+    ]);
   });
 
   it("keeps a shortcut a broadcast put on the desktop while a refused add was in flight", async () => {
@@ -1034,6 +1037,28 @@ describe("the switch to the phone layout", () => {
     store.setThemeMetrics(themeMetricsRecord(), { isPhone: false, isTouch: false });
     m.redraw.sync();
     expect(rightClick().defaultPrevented).toBe(true);
+  });
+
+  it("tells a failed start-sheet run under its field, and a sheet opened anew starts without it", async () => {
+    store.setThemeMetrics(themeMetricsRecord(), { isPhone: true, isTouch: true });
+    m.redraw.sync();
+    const openStartSheet = (): void => {
+      (document.querySelector("[data-phone-new]") as HTMLElement).click();
+      m.redraw.sync();
+    };
+    openStartSheet();
+    api.refusal = "the shell is restarting";
+    (document.querySelector('[data-launch="docs:new"]') as HTMLElement).click();
+    await settle();
+    m.redraw.sync();
+    expect(document.querySelector(".launcher-failure-message")?.textContent).toBe("Docs couldn't open that.");
+
+    // Left some other way than its own dismiss (the windows sheet replacing it), then opened again with New.
+    store.openPhoneSheet("windows");
+    m.redraw.sync();
+    openStartSheet();
+    expect(document.querySelector('[data-launch="docs:new"]')).not.toBeNull();
+    expect(document.querySelector(".launcher-failure")).toBeNull();
   });
 
   it("creates no page for a window the phone does not show", () => {

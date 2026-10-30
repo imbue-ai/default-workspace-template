@@ -6,12 +6,14 @@ when no catalog URL is configured, and a 503 says nothing could be loaded). The 
 the shell with is the shell's build output, served from this origin (desktop-interface contracts.md section 7).
 """
 
+import json
 from pathlib import Path
 from typing import Final
 from typing import assert_never
 
 from flask import Blueprint
 from flask import Response
+from flask import request
 from flask import send_file
 from flask import send_from_directory
 from flask.typing import ResponseReturnValue
@@ -41,6 +43,7 @@ HEALTH_PATH: Final[str] = "/api/health"
 APP_DISPLAY_NAME: Final[str] = "Getting Started"
 APP_DESCRIPTION: Final[str] = "The ways into the workspace: things to start, and the published templates to adapt."
 TEMPLATES_CATALOG_PATH: Final[str] = "/api/templates-catalog"
+RETRY_QUERY_PARAMETER: Final[str] = "retry"
 PAGE_DOCUMENT_FILENAME: Final[str] = "index.html"
 
 HTTP_NOT_FOUND: Final[int] = 404
@@ -48,11 +51,61 @@ HTTP_SERVICE_UNAVAILABLE: Final[int] = 503
 
 _TEMPLATES_UNAVAILABLE_DETAIL: Final[str] = "failed to load templates"
 
-# Served in place of the page while the frontend has not been built (``static/`` is build output).
+# How often the not-built page asks whether the page has been built since, so a rebuild by any route brings it back.
+NOT_BUILT_POLL_SECONDS: Final[int] = 10
+
+# What an agent asked to rebuild the page is told.
+_REBUILD_REQUEST: Final[str] = (
+    "The Getting Started page isn't available: its built files are missing. Please rebuild it (npm run build in "
+    "system/) so it comes back."
+)
+
+# Served in place of the page while the frontend has not been built (``static/`` is build output): it checks again
+# on its own, offers a Reload, and, once a shell has greeted it, an agent to rebuild it; the build command is behind
+# "See details". The contract module it asks the shell with is the shell's, served from this origin; when it cannot
+# be loaded (the shell's frontend is not built either), or no shell greets the page, the agent button stays hidden.
 _NOT_BUILT_PAGE: Final[str] = (
-    '<!doctype html><html><head><meta charset="utf-8"><title>Getting Started</title></head>'
-    "<body><p>The Getting Started page has not been built yet (run <code>npm run build</code> in <code>system/</code>).</p>"
-    "</body></html>"
+    """<!doctype html>
+<html><head><meta charset="utf-8"><title>Getting Started</title>
+<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;min-height:100vh;
+margin:0;color:#334155}main{max-width:32rem;padding:2rem}p{line-height:1.5}button{font:inherit;padding:0.4rem 1rem;
+border:1px solid #cbd5e1;border-radius:6px;background:#fff;color:inherit;cursor:pointer;margin-right:0.5rem}
+button:hover{background:#f1f5f9}button[hidden]{display:none}details{margin-top:1.5rem;font-size:0.85em;color:#64748b}
+summary{cursor:pointer}</style></head>
+<body><main>
+<p>The Getting Started page isn't available right now. It comes back on its own once it is rebuilt.</p>
+<p><button type="button" id="reload">Reload</button><button type="button" id="ask-agent" hidden>Ask an agent to
+rebuild it</button></p>
+<details><summary>See details</summary><p>Its built files are missing. They are rebuilt with
+<code>npm run build</code> in <code>system/</code>.</p></details>
+</main>
+<script type="module">
+  document.getElementById("reload").addEventListener("click", () => window.location.reload());
+  setInterval(() => {
+    fetch("__HEALTH_PATH__", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((health) => {
+        if (health.is_frontend_built === true) window.location.reload();
+      })
+      // The app restarting is the expected way for this to fail, and a moment the page may be arriving: ask again.
+      .catch(() => {});
+  }, __POLL_SECONDS__ * 1000);
+  if (window.parent !== window) {
+    import("__CONTRACT_PATH__")
+      .then(({ connectToShell }) => {
+        const ask = document.getElementById("ask-agent");
+        // Only a shell can start a chat, so the button waits for one to greet the page.
+        const shell = connectToShell({ onHandshake: () => (ask.hidden = false) });
+        ask.addEventListener("click", () => shell.startWithText(__REBUILD_REQUEST__));
+      })
+      .catch((error) => console.warn("[getting-started] could not load the shell contract", error));
+  }
+</script>
+</body></html>
+""".replace("__HEALTH_PATH__", HEALTH_PATH.lstrip("/"))
+    .replace("__POLL_SECONDS__", str(NOT_BUILT_POLL_SECONDS))
+    .replace("__CONTRACT_PATH__", APP_CONTRACT_ROUTE)
+    .replace("__REBUILD_REQUEST__", json.dumps(_REBUILD_REQUEST))
 )
 
 
@@ -123,7 +176,8 @@ def build_pages_blueprint(static_directory: Path, catalog: TemplateCatalogStore,
     @blueprint.get(TEMPLATES_CATALOG_PATH)
     def templates_catalog() -> ResponseReturnValue:
         """The published template catalog as last fetched (null when none is configured; 503 when none could be loaded)."""
-        reading = catalog.read()
+        # A person's Try again asks for a fresh fetch, past the hold the store keeps after a failed one.
+        reading = catalog.read(is_retry=request.args.get(RETRY_QUERY_PARAMETER) == "1")
         match reading.availability:
             case TemplateCatalogAvailability.DISABLED:
                 return model_response(TemplatesCatalogResponse(catalog=None, is_stale=False))

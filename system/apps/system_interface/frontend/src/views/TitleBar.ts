@@ -33,6 +33,8 @@ export interface TitleBarAttrs {
   readonly app: AppRecord | undefined;
   readonly state: WindowState;
   readonly isFocused: boolean;
+  /** Whether the window has a page to refresh. */
+  readonly canRefresh: boolean;
   readonly isMenuOpen: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
   readonly sizeMenuTrigger: m.Attributes;
@@ -103,8 +105,18 @@ function slotMargin(slot: ChromeSlot, isFirst: boolean): string {
 export function TitleBar(): m.Component<TitleBarAttrs> {
   return {
     view(vnode) {
-      const { title, app, state, isFocused, isMenuOpen, sizeMenuTrigger, onControl, onDoubleClick, chrome } =
-        vnode.attrs;
+      const {
+        title,
+        app,
+        state,
+        isFocused,
+        canRefresh,
+        isMenuOpen,
+        sizeMenuTrigger,
+        onControl,
+        onDoubleClick,
+        chrome,
+      } = vnode.attrs;
       const isMaximized = state === "MAXIMIZED";
       const isTitleCentered = chrome.title_align === "center";
 
@@ -119,6 +131,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           case "title":
             return !isTitleCentered;
           case "refresh":
+            return isFocused && canRefresh;
           case "menu":
             return isFocused;
           case "icon":

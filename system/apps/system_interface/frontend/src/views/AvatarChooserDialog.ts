@@ -14,11 +14,16 @@ import { Modal } from "@imbue/workspace-ui/src/components/Modal";
 import { startDownload } from "@imbue/workspace-ui/src/download";
 import { TILE_PART, partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { avatarImageUrl, avatarSourceUrl } from "../model/api";
+import type { FailureNotice } from "../model/failures";
 import type { AvatarDesign } from "../model/records";
+import { FailureLine } from "./FailureLine";
 import { IMBUE_CHARACTER_DESIGN_ID, ImbueCharacter } from "./character/ImbueCharacter";
 
-/** The disabled "Design your own..." button's tooltip. */
-export const NO_DRAFT_TARGET_REASON = "No pinned window on this desktop takes a draft";
+/** The disabled "Design your own..." button's tooltip: the request goes into the pinned window of the app that takes
+ *  a draft (``appName``, Chat on a stock workspace), which this desktop does not have. */
+export function designOwnDisabledReason(appName: string | null): string {
+  return `This needs ${appName ?? "a chat"} on this desktop.`;
+}
 
 /** The prompt "Design your own..." drafts, unsent, into the pinned window's chat. */
 export const AVATAR_DESIGN_PROMPT =
@@ -33,12 +38,17 @@ const CHARACTER_PREVIEW_SIZE_PX = 45;
 export interface AvatarChooserDialogAttrs {
   /** The designs on offer; null while they load. */
   readonly designs: readonly AvatarDesign[] | null;
-  readonly loadError: string | null;
+  /** Why the designs could not be read, in place of the grid; null while they load or once they have. */
+  readonly loadError: FailureNotice | null;
+  /** Read the designs again. */
+  readonly onRetry: () => void;
   /** The workspace's current design. */
   readonly selected: string;
   readonly onSelect: (design: string) => void;
-  /** Null when no app declares a launch path that takes a message. */
+  /** Null when no pinned window on this desktop takes a draft. */
   readonly onDesignOwn: (() => void) | null;
+  /** Why "Design your own..." is disabled, shown on its hover. */
+  readonly designOwnDisabledReason: string;
   readonly onClose: () => void;
   /** Tell the user the chosen design's original did not download. */
   readonly onDownloadFailed: (note: string) => void;
@@ -86,7 +96,12 @@ function designCell(design: AvatarDesign, attrs: AvatarChooserDialogAttrs): m.Vn
 
 function designGrid(attrs: AvatarChooserDialogAttrs): m.Children {
   if (attrs.loadError !== null) {
-    return m("p", { class: "type-helper text-danger", role: "alert" }, attrs.loadError);
+    const retry = { label: "Try again", run: attrs.onRetry };
+    return m(FailureLine, {
+      notice: { ...attrs.loadError, actions: [retry, ...attrs.loadError.actions] },
+      marker: "avatar-designs-failure",
+      messageClass: "type-helper text-danger",
+    });
   }
   if (attrs.designs === null) return m("p", { class: "type-helper text-faint", role: "status" }, "Loading designs…");
   return m(
@@ -101,7 +116,7 @@ function designOwnRow(attrs: AvatarChooserDialogAttrs): m.Children {
   return m("div", { class: "mt-4 border-t border-default pt-3" }, [
     m(
       "span",
-      { class: "inline-block", ...hoverTooltipAttrs(isDisabled ? NO_DRAFT_TARGET_REASON : null) },
+      { class: "inline-block", ...hoverTooltipAttrs(isDisabled ? attrs.designOwnDisabledReason : null) },
       m(
         Button,
         {

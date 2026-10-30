@@ -66,6 +66,8 @@ from imbue.system_interface.shell.desktop_routes import DesktopWallpaperRequest
 from imbue.system_interface.shell.desktop_routes import ShortcutMoveRequest
 from imbue.system_interface.shell.desktop_routes import ShortcutRemoveRequest
 from imbue.system_interface.shell.embedder_messages import EmbedderMessageRelayRequest
+from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchAnswer
+from imbue.system_interface.shell.not_built_launches import NotBuiltLaunchRequest
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
@@ -180,6 +182,9 @@ SHELL_ROUTE_TABLE: RouteTable = {
         alternate_responses=(AlternateResponse(status=HTTP_BAD_GATEWAY, model=EmbedderMessageRelayResponse),),
     ),
     # The update notice
+    ("POST", "/api/not-built/launch"): RouteModels(
+        request_model=NotBuiltLaunchRequest, response_model=NotBuiltLaunchAnswer
+    ),
     ("GET", "/api/updates/pending"): RouteModels(response_model=PendingUpdateResponse),
     ("POST", "/api/updates/pending/confirm"): RouteModels(success_status=HTTP_NO_CONTENT),
     ("POST", "/api/updates/pending/rollback"): RouteModels(

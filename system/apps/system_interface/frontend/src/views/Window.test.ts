@@ -23,10 +23,12 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     isMenuOpen: false,
     sizeMenuTrigger: {},
     isShielded: false,
-    isStopped: false,
+    stopped: null,
+    isAppGone: false,
     onRaise: vi.fn(),
     onControl: vi.fn(),
     onToggleMaximize: vi.fn(),
+    onClose: vi.fn(),
     chrome: STANDARD_CHROME,
     ...overrides,
   };
@@ -107,17 +109,41 @@ describe("Window", () => {
     expect(render({ isTouch: true }).querySelectorAll("[data-resize-edge]")).toHaveLength(0);
   });
 
-  it("shows a placeholder, and no page, for an app the caller says is stopped", () => {
-    const element = render({ app: appRecord("docs", { is_running: false, program: "" }), isStopped: true });
+  it("shows what the caller says of a stopped app in place of its page, with the next step's button", () => {
+    const askAgent = vi.fn();
+    const element = render({
+      app: appRecord("docs", { is_running: false, program: "" }),
+      stopped: {
+        message: "Docs isn't running.",
+        details: null,
+        actions: [{ label: "Ask an agent to start it", run: askAgent }],
+        isReportable: false,
+      },
+    });
     const placeholder = element.querySelector("[data-stopped-app]") as HTMLElement;
-    expect(placeholder.textContent).toContain("Docs");
-    expect(placeholder.textContent).toContain("not running (managed outside the workspace)");
-    expect(placeholder.querySelector("button")).toBeNull();
+    expect(placeholder.querySelector(".stopped-app-notice-message")?.textContent).toBe("Docs isn't running.");
+    (placeholder.querySelector("button") as HTMLButtonElement).click();
+    expect(askAgent).toHaveBeenCalledTimes(1);
     unmountViews();
     // A stopped app the shell wakes on a request keeps its page: the parker answers it.
     expect(
-      render({ app: appRecord("docs", { is_running: false }), isStopped: false }).querySelector("[data-stopped-app]"),
+      render({ app: appRecord("docs", { is_running: false }), stopped: null }).querySelector("[data-stopped-app]"),
     ).toBeNull();
+  });
+
+  it("says a window's app is no longer part of the workspace, offers to close it, and drops Refresh", () => {
+    const onClose = vi.fn();
+    const element = render({ app: undefined, isAppGone: true, onClose });
+    const placeholder = element.querySelector("[data-gone-app]") as HTMLElement;
+    expect(placeholder.querySelector(".gone-app-notice-message")?.textContent).toBe(
+      "This app is no longer part of this workspace.",
+    );
+    (placeholder.querySelector("button") as HTMLButtonElement).click();
+    expect(onClose).toHaveBeenCalledTimes(1);
+    const controls = [...element.querySelectorAll("[data-window-control]")].map((control) =>
+      control.getAttribute("data-window-control"),
+    );
+    expect(controls).toEqual(["menu", "minimize", "maximize", "close"]);
   });
 
   it("a double click on the title bar toggles maximize, a click on a control does not", () => {

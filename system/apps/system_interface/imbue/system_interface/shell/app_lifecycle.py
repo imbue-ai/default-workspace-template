@@ -212,8 +212,8 @@ class AppLifecycleManager(MutableModel):
 
     def wake(self, app: str) -> ParkedPageKind:
         """Release the app's parked port (if any) and ask supervisord to start its program, within the wake budget.
-        Answers STARTING when the program was asked to start, FAILED when the budget refused it or supervisord could
-        not start it. Raises AppLifecycleRefusedError for an app the workspace cannot start."""
+        Answers STARTING when the program was asked to start, BUDGET_SPENT when the budget refused it, and FAILED when
+        supervisord could not start it. Raises AppLifecycleRefusedError for an app the workspace cannot start."""
         program = self._stoppable_program_or_refuse(app, "started")
         now = self.clock()
         with self._lock:
@@ -226,7 +226,7 @@ class AppLifecycleManager(MutableModel):
                 )
                 self._wake_times_by_app[app] = recent
                 self._failed_apps.add(app)
-                kind = ParkedPageKind.FAILED
+                kind = ParkedPageKind.BUDGET_SPENT
             else:
                 self._wake_times_by_app[app] = recent + [now]
                 self._apps_awaiting_wake_outcome.add(app)
@@ -251,12 +251,12 @@ class AppLifecycleManager(MutableModel):
 
     def _wake_from_parked_port(self, app: str) -> ParkedPageKind:
         """The parker's first connection: wake the app, and answer the failure page when its last wake ended in
-        FATAL or was refused (spec section 5.5), so the page names the program's log and reloads slowly; the wake
-        itself still happens within the budget, and that reload is the next attempt."""
+        FATAL or was refused (spec section 5.5), so the page offers a Try again and names the program's log; the wake
+        itself still happens within the budget, and that Try again is the next attempt."""
         with self._lock:
             was_failed = app in self._failed_apps
         kind = self.wake(app)
-        return ParkedPageKind.FAILED if was_failed else kind
+        return ParkedPageKind.FAILED if was_failed and kind is ParkedPageKind.STARTING else kind
 
     def stop_app(self, app: str) -> None:
         """Ask supervisord to stop the app's program; the next sweep parks its port. Raises

@@ -365,7 +365,7 @@ def test_the_wake_budget_refuses_a_fourth_wake_in_the_window(
         assert manager.wake("docs") is ParkedPageKind.STARTING
         supervisor.statename_by_program["docs"] = "STOPPED"
 
-    assert manager.wake("docs") is ParkedPageKind.FAILED
+    assert manager.wake("docs") is ParkedPageKind.BUDGET_SPENT
     assert len(supervisor.started) == WAKE_BUDGET_COUNT
 
     clock.now += WAKE_BUDGET_WINDOW_SECONDS + 1
@@ -391,12 +391,12 @@ def test_a_request_past_the_wake_budget_is_answered_the_failure_page_and_starts_
 
     refused = send_raw_get_over_socket(closed_port)
 
-    assert refused.startswith(b"HTTP/1.1 503") and b"Docs could not start" in refused
+    assert refused.startswith(b"HTTP/1.1 503") and b"Docs failed to start several times" in refused
     assert len(supervisor.started) == WAKE_BUDGET_COUNT
     manager.sweep_once()
     assert manager.is_app_parked("docs")
     clock.now += WAKE_BUDGET_WINDOW_SECONDS + 1
-    assert b"Docs could not start" in send_raw_get_over_socket(closed_port)
+    assert b"Docs couldn't start." in send_raw_get_over_socket(closed_port)
     assert len(supervisor.started) == WAKE_BUDGET_COUNT + 1
 
 
@@ -420,7 +420,7 @@ def test_a_wake_after_which_the_app_runs_spends_none_of_the_budget(
         assert manager.wake("docs") is ParkedPageKind.STARTING
         supervisor.statename_by_program["docs"] = "FATAL"
         manager.sweep_once()
-    assert manager.wake("docs") is ParkedPageKind.FAILED
+    assert manager.wake("docs") is ParkedPageKind.BUDGET_SPENT
 
 
 def test_a_wake_ended_by_a_deliberate_stop_spends_none_of_the_budget(
@@ -443,7 +443,7 @@ def test_a_wake_ended_by_a_deliberate_stop_spends_none_of_the_budget(
     for _ in range(WAKE_BUDGET_COUNT):
         assert manager.wake("docs") is ParkedPageKind.STARTING
         manager.stop_app("docs")
-    assert manager.wake("docs") is ParkedPageKind.FAILED
+    assert manager.wake("docs") is ParkedPageKind.BUDGET_SPENT
 
 
 def test_a_wake_supervisord_refuses_is_answered_as_failed_and_awaits_no_outcome(
@@ -465,7 +465,7 @@ def test_a_wake_supervisord_refuses_is_answered_as_failed_and_awaits_no_outcome(
         refusing.sweep_once()
 
         assert refusing.is_app_parked("docs")
-        assert b"Docs could not start" in send_raw_get_over_socket(closed_port)
+        assert b"Docs couldn't start." in send_raw_get_over_socket(closed_port)
     finally:
         refusing.stop()
 
@@ -482,7 +482,7 @@ def test_a_wake_that_ends_in_fatal_re_parks_with_the_failure_page(
     assert manager.is_app_parked("docs")
     # The next request wakes it again (within the budget) and is told where to look while it waits.
     answer = send_raw_get_over_socket(closed_port)
-    assert b"Docs could not start" in answer and b"supervisorctl tail docs stderr" in answer
+    assert b"Docs couldn't start." in answer and b"supervisorctl tail docs stderr" in answer
     assert supervisor.started == ["docs", "docs"]
     # Once the app has run again, a later stop is an ordinary one and its request is answered as starting.
     supervisor.statename_by_program["docs"] = "RUNNING"

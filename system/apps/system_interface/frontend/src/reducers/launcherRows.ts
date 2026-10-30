@@ -17,8 +17,16 @@ import {
   textRowDisabledReason,
 } from "../model/launch";
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
+import { stoppedSentence } from "../model/failures";
 import { TOUR_LAUNCHER_LABEL, TOUR_LAUNCHER_SEARCH_WORDS } from "../model/tourCards";
-import { activePlacements, appByName, effectiveWindowTitle, isWindowMinimized, openableApps } from "./desktopState";
+import {
+  activePlacements,
+  appByName,
+  effectiveWindowTitle,
+  isAppShownStopped,
+  isWindowMinimized,
+  openableApps,
+} from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
 /** A row that runs one launch path of one app; the store decides focus or new from the manifest when it runs
@@ -32,6 +40,9 @@ export interface LaunchRow {
   readonly label: string;
   /** The app's display name, when the label does not already say it. */
   readonly caption: string | null;
+  /** Why the app is not running, as its window and shortcut say it, for an app the workspace does not start on a
+   *  request; null while it runs (or the workspace starts it when asked). */
+  readonly stoppedReason: string | null;
 }
 
 /** A row that shows an existing window, on this or another desktop. */
@@ -105,7 +116,7 @@ function tourRowsOf(apps: readonly AppRecord[], query: string): TourRow[] {
   return [{ kind: "tour", key: TOUR_ROW_KEY, label: TOUR_LAUNCHER_LABEL }];
 }
 
-function launchRowsOf(apps: readonly AppRecord[], query: string): LaunchRow[] {
+function launchRowsOf(state: DesktopState, apps: readonly AppRecord[], query: string): LaunchRow[] {
   const rows: LaunchRow[] = [];
   for (const { app, launchPath } of orderAppLaunches(appLaunchesOf(apps))) {
     // A free-text launch path is listed once, at the foot, never as a launch-path row.
@@ -118,6 +129,7 @@ function launchRowsOf(apps: readonly AppRecord[], query: string): LaunchRow[] {
       launchPath,
       label: launchPath.label,
       caption: launchPath.label === app.display_name ? null : app.display_name,
+      stoppedReason: isAppShownStopped(state, app) ? stoppedSentence(app) : null,
     });
   }
   return rows;
@@ -193,7 +205,7 @@ export function launcherRowsOf(
   const text = query.trim();
   const apps = openableApps(state);
   const isMessage = isMessageText(query);
-  const launchRows = isMessage ? [] : launchRowsOf(apps, text);
+  const launchRows = isMessage ? [] : launchRowsOf(state, apps, text);
   const tourRows = isMessage || options.isTourOffered === false ? [] : tourRowsOf(apps, text);
   const windowRows = text === "" || isMessage ? [] : windowRowsOf(state, text);
   const textRows = textRowsOf(apps, text);

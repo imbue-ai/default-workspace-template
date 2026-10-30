@@ -14,12 +14,19 @@ import type { Desktop, DesktopShortcut, GridCell, ShortcutMode } from "../model/
 import { activeDesktop, appByName } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
+/** Why a launch cannot run: its app is no longer part of the workspace, its app no longer offers the launch path,
+ *  or no desktop is active to open it on. */
+export type UnavailableReason =
+  | { readonly kind: "app_gone" }
+  | { readonly kind: "launch_gone"; readonly displayName: string }
+  | { readonly kind: "no_desktop" };
+
 export type ShortcutRun =
   | { readonly kind: "raise"; readonly windowId: string }
   | { readonly kind: "open"; readonly app: string; readonly launch: string }
   /** The app is not known yet because no app list has landed; nothing is wrong with the shortcut. */
   | { readonly kind: "connecting" }
-  | { readonly kind: "unavailable"; readonly reason: string };
+  | { readonly kind: "unavailable"; readonly reason: UnavailableReason };
 
 /** What the user is told when a shortcut is run before the apps are known. */
 export const STILL_CONNECTING_NOTICE = "Still connecting to the workspace; try again in a moment.";
@@ -35,12 +42,14 @@ export function resolveLaunchRun(
   const app = appByName(state, appName);
   if (app === undefined) {
     if (!state.isAppsLoaded) return { kind: "connecting" };
-    return { kind: "unavailable", reason: `${appName} is not registered` };
+    return { kind: "unavailable", reason: { kind: "app_gone" } };
   }
   const launchPath = launchPathOf(app, launch);
-  if (launchPath === null) return { kind: "unavailable", reason: `${app.display_name} has no launch path ${launch}` };
+  if (launchPath === null) {
+    return { kind: "unavailable", reason: { kind: "launch_gone", displayName: app.display_name } };
+  }
   const desktop = activeDesktop(state);
-  if (desktop === null) return { kind: "unavailable", reason: "there is no desktop to open on" };
+  if (desktop === null) return { kind: "unavailable", reason: { kind: "no_desktop" } };
   if (mode === "focus") {
     const recent = mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
     if (recent !== null) return { kind: "raise", windowId: recent.id };

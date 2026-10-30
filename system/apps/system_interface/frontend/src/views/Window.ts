@@ -19,7 +19,9 @@ import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
 import { windowChromeZIndex } from "../geometry/stacking";
+import type { FailureNotice } from "../model/failures";
 import type { AppRecord, WindowRecord, WindowState } from "../model/records";
+import { FailureLine } from "./FailureLine";
 import { rectStyle } from "./pixelStyle";
 import { TitleBar } from "./TitleBar";
 import type { WindowControl } from "./TitleBar";
@@ -55,38 +57,50 @@ export interface WindowAttrs {
   /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
    *  launcher is open. */
   readonly isShielded: boolean;
-  /** Whether the app behind the window is stopped and nothing brings it back on a request (a row the workspace
-   *  cannot start: no supervised program, critical, or inside a critical app's program): its page is replaced by
-   *  the stopped placeholder. A stoppable app's window keeps its page, which the shell's parker answers with a
-   *  loading page until the app is up. */
-  readonly isStopped: boolean;
+  /** What the window says in place of its page while the app behind it is stopped and nothing brings it back on a
+   *  request (a row the workspace cannot start: no supervised program, critical, or inside a critical app's
+   *  program), with the next step the workspace has; null otherwise. A stoppable app's window keeps its page, which
+   *  the shell's parker answers with a loading page until the app is up. */
+  readonly stopped: FailureNotice | null;
+  /** Whether the window's app is no longer part of the workspace (the app list has landed without it): the window
+   *  says so and offers to close, in place of a page it can never show. */
+  readonly isAppGone: boolean;
   readonly onRaise: () => void;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;
   readonly onToggleMaximize: () => void;
+  readonly onClose: () => void;
   /** The theme's arrangement of the title bar. */
   readonly chrome: ThemeChrome;
 }
 
-/** What a window shows in place of its page while the app behind it is stopped and the workspace cannot bring
- *  it back on a request. */
-export function stoppedPlaceholder(app: AppRecord | undefined): m.Vnode {
-  const label = app?.display_name ?? "This app";
-  const detail = app !== undefined && app.program !== "" ? "stopped" : "not running (managed outside the workspace)";
+/** What a window shows in place of its page: why it has none (its app is stopped, or no longer part of the
+ *  workspace), with the buttons for the next step. */
+export function windowPlaceholder(marker: string, notice: FailureNotice): m.Vnode {
   return m(
     "div",
-    { "data-stopped-app": "", class: "flex h-full w-full flex-col items-center justify-center gap-3 bg-surface" },
-    [
-      m("div", { class: "type-label text-primary" }, label),
-      m("div", { class: "text-(length:--font-size-row) text-faint" }, detail),
-    ],
+    {
+      [`data-${marker}`]: "",
+      class: "flex h-full w-full flex-col items-center justify-center bg-surface px-6 text-center",
+    },
+    m(FailureLine, { notice, marker: `${marker}-notice`, messageClass: "type-label text-primary" }),
   );
+}
+
+/** What a window of an app that is no longer part of the workspace shows. */
+export function appGoneNotice(onClose: () => void): FailureNotice {
+  return {
+    message: "This app is no longer part of this workspace.",
+    details: null,
+    actions: [{ label: "Close window", run: onClose }],
+    isReportable: false,
+  };
 }
 
 export function Window(): m.Component<WindowAttrs> {
   return {
     view(vnode) {
       const attrs = vnode.attrs;
-      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, isStopped } = attrs;
+      const { window, app, title, rect, state, stackIndex, isFocused, isTouch, stopped, isAppGone } = attrs;
       const isResizable = !isTouch;
       return m(
         "div",
@@ -124,6 +138,8 @@ export function Window(): m.Component<WindowAttrs> {
                 app,
                 state,
                 isFocused,
+                // A window with no page has nothing to refresh.
+                canRefresh: !isAppGone,
                 isMenuOpen: attrs.isMenuOpen,
                 sizeMenuTrigger: attrs.sizeMenuTrigger,
                 onControl: attrs.onControl,
@@ -141,7 +157,8 @@ export function Window(): m.Component<WindowAttrs> {
                   class: "window-content relative min-h-0 flex-1 [&>*]:pointer-events-auto",
                 },
                 [
-                  isStopped ? stoppedPlaceholder(app) : null,
+                  stopped === null ? null : windowPlaceholder("stopped-app", stopped),
+                  isAppGone ? windowPlaceholder("gone-app", appGoneNotice(attrs.onClose)) : null,
                   // The shield: the press that raises the window (or closes an open menu or the launcher)
                   // lands here rather than in the page, and bubbles to the window's own handler and on to
                   // the document. A right-click here is that press and nothing more: handled, so the
