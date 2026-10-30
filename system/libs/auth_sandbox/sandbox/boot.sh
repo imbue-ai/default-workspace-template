@@ -53,8 +53,10 @@ supervisord -n -c "$INSTALL_DIR/supervisord.conf" &
 SUPERVISORD_PID=$!
 trap 'kill -TERM "$SUPERVISORD_PID" 2>/dev/null || true' TERM INT
 
-# Start the Screen's stack (Xorg, XFCE, PulseAudio, neko) before any viewer arrives.
-for ((waited = 0; waited < SCREEN_READY_TIMEOUT_SECONDS; waited++)); do
+# Start the Screen's stack (Xorg, XFCE, PulseAudio, neko) before any viewer arrives. The bound is on
+# the clock, not on the number of probes: each one may wait on its own timeout.
+SECONDS=0
+while ((SECONDS < SCREEN_READY_TIMEOUT_SECONDS)); do
     if curl -fsS --max-time 2 "$SCREEN_URL/health" >/dev/null 2>&1; then
         break
     fi
