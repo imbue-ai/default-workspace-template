@@ -350,7 +350,7 @@ def _record_compaction_cause(server: RunningWorkspace, cause: str | None) -> Non
 
 @pytest.mark.parametrize("cause", ["idle", "manual", "native", None])
 @pytest.mark.timeout(60, func_only=False)
-def test_a_compaction_is_two_chips_with_the_start_named_for_its_cause_that_open_on_why_then_the_summary(
+def test_a_compaction_is_two_chips_with_the_start_named_for_its_cause_that_open_on_why_and_the_finish_then_on_the_summary(
     compaction_server: RunningWorkspace, page: Page, cause: str | None
 ) -> None:
     server = compaction_server
