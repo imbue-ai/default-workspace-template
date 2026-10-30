@@ -76,10 +76,12 @@ describe("StyleGuidePage", () => {
     expect(document.querySelector(".modal-title")?.textContent).toBe("Rename project");
   });
 
-  it("shows a toast on request", () => {
+  it("shows a toast on request, which its close button takes away", () => {
     const root = mountPage();
     click(root.querySelector("#show-toast"));
     expect(document.querySelector("[data-toast]")?.textContent).toContain("the disk is full");
+    click(document.querySelector("[data-toast] [data-toast-dismiss]"));
+    expect(document.querySelector("[data-toast]")).toBeNull();
   });
 
   it("moves the segmented control's choice on a click", () => {

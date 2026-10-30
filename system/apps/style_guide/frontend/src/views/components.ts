@@ -536,6 +536,7 @@ function overlaysSection(demos: ComponentDemos): CatalogSection {
         toasts: demos.toasts.current(),
         placementClass: "fixed bottom-6",
         onDismiss: (id) => demos.toasts.dismiss(id),
+        closesPlainToasts: true,
       }),
     ],
   };
