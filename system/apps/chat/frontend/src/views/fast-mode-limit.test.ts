@@ -114,6 +114,16 @@ describe("countUserTurns", () => {
     ];
     expect(countUserTurns(events)).toBe(2);
   });
+
+  it("counts a typed /compact but not the one the idle sweep sent", () => {
+    const compactThen = (cause: "idle" | "manual"): TranscriptEvent[] => [
+      ...conversation(1),
+      userMsg("/compact", `compact-${cause}`, { non_turn_tail: true }),
+      userMsg("Context was compacted", `status-${cause}`, { display: "status", compaction_cause: cause }),
+    ];
+    expect(countUserTurns(compactThen("idle"))).toBe(1);
+    expect(countUserTurns(compactThen("manual"))).toBe(2);
+  });
 });
 
 describe("isFastModeLimitReached", () => {

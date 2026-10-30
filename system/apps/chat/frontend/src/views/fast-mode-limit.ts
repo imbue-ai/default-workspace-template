@@ -17,7 +17,8 @@
  * also breaks at system chips, notices and permission and secret verdicts, but none of those is a
  * turn the user took: the registry marks chips and notices as no turn, and verdicts are excluded on
  * top of that (the app talking to itself). So are the turns of a seeded chat's seed segment: those
- * were written before any agent ran, so they bought no fast turns.
+ * were written before any agent ran, so they bought no fast turns. Nor is the `/compact` the idle
+ * sweep sends a Claude agent: the user never sent it, and it shows on its compaction's chip.
  */
 
 import m from "mithril";
@@ -34,7 +35,13 @@ import { hasFastModeLimit } from "../models/HarnessCatalog";
 import { getChatFastMode, setFastMode } from "../models/ModelSettings";
 import type { TranscriptEvent } from "../models/Response";
 import { SEED_SOURCE } from "../models/Response";
-import { isTurnUserMessage, resolutionOf, secretResolutionOf } from "./message-classification";
+import {
+  isTurnUserMessage,
+  resolutionOf,
+  secretResolutionOf,
+  sweepCompactCommandIds,
+  sweepCompactCommands,
+} from "./message-classification";
 
 // The chat whose switch raised the notice, or null while none is showing.
 let noticeChatId: string | null = null;
@@ -42,11 +49,12 @@ let noticeChatId: string | null = null;
 /** How many turns the user has actually taken with an agent in this conversation. */
 export function countUserTurns(events: readonly TranscriptEvent[]): number {
   let count = 0;
+  const sweepCommandIds = sweepCompactCommandIds(sweepCompactCommands(events, null));
   for (const event of events) {
     if (event.type !== "user_message") {
       continue;
     }
-    if (event.source === SEED_SOURCE) {
+    if (event.source === SEED_SOURCE || sweepCommandIds.has(event.event_id)) {
       continue;
     }
     if (!isTurnUserMessage(event)) {
