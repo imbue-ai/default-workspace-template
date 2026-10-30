@@ -42,6 +42,7 @@ from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _FINISHED_TASK_TURN_GRACE_PASSES
 from imbue.chat.agent_manager import _SwitchTarget
+from imbue.chat.agent_manager import _UNRECORDED_SEND_KEPT_SECONDS
 from imbue.chat.agent_manager import _UnrecordedSend
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
@@ -6103,6 +6104,61 @@ def test_an_agent_the_stream_reports_removed_takes_its_kept_sends_with_it(broadc
     finally:
         chat.manager.stop()
     assert chat.agent_id not in chat.manager._unrecorded_sends_by_agent
+
+
+def test_a_message_kept_too_long_is_not_sent_again(broadcaster: WebSocketBroadcaster) -> None:
+    chat = _LostSendChat(broadcaster)
+    now = time.monotonic()
+    chat.manager._unrecorded_sends_by_agent[chat.agent_id] = [
+        _UnrecordedSend(
+            text="old", sent_after=time.time(), sent_at=now - _UNRECORDED_SEND_KEPT_SECONDS - 1.0, is_resend=False
+        ),
+        _UnrecordedSend(text="new", sent_after=time.time(), sent_at=now, is_resend=False),
+    ]
+    try:
+        chat.observe(AgentLifecycleState.DONE)
+        wait_for(lambda: len(chat.resent) > 0, error_message="the fresh message was never sent again")
+    finally:
+        chat.manager.stop()
+    assert chat.resent == ["new"]
+
+
+def test_a_failed_resend_leaves_the_messages_after_it(broadcaster: WebSocketBroadcaster) -> None:
+    """They would land ahead of the one that failed, or fail the same way."""
+    chat = _LostSendChat(broadcaster)
+    tried: list[str] = []
+
+    def refuse(_agent_info: AgentInfo, text: str, _message_id: str) -> SendOutcome:
+        tried.append(text)
+        raise SendFailedError("the agent would not start")
+
+    _install_resend_capabilities(chat.manager, lambda _agent_info: chat.transcript, refuse)
+    try:
+        chat.manager._resend_sends_lost_with_process(
+            chat.agent_id, (_kept_send("first", 0.0), _kept_send("second", 0.0))
+        )
+    finally:
+        chat.manager.stop()
+    assert tried == ["first"]
+
+
+def test_nothing_lost_is_sent_to_a_chat_that_is_switching(broadcaster: WebSocketBroadcaster) -> None:
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger(), chat_record_store=store)
+    agent_id, _successor = _converging_chat(manager, store, phase=HandoffPhase.SUMMARIZING, is_retiring_archived=False)
+    resent: list[str] = []
+
+    def record(_agent_info: AgentInfo, text: str, _message_id: str) -> SendOutcome:
+        resent.append(text)
+        return SendOutcome.OK
+
+    _install_resend_capabilities(manager, lambda _agent_info: _FixedTranscriptReader([]), record)
+    try:
+        assert manager.get_agent_info_by_id(agent_id) is not None
+        manager._resend_sends_lost_with_process(agent_id, (_kept_send("what is 5+5?", 0.0),))
+    finally:
+        manager.stop()
+    assert resent == []
 
 
 def test_a_message_lost_twice_is_not_sent_a_third_time(broadcaster: WebSocketBroadcaster) -> None:
