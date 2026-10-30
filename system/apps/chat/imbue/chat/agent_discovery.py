@@ -283,7 +283,7 @@ class SendFailedError(Exception):
     the returned reason instead, so this changes nothing for them.
 
     ``kind`` is mngr's classification of the failure, which is what lets the chat decide what to
-    offer: trying again can clear a blocked input and cannot conjure back a pane that is gone.
+    offer: trying again can clear a blocked input, where only a restart is left for an agent that would not start.
     Unknown when mngr did not classify it.
     """
 

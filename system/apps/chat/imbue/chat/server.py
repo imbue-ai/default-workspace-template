@@ -871,7 +871,7 @@ def _send_to_chat(
             # ("the agent is in shell mode with an unsubmitted command"). Pass that through rather
             # than the generic failure below -- it is the only thing here the user can act on.
             # The kind travels beside the detail so the chat can decide what to offer: trying again
-            # can clear a blocked input and cannot help when there is nothing left to talk to.
+            # can clear a blocked input, where only a restart is left for an agent that would not start.
             # A /compact the chat declines is its own refusal, not a failure.
             status_code = 409 if send_failure.kind in _DECLINED_SEND_FAILURE_KINDS else 500
             return _SendRefused(

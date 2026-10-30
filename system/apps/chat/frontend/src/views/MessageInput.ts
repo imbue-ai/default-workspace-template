@@ -1347,9 +1347,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             ],
           });
         }
-        // A pane that is gone is not going to be there on the next attempt, so Retry is not
-        // offered at all rather than offered and guaranteed to fail. Every other kind -- and
-        // anything unclassified -- keeps it.
+        // The chat app already tried once more for an agent that was down and would not start,
+        // and Force's restart is the stronger way to bring it up, so Retry is not offered. Every
+        // other kind -- and anything unclassified -- keeps it.
         const canRetryHelp = actionFailureKind !== "agent_unreachable";
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
         // The text was typed and Enter sent but nothing confirmed the agent took it, so it may
@@ -1391,8 +1391,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             // and never for an agent that is merely still starting, where restarting would
             // discard the session it was about to finish bringing up, or for one that may already
             // be working on this message, where it would cut that turn off and send it twice. It
-            // is the only thing that helps an agent that is GONE, which is why it survives Retry
-            // being withheld.
+            // survives Retry being withheld for an agent that would not start, whose restart is
+            // the stronger way to bring it up.
             ...(recovery === null || actionFailureKind === "not_ready" || isUnconfirmed
               ? []
               : [
