@@ -90,9 +90,17 @@ ever acting on a laptop with swap.
 - **`agent_identity`** -- classifies an agent from its label (primary, chat, or
   worker), used by the launch wrapper to pick the band. An agent whose record
   can't be read matches none of these and is tagged least-protected (worker band).
-- **`registry`** -- one file per agent recording its main-process pid, so a
-  killed pid can be mapped back to "which agent" (earlyoom's after-kill hook is
-  handed only a pid that is already gone).
+- **`registry`** -- one file per agent process recording its pid, start time and
+  boot id, so a killed pid can be mapped back to "which agent" (earlyoom's
+  after-kill hook is handed only a pid that is already gone), and so the chat
+  app's prioritizer can re-tag an agent's processes by its id. A reader counts an
+  entry only while its pid is still that process, started at the recorded time in
+  the same boot: pids are reused within hours under gVisor, `/proc/<id>` also
+  resolves for another process's thread, and the registry outlives a container
+  restart while start times count from boot. An entry written before start times
+  were recorded counts while its pid is a process whose environment carries the
+  agent id the entry names. The kill hook, which reads an entry after its process
+  is gone, can check only that it was recorded in this boot.
 - **`ledger`** -- the append-only shed ledger and the revival-notice bookkeeping.
 
 Tagging happens at three startup points, each setting a process's band directly
@@ -307,7 +315,8 @@ a protected one.
   `claude_shed_notice_hook.py` only when the ledger names the agent) and the
   launch-task report poll.
 - **Agent-pid registry** (`data/.state/oom_priority/agent_pids/<pid>.json`): written
-  by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook.
+  by the launch wrapper (`system/services/oom_priority/bin/agent_oom_launch.py`), read by the kill hook,
+  the chat app's prioritizer, System Monitor, the resource sampler and the memory candidates command.
 
 Both live under `runtime/` so they ride the runtime-backup branch. Their absolute
 location is pinned via `OOM_PRIORITY_RUNTIME_DIR` (see `.mngr/settings.toml`) so
@@ -325,7 +334,12 @@ never stops, kills, or re-tags anything.
 ```bash
 python3 system/services/oom_priority/bin/memory_candidates.py          # a table
 python3 system/services/oom_priority/bin/memory_candidates.py --json   # the same report as JSON
+python3 system/services/oom_priority/bin/memory_candidates.py --free-memory   # only the free memory line
 ```
+
+`--free-memory` reads nothing but the meminfo files, so it is cheap enough to
+poll while memory is short, when the full report's `mngr list` and service
+calls would add to the pressure.
 
 It lists:
 
@@ -362,9 +376,9 @@ It lists:
     and `start_time`. mngr's own `idle_seconds` is not used, because it also
     counts the host's SSH activity.
 
-  Its memory is the summed RSS of its process trees. The trees are rooted at the
-  `pid` mngr reports and at every live pid the agent-pid registry holds for it
-  (codex registers two).
+  Its memory is the summed anonymous memory of its process trees (see below).
+  The trees are rooted at the `pid` mngr reports and at every live pid the
+  agent-pid registry holds for it (codex registers two).
 - **Apps the workspace may stop**, from the shell's `GET /api/inventory` joined
   to the programs supervisord reports running. A candidate has a program, is not
   critical (the shell, the chat and the terminal are what the workspace is
@@ -376,11 +390,11 @@ It lists:
   user's screen, and `AUTO-STOP` (`stop_when_no_windows` in JSON), which says
   whether the shell stops the app by itself once no window has shown it for the
   grace period. An app it does not is one that may do work between requests, so
-  it is the costlier one to take down. Its memory is the summed RSS of its
-  program's process tree.
+  it is the costlier one to take down. Its memory is the summed anonymous memory
+  of its program's process tree.
 - **Browsers no window shows**, from the browser service's `GET /browsers`. A
   candidate is a `running` browser that no window names, according to the same
-  inventory document. Its memory is the summed RSS of the Chromium
+  inventory document. Its memory is the summed anonymous memory of the Chromium
   processes on its profile and their children.
 
 The browser service stops a browser on its own once a window has shown it and
@@ -390,10 +404,14 @@ browser it starts, so one reaches this list only when that open failed (no
 shell answered) or something started the browser through the service's API
 directly.
 
-The sums count shared pages once per process, so they overstate what stopping
-frees, most of all for Chromium, whose processes share most of their memory: a
-browser whose processes summed to 2.8 GB freed about 460 MB when stopped. Read
-them as a ranking, and read the free memory again after stopping something.
+Each figure sums the processes' anonymous memory (the `Anonymous` lines of
+`smaps_rollup`, or of `smaps` under gVisor, which has no rollup); under gVisor
+that is also the memory earlyoom scores by. It leaves out the binaries and
+libraries every process maps, which resident size counts in each of them: under
+gVisor an agent harness's `VmRSS` reads up to ten times its anonymous memory.
+Pages a process still shares with its parent after a fork count in both, so a
+browser can read somewhat above what stopping it frees; read the free memory
+again after stopping something.
 
 Each source is read on its own. When `mngr list`, the browser service, the
 shell or supervisord cannot be read, that section says so, and its candidates are
