@@ -422,8 +422,9 @@ where the data dies. Encode these, cheapest first:
   counts against the preview's health wait, so on a fresh `git worktree add`
   run the same sync there once before the first `up`. The sync never relocks:
   after changing a dependency in the worktree, run `uv lock` (in the app's
-  directory, for a user-built app) before `refresh`, or the preview boots
-  without the change.
+  directory, for a user-built app) before `refresh`, or a built-in app's
+  preview boots without the change and a user-built app's fails its `--locked`
+  sync.
   If the app has a frontend, build it in the worktree too.
 
   `--with <sibling>` boots a sibling app's preview from the same worktree first
