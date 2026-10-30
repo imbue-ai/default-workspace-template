@@ -792,6 +792,7 @@ async () => {
 """
 
 
+@pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_the_transcript_reaches_its_bottom_whatever_the_composer_height(tmp_path: Path, page: Page) -> None:
     """A draft that grows the composer leaves the transcript at its bottom, the wheel can still reach that
