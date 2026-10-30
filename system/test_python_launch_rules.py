@@ -5,7 +5,8 @@ Each rule is checked against the real tree and against a planted violation:
 - A long-running program never runs under ``uv run``, so no ``uv`` process stays
   resident as its parent: this covers supervisord programs (built-in and user-added
   drop-ins alike) and the tmux windows ``.mngr/settings.toml`` opens. One that starts
-  a root-venv entry point syncs ``--frozen`` and then runs ``exec .venv/bin/<name>``.
+  a root-venv entry point runs ``exec .venv/bin/<name>`` (a service after a ``--frozen``
+  sync).
 - A one-off written into an agent-facing file, or into a string or argv in the
   workspace's Python, runs ``uv run --no-sync``, so following an instruction can
   never relock or sync the workspace behind the agent's back. A one-off of a user
@@ -346,8 +347,10 @@ def test_no_supervisord_program_runs_under_uv_run() -> None:
     offenders = _programs_under_uv_run(_SUPERVISORD_DIR)
     assert not offenders, (
         "These supervisord programs run under `uv run`, which stays resident as their parent and can "
-        'relock the workspace. Use `bash -c "uv sync --all-packages --frozen && exec .venv/bin/<name>"` '
-        "(see .agents/shared/references/running-python.md):\n" + "\n".join(offenders)
+        'relock the workspace. A built-in uses `bash -c "uv sync --all-packages --frozen && exec '
+        '.venv/bin/<name>"`; a user package syncs and execs its own project instead ("User packages '
+        'are standalone projects" in .agents/shared/references/running-python.md):\n'
+        + "\n".join(offenders)
     )
 
 
