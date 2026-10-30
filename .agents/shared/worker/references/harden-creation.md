@@ -426,14 +426,15 @@ have selected it, the same way.
 **A shed command.** Judge whether a rerun would be shed again, from the
 ledger (`/home/user/workspace/data/.state/oom_priority/events/shed.jsonl`:
 are shed records still arriving, for processes other than yours?) and from
-the free memory the guard acts on -- the first line of `python3
-system/services/oom_priority/bin/memory_candidates.py`, not `/proc/meminfo` or
-`free -m`. Is that figure recovering since the shed, or still falling? If
-things are settling, rerun the shed command from the repo root exactly as
-`run-tests` printed it. If they are not, or the rerun is shed too, ask your
-lead with a `question` gate (`worker-reporting.md`) naming the command, the
-ledger records, and the free memory you saw; your lead frees memory with the
-user, and answers when you can rerun.
+the free memory the guard acts on,
+`python3 system/services/oom_priority/bin/memory_candidates.py --free-memory`
+(is it recovering since the shed, or still falling?). Not `/proc/meminfo` or
+`free`: under a memory cap they read far more free memory than the guard
+sees. If things are settling, rerun the shed command from the repo root
+exactly as `run-tests` printed it. If they are not, or the rerun is shed too,
+ask your lead with a `question` gate (`worker-reporting.md`) naming the
+command, the ledger records, and the free memory you saw; your lead frees
+memory with the user, and answers when you can rerun.
 
 Memory pressure is never a reason to skip a command of the gate, or to report
 `done` without it.

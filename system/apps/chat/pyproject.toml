@@ -162,9 +162,10 @@ fail_under = 75
 
 [tool.coverage.paths]
 # Coverage data measured inside the workspace image on Modal (the
-# test-offload CI job) records the sandbox's paths; map them back so
+# test-offload CI job) records the sandbox's resolved paths (its
+# /home/user is a symlink to /mngr-vol/home); map them back so
 # the runner can combine the batches and enforce the floor above.
 source = [
     ".",
-    "/home/user/workspace/system/apps/chat/",
+    "/mngr-vol/home/workspace/system/apps/chat/",
 ]
