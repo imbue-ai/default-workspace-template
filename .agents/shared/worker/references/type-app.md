@@ -38,16 +38,27 @@ paths.
 The isolated-instance and rendered-page rules are in `web-frontend-testing.md`.
 App specifics:
 
-- A fresh worktree has no `.venv`, so run `uv sync --all-packages` once before
-  any `uv run`. If a fix needs a new dependency, `uv add ...` and commit the
-  manifest changes (`pyproject.toml` / `uv.lock`).
-- Add a `test_<package>.py` for the routes. While you iterate, run the app's
-  suite by path from the repo root, where the root pytest configuration
-  applies and the app's repo-relative paths resolve (the shell's and the
-  chat's suites are their own pytest roots, run from their own directories):
+- A user-built app is a standalone uv project
+  (`.agents/shared/references/running-python.md`, "User packages are standalone
+  projects"): the worktree's setup syncs its venv from its own lock (`uv sync
+  --locked` in its directory does it again), and a new dependency is `uv add
+  ...` **in its directory**, committing its own `pyproject.toml` and `uv.lock`,
+  never the root's. A built-in app is a root workspace member: a fresh worktree
+  has no root `.venv`, so run `uv sync --all-packages` once before any `uv run`,
+  and `uv add` at the root.
+- Add a `test_<package>.py` for the routes. While you iterate, run a user-built
+  app's suite from its own directory, against its own venv; the root pytest
+  configuration skips user packages, so a run by path from the repo root
+  collects nothing. The gate runs it from there too, so a test resolves repo
+  paths from its own file (as the scaffolded `runner_test.py` does), not from
+  the working directory. A built-in app's suite runs by path from the repo
+  root, where the root pytest configuration applies and the app's repo-relative
+  paths resolve (the shell's and the chat's suites are their own pytest roots,
+  run from their own directories):
 
   ```bash
-  uv run --no-sync pytest system/apps/<package>    # primary, plus test_<package>_ratchets.py
+  (cd system/apps/<package> && uv run --no-sync pytest)   # a user-built app, plus test_<package>_ratchets.py
+  uv run --no-sync pytest system/apps/<package>           # a built-in app
   ```
 
   Its pages import the shell's built modules, which a fresh worktree lacks
