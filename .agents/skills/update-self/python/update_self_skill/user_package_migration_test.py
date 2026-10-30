@@ -226,6 +226,34 @@ def test_every_old_program_form_becomes_one_the_standalone_check_accepts(
             assert kept in rewritten
 
 
+@pytest.mark.parametrize(
+    "run",
+    [
+        "uv run widget-app --port 9",
+        "uv run --package widget --frozen widget-app --port 9",
+        "uv run --with flask --python 3.12 widget-app --port 9",
+    ],
+)
+def test_a_uv_run_becomes_an_exec_of_the_script_with_none_of_uvs_options(
+    run: str,
+) -> None:
+    # The standalone check accepts a line whose exec still carries a stray option value
+    # (`exec widget .../widget-app`), so the exec step itself is what has to be right.
+    rewritten = migration._program_rewrite(
+        f"python3 system/services/oom_priority/bin/oom_tag_service.py user {run}",
+        "system/apps/widget",
+        ["widget-app"],
+    )
+
+    assert rewritten is not None
+    assert user_packages.command_steps(rewritten)[-1] == [
+        "exec",
+        "system/apps/widget/.venv/bin/widget-app",
+        "--port",
+        "9",
+    ]
+
+
 def test_a_program_that_runs_another_packages_script_is_left_alone() -> None:
     assert (
         migration._program_rewrite(

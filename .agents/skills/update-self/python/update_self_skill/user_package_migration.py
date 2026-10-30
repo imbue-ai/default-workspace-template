@@ -287,12 +287,14 @@ def _program_rewrite(command: str, relative: str, scripts: Sequence[str]) -> str
             continue
         found = True
         if step[:2] == ["uv", "run"]:
-            index = 2
-            while index < len(step) and step[index].startswith("-"):
-                index += (
-                    2 if step[index] in ("--project", "--directory", "--with") else 1
-                )
-            step = step[index:]
+            # Cut at the script itself, so no option of uv run's, valued or not, survives.
+            step = step[
+                next(
+                    index
+                    for index, word in enumerate(step)
+                    if user_packages.runs_script(word, script)
+                ) :
+            ]
         own = f"{relative}/.venv/bin/{script}"
         new_step = [
             own if user_packages.runs_script(word, script) else word for word in step
