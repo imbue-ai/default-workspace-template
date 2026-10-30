@@ -94,9 +94,15 @@ def _requirement_name(requirement: str) -> str:
     return _normalize(match.group(1)) if match else ""
 
 
+def _parse_toml(text: str, path: Path) -> dict:
+    try:
+        return tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise MigrationError(f"{path} does not parse: {exc}") from exc
+
+
 def _read_toml(path: Path) -> dict:
-    with path.open("rb") as handle:
-        return tomllib.load(handle)
+    return _parse_toml(path.read_text(encoding="utf-8"), path)
 
 
 def _uv_sources(pyproject: dict) -> dict:
@@ -566,7 +572,7 @@ def plan_migration(
             "only built-in packages"
         )
     package_text = (package_dir / "pyproject.toml").read_text()
-    pyproject = tomllib.loads(package_text)
+    pyproject = _parse_toml(package_text, package_dir / "pyproject.toml")
     name = pyproject.get("project", {}).get("name")
     if name is None:
         raise MigrationError(f"{relative}/pyproject.toml names no project")

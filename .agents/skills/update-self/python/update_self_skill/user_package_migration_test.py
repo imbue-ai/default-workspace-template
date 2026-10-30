@@ -549,6 +549,24 @@ def test_a_package_that_is_still_a_root_member_is_refused(tmp_path: Path) -> Non
         )
 
 
+def test_a_package_whose_pyproject_does_not_parse_is_an_error_not_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # convert-packages migrates each package in-process and goes on past one that
+    # answers 1, so a parse failure has to come back as that answer.
+    root = tmp_path / "workspace"
+    _write(root / "pyproject.toml", "[tool.uv.workspace]\nmembers = []\n")
+    _write(root / "system/apps/board/pyproject.toml", "[project\nname = ")
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+
+    code = migration.main(
+        ["--repo-root", str(root), "migrate", "system/apps/board", "--dry-run"]
+    )
+
+    assert code == 1
+    assert "system/apps/board/pyproject.toml does not parse" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("test_source", "dependency"),
     [
