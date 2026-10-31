@@ -1055,6 +1055,19 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("names the failed upload even over a send failure that landed during the upload wait", async () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.pdf", status: "error", error: "boom" },
+    ]);
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", { title: "Couldn't send your message", detail: "x", kind: "not_ready" });
+    component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const after = await typeAndSend(component, "agent-1", "here you go");
+    mocks.getComposerAttachments.mockReturnValue([]);
+    expect(renderedText(after)).toContain("notes.pdf");
+    expect(renderedText(after)).not.toContain("isn't ready for messages yet");
+  });
+
   it("withholds Retry when the agent is unreachable, since it cannot help", async () => {
     // The chat app already tried the start once more, and Restart is the stronger way to bring it up.
     mocks.sendMessage.mockRejectedValueOnce({ kind: "agent_unreachable", toString: () => "start timed out" });

@@ -768,11 +768,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             return null;
           }
           const names = failedAttachments.map((attachment) => attachment.fileName).join(", ");
+          clearActionFailureNotice();
           actionFailureTitle =
             failedAttachments.length === 1 ? "An attachment didn't upload" : "Some attachments didn't upload";
           actionFailureDetail = `${names} could not be uploaded, so the message was not sent. Remove the attachment, or try again.`;
-          actionFailureRecovery = null;
-          externalRetry = null;
           m.redraw();
           return null;
         }
