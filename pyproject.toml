@@ -29,6 +29,9 @@ dependencies = [
     # `uv run --no-sync routines ...` from the repo root, so its console script must
     # survive a sync of the root closure too.
     "routines",
+    # Agents run `uv run --no-sync disk-headroom` from the repo root where they would run df,
+    # so its console script must survive a sync of the root closure too.
+    "disk-headroom",
     "imbue-common",
     "tomlkit>=0.12",
     "playwright==1.58.0",
@@ -124,6 +127,7 @@ workspace-themes = { workspace = true }
 app-schema = { workspace = true }
 workspace-layout = { workspace = true }
 routines = { workspace = true }
+disk-headroom = { workspace = true }
 # Apps that other members depend on (their test suites boot each other).
 system-interface = { workspace = true }
 chat = { workspace = true }

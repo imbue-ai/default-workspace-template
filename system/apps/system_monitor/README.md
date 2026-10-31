@@ -17,9 +17,10 @@ seconds. The design is `docs/system/specs/system-monitor.md`.
   total, the memory guard's 90% mark on the bar and the chart, a note from
   80% used naming the largest kind of memory the user can free, the
   breakdown, and the stops with their commands behind a Details toggle.
-- **Disk** (`/disk`): used out of total, worded as the machine's whole disk
+- **Disk** (`/disk`): used out of total as the workspace can use them
   (a local docker workspace's volume has no quota of its own, so this is the
-  laptop's disk; a cloud machine's is its data disk); "See what's using the
+  laptop's disk; on a cloud machine, free is the smaller of the room left under
+  the machine's disk quota and the disk's own free space); "See what's using the
   disk", which measures the disk only when asked (walking it is slow under
   gVisor and the figures go stale at once): workspace files with the folders
   under them, uploads, each app's data, each package cache, and everything

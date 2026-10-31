@@ -106,6 +106,21 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, NamedTuple, Sequence
 
+# What the workspace can still write to a disk comes from the stdlib-only
+# disk_headroom library in this repo; this script runs under a bare python3.
+sys.path.insert(
+    0,
+    str(
+        Path(__file__).resolve().parents[3]
+        / "system"
+        / "libs"
+        / "disk_headroom"
+        / "src"
+    ),
+)
+
+from disk_headroom.space import read_disk_space
+
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and
 # ``down`` invocations. One instance per ``--name``; ``up`` tears down any stale
@@ -118,10 +133,9 @@ WRAPPER_LOG_FILENAME = "wrapper.log"
 # dir so ``down`` removes them with everything else.
 COPIES_DIRNAME = "copies"
 SCRATCH_DIRNAME = "scratch"
-# What a ``--copy`` must leave free on its disk, as ``statfs`` reports it: room for
-# the live workspace's own writes, above the 4 GiB a cloud workspace's disk quota
-# holds back from the filesystem (``statfs`` does not see the quota).
-COPY_RESERVE_BYTES = 6 * 1024**3
+# What a ``--copy`` must leave the workspace able to write, for the live
+# workspace's own writes.
+COPY_RESERVE_BYTES = 2 * 1024**3
 # The port the health probe reaches and the wrapper frames; every instance has it.
 MAIN_PORT_NAME = "main"
 LOOPBACK_HOST = "127.0.0.1"
@@ -226,8 +240,12 @@ class InstanceError(Exception):
 
 
 def free_bytes(path: Path) -> int:
-    """Free space on the filesystem holding ``path``, which must exist."""
-    return shutil.disk_usage(path).free
+    """What the workspace can still write to the disk holding ``path``, which must exist.
+
+    On a cloud machine that is the smaller of the filesystem's free space and
+    the room left under the machine's disk quota, which statfs does not see.
+    """
+    return read_disk_space(path).free
 
 
 def tree_size_bytes(root: Path) -> int:
@@ -260,9 +278,9 @@ def copy_tree_checked(
 ) -> None:
     """Copy the directory ``source`` to ``destination`` (which must not exist yet).
 
-    Refuses, writing nothing, when the copy would leave less than
-    ``COPY_RESERVE_BYTES`` free on the destination's disk; a copy that fails part
-    way is removed.
+    Refuses, writing nothing, when the copy would leave the workspace able to
+    write less than ``COPY_RESERVE_BYTES`` more to the destination's disk (as
+    ``free_space`` reports it); a copy that fails part way is removed.
     """
     if destination.exists():
         raise InstanceError(f"{destination} already exists; not copying over it")
@@ -271,8 +289,9 @@ def copy_tree_checked(
     if size + COPY_RESERVE_BYTES > available:
         raise InstanceError(
             f"copying {source} ({_format_bytes(size)}) would leave "
-            f"{_format_bytes(max(available - size, 0))} free on its disk, under the "
-            f"{_format_bytes(COPY_RESERVE_BYTES)} the workspace needs for its own "
+            f"the workspace able to write only {_format_bytes(max(available - size, 0))} "
+            "more to its disk, under the "
+            f"{_format_bytes(COPY_RESERVE_BYTES)} it needs for its own "
             "writes. Copy only what the test needs (a subdirectory, or a small store "
             "seeded for the test), or verify read-only against the live service."
         )

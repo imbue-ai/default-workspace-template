@@ -75,6 +75,9 @@ MNGR_BINARY = "mngr"
 MEMINFO_PATH = "/proc/meminfo"
 UPTIME_PATH = "/proc/uptime"
 LOADAVG_PATH = "/proc/loadavg"
+# A cloud machine's disk quota over the workspace, as the machine publishes it
+# (statfs, and so df, never sees it): its limit, usage and publish time.
+HOST_DISKINFO_PATH = "/mngr-vol/.host-diskinfo"
 
 # How far back a chat counts as recent: every chat transcript written to inside
 # this window is attached, on the view that a bug is rarely about exactly one
@@ -508,6 +511,7 @@ def build_metadata() -> dict[str, object]:
         },
         "host_health": {
             "disk": run_command(["df", "-h"], DF_TIMEOUT_SECONDS),
+            "disk_quota": read_head(HOST_DISKINFO_PATH, 3),
             # meminfo is head-ordered: MemTotal/MemFree/MemAvailable/Buffers/Cached
             # lead the file, and the tail is Hugetlb/Vmalloc detail nobody reads.
             "memory": read_head(MEMINFO_PATH, MAX_MEMINFO_LINES),

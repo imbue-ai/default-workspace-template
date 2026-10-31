@@ -438,7 +438,7 @@ where the data dies. Encode these, cheapest first:
   confirm the real data survived, and only then remove the snapshot:
 
   ```bash
-  du -sh data/.apps/<name>; df -h /var/tmp    # the copy must leave several GB free
+  du -sh data/.apps/<name>; uv run --no-sync disk-headroom /var/tmp    # the copy must leave several GB free
   cp -a data/.apps/<name> /var/tmp/<name>-pre-<change>
   # ...run the change, confirm the real data survived...
   rm -rf /var/tmp/<name>-pre-<change>
