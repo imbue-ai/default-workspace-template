@@ -46,13 +46,14 @@ Cloud / litellm proxy (``ANTHROPIC_BASE_URL``) path is intentionally unsupported
 """
 
 import asyncio
+import concurrent.futures
+import functools
 import json
 import os
 import queue
 import secrets
 import shutil
 import subprocess
-import sys
 import threading
 import time
 from collections import deque
@@ -63,6 +64,7 @@ from typing import Any
 from imbue.imbue_common.mutable_model import MutableModel
 from loguru import logger
 from pydantic import PrivateAttr
+from workspace_bare_scripts import message_chat
 from workspace_layout.windows import (
     WindowClosedHint,
     read_app_window_paths,
@@ -385,20 +387,18 @@ def _should_disable_sandbox() -> bool:
 
 def _repo_root() -> Path:
     """The workspace root (where ``system/scripts/`` lives), anchored on this file's location
-    rather than cwd -- used as the wake subprocess's cwd so the ``mngr`` dev shim
-    resolves this checkout regardless of where the daemon was started."""
+    rather than cwd -- the wake reads the app registry from here and runs its ``mngr``
+    backoff here, so the ``mngr`` dev shim resolves this checkout regardless of where the
+    daemon was started."""
     for candidate in Path(__file__).resolve().parents:
         if (candidate / "system" / "scripts").is_dir() and (candidate / "system" / "libs").is_dir():
             return candidate
     return Path.cwd()
 
 
-# The in-workspace chat messenger (see `_message_agent`): the owner recorded on a browser is
-# a chat id, and the chat app knows which agent is taking that chat's messages; the script
-# falls back to `mngr message` itself when the chat app cannot take the message. Its
-# `--browser-fleet` flag wraps the fleet's nudges in the sentinel the chat transcript renders
-# as a collapsed "Browser fleet" chip instead of a bare user bubble.
-_MESSAGE_CHAT_SCRIPT = Path("system") / "scripts" / "message_chat.py"
+# The wakes' own threads: a send has no read timeout, so a slow one must not hold a thread of the
+# default executor the browser's own start and stop work runs on.
+_WAKE_EXECUTOR = concurrent.futures.ThreadPoolExecutor(thread_name_prefix="browser-wake")
 
 # Per-browser persistent Chromium profiles (cookies/logins/history) live here, on the
 # workspace volume under $MNGR_HOST_DIR -- Tier A durability: they survive stop/start
@@ -602,7 +602,7 @@ class LiveBrowser(MutableModel):
     # When a resume-queue agent was handed the browser but hasn't sent a command
     # yet (the claim window); 0.0 once it claims (or when no grant is pending).
     _granted_at: float = PrivateAttr(default=0.0)
-    # Strong refs to in-flight fire-and-forget tasks (the _wake_agent subprocess, the
+    # Strong refs to in-flight fire-and-forget tasks (the _wake_agent send, the
     # crash announcement). asyncio keeps only weak references to bare create_task()
     # results, so without this they could be garbage-collected before they run.
     _bg_tasks: set[Any] = PrivateAttr(default_factory=set)
@@ -1395,40 +1395,32 @@ class LiveBrowser(MutableModel):
 
     async def _message_agent(self, agent_id: str, agent_name: str | None, text: str) -> None:
         """Best-effort: message a queued agent's chat through the chat app (the same path
-        launch-task uses). Failures are logged, not raised -- a messenger that cannot be
-        spawned and one that exits nonzero (``mngr message``'s codes: 1 not delivered, 7
-        delivered but the agent's input is blocked) both leave a warning; the claim window /
-        lifecycle handling is the backstop if a message never lands.
+        launch-task uses), which falls back to ``mngr message`` when the chat app cannot take
+        it. Failures are logged, not raised -- a send that ends in anything but delivered
+        (``mngr message``'s codes: 1 not delivered, 7 delivered but the agent's input is
+        blocked) leaves a warning; the claim window / lifecycle handling is the backstop if a
+        message never lands.
 
-        These are automated, non-human nudges, so they go with ``--browser-fleet``: the
-        transcript UI renders them as a collapsed "Browser fleet" chip instead of a bare user
-        bubble. This is display-only -- the agent still receives the message and resumes its
-        turn exactly as before. The chat is addressed by its chat id, never by an agent's
-        name."""
+        These are automated, non-human nudges, so they are wrapped in the browser fleet's
+        sentinel: the transcript UI renders them as a collapsed "Browser fleet" chip instead of
+        a bare user bubble. This is display-only -- the agent still receives the message and
+        resumes its turn exactly as before. The chat is addressed by its chat id, never by an
+        agent's name."""
         try:
-            proc = await asyncio.create_subprocess_exec(
-                sys.executable,
-                str(_MESSAGE_CHAT_SCRIPT),
-                agent_id,
-                "--browser-fleet",
-                "--message",
-                text,
-                # Run from the repo root: the script path is repo-relative and the `mngr`
-                # dev shim the script's backoff runs resolves this checkout from there
-                # (don't rely on the daemon's inherited cwd).
-                cwd=str(_repo_root()),
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.DEVNULL,
+            returncode = await asyncio.get_running_loop().run_in_executor(
+                _WAKE_EXECUTOR,
+                functools.partial(
+                    message_chat.send, agent_id, message_chat.wrap_browser_fleet_nudge(text), cwd=_repo_root()
+                ),
             )
         except OSError as e:
             logger.warning(
                 "could not message agent {} for browser {} ({})", agent_name or agent_id, self.browser_id, e
             )
             return
-        returncode = await proc.wait()
-        if returncode != 0:
+        if returncode != message_chat.EXIT_DELIVERED:
             logger.warning(
-                "message_chat.py exited {} messaging agent {} for browser {}; the message may not have landed",
+                "the chat messenger answered {} messaging agent {} for browser {}; the message may not have landed",
                 returncode,
                 agent_name or agent_id,
                 self.browser_id,

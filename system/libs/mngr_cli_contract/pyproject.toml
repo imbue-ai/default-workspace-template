@@ -3,7 +3,7 @@ name = "mngr-cli-contract"
 version = "0.1.0"
 description = "Test-only validator that checks mngr CLI argvs against the live mngr command tree"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "click>=8.1",
     "imbue-mngr",

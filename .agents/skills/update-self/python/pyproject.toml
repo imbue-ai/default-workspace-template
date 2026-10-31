@@ -1,0 +1,16 @@
+[project]
+name = "update-self-skill"
+version = "0.1.0"
+description = "Pulls an update from the upstream template"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+user-package-migration = "update_self_skill.user_package_migration:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["update_self_skill"]

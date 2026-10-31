@@ -44,13 +44,13 @@ from imbue.imbue_common.pure import pure
 # this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
-# Cross-layer contract: the wrapper ``system/scripts/run_in_background.py`` puts around the
+# Cross-layer contract: the wrapper ``system/scripts/workspace_bare_scripts/run_in_background.py`` puts around the
 # report it sends an agent's own chat when a command it ran for that agent exits. Only its
 # ``<summary>`` line is for the user; ``message_display_test.py`` pins the two tags equal.
 BACKGROUND_TASK_REPORT_TAG = "background-task-report"
 
 # Cross-layer contract: the wrapper the update-self skill puts around the note it sends each chat
-# it paused for an update's apply (``.agents/skills/update-self/scripts/update_resume_note.py``,
+# it paused for an update's apply (``.agents/skills/update-self/python/update_self_skill/update_resume_note.py``,
 # sent by ``run-status resume-chats``). The opening tag says whether the update landed, which
 # picks the notice's label; only the ``<summary>`` line is for the user. ``message_display_test.py``
 # pins the tag and both outcomes equal.

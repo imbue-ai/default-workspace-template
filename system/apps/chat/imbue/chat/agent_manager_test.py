@@ -1880,7 +1880,7 @@ def test_a_failed_create_syncs_the_venv_and_is_retried_once(
         manager.stop()
 
     assert outcome is not None and outcome.is_created
-    assert uv_log.read_text().splitlines() == ["sync --all-packages"]
+    assert uv_log.read_text().splitlines() == ["sync --all-packages --frozen"]
     assert argv_log.read_text().splitlines() == ["create --id", "destroy --force", "create --id"]
 
 

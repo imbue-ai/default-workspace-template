@@ -1,6 +1,6 @@
 """Live terminal dashboard for the pixelflux stream telemetry (watch-only).
 
-    uv run python -m browser.telemetry_watch [browser-name] [--sample] [--for N]
+    uv run --no-sync python -m browser.telemetry_watch [browser-name] [--sample] [--for N]
 
 Connects to the daemon's read-only ``/telemetry`` firehose (directly on
 127.0.0.1:8081), derives everything in-process, and never influences the stream.

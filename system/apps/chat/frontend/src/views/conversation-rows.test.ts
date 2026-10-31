@@ -347,8 +347,9 @@ describe("a compaction's chips in the rows", () => {
     };
   }
 
-  /** The `/compact` the user typed, and the expansion Claude Code repeats it in after the compaction. */
-  function typedCompact(ts: string): UserMessageEvent[] {
+  /** A `/compact` as Claude Code records it, typed by the user or sent by the idle sweep, and the
+   *  expansion it repeats it in after the compaction. */
+  function compactCommand(ts: string): UserMessageEvent[] {
     return [
       { ...userMsg(ts, "/compact", "u-compact"), non_turn_tail: true },
       { ...userMsg(ts, "/compact", "u-compact-expansion"), display: "hidden", non_turn_tail: true },
@@ -363,13 +364,18 @@ describe("a compaction's chips in the rows", () => {
     return [v, ...vnodes(v.children)];
   }
 
-  /** Each chip row a row renders, as its chips: a call by its id, a status chip by its label. */
-  function chipRows(rows: RowDescriptor[], key: string): string[][] {
+  /** Each chip row a row renders, as its chips. */
+  function rowChips(rows: RowDescriptor[], key: string): ChipEntry[][] {
     const row = rows.find((r) => r.key === key);
     expect(row).toBeDefined();
     return vnodes(row!.render())
       .filter((v) => v.tag === ToolChipGroup)
-      .map((v) => (v.attrs!.chips as ChipEntry[]).map((c) => (c.kind === "tool" ? c.call.tool_call_id : c.label)));
+      .map((v) => v.attrs!.chips as ChipEntry[]);
+  }
+
+  /** Each chip row a row renders, as its chips: a call by its id, a status chip by its label. */
+  function chipRows(rows: RowDescriptor[], key: string): string[][] {
+    return rowChips(rows, key).map((chips) => chips.map((c) => (c.kind === "tool" ? c.call.tool_call_id : c.label)));
   }
 
   function hasNotice(rows: RowDescriptor[], key: string): boolean {
@@ -441,7 +447,7 @@ describe("a compaction's chips in the rows", () => {
       [
         userMsg("t1", "hello"),
         assistantText("t2", "hi there", "end_turn"),
-        ...typedCompact("t3"),
+        ...compactCommand("t3"),
         compacted("t4", "cs-manual", "manual"),
       ],
       true,
@@ -451,7 +457,7 @@ describe("a compaction's chips in the rows", () => {
   });
 
   it("puts the start chip alone where the pair will land while the agent compacts, then the pair", () => {
-    const before = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn"), ...typedCompact("t3")];
+    const before = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn"), ...compactCommand("t3")];
     const during = buildConversationRows("agent-1", before, true, { cause: "manual" });
     expect(during.map((r) => r.key)).toEqual(["u-t1", "a-t2", "u-compact", "compaction-running"]);
     expect(chipRows(during, "compaction-running")).toEqual([["Compacting as requested…"]]);
@@ -464,6 +470,50 @@ describe("a compaction's chips in the rows", () => {
     });
     expect(landed.map((r) => r.key)).toEqual(["u-t1", "a-t2", "u-compact", "cs-manual"]);
     expect(chipRows(landed, "cs-manual")).toEqual([["Compacting as requested…", "Compacted"]]);
+  });
+
+  // idle in a Claude chat: the sweep's /compact is recorded like a typed one, but the user never typed it.
+  it("shows the idle sweep's /compact on the start chip, not as a bubble, while it runs and once it lands", () => {
+    const before = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn"), ...compactCommand("t3")];
+    const during = buildConversationRows("agent-1", before, true, { cause: "idle" });
+    expect(during.map((r) => r.key)).toEqual(["u-t1", "a-t2", "compaction-running"]);
+    expect(chipRows(during, "compaction-running")).toEqual([["Compacting while idle…"]]);
+
+    const landed = buildConversationRows("agent-1", [...before, compacted("t4", "cs-idle", "idle")], true);
+    expect(landed.map((r) => r.key)).toEqual(["u-t1", "a-t2", "cs-idle"]);
+    expect(chipRows(landed, "cs-idle")).toEqual([["Compacting while idle…", "Compacted"]]);
+    const commands = rowChips(landed, "cs-idle")
+      .flat()
+      .flatMap((c) => (c.kind === "status" ? c.sections : []))
+      .filter((section) => section.kind === "output" && section.marker === "compaction-command");
+    expect(commands).toEqual([{ kind: "output", marker: "compaction-command", text: "/compact" }]);
+  });
+
+  it("appends the idle sweep's chips to the last chip run when the turn ended without a reply", () => {
+    const rows = buildConversationRows(
+      "agent-1",
+      [
+        userMsg("t1", "go"),
+        toolMsg("t2", "c1", "Read the log"),
+        ...compactCommand("t3"),
+        compacted("t4", "cs1", "idle"),
+      ],
+      true,
+    );
+    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1"]);
+    expect(chipRows(rows, "a-c1")).toEqual([["c1", "Compacting while idle…", "Compacted"]]);
+  });
+
+  it("keeps a /compact as a bubble when a message comes between it and the idle compaction, or the compaction running after it is not idle", () => {
+    const refused = buildConversationRows(
+      "agent-1",
+      [...compactCommand("t1"), userMsg("t2", "never mind"), compacted("t3", "cs-idle", "idle")],
+      true,
+    );
+    expect(refused.map((r) => r.key)).toEqual(["u-compact", "u-t2", "cs-idle"]);
+
+    const pending = buildConversationRows("agent-1", compactCommand("t1"), true, { cause: "manual" });
+    expect(pending.map((r) => r.key)).toEqual(["u-compact", "compaction-running"]);
   });
 
   it("puts the one-time notice under the chip row holding the latest idle compaction only", () => {

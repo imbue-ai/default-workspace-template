@@ -272,7 +272,7 @@ _TRANSCRIPT_CLOCK_SLACK_SECONDS: Final[float] = 2.0
 # background-task poller passes instead.
 _FINISHED_TASK_TURN_GRACE_PASSES: Final[int] = 3
 
-# Cap on the ``uv sync --all-packages`` a failed chat create runs before it retries; a sync
+# Cap on the ``uv sync --all-packages --frozen`` a failed chat create runs before it retries; a sync
 # with nothing to do takes well under a second.
 _VENV_SYNC_TIMEOUT_SECONDS: Final[float] = 300.0
 
@@ -4864,21 +4864,27 @@ class AgentManager:
         return True, None
 
     def _sync_workspace_venv(self, work_dir: Path) -> None:
-        """``uv sync --all-packages`` in the workspace; a failure is logged, and the retry runs regardless."""
+        """``uv sync --all-packages --frozen`` in the workspace; a failure is logged, and the retry runs regardless.
+
+        ``--frozen``, so a lock another agent has left out of date with ``pyproject.toml`` is synced from as
+        committed rather than rewritten under that agent's change.
+        """
         try:
             result = run_local_command_modern_version(
-                command=["uv", "sync", "--all-packages"],
+                command=["uv", "sync", "--all-packages", "--frozen"],
                 cwd=work_dir,
                 is_checked=False,
                 timeout=_VENV_SYNC_TIMEOUT_SECONDS,
                 shutdown_event=self._shutdown_event,
             )
         except (OSError, ConcurrencyGroupError) as e:
-            _loguru_logger.opt(exception=e).warning("uv sync --all-packages could not run")
+            _loguru_logger.opt(exception=e).warning("uv sync --all-packages --frozen could not run")
             return
         if result.returncode != 0:
             _loguru_logger.warning(
-                "uv sync --all-packages exited with code {}: {}", result.returncode, result.stderr.strip()[-500:]
+                "uv sync --all-packages --frozen exited with code {}: {}",
+                result.returncode,
+                result.stderr.strip()[-500:],
             )
 
     def _destroy_half_made_agent(self, chat_id: ChatId, agent_id: str) -> None:
