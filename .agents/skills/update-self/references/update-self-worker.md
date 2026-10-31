@@ -512,7 +512,8 @@ Valid `name:` values:
     `<your work_dir>/system/apps/chat/imbue/chat/static`,
     `<your work_dir>/system/apps/getting_started/src/getting_started/static`,
     `<your work_dir>/system/apps/files/static`,
-    `<your work_dir>/system/apps/routines/src/routines_app/static`, and
+    `<your work_dir>/system/apps/routines/src/routines_app/static`,
+    `<your work_dir>/system/apps/screen/src/screen/static`, and
     `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`); omit
     when you did not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
