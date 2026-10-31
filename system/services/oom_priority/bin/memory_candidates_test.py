@@ -556,7 +556,9 @@ def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
 
     apps = report.apps.candidates
     assert apps is not None
-    assert [(a.name, a.display_name, a.window_count, a.anonymous_kib) for a in apps] == [
+    assert [
+        (a.name, a.display_name, a.window_count, a.anonymous_kib) for a in apps
+    ] == [
         ("daily-digest", "Daily Digest", 2, 3072),
         ("lineup-scout", "lineup-scout", 0, 512),
     ]
