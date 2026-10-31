@@ -238,3 +238,19 @@ def test_take_unclaimed_does_not_void_the_flush_it_spares(tmp_path: Path) -> Non
     tracker.take_unclaimed()
     tracker.finish_flush(claimed, generation, delivered=claimed)
     assert _contents(tracker) == [], "the spared flush must still be able to settle"
+
+
+def test_note_flush_began_answers_when_an_earlier_flush_first_tried_the_entries(tmp_path: Path) -> None:
+    tracker = _tracker(tmp_path)
+    tracker.enqueue("first", "t0")
+    _block, claimed, _generation = tracker.begin_flush()
+    assert tracker.note_flush_began(claimed, 100.0) is None
+    assert tracker.note_flush_began(claimed, 105.0) == 100.0
+    assert tracker.note_flush_began(claimed, 110.0) == 100.0
+
+
+def test_note_flush_began_forgets_entries_a_later_flush_no_longer_claims(tmp_path: Path) -> None:
+    tracker = _tracker(tmp_path)
+    assert tracker.note_flush_began(("gone",), 100.0) is None
+    assert tracker.note_flush_began(("new",), 105.0) is None
+    assert tracker.note_flush_began(("gone",), 110.0) is None

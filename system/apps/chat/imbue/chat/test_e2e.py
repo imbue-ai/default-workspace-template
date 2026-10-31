@@ -22,6 +22,8 @@ from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -1341,7 +1343,7 @@ def test_a_send_refused_for_a_removed_account_offers_a_provider_instead_of_retry
         expect(notice).to_contain_text("Couldn't send your message", timeout=15000)
         expect(notice).to_contain_text("You signed out of the account this chat runs on.")
         expect(notice.get_by_role("button", name="Retry")).to_have_count(0)
-        expect(notice.get_by_role("button", name="Force")).to_have_count(0)
+        expect(notice.get_by_role("button", name="Restart")).to_have_count(0)
         notice.get_by_role("button", name="Choose a provider").click()
         expect(chat.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         expect(chat.locator(".message-input-textbox")).to_have_value("are you still there?")
@@ -1365,7 +1367,7 @@ def _append_user_turn(session_file: Path, uuid: str, text: str) -> None:
                 {
                     "type": "user",
                     "uuid": uuid,
-                    "timestamp": "2026-01-01T00:02:00Z",
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "message": {"role": "user", "content": text},
                 }
             )
@@ -1414,7 +1416,7 @@ def test_a_send_mngr_could_not_confirm_is_sent_again_and_says_so_under_the_messa
                     {
                         "type": "assistant",
                         "uuid": "resent-a-after-second",
-                        "timestamp": "2026-01-01T00:02:01Z",
+                        "timestamp": datetime.now(UTC).isoformat(),
                         "message": {
                             "role": "assistant",
                             "model": "claude-opus-4-6",
@@ -1431,13 +1433,20 @@ def test_a_send_mngr_could_not_confirm_is_sent_again_and_says_so_under_the_messa
         expect(chat.locator(".message-resent-note")).to_have_count(1)
         assert sent == [text, text]
 
+        # The chat app keeps the send, so the page says the same after a reload.
+        _open_fixture_chat(page, server)
+        reloaded = _chat(page)
+        expect(reloaded.get_by_text("Got it, twice.")).to_be_visible(timeout=15000)
+        expect(reloaded.locator(".message-user-bubble", has_text=text)).to_have_count(1)
+        expect(reloaded.locator(".message-resent-note")).to_have_count(1)
+
 
 @pytest.mark.timeout(120, func_only=False)
 def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_sending_it_once_more(
     tmp_path: Path, page: Page
 ) -> None:
     """The chat app's own second send could not be confirmed either, so it sends nothing more itself: the notice says
-    so in its own words rather than mngr's diagnostics, offers neither Retry nor Force, and the message stays in the
+    so in its own words rather than mngr's diagnostics, offers neither Retry nor Restart, and the message stays in the
     composer and is sent again only when Send again is pressed."""
     text = "did you get this?"
     sent: list[str] = []
@@ -1463,7 +1472,7 @@ def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_
         )
         expect(notice).not_to_contain_text("Timeout waiting")
         expect(notice.get_by_role("button", name="Retry")).to_have_count(0)
-        expect(notice.get_by_role("button", name="Force")).to_have_count(0)
+        expect(notice.get_by_role("button", name="Restart")).to_have_count(0)
         expect(chat.locator(".message-input-textbox")).to_have_value(text)
         assert sent == [text, text]
 

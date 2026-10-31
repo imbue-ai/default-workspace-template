@@ -954,7 +954,7 @@ def _fake_watcher(
         set_finished_tasks_callback=lambda _callback: None,
         notify_idle=lambda: [],
         notify_busy=lambda: None,
-        set_flush_hooks=lambda _send, _is_alive: None,
+        set_flush_hooks=lambda _send, _is_alive, _note_resent: None,
         get_all_events=get_all_events,
         start=start,
         stop=stop,
@@ -991,13 +991,32 @@ def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass(
     state = build_test_state(agent_manager=AgentManager.build(WebSocketBroadcaster(), messenger=messenger))
     flush_sends: list[Callable[[str], bool]] = []
     fake_watcher = _fake_watcher(lambda: [], lambda: None)
-    fake_watcher.set_flush_hooks = lambda send, _is_alive: flush_sends.append(send)
+    fake_watcher.set_flush_hooks = lambda send, _is_alive, _note_resent: flush_sends.append(send)
     try:
         with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
             state.get_or_create_watcher(_agent_info(harness=HarnessType.ANTIGRAVITY))
         (flush_send,) = flush_sends
         assert flush_send("held block") is True
         assert messenger.resend_choices == [False]
+    finally:
+        state.shutdown()
+
+
+def test_the_antigravity_flush_notes_a_block_it_sent_again_on_the_chat() -> None:
+    agent_info = _agent_info(harness=HarnessType.ANTIGRAVITY)
+    state = build_test_state(agent_manager=AgentManager.build(WebSocketBroadcaster()))
+    seed_agent_state(state.agent_manager, agent_info.id, name=agent_info.name)
+    note_hooks: list[Callable[[str, float], None]] = []
+    fake_watcher = _fake_watcher(lambda: [], lambda: None)
+    fake_watcher.set_flush_hooks = lambda _send, _is_alive, note_resent: note_hooks.append(note_resent)
+    try:
+        with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
+            state.get_or_create_watcher(agent_info)
+        (note_resent,) = note_hooks
+        note_resent("held block", 0.0)
+        snapshot = state.agent_manager.get_chat_snapshot(agent_info.id)
+        assert snapshot is not None
+        assert [send.text for send in snapshot.resent_sends] == ["held block"]
     finally:
         state.shutdown()
 
@@ -1146,12 +1165,16 @@ def test_a_send_delivered_by_a_second_send_answers_resent() -> None:
     agent_info = _agent_info()
     messenger = RecordingMngrMessenger(delivery=SendDelivery.RESENT)
     manager, client = _client_over(messenger)
+    seed_agent_state(manager, agent_info.id, name=agent_info.name)
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
         response = client.post(f"/api/chats/{agent_info.id}/message", json={"message": "hello"})
 
     assert response.status_code == 200
     assert response.get_json() == {"status": "resent"}
     assert messenger.sent == [(agent_info.id, "hello")]
+    snapshot = manager.get_chat_snapshot(agent_info.id)
+    assert snapshot is not None
+    assert [send.text for send in snapshot.resent_sends] == ["hello"]
     # Delivered all the same: kept to be sent again should the agent's process exit before recording it.
     assert [send.text for send in manager._unrecorded_sends_by_agent.get(agent_info.id, [])] == ["hello"]
 
@@ -1667,6 +1690,28 @@ def test_revive_and_retry_send_keeps_the_senders_choice_on_repeating_it(
         outcome = _revive_and_retry_send(agent_info, agent_manager, session, request_body, "m11", sleep=lambda _: None)
     assert outcome is SendOutcome.OK
     mock_send.assert_called_once_with("hi", "m11", not is_single_send)
+
+
+def test_a_send_delivered_by_a_second_send_on_the_revive_path_is_noted_on_its_chat(tmp_path: Path) -> None:
+    agent_id = "codex-agent-12"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager, client = _client_over(RecordingMngrMessenger())
+    seed_agent_state(manager, agent_id, name=agent_info.name)
+    session = _codex_session_over(None)
+
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch("imbue.chat.server.start_agent", lambda name: None),
+        patch.object(AgentManager, "get_or_create_session", return_value=session),
+        patch.object(session, "is_starting_up", return_value=False),
+        patch.object(session, "send", side_effect=[SendOutcome.NOT_READY, SendOutcome.RESENT]),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m12"})
+
+    assert response.get_json() == {"status": "resent"}
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    assert [send.text for send in snapshot.resent_sends] == ["hi"]
 
 
 def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:
@@ -2676,18 +2721,23 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
     assert fake_watcher.clear_calls == [True]
 
 
-def test_flush_queue_answers_resent_for_a_block_delivered_by_a_second_send(client: FlaskClient) -> None:
+def test_flush_queue_answers_resent_for_a_block_delivered_by_a_second_send() -> None:
+    agent_info = _agent_info()
+    manager, client = _client_over(RecordingMngrMessenger(delivery=SendDelivery.RESENT))
+    seed_agent_state(manager, agent_info.id, name=agent_info.name)
     with (
-        patch("imbue.chat.server._find_active_agent", return_value=_agent_info()),
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
         patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("queued text")),
         patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
         patch.object(AgentManager, "reset_activity_state"),
-        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.RESENT),
     ):
-        response = client.post("/api/chats/agent-123/flush-queue")
+        response = client.post(f"/api/chats/{agent_info.id}/flush-queue")
 
     assert response.status_code == 200
     assert response.get_json()["status"] == "resent"
+    snapshot = manager.get_chat_snapshot(agent_info.id)
+    assert snapshot is not None
+    assert [send.text for send in snapshot.resent_sends] == ["queued text"]
 
 
 def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> None:

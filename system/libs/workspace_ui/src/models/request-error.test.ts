@@ -56,12 +56,9 @@ describe("describeRequestErrorKind", () => {
     expect(describeRequestErrorKind(error)).toBe("submission_unconfirmed");
   });
 
-  it("reads a kind the chat has no handling for as unknown", () => {
-    // agent_not_found means nothing was typed, so the unknown kind's plain Retry fits it.
-    for (const kind of ["agent_not_found", "a_kind_added_later"]) {
-      const error = Object.assign(new Error("{}"), { code: 500, response: { detail: "x", kind } });
-      expect(describeRequestErrorKind(error)).toBe("unknown");
-    }
+  it("reads a kind it does not know as unknown", () => {
+    const error = Object.assign(new Error("{}"), { code: 500, response: { detail: "x", kind: "a_kind_added_later" } });
+    expect(describeRequestErrorKind(error)).toBe("unknown");
   });
 
   it("reads a failure with no kind as unknown", () => {

@@ -128,6 +128,13 @@ export function isHandoffCancellable(handoff: HandoffState): boolean {
   return handoff.kind === "handoff" && (handoff.phase === "draining" || handoff.phase === "summarizing");
 }
 
+/** A message delivered by sending it a second time (the backend's ``ResentSendSnapshot``). */
+export interface ResentSend {
+  text: string;
+  sent_after: number;
+  closed_at: number | null;
+}
+
 /** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
 export interface ChatSnapshot {
   chat_id: string;
@@ -150,6 +157,8 @@ export interface ChatSnapshot {
   // Epoch seconds of the chat's most recent message; null when it has never been messaged.
   // The chat root's list orders on it.
   last_messaged_at: number | null;
+  // The backend's ``ResentSendSnapshot``s, oldest first (see ResentSends.ts).
+  resent_sends?: ResentSend[];
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
