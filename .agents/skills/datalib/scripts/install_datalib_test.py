@@ -63,10 +63,13 @@ def workspace(tmp_path: Path) -> Path:
 
 
 def _run(
-    workspace: Path, state: str = "RUNNING", reread_exit: int = 0
+    workspace: Path,
+    state: str = "RUNNING",
+    reread_exit: int = 0,
+    args: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["bash", str(_SCRIPT)],
+        ["bash", str(_SCRIPT), *args],
         env={
             **os.environ,
             "DATALIB_INSTALL_ROOT": str(workspace / "install"),
@@ -124,3 +127,26 @@ def test_a_supervisord_that_cannot_reread_fails_the_install(workspace: Path) -> 
 
     assert result.returncode != 0
     assert _calls(workspace) == ["reread"]
+
+
+def test_without_the_app_the_binaries_are_linked_and_supervisord_is_left_alone(
+    workspace: Path,
+) -> None:
+    result = _run(workspace, args=("--without-app",))
+
+    assert result.returncode == 0, result.stderr
+    assert (workspace / "bin" / "datalib-step").resolve() == (
+        workspace / "install" / _pinned_version() / "datalib-step"
+    ).resolve()
+    assert not (workspace / "conf.d" / "datalib.conf").exists()
+    assert not (workspace / "supervisorctl.log").exists()
+
+
+def test_an_unknown_argument_is_refused_before_anything_is_installed(
+    workspace: Path,
+) -> None:
+    result = _run(workspace, args=("--quietly",))
+
+    assert result.returncode == 2
+    assert "--without-app" in result.stderr
+    assert not (workspace / "bin").exists()

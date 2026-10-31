@@ -1,5 +1,5 @@
-"""The app's state files: JSON documents under ``data/.state/getting-started/`` (the catalog's last good copy),
-each written atomically."""
+"""The app's state files: JSON documents under ``data/.state/getting-started/`` (the catalog's last good copy and
+the chat import card's dismissal), each written atomically."""
 
 import contextlib
 import json

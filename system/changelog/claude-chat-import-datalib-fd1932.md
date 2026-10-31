@@ -1,0 +1,1 @@
+The launcher-and-getting-started plan now lists the Getting Started page's "Bring in your chats" card (between the search field and "Start something") and names who owns its state: the app keeps whether the card was put away, the `import-chats` skill how far an import has got.
