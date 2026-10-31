@@ -1,0 +1,9 @@
+Built-in apps share the workspace venv, and every user-built package is its own uv project (`docs/system/blueprint/app-environments/plan-app-environments.md`).
+
+- **One install per built-in app.** Each built-in app's supervisord program execs its entry point from `.venv/bin` instead of a bare name, and the build no longer installs each app as its own uv tool (a second copy only an agent's PATH and the update pre-flight reached; a stale one rolled back a good update). The build removes any such tool an older image still carries (`tool_env.py drop-app-tools`). The built-in apps are root dependencies, and `system/config/mngr_plugins.toml` assigns plugins only to the mngr tool.
+
+- **Explicit root members.** The root `pyproject.toml` names every built-in library, service and app instead of globbing `system/*/*`. A package under `system/apps`, `system/services` or `system/libs` that it does not name is a user package, and `system/test_user_packages_are_standalone.py` holds each to the standalone layout: its own `uv.lock` (checked with `uv lock --check`), no workspace sources, and a program line that syncs its own project `--locked` before it execs from its own `.venv/bin`. `system/test_app_manifests.py` reads the built-ins from `members` and fails on a package that is neither listed nor standalone; the launch rules flag a root-venv one-off of a user package's command.
+
+- **User packages at boot, build and worker setup.** The bootstrap window links every user package's venv without syncing it; `build_workspace.sh` and worker provisioning sync each from its own lock, a failure stopping only that package (`system/scripts/workspace_bare_scripts/user_packages.py`). The root test run leaves user packages out; each runs from its own directory.
+
+- `contracts.md` section 14, the workspace-app-model plan, `workspace-internals.md`, the stop-when-no-windows spec, the critical-app-editing test plan and the app READMEs describe the layout.

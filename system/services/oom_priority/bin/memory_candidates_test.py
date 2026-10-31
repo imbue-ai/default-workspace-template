@@ -1,7 +1,6 @@
 """Tests for the memory candidates command, against a fake ``/proc``, a fake ``mngr list`` and fake
 browser-service and shell answers (all injected through ``Sources``)."""
 
-import importlib.util
 import json
 import os
 import string
@@ -14,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import memory_candidates
 import pytest
 from chat_background_tasks import markers
 from chat_background_tasks.testing import runner_task
@@ -23,10 +23,6 @@ from oom_priority.meminfo import HOST_MEMINFO_MAX_AGE_SECONDS
 from oom_priority.testing import FAKE_BOOT_ID, write_fake_process
 
 _SCRIPT = Path(__file__).parent / "memory_candidates.py"
-_spec = importlib.util.spec_from_file_location("memory_candidates", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
-memory_candidates = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(memory_candidates)
 
 _NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
 _BROWSER_URL = "http://browser.test"
@@ -248,7 +244,7 @@ def _sources(
     is_chat_busy: Callable[[str], bool] = _never_busy,
     supervised_pids: Mapping[str, int] | None = None,
     host_meminfo: Path | None = None,
-) -> object:
+) -> memory_candidates.Sources:
     return memory_candidates.Sources(
         proc_dir=proc_dir,
         host_meminfo=host_meminfo if host_meminfo is not None else proc_dir / "absent",
@@ -322,6 +318,7 @@ def test_lists_idle_chats_and_workers_with_last_activity_and_the_memory_of_their
     )
 
     agents = report.agents.candidates
+    assert agents is not None
     assert [(a.kind, a.name, a.display_name) for a in agents] == [
         ("chat", "chat-a", "Trip plan"),
         ("worker", "fix-login", None),
@@ -437,6 +434,7 @@ def test_an_agent_whose_chat_waits_on_a_background_task_is_not_a_candidate(
         )
     )
 
+    assert report.agents.candidates is not None
     assert [a.name for a in report.agents.candidates] == ["finished"]
 
 
@@ -499,6 +497,7 @@ def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(
     )
 
     browsers = report.browsers.candidates
+    assert browsers is not None
     assert [(b.name, b.controller, b.tab_count, b.active_url) for b in browsers] == [
         ("browser-1", "free", 2, "https://b.test/")
     ]
@@ -556,9 +555,8 @@ def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
     )
 
     apps = report.apps.candidates
-    assert [
-        (a.name, a.display_name, a.window_count, a.anonymous_kib) for a in apps
-    ] == [
+    assert apps is not None
+    assert [(a.name, a.display_name, a.window_count, a.anonymous_kib) for a in apps] == [
         ("daily-digest", "Daily Digest", 2, 3072),
         ("lineup-scout", "lineup-scout", 0, 512),
     ]
@@ -624,6 +622,7 @@ def test_a_window_the_browser_read_cannot_parse_leaves_the_apps_listed(
         _sources(proc, _FakeMngr([]), http, supervised_pids={"daily-digest": 600})
     )
 
+    assert report.apps.candidates is not None
     assert [(a.name, a.window_count) for a in report.apps.candidates] == [
         ("daily-digest", 1)
     ]
@@ -680,6 +679,7 @@ def test_a_failed_mngr_list_reports_agents_as_unknown_and_still_lists_browsers(
     assert report.agents.candidates is None
     assert len(report.agents.notes) == 1
     assert report.agents.notes[0].startswith("could not run `mngr list`: ")
+    assert report.browsers.candidates is not None
     assert [b.name for b in report.browsers.candidates] == ["browser-1"]
     assert (
         "Idle chats and workers (waiting, not on a background task, no activity for 15m or more):\n  unknown\n  note: could not run"
@@ -702,6 +702,7 @@ def test_a_listing_error_keeps_the_agents_mngr_did_list_and_notes_the_error(
         _sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
     )
 
+    assert report.agents.candidates is not None
     assert [a.name for a in report.agents.candidates] == ["chat-a"]
     assert report.agents.notes == (
         "mngr list exited 1: Errors while listing:; host-2: ssh timed out",
@@ -778,6 +779,7 @@ def test_an_unreachable_browser_service_reports_browsers_as_unknown_and_still_li
     assert report.browsers.notes[0].startswith(
         f"could not reach the browser service at {_BROWSER_URL}/browsers:"
     )
+    assert report.agents.candidates is not None
     assert [a.name for a in report.agents.candidates] == ["chat-a"]
 
 

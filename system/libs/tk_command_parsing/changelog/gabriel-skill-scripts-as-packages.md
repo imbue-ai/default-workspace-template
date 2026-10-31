@@ -1,0 +1,1 @@
+The README and the parser's docstring name the guard checks that import this library at their new home, `system/scripts/workspace_bare_scripts/`; the hooks now reach them through `system/scripts/agent_hook_check.py`.

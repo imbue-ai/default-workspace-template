@@ -41,13 +41,20 @@ build_inputs = [
     "system/scripts/install_agent_plugins.sh",
     "system/scripts/install_dependencies.sh",
     "system/scripts/_mngr_git_auth.sh",
+    # Run by install_dependencies.sh before its sync.
+    "system/scripts/workspace_bare_scripts/venv_links.py",
     "system/scripts/build_workspace.sh",
     "system/scripts/_tool_env.sh",
     "system/scripts/install_mngr.py",
-    "system/scripts/list_mngr_plugins.py",
-    # Read by those two to pick each tool's mngr plugins.
+    "system/scripts/workspace_bare_scripts/list_mngr_plugins.py",
+    # Read by those two to pick the mngr tool's plugins.
     "system/config/mngr_plugins.toml",
-    "system/scripts/tool_env.py",
+    "system/scripts/workspace_bare_scripts/tool_env.py",
+    # Lists and syncs the user packages in build_workspace.sh.
+    "system/scripts/workspace_bare_scripts/user_packages.py",
+    # The code the install_mngr.py entry stub imports.
+    "system/scripts/workspace_bare_scripts/__init__.py",
+    "system/scripts/workspace_bare_scripts/install_mngr.py",
     "system/scripts/default_workspace_template_seed.sh",
     "system/scripts/seed_home_skeleton.sh",
     # What the first-boot steps run on top of it.
@@ -58,7 +65,7 @@ build_inputs = [
 
 [framework]
 type = "pytest"
-command = "uv run pytest"
+command = "uv run --no-sync pytest"
 # Skip assertion-rewriting during `pytest --collect-only` -- pure overhead
 # there (OFFLOAD-18).
 discovery_args = "--assert=plain"

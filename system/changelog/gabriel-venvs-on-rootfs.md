@@ -1,0 +1,5 @@
+- Every `.venv` (the checkout's and each worktree's) is now a symlink to a target beside the uv cache (`/var/cache/user/venvs` on docker), so uv hardlinks packages from its cache instead of copying them onto the workspace volume: the root venv was a 512M copy. `system/scripts/workspace_bare_scripts/venv_links.py` keeps the links. The boot window, worker provisioning, the session-start sync, the build and the dependency install run its `ensure` before they sync. `ensure` recreates a target a rebuilt root filesystem lost, turns a real `.venv` directory into a link (putting the directory back if the sync fails), and deletes every target whose link is gone, so removed worktrees leave nothing behind. A target on a different filesystem from the cache gets a warning in the boot log.
+
+- An image build bakes the root venv's target into the image layer, and the first-boot seed copies only the `.venv` link, not a 512M venv.
+
+- New blueprint `docs/system/blueprint/app-environments/plan-app-environments.md`: one shared environment for the built-in packages, and a standalone project for each user package.

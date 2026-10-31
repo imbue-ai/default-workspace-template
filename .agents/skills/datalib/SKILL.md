@@ -2,6 +2,8 @@
 name: datalib
 description: Search and mirror the user's own personal data (chat history, Slack, email, GitHub, Notion, contacts, messages) with datalib, an UNANNOUNCED feature that is off by default. Use ONLY when the user explicitly says "datalib" -- never suggest, mention, or start it proactively, and never reach for it just because a request is about their past messages or mail.
 compatibility: Nothing of datalib is installed until this skill is first used; scripts/install_datalib.sh then downloads the binaries and datalib's own Node runtime (about 195 MB together). Needs curl and the latchkey gateway (present in a default-workspace-template agent).
+metadata:
+  author: imbue
 ---
 
 # datalib
@@ -57,11 +59,11 @@ mkdir -p "$DATA_ROOT"
 
    ```bash
    # File the sync. Prints one request id per line (one per source).
-   python3 .agents/skills/datalib/scripts/sync_request.py open slack/ingest --by "${MINDS_CHAT_ID:-agent}"
+   uv run --no-sync .agents/skills/datalib/python/datalib_skill/sync_request.py open slack/ingest --by "${MINDS_CHAT_ID:-agent}"
 
    # Wait for those requests in the background, then END YOUR TURN.
-   python3 system/scripts/run_in_background.py --description "Sync Slack into datalib" -- \
-     python3 .agents/skills/datalib/scripts/sync_request.py wait <request-id>...
+   python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Sync Slack into datalib" -- \
+     uv run --no-sync .agents/skills/datalib/python/datalib_skill/sync_request.py wait <request-id>...
    ```
 
    Tell the user the sync is running and that you will answer when it is
