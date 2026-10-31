@@ -1,5 +1,5 @@
 """Tests for the memory candidates command, against a fake ``/proc``, a fake ``mngr list`` and fake
-browser-service and shell answers (all injected through ``Sources``)."""
+Screen-service and shell answers (all injected through ``Sources``)."""
 
 import json
 import os
@@ -928,7 +928,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
 
 def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -> None:
     """End to end through the real wiring: a fake ``mngr`` on PATH printing two rendered agents, one of whose chats
-    waits on a background task, and a browser service nothing listens on."""
+    waits on a background task, and a Screen service nothing listens on."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
     long_ago = datetime.now(timezone.utc) - timedelta(hours=3)
