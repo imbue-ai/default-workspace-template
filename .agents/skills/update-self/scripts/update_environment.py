@@ -884,11 +884,16 @@ def refresh_backend_dependencies(
             f"refresh: {PYPROJECT_PATH} does not give {MNGR_TOOL_NAME} a source this can "
             "re-resolve; keeping the mngr tool the restored tree was running.\n"
         )
+    # Inexact runs can co-install renamed distributions owning the same paths.
+    # Removing the obsolete owner deletes files the retained metadata still
+    # claims; a normal sync then audits that hollow installation as satisfied.
+    # Reinstall the exact closure in place, including on recovery: this also
+    # repairs already-missing files without moving prefix-bound entrypoints.
     run_checked(
         runner,
-        expend(["uv", "sync", "--all-packages", "--frozen"]),
+        expend(["uv", "sync", "--all-packages", "--frozen", "--reinstall"]),
         repo_root,
-        "uv sync --all-packages --frozen",
+        "uv sync --all-packages --frozen --reinstall",
         timeout=timeout,
     )
     _fetch_mngr_assets(repo_root, runner, expend, timeout)
