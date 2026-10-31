@@ -63,6 +63,19 @@ describe("ChatRail status marks", () => {
     expect(dotClassOf("agent-idle")).not.toMatch(/chat-rail-dot--(dashed|pulse)/);
     expect(rail.querySelector('[data-chat-id="agent-wait"]')?.getAttribute("data-status")).toBe("background");
   });
+
+  it("leaves idle and stopped chats an empty slot, and dims only the stopped row", () => {
+    const rail = mount([chatRowFixture("agent-idle"), chatRowFixture("agent-stopped", { status: "stopped" })]);
+
+    for (const chatId of ["agent-idle", "agent-stopped"]) {
+      const dot = rail.querySelector(`[data-chat-id="${chatId}"] .chat-rail-dot`)!;
+      expect(dot.tagName).toBe("SPAN");
+      expect(dot.childElementCount).toBe(0);
+      expect(dotClassOf(chatId)).not.toMatch(/\b(bg-|border)/);
+    }
+    expect(rail.querySelector('[data-chat-id="agent-stopped"]')?.className).toContain("opacity-50");
+    expect(rail.querySelector('[data-chat-id="agent-idle"]')?.className).not.toContain("opacity-50");
+  });
 });
 
 describe("ChatRail main chat", () => {

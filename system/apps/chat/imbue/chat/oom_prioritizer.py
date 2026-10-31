@@ -54,6 +54,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Iterable
+from collections.abc import Sequence
 from typing import Final
 
 from oom_priority import bands
@@ -73,8 +74,8 @@ class ChatOomPrioritizer:
     """Holds chat activity state and re-tags each chat's ``oom_score_adj``.
 
     ``list_chat_ids`` returns the ids of the chats to manage (the caller excludes workers and
-    the primary agent). ``resolve_pid`` maps a chat to its active agent's live main-process
-    pid, or None when it has no running process.
+    the primary agent). ``resolve_pids`` maps a chat to its active agent's live main-process
+    pids (codex runs two), empty when it has no running process.
     ``set_adj`` writes ``oom_score_adj`` for a pid (best-effort; its return value
     is ignored); None makes an inert prioritizer that still accepts every report but
     computes nothing, writes nothing, and runs no sweep.
@@ -91,7 +92,7 @@ class ChatOomPrioritizer:
         self,
         *,
         list_chat_ids: Callable[[], Iterable[ChatId]],
-        resolve_pid: Callable[[ChatId], int | None],
+        resolve_pids: Callable[[ChatId], Sequence[int]],
         set_adj: Callable[[int, int], bool] | None,
         resolve_process_started_at: Callable[[ChatId], float | None],
         clock: Callable[[], float] = time.time,
@@ -99,7 +100,7 @@ class ChatOomPrioritizer:
         presence: PresenceTracker | None = None,
     ) -> None:
         self._list_chat_ids = list_chat_ids
-        self._resolve_pid = resolve_pid
+        self._resolve_pids = resolve_pids
         self._set_adj = set_adj
         self._resolve_process_started_at = resolve_process_started_at
         self._clock = clock
@@ -214,7 +215,7 @@ class ChatOomPrioritizer:
         """Recompute and write every managed chat's ``oom_score_adj``.
 
         Snapshots the activity state under the lock, then classifies, ranks by
-        recency, resolves each chat's pid, and writes its band -- all outside the
+        recency, resolves each chat's pids, and writes its band to each -- all outside the
         lock, so a write (or a call into the agent manager / pid registry) never
         blocks a concurrent activity report. Chats with no live process are
         skipped. Idempotent: concurrent reapplies converge on the same result.
@@ -245,8 +246,8 @@ class ChatOomPrioritizer:
         rank_by_id = {cid: rank for rank, cid in enumerate(messaged_newest_first)}
 
         for chat_id in chat_ids:
-            pid = self._resolve_pid(chat_id)
-            if pid is None:
+            pids = self._resolve_pids(chat_id)
+            if not pids:
                 continue
             is_visible = chat_id in visible_ids
             is_open = chat_id in open_ids
@@ -257,7 +258,8 @@ class ChatOomPrioritizer:
                 idle_seconds=self._idle_seconds(chat_id, last_engaged_at, now),
                 is_mid_turn=chat_id in running_ids,
             )
-            set_adj(pid, adj)
+            for pid in pids:
+                set_adj(pid, adj)
 
     def _idle_seconds(self, chat_id: ChatId, last_engaged_at: dict[ChatId, float], now: float) -> float | None:
         """How long ``chat_id`` has gone without engagement, or None if unknown.

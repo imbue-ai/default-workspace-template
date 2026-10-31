@@ -120,7 +120,9 @@ class RegistryRow(FrozenModel):
         default=False, description="Whether the shell may stop the app's program once no window shows it"
     )
     priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
-    default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new desktop is seeded with")
+    default_shortcut: DefaultShortcut | None = Field(
+        default=None, description="The shortcut a new desktop is seeded with"
+    )
     launch_paths: tuple[RegistryLaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at"
     )
@@ -167,9 +169,7 @@ def read_registry(path: Path) -> list[RegistryRow]:
             logger.warning(
                 "Skipped registry row {} ({}) in {}: {}",
                 row_idx,
-                raw_row.get("name", "<unnamed>")
-                if isinstance(raw_row, dict)
-                else "<not a table>",
+                raw_row.get("name", "<unnamed>") if isinstance(raw_row, dict) else "<not a table>",
                 path,
                 describe_validation_error(e),
             )
