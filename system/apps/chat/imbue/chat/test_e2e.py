@@ -22,6 +22,8 @@ from collections.abc import Generator
 from collections.abc import Mapping
 from collections.abc import Sequence
 from contextlib import AbstractContextManager
+from datetime import UTC
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -1365,7 +1367,7 @@ def _append_user_turn(session_file: Path, uuid: str, text: str) -> None:
                 {
                     "type": "user",
                     "uuid": uuid,
-                    "timestamp": "2026-01-01T00:02:00Z",
+                    "timestamp": datetime.now(UTC).isoformat(),
                     "message": {"role": "user", "content": text},
                 }
             )
@@ -1414,7 +1416,7 @@ def test_a_send_mngr_could_not_confirm_is_sent_again_and_says_so_under_the_messa
                     {
                         "type": "assistant",
                         "uuid": "resent-a-after-second",
-                        "timestamp": "2026-01-01T00:02:01Z",
+                        "timestamp": datetime.now(UTC).isoformat(),
                         "message": {
                             "role": "assistant",
                             "model": "claude-opus-4-6",
@@ -1430,6 +1432,13 @@ def test_a_send_mngr_could_not_confirm_is_sent_again_and_says_so_under_the_messa
         expect(chat.locator(".message-user-bubble", has_text=text)).to_have_count(1)
         expect(chat.locator(".message-resent-note")).to_have_count(1)
         assert sent == [text, text]
+
+        # The chat app keeps the send, so the page says the same after a reload.
+        _open_fixture_chat(page, server)
+        reloaded = _chat(page)
+        expect(reloaded.get_by_text("Got it, twice.")).to_be_visible(timeout=15000)
+        expect(reloaded.locator(".message-user-bubble", has_text=text)).to_have_count(1)
+        expect(reloaded.locator(".message-resent-note")).to_have_count(1)
 
 
 @pytest.mark.timeout(120, func_only=False)

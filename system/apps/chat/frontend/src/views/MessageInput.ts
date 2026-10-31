@@ -147,7 +147,8 @@ const pendingComposerPrepends = new Map<string, string>();
 // What the failure notice says about a send, in place of mngr's reason, which is written for its own
 // command line. "unknown" keeps that reason: it is the only account of what went wrong.
 const SEND_FAILURE_SENTENCES: Partial<Record<SendFailureKind, string>> = {
-  input_blocked: "The agent is waiting on something in its terminal. Answer it there and try again, or restart the agent.",
+  input_blocked:
+    "The agent is waiting on something in its terminal. Answer it there and try again, or restart the agent.",
   agent_unreachable: "The agent isn't running and didn't start. Restart it to send your message.",
   not_ready: "The agent isn't ready for messages yet. Try again in a moment.",
   state_unknown: "Couldn't reach the agent just now. Try again in a moment.",
