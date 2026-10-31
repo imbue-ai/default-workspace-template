@@ -39,8 +39,10 @@ TRANSCRIPT_CLOCK_SLACK_SECONDS: Final[float] = 2.0
 # composition root to the manager's send path (which resolves the agent's location).
 FlushSendCallback = Callable[[str], bool]
 
-# Record a block that landed on a later pass after an earlier one was not seen to, and the time the first pass began.
+# Record a block that landed on a later pass after an earlier one was not seen to, with the time a first copy of it
+# could have been stamped from at the earliest (``ResentSendSnapshot.sent_after``).
 FlushResentCallback = Callable[[str, float], None]
+
 # Whether the agent's process is currently alive -- see ``set_flush_hooks``.
 IsAliveCallback = Callable[[], bool]
 
@@ -273,7 +275,7 @@ class AgentSessionWatcher(TranscriptReader, ABC):
     def set_flush_hooks(
         self, send: "FlushSendCallback", is_alive: "IsAliveCallback", note_resent: "FlushResentCallback"
     ) -> None:
-        """Give a watcher the two capabilities it needs to DELIVER its own queue. No-op by default.
+        """Give a watcher the capabilities it needs to DELIVER its own queue. No-op by default.
 
         Only a harness that holds the queue on the agent's behalf needs these -- antigravity,
         whose parked messages live invisibly inside its TUI, so nothing else can deliver them.
@@ -284,4 +286,7 @@ class AgentSessionWatcher(TranscriptReader, ABC):
         flush that skipped this check would resurrect a stopped agent and deliver its queue,
         which the contract forbids outright ("NEVER auto-sent on resume"; "the queue is empty
         whenever the agent is stopped").
+
+        ``note_resent`` records a block that landed on a later pass, whose first copy may have
+        landed too, for the chat's "Sent again" line.
         """

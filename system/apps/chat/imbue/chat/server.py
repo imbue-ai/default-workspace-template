@@ -596,7 +596,7 @@ COMPACT_WHILE_STOPPED_DETAIL: Final[str] = "The agent isn't running. Send it a m
 # The message route's status for a /compact the chat asked mngr to run instead of sending it, which
 # no transcript turn will echo.
 COMPACTION_REQUESTED_SEND_STATUS: Final[str] = "compaction_requested"
-# The message route's status for a send Stop took back while its agent came up: nothing reached the agent.
+# The message route's status for a send Stop took back before it landed: nothing reached the agent.
 WITHDRAWN_SEND_STATUS: Final[str] = "withdrawn"
 # The message route's status for a send delivered by a second send, mngr having been unable to confirm the
 # first, which may have landed too.
