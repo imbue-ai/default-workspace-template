@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
+from pydantic import SecretStr
 
 from auth_sandbox.cli import (
     EXIT_MISSING_MATERIAL,
@@ -12,6 +13,7 @@ from auth_sandbox.cli import (
     set_credentials_command,
     sign_in_command,
 )
+from auth_sandbox.environment import identity_from_environ, sign_in_environment
 
 
 def test_sign_in_without_a_sandbox_key_names_the_missing_file_and_runs_nothing(
@@ -39,6 +41,11 @@ def test_sign_in_with_a_latchkey_it_cannot_run_is_missing_material_not_a_refusal
     # the refusal's code, which the chrome retries in the same sandbox.
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
     (tmp_path / "latchkey_key").write_text("key\n")
+    # The command puts the sign-in environment into this process; naming those variables in `env` has the
+    # runner restore each of them afterwards, set or not before.
+    sign_in_variables = sign_in_environment(
+        {}, identity_from_environ({}), tmp_path, SecretStr("key")
+    )
     result = CliRunner().invoke(
         sign_in_command,
         [
@@ -48,6 +55,7 @@ def test_sign_in_with_a_latchkey_it_cannot_run_is_missing_material_not_a_refusal
             "--latchkey-binary",
             "/nonexistent/latchkey",
         ],
+        env=dict.fromkeys(sign_in_variables),
     )
     assert result.exit_code == EXIT_MISSING_MATERIAL
     assert "/nonexistent/latchkey" in result.output
