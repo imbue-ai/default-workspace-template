@@ -458,8 +458,8 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
     assert by_name["browser"].critical is False
-    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, and System Monitor stop
-    # once no window shows them; the browser keeps running, since agents drive its browsers with no window; and the
+    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, System Monitor, and the Style
+    # Guide stop once no window shows them; the browser keeps running, since agents drive its browsers with no window; and the
     # critical ones (which the manifest refuses the field on) never stop.
     assert {
         name: manifest.stop_when_no_windows for name, manifest in by_name.items()
@@ -473,6 +473,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "getting-started": True,
         "routines": True,
         "system-monitor": True,
+        "style-guide": True,
     }
     # Where the minds Share tab lists each built-in: never for an internal one, under its System group for the
     # interfaces the workspace is built out of, and up front for the rest.
@@ -493,6 +494,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "getting-started": "system",
         "routines": "app",
         "system-monitor": "system",
+        "style-guide": "system",
     }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
     # focuses it like the browser's; it declares no launch path, so the desktop synthesizes ``open`` at its root.

@@ -5,3 +5,5 @@ The new `oom_priority.supervisord_testing` module holds `supervisord_commands`, 
 The launch-wrapper and memory-candidates tests import their scripts like the other `bin/` tests instead of loading them by path. Now that the type checker sees `memory_candidates`'s real types, the tests annotate their `Sources` helper and check that the candidate lists are present before reading them.
 
 The project requires Python 3.12 or newer (was 3.11), matching the workspace floor: every workspace already runs 3.12, and the lock already required it.
+
+`SERVICE_BANDS` gains `style-guide` (84), the Style Guide app's own band, between Getting Started and System Monitor: a built-in never sits in the user band.

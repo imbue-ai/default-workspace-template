@@ -70,3 +70,5 @@ Built-in apps share the workspace venv, and every user-built package is its own 
 - **User packages at boot, build and worker setup.** The bootstrap window links every user package's venv without syncing it; `build_workspace.sh` and worker provisioning sync each from its own lock, a failure stopping only that package (`system/scripts/workspace_bare_scripts/user_packages.py`). The root test run leaves user packages out; each runs from its own directory.
 
 - `contracts.md` section 14, the workspace-app-model plan, `workspace-internals.md`, the stop-when-no-windows spec, the critical-app-editing test plan and the app READMEs describe the layout.
+
+- The Style Guide app's drop-in execs `.venv/bin/style-guide-app` from the workspace venv like every other built-in app's, tagged into the app's own `style-guide` band.
