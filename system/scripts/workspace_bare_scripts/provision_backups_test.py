@@ -5,6 +5,7 @@ The pure parsing and the missing-key guard are exercised directly; the real
 local filesystem repository needs no network), and is skipped otherwise.
 """
 
+import shutil
 import uuid
 from pathlib import Path
 
@@ -73,6 +74,9 @@ def test_initialize_repository_surfaces_a_failure_without_retrying() -> None:
     assert scripted.call_count == 1
 
 
+@pytest.mark.skipif(
+    shutil.which("restic") is None, reason="restic binary not installed"
+)
 def test_initialize_repository_is_idempotent_against_a_local_repo(
     tmp_path: Path,
 ) -> None:
