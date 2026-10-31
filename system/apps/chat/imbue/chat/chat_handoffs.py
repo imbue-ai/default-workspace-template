@@ -20,6 +20,7 @@ than creating another.
 
 import shlex
 import string
+import threading
 from collections.abc import Callable
 from collections.abc import Iterable
 from collections.abc import Mapping
@@ -76,6 +77,7 @@ from imbue.concurrency_group.errors import ConcurrencyGroupError
 from imbue.concurrency_group.event_utils import ShutdownEvent
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.concurrency_group.subprocess_utils import run_local_command_modern_version
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.mutable_model import MutableModel
@@ -717,9 +719,11 @@ class HandoffRunner:
             ) from e
 
     def _switch(self, chat_id: ChatId, handoff_id: str, record: ChatRecord, handoff: ChatHandoffRecord) -> None:
-        """Stop, archive, and measure the retiring agent, then create the successor, set its model, and hand it
-        the prompt and the held sends.
+        """Archive the retiring agent, stop it while the successor is created, measure its segment, then set the
+        successor's model and hand it the prompt and the held sends.
 
+        The archival rename comes first because the successor is created under the chat's name, which the
+        retiring agent holds until then; the stop and the create share no lock, so neither waits on the other.
         The successor is tracked the moment its create returns and only appended to the record
         once its model pick has applied, so a pick that fails leaves the chat listing its
         retiring agent, as a failed create does, and a retry adopts the successor rather than
@@ -729,10 +733,14 @@ class HandoffRunner:
         """
         if record.agents[-1].agent_id != handoff.next_agent_id:
             retiring = _retiring_entry(record, handoff)
-            self._stop_retiring(chat_id, retiring)
-            self._archive_retiring(chat_id, handoff, retiring)
+            try:
+                self._archive_retiring(chat_id, handoff, retiring)
+            except HandoffStepError:
+                # The switch fails here, past the point of no return: the agent the chat still lists stops anyway.
+                self._stop_retiring(chat_id, retiring)
+                raise
+            successor_state = self._create_successor_while_stopping(chat_id, handoff_id, retiring, handoff)
             record_after_count = self._record_final_count(chat_id, handoff_id, retiring)
-            successor_state = self._create_successor(chat_id, handoff_id, record_after_count, handoff)
             if successor_state is None:
                 return
             # Tracked first: the record's handoff names the successor, so a tracked successor
@@ -744,6 +752,30 @@ class HandoffRunner:
             self._adopt_successor(chat_id, handoff_id, _retiring_entry(record_after_count, handoff), handoff)
         self._deliver_prompt(chat_id, handoff_id)
         self._deliver_held_sends(chat_id, handoff_id, handoff.next_agent_id)
+
+    def _create_successor_while_stopping(
+        self, chat_id: ChatId, handoff_id: str, retiring: ChatAgentEntry, handoff: ChatHandoffRecord
+    ) -> AgentStateItem | None:
+        """Create the successor while the retiring agent stops on a thread of its own, and return once both are done.
+
+        Returns what ``_create_successor`` does. The stop's failure is raised once the create is over, so the
+        retiring agent's segment is never measured while it may still be writing; the create's own failure wins
+        over it, since that is the step the runner has to answer for.
+        """
+        stopper = ObservableThread(
+            target=self._stop_retiring,
+            args=(chat_id, retiring),
+            name=f"handoff-stop-{str(chat_id)[:14]}",
+            silenced_exceptions=(AgentStopError, OSError),
+        )
+        stopper.start()
+        try:
+            successor_state = self._create_successor(chat_id, handoff_id, handoff)
+        finally:
+            # The plain join: ``ObservableThread.join`` would raise the stop's failure over the create's.
+            threading.Thread.join(stopper)
+        stopper.maybe_raise()
+        return successor_state
 
     def _stop_retiring(self, chat_id: ChatId, retiring: ChatAgentEntry) -> None:
         agent_state = self._deps.get_agent_state(retiring.agent_id)
@@ -792,9 +824,7 @@ class HandoffRunner:
             chat_id, handoff_id, lambda record: _with_retiring_closed(record, retiring, ended_at, count)
         )
 
-    def _create_successor(
-        self, chat_id: ChatId, handoff_id: str, record: ChatRecord, handoff: ChatHandoffRecord
-    ) -> AgentStateItem | None:
+    def _create_successor(self, chat_id: ChatId, handoff_id: str, handoff: ChatHandoffRecord) -> AgentStateItem | None:
         """Create the successor under its pre-minted id, or adopt one an earlier attempt already made.
 
         Returns its tracked state, or None once the failed phase has been written.

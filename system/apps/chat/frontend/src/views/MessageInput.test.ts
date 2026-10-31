@@ -1476,6 +1476,15 @@ describe("MessageInput switching harness", () => {
     expect(findByAttr(rendered, "aria-label", "Cancel switch")).toBeUndefined();
   });
 
+  it("offers Stop for the successor's turn once the handoff has landed, with the ordinary placeholder", () => {
+    mocks.agent.activity_state = "THINKING";
+    mocks.switching.handoff = handoffStateFixture({ phase: "switching", has_landed: true });
+    const rendered = MessageInput().view!({ attrs: { chatId: "agent-1" } } as never);
+    expect(findByAttr(rendered, "aria-label", "Interrupt agent")).toBeDefined();
+    expect(findByAttr(rendered, "aria-label", "Cancel switch")).toBeUndefined();
+    expect(findByTag(rendered, "textarea")?.attrs?.placeholder).toBe("Type to queue more messages...");
+  });
+
   it("gives its draft up to a sibling that takes it, attachments and all, and comes back empty", async () => {
     mocks.getComposerAttachments.mockReturnValue([
       { localId: "a1", fileName: "plan.pdf", status: "ready", uploaded: { path: "/uploads/plan.pdf" } },

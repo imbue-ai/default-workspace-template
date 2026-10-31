@@ -1646,10 +1646,13 @@ def test_a_chat_with_no_user_turn_switches_at_once_and_leaves_no_handoff_node(tm
         _open_provider_menu(chat)
         chat.locator('[data-menu-part="submenu"] button', has_text="OpenAI").first.click()
 
-        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, and only the
-        # line by the composer reports it while it does.
-        expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_contain_text("Starting Codex")
-        expect(chat.locator("[data-handoff-status]")).to_have_count(0)
+        # Nothing to hand over, so nothing asks and nothing is armed: the switch runs at once, one line in the
+        # conversation says the chat is starting on Codex (no handoff, and nothing by the composer), and the chip
+        # names Codex rather than the model it is leaving.
+        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Starting Codex")
+        expect(chat.locator(".message-list")).not_to_contain_text("Handing off")
+        expect(chat.locator(".agent-activity-indicator")).to_have_count(0)
+        expect(chat.locator(".model-selector-trigger")).to_contain_text("Codex")
         expect(chat.locator(".modal-card")).to_have_count(0)
         expect(chat.locator(".message-input-switch-strip")).to_have_count(0)
 
@@ -1689,12 +1692,12 @@ def test_a_chat_switches_to_another_harness_from_the_page(tmp_path: Path, page: 
         _choose_pending_account(chat, "OpenAI", "OpenAI (Codex)")
         _switch_and_send(chat, "Carry on in Codex")
 
-        # The typed message stays visible as a held bubble, the handoff node reports the switch's
-        # progress, and the strip above the composer reports the switch rather than a turn.
+        # The typed message stays visible as a held bubble, and the handoff node in the conversation is the one
+        # place that reports the switch's progress: nothing by the composer meanwhile.
         held = chat.locator(".held-send", has_text="Carry on in Codex")
         expect(held).to_be_visible(timeout=15000)
-        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Handing off to Codex")
-        expect(chat.locator('.agent-activity-indicator[data-state^="HANDOFF_"]')).to_be_visible()
+        expect(chat.locator('[data-handoff-status="active"]')).to_be_visible()
+        expect(chat.locator(".agent-activity-indicator")).to_have_count(0)
         expect(chat.locator(".message-input-send-button--switch")).to_have_count(0)
         expect(chat.locator(".message-input-switch-strip")).to_have_count(0)
 
@@ -1885,7 +1888,7 @@ def test_a_switch_is_cancelled_while_the_summary_is_written_and_the_message_come
         # period, long enough to call the switch off. The node reports the switch meanwhile.
         cancel = chat.locator(".message-input-cancel-switch-button")
         expect(cancel).to_be_visible(timeout=15000)
-        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Handing off to Codex")
+        expect(chat.locator('[data-handoff-status="active"]')).to_contain_text("Claude Code is writing a summary")
         cancel.click()
 
         expect(chat.locator(".message-input-textbox")).to_have_value("Carry on in Codex", timeout=15000)

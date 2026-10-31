@@ -1494,8 +1494,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       const isUninterruptibleCompaction =
         activityState === COMPACTING_STATE &&
         getHarnessCatalog(chat?.active_agent.harness)?.can_interrupt_compaction === false;
+      // A handoff that has landed runs on its successor already: that agent's turn is stoppable like any other.
+      const isSwitchInTheWay = handoff !== null && !handoff.has_landed;
       const isStopButtonVisible =
-        (isAgentWorking || isConnecting) && !isInterruptInFlight && handoff === null && !isUninterruptibleCompaction;
+        (isAgentWorking || isConnecting) && !isInterruptInFlight && !isSwitchInTheWay && !isUninterruptibleCompaction;
       const isCancelSwitchVisible = handoff !== null && isHandoffCancellable(handoff);
       // Read straight off the backend's queue snapshot -- the frontend holds no queued state.
       const hasQueuedMessages = (chat?.active_agent.queued_messages ?? []).length > 0;
@@ -1547,12 +1549,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-primary focus:outline-none " +
                     "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
                     "disabled:cursor-not-allowed disabled:opacity-60",
-                  placeholder:
-                    handoff !== null
-                      ? handoffComposerPlaceholder(handoff)
-                      : isAgentWorking
-                        ? "Type to queue more messages..."
-                        : "Type a message...",
+                  placeholder: isSwitchInTheWay
+                    ? handoffComposerPlaceholder(handoff)
+                    : isAgentWorking
+                      ? "Type to queue more messages..."
+                      : "Type a message...",
                   rows: 1,
                   disabled: isComposerDisabled,
                   value: messageText,

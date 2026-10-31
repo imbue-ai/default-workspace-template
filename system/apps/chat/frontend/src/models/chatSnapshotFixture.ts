@@ -53,6 +53,7 @@ export function handoffStateFixture(overrides: Partial<HandoffState> = {}): Hand
     error: null,
     failed_step: null,
     is_fresh_start: false,
+    has_landed: false,
     ...overrides,
   };
 }
@@ -73,6 +74,7 @@ export function rebindStateFixture(overrides: Partial<HandoffState> = {}): Hando
     error: null,
     failed_step: null,
     is_fresh_start: false,
+    has_landed: false,
     ...overrides,
   };
 }
