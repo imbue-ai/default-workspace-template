@@ -1,10 +1,11 @@
 """Verification of the broker's handoff JWT at the gateway's login callback.
 
 The broker (at the accounts domain) mints a 60-second RS256 token
-``{sub, email, owner, aud: <workspace-domain>, jti, nonce}`` and redirects the
-visitor here. Verification: signature against the broker's published JWKS
-(cached; refreshed once on an unknown ``kid``), audience must be exactly this
-workspace's domain, ``nonce`` must match the state this gateway minted for the
+``{sub, email, owner, aud, jti, nonce}`` and redirects the visitor here.
+Verification: signature against the broker's published JWKS (cached;
+refreshed once on an unknown ``kid``), audience must be exactly this
+workspace's domain (on a share whose cookies are host-only, the host the
+callback runs on), ``nonce`` must match the state this gateway minted for the
 pending login, and each ``jti`` is single-use. The verified claims become the
 requester's identity record, which the session cookie then carries. An older
 broker may still add profile claims (``display_name``, ``avatar_url``); they
