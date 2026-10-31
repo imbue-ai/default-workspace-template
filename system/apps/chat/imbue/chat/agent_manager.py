@@ -4758,6 +4758,7 @@ class AgentManager:
         with self._lock:
             self._creation_settled_by_chat.pop(chat_id, None)
             self._background_tasks_by_chat.pop(chat_id, None)
+            self._resent_sends_by_chat.pop(chat_id, None)
 
     def _initial_discover(self) -> None:
         """Perform initial agent discovery and start per-agent tracking."""

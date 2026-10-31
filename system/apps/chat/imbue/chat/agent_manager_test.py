@@ -8432,3 +8432,17 @@ def test_a_chat_keeps_only_its_latest_messages_sent_again(broadcaster: WebSocket
     snapshot = manager.get_chat_snapshot(agent_id)
     assert snapshot is not None
     assert [send.text for send in snapshot.resent_sends] == [f"message {count}" for count in range(5, 25)]
+
+
+def test_removing_a_chats_agent_forgets_its_messages_sent_again(broadcaster: WebSocketBroadcaster) -> None:
+    manager = AgentManager.build(broadcaster)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Chat")
+    manager.note_resent_send(agent_id, "hello", 0.0)
+
+    manager.remove_agent(agent_id)
+
+    seed_agent_state(manager, agent_id, name="Chat")
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    assert snapshot.resent_sends == ()
