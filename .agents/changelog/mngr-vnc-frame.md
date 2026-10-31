@@ -14,7 +14,7 @@ The browser moved onto the Screen (`docs/system/specs/screen/spec.md`, sections 
 
 The update apply (`update-self`) carries a workspace that ran the browser app onto the Screen:
 
-- The old `browser` uv tool goes the way every per-app tool install does under the fresh-venv apply: `tool_env.py drop-app-tools` removes the tool environments older builds installed editable from an app directory, console scripts included, and the Screen runs from the workspace venv, so nothing is installed over the `agentic-browser-fleet` script the old tool owned.
+- The old `browser` uv tool goes the way every per-app tool install does under the fresh-venv apply: once the merged tree is live and healthy, the apply runs the sweep the build's `tool_env.py drop-app-tools` runs (`tool_env.remove_app_tool_installs`), which removes the tool environments older builds installed editable from an app directory, console scripts included, and only warns when it cannot. The Screen runs from the workspace venv, so nothing is installed over the `agentic-browser-fleet` script the old tool owned.
 
 - The Screen's viewer is one of the frontend bundles the apply builds, installs from the worker (`--worker-bundle screen=<path>`), snapshots and verifies, beside the shell's, the chat's, Getting Started's, Files' and Routines'; a change under `system/apps/screen/frontend/` rebuilds like any other frontend's.
 
