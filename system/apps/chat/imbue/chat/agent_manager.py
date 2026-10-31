@@ -1729,6 +1729,7 @@ class AgentManager:
             kept = self._resent_sends_by_chat.get(chat_id, ())
             added = ResentSendSnapshot(text=text, sent_after=sent_after, closed_at=None)
             self._resent_sends_by_chat[chat_id] = (*kept, added)[-_RESENT_SENDS_KEPT_PER_CHAT:]
+        _loguru_logger.info("A message to chat {} was sent again", chat_id)
         self._broadcast_chats_updated()
 
     def show_automatic_title(self, chat_id: ChatId, title: str) -> None:

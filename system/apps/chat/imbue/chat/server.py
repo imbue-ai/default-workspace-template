@@ -902,8 +902,6 @@ def _send_to_chat(
             is ComposerCompactHandling.REQUESTED_FROM_MNGR
         )
         is_resent = outcome is SendOutcome.RESENT
-        if is_resent:
-            logger.info("Send to chat {} was sent again", chat_id)
         _report_unreported_runner_ends(state, chat_id)
     record_client_message_activity(state.shell, chat_id, send_message_request, state.is_secondary)
     # Recorded after the delivery, once the revived process (if any) is up and its pid can be
@@ -1438,6 +1436,7 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
         if isinstance(resend, SendFailure):
             # The harness said why; passing that on rather than a generic sentence is the whole
             # point of carrying it this far.
+            logger.info("Flush of chat {}'s queue failed: {}", chat_id, resend.kind)
             return model_response(SendFailureResponse(detail=resend.reason, kind=resend.kind), 500)
         if resend is SendDelivery.RESENT:
             agent_manager.note_resent_send(agent_info.id, block, sent_after)
