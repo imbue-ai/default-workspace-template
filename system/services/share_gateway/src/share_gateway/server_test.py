@@ -499,17 +499,20 @@ def test_callback_on_an_auth_sandbox_refuses_a_token_minted_for_another_host(
 ) -> None:
     # Every sandbox of a region shares the workspace domain, so on such a share the token must name
     # the host the callback runs on: one the broker minted for the shared domain, or for another
-    # sandbox's host, opens no session here.
+    # sandbox's host, opens no session here, even sent with that other host as its Host header
+    # (caddy routes by SNI, so the header is the client's to choose).
     harness = _make_harness(tmp_path, is_cookie_host_only=True)
-    for jti, audience in (
-        ("jti-domain", _DOMAIN),
-        ("jti-other", f"screen-other111.{_DOMAIN}"),
+    other_host = f"screen-other111.{_DOMAIN}"
+    for jti, audience, host in (
+        ("jti-domain", _DOMAIN, _WEB_HOST),
+        ("jti-other", other_host, _WEB_HOST),
+        ("jti-other-host", other_host, other_host),
     ):
         nonce = harness.pending_logins.mint(is_retry=False)
         token = _mint_handoff(nonce, audience=audience, jti=jti, is_owner=True)
 
         resp = harness.client.get(
-            f"/_auth/callback?token={token}&state={nonce}", headers={"Host": _WEB_HOST}
+            f"/_auth/callback?token={token}&state={nonce}", headers={"Host": host}
         )
 
         assert resp.status_code == 302
