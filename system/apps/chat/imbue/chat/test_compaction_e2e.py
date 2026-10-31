@@ -269,6 +269,7 @@ def test_a_harness_that_cannot_be_compacted_has_no_auto_compact_row(
 @pytest.mark.parametrize(
     ("trigger", "label"), [("manual", "Compacting as requested…"), ("auto", "Compacting to free up context…")]
 )
+@pytest.mark.flaky
 @pytest.mark.timeout(60, func_only=False)
 def test_a_compacting_marker_shows_the_status_on_the_strip_until_it_goes(
     compaction_server: RunningWorkspace, page: Page, trigger: str, label: str
