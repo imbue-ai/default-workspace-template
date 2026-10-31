@@ -1368,7 +1368,10 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           body: isUnconfirmed
             ? ["The agent may already have it, so check its terminal before you send it again."]
             : sendFailureSentence !== undefined
-              ? [sendFailureSentence, recovery === null ? null : SEND_FAILURE_RESTART_SENTENCES[actionFailureKind]]
+              ? [
+                  sendFailureSentence,
+                  recovery === null ? null : (SEND_FAILURE_RESTART_SENTENCES[actionFailureKind] ?? null),
+                ]
               : [detail, isRepeatable ? "You can open the agent's terminal, fix it there, then Retry." : null],
           dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
           isDismissable: actionFailureInFlight === null,
