@@ -85,10 +85,10 @@ host_env__extend = [
     # Debian 12 lima VM on the launch-to-msg M5 runner; Ubuntu 24.04 lima
     # guests don't advertise SVE so they don't hit this.
     "OPENSSL_armcap=0",
-    # Lower memory for every Claude Code process: the chat's claude, the claude -p helpers
-    # (pi-claude-code) it spawns, any claude a skill launches. Claude Code is a Bun
-    # program, so the BUN_ and BUN_JSC_ variables apply to it (NODE_OPTIONS does not) and
-    # have to be set here: settings.json `env` is applied after the runtime has started.
+    # Lower memory for every Claude Code process: the chat's claude and any claude -p or
+    # claude a tool or skill launches from it. Claude Code is a Bun program, so the BUN_
+    # and BUN_JSC_ variables apply to it (NODE_OPTIONS does not) and have to be set here:
+    # settings.json `env` is applied after the runtime has started.
     # Measured on Claude Code 2.1.307 under gVisor, a process's own (anonymous) memory:
     # a loaded full chat 242 -> 205 MB, 261 -> 212 MB after one reply (resumed real chats,
     # 2 to 3 runs each), a fresh chat peak 278 -> 210 MB, the claude -p helper 154 -> 134 MB.
