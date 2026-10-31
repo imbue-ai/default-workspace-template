@@ -840,7 +840,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             if (!awaiting.is_seeded) {
               await launchChat(chatId, accountId);
               priorTurnIds = sentUserTurnIds(chatId);
-              await sendMessage(chatId, finalText, messageId);
+              dropOutgoingNoTurnWillRetire(chatId, outgoingId, await sendMessage(chatId, finalText, messageId));
               refocusAfterSend();
               return;
             }

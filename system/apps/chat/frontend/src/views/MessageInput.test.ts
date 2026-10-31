@@ -951,6 +951,13 @@ describe("MessageInput first send of a chat with no seed", () => {
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessage.mock.calls[0]).toEqual(expect.arrayContaining(["agent-1", "Plan my week"]));
   });
+
+  it("drops the bubble of a first send that Stop took back, which no turn will retire", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("withdrawn");
+    await typeAndSend(MessageInput(), "agent-1", "Taken back");
+
+    expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.content)).not.toContain("Taken back");
+  });
 });
 
 describe("MessageInput stop while connecting", () => {
