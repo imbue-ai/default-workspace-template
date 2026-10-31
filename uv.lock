@@ -62,6 +62,7 @@ members = [
     "update-self-skill",
     "use-ai-integration-skill",
     "workspace-layout",
+    "workspace-profile",
     "workspace-scripts",
     "workspace-themes",
 ]
@@ -4726,6 +4727,31 @@ requires-dist = [
     { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=b1bf18b91939da044698693c5837ea39b3c35f2e" },
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.12" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ty", specifier = "==0.0.85" }]
+
+[[package]]
+name = "workspace-profile"
+version = "0.1.0"
+source = { editable = "system/libs/workspace_profile" }
+dependencies = [
+    { name = "imbue-common" },
+    { name = "loguru" },
+    { name = "pydantic" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "imbue-common", git = "https://github.com/imbue-ai/mngr?subdirectory=libs%2Fimbue_common&rev=b1bf18b91939da044698693c5837ea39b3c35f2e" },
+    { name = "loguru", specifier = ">=0.7" },
+    { name = "pydantic", specifier = ">=2.0" },
 ]
 
 [package.metadata.requires-dev]

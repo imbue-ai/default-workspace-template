@@ -125,6 +125,7 @@ members = [
     "system/libs/routines",
     "system/libs/tk_command_parsing",
     "system/libs/workspace_layout",
+    "system/libs/workspace_profile",
     "system/libs/workspace_themes",
     "system/services/caretaker",
     "system/services/env_converge",
