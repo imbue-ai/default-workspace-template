@@ -127,6 +127,10 @@ class _StopInterrupter(InterruptToComposer):
     def __init__(self, is_failing: bool) -> None:
         self.is_failing = is_failing
 
+    @classmethod
+    def build(cls, agent_info: AgentInfo) -> "_StopInterrupter":
+        return cls(is_failing=False)
+
     def drain_to_composer(
         self,
         watcher: AgentSessionWatcher,
