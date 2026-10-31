@@ -1,1 +1,0 @@
-The upgrade's `apt-get update` and `apt-get full-upgrade` steps now pass `-oDPkg::Lock::Timeout=600`, so apt waits up to ten minutes for the dpkg lock instead of failing at once when the boot-time converge (or any concurrent install) holds it. The per-step timeout (30 minutes) still bounds a genuinely wedged lock.

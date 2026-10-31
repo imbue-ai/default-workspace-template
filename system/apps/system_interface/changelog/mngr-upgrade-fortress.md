@@ -1,1 +1,0 @@
-The phone-and-laptop e2e test of the shell runs its stub app with a new-window-per-launch shortcut (`stub_shortcut_mode="new"` on `_running_e2e_server`): under the one-window launch rule the focusing stub became a one-window app, so the phone's launch landed in the laptop's window and the test failed. Test-only; the shell's behavior is unchanged.
