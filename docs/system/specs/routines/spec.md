@@ -398,9 +398,11 @@ The daily routines-only check is a second definition later, `caretaker-routines.
 `routines migrate-cron` converts what a workspace has:
 
 - Every `data/.state/cron.d` entry whose line runs `run_job.sh` becomes a definition: the job id, `--every`, `--at`, and `--retry-after` map to the fields; a command that is `run_automation.sh <skill>` becomes `skill`; a `caretaker` entry becomes the switch on the shipped definition.
-  `data/.state/jobs/<id>/` becomes the state's `last_succeeded_at` and `consecutive_failures`.
+  `data/.state/jobs/<id>/` becomes the state's `last_succeeded_at` and `consecutive_failures`; a job that never ran on minds-v0.8.7 still keeps it under `system/data/.state/jobs/<id>/`, and when both hold one, the later success wins.
   The title is the id with the hyphens read as spaces, and `what` is the command, until an agent describes it.
 - A plain cron line whose five fields are one of the shapes section 5 expresses becomes a definition the same way; one that is not is left in place with a warning in the boot log, since the daemon still runs it.
+- A command is its words when the shell would only split it; one with quoting, operators or expansions runs through the entry's `SHELL` (else `/bin/sh`) as the text cron ran.
+  `\%` is a literal `%`; a line whose bare `%` feeds the command input is left in place.
 - Both copies of every converted entry are removed.
 - The Imbue Studio app's `update-self-dispatch` entry stays with cron, untouched: the app rewrites it whenever it arms an update, so a routine of it would run beside the cron line rather than replace it.
 
