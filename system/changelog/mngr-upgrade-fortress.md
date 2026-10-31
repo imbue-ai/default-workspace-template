@@ -6,6 +6,8 @@ Upgrade Fortress (the Screen's stealth Chromium) from v151.0.7908.0 to v156.0.80
 
 - No license key is provisioned: unlicensed, Fortress prints one notice and runs the public first-generation engine, matching the fleet's v151 behavior (and this repository is public, so a shipped key would be too).
 
+- v156 replays a recorded human cursor trajectory for every pointer move it is sent (v151 teleported the pointer): a click on a target away from the pointer's last position returns in up to about a second, and after the press the cursor glides across whatever lies between the two points, so a hover-sensitive control can change under a test that reads it right after such a click. `AGENTS.md` says so beside the Playwright instructions, and the one workspace test this caught (the chat's auto-compact e2e test) drives its submenu with the keyboard.
+
 - The Chrome extensions are fetched for Chrome 156, and the pre-2026-10-18 legacy-layout satisfied check (a CLEANUP for images that unpacked v151 straight into the stable path) is dropped -- those images exist only on this branch's history and a layout that old now simply reinstalls.
 
 - The update apply no longer races the boot-time env-converge for the dpkg lock: its post-success `env-converge upgrade` first waits (bounded, 15 minutes) for the one-shot env-converge program to finish -- the apply's own services restart re-runs it, and a unit with new pins (this branch's Screen stack) can keep it installing for minutes -- and the upgrade's apt steps now pass `-oDPkg::Lock::Timeout=600` so apt waits for the lock instead of failing at once. Found by the upgrade end-to-end test, where the apply's `apt_full_upgrade` step failed with "Could not get lock /var/lib/dpkg/lock-frontend" while the Screen stack installed.
