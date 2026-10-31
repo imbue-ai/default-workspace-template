@@ -15,7 +15,6 @@ the agent manager.
 from __future__ import annotations
 
 import fcntl
-import importlib.util
 import json
 import os
 import queue
@@ -43,7 +42,6 @@ from datetime import timezone
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from types import ModuleType
 from typing import Any
 from typing import Final
 from unittest.mock import patch
@@ -745,22 +743,6 @@ def write_gated_mngr_binary(tmp_path: Path) -> tuple[str, Path, Path]:
     )
     script.chmod(0o755)
     return str(script), log_path, gate_path
-
-
-# The room's reader (``system/scripts/workspace_bare_scripts/room_agent.py``), which writes a room's transcript from
-# the agent's pane.
-ROOM_AGENT_SCRIPT_PATH: Final[Path] = (
-    Path(__file__).parents[5] / "system" / "scripts" / "workspace_bare_scripts" / "room_agent.py"
-)
-
-
-def load_room_agent_script() -> ModuleType:
-    """The room's reader as a module, for a test that writes a room's transcript the way ``mngr message`` comes to."""
-    spec = importlib.util.spec_from_file_location("room_agent_for_tests", ROOM_AGENT_SCRIPT_PATH)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: pytest.MonkeyPatch) -> Path:

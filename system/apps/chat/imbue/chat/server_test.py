@@ -33,6 +33,7 @@ from pydantic import Field
 from pydantic import SecretStr
 from werkzeug.test import TestResponse
 from workspace_bare_scripts import message_chat
+from workspace_bare_scripts import room_agent
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import parse_identity_header
@@ -133,7 +134,6 @@ from imbue.chat.testing import close_ws
 from imbue.chat.testing import compact_summary_record
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
-from imbue.chat.testing import load_room_agent_script
 from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
@@ -5923,7 +5923,6 @@ def _room_events(client: FlaskClient) -> list[dict[str, Any]]:
 
 def _post_into_room_as_the_agent(text: str) -> None:
     """What ``mngr message <room>`` comes to: the room's reader appends the typed text as the workspace agent's."""
-    room_agent = load_room_agent_script()
     state_dir = agent_state_dir(get_host_dir(), _LOUNGE_ID)
     author, name, said = room_agent.author_of_typed_text(text)
     room_agent.ensure_header(state_dir / room_agent.TRANSCRIPT_RELATIVE_PATH, _LOUNGE_ID)
