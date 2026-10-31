@@ -143,6 +143,8 @@ AGENT_LOG_MEMBER_DIR = "agent-logs"
 UPDATE_APPLY_STATE_REL = "data/.state/update-apply"
 UPDATE_APPLY_RECORD_FILES = (
     "schedule.json",
+    "skipped-target.json",
+    "dismissals.json",
     "run.json",
     "last-dispatch.json",
     "dispatch-attempt.json",

@@ -162,6 +162,15 @@ class BackupConfig(FrozenModel):
             "event, at most once a day"
         ),
     )
+    verification_disabled: bool = Field(
+        default=False,
+        description=(
+            "Whether the Imbue Studio app's exec-based verification of this "
+            "workspace's backup service is turned off. Written by the app (per "
+            "workspace, from its backups panel) and read back by it; the backup "
+            "service itself keeps backing up regardless"
+        ),
+    )
 
     @property
     def effective_excludes(self) -> tuple[str, ...]:

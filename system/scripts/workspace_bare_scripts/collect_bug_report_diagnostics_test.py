@@ -1293,6 +1293,12 @@ def _write_update_apply_state(
     )
     (state / "dispatcher.pyz").write_text("print('the app program')\n")
     (state / "schedule.json").write_text('{"schema": 1, "ceiling": "minds-v0.9.0"}\n')
+    (state / "skipped-target.json").write_text(
+        '{"schema": 1, "target_ref": "minds-v0.9.0"}\n'
+    )
+    (state / "dismissals.json").write_text(
+        '{"schema": 1, "outcome_run_started_at": 1761600000.0}\n'
+    )
     (state / "run.json").write_text(
         '{"chat_agent_name": "update-to-minds-v0-9-0", "verdict": null}\n'
     )
@@ -1343,6 +1349,8 @@ def test_the_update_records_ride_with_the_logs_but_never_the_snapshots_or_the_di
         ]
         assert update_members == [
             "update-apply/schedule.json",
+            "update-apply/skipped-target.json",
+            "update-apply/dismissals.json",
             "update-apply/run.json",
             "update-apply/last-dispatch.json",
             "update-apply/dispatch-attempt.json",
@@ -1420,6 +1428,8 @@ def test_a_secret_in_the_dispatcher_log_withholds_that_log_and_nothing_else(
         ]
         assert update_members == [
             "update-apply/schedule.json",
+            "update-apply/skipped-target.json",
+            "update-apply/dismissals.json",
             "update-apply/run.json",
             "update-apply/last-dispatch.json",
             "update-apply/dispatch-attempt.json",
