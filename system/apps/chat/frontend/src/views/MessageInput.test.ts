@@ -1086,6 +1086,13 @@ describe("MessageInput send failure notice", () => {
     expect(text).not.toContain("start timed out");
   });
 
+  it("doesn't mention restarting on a notice that has no Restart button", async () => {
+    raiseFailureNotice("agent-1", { title: "Couldn't send your message", detail: "x", kind: "agent_unreachable" });
+    const text = renderedText(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).toContain("The agent isn't running and didn't start.");
+    expect(text).not.toContain("Restart");
+  });
+
   it("says what a send failure means in its own words, not mngr's", async () => {
     for (const [kind, sentence] of [
       ["input_blocked", "waiting on something in its terminal"],

@@ -147,13 +147,18 @@ const pendingComposerPrepends = new Map<string, string>();
 // What the failure notice says about a send, in place of mngr's reason, which is written for its own
 // command line. "unknown" keeps that reason: it is the only account of what went wrong.
 const SEND_FAILURE_SENTENCES: Partial<Record<SendFailureKind, string>> = {
-  input_blocked:
-    "The agent is waiting on something in its terminal. Answer it there and try again, or restart the agent.",
-  agent_unreachable: "The agent isn't running and didn't start. Restart it to send your message.",
+  input_blocked: "The agent is waiting on something in its terminal. Answer it there and try again.",
+  agent_unreachable: "The agent isn't running and didn't start.",
   not_ready: "The agent isn't ready for messages yet. Try again in a moment.",
   state_unknown: "Couldn't reach the agent just now. Try again in a moment.",
   agent_not_found: "Couldn't find the agent. Try again in a moment.",
   not_submitted: "The agent didn't take your message. Try again.",
+};
+
+// Added to the sentence above only when the notice offers Restart.
+const SEND_FAILURE_RESTART_SENTENCES: Partial<Record<SendFailureKind, string>> = {
+  input_blocked: "Or restart the agent.",
+  agent_unreachable: "Restart it to send your message.",
 };
 
 /** A failure raised from OUTSIDE this component, waiting for the composer to show it. */
@@ -1363,7 +1368,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           body: isUnconfirmed
             ? ["The agent may already have it, so check its terminal before you send it again."]
             : sendFailureSentence !== undefined
-              ? [sendFailureSentence]
+              ? [sendFailureSentence, recovery === null ? null : SEND_FAILURE_RESTART_SENTENCES[actionFailureKind]]
               : [detail, isRepeatable ? "You can open the agent's terminal, fix it there, then Retry." : null],
           dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
           isDismissable: actionFailureInFlight === null,
