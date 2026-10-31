@@ -16,6 +16,8 @@ dependencies = [
     "werkzeug>=3.0",
     # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
     "workspace-themes",
+    # Resolves account-keyed settings (keybindings) for a request identity, and parses the identity header.
+    "workspace-profile",
 ]
 
 [dependency-groups]
@@ -49,3 +51,7 @@ force-single-line = true
 case-sensitive = true
 order-by-type = false
 known-first-party = ["files_app", "imbue", "app_manifest", "app_schema"]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward
+# (out of this repo entirely when it is checked out nested inside another).
+[tool.ty]

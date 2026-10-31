@@ -63,6 +63,7 @@ from imbue.system_interface.shell.data_types import PopOutStateReport
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
+from imbue.system_interface.shell.keybindings_routes import register_keybindings_routes
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.routes import register_shell_routes
@@ -847,6 +848,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(PRESENCE_PATH, view_func=_presence_endpoint, methods=["GET"])
     application.add_url_rule(PRESENCE_HEARTBEAT_PATH, view_func=_presence_heartbeat_endpoint, methods=["POST"])
     register_shell_routes(application)
+    register_keybindings_routes(application)
     register_avatar_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
 

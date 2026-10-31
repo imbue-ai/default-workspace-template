@@ -26,6 +26,14 @@ from flask import Response
 from flask import request
 from flask import send_from_directory
 from loguru import logger
+from workspace_profile.identity import IDENTITY_HEADER
+from workspace_profile.identity import parse_identity_header
+from workspace_profile.manifest import KEYBINDINGS_ACTIONS_SUBPATH
+from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
+from workspace_profile.manifest import KeybindingsActionsResponse
+from workspace_profile.manifest import KeybindingsMeResponse
+from workspace_profile.manifest import resolve_keybindings_me_response
+from workspace_profile.snapshot import load_workspace_profile_snapshot
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 from workspace_themes.flask_routes import register_workspace_theme_route
 
@@ -40,6 +48,7 @@ from files_app.connections import SYNCED_FOLDERS
 from files_app.connections_cache import ConnectionsCache
 from files_app.device_files import DeviceFiles
 from files_app.gateway import Gateway
+from files_app.keybindings import FILES_KEYBINDINGS_MANIFEST
 from files_app.local_files import LocalFiles
 from files_app.local_files import content_disposition
 from files_app.sources import FileSource
@@ -81,6 +90,8 @@ _FILE_VERBS: Final[dict[str, str]] = {
 ROUTE_TABLE: RouteTable = {
     ("GET", f"{API_PREFIX}/connections"): RouteModels(response_model=Connections),
     ("GET", f"{API_PREFIX}/stamps"): RouteModels(response_model=FolderStamps),
+    ("GET", f"{API_PREFIX}{KEYBINDINGS_ACTIONS_SUBPATH}"): RouteModels(response_model=KeybindingsActionsResponse),
+    ("GET", f"{API_PREFIX}{KEYBINDINGS_ME_SUBPATH}"): RouteModels(response_model=KeybindingsMeResponse),
     ("GET", f"{ASSETS_PREFIX}/{{name}}"): SchemalessRoute(reason="a file of the frontend's build"),
     **{
         (method, path): SchemalessRoute(reason=reason)
@@ -140,7 +151,9 @@ def create_app(
 
     def failure(error: FilesError) -> Response:
         """The error in plain words; a page asked for that isn't there is Files' own "not found" page."""
-        is_page_asked = "text/html" in request.headers.get("Accept", "") and not _NON_PAGE_QUERIES & request.args.keys()
+        is_page_asked = (
+            "text/html" in request.headers.get("Accept", "") and not _NON_PAGE_QUERIES & request.args.keys()
+        )
         if error.status == 404 and is_page_asked:
             response = send_from_directory(static_directory, "404.html", max_age=None)
             response.status_code = 404
@@ -216,6 +229,24 @@ def create_app(
             return error_response(f"Couldn't read your shares: {error}", 502)
         device_paths.update({device.id: device.has_device_paths for device in listed.devices})
         return model_response(listed)
+
+    @app.get(f"{API_PREFIX}{KEYBINDINGS_ACTIONS_SUBPATH}")
+    def keybindings_actions() -> Response:
+        """The Files keybindings manifest: every browser action a keystroke can trigger."""
+        return model_response(FILES_KEYBINDINGS_MANIFEST)
+
+    @app.get(f"{API_PREFIX}{KEYBINDINGS_ME_SUBPATH}")
+    def keybindings_me() -> Response:
+        """The requesting user's resolved chords for the Files actions."""
+        workspace_root = Path.cwd()
+        return model_response(
+            resolve_keybindings_me_response(
+                FILES_KEYBINDINGS_MANIFEST,
+                snapshot=load_workspace_profile_snapshot(workspace_root),
+                identity=parse_identity_header(request.headers.get(IDENTITY_HEADER)),
+                workspace_root=workspace_root,
+            )
+        )
 
     @app.get(f"{API_PREFIX}/stamps")
     def stamps() -> Response:

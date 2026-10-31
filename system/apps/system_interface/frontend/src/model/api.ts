@@ -91,6 +91,79 @@ export async function setDefaultTheme(theme: string | null): Promise<void> {
   await postJson<unknown>(apiUrl("/api/themes/default"), { theme });
 }
 
+/** One action of the keybindings catalog, resolved for this requester. */
+export interface KeybindingActionView {
+  id: string;
+  label: string;
+  default_chords: string[];
+  chords: string[];
+  source: "default" | "account" | "unsent" | "workspace";
+}
+
+export interface KeybindingAppView {
+  app: string;
+  display_name: string;
+  actions: KeybindingActionView[];
+}
+
+export interface UnsentKeybindingView {
+  app: string;
+  action: string;
+  chords: string[];
+}
+
+/** Everything the Keyboard settings renders (user-profile-state spec, section 10.3). */
+export interface KeybindingsCatalog {
+  apps: KeybindingAppView[];
+  is_owner: boolean;
+  can_save_everywhere: boolean;
+  has_pending_permission: boolean;
+  unsent: UnsentKeybindingView[];
+}
+
+export interface KeybindingsDeliveryOutcome {
+  status: string;
+  detail: string;
+}
+
+export interface SavedKeybinding {
+  chords: string[];
+  delivery: KeybindingsDeliveryOutcome | null;
+}
+
+export async function fetchKeybindingsCatalog(): Promise<KeybindingsCatalog> {
+  return (await getJson(apiUrl("/api/keybindings/catalog"))) as KeybindingsCatalog;
+}
+
+/** Save one assignment: the requester's override here, or (the owner's "account" scope) everywhere. */
+export async function saveKeybinding(
+  app: string,
+  action: string,
+  chords: string[],
+  scope: "workspace" | "account",
+): Promise<SavedKeybinding> {
+  return (await postJson<unknown>(apiUrl("/api/keybindings"), { app, action, chords, scope })) as SavedKeybinding;
+}
+
+/** Drop one undelivered "everywhere" save (and its optimistic copy here). */
+export async function discardKeybinding(app: string, action: string): Promise<void> {
+  await postJson<unknown>(apiUrl("/api/keybindings/discard"), { app, action });
+}
+
+/** Drop the requester's workspace override of one action, so the account value (or default) answers again. */
+export async function resetKeybinding(app: string, action: string): Promise<void> {
+  await postJson<unknown>(apiUrl("/api/keybindings/reset"), { app, action });
+}
+
+/** Retry the undelivered "everywhere" saves, with the permission verdicts the page observed. */
+export async function deliverKeybindings(
+  resolutions: { request_id: string; resolution: "granted" | "denied" }[],
+): Promise<KeybindingsDeliveryOutcome> {
+  return (await postJson<unknown>(apiUrl("/api/keybindings/deliver"), {
+    resolutions,
+  })) as KeybindingsDeliveryOutcome;
+}
+
 /** Delete a desktop; answers the desktop its clients fall back to. The last desktop is refused. */
 export async function deleteDesktop(desktopId: string): Promise<string> {
   const data = await postJson<{ fallback_desktop_id: string }>(desktopUrl(desktopId, "/delete"), {});

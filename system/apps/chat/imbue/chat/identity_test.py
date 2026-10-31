@@ -12,7 +12,9 @@ from imbue.chat.identity import is_owner_identity
         pytest.param('{"owner": true, "user_id": "u-1", "email": "o@example.com"}', True, id="owner-with-account"),
         pytest.param('{"owner": false, "user_id": "u-2", "email": "v@example.com"}', False, id="visitor"),
         pytest.param("not json", True, id="unreadable"),
-        pytest.param('{"owner": "false"}', True, id="owner-not-a-boolean"),
+        # The shared parser reads lax-JSON booleans the way the shell always has: a header
+        # spelling the flag as a string still carries its claim, so it is honored, not ignored.
+        pytest.param('{"owner": "false"}', False, id="owner-as-a-string"),
         pytest.param("[false]", True, id="not-an-object"),
     ],
 )

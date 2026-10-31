@@ -18,6 +18,7 @@ import { isLiveShared } from "../models/connections";
 import * as server from "../models/server";
 import { isTextLike, previewKindOf } from "../models/fileKinds";
 import { formatSize } from "../models/format";
+import { matchesKeybinding } from "../models/keybindings";
 import { childPath, nameOf, parentOf } from "../models/paths";
 import { Dialogs } from "./dialogs";
 import { FileIcon } from "./FileIcon";
@@ -198,7 +199,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
     oninit({ attrs: { page } }) {
       menu = createMenu({ placement: "below", align: "end", minWidth: 200, extraClass: "files-file-menu" });
       onKeydown = (event) => {
-        if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        if (matchesKeybinding(event, "save-file")) {
           event.preventDefault();
           void page.save();
         }

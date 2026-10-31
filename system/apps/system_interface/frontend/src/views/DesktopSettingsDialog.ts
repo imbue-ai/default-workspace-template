@@ -13,6 +13,7 @@ import type { AppRecord, Desktop, Wallpaper, WallpaperListing } from "../model/r
 import { availableTheme, resolveDesktopTheme, type ThemeCatalog, type ThemeRecord } from "../model/themes";
 import { appIconMarkupForApp } from "./components/appIcon";
 import { glyph as genericGlyph } from "./glyphs";
+import { KeyboardSettingsSection } from "./KeyboardSettingsSection";
 import { SQUIGGLE_GLYPHS, squiggleMarkup } from "./squiggles";
 import { FIELD_PART, TILE_PART } from "@imbue/workspace-ui/src/themes/parts";
 
@@ -482,6 +483,8 @@ export function DesktopSettingsDialog(): m.Component<DesktopSettingsDialogAttrs>
           m("div", { class: "mb-3" }, wallpaperPicker(attrs)),
           m("label", { class: MODAL_LABEL_CLASS }, "Theme"),
           themeRow(attrs),
+          m("label", { class: MODAL_LABEL_CLASS }, "Keyboard"),
+          m(KeyboardSettingsSection),
           error ? m("p", { class: "type-helper mt-1 text-danger" }, error) : null,
           isConfirmingDelete
             ? m("p", { class: MODAL_MESSAGE_CLASS }, [
