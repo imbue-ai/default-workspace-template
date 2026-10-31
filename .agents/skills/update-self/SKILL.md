@@ -717,6 +717,19 @@ run the fast-forward check once more, and on exit 1 catch the worker up as
 above. The chats stay paused through that round, which covers only those
 commits.
 
+**Keep the root environment stable through landing and snapshots.** Pausing
+chats does not stop an already spawned installer or other environment writer.
+Wait for those writers to finish or stop them deliberately before applying;
+run inspection commands with `uv run --no-sync` or system Python, never an
+implicit sync against the changing tree. Keep writers quiesced until the apply
+and any rollback finish. A snapshot copied while files are changing cannot be
+assumed to be a complete rollback point. Diagnose an incomplete copy before
+retrying; do not overwrite a completed saved snapshot with a damaged environment.
+The official backend refresh reinstalls the frozen dependency closure at its
+existing final prefix, repairing renamed owners and already-missing package
+files; repeated ordinary sync alone cannot establish integrity. See
+`references/environment-migration.md` for the repair tradeoff and launcher contract.
+
 Run the apply from the staged copy, in the **foreground**: its output (refusal
 and resume messages, any provisioner warning, the `apply phase timings:` line)
 is what you read before recording a verdict.
