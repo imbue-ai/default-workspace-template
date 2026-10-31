@@ -1,6 +1,6 @@
 /**
  * The small glyphs the desktop's chrome draws that the shared icon set does not carry: the
- * window controls (minimize, maximize, restore), the kebab, the size menu's zone pictograms,
+ * window controls (minimize, maximize, restore, fullscreen and its exit), the kebab, the size menu's zone pictograms,
  * the launcher's plus and app fallback, and the phone bar's home. Same Feather-style 24x24 frame as ``icons.ts``,
  * produced as SVG strings for ``m.trust``.
  *
@@ -10,6 +10,8 @@
 
 import { appIconMarkupForApp } from "./components/appIcon";
 import type { AppRecord, Frame } from "../model/records";
+import { partAttrs, partAttrsMarkup } from "@imbue/workspace-ui/src/themes/parts";
+import { themedIconFor, type IconSource, type ThemedIcon } from "./themeIcons";
 
 const XMLNS = "http://www.w3.org/2000/svg";
 
@@ -18,6 +20,13 @@ const GLYPH_PATHS = {
   maximize: '<rect x="4" y="4" width="16" height="16" rx="2"/>',
   restore:
     '<rect x="3" y="8" width="13" height="13" rx="2"/><path d="M8 8V5a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-3"/>',
+  // The four corners of the viewport, pointing out; and pointing back in for the way out of fullscreen.
+  fullscreen:
+    '<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/>' +
+    '<path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>',
+  "exit-fullscreen":
+    '<path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/>' +
+    '<path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>',
   // A dot reads lighter than a line of the same width, so these are fatter than the 2px strokes
   // the rest of the set is drawn with.
   kebab:
@@ -59,7 +68,32 @@ export function zoneGlyph(frame: Frame, size: number): string {
   );
 }
 
-/** The glyph an app wears everywhere: its own icon, its monogram, or the generic app glyph. */
+/** The glyph an app wears everywhere: its own icon (or its monogram, or the generic app glyph), or under a theme
+ *  the icon the theme draws for it (`themeIcons.ts`). Either way it is the contract's `app-icon` part, saying which
+ *  kind of icon it is. */
 export function appGlyph(app: Pick<AppRecord, "name" | "icon"> | undefined, size: number): string {
-  return appIconMarkupForApp(app, size, glyph("app", size));
+  const standardAt = (pixels: number): string => appIconMarkupForApp(app, pixels, glyph("app", pixels));
+  const themed = themedIconFor(app?.name ?? "app", standardAt);
+  if (themed === null) return standardAt(size).replace(/^<svg\b/, `<svg ${iconPartMarkup("standard")}`);
+  return themedIconMarkup(themed, size);
+}
+
+/** The `app-icon` part's attributes, saying where the icon came from, as markup. */
+function iconPartMarkup(source: IconSource): string {
+  return partAttrsMarkup({ ...partAttrs("app-icon"), "data-icon-source": source });
+}
+
+/** Text written into a double-quoted attribute of markup the page trusts. */
+function attributeText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** A theme's icon (served by the shell itself, or derived in this page) as the svg every icon slot sizes. */
+function themedIconMarkup(icon: ThemedIcon, size: number): string {
+  const rendering = icon.isPixelated ? ' style="image-rendering: pixelated"' : "";
+  return (
+    `<svg xmlns="${XMLNS}" ${iconPartMarkup(icon.source)} width="${size}" ` +
+    `height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">` +
+    `<image href="${attributeText(icon.url)}" width="${size}" height="${size}"${rendering}/></svg>`
+  );
 }

@@ -141,6 +141,15 @@ class WallpaperKind(LowerCaseStrEnum):
     FILE = auto()
 
 
+class AppTheming(LowerCaseStrEnum):
+    """Where an app's Theming submenu stands (a wire value): a themeable app's theming is on or off, and an unthemed
+    app offers to be made themeable."""
+
+    ON = auto()
+    OFF = auto()
+    UNTHEMED = auto()
+
+
 class ClientActivityKind(LowerCaseStrEnum):
     """What a client-activity report records: a message a client sent to an app's page (a wire value)."""
 
@@ -155,12 +164,14 @@ class IfPresent(LowerCaseStrEnum):
 
 
 class WindowState(UpperCaseStrEnum):
-    """How one client shows a window: at its frame, snapped to a half, or maximized (a wire value)."""
+    """How one client shows a window: at its frame, snapped to a half, maximized over the backdrop, or fullscreen over
+    the whole viewport, taskbar included (a wire value)."""
 
     NORMAL = auto()
     SNAPPED_LEFT = auto()
     SNAPPED_RIGHT = auto()
     MAXIMIZED = auto()
+    FULLSCREEN = auto()
 
 
 class ShowOutcome(LowerCaseStrEnum):

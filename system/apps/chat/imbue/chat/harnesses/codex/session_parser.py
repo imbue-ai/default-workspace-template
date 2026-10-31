@@ -218,6 +218,11 @@ def _labelled_tool_call(call_id: str, tool_name: str, raw_input: str) -> dict[st
     return tool_call
 
 
+def assistant_message_event_id(message_id: str) -> str:
+    """The event id of codex's agent message ``message_id`` (the id its app-server streams the message under)."""
+    return f"codex-{message_id}"
+
+
 def _assistant_event(
     timestamp: str, event_id: str, *, text: str, tool_calls: list[dict[str, Any]], model: str = _UNKNOWN_MODEL
 ) -> dict[str, Any]:
@@ -618,7 +623,7 @@ def parse_lines(
             # keying the event id on it dedups the copies.
             msg_id = payload.get("id")
             event_id = (
-                f"codex-{msg_id}"
+                assistant_message_event_id(msg_id)
                 if isinstance(msg_id, str) and msg_id
                 else _synthetic_event_id("assistant", timestamp, payload)
             )

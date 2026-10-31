@@ -1,0 +1,1 @@
+`template_manifest.validate_template_tree` checks that the thumbnail is inert -- no `<script>`, no `<foreignObject>`, no `on*=` event attributes -- on every run, including the skeleton check right after assembly. The publish flow used to check this with a separate grep before the push.

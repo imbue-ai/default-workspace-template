@@ -3,7 +3,9 @@
  * is ``/?chat=<id>`` (what it reports as its location) and ``/`` with nothing selected. An
  * ``intake`` parameter names a pending intake the root applies once (post-launch-paths plan
  * section 3.6): a draft for a composer, a choice of chat, or a first message that needs an
- * account; the root then reports the selection alone.
+ * account; the root then reports the selection alone. ``open=providers`` asks the root to open the
+ * provider chooser once on arrival (the Imbue Studio app's sign-in button); it too is dropped from
+ * the path the root reports.
  */
 
 // A chat id is its first agent's id (the backend's ``AGENT_ID_PATTERN`` in ``primitives.py``).
@@ -11,6 +13,8 @@ const AGENT_ID_PATTERN = /^agent-[A-Za-z0-9_-]{1,120}$/;
 
 export const CHAT_QUERY_KEY = "chat";
 export const INTAKE_QUERY_KEY = "intake";
+export const OPEN_QUERY_KEY = "open";
+export const OPEN_PROVIDERS = "providers";
 
 /** The chat the URL selects, or null for none (or an id that cannot be a chat's). */
 export function selectionFromSearch(search: string): string | null {
@@ -23,6 +27,11 @@ export function selectionFromSearch(search: string): string | null {
 export function intakeTokenFromSearch(search: string): string | null {
   const value = new URLSearchParams(search).get(INTAKE_QUERY_KEY);
   return value === null || value === "" ? null : value;
+}
+
+/** Whether the URL asks the root to open the provider chooser on arrival. */
+export function isProviderChooserRequested(search: string): boolean {
+  return new URLSearchParams(search).get(OPEN_QUERY_KEY) === OPEN_PROVIDERS;
 }
 
 /** The root's path for a selection: what it reports to the shell and writes into its own URL. */

@@ -153,7 +153,7 @@ class WindowPlacement(FrozenModel):
 
     window_id: WindowId = Field(description="The window placed")
     frame: Frame = Field(description="The frame, kept through every state so restore has somewhere to go")
-    state: WindowState = Field(description="Normal, snapped to a half, or maximized")
+    state: WindowState = Field(description="Normal, snapped to a half, maximized, or fullscreen")
     is_minimized: bool = Field(description="Whether the window is out of sight; orthogonal to the state")
     is_detached: bool = Field(
         default=False,
@@ -234,6 +234,9 @@ class DesktopView(Desktop):
     """The ``desktop`` object of desktop contracts.md section 5.2: the record, its windows as views."""
 
     windows: tuple[WindowView, ...] = Field(description="Every window on the desktop, in opening order")
+    theme: str | None = Field(
+        default=None, description="The desktop's own workspace theme id; None when it wears the workspace's default"
+    )
 
 
 class DesktopLayoutView(DesktopLayout):

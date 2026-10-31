@@ -6,7 +6,7 @@
 # runbook in the mngr monorepo (apps/minds/docs/deploy/ops/app-release.md, step
 # 0) and its release test check that the pair still agrees. Resolve a tag's
 # current index digest with `docker buildx imagetools inspect python:3.12-slim-trixie`.
-FROM python:3.12-slim-trixie@sha256:57cd7c3a7a273101a6485ba99423ee568157882804b1124b4dd04266317710de
+FROM python:3.12-slim-trixie@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
 
 # /root/.local/bin holds uv + claude (installed by system/scripts/setup_system.sh); put
 # it on PATH for every build layer and at runtime.
@@ -48,7 +48,7 @@ RUN chmod +x /usr/local/bin/default-workspace-template-write-apt-sources \
 COPY system/scripts/setup_system.sh /usr/local/bin/default-workspace-template-setup-system
 COPY system/scripts/_provision_guard.sh /usr/local/bin/_provision_guard.sh
 COPY system/scripts/install_secret_scanners.sh /usr/local/bin/default-workspace-template-install-secret-scanners
-COPY system/scripts/agy_install-1.1.22.sh /usr/local/bin/default-workspace-template-install-agy
+COPY system/scripts/agy_install.sh /usr/local/bin/default-workspace-template-install-agy
 COPY system/scripts/install_owner_exec.sh /usr/local/bin/default-workspace-template-install-owner-exec
 COPY system/scripts/install_earlyoom.sh /usr/local/bin/default-workspace-template-install-earlyoom
 COPY system/scripts/install_agent_plugins.sh /usr/local/bin/default-workspace-template-install-agent-plugins
@@ -60,6 +60,9 @@ RUN chmod +x /usr/local/bin/default-workspace-template-setup-system /usr/local/b
 # landing under /home/user (where the runtime mount would shadow them), and
 # runtime installs reuse them. The seed script additionally symlinks ~/.cache
 # here so even non-XDG-aware tools land off-volume. Caches are never backed up.
+# Every venv's files live beside the uv cache too, in /var/cache/user/venvs (each
+# .venv is a link there; see system/scripts/workspace_bare_scripts/venv_links.py),
+# so uv hardlinks them from the cache rather than copying across filesystems.
 ENV XDG_CACHE_HOME=/var/cache/user
 ENV UV_CACHE_DIR=/var/cache/user/uv
 ENV npm_config_cache=/var/cache/user/npm
@@ -90,8 +93,10 @@ COPY system/libs/workspace_ui/package.json /home/user/workspace/system/libs/work
 COPY system/apps/system_interface/frontend/package.json /home/user/workspace/system/apps/system_interface/frontend/
 COPY system/apps/chat/frontend/package.json /home/user/workspace/system/apps/chat/frontend/
 COPY system/apps/getting_started/frontend/package.json /home/user/workspace/system/apps/getting_started/frontend/
+COPY system/apps/screen/frontend/package.json /home/user/workspace/system/apps/screen/frontend/
 COPY system/apps/files/frontend/package.json /home/user/workspace/system/apps/files/frontend/
 COPY system/apps/routines/frontend/package.json /home/user/workspace/system/apps/routines/frontend/
+COPY system/apps/style_guide/frontend/package.json /home/user/workspace/system/apps/style_guide/frontend/
 
 # Dependency install (manifests only). Shared verbatim with the Lima provider.
 # Copied with its sibling _mngr_git_auth.sh (which it sources via `dirname "$0"`).
@@ -106,6 +111,8 @@ COPY system/apps/routines/frontend/package.json /home/user/workspace/system/apps
 # helper treats as absent), and the secret never lands in a layer.
 COPY system/scripts/install_dependencies.sh /usr/local/bin/default-workspace-template-install-dependencies
 COPY system/scripts/_mngr_git_auth.sh /usr/local/bin/_mngr_git_auth.sh
+# The venv-link helper the install runs before its sync, at the path it runs it from.
+COPY system/scripts/workspace_bare_scripts/venv_links.py /home/user/workspace/system/scripts/workspace_bare_scripts/venv_links.py
 RUN chmod +x /usr/local/bin/default-workspace-template-install-dependencies && default-workspace-template-install-dependencies
 
 # End pre-COPY manifest layer. Source-changing layers begin below.
@@ -114,7 +121,8 @@ COPY . /home/user/workspace/
 
 # Build the workspace from full source. Shared verbatim with the Lima provider.
 # With a private pin, set_mngr_pin.py gives this RUN the same secret mount as
-# the dependency install above: the tool installs fetch mngr from the pin.
+# the dependency install above: the mngr tool install and the venv sync fetch
+# mngr from the pin.
 RUN bash /home/user/workspace/system/scripts/build_workspace.sh
 
 # Move the baked workspace off the volume mount path so the shipped

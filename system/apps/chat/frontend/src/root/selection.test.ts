@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } from "./selection";
+import {
+  intakeTokenFromSearch,
+  isProviderChooserRequested,
+  rootPathFor,
+  selectionFromSearch,
+  slotFill,
+} from "./selection";
 import type { SlotState } from "./selection";
 
 describe("selection", () => {
@@ -15,6 +21,16 @@ describe("selection", () => {
     expect(intakeTokenFromSearch("?chat=agent-1")).toBeNull();
     expect(intakeTokenFromSearch("?intake=")).toBeNull();
     expect(intakeTokenFromSearch("")).toBeNull();
+  });
+
+  it("reads a request to open the provider chooser, and writes the selection back without it", () => {
+    const search = "?chat=agent-0123abc&open=providers";
+    expect(isProviderChooserRequested(search)).toBe(true);
+    expect(isProviderChooserRequested("?open=providers")).toBe(true);
+    expect(isProviderChooserRequested("?open=settings")).toBe(false);
+    expect(isProviderChooserRequested("?chat=agent-0123abc")).toBe(false);
+    // The path the root reports and writes into its own URL drops the request, so it is honored once.
+    expect(rootPathFor(selectionFromSearch(search))).toBe("/?chat=agent-0123abc");
   });
 
   it("writes the selection back as the root's path, with no token", () => {

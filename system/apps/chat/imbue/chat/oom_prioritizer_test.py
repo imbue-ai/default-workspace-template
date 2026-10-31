@@ -21,7 +21,9 @@ _HOUR = 3600.0
 class _Harness:
     """Wires a prioritizer to in-memory fakes and records every band write."""
 
-    def __init__(self, chat_ids: list[str], pids: dict[str, int], sweep_interval_seconds: float = 3600.0) -> None:
+    def __init__(
+        self, chat_ids: list[str], pids: dict[str, int | list[int]], sweep_interval_seconds: float = 3600.0
+    ) -> None:
         self.chat_ids = [ChatId(chat_id) for chat_id in chat_ids]
         self.pids = pids
         self.writes: list[tuple[int, int]] = []
@@ -32,7 +34,7 @@ class _Harness:
         self.reports_sent = 0
         self.prioritizer = ChatOomPrioritizer(
             list_chat_ids=lambda: list(self.chat_ids),
-            resolve_pid=lambda cid: self.pids.get(cid),
+            resolve_pids=self._resolve_pids,
             set_adj=self._set_adj,
             resolve_process_started_at=self.process_started_at.get,
             clock=lambda: self.now,
@@ -52,6 +54,10 @@ class _Harness:
                 sequence=self.reports_sent,
             ),
         )
+
+    def _resolve_pids(self, chat_id: ChatId) -> list[int]:
+        pids = self.pids.get(chat_id, [])
+        return [pids] if isinstance(pids, int) else pids
 
     def _set_adj(self, pid: int, adj: int) -> bool:
         self.writes.append((pid, adj))
@@ -134,6 +140,16 @@ def test_a_heartbeat_keeps_the_report_alive() -> None:
         h.report("a", PresenceState.VISIBLE)
     h.prioritizer.reapply()
     assert h.latest_adj_by_pid()[10] == _fresh(is_open=True, is_visible=True, recency_rank=None)
+
+
+def test_every_process_of_a_chat_gets_its_band() -> None:
+    # A codex chat runs a TUI and an app-server daemon; a shed picks either, so both must
+    # carry the chat's current band rather than one keeping its launch band.
+    h = _Harness(chat_ids=["a", "b"], pids={"a": [10, 11], "b": 20})
+    h.report("a", PresenceState.VISIBLE)
+    latest = h.latest_adj_by_pid()
+    assert latest[10] == latest[11] == _fresh(is_open=True, is_visible=True, recency_rank=None)
+    assert latest[20] == _fresh(is_open=False, is_visible=False, recency_rank=None)
 
 
 def test_dormant_chat_without_a_live_pid_is_skipped() -> None:
@@ -351,9 +367,9 @@ def test_a_prioritizer_with_no_writer_accepts_every_report_and_touches_no_proces
     consulted: list[ChatId] = []
     chat_id = ChatId("a")
 
-    def resolve_pid(cid: ChatId) -> int:
+    def resolve_pids(cid: ChatId) -> list[int]:
         consulted.append(cid)
-        return 10
+        return [10]
 
     def resolve_process_started_at(cid: ChatId) -> float:
         consulted.append(cid)
@@ -361,7 +377,7 @@ def test_a_prioritizer_with_no_writer_accepts_every_report_and_touches_no_proces
 
     prioritizer = ChatOomPrioritizer(
         list_chat_ids=lambda: [chat_id],
-        resolve_pid=resolve_pid,
+        resolve_pids=resolve_pids,
         set_adj=None,
         resolve_process_started_at=resolve_process_started_at,
         sweep_interval_seconds=0.01,

@@ -19,7 +19,8 @@ Users make "creations". There are conventions for the common kinds:
 - an **app**: something the user opens as a tab and interacts with. Lives
   under `system/apps/<package>/` beside its `app.toml` manifest (name, display
   name, icon, instances, priority, criticality, program), runs as a supervisord
-  program from its own uv tool environment, registers its manifest and port
+  program from a venv (the workspace venv for a built-in app, its own for one
+  the user's agents build, a standalone uv project), registers its manifest and port
   via `forward_port.py --manifest`, and is served at its own browser origin: the
   app's name is prefixed as a hostname label on the workspace host, so
   locally the app lives at `http://<name>.<host-id>.localhost:8421/` (the
@@ -65,12 +66,12 @@ is named `<app>-<role>`.
   services' programs
 - `system/apps/` - Everything tab-openable: `system_interface/` (the workspace
   web UI -- the special app that hosts the other tabs), `chat/` (the agent
-  chats), `terminal/`, `files/`, `browser/`, `routines/` (Routines),
-  `system_monitor/` (System Monitor),
-  and every user-built app, each with an `app.toml` manifest; every
-  Python app with a manifest is installed as its own uv tool and is also a
-  member of the uv workspace via the `system/apps/*` glob; an app with no
-  manifest runs from the root venv)
+  chats), `terminal/`, `files/`, `screen/` (the streamed Linux desktop, with the
+  browser as its launch path), `routines/` (Routines), `system_monitor/` (System Monitor),
+  and every user-built app, each with an `app.toml` manifest; every built-in
+  app is a member of the root uv workspace, named in its `members`, and runs
+  from the root venv; every user-built app, service or library under `system/`
+  is a standalone uv project with its own `uv.lock` and `.venv`)
 - `system/services/` - Standalone background services (`caretaker/`,
   `share_gateway/`, `host_backup/`, `env_converge/`, `oom_priority/`)
 - `system/libs/` - Support libraries, including `bootstrap/` (first-boot
@@ -105,6 +106,22 @@ is named `<app>-<role>`.
   it with the pin through `system/scripts/vendor_mngr_skill.py --write`, the file's one
   writer, and the same CI job checks the copy against the pinned commit with its
   `--check`; edit it in the mngr repo, never here.
+- `.venv` - The root venv, as a symlink: every `.venv` (the checkout's, each
+  worktree's) links to a target under `<uv cache dir>/../venvs/`, beside the uv
+  cache on the root filesystem (`/var/cache/user/venvs` on docker), so uv
+  hardlinks its files from the cache instead of copying them onto the volume.
+  `system/scripts/workspace_bare_scripts/venv_links.py` owns the links: the boot
+  window, worker provisioning, the session-start sync and the build run its
+  `ensure` before their syncs, which creates a missing target (a rebuilt root
+  filesystem drops them; the next sync refills it from the cache), turns a real
+  `.venv` directory into a link, and deletes every target whose link is gone
+  (each records its link in a sibling `.owner.json`). The update apply syncs a
+  manifest change into a fresh target, pre-flights from it, and switches the
+  link just before its restart; a rollback switches it back. A target on a
+  different filesystem from the cache gets a warning in the boot log. Every
+  user package's own `.venv` is a link the same way: the boot window links each
+  without syncing it, its program syncs it at start, and worker setup and the
+  build sync each (`system/scripts/workspace_bare_scripts/user_packages.py`).
 - `system/vendor/tk/` - A vendored copy of the
   [tk](https://github.com/wedow/ticket) ticket tracker. The `ticket` script
   (also callable as `tk`) manages tickets stored as markdown. We point
@@ -122,7 +139,7 @@ config per pytest root at the repo root (`offload-modal.toml`,
 `offload-modal-chat.toml`, `offload-modal-system-interface.toml`). The
 checkpoint image is `system/Dockerfile` as shipped, plus a first boot
 (`default-workspace-template-seed`) and `system/scripts/offload_sandbox_init.sh`
-(the Fortress env.d unit and the offload binary); it rebuilds only when one of
+(the Screen's env.d unit, Fortress included, and the offload binary); it rebuilds only when one of
 the config's build inputs changes, and every other commit rides it as a thin
 source diff followed by `system/scripts/offload_post_patch.sh`. Inside the
 image any test that skips fails the job
@@ -145,12 +162,12 @@ repository and can read only `mngr/ci/MODAL_TOKEN_ID` and
 
 ## Creation harden lifecycle
 
-The main agent can promote ad-hoc work into reusable creations, fix creations that fail, and extend creations that came up short -- across skills, apps, services, and the system interface. The user-invokable surface is three generic operation leads (main agent side), each parameterized by the creation type:
+The main agent can promote ad-hoc work into reusable creations, fix creations that fail, and extend creations that came up short -- across skills, apps, services, and the system interface. The user-invokable surface is three generic operation leads (main agent side), each parameterized by the creations a pass covers and their types. A pass hardens one change: every creation the change touched, with one worker.
 
 - `crystallize-creation` - Create a new creation (default: a skill reconstructed from the just-finished turn). Invoked directly post-turn, or by the live-half wrappers (`build-app`, `fetch-process-show`) once a prototype is confirmed.
 - `heal-creation` - Fix a skill, app, or service that errored or produced wrong results.
 - `update-creation` - Extend / refactor / verify a skill, app, service, or shared reference; one flow with a committed-vs-emergent design-gate toggle.
 
-Each lead spawns a `worker` sub-agent that follows the single generic worker contract at `.agents/shared/worker/SKILL.md`. The worker reads the operation and type from its task file and composes the universal `harden-creation.md` contract with one `op-*.md` and one `type-*.md` reference under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs `update-app`'s careful flow for a critical app, which wraps `update-creation` with `type=app`, creates the worker at approval on the branch the lead built up, and adds its preview and its go-live through the atomic update apply.)
+Each lead spawns a `worker` sub-agent that follows the single generic worker contract at `.agents/shared/worker/SKILL.md`. The worker reads the operation and the creations (each with its type) from its task file and composes the universal `harden-creation.md` contract with one `op-*.md` and a `type-*.md` reference per type among them, under `.agents/shared/worker/references/`. Workers commit to `mngr/<task-name>` branches; main merges on user approval. (The same template also backs `update-app`'s careful flow for a critical app, which wraps `update-creation` for the whole change the critical app is part of, creates the worker at approval on the branch the lead built up, and adds its preview and its go-live through the atomic update apply.)
 
-Crystallized skills are marked with `metadata.crystallized: true` in their SKILL.md frontmatter and follow the [agentskills.io](https://agentskills.io/specification) layout (`scripts/run.py` as a PEP 723 script, companion SKILL.md, optional `references/` and `assets/`).
+Crystallized skills are marked with `metadata.crystallized: true` in their SKILL.md frontmatter and follow the [agentskills.io](https://agentskills.io/specification) layout (`scripts/run.py` as the entry point, with the code behind it in the skill's own `python/` uv project -- see "Packaging" in `.agents/shared/references/spec-summary.md` -- companion SKILL.md, optional `references/` and `assets/`).

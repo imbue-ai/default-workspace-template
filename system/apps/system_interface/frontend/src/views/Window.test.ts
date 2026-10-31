@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { appRecord, windowRecord } from "../testing/records";
 import { Window } from "./Window";
 import type { WindowAttrs } from "./Window";
+import { STANDARD_CHROME } from "../model/themes";
 
 afterEach(unmountViews);
 
@@ -23,9 +24,11 @@ function render(overrides: Partial<WindowAttrs> = {}): HTMLElement {
     sizeMenuTrigger: {},
     isShielded: false,
     isStopped: false,
+    immersive: null,
     onRaise: vi.fn(),
     onControl: vi.fn(),
     onToggleMaximize: vi.fn(),
+    chrome: STANDARD_CHROME,
     ...overrides,
   };
   const root = mountView(() => m(Window, attrs));
@@ -98,11 +101,66 @@ describe("Window", () => {
     expect(onControl).toHaveBeenCalledWith("close", expect.anything());
   });
 
-  it("shows Restore when maximized, and no resize edges on a touch screen", () => {
-    const maximized = render({ state: "MAXIMIZED" });
-    expect(maximized.querySelector('[data-window-control="restore"]')).not.toBeNull();
+  it("shows Fullscreen and Restore when maximized, and no resize edges on a touch screen", () => {
+    const onControl = vi.fn();
+    const maximized = render({ state: "MAXIMIZED", onControl });
+    const controls = [...maximized.querySelectorAll("[data-window-control]")].map((control) =>
+      control.getAttribute("data-window-control"),
+    );
+    expect(controls).toEqual(["refresh", "menu", "minimize", "fullscreen", "restore", "close"]);
+    (maximized.querySelector('[data-window-control="fullscreen"]') as HTMLElement).click();
+    expect(onControl).toHaveBeenCalledWith("fullscreen", expect.anything());
     unmountViews();
     expect(render({ isTouch: true }).querySelectorAll("[data-resize-edge]")).toHaveLength(0);
+  });
+
+  it("a fullscreen window has no title bar, no handles and no corners, and a strip at its top edge that exits", () => {
+    const onControl = vi.fn();
+    const element = render({ state: "FULLSCREEN", onControl });
+    expect(element.getAttribute("data-window-state")).toBe("FULLSCREEN");
+    expect(element.querySelector("[data-drag-handle]")).toBeNull();
+    expect(element.querySelectorAll("[data-window-control]")).toHaveLength(0);
+    expect(element.querySelectorAll("[data-resize-edge]")).toHaveLength(0);
+    const frame = element.querySelector("[data-window-frame]") as HTMLElement;
+    expect(frame.className).not.toContain("rounded");
+    expect(frame.className).not.toContain("shadow");
+    expect(element.querySelector("[data-window-content]")).not.toBeNull();
+    const strip = element.querySelector("[data-fullscreen-strip]") as HTMLElement;
+    expect(strip).not.toBeNull();
+    expect(strip.className).toContain("h-(--desk-resize-edge)");
+    // The chrome never said it could take the window immersive: the control is not there and nothing is said.
+    expect(strip.querySelector('[data-fullscreen-control="immersive"]')).toBeNull();
+    expect(strip.querySelector("[data-fullscreen-hint]")?.textContent).toBe("");
+    (strip.querySelector('[data-fullscreen-control="exit-fullscreen"]') as HTMLElement).click();
+    expect(onControl).toHaveBeenCalledWith("fullscreen", expect.anything());
+  });
+
+  it("the strip offers Immersive where the chrome can, and Leave immersive with the lock's word while it is on", () => {
+    const onEnter = vi.fn();
+    const onLeave = vi.fn();
+    const off = render({
+      state: "FULLSCREEN",
+      immersive: { isOn: false, isKeyboardLocked: false, onEnter, onLeave },
+    });
+    expect(off.querySelector("[data-fullscreen-hint]")?.textContent).toBe("Press Immersive to send every key");
+    (off.querySelector('[data-fullscreen-control="immersive"]') as HTMLElement).click();
+    expect(onEnter).toHaveBeenCalledTimes(1);
+    expect(off.querySelector('[data-fullscreen-control="leave-immersive"]')).toBeNull();
+    unmountViews();
+    const locked = render({
+      state: "FULLSCREEN",
+      immersive: { isOn: true, isKeyboardLocked: true, onEnter, onLeave },
+    });
+    expect(locked.querySelector("[data-fullscreen-hint]")?.textContent).toBe("Every key reaches this window");
+    expect(locked.querySelector('[data-fullscreen-control="immersive"]')).toBeNull();
+    (locked.querySelector('[data-fullscreen-control="leave-immersive"]') as HTMLElement).click();
+    expect(onLeave).toHaveBeenCalledTimes(1);
+    unmountViews();
+    const unlocked = render({
+      state: "FULLSCREEN",
+      immersive: { isOn: true, isKeyboardLocked: false, onEnter, onLeave },
+    });
+    expect(unlocked.querySelector("[data-fullscreen-hint]")?.textContent).toBe("Immersive, without the keyboard lock");
   });
 
   it("shows a placeholder, and no page, for an app the caller says is stopped", () => {

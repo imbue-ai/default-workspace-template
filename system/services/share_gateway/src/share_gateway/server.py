@@ -13,6 +13,10 @@ callback whose nonce or token no longer verifies (a reopened link, a slow
 redirect) heals itself: a visitor who already holds a session is sent on, and
 anyone else is sent through the broker once more; only a second failure shows
 the "Sign-in link expired" page.
+
+``GET /connect-info`` is the one route for the Screen service alone: it lives on the
+loopback port caddy never routes a visitor to (caddy reaches this app only for
+``/_auth/*``, ``/_agent/*`` and ``/_health``), and answers the relay credential and the media candidates.
 """
 
 import base64
@@ -193,6 +197,9 @@ def build_gateway_app(
     # service registered while shared is recognized without rebuilding the app.
     # Grants are keyed by service name, not label.
     get_registered_apps: Callable[[], Sequence[RegisteredApp]],
+    # The current relay credential and media candidates for the Screen service (share_gateway.connect_info),
+    # read fresh on each call so an assignment re-poll or a credential refresh shows at once.
+    get_connect_info: Callable[[], dict[str, object]],
     # Resolves a bearer admission token to the visiting agent's identity when
     # its scope admits the named service; None answers 403. Absent (older
     # callers, tests of the human path), every bearer request is refused.
@@ -268,6 +275,13 @@ def build_gateway_app(
             # the owner gets the map; a visitor sees just liveness + backend.
             detail["services"] = {name: label for label, name in label_to_name.items()}
         return _apply_health_cors(Response(_json_body(detail), mimetype="application/json"))
+
+    @app.get("/connect-info")
+    def connect_info() -> Response:
+        # A relay credential is a bearer token: nothing may cache it on the way to the Screen service.
+        return Response(
+            _json_body(get_connect_info()), mimetype="application/json", headers={"Cache-Control": "no-store"}
+        )
 
     @app.get("/_auth/loading")
     def loading() -> Response:

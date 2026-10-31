@@ -63,14 +63,23 @@ CASCADE_WIDTH: Final[float] = 0.6
 CASCADE_HEIGHT: Final[float] = 0.7
 CASCADE_CYCLE: Final[int] = 6
 
-# Where a pinned window first shows (pinned-taskbar-entries plan section 4.3): the right half of the backdrop, a
-# margin in, above the corner its floating entry rests in; roughly where the first users put it by hand.
-PINNED_WINDOW_FRAME: Final[Frame] = Frame(x=0.46, y=0.05, width=0.5, height=0.9)
+# Where a pinned window first shows (pinned-taskbar-entries plan section 4.3): most of the backdrop, a margin in on
+# every side, so the welcome chat is what a new workspace opens on; the tour's resize card snaps it to the right half.
+PINNED_WINDOW_FRAME: Final[Frame] = Frame(x=0.05, y=0.05, width=0.9, height=0.9)
 
 # The snap frames (fixed).
 SNAPPED_LEFT_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=0.5, height=1.0)
 SNAPPED_RIGHT_FRAME: Final[Frame] = Frame(x=0.5, y=0.0, width=0.5, height=1.0)
 MAXIMIZED_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=1.0, height=1.0)
+
+
+class Viewport(FrozenModel):
+    """The whole viewport, the backdrop plus the taskbar's band below it: what a FULLSCREEN window renders at (the
+    Screen spec, section 12). No frame in fractions of the backdrop reaches past the backdrop, so the viewport is its
+    own value rather than a frame."""
+
+
+VIEWPORT: Final[Viewport] = Viewport()
 
 # How wide a window opened beside another is, and the width its anchor has to be under for the two to
 # fit side by side at all.
@@ -113,6 +122,9 @@ class FitMetrics(FrozenModel):
     window_min_height: float = Field(description="Pixels a window is never rendered shorter than")
     title_min_visible: float = Field(description="Pixels of the title bar that stay inside horizontally")
     title_bar_height: float = Field(description="Pixels; the whole title bar stays inside vertically")
+    taskbar_height: float = Field(
+        description="Pixels of the taskbar's band below the backdrop, which the viewport adds"
+    )
 
 
 class GridMetrics(FrozenModel):
@@ -163,8 +175,9 @@ def cascade_frame(placed_count: int) -> Frame:
 
 
 @pure
-def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame:
-    """The frame a window renders at: its own when normal, the fixed half or whole otherwise."""
+def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame | Viewport:
+    """The frame a window renders at: its own when normal, the fixed half or whole of the backdrop when snapped or
+    maximized, and the whole viewport when fullscreen."""
     match state:
         case WindowState.NORMAL:
             return placement_frame
@@ -174,8 +187,19 @@ def frame_for_state(placement_frame: Frame, state: WindowState) -> Frame:
             return SNAPPED_RIGHT_FRAME
         case WindowState.MAXIMIZED:
             return MAXIMIZED_FRAME
+        case WindowState.FULLSCREEN:
+            return VIEWPORT
         case _ as unreachable:
             assert_never(unreachable)
+
+
+@pure
+def backdrop_frame_of(state_frame: Frame | Viewport) -> Frame:
+    """The part of the backdrop a rendered frame covers: a fullscreen window covers all of it (and the taskbar too,
+    which the backdrop's fractions cannot say); what a rule over backdrop frames, such as pairing, reads a window as."""
+    if isinstance(state_frame, Viewport):
+        return MAXIMIZED_FRAME
+    return state_frame
 
 
 @pure
@@ -230,6 +254,20 @@ def fit_frame_to_backdrop(frame: Frame, backdrop: BackdropSize, metrics: FitMetr
     # Vertically the whole title bar stays inside, and the top edge is never above the backdrop's.
     y = max(min(scaled_y, backdrop.height - metrics.title_bar_height), 0.0)
     return PixelRect(x=x, y=y, width=width, height=height)
+
+
+@pure
+def viewport_rect(backdrop: BackdropSize, taskbar_height: float) -> PixelRect:
+    """The viewport in backdrop pixels: the backdrop from its top-left corner, plus the taskbar's band below it."""
+    return PixelRect(x=0.0, y=0.0, width=backdrop.width, height=backdrop.height + taskbar_height)
+
+
+@pure
+def fit_state_frame(state_frame: Frame | Viewport, backdrop: BackdropSize, metrics: FitMetrics) -> PixelRect:
+    """The rectangle a rendered frame takes: the fit rule for a frame, the viewport as it is for the viewport."""
+    if isinstance(state_frame, Viewport):
+        return viewport_rect(backdrop, metrics.taskbar_height)
+    return fit_frame_to_backdrop(state_frame, backdrop, metrics)
 
 
 @pure

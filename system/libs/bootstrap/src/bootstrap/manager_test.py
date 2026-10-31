@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 from collections.abc import Callable
 from pathlib import Path
@@ -40,6 +41,7 @@ from bootstrap.manager import (
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
     _set_container_timezone,
+    _supervisord_environment,
     _wake_update_dri_agent,
     _write_routines_tick_cron_entry,
     _write_update_recovery_cron_entry,
@@ -414,6 +416,39 @@ def test_update_recovery_cron_entry_tolerates_an_unwritable_target(
     # This runs on the path to supervisord; a boot that reaches the services is
     # worth more than the guard.
     _write_update_recovery_cron_entry(target_dir=tmp_path / "missing")
+
+
+# _supervisord_environment
+
+
+def _write_executable(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n")
+    path.chmod(0o755)
+
+
+def test_supervisords_programs_resolve_bare_entry_points_in_the_workspace_venv(
+    tmp_path: Path,
+) -> None:
+    venv = tmp_path / "workspace" / ".venv"
+    tool_bin = tmp_path / "root" / ".local" / "bin"
+    # A user-built app exists only as the venv's console script; a built-in one
+    # also has a tool copy on the inherited PATH.
+    _write_executable(venv / "bin" / "user-app")
+    _write_executable(venv / "bin" / "chat-app")
+    _write_executable(tool_bin / "chat-app")
+    _write_executable(tool_bin / "uv")
+
+    environment = _supervisord_environment(
+        {"PATH": str(tool_bin), "MNGR_HOST_DIR": "/home/user/.mngr"}, venv
+    )
+
+    path = environment["PATH"]
+    assert shutil.which("user-app", path=path) == str(venv / "bin" / "user-app")
+    assert shutil.which("chat-app", path=path) == str(venv / "bin" / "chat-app")
+    assert shutil.which("uv", path=path) == str(tool_bin / "uv")
+    assert environment["VIRTUAL_ENV"] == str(venv)
+    assert environment["MNGR_HOST_DIR"] == "/home/user/.mngr"
 
 
 # _apply_container_timezone
@@ -1046,6 +1081,38 @@ def test_main_boots_without_an_agent_state_dir(
     main()
 
     assert not list(tmp_path.rglob("events.jsonl"))
+
+
+def test_a_workspaces_first_boot_offers_it_the_tour(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # The work dir is set, so the main-branch step writes its signal in the same boot: the offer
+    # has to be made before that signal exists.
+    _prepare_boot(monkeypatch, tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+
+    main()
+
+    assert (tmp_path / "data/.state/workspace_main_branch_initialized").exists()
+    assert (tmp_path / "data/.state/system_interface/offer_tour").exists()
+
+
+@pytest.mark.parametrize(
+    "first_boot_signal", ["workspace_main_branch_initialized", "initial_chat_created"]
+)
+def test_a_workspace_that_booted_before_is_never_offered_the_tour(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, first_boot_signal: str
+) -> None:
+    # An existing workspace booting into a build that has the tour, whichever build first booted it.
+    _prepare_boot(monkeypatch, tmp_path)
+    monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
+    (tmp_path / "data/.state" / first_boot_signal).touch()
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+
+    main()
+
+    assert not (tmp_path / "data/.state/system_interface/offer_tour").exists()
 
 
 def test_recover_names_nobody_when_the_marker_recorded_no_agent(

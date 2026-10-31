@@ -1,3 +1,6 @@
+import base64
+import hashlib
+import json
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -5,14 +8,12 @@ from pathlib import Path
 from urllib.parse import parse_qs
 from urllib.parse import urlsplit
 
-import base64
-import hashlib
-import json
-
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
 from flask import Flask
 from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
 
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.caddyfile import build_label_to_name
@@ -30,8 +31,6 @@ from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
 from share_gateway.session_cookie import SESSION_COOKIE_NAME
 from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.testing import set_cookies_by_name
-
-from cryptography.hazmat.primitives.asymmetric import rsa
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 _BROKER_URL = "https://accounts.example.com"
@@ -105,6 +104,7 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str
         pending_logins=pending_logins,
         auth_label=_AUTH_LABEL,
         get_registered_apps=lambda: _APPS,
+        get_connect_info=lambda: {"ice_servers": [], "candidates": []},
     )
     return _GatewayHarness(app, app.test_client(), grants_path, pending_logins)
 
@@ -118,9 +118,8 @@ def _session_cookie_for(email: str, is_owner: bool = False, user_id: str = _BOB_
     return mint_session_cookie_value(_SIGNING_SECRET, identity, _DOMAIN)
 
 
-def _identity_header(response: object) -> dict[str, object]:
-    headers = getattr(response, "headers")
-    return json.loads(headers[IDENTITY_HEADER])
+def _identity_header(response: TestResponse) -> dict[str, object]:
+    return json.loads(response.headers[IDENTITY_HEADER])
 
 
 def _install_session(client: FlaskClient, email: str, extra_cookies: dict[str, str] | None = None) -> None:
@@ -407,9 +406,8 @@ def test_callback_clamps_foreign_next_to_the_shell_label(tmp_path: Path) -> None
     assert resp.headers["Location"] == f"https://{_SHELL_HOST}/"
 
 
-def _broker_query(response: object) -> dict[str, list[str]]:
-    headers = getattr(response, "headers")
-    location = headers["Location"]
+def _broker_query(response: TestResponse) -> dict[str, list[str]]:
+    location = response.headers["Location"]
     assert location.startswith(f"{_BROKER_URL}/share/authorize?")
     return parse_qs(location.removeprefix(f"{_BROKER_URL}/share/authorize?"), keep_blank_values=True)
 
@@ -854,3 +852,55 @@ def test_foreign_preflight_still_requires_a_session(tmp_path: Path) -> None:
     )
 
     assert resp.status_code == 401
+
+
+def test_connect_info_answers_what_the_stack_holds_without_caching(
+    tmp_path: Path,
+) -> None:
+    grants_path = tmp_path / "share_grants.toml"
+    grants_path.write_text(_GRANTS)
+    materials = ShareMaterials(
+        workspace_domain=_DOMAIN,
+        relay_token="tok",
+        connector_url="https://connector.example.com",
+        broker_url=_BROKER_URL,
+        chrome_origin=_CHROME_ORIGIN,
+    )
+    answers: list[dict[str, object]] = [
+        {"ice_servers": [], "candidates": []},
+        {
+            "ice_servers": [
+                {
+                    "urls": ["turn:t:3478?transport=udp"],
+                    "username": "u",
+                    "credential": "c",
+                }
+            ],
+            "candidates": [
+                {
+                    "host": "relay-us1.example",
+                    "port": 40123,
+                    "protocol": "tcp",
+                    "guest_port": 59000,
+                }
+            ],
+        },
+    ]
+    app = build_gateway_app(
+        materials=materials,
+        grants_path=grants_path,
+        signing_secret=_SIGNING_SECRET,
+        jwks_cache=JwksCache("https://accounts.example.com/share/jwks.json"),
+        jti_registry=SingleUseJtiRegistry(),
+        pending_logins=PendingLoginRegistry(),
+        auth_label=_AUTH_LABEL,
+        get_registered_apps=lambda: _APPS,
+        get_connect_info=lambda: answers[0],
+    )
+    client = app.test_client()
+    first = client.get("/connect-info")
+    assert first.status_code == 200
+    assert first.get_json() == {"ice_servers": [], "candidates": []}
+    assert first.headers["Cache-Control"] == "no-store"
+    answers.pop(0)
+    assert client.get("/connect-info").get_json() == answers[0]

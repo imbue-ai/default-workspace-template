@@ -12,7 +12,7 @@ service.
 
 ## What it does
 
-`uv run bootstrap` runs, in order:
+`bootstrap` runs, in order:
 
 1. **Global git config** - rewrites `git@`/`ssh://` GitHub remotes to `https://`.
    (`core.hooksPath` is deliberately NOT set here: the post-commit auto-push
@@ -21,10 +21,15 @@ service.
 2. **Workspace main branch** - on first boot only (gated by
    `data/.state/workspace_main_branch_initialized`), commits the rsynced workspace
    onto a clean `main` branch. It creates no chat: the chat app creates chats on
-   demand.
+   demand. The same first boot writes `data/.state/system_interface/offer_tour`,
+   which tells the system interface the workspace is new, so its show-around tour
+   may start by itself; a workspace that already existed never gets it.
 3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
+   That environment gets the workspace venv activated (`.venv/bin` first on
+   `PATH`, `VIRTUAL_ENV` set), so a program line that names its entry point bare
+   resolves the venv's console script.
 
 ### Progress events
 
@@ -62,8 +67,10 @@ writes separate, rotated, container-local logs under
 
 To add, change, or remove a service, add/edit/delete its own
 `system/supervisord.conf.d/<name>.conf` and run
-`supervisorctl reread && supervisorctl update` (and `supervisorctl restart
-<name>` to bounce one). See the `update-app` skill, or
+`supervisorctl reread && supervisorctl update`. To bounce an app after a code
+change use `uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart`, which
+does not wait out a scaffolded app's `startsecs=30`; `supervisorctl restart
+<name>` is for a daemon with no port. See the `update-app` skill, or
 `.agents/shared/references/service-processes.md`, for details.
 
 ## Environment convergence (env-converge)
@@ -76,8 +83,9 @@ Bootstrap's role is only the fast phase: it applies the overlay symlinks from
 `system/scripts/env.d/overlay-paths.json` synchronously before exec'ing supervisord,
 so no service ever writes to a rootfs path that should persist.
 
-Heavy packages not needed by boot-time services (currently the Fortress
-browser + its Chromium apt libs) install this way on first boot. If something
+Heavy packages not needed by boot-time services (currently the Screen's stack
+with the neko binary, and the Fortress browser + its Chromium apt libs, all in
+`system/scripts/env.d/2000-screen.sh`) install this way on first boot. If something
 tries to use one before its unit has finished, it fails loudly -- that is
 acceptable. Check `supervisorctl status env-converge`,
 `/var/log/supervisor/env-converge-stdout.log`, or the concrete satisfied

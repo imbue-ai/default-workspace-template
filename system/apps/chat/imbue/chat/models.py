@@ -141,6 +141,13 @@ class SendMessageRequest(FrozenModel):
             "composer if it never committed. '' for legacy callers, which the backend then mints for."
         ),
     )
+    is_single_send: bool = Field(
+        default=False,
+        description=(
+            "Whether the user asked for this send from a failure notice, so it goes out once: a send that "
+            "comes back unconfirmed is not repeated automatically"
+        ),
+    )
     client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
     desktop_id: str = Field(
         default="", description="The id of the desktop the sender was on at send time ('' for legacy callers)"
@@ -150,7 +157,13 @@ class SendMessageRequest(FrozenModel):
 class SendMessageResponse(FrozenModel):
     """Response from the message endpoint."""
 
-    status: str = Field(description="Status of the send operation: 'ok', or 'compaction_requested'")
+    status: str = Field(
+        description=(
+            "Status of the send operation: 'ok', 'resent' (delivered by a second send, mngr having been unable to "
+            "confirm the first, which may have landed too), 'compaction_requested', or 'withdrawn' (Stop took it "
+            "back while the agent was coming up, and nothing was delivered)"
+        )
+    )
 
 
 class SetModelChoiceRequest(FrozenModel):
@@ -315,7 +328,16 @@ class HandoffError(ValueError):
     ...
 
 
-class QueuedMessageState(FrozenModel):
+class DisplayDecisionFields(FrozenModel):
+    """The render decision a not-yet-delivered message's text would get as a transcript user_message
+    (``harnesses.message_display``), so the page draws it as the row it will become."""
+
+    display: DisplayKind | None = Field(default=None, description="The decision's kind; None for a plain message")
+    display_label: str | None = Field(default=None, description="The decision's chip or notice label")
+    display_body: str | None = Field(default=None, description="The decision's body, when it is not the text")
+
+
+class QueuedMessageState(DisplayDecisionFields):
     """One currently-queued message on the per-agent WebSocket state.
 
     The harness-agnostic wire shape of a queued message: the frontend renders the
@@ -337,15 +359,6 @@ class QueuedMessageState(FrozenModel):
             "False for an ordinary parked queue chip."
         ),
     )
-    display: DisplayKind | None = Field(
-        default=None,
-        description=(
-            "The render decision the content would get as a transcript user_message "
-            "(``harnesses.message_display``); None for a plain message"
-        ),
-    )
-    display_label: str | None = Field(default=None, description="The decision's chip or notice label")
-    display_body: str | None = Field(default=None, description="The decision's body, when it is not the content")
 
 
 class AgentStateItem(FrozenModel):
@@ -475,7 +488,7 @@ class HeldSend(FrozenModel):
     received_at: datetime = Field(description="When the chat app accepted it")
 
 
-class HeldSendSnapshot(FrozenModel):
+class HeldSendSnapshot(DisplayDecisionFields):
     """One message the chat app is holding for the successor, as the chat pages render it while converging."""
 
     message_id: str = Field(description="The sender's stable send-time id, which the page's own bubble carries too")
@@ -554,10 +567,11 @@ class SwitchChatResponse(FrozenModel):
 
 
 class HeldSendResponse(FrozenModel):
-    """Response from the message route while the chat is converging: the send is held for the successor."""
+    """Response from the message route while the chat is converging or still being created: the send is held
+    for the agent the chat is waiting on."""
 
     status: str = Field(description="'held'")
-    phase: HandoffPhase = Field(description="The phase the chat is in")
+    phase: HandoffPhase | None = Field(description="The phase the chat is in; None for a chat still being created")
 
 
 class SendFailureResponse(ErrorResponse):
@@ -714,12 +728,6 @@ class CreateChatRequest(FrozenModel):
         "``account``, ``project``, ``chat_id``, ``chat_seq``, ``autocompact``) are refused, and a chat minted "
         "earlier keeps the ones it was minted with",
     )
-    is_installation_check_skipped: bool = Field(
-        default=False,
-        description="Create the chat even if the workspace's claude binary no longer matches the template's pin, "
-        "so the update chat that repairs that can still be made (``message_chat.py --create`` asks for it on "
-        "every create); a chat minted earlier keeps its own",
-    )
     should_wait: bool = Field(
         default=False,
         description="Answer once the chat's ``mngr create`` has finished, with its failure reason when it "
@@ -756,8 +764,9 @@ class ProvisionalChatPhase(LowerCaseStrEnum):
     """Where a chat that is not an agent yet stands."""
 
     # A seeded chat (``chat_seed.py``) whose transcript is on the page with a composer: the
-    # user's first send launches it on the signed-in account (with nothing signed in, the page
-    # asks for a provider in the composer's place).
+    # user's first send launches it on the signed-in account; with nothing signed in, the page
+    # asks for a provider in the composer's place, and that sign-in launches it with no message,
+    # the first send then carrying the seed (``AgentManager.carry_pending_seed``).
     AWAITING_FIRST_SEND = auto()
     # Its ``mngr create`` is running.
     CREATING = auto()
@@ -780,15 +789,26 @@ class ProvisionalChat(FrozenModel):
     )
     message: str = Field(default="", description="The first message the chat sends once it launches; empty for none")
     labels: dict[str, str] = Field(default_factory=dict, description="The extra labels its create was asked for")
-    is_installation_check_skipped: bool = Field(
-        default=False, description="Whether its create waves the claude version check"
-    )
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
     is_seeded: bool = Field(
         default=False,
         description="Whether the chat has a seed segment to show while it is created (``chat_seed.py``)",
     )
+    held_sends: tuple[HeldSend, ...] = Field(
+        default=(),
+        description="Messages sent while the create ran, delivered in order once the chat runs",
+    )
+    model_pick: ModelPick | None = Field(
+        default=None, description="The model chosen for it; None for its harness's default"
+    )
+
+
+class SetLaunchChoiceRequest(FrozenModel):
+    """Request body for POST /api/chats/{id}/launch-choice: the account and model a chat with no agent yet runs on."""
+
+    account_id: str = Field(description="The account it runs on")
+    model: ModelPick | None = Field(default=None, description="The model it runs on; None for the harness's default")
 
 
 class SeedChatRequest(FrozenModel):

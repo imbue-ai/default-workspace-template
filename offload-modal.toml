@@ -6,8 +6,8 @@
 max_parallel = 20
 test_timeout_secs = 600
 sandbox_repo_root = "/home/user/workspace"
-# First boot, then what a CI image needs on top of it (the browser stack and the
-# offload binary); once per checkpoint build.
+# First boot, then what a CI image needs on top of it (the Screen's stack, Fortress
+# included, and the offload binary); once per checkpoint build.
 sandbox_init_cmd = "default-workspace-template-seed && bash /home/user/workspace/system/scripts/offload_sandbox_init.sh"
 post_patch_cmd = "bash /home/user/workspace/system/scripts/offload_post_patch.sh"
 
@@ -35,30 +35,37 @@ build_inputs = [
     "system/scripts/setup_system.sh",
     "system/scripts/_provision_guard.sh",
     "system/scripts/install_secret_scanners.sh",
-    "system/scripts/agy_install-1.1.22.sh",
+    "system/scripts/agy_install.sh",
     "system/scripts/install_owner_exec.sh",
     "system/scripts/install_earlyoom.sh",
     "system/scripts/install_agent_plugins.sh",
     "system/scripts/install_dependencies.sh",
     "system/scripts/_mngr_git_auth.sh",
+    # Run by install_dependencies.sh before its sync.
+    "system/scripts/workspace_bare_scripts/venv_links.py",
     "system/scripts/build_workspace.sh",
     "system/scripts/_tool_env.sh",
     "system/scripts/install_mngr.py",
-    "system/scripts/list_mngr_plugins.py",
-    # Read by those two to pick each tool's mngr plugins.
+    "system/scripts/workspace_bare_scripts/list_mngr_plugins.py",
+    # Read by those two to pick the mngr tool's plugins.
     "system/config/mngr_plugins.toml",
-    "system/scripts/tool_env.py",
+    "system/scripts/workspace_bare_scripts/tool_env.py",
+    # Lists and syncs the user packages in build_workspace.sh.
+    "system/scripts/workspace_bare_scripts/user_packages.py",
+    # The code the install_mngr.py entry stub imports.
+    "system/scripts/workspace_bare_scripts/__init__.py",
+    "system/scripts/workspace_bare_scripts/install_mngr.py",
     "system/scripts/default_workspace_template_seed.sh",
     "system/scripts/seed_home_skeleton.sh",
     # What the first-boot steps run on top of it.
-    "system/scripts/env.d/1000-playwright-fortress.sh",
+    "system/scripts/env.d/2000-screen.sh",
     "system/scripts/env.d/1300-mcpc-home-link.sh",
     "system/scripts/offload_sandbox_init.sh",
 ]
 
 [framework]
 type = "pytest"
-command = "uv run pytest"
+command = "uv run --no-sync pytest"
 # Skip assertion-rewriting during `pytest --collect-only` -- pure overhead
 # there (OFFLOAD-18).
 discovery_args = "--assert=plain"

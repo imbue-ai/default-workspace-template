@@ -96,7 +96,7 @@ Commit -- never stash (stashed work gets lost during multi-agent coordination)
 -- then launch.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name $NAME \
     --template worker \
     --runtime-dir data/.tasks/launch-task/$NAME/ \
@@ -129,7 +129,7 @@ assumed to be `mngr/$NAME`.
 ## 3. Background-poll for the worker's report
 
 Poll with `create_worker.py await`, started through
-`system/scripts/run_in_background.py`, and continue with whatever else you were
+`system/scripts/workspace_bare_scripts/run_in_background.py`, and continue with whatever else you were
 doing. `await` reads `finish_report_path` from the task file
 (`data/.tasks/launch-task/$NAME/reports/report.md`), blocks until the worker writes
 it back, then prints the report. `--name $NAME` is required so the poll also
@@ -138,8 +138,8 @@ pressure (so it will never report until revived), the poll surfaces that
 promptly and actionably (exit code 75) instead of waiting out the full timeout.
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name $NAME \
     --task-file data/.tasks/launch-task/$NAME/task.md
 ```
@@ -193,8 +193,9 @@ Flow-specific substitutions when reading `lead-proxy.md`:
   it does not interact reliably with stop hooks or worker-spawned
   sub-agents. The report file is the contract.
 - If a task fails (stuck report, or 30m poll timeout with no report and
-  the worker is dead), see `references/worker-failure.md` -- do not
-  silently retry.
+  the worker wedged, or dead and not brought back by
+  `references/dead-worker-recovery.md`), see `references/worker-failure.md`
+  -- do not silently retry.
 - If a worker is `STOPPED` with uncommitted work and its `archived_at` label
   is absent or empty, message it to continue with `create_worker.py reply`,
   which restarts it -- the worktree is preserved across the restart. One

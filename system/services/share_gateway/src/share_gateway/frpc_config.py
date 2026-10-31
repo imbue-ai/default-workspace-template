@@ -11,6 +11,30 @@ nothing. The relay only ever sees ciphertext; the per-share relay token rides
 in the client metadata map, and the connector's frps plugin validates it on
 Login and checks that every claimed domain is a single label under this
 share's domain on NewProxy.
+
+A second proxy, ``screen-media`` of type ``tcp``, carries the Screen's WebRTC stream to
+visitors the published port cannot reach (the Screen spec, section 15): the relay binds the
+share's ``media_port`` and splices each connection to neko's TCP mux at the workspace's
+own interface address (``local_address.py`` says why loopback would not do) on the port
+below. It is rendered only when the assignment carries a ``media_port`` and the workspace
+has an address; the connector accepts exactly that one tcp claim at exactly that port.
+"""
+
+# neko's TCP ICE mux inside the workspace (the Screen spec, section 5.1).
+SCREEN_MEDIA_LOCAL_PORT = 59000
+SCREEN_MEDIA_PROXY_NAME = "screen-media"
+
+
+def _render_media_proxy(media_port: int | None, local_media_address: str | None, local_media_port: int) -> str:
+    if media_port is None or local_media_address is None:
+        return ""
+    return f"""
+[[proxies]]
+name = "{SCREEN_MEDIA_PROXY_NAME}"
+type = "tcp"
+localIP = "{local_media_address}"
+localPort = {local_media_port}
+remotePort = {media_port}
 """
 
 
@@ -23,6 +47,9 @@ def render_frpc_toml(
     auth_label: str,
     local_https_port: int,
     admin_port: int,
+    media_port: int | None,
+    local_media_address: str | None,
+    local_media_port: int,
 ) -> str:
     # Claim exactly the labels the relay should route: every registered
     # service label plus the auth label. Sorted + de-duplicated for a stable,
@@ -69,4 +96,4 @@ customDomains = [{custom_domains}]
 # it) can tell a scanner from a visitor instead of seeing every connection as
 # frpc on 127.0.0.1.
 transport.proxyProtocolVersion = "v2"
-"""
+{_render_media_proxy(media_port, local_media_address, local_media_port)}"""
