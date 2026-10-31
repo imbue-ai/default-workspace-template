@@ -10,4 +10,4 @@ Upgrade Fortress (the Screen's stealth Chromium) from v151.0.7908.0 to v156.0.80
 
 - The Chrome extensions are fetched for Chrome 156, and the pre-2026-10-18 legacy-layout satisfied check (a CLEANUP for images that unpacked v151 straight into the stable path) is dropped -- those images exist only on this branch's history and a layout that old now simply reinstalls.
 
-- The eMudhra CA distrust policy (the `CADistrustedCertificates` machine policy distrusting the eight compromised intermediates, shipped on main in the old `1000-playwright-fortress.sh`) is ported into `2000-screen.sh` with its test, since this branch deletes that unit and forked before the policy landed. v156 is still below the 158.0.8115.0 threshold at which Chromium's own root store and SPKI blocklist make the policy removable.
+- The unit keeps writing the eMudhra CA distrust policy (the `CADistrustedCertificates` machine policy distrusting the eight compromised intermediates): v156 is still below the 158.0.8115.0 threshold at which Chromium's own root store and SPKI blocklist make the policy removable.
