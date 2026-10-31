@@ -114,6 +114,27 @@ def test_import_and_export_report_missing_materials_before_touching_latchkey(
     assert "transfer_key" in exported.output
 
 
+def test_import_and_export_with_a_latchkey_they_cannot_run_are_missing_material(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "latchkey_key").write_text("key\n")
+    (tmp_path / "transfer_key").write_text("transfer\n")
+    (tmp_path / "incoming").mkdir()
+    (tmp_path / "incoming" / "browser_state.json.enc").write_bytes(b"state")
+    runner = CliRunner()
+    binary_options = [
+        "--runtime-dir",
+        str(tmp_path),
+        "--latchkey-binary",
+        "/nonexistent/latchkey",
+    ]
+    imported = runner.invoke(import_browser_state_command, binary_options)
+    exported = runner.invoke(export_command, ["slack", *binary_options])
+    for result in (imported, exported):
+        assert result.exit_code == EXIT_MISSING_MATERIAL, result.output
+        assert "/nonexistent/latchkey" in result.output
+
+
 def test_render_config_writes_the_template_with_the_browser_entry(
     tmp_path: Path,
 ) -> None:

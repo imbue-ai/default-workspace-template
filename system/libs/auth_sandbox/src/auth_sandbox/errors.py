@@ -6,7 +6,8 @@ class AuthSandboxError(Exception):
 
 
 class MissingMaterialError(AuthSandboxError, FileNotFoundError):
-    """A file the connector or the chrome writes before a command runs (a key, an incoming state) is not there."""
+    """A material a command needs is missing or unusable: a file the connector or the chrome writes before it runs
+    (a key, an incoming state), or the ``latchkey`` binary itself."""
 
 
 class LatchkeyCommandError(AuthSandboxError, RuntimeError):

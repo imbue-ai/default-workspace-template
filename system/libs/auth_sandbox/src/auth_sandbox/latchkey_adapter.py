@@ -8,7 +8,7 @@ from pathlib import Path
 from imbue.mngr_latchkey.core import Latchkey, LatchkeyServiceInfo
 from pydantic import Field
 
-from auth_sandbox.errors import LatchkeyCommandError
+from auth_sandbox.errors import LatchkeyCommandError, MissingMaterialError
 from auth_sandbox.interfaces import (
     FinishedCommand,
     ReencryptRunnerInterface,
@@ -47,7 +47,8 @@ class LatchkeyAdapter(SignInLatchkeyInterface):
 
 
 class SubprocessReencryptRunner(ReencryptRunnerInterface):
-    """Runs the CLI as a child process; a child that cannot start or outlives its budget is a command error."""
+    """Runs the CLI as a child process: a binary that cannot start is a missing material, and a child that outlives
+    its budget is a command error."""
 
     def run(
         self,
@@ -67,8 +68,10 @@ class SubprocessReencryptRunner(ReencryptRunnerInterface):
                 timeout=_REENCRYPT_TIMEOUT_SECONDS,
                 check=False,
             )
-        except (OSError, subprocess.TimeoutExpired) as e:
-            raise LatchkeyCommandError(f"could not run {argv[0]}: {e}") from e
+        except OSError as e:
+            raise MissingMaterialError(f"could not run {argv[0]}: {e}") from e
+        except subprocess.TimeoutExpired as e:
+            raise LatchkeyCommandError(f"{argv[0]} did not finish: {e}") from e
         return FinishedCommand(
             returncode=completed.returncode,
             stdout=completed.stdout,
