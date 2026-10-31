@@ -340,12 +340,20 @@ def prune_registry_rows_of_removed_programs(
     release removed never starts again, so its row would offer a dead tile in the
     launcher and a dead origin to the share gateway for the life of the workspace. A
     row with no program (an unsupervised instance owning its own teardown) is never
-    touched, and a registry or a supervisord table that cannot be read prunes nothing.
-    A row removed in error costs one restart: the program registers itself again.
+    touched, and a registry or a supervisord table that cannot be read prunes nothing
+    (a registry that is there but unreadable or not TOML is reported, a missing one is
+    the tree that never registered an app). A row removed in error costs one restart:
+    the program registers itself again.
     """
     try:
         rows = _read_registry_rows(repo_root)
-    except (OSError, tomllib.TOMLDecodeError):
+    except FileNotFoundError:
+        return []
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        sys.stderr.write(
+            f"warning: could not read the app registry {APPS_REGISTRY_PATH} ({exc}); "
+            "no registry row is pruned.\n"
+        )
         return []
     programs = read_supervisord_programs(repo_root)
     if programs is None:

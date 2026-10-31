@@ -9755,6 +9755,32 @@ def test_the_apply_prunes_no_registry_row_when_the_tree_has_no_supervisord_table
     ]
 
 
+def test_the_apply_reports_a_registry_it_cannot_parse_and_prunes_nothing(
+    apply_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (apply_repo / update_layout.SUPERVISORD_DROPIN_DIR).mkdir(parents=True)
+    (apply_repo / update_layout.SUPERVISORD_CONF).write_text(
+        "[supervisord]\nnodaemon=true\n"
+    )
+    registry = apply_repo / update_layout.APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text("[[apps]\nname = ")
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert not [
+        argv
+        for argv in runner.calls
+        if argv[1:3] == [update_layout.FORWARD_PORT_SCRIPT, "--remove"]
+    ]
+    assert (
+        f"warning: could not read the app registry {update_layout.APPS_REGISTRY_PATH}"
+        in capsys.readouterr().err
+    )
+
+
 def test_recover_runs_from_the_command_line(apply_repo: Path) -> None:
     # Boot and cron reach the rollback through the command, not the function, so the
     # command's argument list has to match the function's; with no marker, the
