@@ -28,15 +28,15 @@ and `themes/` (made in the workspace).
 ## CLI
 
 ```bash
-uv run workspace-themes list
-uv run workspace-themes validate [<id> ...]
-uv run workspace-themes new <id> --name "<name>" --description "<one sentence>" [--base <id>]
-uv run workspace-themes bundle <id>
-uv run workspace-themes icon spec <theme>
-uv run workspace-themes icon missing [<id> ...]
-uv run workspace-themes icon fit <candidate.png> --theme <theme> --out <fitted.png>
-uv run workspace-themes icon grid <grid.txt> --theme <theme> --legend "k=#000000,w=#ffffff" --out <icon.png>
-uv run workspace-themes icon check <icon.png> --theme <theme>
-uv run workspace-themes icon install <icon.png> --theme <theme> --app <app>
-uv run workspace-themes lint-app <app package>
+uv run --no-sync workspace-themes list
+uv run --no-sync workspace-themes validate [<id> ...]
+uv run --no-sync workspace-themes new <id> --name "<name>" --description "<one sentence>" [--base <id>]
+uv run --no-sync workspace-themes bundle <id>
+uv run --no-sync workspace-themes icon spec <theme>
+uv run --no-sync workspace-themes icon missing [<id> ...]
+uv run --no-sync workspace-themes icon fit <candidate.png> --theme <theme> --out <fitted.png>
+uv run --no-sync workspace-themes icon grid <grid.txt> --theme <theme> --legend "k=#000000,w=#ffffff" --out <icon.png>
+uv run --no-sync workspace-themes icon check <icon.png> --theme <theme>
+uv run --no-sync workspace-themes icon install <icon.png> --theme <theme> --app <app>
+uv run --no-sync workspace-themes lint-app <app package>
 ```

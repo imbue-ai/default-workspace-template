@@ -19,7 +19,7 @@ scripted; Step 4a is your recipe for it.
 ## 1. Resolve inputs
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 ```
 
 Sets `LEAD_AGENT`, `LEAD_WORK_DIR`, `FINISH_REPORT_PATH`, and `TARGET_REF`. If the worktree has
@@ -155,7 +155,7 @@ whether the creation carries the workspace's own content, and whether the
 update reached it.
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 SCOPES=data/.tasks/update-self/scopes
 RANGES=data/.tasks/update-self/footprint-ranges.json
 rm -rf "$SCOPES" && mkdir -p "$SCOPES"
@@ -317,9 +317,32 @@ is a `question` gate (Step 6). Record which branch applied, with its evidence,
 in your report.
 
 - **Environment gate first**, whenever a manifest or lockfile is in the
-  merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
-  is a precise blocker (an unparseable root lock means no service in the
-  workspace can start); fix it before running anything else.
+  merged set: `uv lock --check` then `uv sync --all-packages` at the root, and
+  for each user package (`python3 system/scripts/workspace_bare_scripts/user_packages.py list`;
+  each is a standalone project with its own lock) `uv lock --check --project <package>`.
+  A failure here is a precise blocker (an unparseable root lock means no service
+  in the workspace can start); fix it before running anything else. A user
+  package whose lock is stale after the merge (a shared library it uses or the
+  mngr pin moved) is relocked with
+  `uv run --no-sync user-package-migration relock <package>`,
+  never by hand-editing its lock. A user package that is not standalone yet (the
+  update that made them standalone; `system/test_user_packages_are_standalone.py`
+  names it) is converted with the same command's `migrate`, after its `--dry-run`,
+  whose output goes in your report, per `references/python-packaging-migration.md`
+  ("A user app, service or lib"). Each converted package then gets this step's
+  suites, and an app or service its isolated boot, from its own venv. A failure here
+  or in the suites below on the workspace's own skills, apps, services or docs
+  that the update's changelog ties to a changed rule (for example a user
+  skill's PEP 723 script that `system/test_entry_point_import_cost.py` cannot
+  import, a user service whose program line runs under `uv run`, or a type
+  error in a user skill or app) is fixed by following
+  `references/python-packaging-migration.md`.
+  Separately, before any suite or boot below runs, sync the venv
+  (`uv sync --all-packages --frozen`) whenever the merge changed a
+  `pyproject.toml` or `uv.lock` at all, merged or pulled in
+  (`git diff --name-only "$MERGE^1" "$MERGE" -- '*pyproject.toml' '*uv.lock'`
+  lists one, `$MERGE` as below): everything below runs `uv run --no-sync`,
+  which never syncs, so it would otherwise run on the pre-merge environment.
 - **Suites, lint, ratchets** for what the merged set, the update's changes to
   your creations, 4a's impacted consumers, and your own edits can reach, and
   for nothing else (with none of them, no suite runs at all). The test
@@ -361,7 +384,7 @@ in your report.
   Commit your own edits first: the `git diff` line reads commits.
   `--diff-base` here only names what a merged `uv.lock` is compared against,
   so a lock that upgraded a package selects the suites that depend on it. Run
-  every printed line, in order, plus `uv run ruff check` when a Python file is
+  every printed line, in order, plus `uv run --no-sync ruff check` when a Python file is
   in the list, and handle a failing test and a shed command the way
   `.agents/shared/worker/references/harden-creation.md` ("The test gate")
   says, naming a flaky test under your report's Validation; the tree before
@@ -371,7 +394,7 @@ in your report.
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a
   file of it in `local_only`) -- against a scratch data copy via
-  `.agents/shared/scripts/serve_isolated_instance.py` (see `update-app`),
+  `.agents/shared/scripts/agents_shared/serve_isolated_instance.py` (see `update-app`),
   never the live store. A service that arrived exactly as upstream shipped
   it is not booted here: upstream tested it, and for the shell and the chat
   app the apply pre-flights the merged copy itself before anything live
@@ -384,11 +407,11 @@ in your report.
   when the merge needed nontrivial merge work there. For the system interface,
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
   system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
-  the chat app's, the Getting Started app's, the Files app's, and the Routines
-  app's) and drive it per
-  `.agents/shared/worker/references/web-frontend-testing.md`. Those five bundles
+  the chat app's, the Getting Started app's, the Files app's, the Routines
+  app's, and the Style Guide's) and drive it per
+  `.agents/shared/worker/references/web-frontend-testing.md`. Those six bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
-  installed only as a set) -- name all five locations in your report.
+  installed only as a set) -- name all six locations in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
@@ -485,11 +508,12 @@ Valid `name:` values:
     evidence for the manifest apps: which carried local content and which
     the update reached.
   - **Built frontend bundles** -- when you built them, the absolute paths of
-    all five (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
+    all six (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
     `<your work_dir>/system/apps/chat/imbue/chat/static`,
     `<your work_dir>/system/apps/getting_started/src/getting_started/static`,
-    `<your work_dir>/system/apps/files/static`, and
-    `<your work_dir>/system/apps/routines/src/routines_app/static`); omit
+    `<your work_dir>/system/apps/files/static`,
+    `<your work_dir>/system/apps/routines/src/routines_app/static`, and
+    `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`); omit
     when you did not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
     or skill depending on a changed file; or, when the 4a rule skipped it,

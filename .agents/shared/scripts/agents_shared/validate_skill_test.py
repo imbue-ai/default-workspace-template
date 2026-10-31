@@ -1,0 +1,522 @@
+"""Tests for ``validate_skill.py``.
+
+Run via: ``uv run --no-sync pytest
+.agents/shared/scripts/agents_shared/validate_skill_test.py``
+"""
+
+from __future__ import annotations
+
+import subprocess
+from collections.abc import Sequence
+from pathlib import Path
+
+import pytest
+
+from agents_shared import validate_skill
+
+_REPO_ROOT = Path(__file__).resolve().parents[4]
+
+_PYPROJECT = """\
+[project]
+name = "{project}"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["{package}"]
+"""
+
+
+_ENTRY_MODULE = (
+    'def main() -> None:\n    pass\n\n\nif __name__ == "__main__":\n    main()\n'
+)
+
+
+def _write_skill(
+    base: Path,
+    name: str,
+    description: str = "Valid description",
+    body_lines: int = 5,
+    metadata_crystallized: bool = False,
+    include_scripts: bool | None = None,
+    frontmatter_override: str | None = None,
+) -> Path:
+    """Build a skill directory on disk; return the skill path.
+
+    With scripts, the skill is laid out the way the spec asks: a ``python/`` project
+    whose ``pyproject.toml`` names ``<name>-skill`` and its package, whose ``run``
+    module is run by path, and a ``scripts/run.py`` stub for a path called from outside.
+    """
+    skill = base / name
+    skill.mkdir(parents=True)
+    meta = "\nmetadata:\n  crystallized: true" if metadata_crystallized else ""
+    fm = (
+        frontmatter_override
+        if frontmatter_override is not None
+        else (f"---\nname: {name}\ndescription: {description}{meta}\n---\n")
+    )
+    body = "\n".join(f"line {i}" for i in range(body_lines))
+    (skill / "SKILL.md").write_text(fm + body)
+    if include_scripts is None:
+        include_scripts = metadata_crystallized
+    if include_scripts:
+        package = name.replace("-", "_") + "_skill"
+        project = skill / "python"
+        (project / package).mkdir(parents=True)
+        (project / package / "__init__.py").write_text("")
+        (project / package / "run.py").write_text(_ENTRY_MODULE)
+        (project / package / "helpers.py").write_text(
+            "def helper() -> None:\n    pass\n"
+        )
+        (project / "pyproject.toml").write_text(
+            _PYPROJECT.format(project=f"{name}-skill", package=package)
+        )
+        (skill / "scripts").mkdir()
+        (skill / "scripts" / "run.py").write_text(f"from {package} import cli\n")
+    return skill
+
+
+def test_valid_skill(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "my-skill")
+    assert validate_skill.validate(skill) is None
+
+
+def test_name_mismatch(tmp_path: Path) -> None:
+    skill = tmp_path / "dirname"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: wrong\ndescription: x\n---\nbody\n")
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "does not match parent directory" in error
+
+
+def test_missing_description(tmp_path: Path) -> None:
+    skill = tmp_path / "s"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: s\n---\nbody\n")
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "description" in error
+
+
+def test_description_too_long(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", description="x" * 2000)
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "length" in error
+
+
+def test_body_too_long(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", body_lines=600)
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "500" in error
+
+
+def test_crystallized_without_scripts_is_ok(tmp_path: Path) -> None:
+    """Crystallized skills do not require scripts -- pure-prose skills are valid."""
+    skill = _write_skill(
+        tmp_path, "s", metadata_crystallized=True, include_scripts=False
+    )
+    assert validate_skill.validate(skill) is None
+
+
+def test_packaged_scripts_are_valid(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "my-skill", include_scripts=True)
+    assert validate_skill.validate(skill) is None
+
+
+def test_scripts_without_a_pyproject_are_invalid(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "my-skill", include_scripts=True)
+    (skill / "python" / "pyproject.toml").unlink()
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "pyproject.toml is missing" in error
+
+
+def test_a_project_not_named_for_the_skill_is_invalid(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "my-skill", include_scripts=True)
+    (skill / "python" / "pyproject.toml").write_text(
+        _PYPROJECT.format(project="my-scripts", package="my_skill_skill")
+    )
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "'my-skill-skill'" in error
+
+
+def test_a_package_not_named_for_the_skill_is_invalid(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "my-skill", include_scripts=True)
+    (skill / "python" / "pyproject.toml").write_text(
+        _PYPROJECT.format(project="my-skill-skill", package="helpers")
+    )
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "'my_skill_skill'" in error
+
+
+def test_a_shell_only_scripts_dir_needs_no_python_project(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "my-skill")
+    scripts = skill / "scripts"
+    scripts.mkdir()
+    (scripts / "run.sh").write_text("echo hi\n")
+    assert validate_skill.validate(skill) is None
+
+    (scripts / "run.py").write_text("print('hi')\n")
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "python/pyproject.toml is missing" in error
+
+
+_BARE_SCRIPT = (
+    "import argparse\nimport json\n\n\ndef main() -> None:\n"
+    "    argparse.ArgumentParser().parse_args()\n    print(json.dumps({}))\n\n\n"
+    'if __name__ == "__main__":\n    main()\n'
+)
+
+
+def _write_bare_skill(base: Path, name: str, script: str = _BARE_SCRIPT) -> Path:
+    """A skill whose Python is one standard-library script named for the skill."""
+    skill = _write_skill(base, name)
+    (skill / "scripts").mkdir()
+    (skill / "scripts" / f"{name.replace('-', '_')}.py").write_text(script)
+    return skill
+
+
+def test_a_single_standard_library_script_named_for_the_skill_is_a_valid_bare_skill(
+    tmp_path: Path,
+) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report")
+
+    assert validate_skill.validate(skill) is None
+    assert (
+        validate_skill.bare_skill_module(skill) == skill / "scripts" / "fruit_report.py"
+    )
+
+
+def test_a_bare_skill_may_carry_its_own_test(tmp_path: Path) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report")
+    (skill / "scripts" / "fruit_report_test.py").write_text(
+        "import pytest\n\nimport fruit_report\n\n\ndef test_main() -> None:\n"
+        "    with pytest.raises(SystemExit):\n        fruit_report.main()\n"
+    )
+
+    assert validate_skill.validate(skill) is None
+
+
+@pytest.mark.parametrize(
+    "script",
+    [
+        "import yaml\n",
+        "def main() -> None:\n    import rich\n",
+        "from pydantic import BaseModel\n",
+    ],
+    ids=["top-level", "inside-a-function", "from-import"],
+)
+def test_a_bare_script_importing_outside_the_standard_library_is_invalid(
+    tmp_path: Path, script: str
+) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report", script)
+
+    error = validate_skill.validate(skill)
+
+    assert error is not None
+    assert "imports outside the standard library" in error
+
+
+def test_a_bare_script_keeping_a_pep_723_header_is_invalid(tmp_path: Path) -> None:
+    header = '# /// script\n# requires-python = ">=3.12"\n# dependencies = []\n# ///\n'
+    skill = _write_bare_skill(tmp_path, "fruit-report", header + _BARE_SCRIPT)
+
+    error = validate_skill.validate(skill)
+
+    assert error is not None
+    assert "PEP 723" in error
+
+
+def test_a_bare_script_named_like_a_standard_library_module_is_invalid(
+    tmp_path: Path,
+) -> None:
+    skill = _write_bare_skill(tmp_path, "json")
+
+    error = validate_skill.validate(skill)
+
+    assert error is not None
+    assert "shadow" in error
+
+
+def test_a_second_module_beside_a_bare_script_needs_a_python_project(
+    tmp_path: Path,
+) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report")
+    (skill / "scripts" / "helpers.py").write_text("")
+
+    error = validate_skill.validate(skill)
+
+    assert error is not None
+    assert "python/pyproject.toml is missing" in error
+    assert validate_skill.bare_skill_module(skill) is None
+
+
+def test_check_runnable_runs_a_bare_skill_script_without_site_packages(
+    tmp_path: Path,
+) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report")
+    runner = _RecordingRunner()
+
+    assert validate_skill.check_runnable(skill, runner=runner) is None
+    module = (skill / "scripts" / "fruit_report.py").resolve()
+    assert runner.calls == [["python3", "-S", "-s", str(module), "--help"]]
+
+
+def test_a_real_bare_skill_runs_under_python3_without_site_packages(
+    tmp_path: Path,
+) -> None:
+    skill = _write_bare_skill(tmp_path, "fruit-report")
+    assert validate_skill.check_runnable(skill) is None
+
+    broken = _write_bare_skill(
+        tmp_path / "broken", "fruit-report", "raise SystemExit(3)\n"
+    )
+    error = validate_skill.check_runnable(broken)
+    assert error is not None
+    assert "exit 3" in error
+
+
+def test_missing_frontmatter(tmp_path: Path) -> None:
+    skill = tmp_path / "s"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("no frontmatter here\n")
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "frontmatter" in error
+
+
+def test_malformed_frontmatter(tmp_path: Path) -> None:
+    skill = tmp_path / "s"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("---\nname: s\ndescription: x\n")  # no closing ---
+    error = validate_skill.validate(skill)
+    assert error is not None
+
+
+def test_missing_skill_md(tmp_path: Path) -> None:
+    skill = tmp_path / "s"
+    skill.mkdir()
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "SKILL.md" in error
+
+
+def test_missing_directory(tmp_path: Path) -> None:
+    error = validate_skill.validate(tmp_path / "does-not-exist")
+    assert error is not None
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "Bad-Name",  # uppercase
+        "bad_name",  # underscore
+        "-leading",  # leading hyphen
+        "trailing-",  # trailing hyphen
+        "double--hyphen",  # consecutive hyphens
+    ],
+)
+def test_invalid_name_format(tmp_path: Path, bad_name: str) -> None:
+    """frontmatter.name must match the kebab-case rules even if dir matches."""
+    skill = _write_skill(tmp_path, bad_name)
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "lowercase letters/digits" in error
+
+
+def test_name_too_long(tmp_path: Path) -> None:
+    long_name = "a" * 65
+    skill = _write_skill(tmp_path, long_name)
+    error = validate_skill.validate(skill)
+    assert error is not None
+    assert "length" in error
+
+
+# --- Runnability check (check_runnable) -------------------------------------
+
+
+class _RecordingRunner:
+    """Answers each command with the result its argv prefix is mapped to (exit 0 otherwise)."""
+
+    def __init__(
+        self,
+        failures: dict[tuple[str, ...], subprocess.CompletedProcess[str]] | None = None,
+    ) -> None:
+        self.failures = failures or {}
+        self.calls: list[list[str]] = []
+
+    def __call__(
+        self, argv: Sequence[str], cwd: Path
+    ) -> subprocess.CompletedProcess[str]:
+        self.calls.append(list(argv))
+        for prefix, result in self.failures.items():
+            if tuple(argv[: len(prefix)]) == prefix:
+                return result
+        return subprocess.CompletedProcess(
+            args=list(argv), returncode=0, stdout="", stderr=""
+        )
+
+
+def _failed(stderr: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=[], returncode=2, stdout="", stderr=stderr)
+
+
+def test_check_runnable_without_scripts(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=False)
+    runner = _RecordingRunner()
+    assert validate_skill.check_runnable(skill, runner=runner) is None
+    assert runner.calls == []
+
+
+def test_check_runnable_checks_the_lock_then_runs_every_entry(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+    scripts = (skill / "scripts").resolve()
+    package = (skill / "python" / "s_skill").resolve()
+    (scripts / "extra.py").write_text("")
+    (scripts / "conftest.py").write_text("")
+    (package / "cli_test.py").write_text(_ENTRY_MODULE)
+    # A guard nested inside a function does not make a module an entry point.
+    (package / "nested.py").write_text(
+        "def f() -> None:\n"
+        + "".join(f"    {line}\n" for line in _ENTRY_MODULE.splitlines())
+    )
+    runner = _RecordingRunner()
+
+    assert validate_skill.check_runnable(skill, runner=runner) is None
+    assert runner.calls == [
+        ["uv", "lock", "--check"],
+        ["uv", "run", "--no-sync", str(package / "run.py"), "--help"],
+        ["uv", "run", "--no-sync", str(scripts / "extra.py"), "--help"],
+        ["uv", "run", "--no-sync", str(scripts / "run.py"), "--help"],
+    ]
+
+
+def test_check_runnable_refuses_a_module_shadowing_the_standard_library(
+    tmp_path: Path,
+) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+    (skill / "python" / "s_skill" / "email.py").write_text("")
+    runner = _RecordingRunner()
+
+    error = validate_skill.check_runnable(skill, runner=runner)
+
+    entry = (skill / "python" / "s_skill" / "run.py").resolve()
+    assert error == (
+        f"{entry} runs by its own path, so its package's email would shadow the "
+        "standard-library module of that name; rename it"
+    )
+    assert runner.calls == [["uv", "lock", "--check"]]
+
+
+def test_check_runnable_reports_a_module_that_cannot_be_parsed(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+    (skill / "python" / "s_skill" / "broken.py").write_text("def broken(:\n")
+
+    error = validate_skill.check_runnable(skill, runner=_RecordingRunner())
+
+    assert error is not None
+    assert "broken.py cannot be parsed" in error
+
+
+def test_check_runnable_reports_a_stale_lock(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+    runner = _RecordingRunner(
+        {("uv", "lock"): _failed("The lockfile needs to be updated")}
+    )
+
+    error = validate_skill.check_runnable(skill, runner=runner)
+
+    assert error is not None
+    assert "uv lock --check" in error
+    assert "The lockfile needs to be updated" in error
+
+
+def test_check_runnable_reports_an_entry_that_cannot_import(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+    runner = _RecordingRunner(
+        {
+            ("uv", "run"): _failed(
+                "ModuleNotFoundError: No module named 'missing_dependency'"
+            )
+        }
+    )
+
+    error = validate_skill.check_runnable(skill, runner=runner)
+
+    assert error is not None
+    assert "run.py --help" in error
+    assert "exit 2" in error
+    assert "missing_dependency" in error
+
+
+@pytest.mark.timeout(120)
+def test_check_runnable_catches_a_broken_import_through_real_uv(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+    (skill / "scripts" / "run.py").write_text(
+        "import this_module_definitely_does_not_exist_xyz\n"
+    )
+    subprocess.run(
+        ["uv", "lock", "--quiet"],
+        cwd=skill / "python",
+        check=True,
+        timeout=60,
+    )
+
+    error = validate_skill.check_runnable(skill)
+
+    assert error is not None
+    assert "run.py --help" in error
+    assert "this_module_definitely_does_not_exist_xyz" in error
+
+
+def test_check_runnable_timeout(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+
+    def _timeout(argv: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd="uv", timeout=1)
+
+    error = validate_skill.check_runnable(skill, runner=_timeout)
+    assert error is not None
+    assert "did not finish" in error
+
+
+def test_check_runnable_uv_missing(tmp_path: Path) -> None:
+    skill = _write_skill(tmp_path, "s", include_scripts=True)
+
+    def _no_uv(argv: Sequence[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+        raise FileNotFoundError("uv")
+
+    error = validate_skill.check_runnable(skill, runner=_no_uv)
+    assert error is not None
+    assert "`uv` was not found" in error
+
+
+_SKILLS_WITH_PYTHON = sorted(
+    path.parent for path in (_REPO_ROOT / ".agents" / "skills").glob("*/python")
+)
+
+
+@pytest.mark.parametrize("skill", _SKILLS_WITH_PYTHON, ids=lambda path: path.name)
+def test_every_built_in_skill_with_python_names_its_project_and_package(
+    skill: Path,
+) -> None:
+    assert validate_skill._validate_python_project(skill, skill.name) is None
+
+
+# Real `uv lock --check` and `uv run --no-sync <entry> --help` runs against the workspace:
+# a cold lock check resolves git sources, far past the suite's 10s default.
+@pytest.mark.timeout(300)
+@pytest.mark.parametrize("skill", _SKILLS_WITH_PYTHON, ids=lambda path: path.name)
+def test_every_built_in_skill_with_python_is_runnable(skill: Path) -> None:
+    assert validate_skill.check_runnable(skill) is None

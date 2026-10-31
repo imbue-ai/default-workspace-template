@@ -112,7 +112,9 @@ class Pin(FrozenModel):
     path: LaunchPathValue = Field(
         description="The home path: where the pinned window opens, a page safe to open any number of times"
     )
-    style: PinStyle = Field(default=PinStyle.PLAIN, description="How the entry is drawn by a client that chose nothing")
+    style: PinStyle = Field(
+        default=PinStyle.PLAIN, description="How the entry is drawn by a client that chose nothing"
+    )
     scope: LocationScope = Field(
         default=LocationScope.LINKED, description="Whether the pinned window keeps a path per client"
     )
@@ -126,9 +128,7 @@ class LaunchParam(FrozenModel):
 
     name: LaunchParamName = Field(description="The parameter's name")
     label: NonEmptyStr = Field(description="What the parameter is called in prose")
-    required: bool = Field(
-        default=False, description="Whether the launch path refuses a request without it"
-    )
+    required: bool = Field(default=False, description="Whether the launch path refuses a request without it")
 
 
 class LaunchPath(FrozenModel):
@@ -208,9 +208,7 @@ class MessageHandler(FrozenModel):
                 "(a page to show)"
             )
         if self.showing and self.show is None:
-            raise InvalidManifestValueError(
-                f"message handler {str(self.type)!r} gives 'showing' only beside 'show'"
-            )
+            raise InvalidManifestValueError(f"message handler {str(self.type)!r} gives 'showing' only beside 'show'")
         return self
 
 
@@ -299,7 +297,9 @@ class AppTheming(FrozenModel):
         if len(set(names)) != len(names):
             raise InvalidManifestValueError(f"theming part names must be unique, got {names}")
         if self.parts and self.mode != ThemingMode.PARTS:
-            raise InvalidManifestValueError(f"theming parts are declared only with mode = \"parts\", not {str(self.mode)!r}")
+            raise InvalidManifestValueError(
+                f'theming parts are declared only with mode = "parts", not {str(self.mode)!r}'
+            )
         return self
 
 
@@ -317,11 +317,19 @@ def _preview_placeholders(text: str) -> list[tuple[str, str | None]]:
 class PreviewSpec(FrozenModel):
     """How a throwaway instance of the app boots for a preview: the manifest's ``[preview]`` table."""
 
-    command: tuple[NonEmptyStr, ...] = Field(default=(), description="The launch argv; empty runs the app's program as its console script")
-    ports: tuple[PreviewName, ...] = Field(default=(MAIN_PORT_NAME,), description="The named free ports the instance is given; main is always one")
-    env: dict[str, str] = Field(default_factory=dict, description="Environment for the instance; values may carry placeholders")
+    command: tuple[NonEmptyStr, ...] = Field(
+        default=(), description="The launch argv; empty runs the app's program as its console script"
+    )
+    ports: tuple[PreviewName, ...] = Field(
+        default=(MAIN_PORT_NAME,), description="The named free ports the instance is given; main is always one"
+    )
+    env: dict[str, str] = Field(
+        default_factory=dict, description="Environment for the instance; values may carry placeholders"
+    )
     args: tuple[str, ...] = Field(default=(), description="Arguments appended to the command; may carry placeholders")
-    copies: dict[PreviewName, str] = Field(default_factory=dict, description="Repo-relative directories copied into the instance's scratch space, by key")
+    copies: dict[PreviewName, str] = Field(
+        default_factory=dict, description="Repo-relative directories copied into the instance's scratch space, by key"
+    )
     health_path: str = Field(default=DEFAULT_PREVIEW_HEALTH_PATH, description="The path probed for a 200 once booted")
     open_path: str = Field(default=DEFAULT_PREVIEW_OPEN_PATH, description="The path the preview window opens on")
     open_path_takes_key: bool = Field(default=False, description="Whether open_path carries {key}, an instance key")
@@ -415,7 +423,9 @@ class AppManifest(FrozenModel):
         description="The path under the app's origin that answers an OpenAPI document describing its HTTP API; "
         "absent when the app describes none",
     )
-    icon: IconPath | None = Field(default=None, description="The icon file, relative to the manifest; required unless internal")
+    icon: IconPath | None = Field(
+        default=None, description="The icon file, relative to the manifest; required unless internal"
+    )
     critical: bool = Field(
         default=False,
         description="No Quit verb; never stopped or parked by the shell; snapshot-and-rollback target in the "
@@ -434,7 +444,9 @@ class AppManifest(FrozenModel):
         description="Part of the workspace itself rather than an app built on it: the minds Share tab lists it under "
         "its System group instead of offering it up front",
     )
-    default_shortcut: DefaultShortcut | None = Field(default=None, description="The shortcut a new desktop is seeded with")
+    default_shortcut: DefaultShortcut | None = Field(
+        default=None, description="The shortcut a new desktop is seeded with"
+    )
     launch_paths: tuple[LaunchPath, ...] = Field(
         default=(), description="The paths the desktop interface opens windows at, with their labels and params"
     )
@@ -457,19 +469,17 @@ class AppManifest(FrozenModel):
     references: tuple[AppReference, ...] = Field(
         default=(), description="The artifacts outside the app's directory that belong to it"
     )
-    scope: ScopeRules = Field(
-        default_factory=ScopeRules, description="The app's own exclusions from its footprint"
-    )
-    wiring: WiringRules = Field(
-        default_factory=WiringRules, description="The extra supervisord programs the app owns"
-    )
+    scope: ScopeRules = Field(default_factory=ScopeRules, description="The app's own exclusions from its footprint")
+    wiring: WiringRules = Field(default_factory=WiringRules, description="The extra supervisord programs the app owns")
     secrets: tuple[SecretDeclaration, ...] = Field(
         default=(), description="The secret files the app runs under, for publish-template to aggregate"
     )
     theming: AppTheming = Field(
         default_factory=AppTheming, description="How far the app takes part in workspace themes"
     )
-    preview: PreviewSpec = Field(description="How a throwaway instance boots for a preview (the scaffold convention by default)")
+    preview: PreviewSpec = Field(
+        description="How a throwaway instance boots for a preview (the scaffold convention by default)"
+    )
 
     @model_validator(mode="before")
     @classmethod
@@ -501,9 +511,7 @@ class AppManifest(FrozenModel):
             )
         reference_paths = [reference.path for reference in self.references]
         if len(set(reference_paths)) != len(reference_paths):
-            raise InvalidManifestValueError(
-                f"reference paths must be unique, got {reference_paths}"
-            )
+            raise InvalidManifestValueError(f"reference paths must be unique, got {reference_paths}")
         wiring_programs = list(self.wiring.programs)
         if len(set(wiring_programs)) != len(wiring_programs):
             raise InvalidManifestValueError(f"wiring programs must be unique, got {wiring_programs}")
@@ -588,9 +596,7 @@ def _find_symlinked_component(repo_root: Path, reference_path: ReferencePath) ->
     return None
 
 
-def _check_references_against_repo_root(
-    path: Path, manifest: AppManifest, repo_root: Path
-) -> None:
+def _check_references_against_repo_root(path: Path, manifest: AppManifest, repo_root: Path) -> None:
     """Raises ManifestLoadError when a reference sits where it may not, or names nothing that exists."""
     own_app_directory = app_package_directory(repo_root, path)
     for reference in manifest.references:

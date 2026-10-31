@@ -37,7 +37,7 @@ ASSET_PATHS=(
     apps/minds/imbue/minds/desktop_client/workspace_profile_contract.json
 )
 
-read -r GIT_URL REV < <(python3 "$REPO_ROOT/system/scripts/list_mngr_plugins.py" --pin --repo-root "$REPO_ROOT")
+read -r GIT_URL REV < <(python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/list_mngr_plugins.py" --pin --repo-root "$REPO_ROOT")
 asset_list_hash="$(printf '%s\n' "${ASSET_PATHS[@]}" | shasum | cut -c1-12)"
 
 marker="$REV $asset_list_hash"

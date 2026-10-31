@@ -27,6 +27,8 @@ from imbue.chat.harnesses.codex.session import CodexHarnessSession
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
+from imbue.chat.harnesses.session_watcher import StreamedReply
+from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexAppServerClient
 from imbue.mngr_codex.app_server_client import TransportClosedError
 
@@ -69,6 +71,9 @@ class _ScriptedTransport:
             raise TimeoutError("no frame")
         return self._inbound.popleft()
 
+    def push(self, frame: Mapping[str, Any]) -> None:
+        self._inbound.append(json.dumps(frame))
+
     def close(self) -> None:
         pass
 
@@ -90,7 +95,7 @@ def _session_over(transport: _ScriptedTransport, state_dir: Path) -> tuple[Codex
         harness=HarnessType.CODEX,
         state_dir=state_dir,
         model_state_path=state_dir / "model_state.json",
-        send_to_harness=lambda text: True,
+        send_to_harness=lambda text, is_resent_when_unsure: SendOutcome.OK,
         notify_agents_changed=lambda: None,
         is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,
@@ -156,3 +161,19 @@ def test_send_raises_send_failed_on_a_daemon_refusal(tmp_path: Path) -> None:
         assert connection.ledger.state_of("m3") is None
     finally:
         connection.stop()
+
+
+def test_the_streamed_reply_is_the_live_connections_and_none_once_it_is_gone(tmp_path: Path) -> None:
+    transport = _ScriptedTransport()
+    session, connection = _session_over(transport, tmp_path)
+    transport.push(
+        {
+            "jsonrpc": "2.0",
+            "method": "item/agentMessage/delta",
+            "params": {"threadId": "thread-1", "itemId": "msg-1", "delta": "Tides rise"},
+        }
+    )
+    wait_for(lambda: session.read_streamed_reply() == StreamedReply(message_id="msg-1", text="Tides rise"))
+
+    session.on_lifecycle_dead()
+    assert session.read_streamed_reply() is None

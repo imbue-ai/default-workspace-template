@@ -12,6 +12,7 @@
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
 import type { UserMessageEvent } from "../models/Response";
@@ -111,6 +112,45 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
   };
 }
 
+/** What the "?" beside "Sent again" says. */
+const RESENT_NOTE_HELP =
+  "Imbue Studio couldn't confirm the agent received this message, so it sent it again. " +
+  "If the first copy arrived too, the agent may see it twice.";
+
+/** The line under a message the chat app sent a second time: "Sent again", and a "?" that opens a sentence on
+ *  what that means. Its own expansion key, so the opened sentence survives the row being rebuilt. */
+function renderResentNote(eventId: string): m.Vnode {
+  const expansionKey = `resent-note:${eventId}`;
+  const isExpanded = isBlockExpanded(expansionKey);
+  return m("div", { class: "message-resent-note mt-1 flex max-w-[80%] flex-col items-end gap-1" }, [
+    m("div", { class: "flex items-center gap-1 text-(length:--font-size-helper) text-faint" }, [
+      m("span", "Sent again"),
+      m(
+        "button",
+        {
+          type: "button",
+          class:
+            "message-resent-note-help flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full " +
+            "border border-current text-[10px] leading-none hover:text-secondary",
+          "aria-label": "What does sent again mean?",
+          "aria-expanded": String(isExpanded),
+          onclick: () => {
+            toggleBlockExpanded(expansionKey);
+          },
+        },
+        "?",
+      ),
+    ]),
+    isExpanded
+      ? m(
+          "p",
+          { class: "message-resent-note-text text-right text-(length:--font-size-helper) text-secondary" },
+          RESENT_NOTE_HELP,
+        )
+      : null,
+  ]);
+}
+
 /**
  * Render a `user_message` as a top-level row, or `null` when it produces no row of its own
  * (hidden `/welcome`, a skill expansion folded into its Skill tool block, or a compaction,
@@ -118,7 +158,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
  * the collapsed-system class; a genuine prompt gets the user-bubble class; a notice sits on
  * the agent's rail instead.
  */
-export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
+export function renderUserMessage(event: UserMessageEvent, isResent = false): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;
   if (isHiddenUserMessage(event) || kind === UserMessageKind.StatusMessage) {
     return null;
@@ -131,5 +171,8 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
         : `${USER_MESSAGE_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
-  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, m(StableUserMessage, { event }));
+  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [
+    m(StableUserMessage, { event }),
+    isResent ? renderResentNote(event.event_id) : null,
+  ]);
 }
