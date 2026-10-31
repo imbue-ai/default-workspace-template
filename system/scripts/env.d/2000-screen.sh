@@ -266,23 +266,21 @@ _install_neko() {
     return "$rc"
 }
 
-# Fortress (tiliondev/fortress), the stealth Chromium the Screen's browser runs. Pinned
-# at v151, the last BSD release: v153 (Fortress v3) moves to a source-available license
-# that charges organizations of our size for production use, and its engine-level
-# "recorded-human mouse motion" makes a CDP mouse click hang under Playwright (1.58 and
-# 1.64 alike, with the raw-engine switch, and with the launcher bypassed), which would
-# stall every agent driving the browser fleet. arm64 has no official v151 build
-# (tiliondev/fortress#29), so it comes from a fork build.
-# The tarballs unpack to tilion-fortress/ (the `tilion` launcher execs `chrome` beside
+# Fortress (tiliondev/fortress), the stealth Chromium the Screen's browser runs, from the
+# official release for both architectures. No license key is provisioned: unlicensed,
+# the launcher falls through to the binary, which prints one notice and runs the public
+# first-generation engine -- the behavior the fleet has always had (and this repository
+# is public, so any key shipped here would be too).
+# The tarballs unpack to fortress-v156/ (the `tilion` launcher execs `chrome` beside
 # it). The tree is installed under a versioned directory and the stable path every
 # consumer knows, /opt/fortress/tilion-fortress/tilion, is a symlink repointed at it,
 # so a pin bump fails the satisfied-check and installs the new release.
-readonly _FORTRESS_RELEASE="v151.0.7908.0"
-readonly _FORTRESS_UNPACKED_DIR="tilion-fortress"
-readonly _FORTRESS_X64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/tilion-fortress-linux-x64.tar.gz"
-readonly _FORTRESS_X64_SHA256="243238b2b8a8b944b7ba2b63533d2b917da7d569dcb290ce96bf28151294b873"
-readonly _FORTRESS_ARM64_URL="https://github.com/minhtrinh-imbue/fortress/releases/download/linux-arm64-151.0.7908.0-debian12/tilion-fortress-linux-arm64-debian12.tar.gz"
-readonly _FORTRESS_ARM64_SHA256="da6965af8fa8e995d137bcabdca8d163fde7f32ba483eaf5e029223995f19ada"
+readonly _FORTRESS_RELEASE="v156.0.8078.47"
+readonly _FORTRESS_UNPACKED_DIR="fortress-v156"
+readonly _FORTRESS_X64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/fortress-v156-linux-x64.tar.gz"
+readonly _FORTRESS_X64_SHA256="181512397a027e65099c8f2c7c8591c98dfd19649fe7bdbb4fc629989237d3c9"
+readonly _FORTRESS_ARM64_URL="https://github.com/tiliondev/fortress/releases/download/${_FORTRESS_RELEASE}/fortress-v156-linux-arm64.tar.gz"
+readonly _FORTRESS_ARM64_SHA256="2fead923de56b92fad78940bde373c07d38a925f229b710353e601b07d13af87"
 readonly _FORTRESS_INSTALL_DIR="/opt/fortress"
 readonly _FORTRESS_VERSIONED_DIR="${_FORTRESS_INSTALL_DIR}/fortress-${_FORTRESS_RELEASE}"
 readonly _FORTRESS_STABLE_LINK="${_FORTRESS_INSTALL_DIR}/tilion-fortress/tilion"
@@ -355,13 +353,6 @@ _install_fortress() {
     if [ -x "$_FORTRESS_VERSIONED_DIR/tilion" ] \
         && [ "$(readlink -f "$_FORTRESS_STABLE_LINK" 2>/dev/null)" = "$_FORTRESS_VERSIONED_DIR/tilion" ]; then
         _log "fortress: $_FORTRESS_RELEASE already installed at $_FORTRESS_VERSIONED_DIR, satisfied"
-        return 0
-    fi
-    # CLEANUP: drop once every image baked before 2026-10-18 is gone; that unit unpacked this
-    # same release straight into the stable path rather than under a versioned directory.
-    if [ ! -L "$_FORTRESS_STABLE_LINK" ] && [ -x "$_FORTRESS_STABLE_LINK" ] \
-        && "$_FORTRESS_INSTALL_DIR/tilion-fortress/chrome" --version 2>/dev/null | grep -q "${_FORTRESS_RELEASE#v}"; then
-        _log "fortress: $_FORTRESS_RELEASE already installed at $_FORTRESS_STABLE_LINK by the previous unit, satisfied"
         return 0
     fi
     # `install-deps` apt-installs the shared libs Chromium needs (libnss3,
@@ -460,7 +451,7 @@ _install_one_extension() {
         return 0
     fi
     local crx="/tmp/${ext_id}.crx"
-    local url="https://clients2.google.com/service/update2/crx?response=redirect&prodversion=151&acceptformat=crx3&x=id%3D${ext_id}%26uc"
+    local url="https://clients2.google.com/service/update2/crx?response=redirect&prodversion=156&acceptformat=crx3&x=id%3D${ext_id}%26uc"
     _log "extensions: fetching ${name} (${ext_id})"
     if ! curl -fsSL --retry 3 --max-time 120 -o "$crx" "$url"; then
         _log "extensions: download FAILED for ${name}; the browser runs without it"
