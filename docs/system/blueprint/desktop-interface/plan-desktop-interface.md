@@ -351,7 +351,9 @@ So a theme is a token file, a look is a component, and a behaviour is a reducer 
 
 One iframe per window per client, keyed by window id, created when the window is first shown in this client and destroyed only when the window closes or its desktop is deleted.
 The layer sits above the backdrop and below the window chrome in z-order per window, so the chrome's resize edges and shield stay clickable over a cross-origin page; the reconcile step positions each page over its window's content box.
-Hidden pages (minimized, on another desktop) are `display: none`, which is what a hidden dockview tab did.
+Hidden pages (minimized, on another desktop) are parked: moved out of the viewport and made invisible, which stops every engine rendering them while the page keeps its size, layout, and scroll (`display: none` would collapse its viewport and lose its document scroll, and Safari keeps rendering it).
+A shown page that the windows in front of it wholly cover within the backdrop (so one dragged wholly below the backdrop counts) is parked the same way but stays shown to the contract (it gets no `shell:hidden`); the focused window's page never is, so the keyboard stays in the window the user is in.
+A page is covered only where the windows are both drawn now and going, and never while a window is being moved or resized, so a window travelling over it covers it once it lands and one moving away uncovers it at once.
 Sandbox and permission attributes are today's.
 The handshake, shown, hidden, close-request, and navigate messages go through `relay.ts` as today.
 
@@ -364,7 +366,7 @@ Touch needs nothing extra beyond `touch-action: none` on handles.
 ### 6.6 Theme and metrics
 
 `theme/default.css` extends `base.css` with the desktop tokens of contracts.md section 11.
-`metrics.ts` reads the ones behaviour needs (title bar height, taskbar heights, cell sizes, inset, minimum window size, minimum visible title width, snap threshold, drag threshold, touch target size) from `getComputedStyle(document.documentElement)` once at boot and again on `data-phone` or `data-touch` change, and hands the store a frozen `ThemeMetrics`.
+`metrics.ts` reads the ones behaviour needs (title bar height, window radius, taskbar heights, cell sizes, inset, minimum window size, minimum visible title width, snap threshold, drag threshold, touch target size) from `getComputedStyle(document.documentElement)` once at boot and again on `data-phone` or `data-touch` change, and hands the store a frozen `ThemeMetrics`.
 No metric is a literal in TypeScript, and the phone breakpoint is the one exception in the other direction: it is a TypeScript constant applied as a `matchMedia` query on the viewport's size that sets `data-phone`, and CSS keys off the attribute, so it too lives once.
 
 ## 7. The app contract (v2)

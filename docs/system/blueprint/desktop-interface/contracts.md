@@ -338,11 +338,11 @@ A page no shell has handed a handshake -- an unframed page, or one framed by som
 | Direction | Type | Payload |
 |---|---|---|
 | shell to page | `shell:handshake` | `{"clientId", "windowId", "desktopId", "app", "path", "opensLocalFiles"}`; after every `load` of the frame and when the window's desktop changes; `app` is the name of the app the window belongs to (element-reference-menu plan section 5); `opensLocalFiles` is whether the Imbue Studio chrome said, with `minds:embedder-capabilities`, that it opens its settings for the files shared from the user's computer (`minds:open-local-files`), and is false when no chrome said so |
-| shell to page | `shell:shown`, `shell:hidden` | `{}` |
+| shell to page | `shell:shown`, `shell:hidden` | `{}`; one of the two right after the handshake on every `load` of the frame, then whenever the window's visibility changes; hidden is minimized, on another desktop, pulled out, showing the stopped placeholder (its app is stopped and nothing brings it back on a request), or on a phone any page but the shown window's; a page covered by the windows in front of it stays shown, and keeps its size either way |
 | shell to page | `shell:close-request` | `{}`; a page that declared `closeChord: true` keeps its window, any other page's window closes right after |
 | shell to page | `shell:navigate` | `{"path"}`; only to a page that declared `navigation: true` |
 | shell to page | `shell:theme` | `{"theme", "revision", "isPreview"}`; the theme the shell wears: the desktop on screen's, or the one Desktop settings is previewing (`isPreview` true, so the page does not remember it); after every handshake and on every change (the workspace-themes plan, section 5.3); `onTheme(theme, revision, isPreview)` receives it |
-| page to shell | `shell:capabilities` | `{"navigation": bool, "closeChord": bool}`; sent once by `connectToShell`; absent means `false` |
+| page to shell | `shell:capabilities` | `{"navigation": bool, "closeChord": bool}`; sent once by `connectToShell`; absent means `false`. The shell answers a hidden page's with `shell:hidden`, since a page that loads the contract after its own load (a dynamic `import()`) misses the visibility sent at load |
 | page to shell | `shell:location` | `{"path", "title"}`; the shell remembers the pair as the page's last report and posts it to the window's location route when it differs from the stored one |
 | page to shell | `shell:focused` | `{}`; the shell raises the page's window. A report from a page that is not shown (minimized, pulled out, being pulled out) is ignored, since a raise would bring the window back onto the desktop and the user cannot have chosen a hidden page (the shell also takes the document's focus off a page as it hides it, so the browser does not restore focus there). It is ignored too while a move or resize of another window is in progress: the gestured window holds the top of the stack until its gesture ends, and a focus report meanwhile (the page's focus coming back with the embedder window's, mid-drag) is not the user choosing that window |
 | page to shell | `shell:open` | `{"path", "ifPresent"}`; opens a window of the posting frame's own app on the posting window's desktop, with `client_id` the hosting client; with `focus`, a window already at the path that the client has popped out (section 8) is raised in its own window rather than brought back onto the desktop |
@@ -465,7 +465,7 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-unsnap-distance` | `12px` | | yes |
 | `--desk-drag-threshold` | `4px` | `8px` | yes |
 | `--desk-touch-target` | `32px` | `44px` | yes |
-| `--desk-window-radius` | `12px` | | no |
+| `--desk-window-radius` | `12px` | | yes |
 | `--desk-window-shadow` | `var(--shadow-overlay)` | | no |
 | `--desk-taskbar-surface` | translucent surface | | no |
 | `--desk-backdrop` | `var(--c-bg)` | | no |
@@ -483,7 +483,7 @@ Both editors (`shell/desktop_document.py` and `frontend/src/geometry/`) implemen
 | `--desk-window-move-ease` | `cubic-bezier(0.2, 0, 0, 1)` | | no |
 | `--desk-launcher-menu-width` | `22rem` | | no |
 
-A workspace theme (section 4.1b; `docs/system/blueprint/workspace-themes/`, section 4.1) may set four metrics, within the contract's ranges: `--desk-title-bar-height` and `--desk-taskbar-height` (outside touch mode), which `metrics.ts` reads, and `--desk-window-control-size` and `--desk-taskbar-entry-size`, which `theme/default.css` declares (from the title bar's height and as `36px`) and only the stylesheets use. So the shell reads the metrics again once a theme's stylesheet has loaded, whenever the desktop on screen changes theme or the theme's files change.
+A workspace theme (section 4.1b; `docs/system/blueprint/workspace-themes/`, section 4.1) may set five metrics, within the contract's ranges: `--desk-title-bar-height` and `--desk-taskbar-height` (outside touch mode) and `--desk-window-radius`, which `metrics.ts` reads, and `--desk-window-control-size` and `--desk-taskbar-entry-size`, which `theme/default.css` declares (from the title bar's height and as `36px`) and only the stylesheets use. So the shell reads the metrics again once a theme's stylesheet has loaded, whenever the desktop on screen changes theme or the theme's files change.
 The phone breakpoint is `PHONE_MAX_SHORT_SIDE_PX = 500` and `PHONE_MAX_LONG_SIDE_PX = 1000` in `theme/metrics.ts`, applied to the viewport whichever way round as `matchMedia("(max-width: 500px) and (max-height: 1000px), (max-height: 500px) and (max-width: 1000px)")`, which sets `data-phone`; touch is `matchMedia("(pointer: coarse)")`.
 The phone layout's own tokens (`--desk-phone-*`, and `--desk-toast-gap` and `--desk-toast-radius` for the toasts both layouts draw) are declared on `:root` and read by no behaviour: the bar's controls (`64px` by `42px`), its `48px` pill, and `12px` of padding (above and beside the controls; below them, only the safe-area inset), the sheets' radius and top, the rows and the home grid's tiles.
 The resize handles are strips of `--desk-resize-edge` overhanging the window's border by `--desk-resize-overhang` (so a press just outside the frame still grabs an edge), inset from the corners by `--desk-resize-edge-inset`; the corners are `--desk-resize-corner` squares over the same overhang.
