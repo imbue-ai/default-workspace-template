@@ -787,6 +787,7 @@ def _cmd_run_status_start(args: argparse.Namespace) -> int:
             chat_agent_name=chat_agent_name,
             started_at=now(),
             updated_at=0.0,
+            chat_id=lead.chat_id,
             started_by=args.started_by
             or dispatched_started_by(repo_root, chat_agent_name, lead.chat_id),
             stopped_agents=still_paused,
@@ -828,10 +829,17 @@ def _run_status_for_recorder(
 
     The app matches a record to a workspace's row by chat name, so writing
     this pass's facts onto another pass's record would file them under a run
-    the app is not watching.
+    the app is not watching. A record holding this chat's id is its own under
+    the name it started with: a rename rewrites ``$MNGR_AGENT_NAME`` for the
+    lead's next launch, and that name is not the one the app is watching.
     """
     status = read_run_status(repo_root)
-    if status is not None and recorder and status.chat_agent_name != recorder:
+    lead_chat_id = LeadIdentity.from_environ(os.environ).chat_id
+    is_this_chats = status is not None and (
+        status.chat_agent_name == recorder
+        or (bool(status.chat_id) and status.chat_id == lead_chat_id)
+    )
+    if status is not None and recorder and not is_this_chats:
         sys.stderr.write(
             f"warning: {run_status_path(repo_root)} records {status.chat_agent_name or '<unnamed>'}, "
             f"not {recorder}; recording under {recorder} instead.\n"
@@ -842,6 +850,7 @@ def _run_status_for_recorder(
             chat_agent_name=recorder,
             started_at=now(),
             updated_at=0.0,
+            chat_id=lead_chat_id,
         )
     return status
 
