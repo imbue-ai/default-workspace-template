@@ -28,7 +28,7 @@ The desktop-interface blueprint (`docs/system/blueprint/desktop-interface/`) rec
 
 Viewing somebody else's desktop with a fullscreen window on it draws that window over the whole letterbox (the owner's backdrop alone), never over the viewer's taskbar, which keeps "Stop viewing"; Fullscreen is refused while viewing like every other window verb, and the overview's thumbnails draw a fullscreen window as a maximized one.
 
-`system/test_app_manifests.py` also holds the terminal, files, and browser launch paths to declaring no `mention_param`, as it already did for their `text_param` and `draft_param`.
+`system/test_app_manifests.py` also holds the terminal and files launch paths to declaring no `mention_param` and no `app_params`, as it already did for their `text_param` and `draft_param`.
 
 The contract table's chat row (`docs/system/blueprint/desktop-interface/contracts.md`, section 2) lists the `main` launch path ("Send to main chat", `target = "main_chat"`) the manifest declares and the manifest test asserts, which the row had left out since the path was added.
 
