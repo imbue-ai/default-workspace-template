@@ -233,7 +233,9 @@ as soon as the tick is over rather than waiting out its `--timeout`.
 Exit codes let a caller that takes a backup as a precondition distinguish the
 outcomes without parsing the event: `0` for `restic_backup_succeeded`, `3` for
 `tick_skipped_due_to_missing_secrets` (backups are not configured, so there is
-no restore point), `1` for any other tick outcome, and `2` when no outcome was
+no restore point), `4` for `backup_skipped_over_quota` (the account is out of
+backup storage, so the newest restore point is the previous one), `1` for any
+other tick outcome, and `2` when no outcome was
 observed at all -- either no terminal event arrived before the timeout, or the
 events log could not be located in the first place (see below), in which case
 nothing was triggered either. Nothing is triggered when the in-flight backup is
@@ -251,7 +253,8 @@ the current one holds no success yet), prints them as JSON (`newest_outcome`,
 `newest_success_at`, `age_seconds`, `max_age_seconds`, `inflight_tick_id`), and
 exits `0` when a `restic_backup_succeeded` is within two backup intervals (a healthy
 service's newest success is at most one interval plus one run old), `3` when the
-newest tick ended for missing secrets, `1` otherwise (the service is down, or its
+newest tick ended for missing secrets, `4` when it was skipped for lack of backup
+storage, `1` otherwise (the service is down, or its
 ticks fail), and `2` when the events log cannot be located. The update-self skill
 runs it before an update, as the check that a restore point exists.
 
@@ -334,7 +337,12 @@ library alone:
 
 - the `[program:host-backup]` block in `system/supervisord.conf.d/host-backup.conf`,
 - this package's registration in the root `pyproject.toml` uv workspace,
-- the `host-backup` / `host-backup-now` entry points.
+- the `host-backup` / `host-backup-now` entry points,
+- the set of event types that end a tick (`TICK_TERMINAL_EVENT_TYPES` in
+  `host_backup/events.py`): the Imbue Studio desktop keeps its own copy
+  (`apps/minds/imbue/minds/workspace_programs/backup_support.py` in the mngr
+  repo) to tell an in-flight tick from a finished one, so a new terminal event
+  type must land there too.
 
 Dependency changes are absorbed by regenerating `uv.lock` on the workspace
 with a plain `uv sync`. `host_backup/config.py` additionally keeps no-op

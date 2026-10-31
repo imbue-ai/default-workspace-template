@@ -24,8 +24,6 @@ _FAILURE_TYPES: Final[frozenset[str]] = frozenset(
 _TAIL_BYTES: Final[int] = 1024 * 1024
 # A backup older than this many intervals is stale.
 _STALE_INTERVALS: Final[float] = 2.0
-# The `reason` host_backup stamps on a failed backup the store refused for lack of storage.
-_QUOTA_EXCEEDED_REASON: Final[str] = "quota_exceeded"
 
 
 def summarize(
@@ -93,7 +91,7 @@ def _is_out_of_storage(terminal: dict[str, object] | None) -> bool:
         return True
     return (
         terminal_type == backup_events.BackupEventType.RESTIC_BACKUP_FAILED.value
-        and terminal.get("reason") == _QUOTA_EXCEEDED_REASON
+        and terminal.get("reason") == backup_events.BACKUP_FAILURE_REASON_QUOTA_EXCEEDED
     )
 
 

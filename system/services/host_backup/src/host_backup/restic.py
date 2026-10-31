@@ -47,9 +47,6 @@ _QUOTA_EXCEEDED_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"\(507\)"),
     re.compile(r"507 Insufficient Storage", re.IGNORECASE),
 )
-# Why a `restic backup` failed, when the runner can tell: carried on the
-# RESTIC_BACKUP_FAILED event so the monitor and the desktop can name the cause.
-BACKUP_FAILURE_REASON_QUOTA_EXCEEDED: Final[str] = "quota_exceeded"
 # restic's default target pack size, pinned so an upload can never approach the
 # backup store's request body limit however the default moves.
 PACK_SIZE_MIB: Final[int] = 16

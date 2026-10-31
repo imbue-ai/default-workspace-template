@@ -200,6 +200,11 @@ class ResticBackupSucceededEvent(BackupEvent):
     stderr: str
 
 
+# The `reason` values a RESTIC_BACKUP_FAILED event can carry; the runner stamps
+# them and the system monitor and the desktop read them.
+BACKUP_FAILURE_REASON_QUOTA_EXCEEDED: Final[str] = "quota_exceeded"
+
+
 class ResticBackupFailedEvent(BackupEvent):
     """`restic backup` returned non-zero."""
 

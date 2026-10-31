@@ -32,6 +32,7 @@ from host_backup.config import (
     publish_service_events_dir,
 )
 from host_backup.events import (
+    BACKUP_FAILURE_REASON_QUOTA_EXCEEDED,
     BackupEventType,
     make_event,
     record_abandoned_tick,
@@ -39,7 +40,6 @@ from host_backup.events import (
     write_event,
 )
 from host_backup.restic import (
-    BACKUP_FAILURE_REASON_QUOTA_EXCEEDED,
     RESTORE_MARKER_TAGS,
     extract_snapshot_id_from_backup_output,
     find_backup_summary,
@@ -245,94 +245,6 @@ def _should_tick_now(
     return False, "interval_not_elapsed"
 
 
-def _run_one_tick(
-    *,
-    state: _LoopState,
-    config: BackupConfig,
-    trigger_reason: str,
-    usage_fn: UsageFn = read_store_usage,
-    free_space_fn: FreeSpaceFn | None = None,
-) -> None:
-    """Run one full backup tick.
-
-    Each per-step helper is responsible for emitting its own success or
-    failure event and returning a clean signal to this orchestrator. The
-    enclosing `_service_iteration` catches anything unexpected at the
-    outer loop boundary, so this function deliberately does NOT wrap the
-    sequence in a broad try/except.
-    """
-    tick_id = state.current_tick_id
-    backup_mtime = _safe_mtime(BACKUP_TOML_PATH) or 0.0
-    env_mtime = _safe_mtime(RESTIC_ENV_PATH)
-
-    # Only here, so a tick's events never span two files.
-    rotate_events_log_if_over(state.events_dir)
-    write_event(
-        state.events_dir,
-        make_event(
-            BackupEventType.CONFIG_RELOADED,
-            tick_id=tick_id,
-            backup_toml_mtime=backup_mtime,
-            restic_env_mtime=env_mtime,
-        ),
-    )
-    write_event(
-        state.events_dir,
-        make_event(
-            BackupEventType.BACKUP_STARTED,
-            tick_id=tick_id,
-            trigger_reason=trigger_reason,
-        ),
-    )
-
-    env = _check_secrets_present(state=state)
-    if env is None:
-        return
-    # restic.env is the overlay restic runs with: RESTIC_REPOSITORY plus every
-    # credential restic reads from the environment. The repository is created
-    # (and keyed) by Imbue Studio, so host_backup just backs up to it -- it
-    # never probes-then-inits the repo itself.
-    env_overrides = dict(env)
-    # The backup store refuses data uploads past the account's hard limit, and
-    # restic can only free space by writing (a prune repacks). So a tick asks
-    # the store first and, over the soft quota, frees space instead of trying
-    # to back up into the headroom the prune needs.
-    usage = usage_fn(env)
-    if usage is not None and usage.is_over_soft_limit:
-        free_space = (
-            free_space_fn if free_space_fn is not None else _free_space_over_quota
-        )
-        free_space(state=state, config=config, env_overrides=env_overrides, usage=usage)
-        return
-    _refresh_environment_record(state=state)
-    snapshot_result = _take_snapshot(state=state)
-    if snapshot_result is None:
-        # The step can fail on a snapshot the helper has already created (one
-        # whose layout the backup cannot read is exactly that), and this is the
-        # only thing that reclaims them, so an aborted tick still has to run it
-        # or the outer host gains a snapshot an hour for as long as the failure
-        # lasts.
-        _cleanup_snapshot(state=state, snapshot=None)
-        return
-    try:
-        backup_succeeded = _run_restic_backup(
-            state=state,
-            config=config,
-            snapshot=snapshot_result,
-            env_overrides=env_overrides,
-        )
-    finally:
-        _cleanup_snapshot(state=state, snapshot=snapshot_result)
-    if not backup_succeeded:
-        return
-    _run_forget(state=state, config=config, env_overrides=env_overrides)
-    _age_out_restore_markers(state=state, config=config, env_overrides=env_overrides)
-    _maybe_run_prune(state=state, config=config, env_overrides=env_overrides)
-
-
-# Per-step helpers
-
-
 def _free_space_over_quota(
     *,
     state: _LoopState,
@@ -383,6 +295,93 @@ def _free_space_over_quota(
         is_forced=True,
         max_repack_bytes=usage.headroom_bytes // 2,
     )
+
+
+def _run_one_tick(
+    *,
+    state: _LoopState,
+    config: BackupConfig,
+    trigger_reason: str,
+    usage_fn: UsageFn = read_store_usage,
+    free_space_fn: FreeSpaceFn = _free_space_over_quota,
+) -> None:
+    """Run one full backup tick.
+
+    Each per-step helper is responsible for emitting its own success or
+    failure event and returning a clean signal to this orchestrator. The
+    enclosing `_service_iteration` catches anything unexpected at the
+    outer loop boundary, so this function deliberately does NOT wrap the
+    sequence in a broad try/except.
+    """
+    tick_id = state.current_tick_id
+    backup_mtime = _safe_mtime(BACKUP_TOML_PATH) or 0.0
+    env_mtime = _safe_mtime(RESTIC_ENV_PATH)
+
+    # Only here, so a tick's events never span two files.
+    rotate_events_log_if_over(state.events_dir)
+    write_event(
+        state.events_dir,
+        make_event(
+            BackupEventType.CONFIG_RELOADED,
+            tick_id=tick_id,
+            backup_toml_mtime=backup_mtime,
+            restic_env_mtime=env_mtime,
+        ),
+    )
+    write_event(
+        state.events_dir,
+        make_event(
+            BackupEventType.BACKUP_STARTED,
+            tick_id=tick_id,
+            trigger_reason=trigger_reason,
+        ),
+    )
+
+    env = _check_secrets_present(state=state)
+    if env is None:
+        return
+    # restic.env is the overlay restic runs with: RESTIC_REPOSITORY plus every
+    # credential restic reads from the environment. The repository is created
+    # (and keyed) by Imbue Studio, so host_backup just backs up to it -- it
+    # never probes-then-inits the repo itself.
+    env_overrides = dict(env)
+    # The backup store refuses data uploads past the account's hard limit, and
+    # restic can only free space by writing (a prune repacks). So a tick asks
+    # the store first and, over the soft quota, frees space instead of trying
+    # to back up into the headroom the prune needs.
+    usage = usage_fn(env)
+    if usage is not None and usage.is_over_soft_limit:
+        free_space_fn(
+            state=state, config=config, env_overrides=env_overrides, usage=usage
+        )
+        return
+    _refresh_environment_record(state=state)
+    snapshot_result = _take_snapshot(state=state)
+    if snapshot_result is None:
+        # The step can fail on a snapshot the helper has already created (one
+        # whose layout the backup cannot read is exactly that), and this is the
+        # only thing that reclaims them, so an aborted tick still has to run it
+        # or the outer host gains a snapshot an hour for as long as the failure
+        # lasts.
+        _cleanup_snapshot(state=state, snapshot=None)
+        return
+    try:
+        backup_succeeded = _run_restic_backup(
+            state=state,
+            config=config,
+            snapshot=snapshot_result,
+            env_overrides=env_overrides,
+        )
+    finally:
+        _cleanup_snapshot(state=state, snapshot=snapshot_result)
+    if not backup_succeeded:
+        return
+    _run_forget(state=state, config=config, env_overrides=env_overrides)
+    _age_out_restore_markers(state=state, config=config, env_overrides=env_overrides)
+    _maybe_run_prune(state=state, config=config, env_overrides=env_overrides)
+
+
+# Per-step helpers
 
 
 def _check_secrets_present(*, state: _LoopState) -> dict[str, str] | None:
