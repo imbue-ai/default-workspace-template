@@ -24,7 +24,7 @@ import subprocess
 import time
 import urllib.request
 import uuid
-from collections.abc import Generator, MutableMapping
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -747,18 +747,15 @@ def _format_env_file_line(name: str, value: str) -> str:
     return f"{name}={value}\n"
 
 
-def _ensure_latchkey_gateway_env(
-    host_env_path: Path, environ: MutableMapping[str, str], password: str
-) -> bool:
-    """Append the gateway variables to the host env file when it names no gateway, and export them.
+def _ensure_latchkey_gateway_env(host_env_path: Path, password: str) -> dict[str, str]:
+    """Append the gateway variables to the host env file when it names no gateway, and return them.
 
     The file is appended to, never rewritten: everything else in it is mngr's
-    and the desktop's. The variables are also put into ``environ`` (the
-    bootstrap's own process environment) so every supervised service inherits
-    them from the supervisord this process becomes. Returns whether the lines
-    were written. Best-effort like every other boot step: an unreadable or
-    unwritable file is logged and the boot goes on without a gateway, which is
-    what the workspace had before this step existed.
+    and the desktop's. The variables written are returned (empty when none
+    were) for the supervisord this process becomes to run under, so every
+    supervised service inherits them. Best-effort like every other boot step:
+    an unreadable or unwritable file is logged and the boot goes on without a
+    gateway, which is what the workspace had before this step existed.
     """
     try:
         text = host_env_path.read_text()
@@ -766,12 +763,12 @@ def _ensure_latchkey_gateway_env(
         text = ""
     except OSError as e:
         logger.warning("Could not read the host env file at {}: {}", host_env_path, e)
-        return False
+        return {}
     if _env_file_names(text, LATCHKEY_GATEWAY_ENV_VAR):
         logger.debug(
             "{} already names a latchkey gateway; leaving it alone", host_env_path
         )
-        return False
+        return {}
     variables = latchkey_gateway_env(password)
     block = "".join(
         _format_env_file_line(name, value) for name, value in variables.items()
@@ -784,39 +781,44 @@ def _ensure_latchkey_gateway_env(
         logger.warning(
             "Could not write the latchkey gateway into {}: {}", host_env_path, e
         )
-        return False
-    environ.update(variables)
+        return {}
     logger.info(
         "Wrote the latchkey gateway address and a fresh password into {}", host_env_path
     )
-    return True
+    return variables
 
 
-def _configure_latchkey_gateway_env() -> None:
+def _configure_latchkey_gateway_env() -> dict[str, str]:
     """The ``latchkey_gateway_env`` step: give a workspace with no named gateway the VM gateway's address.
 
     Reads ``$MNGR_HOST_DIR/env``; a bare dev run has no host dir and skips, as
-    the other host-reading steps do.
+    the other host-reading steps do. Returns the variables supervisord must add
+    to this process's environment.
     """
     host_dir = os.environ.get(_HOST_DIR_ENV_VAR, "")
     if not host_dir:
         logger.debug("MNGR_HOST_DIR is unset; skipping the latchkey gateway env step")
-        return
-    _ensure_latchkey_gateway_env(
-        Path(host_dir) / "env", os.environ, generate_latchkey_gateway_password()
+        return {}
+    return _ensure_latchkey_gateway_env(
+        Path(host_dir) / "env", generate_latchkey_gateway_password()
     )
 
 
-def _exec_supervisord() -> None:
+def _exec_supervisord(added_environment: Mapping[str, str]) -> None:
     """Replace this process with supervisord running in the foreground.
 
     Uses the system supervisord (installed via system/scripts/setup_system.sh) and the
     repo-root system/supervisord.conf. `-n` keeps it in the foreground (so the
     bootstrap tmux window stays alive as supervisord) while still creating the
-    [unix_http_server] socket that `supervisorctl` talks to.
+    [unix_http_server] socket that `supervisorctl` talks to. supervisord runs under
+    this process's environment plus ``added_environment``.
     """
     logger.info("Launching supervisord with config {}", SUPERVISORD_CONF)
-    os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
+    os.execvpe(
+        "supervisord",
+        ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)],
+        {**os.environ, **added_environment},
+    )
 
 
 def _run_env_converge_fast_phase() -> None:
@@ -1141,8 +1143,9 @@ def main() -> None:
     # the timezone step on purpose: that step asks the desktop through whatever
     # gateway the environment names, and a web workspace's VM gateway is not
     # provisioned until the chrome gets to it.
+    supervisord_environment: dict[str, str] = {}
     with _bootstrap_step("latchkey_gateway_env", "Preparing the credential gateway"):
-        _configure_latchkey_gateway_env()
+        supervisord_environment = _configure_latchkey_gateway_env()
 
     # Overlay symlinks must exist before services start writing.
     with _bootstrap_step("converge_environment", "Preparing the environment"):
@@ -1176,7 +1179,7 @@ def main() -> None:
         "Starting the workspace's services",
         None,
     )
-    _exec_supervisord()
+    _exec_supervisord(supervisord_environment)
 
 
 if __name__ == "__main__":
