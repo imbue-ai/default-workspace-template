@@ -491,10 +491,10 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         (45, "routines"),
         (50, "system-monitor"),
     ]
-    # Every seeded shortcut opens a new window of its app; the one browser is focused instead
-    # (docs/system/specs/window-bound-resources.md section 3.1).
+    # The terminal's and the file viewer's seeded shortcuts open a new window of their app; the chat's and the
+    # browser's focus the one there is instead (docs/system/specs/window-bound-resources.md section 3.1).
     for name, mode in (
-        ("chat", "new"),
+        ("chat", "focus"),
         ("terminal", "new"),
         ("files", "new"),
         ("browser", "focus"),

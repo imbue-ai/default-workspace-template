@@ -168,6 +168,8 @@ def _running_e2e_server(
     is_second_app_offered: bool = False,
     # The pinned stub's ``[pin]`` as ``(style, scope, default_mode)``; None offers no pinned app.
     pin: tuple[str, str, str] | None = None,
+    # The mode of a default shortcut to the pinned stub's home path, as the chat declares one; None declares none.
+    pinned_shortcut_mode: str | None = None,
     # Further registry rows, for apps a test serves itself.
     extra_rows: tuple[str, ...] = (),
     # A built-in theme the workspace wears by default; None leaves the standard look and no theme folders.
@@ -218,6 +220,7 @@ def _running_e2e_server(
                     _PINNED_APP_NAME,
                     pinned_served.http_url,
                     display_name=_PINNED_APP_DISPLAY_NAME,
+                    default_shortcut=None if pinned_shortcut_mode is None else ("root", pinned_shortcut_mode),
                     pin=(_PINNED_HOME_PATH, *pin),
                     # The pin's home path is a plain page, as the chat's root is; the other three are POST launch
                     # paths as the chat's, two taking typed text and one a draft.
@@ -910,6 +913,32 @@ def test_launcher_free_text_rows_point_the_pinned_window_at_the_text(tmp_path: P
         menu.locator(f'[data-launch="{_PINNED_APP_NAME}:root"]').click()
         expect(_window(page, pinned["id"])).to_be_visible(timeout=10000)
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+
+
+@pytest.mark.parametrize("mode", ("new", "focus"))
+@pytest.mark.timeout(60, func_only=False)
+def test_a_shortcut_to_the_pin_path_raises_the_pinned_window_rather_than_opening_another(
+    tmp_path: Path, page: Page, mode: str
+) -> None:
+    """A shortcut to an app's pin path is the launcher's focus row on the desktop: a double click restores and raises
+    the pinned window and opens no second one, whatever mode the shortcut was stored with (the chat's shipped as
+    ``new``), and its menu offers no mode to switch to."""
+    with _running_e2e_server(tmp_path, pin=("plain", "independent", "bar"), pinned_shortcut_mode=mode) as server:
+        _land(page, server)
+        pinned = _pinned_window(server.base_url)
+        shortcut = page.locator(f'[data-shortcut="{_PINNED_APP_NAME}:root"]')
+        expect(shortcut).to_be_visible(timeout=15000)
+        expect(_window(page, pinned["id"])).to_be_hidden()
+
+        shortcut.dblclick()
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=10000)
+        shortcut.dblclick()
+        page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
+        assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
+
+        shortcut.click(button="right")
+        expect(page.locator('[data-menu-row="open"]')).to_be_visible()
+        expect(page.locator('[data-menu-row="change-mode"]')).to_have_count(0)
 
 
 @pytest.mark.timeout(60, func_only=False)

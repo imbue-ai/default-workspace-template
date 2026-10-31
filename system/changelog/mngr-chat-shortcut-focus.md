@@ -1,0 +1,1 @@
+The window-bound-resources spec and the desktop and workspace-app contract tables now give the chat's default shortcut as focus mode, and say that a shortcut to an app's pinned page raises the pinned window in either mode. The built-in manifest test checks the chat's shortcut is focus.

@@ -1415,7 +1415,7 @@ def running_workspace(
             "chat",
             chat_url,
             is_critical=True,
-            default_shortcut=("root", "new"),
+            default_shortcut=("root", "focus"),
             display_name="Chat",
             launch_paths=(
                 ("root", "Chat", "/"),

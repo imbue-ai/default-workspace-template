@@ -20,7 +20,7 @@ import { elementReferenceRows } from "@imbue/workspace-ui/src/context_menu_rows"
 import { describeElement } from "@imbue/workspace-ui/src/element_reference";
 import type { ReferenceScope } from "@imbue/workspace-ui/src/element_reference";
 import { fetchWallpapers, wallpaperBackgroundImage } from "../model/api";
-import { appShortcutOf, launchPathOf } from "../model/launch";
+import { appShortcutOf, launchPathOf, launchRowKindOf } from "../model/launch";
 import { SHELL_APP_NAME } from "../model/UpdateNotice";
 import type {
   AppRecord,
@@ -661,6 +661,11 @@ export function App(): m.Component<AppAttrs> {
     const rows: MenuRow[] = [
       { kind: "action", key: "open", label: "Open", onSelect: () => void current.runShortcut(shortcut) },
     ];
+    // A shortcut to the pin path raises the pinned window in either mode, so it has no mode to offer.
+    if (app !== undefined && launchPath !== null && launchRowKindOf(app, launchPath) === "focus") {
+      rows.push({ kind: "divider" }, removeFromDesktopRow(current, shortcut.target.app, shortcut.target.launch));
+      return rows;
+    }
     if (shortcut.mode === "focus" && launchPath !== null) {
       rows.push({
         kind: "action",
