@@ -1,7 +1,8 @@
 # host_backup
 
 Background service that continuously backs up the agent's full `host_dir`
-(`/home/user/.mngr/`) to a remote restic repository (Cloudflare R2 by default).
+(`/home/user/.mngr/`) to a remote restic repository (Imbue Studio's backup store,
+a restic REST server, by default).
 
 Distinct from the opt-in `github_sync` service, which only ships git commits
 to a GitHub orphan branch as a fine-grained checkpoint. `host_backup` covers the whole
@@ -87,9 +88,11 @@ is rewritten out of history by its path pattern.
   - `data/.secrets/restic.env`: the repository address + all secrets --
     `RESTIC_REPOSITORY` (the only source of the repo URL), `RESTIC_PASSWORD`
     (this workspace's repository password), and any backend credentials
-    restic reads from the environment (e.g. `AWS_ACCESS_KEY_ID` /
-    `AWS_SECRET_ACCESS_KEY` for an S3/R2 backend). Written only by the Imbue
-    Studio app (injected whole); a missing file means backups are not configured.
+    restic reads from the environment: `RESTIC_REST_USERNAME` /
+    `RESTIC_REST_PASSWORD` for the backup store (a `rest:` repository), or e.g.
+    `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` for an S3 backend. Written
+    only by the Imbue Studio app (injected whole); a missing file means backups
+    are not configured.
     `restic.env` is gitignored (rides nothing). `backup.toml` is *not*
     gitignored (everything under data/ is), so it survives via these restic
     backups themselves when
@@ -98,6 +101,22 @@ is rewritten out of history by its path pattern.
   set in `restic.env`. Backend credentials are not gated by host_backup --
   restic reports its own error if the chosen backend needs one that is
   missing.
+- Storage quota. When the repository is a `rest:` URL, the tick first asks the
+  server `GET <repository>_usage` (with the `RESTIC_REST_*` credentials; see
+  `host_backup/usage.py`). Imbue Studio's backup store answers with the
+  account's usage, its soft quota, and the hard limit past which it refuses
+  data uploads with a 507. Any other REST server (a 404), or a store that does
+  not answer, means no quota information and the tick proceeds. Over the soft
+  quota, the tick takes no backup: it records a `backup_skipped_over_quota`
+  event, runs the retention `forget`, and runs `restic prune --max-repack-size
+  <half the headroom between the two limits>`, so the prune's transient growth
+  (it writes the repacked packs before deleting the old ones) always fits under
+  the hard limit; every tick repeats that until the account is back under the
+  soft quota, then backs up normally. An upload the store refuses anyway (a
+  race, or a tick that could not ask) fails the backup at once -- restic treats
+  a 507 as permanent -- and the `restic_backup_failed` event carries
+  `reason = "quota_exceeded"`, which the system monitor shows as out of backup
+  storage.
 - Before the snapshot is taken, the tick runs `uv run --no-sync env-converge capture`
   (best-effort, bounded at 120s) so the environment record
   (`~/.mngr/plugin/env-converge/`) inside the backup describes the packages
@@ -143,7 +162,9 @@ is rewritten out of history by its path pattern.
   the user-data parts of those trees (`~/.cargo/bin` binaries, config,
   credentials, rustup's `settings.toml`) ride the backup.
 - Restic runs from inside the directory it reads and backs up `.`, so each
-  snapshot stores that tree at its root. restic only skips re-reading an
+  snapshot stores that tree at its root. `--pack-size 16` pins the pack size
+  (restic's default target) so no upload approaches the backup store's request
+  body limit. restic only skips re-reading an
   unchanged file when the previous snapshot holds it at the same path inside
   the snapshot, and `outer_trigger` reads every tick from a new timestamped
   path, so an absolute source would never match and every tick would re-read
@@ -212,7 +233,9 @@ as soon as the tick is over rather than waiting out its `--timeout`.
 Exit codes let a caller that takes a backup as a precondition distinguish the
 outcomes without parsing the event: `0` for `restic_backup_succeeded`, `3` for
 `tick_skipped_due_to_missing_secrets` (backups are not configured, so there is
-no restore point), `1` for any other tick outcome, and `2` when no outcome was
+no restore point), `4` for `backup_skipped_over_quota` (the account is out of
+backup storage, so the newest restore point is the previous one), `1` for any
+other tick outcome, and `2` when no outcome was
 observed at all -- either no terminal event arrived before the timeout, or the
 events log could not be located in the first place (see below), in which case
 nothing was triggered either. Nothing is triggered when the in-flight backup is
@@ -230,7 +253,8 @@ the current one holds no success yet), prints them as JSON (`newest_outcome`,
 `newest_success_at`, `age_seconds`, `max_age_seconds`, `inflight_tick_id`), and
 exits `0` when a `restic_backup_succeeded` is within two backup intervals (a healthy
 service's newest success is at most one interval plus one run old), `3` when the
-newest tick ended for missing secrets, `1` otherwise (the service is down, or its
+newest tick ended for missing secrets, `4` when it was skipped for lack of backup
+storage, `1` otherwise (the service is down, or its
 ticks fail), and `2` when the events log cannot be located. The update-self skill
 runs it before an update, as the check that a restore point exists.
 
@@ -251,7 +275,11 @@ Structured events at `$MNGR_AGENT_STATE_DIR/events/backup/events.jsonl`:
 - `backup_started`, `snapshot_created`, `snapshot_failed` (the snapshot step
   aborted the tick before restic ran), `snapshot_deleted` (one per deleted
   snapshot -- `outer_trigger` may emit several per tick when it sweeps leftovers)
-- `restic_backup_succeeded`, `restic_backup_failed`
+- `restic_backup_succeeded`, `restic_backup_failed` (whose `reason` is
+  `quota_exceeded` when the backup store refused the upload for lack of storage)
+- `backup_skipped_over_quota` (the account is over its soft storage quota, so the
+  tick freed space instead of backing up; carries `used_bytes`,
+  `account_used_bytes`, `quota_bytes`, and `hard_limit_bytes`; ends the tick)
 - `backup_repeatedly_failing` (escalation alarm after N consecutive failures)
 - `backup_slow` (a backup took longer than `slow_backup_threshold_seconds`;
   at most once a day, gated by `data/.state/last-slow-backup-notice`; see
@@ -279,11 +307,13 @@ log stays bounded. Rotating only there keeps each tick's events in one file.
 In the Imbue Studio app the whole `data/.secrets/restic.env` is written for you
 when you pick a backup provider on the create form -- Imbue Studio initializes the
 repository (`restic init`, keyed solely by the workspace's own random
-password) from outside the workspace and injects the file. To configure
+password) from outside the workspace and injects the file. For Imbue Cloud
+backups it holds `RESTIC_REPOSITORY=rest:https://<backup store>/<user>/<workspace>/`
+plus `RESTIC_REST_USERNAME` / `RESTIC_REST_PASSWORD`. To configure
 backups by hand instead, populate
 `data/.secrets/restic.env` with `RESTIC_REPOSITORY` (e.g.
-`s3:https://<account>.r2.cloudflarestorage.com/<bucket>`), the backend
-credentials (e.g. R2 access keys), and a `RESTIC_PASSWORD`, and initialize
+`s3:https://<endpoint>/<bucket>`), the backend
+credentials (e.g. S3 access keys), and a `RESTIC_PASSWORD`, and initialize
 the repository yourself (`restic init`) before the first tick -- host_backup
 does not create the repository.
 
@@ -307,7 +337,12 @@ library alone:
 
 - the `[program:host-backup]` block in `system/supervisord.conf.d/host-backup.conf`,
 - this package's registration in the root `pyproject.toml` uv workspace,
-- the `host-backup` / `host-backup-now` entry points.
+- the `host-backup` / `host-backup-now` entry points,
+- the set of event types that end a tick (`TICK_TERMINAL_EVENT_TYPES` in
+  `host_backup/events.py`): the Imbue Studio desktop keeps its own copy
+  (`apps/minds/imbue/minds/workspace_programs/backup_support.py` in the mngr
+  repo) to tell an in-flight tick from a finished one, so a new terminal event
+  type must land there too.
 
 Dependency changes are absorbed by regenerating `uv.lock` on the workspace
 with a plain `uv sync`. `host_backup/config.py` additionally keeps no-op

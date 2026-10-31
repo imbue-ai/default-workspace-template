@@ -12,6 +12,7 @@ from click.testing import CliRunner
 
 from host_backup.cli import (
     EXIT_BACKUP_FAILED,
+    EXIT_BACKUP_SKIPPED_OVER_QUOTA,
     EXIT_BACKUP_SUCCEEDED,
     EXIT_BACKUPS_NOT_CONFIGURED,
     EXIT_NO_COMPLETION_OBSERVED,
@@ -51,6 +52,14 @@ _GENEROUS_TIMEOUT_SECONDS = 3.0
             BackupEventType.SNAPSHOT_FAILED,
             EXIT_BACKUP_FAILED,
             id="snapshot-failed",
+        ),
+        # Out of backup storage: the tick freed space instead of backing up,
+        # which a caller names rather than treats as a broken service.
+        pytest.param(
+            (),
+            BackupEventType.BACKUP_SKIPPED_OVER_QUOTA,
+            EXIT_BACKUP_SKIPPED_OVER_QUOTA,
+            id="over-quota",
         ),
         # An unhandled error, recorded by the loop's outer handler.
         pytest.param(
@@ -281,6 +290,17 @@ def _write_aged_tick(
             EXIT_BACKUPS_NOT_CONFIGURED,
             BackupEventType.TICK_SKIPPED_DUE_TO_MISSING_SECRETS.value,
             id="not-configured",
+        ),
+        # Out of storage since the last success aged out: the newest restore
+        # point is stale, and the caller learns why.
+        pytest.param(
+            (
+                (BackupEventType.RESTIC_BACKUP_SUCCEEDED, timedelta(hours=3)),
+                (BackupEventType.BACKUP_SKIPPED_OVER_QUOTA, timedelta(minutes=5)),
+            ),
+            EXIT_BACKUP_SKIPPED_OVER_QUOTA,
+            BackupEventType.BACKUP_SKIPPED_OVER_QUOTA.value,
+            id="over-quota",
         ),
         pytest.param((), EXIT_BACKUP_FAILED, None, id="never-ran"),
     ],
