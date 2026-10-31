@@ -66,7 +66,11 @@ def _quiet_logging() -> None:
 
 
 def _apply_sign_in_environment(environment: Mapping[str, str]) -> None:
-    """Put the sign-in environment into this process, which every ``latchkey`` child inherits."""
+    """Put the sign-in environment into this process, which every ``latchkey`` child inherits.
+
+    A deliberate exception to never mutating ``os.environ``: the desktop's ``Latchkey`` wrapper builds every
+    child's environment from ``os.environ`` and takes none of its own, and this process is a one-shot command.
+    """
     os.environ.pop(LATCHKEY_GATEWAY_ENV_VAR, None)
     os.environ.update(environment)
 
