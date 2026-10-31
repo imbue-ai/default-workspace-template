@@ -497,6 +497,8 @@ def test_lists_running_browsers_while_no_window_shows_the_screen_with_their_chro
     ]
     assert browsers[0].pids == (300,)
     assert browsers[0].anonymous_kib == 1000
+    assert browsers[1].pids == (310,)
+    assert browsers[1].anonymous_kib == 900
 
 
 def test_a_running_browser_is_not_a_candidate_while_a_window_shows_the_screen(
