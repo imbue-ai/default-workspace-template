@@ -152,6 +152,13 @@ class SendMessageRequest(FrozenModel):
     desktop_id: str = Field(
         default="", description="The id of the desktop the sender was on at send time ('' for legacy callers)"
     )
+    is_repeat: bool = Field(
+        default=False,
+        description=(
+            "Whether the page is sending again, under the same message_id, a request that got no answer: it is "
+            "then answered as the send it repeats was, a refusal included, and never delivered a second time"
+        ),
+    )
 
 
 class SendMessageResponse(FrozenModel):

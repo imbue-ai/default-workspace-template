@@ -369,6 +369,15 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
+A send naming its send-time id (`message_id`) goes through `send_ledger.py`: a
+page whose request got no answer sends it again under the same id, marked
+`is_repeat`, and the repeat gets the first send's answer, a refusal included
+(waiting for it while it is still under way), rather than a second delivery. A
+Retry under the same id gets a taken send's answer, but is sent afresh after a
+refusal. A page whose request still gets no answer cannot know whether the chat
+app took it, and the chat app is out of its reach, so nothing sends it again: it
+gets the "Couldn't confirm your message arrived" notice.
+
 A send mngr reports `agent_not_found` (the agent moved) or `not_submitted`
 (Claude never took it, and mngr cleared it from the input box) is sent again
 once, by discovery or at the same place. One the agent is not accepting yet
@@ -379,8 +388,8 @@ either, and is tried once more. One mngr could not confirm
 (`submission_unconfirmed`), or failed in a way it could not classify
 (`unknown`), may or may not have arrived; not sending one that never arrived is
 worse than sending it twice, so it is sent again once at the same place, and
-the route answers a send that then lands `{"status": "resent"}`. The page shows
-"Sent again" under the message, with a "?" saying the agent may see it twice,
+the route answers a send that then lands `{"status": "resent"}` (as the ledger
+answers its repeats). The page shows "Sent again" under the message, with a "?" saying the agent may see it twice,
 and folds a second copy that reaches the transcript into that line
 (`frontend/src/models/ResentSends.ts`). A send still unconfirmed the second
 time is not sent a third: its failure gets the "Couldn't confirm your message

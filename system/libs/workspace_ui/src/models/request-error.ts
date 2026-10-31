@@ -57,6 +57,22 @@ export function describeRequestError(error: unknown): string {
 }
 
 /**
+ * Whether a request got no answer from the app it was sent to: no HTTP response at all, or a
+ * gateway in between that gave up (a 502 or 504 with no detail of the app's own). The app may
+ * still have done what was asked, so only a request that is safe to repeat should be repeated.
+ */
+export function isUnansweredRequest(error: unknown): boolean {
+  if (error === null || typeof error !== "object") {
+    return false;
+  }
+  const err = error as { response?: { detail?: unknown } | null; code?: unknown };
+  if (err.code === 0) {
+    return true;
+  }
+  return (err.code === 502 || err.code === 504) && typeof err.response?.detail !== "string";
+}
+
+/**
  * mngr's classification of a failed send, when it supplied one.
  *
  * The reason a send failed is written for a person and varies per harness, so it cannot be used
