@@ -1,6 +1,6 @@
 """Bootstrap: first-boot setup, then launch supervisord.
 
-`uv run bootstrap` runs once per container boot (from the `bootstrap`
+`bootstrap` runs once per container boot (from the `bootstrap`
 extra_window). It performs first-boot setup -- global git config and creating
 the initial chat agent -- and then `exec`s the system supervisord in the
 foreground. supervisord (configured by system/supervisord.conf) owns every
@@ -22,7 +22,7 @@ import subprocess
 import time
 import urllib.request
 import uuid
-from collections.abc import Generator
+from collections.abc import Generator, Mapping
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +39,8 @@ from bootstrap.claude_state_migration import (
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
 SUPERVISORD_CONF = Path("system/supervisord.conf")
+# The workspace venv, relative to the repo root like the config above.
+WORKSPACE_VENV = Path(".venv")
 # Container-local directory for supervisord's own log + the per-service logs. Not
 # under data/, so these are never backed up.
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
@@ -671,24 +673,17 @@ _UV_SYNC_TIMEOUT_SECONDS = 600.0
 
 
 def _sync_workspace_venv() -> None:
-    """Converge the workspace .venv to the landed lockfile before any agent runs.
+    """Converge the workspace .venv to the lockfile of the tree boot will run.
 
-    The venv is a bake-time artifact (build_workspace.sh at image build / host
-    provisioning) while the working tree is a landing-time artifact (the
-    create's git-mirror checkout) -- and on docker and pool-lease hosts nothing
-    re-runs the sync at create, so the two can disagree whenever the baked
-    image lags the landed branch. Left alone, the FIRST implicit ``uv run``
-    sync reconciles them lazily: mid-boot, concurrent with the services and
-    the initial chat agent, and with root-closure scope rather than
-    --all-packages. Whatever imports from the venv during that rewrite window
-    fails intermittently (ModuleNotFoundError for imbue_common and friends).
-
-    Converging here -- once, up front, before the chat agent exists and before
-    supervisord starts anything -- removes both the race window and the scope
-    gap; every later implicit sync then no-ops. ``--frozen`` asserts the
-    committed lockfile is canonical, matching build_workspace.sh. Best-effort:
-    a failure is logged loudly but never blocks boot (the per-``uv run``
-    implicit syncs remain the fallback).
+    The bootstrap window syncs ``--frozen`` before this program starts, but
+    against the tree as the container came up. ``_recover_interrupted_update``
+    can then roll a half-applied update back, restoring an older ``uv.lock``,
+    and supervisord's programs and every agent's one-offs
+    (``uv run --no-sync``) run from the venv as it is, without a sync of their own.
+    Converging here, before supervisord starts anything and before the chat
+    agent exists, is what puts the venv on the restored lock. ``--frozen``
+    takes the committed lockfile as canonical, matching build_workspace.sh.
+    Best-effort: a failure is logged loudly but never blocks boot.
     """
     try:
         result = subprocess.run(
@@ -714,6 +709,23 @@ def _sync_workspace_venv() -> None:
     logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
 
 
+def _supervisord_environment(environ: Mapping[str, str], venv: Path) -> dict[str, str]:
+    """``environ`` with ``venv`` activated the way ``uv run`` activates it.
+
+    supervisord's programs inherit this environment, so a command a program runs by
+    bare name (the agent observer's ``mngr``, a ``python`` a service shells out to)
+    resolves to the venv's copy first, as it would under ``uv run``. The built-in
+    apps' and services' lines name their entry points by path (``.venv/bin/<name>``),
+    and a user package's line execs its own project's ``.venv/bin``, so neither
+    depends on this. The bootstrap window starts this program from ``.venv/bin``
+    rather than under ``uv run``, so nothing else has put the venv there.
+    """
+    path = os.pathsep.join(
+        entry for entry in (str(venv / "bin"), environ.get("PATH", "")) if entry
+    )
+    return {**environ, "VIRTUAL_ENV": str(venv), "PATH": path}
+
+
 def _exec_supervisord() -> None:
     """Replace this process with supervisord running in the foreground.
 
@@ -723,7 +735,11 @@ def _exec_supervisord() -> None:
     [unix_http_server] socket that `supervisorctl` talks to.
     """
     logger.info("Launching supervisord with config {}", SUPERVISORD_CONF)
-    os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
+    os.execvpe(
+        "supervisord",
+        ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)],
+        _supervisord_environment(os.environ, WORKSPACE_VENV.resolve()),
+    )
 
 
 def _run_env_converge_fast_phase() -> None:
@@ -736,7 +752,7 @@ def _run_env_converge_fast_phase() -> None:
     one-shot logs the environment's real problems).
     """
     result = subprocess.run(
-        ["uv", "run", "env-converge", "run", "--phase", "fast"],
+        ["uv", "run", "--no-sync", "env-converge", "run", "--phase", "fast"],
         capture_output=True,
         text=True,
         check=False,
@@ -1033,7 +1049,7 @@ def main() -> None:
         _initialize_workspace_main_branch()
 
     # Converge the workspace venv BEFORE the initial chat agent is created
-    # (below) and before supervisord's `uv run` services start, so nothing
+    # (below) and before supervisord's services start, so nothing
     # races the reconcile or runs against a bake-stale venv.
     with _bootstrap_step("sync_venv", "Installing the workspace's Python packages"):
         _sync_workspace_venv()

@@ -1,7 +1,6 @@
 """Tests for the Flask server."""
 
 import fcntl
-import importlib.util
 import io
 import json
 import os
@@ -32,6 +31,7 @@ from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
 from werkzeug.test import TestResponse
+from workspace_bare_scripts import message_chat
 
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
@@ -3611,22 +3611,20 @@ def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) ->
     pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
     a chat app from before them: a rename on this side would send every Imbue Studio chat back to the
     bare ``mngr create`` without a single failing test."""
-    script = Path(__file__).resolve().parents[4] / "scripts" / "message_chat.py"
-    spec = importlib.util.spec_from_file_location("message_chat_for_create_pin", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    assert module.CREATE_CHAT_PATH in {rule.rule for rule in app.url_map.iter_rules()}
-    body = module.create_request_body(
-        module.CreateRequest(name="assist-1a2b3c", message="/assist it broke", labels={"auto_open": "true"})
+    assert message_chat.CREATE_CHAT_PATH in {rule.rule for rule in app.url_map.iter_rules()}
+    body = message_chat.create_request_body(
+        message_chat.CreateRequest(
+            name="assist-1a2b3c",
+            message="/assist it broke",
+            labels={"auto_open": "true"},
+        )
     )
 
     parsed = CreateChatRequest.model_validate(body)
     assert parsed.name == "assist-1a2b3c"
     assert parsed.message == "/assist it broke"
     assert parsed.labels == {"auto_open": "true"}
-    assert body[module.WAIT_FIELD] is True and parsed.should_wait is True
+    assert body[message_chat.WAIT_FIELD] is True and parsed.should_wait is True
 
 
 def test_create_chat_refuses_an_id_it_never_minted(

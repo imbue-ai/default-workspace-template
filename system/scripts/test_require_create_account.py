@@ -1,7 +1,7 @@
 """The create gate as mngr runs it, end to end through the real `mngr create`.
 
-The unit tests beside this file (`require_create_account_test.py`) run the script directly
-and settle what it decides. What they cannot show is that mngr reaches it at all: the gate is
+The unit tests (`workspace_bare_scripts/require_create_account_test.py`) run the script
+directly and settle what it decides. What they cannot show is that mngr reaches it at all: the gate is
 a `pre_command_scripts.create` entry in the committed `.mngr/settings.toml`, and everything
 that matters about it -- the shell test that keeps `python3` out of a create run on the
 user's own machine, the project root mngr runs the entry from, and the script's stderr
@@ -11,7 +11,6 @@ So these run the real thing, which costs a `uv run mngr create` apiece.
 
 from __future__ import annotations
 
-import importlib.util
 import os
 import shutil
 import subprocess
@@ -19,15 +18,10 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from workspace_bare_scripts import require_create_account
 
 _SCRIPT = Path(__file__).with_name("require_create_account.py")
-_spec = importlib.util.spec_from_file_location(
-    "require_create_account_for_e2e", _SCRIPT
-)
-assert _spec is not None and _spec.loader is not None
-_module = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_module)
-NO_ACCOUNT_MESSAGE: str = _module.NO_ACCOUNT_MESSAGE
+NO_ACCOUNT_MESSAGE: str = require_create_account.NO_ACCOUNT_MESSAGE
 
 _COMMITTED_SETTINGS = _SCRIPT.parents[2] / ".mngr" / "settings.toml"
 
@@ -50,7 +44,8 @@ def _mngr_create_in_a_gated_project(
     """Run the real `mngr create` in a temp project carrying the committed gate entry.
 
     The entry names the script by its project-relative path, so the script is copied to that
-    path inside the project; mngr runs the entry from the project root, in this environment.
+    path inside the project, with the package its entry stub imports beside it; mngr runs the
+    entry from the project root, in this environment.
     """
     if shutil.which("uv") is None:
         pytest.skip("uv is not on PATH")
@@ -60,6 +55,12 @@ def _mngr_create_in_a_gated_project(
     script_copy = project / _SCRIPT.relative_to(_SCRIPT.parents[2])
     script_copy.parent.mkdir(parents=True)
     shutil.copy(_SCRIPT, script_copy)
+    bare_package = Path(require_create_account.__file__).parent
+    shutil.copytree(
+        bare_package,
+        script_copy.parent / bare_package.name,
+        ignore=shutil.ignore_patterns("__pycache__", "*_test.py"),
+    )
     (project / ".mngr" / "settings.toml").write_text(
         f"is_allowed_in_pytest = true\n\n[pre_command_scripts]\ncreate = [{_committed_pre_command_entry()!r}]\n"
     )

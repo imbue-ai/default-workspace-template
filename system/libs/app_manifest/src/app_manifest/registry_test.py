@@ -93,7 +93,9 @@ def test_a_manifest_row_reads_every_copied_field(tmp_path: Path) -> None:
         ("draft", "Draft", "/api/intake", ("message",), None),
     ]
     # A row without a method is a GET launch path.
-    assert [(launch_path.method.value, launch_path.presets, launch_path.draft_param) for launch_path in row.launch_paths] == [
+    assert [
+        (launch_path.method.value, launch_path.presets, launch_path.draft_param) for launch_path in row.launch_paths
+    ] == [
         ("GET", {}, None),
         ("GET", {}, None),
         ("POST", {"target": "current_chat"}, "message"),
@@ -216,7 +218,9 @@ def test_register_app_writes_the_manifests_row(tmp_path: Path, registration_regi
     assert [launch_path.id for launch_path in rows[0].launch_paths] == ["new"]
 
 
-def test_register_app_reports_the_scripts_error_for_a_bad_manifest(tmp_path: Path, registration_registry: Path) -> None:
+def test_register_app_reports_the_scripts_error_for_a_bad_manifest(
+    tmp_path: Path, registration_registry: Path
+) -> None:
     manifest_path = tmp_path / "app.toml"
     manifest_path.write_text('name = "Not A Name"\n')
 

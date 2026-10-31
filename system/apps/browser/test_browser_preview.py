@@ -8,12 +8,10 @@ This checkout's ``browser-service`` is booted by update-app's ``preview_app.py``
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import json
 import shutil
 import socket
 import subprocess
-import sys
 import tempfile
 import urllib.request
 from collections.abc import Generator, Iterator
@@ -23,16 +21,10 @@ import pytest
 from app_manifest.manifest import load_manifest
 from browser import session as bsession
 from imbue.mngr.utils.polling import wait_for
+from update_app_skill import preview_app
 
 _APP_DIR = Path(__file__).parent
 _CHECKOUT = _APP_DIR.parents[2]
-
-_PREVIEW_SCRIPT = _CHECKOUT / ".agents" / "skills" / "update-app" / "scripts" / "preview_app.py"
-_spec = importlib.util.spec_from_file_location("preview_app", _PREVIEW_SCRIPT)
-assert _spec is not None and _spec.loader is not None
-preview_app = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = preview_app
-_spec.loader.exec_module(preview_app)
 
 _APP_NAME = "browser"
 

@@ -92,7 +92,7 @@ async def _running_browser(
 
 
 async def _noop_wake_method(self: bsession.LiveBrowser, agent_id: str, agent_name: str | None) -> None:
-    """Stand-in for ``_wake_agent``: skip the real ``message_chat.py`` subprocess in tests."""
+    """Stand-in for ``_wake_agent``: skip the real chat messenger send in tests."""
 
 
 def _install_fake_browser(monkeypatch: pytest.MonkeyPatch, browser_id: str = "alex-smith") -> bsession.LiveBrowser:

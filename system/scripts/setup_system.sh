@@ -10,7 +10,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 # Pin $HOME to the image-build home. Several installers below follow $HOME (the
-# claude.ai installer, the uv installer, `uv python install` / `uv tool install`),
+# claude.ai installer, the uv installer, `uv tool install`),
 # while the checks and PATH entries in this script are fixed to /root/.local. A
 # live re-provision (the update apply, or an agent running this by hand) runs
 # under HOME=/home/user -- root's passwd home at runtime -- so without this pin
@@ -94,7 +94,7 @@ install_downloaded_binary() {
 # init system; the rest are agent/runtime deps). earlyoom, the OOM-prevention
 # daemon, is not among them: it is the imbue-ai fork, installed below by
 # install_earlyoom.sh. supervisor provides the system supervisord + supervisorctl
-# that `uv run bootstrap` execs into the foreground.
+# that `bootstrap` execs into the foreground.
 # xvfb + xclip (the browser fleet's virtual display and its clipboard bridge)
 # are baked here, NOT deferred to the env.d browser unit: [program:xvfb] execs
 # Xvfb directly at boot, and a binary that static service config promises at
@@ -115,7 +115,7 @@ rm -rf /var/lib/apt/lists/*
 # The Debian `supervisor` package enables a systemd unit that immediately starts
 # a supervisord against the default /etc/supervisor/supervisord.conf. On
 # systemd-based providers (lima/VPS) that daemon grabs /var/run/supervisor.sock
-# and makes `uv run bootstrap`'s `supervisord -c /home/user/workspace/system/supervisord.conf`
+# and makes `bootstrap`'s `supervisord -c /home/user/workspace/system/supervisord.conf`
 # fail with "Another program is already listening". We always launch our own
 # supervisord from bootstrap, so disable + mask the packaged unit. Guarded so
 # it is a no-op on docker (no systemd / no systemctl on the slim image).
@@ -221,17 +221,6 @@ rm -rf /tmp/frp.tar.gz "/tmp/frp_${FRP_VERSION}_linux_${frp_goarch}"
 # uv (pinned). Installs to /root/.local/bin.
 curl -LsSf "${CURL_RETRY[@]}" "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
 export PATH="/root/.local/bin:$PATH"
-
-# Ensure a uv-managed Python that satisfies the workspace lockfile (>=3.12).
-# The Docker base image ships 3.12, but other bases (e.g. a Debian VM whose
-# system Python is 3.11) do not -- and the root pyproject's requires-python
-# (>=3.11) lets uv otherwise pick the system 3.11, which the frozen lock then
-# rejects. Fetch a managed 3.12 here so install_dependencies.sh /
-# build_workspace.sh can pin uv to it. No-op when system Python is already
-# >=3.12, so the Docker build is unchanged.
-if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
-    uv python install 3.12
-fi
 
 # Make /root/.local/bin discoverable in login and interactive shells. The docker
 # image also sets ENV PATH; the Lima VM relies on these profile writes.
@@ -378,7 +367,7 @@ cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
 [ -d /home/user/workspace/system/services/env_converge ] || exit 0
 [ -e /var/lib/minds/env-converge/rootfs-id ] || exit 0
 cd /home/user/workspace || exit 0
-MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run env-converge capture >/dev/null 2>&1 || true
+MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run --no-sync env-converge capture >/dev/null 2>&1 || true
 HOOK
 chmod +x /usr/local/bin/env-converge-capture-hook
 printf 'DPkg::Post-Invoke { "/usr/local/bin/env-converge-capture-hook || true"; };\n' \
