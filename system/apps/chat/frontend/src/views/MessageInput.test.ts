@@ -1395,8 +1395,8 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
-  it("does not send when the restart itself fails", async () => {
-    mocks.sendMessage.mockRejectedValueOnce("nope");
+  it("does not send when the restart itself fails, and shows the restart's error", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "input_blocked", toString: () => "a dialog is open" });
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
     mocks.sendMessage.mockClear();
