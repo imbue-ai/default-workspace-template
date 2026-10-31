@@ -31,6 +31,8 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from loguru import logger
+
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.harnesses.harness_type import HarnessType
@@ -280,12 +282,14 @@ class FileHarnessSession(AgentHarnessSession):
         try:
             self._deps.notify_agents_changed()
             return self._deps.send_to_harness(text, is_resent_when_unsure)
-        except SendFailedError:
-            # The stop's block carries this message to the composer, so its failure has nothing to return.
+        except SendFailedError as e:
             with self._sending_lock:
-                if token in self._handed_back_tokens:
-                    return SendOutcome.WITHDRAWN
-            raise
+                is_handed_back = token in self._handed_back_tokens
+            if not is_handed_back:
+                raise
+            # The stop's block carries this message to the composer, so its failure has nothing to return.
+            logger.info("A send a stop took back failed: {}", e.kind)
+            return SendOutcome.WITHDRAWN
         finally:
             # Resolved on EVERY exit -- delivered/queued (a real representation exists), failed
             # (Returned, not Sending), or an exception from the send (the request 500s and the
