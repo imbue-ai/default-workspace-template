@@ -77,6 +77,7 @@ import {
 } from "./conversation-rows";
 import { ActivityIndicator, turnStatusPlacement } from "./ActivityIndicator";
 import { TurnDoneMark } from "./TurnDoneMark";
+import { LastMessageMark } from "./LastMessageMark";
 import type { TranscriptEvent } from "../models/Response";
 import { getResentSendsVersion, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
@@ -774,10 +775,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         // window reaches the live end. A node of its own rather than a row: a draft changes a few
         // times a second, and a row would re-walk the whole held transcript on every change.
         ...renderReplyDraft(chatId),
-        // The status row under the latest turn while the agent works on it, or that turn's done
-        // mark once it has finished; anything queued behind it follows.
+        // The status row under the latest turn while the agent works on it, or, once it has
+        // finished, that turn's done mark and when the last message was (the wrapper is empty, and
+        // so hidden, when neither shows); anything queued behind it follows.
         ...(isTurnStatusAfterSends ? [] : [renderTurnStatus(chatId, events)]),
-        m(TurnDoneMark, { key: "turn-done", chatId, events }),
+        m("div", { key: "turn-end", class: "turn-end-marks mb-5 text-(length:--font-size-helper) empty:hidden" }, [
+          m(TurnDoneMark, { chatId, events }),
+          m(LastMessageMark, { chatId, events }),
+        ]),
         ...renderQueuedMessages(chatId),
         // The messages the chat app holds while the chat switches harness, then this page's
         // own not-yet-delivered sends.

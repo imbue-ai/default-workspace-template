@@ -17,6 +17,7 @@ export function chatSnapshotFixture(
     agent_ids: [chatId],
     handoff: null,
     last_messaged_at: null,
+    last_active_at: null,
     ...chatOverrides,
     active_agent: {
       agent_id: chatId,
