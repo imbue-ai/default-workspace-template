@@ -1,0 +1,1 @@
+The System Monitor spec's disk breakdown table (`docs/system/specs/system-monitor.md` section 4.4) lists `/var/cache/user` among the package caches and leaves it out of the system software, adds a "Chats, logs and settings" row for the home folder less the workspace and the caches, and says when "Everything else" lists the system software and the rest of the disk.

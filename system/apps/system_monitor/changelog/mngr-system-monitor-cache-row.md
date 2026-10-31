@@ -1,0 +1,5 @@
+The disk breakdown's Package caches row now counts `/var/cache/user`, where the workspace's environment points uv's, npm's and other tools' caches (`XDG_CACHE_HOME`). On docker, modal and imbue_cloud workspaces `~/.cache` is a link to it, which `du` does not follow, so those caches were counted as "System software" instead. The system software figure now leaves them out, and on lima, where the link runs the other way, the caches are still counted once.
+
+A new "Chats, logs and settings" row holds the home folder beside the workspace's files and the caches (agent records and logs, worktrees, chat history, installed tools), with its largest folders listed. That space used to fall into "Other files on the machine's disk", which now holds only what is outside the workspace and says it cannot be freed from here.
+
+"Everything else" no longer calls the rest of a lima workspace's data disk "System software": when the system software walk is larger than what is left, it sits on another disk, and the row lists nothing under it.

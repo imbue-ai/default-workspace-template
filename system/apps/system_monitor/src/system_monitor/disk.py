@@ -25,6 +25,9 @@ CACHE_DIRS: Final[tuple[Path, ...]] = (
     Path(".local/share/uv"),
     Path(".local/share/pnpm"),
 )
+# Where the workspace's environment puts uv's, npm's and other tools' caches (XDG_CACHE_HOME), off the
+# home volume except on lima, where it links to ~/.cache; relative to the root.
+OFF_VOLUME_CACHE_DIR: Final[Path] = Path("var/cache/user")
 # What the top-level folders of the workspace hold, for the ones a user would not know.
 WORKSPACE_FOLDER_HINTS: Final[dict[str, str]] = {
     ".venv": "installed packages, rebuilt on demand",
@@ -40,12 +43,22 @@ CACHE_HINTS: Final[dict[str, str]] = {
     ".npm": "Node packages",
     ".local/share/uv": "Python packages",
     ".local/share/pnpm": "Node packages",
+    str(ROOT_DIR / OFF_VOLUME_CACHE_DIR): "downloads and build caches",
 }
-# How many of the workspace's folders the row lists, and the least a listed item holds.
-WORKSPACE_ITEM_COUNT: Final[int] = 8
+# What the top-level folders of the home folder hold, beside the workspace and the caches.
+HOME_FOLDER_HINTS: Final[dict[str, str]] = {
+    "worktrees": "copies of the workspace that background agents work in",
+    ".mngr": "chats' records and logs",
+    ".minds": "chat history, per signed-in account",
+    ".claude": "Claude's settings and history",
+    ".local": "installed tools",
+}
+# How many folders the workspace and home rows list, and the least a listed item holds.
+FOLDER_ITEM_COUNT: Final[int] = 8
 MIN_ITEM_BYTES: Final[int] = 1024 * 1024
-# What is not the machine's system software: the home tree (the rows above), kernel and memory
-# filesystems, and the container engines' own stores where a machine keeps them on this disk.
+# What is not the machine's system software: the home tree and the off-volume cache (the rows
+# above), kernel and memory filesystems, and the container engines' own stores where a machine
+# keeps them on this disk.
 SYSTEM_EXCLUDES: Final[tuple[Path, ...]] = (
     Path("/proc"),
     Path("/sys"),
@@ -123,6 +136,72 @@ def _items(
     return items[:limit] if limit is not None else items
 
 
+def _folder_items(
+    measured: Measured | None,
+    is_folder: Callable[[Path], bool],
+    hints: dict[str, str],
+) -> list[dict[str, Any]]:
+    """A row's largest folders among its measured top-level entries; its loose files count toward the row
+    but are not listed."""
+    if measured is None:
+        return []
+    folders = {path: size for path, size in measured.by_path.items() if is_folder(path)}
+    return _items(
+        Measured(measured.total, folders),
+        hints,
+        lambda path: path.name,
+        FOLDER_ITEM_COUNT,
+    )
+
+
+def _measure_home_folder(
+    home: Path, workspace: Path, home_caches: list[Path], measure: Measure
+) -> Measured | None:
+    """The home folder less the workspace and the caches, by top-level entry; None when it cannot be
+    listed or measured."""
+    # Measured as its entries because the home directory itself can be a link (imbue_cloud's /home/user
+    # points into the volume), which du would count as nothing.
+    try:
+        entries = sorted(
+            path
+            for path in home.iterdir()
+            if path != workspace and path not in home_caches
+        )
+    except OSError:
+        return None
+    return measure(entries, home_caches)
+
+
+def _rest_of_disk_items(
+    other: int, system: Measured | None, is_every_row_measured: bool
+) -> list[dict[str, Any]]:
+    """What the Everything else row's bytes break down into: the system software, then whatever else is
+    on the disk."""
+    # A system walk bigger than what is left is on another disk (lima's boot disk is not its data disk),
+    # so none of what is left can be called system software.
+    if system is None or system.total > other:
+        return []
+    items: list[dict[str, Any]] = []
+    if system.total:
+        items.append(
+            {
+                "name": "System software",
+                "hint": "the workspace's tools",
+                "bytes": system.total,
+            }
+        )
+    # A row that could not be measured leaves its bytes in the rest, and those can be freed from here.
+    if is_every_row_measured and other - system.total:
+        items.append(
+            {
+                "name": "Other files on the machine's disk",
+                "hint": "not part of this workspace, so it cannot be freed from here",
+                "bytes": other - system.total,
+            }
+        )
+    return items
+
+
 def scan(
     disk_used: int,
     workspace: Path = WORKSPACE_DIR,
@@ -170,20 +249,8 @@ def scan(
         "Workspace files",
         "documents, project folders, the workspace's own code",
         workspace_measured,
-        _items(
-            Measured(
-                workspace_measured.total,
-                {
-                    path: size
-                    for path, size in workspace_measured.by_path.items()
-                    if path in folders
-                },
-            )
-            if workspace_measured is not None
-            else None,
-            WORKSPACE_FOLDER_HINTS,
-            lambda path: path.name,
-            WORKSPACE_ITEM_COUNT,
+        _folder_items(
+            workspace_measured, lambda path: path in folders, WORKSPACE_FOLDER_HINTS
         ),
     )
     counted += row(
@@ -221,7 +288,11 @@ def scan(
         }
     )
     counted += rows[-1]["bytes"]
-    caches = measure([home / cache for cache in CACHE_DIRS], [])
+    # Depending on the provider, ~/.cache links to the off-volume cache or the other way round, and du
+    # does not follow a link it is handed, so the caches are counted once.
+    off_volume_cache = root / OFF_VOLUME_CACHE_DIR
+    home_caches = [home / cache for cache in CACHE_DIRS]
+    caches = measure([*home_caches, off_volume_cache], [])
     counted += row(
         "caches",
         "Package caches",
@@ -232,39 +303,27 @@ def scan(
             CACHE_HINTS,
             lambda path: str(path.relative_to(home))
             if path.is_relative_to(home)
-            else path.name,
+            else str(ROOT_DIR / path.relative_to(root)),
             None,
         ),
     )
-    # The rest of the disk: the machine's system software (the workspace's tools, measured
-    # without the home tree, which the rows above hold) and whatever else is on the disk.
+    home_folder = _measure_home_folder(home, workspace, home_caches, measure)
+    counted += row(
+        "home",
+        "Chats, logs and settings",
+        "kept beside the workspace's files",
+        home_folder,
+        _folder_items(home_folder, Path.is_dir, HOME_FOLDER_HINTS),
+    )
     other = max(0, disk_used - counted)
-    system = measure([root], [home, *SYSTEM_EXCLUDES])
-    other_items: list[dict[str, Any]] = []
-    if system is not None and system.total:
-        software = min(other, system.total)
-        other_items.append(
-            {
-                "name": "System software",
-                "hint": "the workspace's tools",
-                "bytes": software,
-            }
-        )
-        if other - software:
-            other_items.append(
-                {
-                    "name": "Other files on the machine's disk",
-                    "hint": "outside this workspace",
-                    "bytes": other - software,
-                }
-            )
+    system = measure([root], [home, off_volume_cache, *SYSTEM_EXCLUDES])
     rows.append(
         {
             "id": "other",
             "label": "Everything else",
             "hint": "the workspace's system software and the rest of the machine's disk",
             "bytes": other,
-            "items": other_items,
+            "items": _rest_of_disk_items(other, system, not missing),
         }
     )
     return rows, missing

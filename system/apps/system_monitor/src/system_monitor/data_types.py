@@ -189,7 +189,7 @@ class DiskRow(FrozenModel):
     """One row of what is on the disk, from an on-demand walk (``disk.scan``)."""
 
     id: str = Field(
-        description="The row's key: workspace, uploads, apps, caches or other"
+        description="The row's key: workspace, uploads, apps, caches, home or other"
     )
     label: str = Field(description="The row's heading")
     hint: str = Field(description="Small grey text beside the heading; empty for none")
