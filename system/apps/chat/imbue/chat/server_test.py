@@ -1,7 +1,6 @@
 """Tests for the Flask server."""
 
 import fcntl
-import importlib.util
 import io
 import json
 import os
@@ -9,6 +8,7 @@ import threading
 import time
 from collections.abc import Callable
 from collections.abc import Generator
+from collections.abc import Sequence
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -21,8 +21,8 @@ from urllib.parse import urlparse
 from uuid import uuid4
 
 import pytest
-from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from chat_background_tasks.listing import chats_from_agents_payload
 from flask import Flask
 from flask.testing import FlaskClient
@@ -31,6 +31,7 @@ from oom_priority import bands
 from pydantic import Field
 from pydantic import SecretStr
 from werkzeug.test import TestResponse
+from workspace_bare_scripts import message_chat
 
 from imbue.chat.accounts import INDEX_VERSION
 from imbue.chat.accounts import account_dir
@@ -43,17 +44,19 @@ from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import COMPACT_UNAVAILABLE_SEND_FAILURE_KIND
 from imbue.chat.agent_discovery import COMPACT_WHILE_BUSY_DETAIL
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import agent_state_dir
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
-from imbue.chat.agent_manager import SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
 from imbue.chat.agent_manager import _build_chat_destroy_command
 from imbue.chat.agent_manager import _build_chat_stop_command
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_naming import chat_naming_prompt
 from imbue.chat.chat_records import ChatRecord
+from imbue.chat.chat_seed import SeedRole
+from imbue.chat.chat_seed import SeedTurn
 from imbue.chat.chat_transcript import agent_switch_event_id
 from imbue.chat.config import Config
 from imbue.chat.errors import ChatAppError
@@ -70,6 +73,7 @@ from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.lanes import HARNESS_LABEL
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
+from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.mock_one_shot_test import ScriptedOneShotCompletion
 from imbue.chat.harnesses.pi_coding.model import PiInterruptToComposer
 from imbue.chat.harnesses.registry import build_interrupt_to_composer
@@ -84,9 +88,12 @@ from imbue.chat.models import CreateChatRequest
 from imbue.chat.models import HandoffPhase
 from imbue.chat.models import HeldSendOrigin
 from imbue.chat.models import ModelPick
+from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import SendMessageRequest
 from imbue.chat.oom_prioritizer import ChatOomPrioritizer
+from imbue.chat.presence import PresenceReport
+from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
 from imbue.chat.server import COMPACT_WHILE_STOPPED_DETAIL
 from imbue.chat.server import _DEFAULT_TAIL_COUNT
@@ -117,15 +124,18 @@ from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import seed_failed_chat
 from imbue.chat.testing import serve_app
 from imbue.chat.testing import utc_iso_seconds_ago
+from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
 from imbue.chat.testing import write_compacting_marker
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.errors import AgentIdNotFoundError
 from imbue.mngr.errors import AgentStartError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_codex.app_server_client import CodexAppServerError
 from imbue.mngr_codex.app_server_client import CodexModel
@@ -366,6 +376,123 @@ def test_send_message_for_unknown_agent(client: FlaskClient) -> None:
     assert response.status_code == 404
 
 
+def test_a_send_to_a_chat_being_created_is_held_for_it() -> None:
+    """A page that sends while its chat starts gets a 202 at once, and the chat app keeps the message until the agent
+    lands, so a page closed meanwhile loses nothing."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    chat_id = ChatId(f"agent-{uuid4().hex}")
+    with manager._lock:
+        manager._provisional_chats[chat_id] = ProvisionalChat(
+            chat_id=chat_id, name="Chat 1", account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        )
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+
+    response = client.post(f"/api/chats/{chat_id}/message", json={"message": "hello", "message_id": "m-1"})
+
+    assert response.status_code == 202
+    assert response.get_json() == {"status": "held", "phase": None}
+    proto = manager.get_provisional_chat(chat_id)
+    assert proto is not None
+    assert [(held.message_id, held.text) for held in proto.held_sends] == [("m-1", "hello")]
+
+
+def _creating_chat_and_client(chat_id: ChatId) -> tuple[AgentManager, Any]:
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
+    manager.note_agent_list_known()
+    with manager._lock:
+        manager._provisional_chats[chat_id] = ProvisionalChat(
+            chat_id=chat_id, name="Chat 1", account_id="acct-1", phase=ProvisionalChatPhase.CREATING
+        )
+    return manager, create_application(build_test_state(agent_manager=manager)).test_client()
+
+
+def test_stop_on_a_chat_being_created_takes_back_its_held_sends() -> None:
+    chat_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(chat_id)
+    client.post(f"/api/chats/{chat_id}/message", json={"message": "first", "message_id": "m-1"})
+    client.post(f"/api/chats/{chat_id}/message", json={"message": "second", "message_id": "m-2"})
+
+    response = client.post(f"/api/chats/{chat_id}/drain-to-composer")
+
+    assert response.status_code == 200
+    assert response.get_json() == {"block": "first\nsecond"}
+    proto = manager.get_provisional_chat(chat_id)
+    assert proto is not None and proto.held_sends == ()
+
+
+def test_a_chat_being_created_can_be_renamed_and_deleted_through_the_routes() -> None:
+    chat_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(chat_id)
+
+    renamed = client.post(f"/api/chats/{chat_id}/rename", json={"title": "Trip plans"})
+    assert renamed.status_code == 200
+    proto = manager.get_provisional_chat(chat_id)
+    assert proto is not None and proto.name == "Trip plans"
+
+    deleted = client.post(f"/api/chats/{chat_id}/destroy", json={})
+    assert deleted.status_code == 200
+    assert manager.get_provisional_chat(chat_id) is None
+
+
+def test_the_launch_choice_route_sets_the_account_and_model_of_a_chat_being_created(signed_in_account: str) -> None:
+    chat_id = ChatId(f"agent-{uuid4().hex}")
+    manager, client = _creating_chat_and_client(chat_id)
+
+    chosen = client.post(
+        f"/api/chats/{chat_id}/launch-choice",
+        json={"account_id": signed_in_account, "model": {"model_id": "sonnet", "effort": None, "fast": False}},
+    )
+    refused = client.post(f"/api/chats/{chat_id}/launch-choice", json={"account_id": "no-such-account"})
+    unknown = client.post(f"/api/chats/agent-{uuid4().hex}/launch-choice", json={"account_id": signed_in_account})
+
+    assert chosen.status_code == 200
+    proto = manager.get_provisional_chat(chat_id)
+    assert proto is not None and proto.account_id == signed_in_account
+    assert proto.model_pick is not None and proto.model_pick.model_id == "sonnet"
+    assert refused.status_code == 400
+    assert unknown.status_code == 404
+
+
+def test_stop_while_a_send_waits_for_a_starting_agent_takes_the_message_back_undelivered() -> None:
+    """Claude is still starting (no ``session_started`` marker), so the send waits for it; Stop answers with
+    the message at once, and the send then ends withdrawn, having handed mngr nothing."""
+    agent_id = f"agent-{uuid4().hex}"
+    state_dir = agent_state_dir(Path(os.environ["MNGR_HOST_DIR"]), agent_id)
+    state_dir.mkdir(parents=True)
+    agent_info = AgentInfo(
+        id=agent_id,
+        name="claude-agent",
+        state="RUNNING",
+        agent_state_dir=state_dir,
+        claude_config_dir=state_dir / ".claude",
+    )
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    seed_agent_state(manager, agent_id, name="claude-agent", state="RUNNING")
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    send_responses: list[Any] = []
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        sender = threading.Thread(
+            target=lambda: send_responses.append(
+                client.post(f"/api/chats/{agent_id}/message", json={"message": "hello", "message_id": "m-1"})
+            )
+        )
+        sender.start()
+        wait_until_true(lambda: is_chat_connecting(manager, agent_id), 5, "the send to wait for the agent")
+
+        stopped = client.post(f"/api/chats/{agent_id}/drain-to-composer")
+        sender.join(timeout=5)
+
+    assert stopped.get_json() == {"block": "hello"}
+    assert not is_chat_connecting(manager, agent_id)
+    [sent] = send_responses
+    assert sent.status_code == 200
+    assert sent.get_json() == {"status": "withdrawn"}
+    assert messenger.sent == []
+
+
 def test_send_message_is_not_ready_until_the_agent_list_is_known() -> None:
     """Before the first agent list has been read, a send answers 503, never 404: a 404 is what
     makes an in-workspace sender deliver around the chat app, and an id that is merely not
@@ -591,6 +718,41 @@ def test_stop_and_remove_watcher_evicts_and_rebuilds_on_demand(tmp_path: Path) -
     state.shutdown()
 
 
+def _presence(sequence: int, state: PresenceState, is_focused: bool) -> PresenceReport:
+    return PresenceReport(
+        instance_id="page-4417", client_id="client-4417", state=state, is_focused=is_focused, sequence=sequence
+    )
+
+
+def test_reply_drafts_read_only_a_chat_a_page_streams_and_shows_focused(tmp_path: Path) -> None:
+    """The pane polling behind reply drafts runs for the chat the user is looking at, never for a
+    chat in the background: streamed but hidden, streamed but unfocused, or shown but not streamed."""
+    state = build_test_state()
+    seed_agent_state(state.agent_manager, "looked-at-agent", name="looked-at-agent", state="RUNNING")
+    agent_info = _claude_agent_info_with_one_message(tmp_path, "looked-at-agent", "RUNNING")
+    chat_id = ChatId("looked-at-agent")
+    try:
+        state.get_or_create_watcher(agent_info)
+        state.agent_manager.record_presence(chat_id, _presence(1, PresenceState.VISIBLE, is_focused=True))
+        # Shown and focused, but no page streams it.
+        assert state.list_watched_agents() == []
+
+        stream = state.event_queues.register(str(chat_id))
+        assert [agent_id for _, agent_id, _ in state.list_watched_agents()] == ["looked-at-agent"]
+
+        state.agent_manager.record_presence(chat_id, _presence(2, PresenceState.VISIBLE, is_focused=False))
+        assert state.list_watched_agents() == []
+
+        state.agent_manager.record_presence(chat_id, _presence(3, PresenceState.HIDDEN, is_focused=True))
+        assert state.list_watched_agents() == []
+
+        state.agent_manager.record_presence(chat_id, _presence(4, PresenceState.VISIBLE, is_focused=True))
+        state.event_queues.unregister(str(chat_id), stream)
+        assert state.list_watched_agents() == []
+    finally:
+        state.shutdown()
+
+
 def test_a_stopped_chat_read_after_its_stop_is_released_once_nobody_streams_it(tmp_path: Path) -> None:
     """Reading a stopped chat rebuilds its transcript; the release drops that rebuild, but not
     while a stream of the chat is open or a send is reviving it, and never a running chat's."""
@@ -610,7 +772,7 @@ def test_a_stopped_chat_read_after_its_stop_is_released_once_nobody_streams_it(t
         state.event_queues.unregister("stopped-agent", stream)
 
         # So does a send reviving it, which built the watcher before starting the agent.
-        with state.agent_manager.track_connecting_send("stopped-agent", "reviving-send") as mark_connecting:
+        with state.agent_manager.track_connecting_send("stopped-agent", "reviving-send", "hello") as mark_connecting:
             mark_connecting()
             state.release_unviewed_stopped_transcripts()
             assert set(state.watchers) == {"stopped-agent", "running-agent"}
@@ -799,6 +961,63 @@ def _fake_watcher(
     )
 
 
+class _ResendChoiceRecordingMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger that also records whether each send may be sent again when unconfirmed."""
+
+    resend_choices: list[bool] = []
+
+    def send_to_agent(
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        self.resend_choices.append(is_resent_when_unsure)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
+def _client_over(messenger: RecordingMngrMessenger) -> tuple[AgentManager, FlaskClient]:
+    """A chat app whose agent list is known and whose sends go to ``messenger``, with a client for its routes."""
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    manager.note_agent_list_known()
+    return manager, create_application(build_test_state(agent_manager=manager)).test_client()
+
+
+def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass() -> None:
+    """The flush retries a block it did not see land only while no turn is open, so mngr's send is not repeated."""
+    messenger = _ResendChoiceRecordingMngrMessenger()
+    state = build_test_state(agent_manager=AgentManager.build(WebSocketBroadcaster(), messenger=messenger))
+    flush_sends: list[Callable[[str], bool]] = []
+    fake_watcher = _fake_watcher(lambda: [], lambda: None)
+    fake_watcher.set_flush_hooks = lambda send, _is_alive: flush_sends.append(send)
+    try:
+        with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
+            state.get_or_create_watcher(_agent_info(harness=HarnessType.ANTIGRAVITY))
+        (flush_send,) = flush_sends
+        assert flush_send("held block") is True
+        assert messenger.resend_choices == [False]
+    finally:
+        state.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("body_fields", "expected_choice"),
+    [({}, True), ({"is_single_send": True}, False)],
+    ids=["a-plain-send", "a-send-from-a-failure-notice"],
+)
+def test_only_a_send_from_a_failure_notice_goes_out_once(body_fields: dict[str, bool], expected_choice: bool) -> None:
+    agent_info = _agent_info()
+    messenger = _ResendChoiceRecordingMngrMessenger()
+    _manager, client = _client_over(messenger)
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_info.id}/message", json={"message": "hello", **body_fields})
+
+    assert response.status_code == 200
+    assert messenger.resend_choices == [expected_choice]
+
+
 def test_a_watcher_released_while_it_starts_is_stopped_once_after_its_start() -> None:
     state = build_test_state()
     seed_agent_state(state.agent_manager, "stopped-agent", name="stopped-agent", state="STOPPED")
@@ -920,6 +1139,72 @@ def test_send_message_success() -> None:
     # The endpoint routes through AgentManager.send_message_to_agent, which addresses
     # the agent by id (the live cache supplies the known location as the 3rd arg).
     assert messenger.sent == [(agent_id, "hello")]
+
+
+def test_a_send_delivered_by_a_second_send_answers_resent() -> None:
+    """mngr could not confirm the first send and the chat sent it again, so the page is told, to say so."""
+    agent_info = _agent_info()
+    messenger = RecordingMngrMessenger(delivery=SendDelivery.RESENT)
+    manager, client = _client_over(messenger)
+    with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
+        response = client.post(f"/api/chats/{agent_info.id}/message", json={"message": "hello"})
+
+    assert response.status_code == 200
+    assert response.get_json() == {"status": "resent"}
+    assert messenger.sent == [(agent_info.id, "hello")]
+    # Delivered all the same: kept to be sent again should the agent's process exit before recording it.
+    assert [send.text for send in manager._unrecorded_sends_by_agent.get(agent_info.id, [])] == ["hello"]
+
+
+def test_a_send_to_a_chat_launched_at_sign_in_carries_the_seeded_conversation_once(
+    tmp_path: Path, signed_in_account: str
+) -> None:
+    """The sign-in launch left the seed pending on the record: the message route delivers the first send with
+    the seeded conversation ahead of the user's words, and the next send as typed."""
+    mngr_binary, _log_path = write_recording_mngr_binary(tmp_path)
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(
+        WebSocketBroadcaster(), messenger=messenger, mngr_binary=mngr_binary, chat_files_root=tmp_path
+    )
+    # The launch's create runs in the primary agent's work dir, which the isolation fixture only names.
+    Path(os.environ["MNGR_AGENT_WORK_DIR"]).mkdir(parents=True, exist_ok=True)
+    manager.note_agent_list_known()
+    client = create_application(build_test_state(agent_manager=manager)).test_client()
+    seeded = manager.seed_chat(
+        "Welcome",
+        (
+            SeedTurn(role=SeedRole.USER, text="Wait.. what is honest software?"),
+            SeedTurn(role=SeedRole.ASSISTANT, text="Your workspace is ready."),
+        ),
+    )
+    chat_id = ChatId(seeded.chat_id)
+    manager.create_chat("", chat_id=seeded.chat_id)
+    wait_until_true(
+        lambda: manager.get_provisional_chat(seeded.chat_id) is None, 10, "the provisional chat's completion"
+    )
+    record = manager._chat_record_store.read(chat_id)
+    assert record is not None and record.is_seed_pending is True
+    member_id = record.agents[-1].agent_id
+    member = AgentInfo(
+        id=member_id,
+        name="Welcome",
+        state="RUNNING",
+        agent_state_dir=tmp_path / "member",
+        claude_config_dir=tmp_path / ".claude",
+    )
+
+    with patch("imbue.chat.server._find_active_agent", return_value=member):
+        first = client.post(f"/api/chats/{chat_id}/message", json={"message": "1"})
+        second = client.post(f"/api/chats/{chat_id}/message", json={"message": "2"})
+
+    assert first.status_code == 200 and second.status_code == 200
+    (first_id, carried), (second_id, plain) = messenger.sent
+    assert first_id == member_id and second_id == member_id
+    assert carried.startswith(f"<{SEED_CONTEXT_TAG}>") and carried.endswith(f"</{SEED_CONTEXT_TAG}>\n1")
+    assert "Wait.. what is honest software?" in carried
+    assert plain == "2"
+    delivered = manager._chat_record_store.read(chat_id)
+    assert delivered is not None and delivered.is_seed_pending is False
 
 
 def test_a_message_sent_to_a_chat_still_called_chat_n_names_it(
@@ -1073,8 +1358,10 @@ class _ReleasingAsEachSendEndsAgentManager(AgentManager):
     release: Callable[[], None] | None = None
 
     @contextmanager
-    def track_connecting_send(self, agent_id: str, message_id: str) -> Generator[Callable[[], None], None, None]:
-        with super().track_connecting_send(agent_id, message_id) as mark_connecting:
+    def track_connecting_send(
+        self, agent_id: str, message_id: str, text: str
+    ) -> Generator[Callable[[], None], None, None]:
+        with super().track_connecting_send(agent_id, message_id, text) as mark_connecting:
             yield mark_connecting
         if self.release is not None:
             self.release()
@@ -1107,6 +1394,9 @@ def _send_and_record_connecting_pushes(state: str, *, is_ready_marker_written: b
     state_dir.mkdir(parents=True)
     if is_ready_marker_written:
         (state_dir / "session_started").touch()
+    else:
+        # The SessionStart hook of a claude that is still starting writes the marker a moment later.
+        threading.Timer(1.0, (state_dir / "session_started").touch).start()
     agent_info = AgentInfo(
         id=agent_id,
         name="claude-agent",
@@ -1206,7 +1496,7 @@ def _file_session_for(agent_info: AgentInfo, in_flight: str = "") -> FileHarness
         harness=agent_info.harness,
         state_dir=agent_info.agent_state_dir,
         model_state_path=agent_info.agent_state_dir / "model_state.json",
-        send_to_harness=lambda text: True,
+        send_to_harness=lambda text, is_resent_when_unsure: SendOutcome.OK,
         notify_agents_changed=lambda: None,
         is_harness_starting_up=lambda: False,
         is_tracked=lambda: True,
@@ -1360,6 +1650,23 @@ def test_revive_and_retry_send_gives_up_after_the_budget(tmp_path: Path, agent_m
         )
     assert outcome is SendOutcome.NOT_READY
     assert sleeps == []
+
+
+@pytest.mark.parametrize("is_single_send", [False, True], ids=["a-plain-send", "a-send-from-a-failure-notice"])
+def test_revive_and_retry_send_keeps_the_senders_choice_on_repeating_it(
+    tmp_path: Path, agent_manager: AgentManager, is_single_send: bool
+) -> None:
+    agent_info = _model_agent_info("codex-agent-11", tmp_path, harness=HarnessType.CODEX)
+    session = _codex_session_over(None)
+    request_body = SendMessageRequest(message="hi", message_id="m11", is_single_send=is_single_send)
+
+    with (
+        patch("imbue.chat.server.start_agent", lambda name: None),
+        patch.object(session, "send", return_value=SendOutcome.OK) as mock_send,
+    ):
+        outcome = _revive_and_retry_send(agent_info, agent_manager, session, request_body, "m11", sleep=lambda _: None)
+    assert outcome is SendOutcome.OK
+    mock_send.assert_called_once_with("hi", "m11", not is_single_send)
 
 
 def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:
@@ -1958,7 +2265,7 @@ def _manager_with_capturing_prioritizer(writes: list[tuple[int, int]], pids: dic
     manager = AgentManager.build(WebSocketBroadcaster())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pid=lambda cid: pids.get(cid),
+        resolve_pids=lambda cid: [pids[cid]] if cid in pids else [],
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         # No process-start marker in this fake, so the chat's idle time comes from
         # the reported presence alone -- which is what these tests are about.
@@ -2132,7 +2439,7 @@ def test_send_records_the_message_for_the_chats_recency() -> None:
     manager = AgentManager.build(WebSocketBroadcaster(), messenger=RecordingMngrMessenger())
     manager._oom_prioritizer = ChatOomPrioritizer(
         list_chat_ids=manager.get_chat_ids,
-        resolve_pid=lambda cid: {agent_id: 4242}.get(cid),
+        resolve_pids=lambda cid: [4242] if cid == agent_id else [],
         set_adj=lambda pid, adj: (writes.append((pid, adj)), True)[1],
         resolve_process_started_at=lambda _cid: None,
     )
@@ -2356,7 +2663,7 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
         patch.object(ChatAppState, "get_or_create_watcher", return_value=fake_watcher),
         patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()) as mock_run,
         patch.object(AgentManager, "reset_activity_state"),
-        patch.object(AgentManager, "send_message_to_agent", return_value=None) as mock_send,
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.DELIVERED) as mock_send,
     ):
         response = client.post("/api/chats/agent-123/flush-queue")
 
@@ -2367,6 +2674,20 @@ def test_flush_queue_restarts_and_resends_the_concatenated_block(client: FlaskCl
     assert mock_send.call_count == 1
     assert mock_send.call_args.args[1] == "first message\nsecond message"
     assert fake_watcher.clear_calls == [True]
+
+
+def test_flush_queue_answers_resent_for_a_block_delivered_by_a_second_send(client: FlaskClient) -> None:
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=_agent_info()),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("queued text")),
+        patch("imbue.chat.server.run_local_command_modern_version", return_value=_restart_ok()),
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.RESENT),
+    ):
+        response = client.post("/api/chats/agent-123/flush-queue")
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "resent"
 
 
 def test_flush_queue_is_a_noop_when_the_queue_is_empty(client: FlaskClient) -> None:
@@ -2420,6 +2741,34 @@ def test_flush_queue_returns_500_on_restart_failure(client: FlaskClient) -> None
     assert response.status_code == 500
     # The restart failed, so nothing is resent.
     mock_send.assert_not_called()
+
+
+@pytest.mark.parametrize("route", ["interrupt", "flush-queue"])
+def test_a_restart_route_lets_go_of_the_sends_kept_for_resending(app: Flask, client: FlaskClient, route: str) -> None:
+    """Both routes restart the agent on purpose, so what it took before is not sent again when its process ends."""
+    agent_info = _agent_info()
+    manager = state_of(app).agent_manager
+    manager._keep_unrecorded_send(agent_info.id, "what is 5+5?", time.time(), stops_begun_before_send=0)
+    letting_go_during_restart: list[bool] = []
+
+    def restart(**_kwargs: Any) -> FinishedProcess:
+        letting_go_during_restart.append(agent_info.id in manager._letting_go_counts_by_agent)
+        return _restart_ok()
+
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch.object(ChatAppState, "get_or_create_watcher", return_value=_fake_queue_watcher("queued text")),
+        patch("imbue.chat.server.run_local_command_modern_version", side_effect=restart),
+        patch.object(AgentManager, "reset_activity_state"),
+        patch.object(AgentManager, "send_message_to_agent", return_value=SendDelivery.DELIVERED),
+    ):
+        response = client.post(f"/api/chats/{agent_info.id}/{route}")
+
+    assert response.status_code == 200
+    assert letting_go_during_restart == [True]
+    kept_texts = [send.text for send in manager._unrecorded_sends_by_agent.get(agent_info.id, [])]
+    # The flush sends the drained queue to the restarted agent, which is kept like any other send.
+    assert kept_texts == (["queued text"] if route == "flush-queue" else [])
 
 
 def test_shoulder_tap_atomic_returns_404_for_unknown_agent(client: FlaskClient) -> None:
@@ -3098,7 +3447,7 @@ def test_an_empty_chat_list_chat_is_refused_until_the_agent_list_is_known() -> N
 def test_the_chat_settings_read_as_the_defaults_and_are_replaced_whole(client: FlaskClient) -> None:
     assert client.get("/api/settings").get_json() == {
         "settings": {
-            "fast_mode_default": "auto",
+            "fast_mode_default": "off",
             "fast_mode_turn_limit": 2,
             "is_fast_mode_notice_shown": False,
             "autocompact_default": True,
@@ -3158,9 +3507,7 @@ def test_a_chats_fast_mode_defaults_to_the_workspaces_and_is_replaced_whole(tmp_
     client = app.test_client()
     _register_agent(app, "agent-fast", "Chat-1", "RUNNING")
 
-    assert client.get("/api/chats/agent-fast/fast-mode").get_json() == {
-        "state": {"mode": "auto", "is_switched": False}
-    }
+    assert client.get("/api/chats/agent-fast/fast-mode").get_json() == {"state": {"mode": "off", "is_switched": False}}
 
     response = client.put("/api/chats/agent-fast/fast-mode", json={"mode": "auto", "is_switched": True})
 
@@ -3260,20 +3607,13 @@ def test_create_chat_refuses_a_label_the_app_sets_itself_with_a_400(
 
 def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) -> None:
     """``system/scripts/message_chat.py --create`` is standard-library only and cannot import this
-    package, so its copy of the route's path, its waiver setting, and the fields it posts are
+    package, so its copy of the route's path and the fields it posts are
     pinned here. ``CreateChatRequest`` forbids unknown fields, and the script reads that refusal as
     a chat app from before them: a rename on this side would send every Imbue Studio chat back to the
     bare ``mngr create`` without a single failing test."""
-    script = Path(__file__).resolve().parents[4] / "scripts" / "message_chat.py"
-    spec = importlib.util.spec_from_file_location("message_chat_for_create_pin", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    assert module.SKIP_CLAUDE_INSTALLATION_CHECK_SETTING == SKIP_CLAUDE_INSTALLATION_CHECK_SETTING
-    assert module.CREATE_CHAT_PATH in {rule.rule for rule in app.url_map.iter_rules()}
-    body = module.create_request_body(
-        module.CreateRequest(
+    assert message_chat.CREATE_CHAT_PATH in {rule.rule for rule in app.url_map.iter_rules()}
+    body = message_chat.create_request_body(
+        message_chat.CreateRequest(
             name="assist-1a2b3c",
             message="/assist it broke",
             labels={"auto_open": "true"},
@@ -3284,8 +3624,7 @@ def test_the_messaging_scripts_create_is_the_one_this_route_takes(app: Flask) ->
     assert parsed.name == "assist-1a2b3c"
     assert parsed.message == "/assist it broke"
     assert parsed.labels == {"auto_open": "true"}
-    assert parsed.is_installation_check_skipped is True
-    assert body[module.WAIT_FIELD] is True and parsed.should_wait is True
+    assert body[message_chat.WAIT_FIELD] is True and parsed.should_wait is True
 
 
 def test_create_chat_refuses_an_id_it_never_minted(
@@ -3531,6 +3870,8 @@ def _track_claude_agent(app: Flask, agent_id: str, name: str, claude_config_dir:
     state_dir = Path(os.environ["MNGR_HOST_DIR"]) / "agents" / agent_id
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
+    # A running claude has finished starting: its SessionStart hook wrote this.
+    (state_dir / "session_started").touch()
     _register_agent(app, agent_id, name, "RUNNING")
     return state_dir
 
@@ -4091,9 +4432,9 @@ def test_a_converging_chat_holds_sends_answers_409_to_the_verbs_and_can_be_cance
     ]
     # The page renders the held messages and the phase text from the snapshot, so both ride it.
     assert listed[0]["handoff"]["target_harness"] == "codex"
-    assert listed[0]["handoff"]["held_sends"] == [
-        {"message_id": "trigger-1", "text": "Carry on in Codex"},
-        {"message_id": "m-2", "text": "and this"},
+    assert [(held["message_id"], held["text"]) for held in listed[0]["handoff"]["held_sends"]] == [
+        ("trigger-1", "Carry on in Codex"),
+        ("m-2", "and this"),
     ]
     # The chat still reads from the agent it is leaving.
     assert client.get(f"/api/chats/{first}/events").get_json()["total"] == 1
@@ -4239,9 +4580,9 @@ def test_a_chat_restarting_on_another_account_holds_sends_refuses_the_verbs_and_
         (chat["status"], chat["handoff"]["kind"], chat["handoff"]["phase"], chat["handoff"]["target_label"])
         for chat in listed
     ] == [("working", "rebind", "restarting", "Anthropic 2 (Claude Code)")]
-    assert listed[0]["handoff"]["held_sends"] == [
-        {"message_id": "trigger-1", "text": "Carry on on the other account"},
-        {"message_id": "m-2", "text": "and this"},
+    assert [(held["message_id"], held["text"]) for held in listed[0]["handoff"]["held_sends"]] == [
+        ("trigger-1", "Carry on on the other account"),
+        ("m-2", "and this"),
     ]
     assert not log_path.exists()
 

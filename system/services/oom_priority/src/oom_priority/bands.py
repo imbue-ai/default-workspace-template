@@ -280,6 +280,10 @@ SERVICE_BANDS: Final[dict[str, int]] = {
     # The Getting Started page: one static page and a cached catalog. A shed costs
     # one reload of a window that shows nothing of the user's.
     "getting-started": 80,
+    # The Style Guide page: one static page cataloguing the design system, which
+    # stores nothing, so a shed costs one reload; shed right before System Monitor
+    # and its sampler.
+    "style-guide": 84,
     # The System Monitor page: one polling page that writes nothing to disk, so a
     # shed costs a reload. The most expendable built-in service of all, with the
     # sampler that feeds its graphs just below it: a shed sampler costs a gap in

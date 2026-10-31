@@ -425,6 +425,32 @@ def test_restore_beyond_the_cap_keeps_the_extra_browser_stopped(tmp_path: Path) 
     assert len(harness.launcher.requests) == 1
 
 
+def test_a_saved_browser_is_started_not_clobbered_by_a_launch_while_the_stack_is_down(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    harness.store.write(
+        BrowserManifest(browsers=(ManifestEntry(id=BrowserName("browser-1"), tabs=("https://a.example",)),))
+    )
+    (harness.profile_root / f"{BROWSER_PROFILE_DIR_PREFIX}browser-1").mkdir(parents=True)
+    harness.fleet.load_saved()
+    browser = harness.fleet.ensure_browser(None)
+    assert browser.name == BrowserName("browser-1")
+    harness.stack_up()
+    assert wait_until(lambda: browser.is_running)
+    assert harness.launcher.requests[0].start_url == "https://a.example"
+    assert [str(entry.id) for entry in harness.manifest().browsers] == ["browser-1"]
+    assert (harness.profile_root / f"{BROWSER_PROFILE_DIR_PREFIX}browser-1").exists()
+
+
+def test_load_saved_with_no_manifest_registers_the_profiles_on_disk_stopped(tmp_path: Path) -> None:
+    harness = _Harness(tmp_path)
+    (harness.profile_root / f"{BROWSER_PROFILE_DIR_PREFIX}browser-1").mkdir(parents=True)
+    harness.fleet.load_saved()
+    browser = harness.fleet.get(BrowserName("browser-1"))
+    assert browser.lifecycle == BrowserLifecycle.STOPPED
+    assert browser.is_stopped_by_user
+    assert harness.launcher.requests == []
+
+
 def test_a_lost_manifest_brings_the_profiles_on_disk_back_stopped_and_sweeps_orphans(tmp_path: Path) -> None:
     harness = _Harness(tmp_path)
     (harness.profile_root / f"{BROWSER_PROFILE_DIR_PREFIX}browser-1").mkdir(parents=True)

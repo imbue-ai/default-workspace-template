@@ -109,7 +109,7 @@ def _headers(is_identity_required: bool) -> dict[str, str]:
         if name:
             headers[AGENT_NAME_HEADER] = name
     elif is_identity_required:
-        _err("MNGR_AGENT_ID is not set -- run `screen control ...` from inside an agent.")
+        _err("MNGR_AGENT_ID is not set -- run `uv run --no-sync screen control ...` from inside an agent.")
         raise SystemExit(EXIT_USAGE)
     return headers
 
@@ -172,7 +172,7 @@ def render_acquire_answer(body: dict[str, Any], me: str | None) -> tuple[str, in
         if enqueued:
             return (
                 "the human has control of the Screen -- you're queued to resume and will be messaged when they "
-                "hand it back (if you don't hear back in a while, re-run `screen control acquire`). Tell the user, "
+                "hand it back (if you don't hear back in a while, re-run `uv run --no-sync screen control acquire`). Tell the user, "
                 "then end your turn.",
                 EXIT_PREEMPTED,
             )
@@ -181,7 +181,7 @@ def render_acquire_answer(body: dict[str, Any], me: str | None) -> tuple[str, in
         who = describe_controller(body, me)
         return (
             f"the Screen is held by {who} -- you're queued and will be messaged when it frees (if you don't hear "
-            "back in a while, re-run `screen control acquire`).",
+            "back in a while, re-run `uv run --no-sync screen control acquire`).",
             EXIT_BUSY,
         )
     if status == "starting":
@@ -385,11 +385,11 @@ def control_handoff(reason: str) -> None:
         _out(
             f"handed the Screen to the human: {reason}. You're first in line to resume. Tell the user what to do"
             + ("" if is_shown else " (and to open the Screen themselves, since its window could not be shown)")
-            + ", end your turn, and re-run `screen control acquire` when they hand control back."
+            + ", end your turn, and re-run `uv run --no-sync screen control acquire` when they hand control back."
         )
         raise SystemExit(EXIT_PREEMPTED)
     _out(
-        "the Screen isn't yours to hand off -- a human may already control it. Re-run `screen control acquire` to see."
+        "the Screen isn't yours to hand off -- a human may already control it. Re-run `uv run --no-sync screen control acquire` to see."
     )
     raise SystemExit(EXIT_PREEMPTED)
 

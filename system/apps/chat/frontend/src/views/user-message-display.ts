@@ -12,12 +12,15 @@
 
 import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
+import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { MarkdownContent } from "../markdown";
 import { parseMessageAttachments } from "../models/attachments";
 import type { UserMessageEvent } from "../models/Response";
 import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
+import type { UserMessageClass } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
 import { renderToolBlock } from "./ToolCallBlock";
+import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 
 /** The user rail's shared recipes, owned here and composed by the queued and
  *  outgoing variants (QueuedMessageView / OutgoingMessageView). `message`,
@@ -26,6 +29,9 @@ import { renderToolBlock } from "./ToolCallBlock";
  *  them. The row recipe carries no bottom margin: each caller sets its own
  *  rhythm. */
 export const USER_MESSAGE_ROW_CLASS = "message message-user flex flex-col items-end";
+
+/** The bubble is the chat's declared `user-message` part (its app.toml `[theming]`), which themes may style. */
+export const USER_MESSAGE_PART = appPartAttrs("chat", "user-message");
 
 /** wrap-break-word: long unbreakable tokens (API keys, URLs) wrap inside the
  *  bubble instead of overflowing past its edge. Code inside a bubble is
@@ -43,7 +49,7 @@ function renderSystemChip(label: string, body: string, expansionKey: string): m.
 }
 
 /** A notice's lead when the backend's decision names none. */
-export const NOTICE_FALLBACK_LABEL = "Background task completed";
+const NOTICE_FALLBACK_LABEL = "Background task completed";
 
 /** The space below a notice's transcript row. */
 export const NOTICE_ROW_SPACING_CLASS = "mb-2";
@@ -59,6 +65,11 @@ export function renderNotice(label: string, body: string): m.Vnode {
       body ? ` ${body}` : null,
     ]),
   ]);
+}
+
+/** A notice that is not on the transcript yet, as a row of its own. */
+export function renderNoticeRow(key: string, rowClass: string, cls: UserMessageClass): m.Vnode {
+  return m("div", { class: rowClass, key }, [renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body)]);
 }
 
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
@@ -96,9 +107,48 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       if (attachmentBlock !== null) {
         bubbleChildren.push(m(MarkdownContent, { content: attachmentBlock, requestedAt: event.timestamp }));
       }
-      return m("div", { class: USER_BUBBLE_CLASS }, bubbleChildren);
+      return m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, bubbleChildren);
     },
   };
+}
+
+/** What the "?" beside "Sent again" says. */
+const RESENT_NOTE_HELP =
+  "Imbue Studio couldn't confirm the agent received this message, so it sent it again. " +
+  "If the first copy arrived too, the agent may see it twice.";
+
+/** The line under a message the chat app sent a second time: "Sent again", and a "?" that opens a sentence on
+ *  what that means. Its own expansion key, so the opened sentence survives the row being rebuilt. */
+function renderResentNote(eventId: string): m.Vnode {
+  const expansionKey = `resent-note:${eventId}`;
+  const isExpanded = isBlockExpanded(expansionKey);
+  return m("div", { class: "message-resent-note mt-1 flex max-w-[80%] flex-col items-end gap-1" }, [
+    m("div", { class: "flex items-center gap-1 text-(length:--font-size-helper) text-faint" }, [
+      m("span", "Sent again"),
+      m(
+        "button",
+        {
+          type: "button",
+          class:
+            "message-resent-note-help flex size-4 shrink-0 cursor-pointer items-center justify-center rounded-full " +
+            "border border-current text-[10px] leading-none hover:text-secondary",
+          "aria-label": "What does sent again mean?",
+          "aria-expanded": String(isExpanded),
+          onclick: () => {
+            toggleBlockExpanded(expansionKey);
+          },
+        },
+        "?",
+      ),
+    ]),
+    isExpanded
+      ? m(
+          "p",
+          { class: "message-resent-note-text text-right text-(length:--font-size-helper) text-secondary" },
+          RESENT_NOTE_HELP,
+        )
+      : null,
+  ]);
 }
 
 /**
@@ -108,7 +158,7 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
  * the collapsed-system class; a genuine prompt gets the user-bubble class; a notice sits on
  * the agent's rail instead.
  */
-export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
+export function renderUserMessage(event: UserMessageEvent, isResent = false): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;
   if (isHiddenUserMessage(event) || kind === UserMessageKind.StatusMessage) {
     return null;
@@ -121,5 +171,8 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
         : `${USER_MESSAGE_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
   // rendered row's height by querying ``.message-list > [id]``.
-  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, m(StableUserMessage, { event }));
+  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, [
+    m(StableUserMessage, { event }),
+    isResent ? renderResentNote(event.event_id) : null,
+  ]);
 }

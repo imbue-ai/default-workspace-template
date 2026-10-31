@@ -28,8 +28,9 @@ import { describeElement, type ReferenceClick, type ReferenceScope } from "@imbu
 import { anchorForPoint } from "@imbue/workspace-ui/src/menu-position";
 import { kebabGlyph, plusGlyph } from "../glyphs";
 import { isUnread } from "./chatUnread";
+import { acceptPendingRename, dropPendingRename, showPendingRename } from "./pendingRenames";
 import { destroyChat, makeMainChat, renameChat, startChat, stopChat } from "./verbs";
-import { isAgentStarted, isBeingCreated, startsWithMainChat } from "./rows";
+import { isAgentStarted, startsWithMainChat } from "./rows";
 import {
   DEFAULT_RAIL_WIDTH_PX,
   MAX_RAIL_WIDTH_PX,
@@ -39,6 +40,7 @@ import {
   setRailWidth,
 } from "./railWidth";
 import type { ChatRow } from "./rows";
+import { LIST_ROW_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 export interface ChatRailAttrs {
   /** The rows in display order. */
@@ -67,7 +69,6 @@ const DOT_CLASS_BY_STATUS: Readonly<Record<string, string>> = {
   background: "chat-rail-dot--dashed",
   attention: "bg-warning",
   error: "bg-danger",
-  idle: "border border-faint bg-transparent",
 };
 
 function displayStatus(row: ChatRow): string {
@@ -118,22 +119,30 @@ export function isRenaming(chatId: string): boolean {
   return rename !== null && rename.chatId === chatId;
 }
 
-/** Keep the typed name: the field closes at once, and a refusal brings it back with the reason. */
+/** Keep the typed name: the field closes at once on the new name, and a refusal brings back the old name and
+ *  the field with the reason. */
 function commitRename(row: ChatRow): void {
   if (rename === null || rename.chatId !== row.chatId) return;
   const title = rename.draft.trim();
   rename = null;
+  if (title !== "" && title !== row.title) showPendingRename(row.chatId, title);
   m.redraw();
   if (title === "" || title === row.title) return;
-  renameChat(row.chatId, title).catch((error: unknown) => {
-    if (rename !== null) {
-      // Another row's rename has the field: the refusal cannot be shown there, so it is logged.
-      console.warn(`Could not rename chat ${row.chatId}`, error);
-      return;
-    }
+  renameChat(row.chatId, title).then(
+    () => acceptPendingRename(row.chatId, title),
+    (error: unknown) => refuseRename(row, title, error),
+  );
+}
+
+function refuseRename(row: ChatRow, title: string, error: unknown): void {
+  dropPendingRename(row.chatId, title);
+  if (rename !== null) {
+    // Another row's rename has the field: the refusal cannot be shown there, so it is logged.
+    console.warn(`Could not rename chat ${row.chatId}`, error);
+  } else {
     rename = { chatId: row.chatId, draft: title, error: error instanceof Error ? error.message : String(error) };
-    m.redraw();
-  });
+  }
+  m.redraw();
 }
 
 function pruneDeleting(rows: readonly ChatRow[]): void {
@@ -241,8 +250,9 @@ function referenceRowsForEvent(attrs: ChatRailAttrs, event: MouseEvent): MenuRow
 
 // The status marks
 
-/** The status mark beside a row: a dot in the status's colour, a check for done, a pause mark
- *  for a stopped chat (paused is what a stop is, since a message resumes it). */
+/** The status mark beside a row: a dot in the status's colour, a check for done, and an empty
+ *  slot of the dot's width for an idle or stopped chat (a stopped row says so by dimming), so
+ *  every title starts at the same place. */
 function statusDot(row: ChatRow, extraClass: string): m.Vnode {
   const status = displayStatus(row);
   if (status === "done") {
@@ -252,24 +262,8 @@ function statusDot(row: ChatRow, extraClass: string): m.Vnode {
       m.trust(icon("check", { size: 12, strokeWidth: 3 })),
     );
   }
-  if (status === "stopped") {
-    return m(
-      "svg",
-      {
-        class: `chat-rail-dot size-2 rounded-full text-faint ${extraClass}`,
-        "data-status": status,
-        viewBox: "0 0 24 24",
-        fill: "currentColor",
-        "aria-hidden": "true",
-      },
-      [
-        m("rect", { x: 4, y: 3, width: 5, height: 18, rx: 1 }),
-        m("rect", { x: 15, y: 3, width: 5, height: 18, rx: 1 }),
-      ],
-    );
-  }
   return m("span", {
-    class: `chat-rail-dot size-2 rounded-full ${DOT_CLASS_BY_STATUS[status] ?? DOT_CLASS_BY_STATUS.idle} ${extraClass}`,
+    class: `chat-rail-dot size-2 rounded-full ${DOT_CLASS_BY_STATUS[status] ?? ""} ${extraClass}`,
     "data-status": status,
   });
 }
@@ -461,7 +455,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       key: row.chatId,
       type: "button",
       class: [
-        "chat-rail-row group flex w-full items-center gap-2 rounded-md py-1.5 text-left",
+        "chat-rail-row group flex w-full items-center gap-1.5 rounded-md py-1.5 text-left",
         // A finger's height in the drawer; the rail's rows stay dense under a pointer.
         attrs.isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "chat-rail-row--nested pr-2 pl-5" : "px-2",
@@ -479,15 +473,16 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       "data-status": status,
       "data-main": row.isMain ? "true" : undefined,
       "aria-current": isSelected ? "true" : undefined,
+      ...LIST_ROW_PART,
       "aria-disabled": isDeleting ? "true" : undefined,
       // In the drawer the chat on screen is picked again to close it.
       onclick: () => {
         if (!isSelected || attrs.isInDrawer) attrs.onPick(row.chatId);
       },
-      ondblclick: isBeingCreated(row) ? undefined : () => beginRename(row),
+      ondblclick: () => beginRename(row),
       oncontextmenu: (event: MouseEvent) => {
         event.preventDefault();
-        if (isDeleting || isBeingCreated(row)) return;
+        if (isDeleting) return;
         menuChatId = row.chatId;
         menuReferenceRows = referenceRowsForEvent(attrs, event);
         railMenu.open(anchorForPoint(event.clientX, event.clientY));
@@ -496,7 +491,7 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
     [
       statusDot(row, "flex-none"),
       m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
-      isBeingCreated(row) || (attrs.isTouch && isDeleting) ? null : attrs.isTouch ? rowKebab(row) : renamePencil(row),
+      attrs.isTouch && isDeleting ? null : attrs.isTouch ? rowKebab(row) : renamePencil(row),
     ],
   );
 }
@@ -596,7 +591,7 @@ function renameRow(row: ChatRow, isSelected: boolean, isTouch: boolean): m.Vnode
     {
       key: row.chatId,
       class: [
-        "chat-rail-row chat-rail-row--renaming flex w-full items-center gap-2 rounded-md py-1.5",
+        "chat-rail-row chat-rail-row--renaming flex w-full items-center gap-1.5 rounded-md py-1.5",
         isTouch ? "min-h-11" : "",
         isAgentStarted(row) ? "pr-2 pl-5" : "px-2",
         isSelected ? "bg-fill-active text-primary" : "text-primary",

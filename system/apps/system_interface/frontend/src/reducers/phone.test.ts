@@ -175,6 +175,13 @@ describe("the start sheet", () => {
     });
     expect(startSheetRows(onlyPinned, "Quarterly")).toMatchObject({ windowRows: [], isNoMatch: true });
   });
+
+  it("never offers the tour's row, which the phone cannot run, and lists exactly its sections in order", () => {
+    const menu = startSheetRows(phoneState(), "");
+    expect(menu.tourRows).toEqual([]);
+    expect(menu.rows).toEqual([...menu.launchRows, ...menu.tourRows, ...menu.windowRows, ...menu.textRows]);
+    expect(startSheetRows(phoneState(), "tour")).toMatchObject({ tourRows: [], isNoMatch: true });
+  });
 });
 
 describe("a home tile", () => {

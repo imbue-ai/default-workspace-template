@@ -15,7 +15,8 @@ dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.13.1",
     "werkzeug>=3.0",
-    "workspace-layout",
+    # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
+    "workspace-themes",
 ]
 
 [dependency-groups]
@@ -85,7 +86,7 @@ fail_under = 80
 default-flags=["report"]
 default-flags-tui=["report"]
 default-flags-ide=["report"]
-format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+format-command="uv run --no-sync ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
 
 [tool.ruff]
 line-length = 119
@@ -114,7 +115,6 @@ known-first-party = [
     "imbue",
     "app_manifest",
     "app_schema",
-    "workspace_layout",
 ]
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.

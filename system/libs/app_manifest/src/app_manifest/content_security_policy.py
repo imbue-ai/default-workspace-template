@@ -38,7 +38,9 @@ from collections.abc import Mapping
 from typing import Final
 from urllib.parse import urlsplit
 
-from flask import Blueprint, Flask, Response
+from flask import Blueprint
+from flask import Flask
+from flask import Response
 
 from app_manifest.errors import PolicySourceError
 
@@ -58,9 +60,7 @@ DOCUMENT_POLICY_DIRECTIVES: Final[Mapping[str, str]] = {
 # An inline script is a ``<script>`` element with a body and no ``src``. Every such body is
 # hashed, data blocks (``type="application/json"``) included: a hash of a block the browser
 # never runs admits nothing, and telling the two apart is not worth a parser.
-_SCRIPT_ELEMENT: Final[re.Pattern[str]] = re.compile(
-    r"<script\b([^>]*)>(.*?)</script>", re.IGNORECASE | re.DOTALL
-)
+_SCRIPT_ELEMENT: Final[re.Pattern[str]] = re.compile(r"<script\b([^>]*)>(.*?)</script>", re.IGNORECASE | re.DOTALL)
 # Not preceded by a word character or a hyphen, so ``data-src=`` is not taken for ``src=``.
 _SRC_ATTRIBUTE: Final[re.Pattern[str]] = re.compile(r"(?<![\w-])src\s*=", re.IGNORECASE)
 
@@ -98,9 +98,7 @@ def build_document_policy(html: str, overrides: Mapping[str, str] | None = None)
     return "; ".join(f"{name} {value}" for name, value in directives.items())
 
 
-def attach_document_policy(
-    target: Flask | Blueprint, overrides: Mapping[str, str] | None = None
-) -> None:
+def attach_document_policy(target: Flask | Blueprint, overrides: Mapping[str, str] | None = None) -> None:
     """Stamp the document policy on every HTML response of ``target`` that does not set one itself.
 
     ``overrides`` replace whole directives (``{"script-src": "'self' blob:"}``) for an app whose pages
@@ -108,20 +106,11 @@ def attach_document_policy(
     """
 
     def _stamp(response: Response) -> Response:
-        if (
-            response.mimetype != "text/html"
-            or CONTENT_SECURITY_POLICY_HEADER in response.headers
-        ):
+        if response.mimetype != "text/html" or CONTENT_SECURITY_POLICY_HEADER in response.headers:
             return response
         # A file or generator body is not read here: it is left to stream, and gets the hash-free policy.
-        html = (
-            ""
-            if response.direct_passthrough or response.is_streamed
-            else response.get_data(as_text=True)
-        )
-        response.headers[CONTENT_SECURITY_POLICY_HEADER] = build_document_policy(
-            html, overrides
-        )
+        html = "" if response.direct_passthrough or response.is_streamed else response.get_data(as_text=True)
+        response.headers[CONTENT_SECURITY_POLICY_HEADER] = build_document_policy(html, overrides)
         return response
 
     target.after_request(_stamp)

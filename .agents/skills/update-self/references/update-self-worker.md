@@ -19,7 +19,7 @@ scripted; Step 4a is your recipe for it.
 ## 1. Resolve inputs
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 ```
 
 Sets `LEAD_AGENT`, `LEAD_WORK_DIR`, `FINISH_REPORT_PATH`, and `TARGET_REF`. If the worktree has
@@ -155,7 +155,7 @@ whether the creation carries the workspace's own content, and whether the
 update reached it.
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py 'data/.tasks/update-self/task.md')"
 SCOPES=data/.tasks/update-self/scopes
 RANGES=data/.tasks/update-self/footprint-ranges.json
 rm -rf "$SCOPES" && mkdir -p "$SCOPES"
@@ -317,9 +317,32 @@ is a `question` gate (Step 6). Record which branch applied, with its evidence,
 in your report.
 
 - **Environment gate first**, whenever a manifest or lockfile is in the
-  merged set: `uv lock --check` then `uv sync --all-packages`. A failure here
-  is a precise blocker (an unparseable root lock means no service in the
-  workspace can start); fix it before running anything else.
+  merged set: `uv lock --check` then `uv sync --all-packages` at the root, and
+  for each user package (`python3 system/scripts/workspace_bare_scripts/user_packages.py list`;
+  each is a standalone project with its own lock) `uv lock --check --project <package>`.
+  A failure here is a precise blocker (an unparseable root lock means no service
+  in the workspace can start); fix it before running anything else. A user
+  package whose lock is stale after the merge (a shared library it uses or the
+  mngr pin moved) is relocked with
+  `uv run --no-sync user-package-migration relock <package>`,
+  never by hand-editing its lock. A user package that is not standalone yet (the
+  update that made them standalone; `system/test_user_packages_are_standalone.py`
+  names it) is converted with the same command's `migrate`, after its `--dry-run`,
+  whose output goes in your report, per `references/python-packaging-migration.md`
+  ("A user app, service or lib"). Each converted package then gets this step's
+  suites, and an app or service its isolated boot, from its own venv. A failure here
+  or in the suites below on the workspace's own skills, apps, services or docs
+  that the update's changelog ties to a changed rule (for example a user
+  skill's PEP 723 script that `system/test_entry_point_import_cost.py` cannot
+  import, a user service whose program line runs under `uv run`, or a type
+  error in a user skill or app) is fixed by following
+  `references/python-packaging-migration.md`.
+  Separately, before any suite or boot below runs, sync the venv
+  (`uv sync --all-packages --frozen`) whenever the merge changed a
+  `pyproject.toml` or `uv.lock` at all, merged or pulled in
+  (`git diff --name-only "$MERGE^1" "$MERGE" -- '*pyproject.toml' '*uv.lock'`
+  lists one, `$MERGE` as below): everything below runs `uv run --no-sync`,
+  which never syncs, so it would otherwise run on the pre-merge environment.
 - **Suites, lint, ratchets** for what the merged set, the update's changes to
   your creations, 4a's impacted consumers, and your own edits can reach, and
   for nothing else (with none of them, no suite runs at all). The test
@@ -361,7 +384,7 @@ in your report.
   Commit your own edits first: the `git diff` line reads commits.
   `--diff-base` here only names what a merged `uv.lock` is compared against,
   so a lock that upgraded a package selects the suites that depend on it. Run
-  every printed line, in order, plus `uv run ruff check` when a Python file is
+  every printed line, in order, plus `uv run --no-sync ruff check` when a Python file is
   in the list, and handle a failing test and a shed command the way
   `.agents/shared/worker/references/harden-creation.md` ("The test gate")
   says, naming a flaky test under your report's Validation; the tree before
@@ -371,7 +394,7 @@ in your report.
   and for each service 4a found impacted that carries local content of its
   own -- one the workspace created, or a built-in one it has modified (a
   file of it in `local_only`) -- against a scratch data copy via
-  `.agents/shared/scripts/serve_isolated_instance.py` (see `update-app`),
+  `.agents/shared/scripts/agents_shared/serve_isolated_instance.py` (see `update-app`),
   never the live store. A service that arrived exactly as upstream shipped
   it is not booted here: upstream tested it, and for the shell and the chat
   app the apply pre-flights the merged copy itself before anything live
@@ -385,10 +408,10 @@ in your report.
   build the frontends in your worktree (`uv sync --all-packages`, then `cd
   system && npm ci && npm run build`: one npm workspace emits the shell's bundle,
   the chat app's, the Getting Started app's, the Files app's, the Routines
-  app's, and the Screen's) and drive it per
-  `.agents/shared/worker/references/web-frontend-testing.md`. Those six bundles
+  app's, the Screen's, and the Style Guide's) and drive it per
+  `.agents/shared/worker/references/web-frontend-testing.md`. Those seven bundles
   are what the lead's apply installs live (`--worker-bundle`, one per app,
-  installed only as a set) -- name all six locations in your report.
+  installed only as a set) -- name all seven locations in your report.
 - **Customization survival** -- for every user creation the update touches
   (workspace-added apps, widgets and skills; user-modified built-in surfaces;
   apps hooking into the system interface's API or state), verify the *merged
@@ -419,7 +442,8 @@ changed (and no global-dep bump with a user-created dependent) **and** you
 authored no in-branch edits of your own (a mirror edit from 4a is merge work
 even though `classify-merge` cannot see it; Step 1's rollback reverts are not,
 as git made them or with a `both added` file taken at the target's version,
-when `git diff <merge-sha> HEAD` is empty). **Otherwise run
+when `git diff <merge-sha> HEAD` is empty, or after a §7 catch-up the diff to
+your tip before the first catch-up merge). **Otherwise run
 the real gates**,
 scoped to every file whose merged content differs from the target release; 4b's
 suites run is their test gate, so select tests again only over what you commit
@@ -484,12 +508,13 @@ Valid `name:` values:
     evidence for the manifest apps: which carried local content and which
     the update reached.
   - **Built frontend bundles** -- when you built them, the absolute paths of
-    all six (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
+    all seven (`<your work_dir>/system/apps/system_interface/imbue/system_interface/static`,
     `<your work_dir>/system/apps/chat/imbue/chat/static`,
     `<your work_dir>/system/apps/getting_started/src/getting_started/static`,
     `<your work_dir>/system/apps/files/static`,
-    `<your work_dir>/system/apps/routines/src/routines_app/static`, and
-    `<your work_dir>/system/apps/screen/src/screen/static`); omit
+    `<your work_dir>/system/apps/routines/src/routines_app/static`,
+    `<your work_dir>/system/apps/screen/src/screen/static`, and
+    `<your work_dir>/system/apps/style_guide/src/style_guide_app/static`); omit
     when you did not build.
   - **Impact analysis** -- what you checked and how, and any user-created app
     or skill depending on a changed file; or, when the 4a rule skipped it,
@@ -497,7 +522,17 @@ Valid `name:` values:
     paths).
   - **Dockerfile split** (if it merged) -- each hunk live-applicable or
     image-level. Version pins live in `setup_system.sh`, so a pin bump is a
-    provisioner change, not a Dockerfile hunk.
+    provisioner change, not a Dockerfile hunk. Mark each image-level hunk by
+    whether a fresh image would give the user anything the applied workspace
+    lacks:
+    - **covered live** -- nothing: its effect already reaches the running
+      container another way (the merged tree the image only copies in, an
+      installer `setup_system.sh` runs from the repo on the apply's re-run, a
+      removed install that nothing in the merged tree runs any more), or it
+      only shapes the build itself (a layer-cache `COPY`). Say which.
+    - **pending recreate** -- something: a base `FROM` change, a package or
+      build-time path nothing outside the image build provides. Say what the
+      running workspace lacks, or still has, until a recreate.
   - **Provisioning changes** and **global-dependency bumps** (if any) -- per
     `references/worker-provisioning-changes.md`: each classified
     live-applicable (naming the in-branch mirror edits you made) or
@@ -520,3 +555,95 @@ Valid `name:` values:
   you hit the provisioning escape hatch; one sentence on what blocked you and
   where the work stands. Never report `done` on a merge whose suites or boots
   fail.
+
+## 7. Catch up when the lead's `HEAD` moved
+
+The apply lands your branch only by fast-forward, so anything another chat
+committed after you branched makes it refuse. When that happens the lead
+replies asking you to catch up to its current `HEAD`. Your validated merge
+stands: bring the workspace's new commits into your branch and validate only
+what they change.
+
+```bash
+rm -f data/.tasks/update-self/catchup-impacted.txt
+git merge --no-ff <the commit the lead named> -m "Catch up to the workspace's latest work (<its short sha>)"
+```
+
+Never give this merge, or anything else you commit, an `update-self:` subject:
+the apply and `footprint-ranges` find this pass's merge by that prefix, and
+your `update-self:` merge must stay on the branch's first-parent line, which
+merging the lead's commit into your branch (not the other way round) keeps.
+
+Resolve conflicts by Step 2's triage, with two differences. The commits coming
+in are the workspace's own latest work, so where they and the update meet,
+keep both. And the sides are swapped: `--ours` is your branch (the update)
+and `--theirs` the workspace, so Step 2's "keep local" is `git checkout
+--theirs` here. Regenerate a lockfile, never merge it, and do so whenever both
+sides changed it even without a conflict. Conclude a conflicted merge with
+`git commit --no-edit`, which keeps the subject the suites step finds it by.
+
+Then validate the delta, scoped by the same rules as 4b but over
+`$PRE..HEAD` only, where `$PRE` is your branch's tip before the catch-up
+merge (that merge's first parent). Do not re-run 4b's recipe: its merged set
+re-selects the whole pass, and its `git diff "$MERGE" HEAD` line would read
+the workspace's commits as your edits.
+
+- **Impact**: when the commits coming in add or change user-created code,
+  check it against what the update changed (4a's steps 2 and 3), and list each
+  impacted creation in `data/.tasks/update-self/catchup-impacted.txt`, one
+  stand-in file per line, as 4b's `impacted-paths.txt` does.
+- **Environment gate** when a manifest or lockfile changed in `$PRE..HEAD`.
+- **Suites**: commit first, then run every printed line:
+
+  ```bash
+  PRE=$(git rev-parse "$(git log --first-parent --merges -1 --format=%H --fixed-strings \
+      --grep "Catch up to the workspace's latest work")^1")
+  { git diff --name-only --no-renames "$PRE" HEAD
+    cat data/.tasks/update-self/catchup-impacted.txt 2>/dev/null; } \
+      | sed '/^[[:space:]]*$/d' | sort -u > data/.tasks/update-self/catchup-paths.txt
+  [ -s data/.tasks/update-self/catchup-paths.txt ] \
+      && uv run --frozen --package app-manifest app-manifest select-tests \
+          --diff-base "$PRE" \
+          $(sed 's/^/--path /' data/.tasks/update-self/catchup-paths.txt)
+  ```
+
+  Handle a failing test as 4b does, except that the tree before your change,
+  for attributing a failure, is the commit you merged (the catch-up merge's
+  second parent), not `$MERGE^1`: a test that fails there was already failing
+  in the workspace, and one absent there arrived with the update.
+- **Isolated-service boots** for a service with a file both sides of the
+  catch-up merge changed (your branch and the incoming commits, conflicted or
+  auto-merged), as 4b boots its merged set, and for each service that carries
+  local content of its own with a file in `catchup-impacted.txt`, as 4b boots
+  what 4a found impacted. Any other service only the workspace changed is
+  already live in that state.
+- **Playwright** for a web surface with a file you resolved a conflict in, as
+  4b drives it.
+- **Bundles**: rebuild all three when you reported them and `$PRE..HEAD`
+  touches what they are built from (`system/apps/system_interface/`,
+  `system/apps/chat/`, `system/apps/getting_started/`,
+  `system/libs/workspace_ui/`, `system/package.json`,
+  `system/package-lock.json`).
+- **Customization survival** for a creation the update touches (Step 4's scope
+  files) whose files the incoming commits also change.
+- **Review gates**: a conflict you resolved here is merge work, in 4c's scope.
+  The catch-up merge itself is not an edit of yours.
+
+Report `done` again with the full §6 body, brought up to date, and a
+**Catch-up** section first: the commit you merged, the commits it brought in,
+each conflict and its resolution, and which of the items above ran, with
+their results.
+
+## 8. Retry after the apply rolled back
+
+When the lead's apply of your branch rolls back, the lead deals with the cause
+(a loaded workspace, a registry it could not reach) and asks you to retry. The
+workspace's `HEAD` now holds your branch, a `Roll back update apply` commit on
+top of it, and whatever was committed since. Bring that in as §7 does (merge
+the commit the lead named), then revert the rollback on your branch with Step
+1's `pending-rollbacks` block, so the branch holds the update again on top of
+the workspace's latest work.
+
+Validate as §7 does, over `$PRE..HEAD`: the rollback and its revert cancel out,
+so that range is the workspace's commits since your last `done`. Report `done`
+again with §7's Catch-up section, naming the rollback you reverted.

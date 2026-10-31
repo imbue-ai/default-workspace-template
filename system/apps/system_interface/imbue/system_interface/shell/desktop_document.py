@@ -63,9 +63,9 @@ CASCADE_WIDTH: Final[float] = 0.6
 CASCADE_HEIGHT: Final[float] = 0.7
 CASCADE_CYCLE: Final[int] = 6
 
-# Where a pinned window first shows (pinned-taskbar-entries plan section 4.3): the right half of the backdrop, a
-# margin in, above the corner its floating entry rests in; roughly where the first users put it by hand.
-PINNED_WINDOW_FRAME: Final[Frame] = Frame(x=0.46, y=0.05, width=0.5, height=0.9)
+# Where a pinned window first shows (pinned-taskbar-entries plan section 4.3): most of the backdrop, a margin in on
+# every side, so the welcome chat is what a new workspace opens on; the tour's resize card snaps it to the right half.
+PINNED_WINDOW_FRAME: Final[Frame] = Frame(x=0.05, y=0.05, width=0.9, height=0.9)
 
 # The snap frames (fixed).
 SNAPPED_LEFT_FRAME: Final[Frame] = Frame(x=0.0, y=0.0, width=0.5, height=1.0)

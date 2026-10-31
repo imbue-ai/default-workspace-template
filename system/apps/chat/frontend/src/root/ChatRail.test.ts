@@ -63,6 +63,19 @@ describe("ChatRail status marks", () => {
     expect(dotClassOf("agent-idle")).not.toMatch(/chat-rail-dot--(dashed|pulse)/);
     expect(rail.querySelector('[data-chat-id="agent-wait"]')?.getAttribute("data-status")).toBe("background");
   });
+
+  it("leaves idle and stopped chats an empty slot, and dims only the stopped row", () => {
+    const rail = mount([chatRowFixture("agent-idle"), chatRowFixture("agent-stopped", { status: "stopped" })]);
+
+    for (const chatId of ["agent-idle", "agent-stopped"]) {
+      const dot = rail.querySelector(`[data-chat-id="${chatId}"] .chat-rail-dot`)!;
+      expect(dot.tagName).toBe("SPAN");
+      expect(dot.childElementCount).toBe(0);
+      expect(dotClassOf(chatId)).not.toMatch(/\b(bg-|border)/);
+    }
+    expect(rail.querySelector('[data-chat-id="agent-stopped"]')?.className).toContain("opacity-50");
+    expect(rail.querySelector('[data-chat-id="agent-idle"]')?.className).not.toContain("opacity-50");
+  });
 });
 
 describe("ChatRail main chat", () => {
@@ -119,7 +132,7 @@ describe("ChatRail main chat", () => {
     expect(keysOf(other)).toContain("stop");
   });
 
-  it("gives a chat waiting for its first send its verbs, and a chat being created none", () => {
+  it("gives a chat waiting for its first send its verbs, and a chat being created its rename and delete too", () => {
     const waiting = chatRowFixture("agent-waiting", { isProvisional: true, status: "idle" });
     const creating = chatRowFixture("agent-creating", { isProvisional: true, status: "working" });
     const context = chatRailAttrsFixture({ rows: [waiting, creating] });
@@ -130,7 +143,12 @@ describe("ChatRail main chat", () => {
         menuRow.kind === "action" && menuRow.key !== undefined ? [menuRow.key] : [],
       ),
     ).toEqual(["rename", "make-main", "delete"]);
+    expect(
+      rowMenuRows(context, creating).flatMap((menuRow) =>
+        menuRow.kind === "action" && menuRow.key !== undefined ? [menuRow.key] : [],
+      ),
+    ).toEqual(["rename", "make-main", "delete"]);
     expect(rail.querySelector('[data-chat-id="agent-waiting"] .chat-rail-rename')).not.toBeNull();
-    expect(rail.querySelector('[data-chat-id="agent-creating"] .chat-rail-rename')).toBeNull();
+    expect(rail.querySelector('[data-chat-id="agent-creating"] .chat-rail-rename')).not.toBeNull();
   });
 });

@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { EntryLook } from "../reducers/desktopState";
 import { appRecord } from "../testing/records";
 import type { ActionRow, MenuRow } from "@imbue/workspace-ui/src/components/menu";
-import { taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
+import { enableThemingPrompt, taskbarEntryMenuRows, windowMenuRows } from "./WindowMenu";
 
 function keysOf(rows: MenuRow[]): string[] {
   return rows.map((row) => (row.kind === "divider" ? "|" : (row.key ?? "")));
@@ -30,6 +30,7 @@ describe("windowMenuRows", () => {
       quit,
       popOut: null,
       close: vi.fn(),
+      theme: null,
     });
     expect(keysOf(rows)).toEqual(["size", "fullscreen", "|", "share", "quit", "|", "close"]);
     const quitRow = rowOf(rows, "quit");
@@ -50,6 +51,7 @@ describe("windowMenuRows", () => {
           quit: vi.fn(),
           popOut: null,
           close: vi.fn(),
+          theme: null,
         }),
       ),
     ).toEqual(["size", "fullscreen", "|", "quit", "|", "close"]);
@@ -66,6 +68,7 @@ describe("windowMenuRows", () => {
           quit: null,
           popOut: null,
           close: vi.fn(),
+          theme: null,
         }),
       ),
     ).toEqual(["size", "fullscreen", "|", "close"]);
@@ -82,6 +85,7 @@ describe("windowMenuRows", () => {
           quit: null,
           popOut: null,
           close: vi.fn(),
+          theme: null,
         }),
       ),
     ).toEqual(["close"]);
@@ -97,6 +101,7 @@ describe("windowMenuRows", () => {
       quit: null,
       popOut: null,
       close,
+      theme: null,
     });
     expect(keysOf(rows)).toEqual(["size", "fullscreen", "|", "close"]);
     rowOf(rows, "close").onSelect();
@@ -114,6 +119,7 @@ describe("windowMenuRows", () => {
           quit: vi.fn(),
           popOut: null,
           close: vi.fn(),
+          theme: null,
         }),
       ),
     ).toEqual(["size", "fullscreen", "|", "close"]);
@@ -253,6 +259,7 @@ describe("the pull-out row", () => {
       quit: vi.fn(),
       popOut,
       close: vi.fn(),
+      theme: null,
     });
     expect(keysOf(rows)).toEqual(["size", "fullscreen", "|", "pop-out", "share", "quit", "|", "close"]);
     expect(rowOf(rows, "pop-out").label).toBe("Open in its own window");
@@ -266,6 +273,7 @@ describe("the pull-out row", () => {
       quit: null,
       popOut: null,
       close: vi.fn(),
+      theme: null,
     });
     expect(keysOf(without)).toEqual(["size", "fullscreen", "|", "close"]);
   });
@@ -282,6 +290,7 @@ describe("the fullscreen rows", () => {
       quit: null,
       popOut: null,
       close: vi.fn(),
+      theme: null,
     });
     expect(keysOf(rows)).toEqual(["size", "fullscreen", "|", "close"]);
     expect(rowOf(rows, "fullscreen").label).toBe("Fullscreen");
@@ -295,6 +304,7 @@ describe("the fullscreen rows", () => {
       quit: null,
       popOut: null,
       close: vi.fn(),
+      theme: null,
     });
     expect(rowOf(filled, "fullscreen").label).toBe("Exit fullscreen");
   });
@@ -309,6 +319,7 @@ describe("the fullscreen rows", () => {
       quit: null,
       popOut: null,
       close: vi.fn(),
+      theme: null,
     });
     expect(keysOf(rows)).toEqual(["size", "fullscreen", "immersive", "|", "close"]);
     expect(rowOf(rows, "immersive").label).toBe("Immersive");
@@ -322,7 +333,66 @@ describe("the fullscreen rows", () => {
       quit: null,
       popOut: null,
       close: vi.fn(),
+      theme: null,
     });
     expect(rowOf(on, "immersive").label).toBe("Leave immersive");
+  });
+});
+
+describe("the window menu's Theming submenu", () => {
+  function themingRows(theme: Parameters<typeof windowMenuRows>[1]["theme"]) {
+    const rows = windowMenuRows(appRecord("notes"), {
+      size,
+      onSized: vi.fn(),
+      fullscreen: null,
+      share: null,
+      quit: null,
+      popOut: null,
+      close: vi.fn(),
+      theme,
+    });
+    const submenu = rows.find((row) => row.kind === "submenu" && row.key === "theme");
+    if (submenu?.kind !== "submenu" || submenu.rows === undefined) throw new Error("no Theming submenu");
+    return { submenu, children: submenu.rows() };
+  }
+
+  it("turns a themeable app's theming on and off, with the current one checked", () => {
+    const setOn = vi.fn();
+    const { submenu, children } = themingRows({ isThemeable: true, isOn: true, setOn, enable: vi.fn() });
+    expect(submenu.label).toBe("Theming");
+    expect(submenu.value).toBe("On");
+    expect(children.map((row) => (row.kind === "divider" ? "|" : "key" in row ? row.key : ""))).toEqual([
+      "theme-on",
+      "theme-off",
+    ]);
+    const [on, off] = children;
+    if (on.kind !== "action" || off.kind !== "action") throw new Error("no On and Off rows");
+    expect(on.trailing).not.toBeUndefined();
+    expect(off.trailing).toBeUndefined();
+    off.onSelect();
+    expect(setOn).toHaveBeenCalledWith(false);
+  });
+
+  it("greys On and Off for an app that is not themeable yet, and offers Enable theming", () => {
+    const enable = vi.fn();
+    const { submenu, children } = themingRows({ isThemeable: false, isOn: false, setOn: vi.fn(), enable });
+    expect(submenu.value).toBe("Off");
+    expect(children.map((row) => (row.kind === "divider" ? "|" : "key" in row ? row.key : ""))).toEqual([
+      "theme-on",
+      "theme-off",
+      "|",
+      "theme-enable",
+    ]);
+    expect(children.slice(0, 2).every((row) => row.kind === "action" && row.isDisabled === true)).toBe(true);
+    const enableRow = children[3];
+    if (enableRow.kind !== "action") throw new Error("no Enable theming row");
+    enableRow.onSelect();
+    expect(enable).toHaveBeenCalled();
+  });
+
+  it("drafts a request to make the app themeable by the workspace's guide", () => {
+    expect(enableThemingPrompt("Notes")).toContain(
+      "Make the Notes app themeable, following docs/system/themeable-apps.md",
+    );
   });
 });

@@ -1,3 +1,4 @@
+import subprocess
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -109,7 +110,55 @@ def test_plain_cron_lines_in_the_shapes_a_definition_can_say_are_converted(
     assert str(converted.definition.every) == every
     assert converted.definition.at == at
     assert converted.definition.days == days
+    assert converted.definition.command == ("cmd",)
     assert converted.routine_id == RoutineId("weekly-report")
+
+
+def test_a_plain_line_with_shell_syntax_is_written_as_a_routine_that_runs_it_as_cron_did(
+    definitions: FileDefinitionStore, states: FileStateStore, legacy_cron_dir: Path, live_cron_dir: Path
+) -> None:
+    out = definitions.paths.repo_root / "out.txt"
+    line = rf"""*/5 * * * * root f={out}; [ -n "$HOME" ] && printf '\%s|' 'one  two' > "$f" """ + "\n"
+    (legacy_cron_dir / "digest").write_text(line)
+
+    report = migrate_cron_entries(definitions.paths.repo_root, definitions, states, live_cron_dir=live_cron_dir)
+
+    assert report.converted == (RoutineId("digest"),)
+    definition = definitions.load(RoutineId("digest")).definition
+    assert definition is not None and definition.command is not None
+    assert definition.command[:2] == ("/bin/sh", "-c")
+    subprocess.run(list(definition.command), check=True)
+    assert out.read_text() == "one  two|"
+
+
+def test_a_runner_line_with_shell_syntax_runs_its_command_through_the_shell() -> None:
+    line = legacy_runner_line("news-sync", "6h", "bash", "-c", "'python3 sync.py && touch synced'")
+    (converted,) = convert_cron_entry(line, "news-sync")
+    assert isinstance(converted, ConvertedEntry)
+    assert converted.definition.command == (
+        "/bin/sh",
+        "-c",
+        "bash -c 'python3 sync.py && touch synced' >> /var/log/supervisor/news-sync.log 2>&1",
+    )
+
+
+@pytest.mark.parametrize("shell_line", ["SHELL=/bin/bash", 'SHELL="/bin/bash"'])
+def test_a_line_with_shell_syntax_runs_through_the_shell_its_entry_names(shell_line: str) -> None:
+    (converted,) = convert_cron_entry(f"{shell_line}\n0 3 * * * root [[ -d /tmp ]] && echo yes\n", "check")
+    assert isinstance(converted, ConvertedEntry)
+    assert converted.definition.command == ("/bin/bash", "-c", "[[ -d /tmp ]] && echo yes")
+
+
+def test_an_escaped_percent_is_a_literal_percent_in_the_command() -> None:
+    (converted,) = convert_cron_entry(r"0 3 * * * root date +\%Y-\%m" + "\n", "stamp")
+    assert isinstance(converted, ConvertedEntry)
+    assert converted.definition.command == ("date", "+%Y-%m")
+
+
+def test_a_line_whose_bare_percent_feeds_the_command_input_is_left_with_that_reason() -> None:
+    (skipped,) = convert_cron_entry("0 3 * * * root mail -s hello me%the body\n", "mail")
+    assert isinstance(skipped, SkippedEntry)
+    assert skipped.reason == "a bare % feeds the command input, which a routine cannot"
 
 
 def test_a_cron_line_naming_a_month_is_left_with_that_reason() -> None:
@@ -168,6 +217,73 @@ def test_migration_writes_definitions_carries_state_over_and_removes_both_copies
 
     again = migrate_cron_entries(root, definitions, states, live_cron_dir=live)
     assert again.converted == ()
+
+
+def _write_job_state(root: Path, state_dir: str, job_name: str, last_success: int, failures: int) -> None:
+    job_state = root / state_dir / job_name
+    job_state.mkdir(parents=True)
+    (job_state / "last_success").write_text(f"{last_success}\n")
+    (job_state / "failures").write_text(f"{failures}\n")
+
+
+def test_migration_carries_state_from_where_releases_before_0_8_7_kept_it(
+    definitions: FileDefinitionStore, states: FileStateStore, legacy_cron_dir: Path, live_cron_dir: Path
+) -> None:
+    root = definitions.paths.repo_root
+    (legacy_cron_dir / "news-sync").write_text(legacy_runner_line("news-sync", "6h", "python3", "sync.py"))
+    _write_job_state(root, "system/data/.state/jobs", "news-sync", last_success=1760000000, failures=2)
+
+    migrate_cron_entries(root, definitions, states, live_cron_dir=live_cron_dir)
+
+    state = states.read(RoutineId("news-sync"))
+    assert state.last_succeeded_at == datetime.fromtimestamp(1760000000, tz=timezone.utc)
+    assert state.consecutive_failures == 2
+
+
+@pytest.mark.parametrize(
+    ("current_success", "older_success", "expected_success", "expected_failures"),
+    [(1760000000, 1750000000, 1760000000, 1), (1750000000, 1760000000, 1760000000, 4)],
+)
+def test_migration_carries_the_state_with_the_later_success_when_both_places_hold_one(
+    definitions: FileDefinitionStore,
+    states: FileStateStore,
+    legacy_cron_dir: Path,
+    live_cron_dir: Path,
+    current_success: int,
+    older_success: int,
+    expected_success: int,
+    expected_failures: int,
+) -> None:
+    root = definitions.paths.repo_root
+    (legacy_cron_dir / "news-sync").write_text(legacy_runner_line("news-sync", "6h", "python3", "sync.py"))
+    _write_job_state(root, "data/.state/jobs", "news-sync", last_success=current_success, failures=1)
+    _write_job_state(root, "system/data/.state/jobs", "news-sync", last_success=older_success, failures=4)
+
+    migrate_cron_entries(root, definitions, states, live_cron_dir=live_cron_dir)
+
+    state = states.read(RoutineId("news-sync"))
+    assert state.last_succeeded_at == datetime.fromtimestamp(expected_success, tz=timezone.utc)
+    assert state.consecutive_failures == expected_failures
+
+
+def test_the_imbue_studio_update_dispatcher_stays_with_cron_untouched(
+    definitions: FileDefinitionStore, states: FileStateStore, legacy_cron_dir: Path, live_cron_dir: Path
+) -> None:
+    root = definitions.paths.repo_root
+    entry = (
+        "PATH=/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+        "* * * * * root flock -n /run/update-self-dispatch.lock -c 'cd /home/user/workspace && python3 "
+        "data/.state/update-apply/dispatcher.pyz tick >> data/.state/update-apply/dispatcher.log 2>&1'\n"
+    )
+    (legacy_cron_dir / "update-self-dispatch").write_text(entry)
+    (live_cron_dir / "update-self-dispatch").write_text(entry)
+
+    report = migrate_cron_entries(root, definitions, states, live_cron_dir=live_cron_dir)
+
+    assert (report.converted, report.skipped) == ((), ())
+    assert (legacy_cron_dir / "update-self-dispatch").read_text() == entry
+    assert (live_cron_dir / "update-self-dispatch").read_text() == entry
+    assert definitions.list_routines() == []
 
 
 def test_an_entry_whose_id_is_already_a_routine_stays_in_place(

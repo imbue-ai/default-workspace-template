@@ -171,6 +171,7 @@ export function Backdrop(): m.Component<BackdropAttrs> {
                   onRaise: () => store.raiseWindow(window.id),
                   onControl: (control, event) => attrs.onWindowControl(window.id, control, event),
                   onToggleMaximize: () => store.toggleMaximized(window.id),
+                  chrome: store.shownChrome(),
                 }),
               ];
             }),
