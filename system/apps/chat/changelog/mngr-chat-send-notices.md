@@ -1,0 +1,1 @@
+The failure notice for a send now says what happened in the chat's own words for each kind of failure, rather than showing mngr's reason, and the Force button is now Restart. An unclassified failure still shows the reason, the only account of what went wrong.

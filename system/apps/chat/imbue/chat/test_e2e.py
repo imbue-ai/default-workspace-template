@@ -1341,7 +1341,7 @@ def test_a_send_refused_for_a_removed_account_offers_a_provider_instead_of_retry
         expect(notice).to_contain_text("Couldn't send your message", timeout=15000)
         expect(notice).to_contain_text("You signed out of the account this chat runs on.")
         expect(notice.get_by_role("button", name="Retry")).to_have_count(0)
-        expect(notice.get_by_role("button", name="Force")).to_have_count(0)
+        expect(notice.get_by_role("button", name="Restart")).to_have_count(0)
         notice.get_by_role("button", name="Choose a provider").click()
         expect(chat.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         expect(chat.locator(".message-input-textbox")).to_have_value("are you still there?")
@@ -1463,7 +1463,7 @@ def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_
         )
         expect(notice).not_to_contain_text("Timeout waiting")
         expect(notice.get_by_role("button", name="Retry")).to_have_count(0)
-        expect(notice.get_by_role("button", name="Force")).to_have_count(0)
+        expect(notice.get_by_role("button", name="Restart")).to_have_count(0)
         expect(chat.locator(".message-input-textbox")).to_have_value(text)
         assert sent == [text, text]
 

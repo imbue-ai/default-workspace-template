@@ -158,6 +158,17 @@ function messageTextKey(chatId: string): string {
 // survives even if the composer is not currently mounted -- never swallowed (contract A1a).
 const pendingComposerPrepends = new Map<string, string>();
 
+// What the failure notice says about a send, in place of mngr's reason, which is written for its own
+// command line. "unknown" keeps that reason: it is the only account of what went wrong.
+const SEND_FAILURE_SENTENCES: Partial<Record<SendFailureKind, string>> = {
+  input_blocked: "The agent is waiting on something in its terminal. Answer it there and try again, or restart the agent.",
+  agent_unreachable: "The agent isn't running and didn't start. Restart it to send your message.",
+  not_ready: "The agent isn't ready for messages yet. Try again in a moment.",
+  state_unknown: "Couldn't reach the agent just now. Try again in a moment.",
+  agent_not_found: "Couldn't find the agent. Try again in a moment.",
+  not_submitted: "The agent didn't take your message. Try again.",
+};
+
 /** A failure raised from OUTSIDE this component, waiting for the composer to show it. */
 interface PendingFailureNotice {
   title: string;
@@ -1356,6 +1367,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // already be in the agent's input or turn and a resend can deliver it twice. The notice shows
         // its own sentence: mngr's reason for this kind is its diagnostics (the whole pane included).
         const isUnconfirmed = actionFailureKind === "submission_unconfirmed";
+        const sendFailureSentence = recovery === null ? undefined : SEND_FAILURE_SENTENCES[actionFailureKind];
         const retryWording = isUnconfirmed
           ? { label: "Send again", inFlight: "Sending…", tooltip: "Sends the message again, even if the agent has it" }
           : { label: "Retry", inFlight: "Retrying…", tooltip: "Tries the same thing again" };
@@ -1363,16 +1375,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           title: isUnconfirmed ? "Couldn't confirm your message arrived" : actionFailureTitle,
           body: isUnconfirmed
             ? ["The agent may already have it, so check its terminal before you send it again."]
-            : [
-                detail,
-                // Only when the detail does not already say what to do: an input_blocked reason is
-                // the dialog's own advice ("press Enter in its terminal to run it").
-                actionFailureKind === "agent_unreachable"
-                  ? "The agent's terminal is gone, so restarting it is the only way to deliver this."
-                  : isRepeatable && actionFailureKind !== "input_blocked"
-                    ? "You can open the agent's terminal, fix it there, then Retry."
-                    : null,
-              ],
+            : sendFailureSentence !== undefined
+              ? [sendFailureSentence]
+              : [detail, isRepeatable ? "You can open the agent's terminal, fix it there, then Retry." : null],
           dismissLabel: isRepeatable || recovery !== null ? "Cancel" : "OK",
           isDismissable: actionFailureInFlight === null,
           onDismiss: dismissActionFailureNotice,
@@ -1397,8 +1402,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               ? []
               : [
                   {
-                    label: actionFailureInFlight === "force" ? "Forcing…" : "Force",
-                    tooltip: "Restarts agent to reset it & resends message",
+                    label: actionFailureInFlight === "force" ? "Restarting…" : "Restart",
+                    tooltip: "Restarts the agent, then sends your message. Anything it's working on stops.",
                     isDestructive: true,
                     isDisabled: actionFailureInFlight !== null,
                     run: () => void forceFailedSend(),
