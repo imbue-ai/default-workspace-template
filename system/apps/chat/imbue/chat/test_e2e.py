@@ -643,7 +643,7 @@ def test_chat_recovers_from_a_failed_transcript_load(tmp_path: Path, page: Page)
 
         error = _chat(page).locator(".message-list-error")
         expect(error).to_be_visible(timeout=15000)
-        expect(error.locator("p")).to_have_text("Error: request failed (HTTP 503)")
+        expect(error.locator("p")).to_have_text("The workspace didn't answer. Try again in a moment.")
 
         page.unroute(events_url)
         error.locator(".message-list-reload").click()

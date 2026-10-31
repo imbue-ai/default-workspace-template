@@ -196,15 +196,18 @@ describe("moving", () => {
   it("moves nothing into or out of a folder read live from a computer, and says why once a drag", async () => {
     const { model } = harness();
     await model.moveInto(["/home/b.txt"], "/__remote/host-mac/Users/kim/");
+    const [first] = model.toasts.current();
+    expect(first.message).toBe("Moving isn't supported on files shared from your computer.");
     await model.moveInto(
       ["/__remote/host-mac/Users/kim/notes.md", "/__remote/host-mac/Users/kim/plan.md"],
       "/home/zeta/",
     );
     expect(server.movePath).not.toHaveBeenCalled();
-    expect(model.toasts.current().map((toast) => toast.message)).toEqual([
-      "Moving isn't supported on files shared from your computer.",
-      "Moving isn't supported on files shared from your computer.",
-    ]);
+    // The second drag says it again in a fresh note, which replaces the first rather than stacking beside it.
+    const [second, ...rest] = model.toasts.current();
+    expect(rest).toEqual([]);
+    expect(second.message).toBe("Moving isn't supported on files shared from your computer.");
+    expect(second.id).not.toBe(first.id);
   });
 });
 

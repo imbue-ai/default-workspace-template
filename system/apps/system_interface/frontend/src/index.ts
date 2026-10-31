@@ -35,6 +35,7 @@ import { avatarPinnedWindow } from "./reducers/desktopState";
 import { initEmbedderRelay, setEmbedderAppMessageHandler } from "./relay";
 import { reloadInterface } from "./reload";
 import { DesktopStore } from "./store/DesktopStore";
+import { openBugReport } from "@imbue/workspace-ui/src/report-bug";
 import { ShellSocket } from "./store/socket";
 import { wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
 import { currentRenderModes, followRenderModes, readThemeMetrics } from "./theme/metrics";
@@ -119,6 +120,7 @@ function bootstrap(): void {
           reloadInterface,
           popOut: popOutBridge,
           outsideLinks,
+          reportBug: openBugReport,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,
         });
@@ -165,6 +167,7 @@ function bootstrap(): void {
       opensCustomSchemeLinks: message.opensCustomSchemeLinks === true,
     });
     desktopStore.setOpensLocalFiles(message.opensLocalFiles === true);
+    desktopStore.setCanReportBug(message.opensHelp === true);
   });
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;

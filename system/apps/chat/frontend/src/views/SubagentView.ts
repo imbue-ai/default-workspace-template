@@ -95,7 +95,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
       loading = false;
     } catch (error) {
       loading = false;
-      loadingError = describeRequestError(error);
+      loadingError = describeRequestError(error, "read");
     }
   }
 
@@ -202,7 +202,7 @@ export function SubagentView(): m.Component<SubagentViewAttrs> {
         content = m(
           "div",
           { class: "message-list-error flex items-center justify-center h-full" },
-          m("p", { class: "text-danger" }, `Error: ${loadingError}`),
+          m("p", { class: "text-danger" }, loadingError),
         );
       } else if (events.length === 0) {
         content = m(

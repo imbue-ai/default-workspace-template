@@ -142,7 +142,8 @@ vi.mock("../models/attachments", () => ({
     paths.length === 0 ? text : `${text} + ${paths.join(" ")}`,
   formatFileSize: () => "0 B",
 }));
-vi.mock("@imbue/workspace-ui/src/models/request-error", () => ({
+vi.mock("@imbue/workspace-ui/src/models/request-error", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@imbue/workspace-ui/src/models/request-error")>()),
   describeRequestError: (e: unknown) => String(e),
   describeRequestErrorKind: (e: unknown) =>
     typeof e === "object" && e !== null && "kind" in e ? (e as { kind: string }).kind : "unknown",
@@ -225,6 +226,7 @@ vi.mock("../models/Providers", () => ({
 }));
 
 import { jsonBlock } from "@imbue/workspace-ui/src/element_reference";
+import { notAnsweredSentence } from "@imbue/workspace-ui/src/models/failure";
 import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import { MessageInput, prependToComposer, restoreComposerDraft, takeComposerDraft } from "./MessageInput";
@@ -1056,6 +1058,24 @@ describe("MessageInput send failure notice", () => {
     expect(text).toContain("restarting it is the only way");
   });
 
+  it("says a refused send was not delivered, and an unanswered one may have been, offering no resend for it", async () => {
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 409, response: { detail: "Agent 'a' is switching" } }),
+    );
+    const refused = renderedText(await typeAndSend(MessageInput(), "agent-1", "hello"));
+    expect(refused).toContain("Couldn't send your message");
+    expect(refused).toContain("Your message wasn't delivered.");
+    expect(refused).toContain("Retry");
+
+    mocks.sendMessage.mockRejectedValueOnce(Object.assign(new Error("null"), { code: 0, response: null }));
+    const unanswered = renderedText(await typeAndSend(MessageInput(), "agent-1", "hello"));
+    expect(unanswered).toContain("Your message may not have been sent");
+    expect(unanswered).toContain(notAnsweredSentence("change"));
+    expect(unanswered).not.toContain("Retry");
+    expect(unanswered).not.toContain("Force");
+    expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
+  });
+
   it("keeps Retry for a blocked input, which a person can clear", async () => {
     mocks.sendMessage.mockRejectedValueOnce({ kind: "input_blocked", toString: () => "a dialog is open" });
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
@@ -1070,7 +1090,9 @@ describe("MessageInput send failure notice", () => {
   ])(
     "shows a /compact the server declined (%s) as a declined command, keeping the typed text",
     async (kind, detail) => {
-      mocks.sendMessage.mockRejectedValueOnce({ response: { detail, kind }, toString: () => detail });
+      mocks.sendMessage.mockRejectedValueOnce(
+        Object.assign(new Error("{}"), { code: 409, response: { detail, user_facing_message: detail, kind } }),
+      );
       const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
       const component = MessageInput();
 
@@ -1206,10 +1228,13 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/));
   });
 
-  it("does not send when the restart itself fails", async () => {
-    mocks.sendMessage.mockRejectedValueOnce("nope");
+  it("does not send when the restart itself fails, and shows none of the send's details under it", async () => {
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 500, response: { detail: "the send's own reason" } }),
+    );
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
+    expect(renderedText(after)).toContain("the send's own reason");
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockRejectedValueOnce("restart refused");
 
@@ -1217,8 +1242,9 @@ describe("MessageInput send failure notice", () => {
     (force!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
-    const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
-    expect(renderedText(shown)).toContain("restart refused");
+    const shown = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(shown).toContain("restart refused");
+    expect(shown).not.toContain("the send's own reason");
   });
 });
 
@@ -1786,10 +1812,12 @@ describe("MessageInput on a chat whose account was signed out", () => {
     mocks.loadAccounts.mockImplementationOnce(async () => {
       mocks.signedOutAccountIds.add("account-signed-out-5521");
     });
-    mocks.sendMessage.mockRejectedValueOnce({
-      response: { kind: "account_signed_out" },
-      toString: () => "You signed out of the account this chat runs on.",
-    });
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), {
+        code: 409,
+        response: { detail: "You signed out of the account this chat runs on.", kind: "account_signed_out" },
+      }),
+    );
     const component = MessageInput();
 
     await typeAndSend(component, "agent-signed-out", "are you still there?");
@@ -1802,10 +1830,13 @@ describe("MessageInput on a chat whose account was signed out", () => {
 
   it("offers choosing a provider instead of Retry and Force when a send is refused for a signed-out account", async () => {
     mocks.signedOutAccountIds.clear();
-    mocks.sendMessage.mockRejectedValueOnce({
-      response: { kind: "account_signed_out" },
-      toString: () => "You signed out of the account this chat runs on. Choose a provider to continue it on.",
-    });
+    const detail = "You signed out of the account this chat runs on. Choose a provider to continue it on.";
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), {
+        code: 409,
+        response: { detail, kind: "account_signed_out", user_facing_message: detail },
+      }),
+    );
     const component = MessageInput();
 
     const after = await typeAndSend(component, "agent-signed-out", "are you still there?");
@@ -1829,10 +1860,9 @@ describe("MessageInput on a chat whose account was signed out", () => {
 
   it("leaves the account list alone when a send fails for any other reason", async () => {
     mocks.signedOutAccountIds.clear();
-    mocks.sendMessage.mockRejectedValueOnce({
-      response: { kind: "input_blocked" },
-      toString: () => "a dialog is open",
-    });
+    mocks.sendMessage.mockRejectedValueOnce(
+      Object.assign(new Error("{}"), { code: 500, response: { detail: "a dialog is open", kind: "input_blocked" } }),
+    );
 
     await typeAndSend(MessageInput(), "agent-signed-out", "hello");
 

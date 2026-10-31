@@ -63,8 +63,9 @@ export const WINDOW_DRAG_ENDED: "minds:window-drag-ended" =
 export const DETACHED_WINDOWS: "minds:detached-windows" =
   "DETACHED_WINDOWS" in embedContract ? embedContract.DETACHED_WINDOWS : "minds:detached-windows";
 // Embedder -> workspace: what the chrome can do, right after WORKSPACE_READY. Payload: { canPopOut,
-// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles? }: whether it takes OPEN_EXTERNAL, custom-scheme
-// links there, and OPEN_LOCAL_FILES.
+// opensExternalLinks?, opensCustomSchemeLinks?, opensLocalFiles?, opensHelp? }: whether it takes OPEN_EXTERNAL,
+// custom-scheme links there, OPEN_LOCAL_FILES, and (opensHelp, from contract v12) OPEN_HELP with its bug report, so a
+// failure's "Report a bug" can work; absent, the workspace offers no such button.
 export const EMBEDDER_CAPABILITIES: "minds:embedder-capabilities" =
   "EMBEDDER_CAPABILITIES" in embedContract ? embedContract.EMBEDDER_CAPABILITIES : "minds:embedder-capabilities";
 // Embedder -> workspace: return a pulled-out window to the desktop. Payload: { windowId, frame? }.

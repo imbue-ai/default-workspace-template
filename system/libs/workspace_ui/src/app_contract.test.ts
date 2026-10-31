@@ -17,9 +17,12 @@ import {
   SHELL_NAVIGATE,
   SHELL_OPEN,
   SHELL_OPEN_LINK,
+  SHELL_REPORT_BUG,
   SHELL_SHOWN,
+  SHELL_START_WITH_TEXT,
   SHELL_THEME,
   ShellContractError,
+  askAgentToFix,
   connectToShell,
   followShellTheme,
 } from "./app_contract";
@@ -91,6 +94,7 @@ describe("connectToShell", () => {
       desktopId: "home",
       app: "chat",
       path: "/?chat=agent-1",
+      canReportBug: false,
       opensLocalFiles: false,
     });
     expect(handlers.onShown).toHaveBeenCalledTimes(1);
@@ -118,6 +122,7 @@ describe("connectToShell", () => {
       desktopId: "home",
       app: "",
       path: "",
+      canReportBug: false,
       opensLocalFiles: false,
     });
   });
@@ -224,6 +229,23 @@ describe("connectToShell", () => {
     connection = connectToShell({});
     deliver(HANDSHAKE, window);
     expect(connection.hasShell()).toBe(false);
+  });
+
+  it("can report a bug while the shell's latest handshake says so, and asks the shell to open the report", () => {
+    const parent = framed();
+    connection = connectToShell({});
+    expect(connection.canReportBug()).toBe(false);
+    deliver(HANDSHAKE, parent);
+    expect(connection.canReportBug()).toBe(false);
+    // The shell hands every page a fresh handshake once Imbue Studio says it opens its bug report.
+    deliver({ ...HANDSHAKE, canReportBug: true }, parent);
+    expect(connection.canReportBug()).toBe(true);
+    deliver({ ...HANDSHAKE, canReportBug: false }, {});
+    expect(connection.canReportBug()).toBe(true);
+    connection.reportBug();
+    expect(parent.postMessage).toHaveBeenLastCalledWith({ type: SHELL_REPORT_BUG }, "*");
+    deliver({ ...HANDSHAKE, canReportBug: "yes" }, parent);
+    expect(connection.canReportBug()).toBe(false);
   });
 
   it("is inert on a top-level page", () => {
@@ -528,5 +550,35 @@ describe("a framed page's scripted popups", () => {
     connection.disconnect();
     connection = null;
     expect(window.open).toBe(nativeOpen);
+  });
+});
+
+describe("askAgentToFix", () => {
+  /** The text the shell was asked to start something with. */
+  function startedText(parent: { postMessage: ReturnType<typeof vi.fn> }): string {
+    const [message] = parent.postMessage.mock.lastCall as [Record<string, unknown>, string];
+    expect(message.type).toBe(SHELL_START_WITH_TEXT);
+    return message.text as string;
+  }
+
+  it("asks the shell to start a chat whose task says what failed and carries the details as they are", () => {
+    const parent = shellFramed();
+    const details = "HTTP 502\ndocs answered the launch with 500: boom\n  at render (``` in a template)";
+    askAgentToFix(connection as ShellConnection, { whatFailed: "Docs couldn't open that", details });
+
+    const text = startedText(parent);
+    expect(text.startsWith("Docs couldn't open that.\n\n")).toBe(true);
+    // The details sit whole inside a fence the backticks among them cannot close.
+    const fenced = text.match(/^(`{4,})\n([\s\S]*?)\n\1$/m);
+    expect(fenced?.[2]).toBe(details);
+  });
+
+  it("gives a failure without details as its sentence and the task alone", () => {
+    const parent = shellFramed();
+    askAgentToFix(connection as ShellConnection, { whatFailed: "This window couldn't be closed.", details: "  " });
+    const text = startedText(parent);
+    expect(text.startsWith("This window couldn't be closed.\n\n")).toBe(true);
+    expect(text).not.toContain("`");
+    expect(text).not.toContain("closed..");
   });
 });

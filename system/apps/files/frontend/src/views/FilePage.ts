@@ -303,6 +303,7 @@ export function FilePage(): m.Component<{ page: FilePageModel }> {
           toasts: page.toasts.current(),
           placementClass: "fixed bottom-6",
           onDismiss: (id: number) => page.toasts.dismiss(id),
+          closesPlainToasts: true,
         }),
         page.dialogs.view(),
       ]);

@@ -12,7 +12,7 @@ const state = vi.hoisted(() => {
     events: [] as unknown[],
     accounts: [] as { id: string; harness: string; lane: string; label: string }[],
     options: [] as unknown[],
-    optionsError: null as string | null,
+    optionsError: null as string | Error | null,
     switches: [] as unknown[][],
     started: [] as unknown[][],
     notices: [] as unknown[],
@@ -81,7 +81,9 @@ vi.mock("./MessageInput", () => ({
 }));
 vi.mock("../models/AccountModelOptions", () => ({
   fetchAccountModelOptions: () =>
-    state.optionsError === null ? Promise.resolve(state.options) : Promise.reject(new Error(state.optionsError)),
+    state.optionsError === null
+      ? Promise.resolve(state.options)
+      : Promise.reject(typeof state.optionsError === "string" ? new Error(state.optionsError) : state.optionsError),
 }));
 
 import m from "mithril";
@@ -432,10 +434,24 @@ describe("the switch dialog", () => {
     await flush();
     render();
     const text = ROOT().textContent ?? "";
-    expect(text).toContain("Could not load Codex's models");
-    expect(text).toContain("the daemon is not answering");
+    expect(text).toContain(
+      "Couldn't load the list of models. Try again. If this persists, report a bug. Codex starts on its default model",
+    );
+    expect(ROOT().querySelector(".see-details pre")?.textContent).toBe("the daemon is not answering");
     // The switch itself needs no model, so the dialog stays usable.
     expect(text).toContain("Switch this chat");
+  });
+
+  it("says only that the workspace didn't answer when nothing answered the model list", async () => {
+    state.optionsError = Object.assign(new Error("Backend timed out"), { code: 504, response: null });
+    beginSwitchTo("agent-1", CODEX as ProviderAccount);
+    render();
+    await flush();
+    render();
+    expect(ROOT().querySelector(".switch-dialog-models-failed p")?.textContent).toBe(
+      "The workspace didn't answer. Try again in a moment. Codex starts on its default model; you can change it once " +
+        "it is running.",
+    );
   });
 
   it("arms a rebind at once, with no dialog and no pick, for an account on the chat's own harness and lane", () => {

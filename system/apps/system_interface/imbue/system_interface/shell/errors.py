@@ -66,12 +66,23 @@ class DesktopValueError(ShellError, ValueError):
     """A desktop's name, colour, glyph, shortcut, wallpaper, or a window's app or path is not usable."""
 
 
-class LaunchRefusedError(ShellError, ValueError):
+class LaunchFailureError(ShellError):
+    """A launch that opened nothing. The message is for the log and "See details". ``user_facing_message`` is a
+    sentence the app itself wrote for people about it, passed on as written, and ``reportable`` the app's own word on
+    whether that sentence asks for a bug report; both are None when the app gave none (the frontends word it then)."""
+
+    def __init__(self, message: str, user_facing_message: str | None = None, reportable: bool | None = None) -> None:
+        self.user_facing_message = user_facing_message
+        self.reportable = reportable
+        super().__init__(message)
+
+
+class LaunchRefusedError(LaunchFailureError, ValueError):
     """The app refused a POST launch (a 4xx with its own detail), or the launch's params are not what the path
     declares (answered 400)."""
 
 
-class LaunchUnavailableError(ShellError, RuntimeError):
+class LaunchUnavailableError(LaunchFailureError, RuntimeError):
     """A POST launch could not be completed: the app could not be reached, timed out, or answered something other
     than a page path (answered 502)."""
 

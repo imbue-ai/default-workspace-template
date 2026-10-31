@@ -2546,6 +2546,7 @@ def test_a_preview_shell_reads_the_notice_but_refuses_to_close_or_roll_it_back(
     for verb in ("confirm", "rollback"):
         refusal = client.post(f"/api/updates/pending/{verb}")
         assert refusal.status_code == 403 and "preview" in refusal.get_json()["detail"]
+        assert refusal.get_json()["user_facing_message"] == refusal.get_json()["detail"]
     assert read_stub_update_self_calls(_repo_root(application)) == []
     assert client.get("/api/updates/pending").get_json()["notice"] is not None
 
@@ -2576,6 +2577,7 @@ def _launching_shell(tmp_path: Path, broadcaster: WebSocketBroadcaster, poster: 
         registry_row_toml(
             "buddy",
             "http://localhost:7002",
+            display_name="Buddy",
             pin=("/", "plain", "independent", "bar"),
             launch_paths=(("root", "Buddy", "/"), ("new", "New buddy", "/api/intake")),
             launch_params={"new": ["message", "account_id"]},
@@ -2720,11 +2722,19 @@ def test_a_post_launch_path_is_posted_with_its_presets_params_and_envelope_and_l
 def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_nothing(
     tmp_path: Path, broadcaster: WebSocketBroadcaster
 ) -> None:
+    starting = "Buddy is still starting. Try again in a few seconds."
+    # Longer than the cap on a quoted detail: a sentence for people is passed on whole.
+    deleted = "That chat was deleted. " + "Open the chat list to start a new one. " * 12
     poster = _RecordingLaunchPoster(
         [
             LaunchPostOutcome(status_code=400, body={"detail": "no account is signed in"}),
             LaunchPostOutcome(status_code=404, body=None),
             LaunchPostOutcome(status_code=500, body={"detail": "boom"}),
+            LaunchPostOutcome(
+                status_code=503,
+                body={"detail": "agent list not read", "user_facing_message": starting, "reportable": False},
+            ),
+            LaunchPostOutcome(status_code=409, body={"detail": "chat is gone", "user_facing_message": deleted}),
             LaunchPostOutcome(status_code=200, body={"nope": True}),
             LaunchPostOutcome(status_code=200, body={"path": "//evil"}),
             LaunchUnavailableError("buddy could not be reached for the launch: refused"),
@@ -2735,18 +2745,40 @@ def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_n
     _register_client(app, "c1", "home")
     body = {"app": "buddy", "launch": "new", "params": {"message": "hi"}, "target": {"kind": "new"}}
 
+    # The shell writes no sentence for people: the frontends word a failed launch, the app's reason behind it.
     refused = _launch(client, body)
     assert refused.status_code == 400
-    assert refused.get_json()["detail"] == "buddy refused the launch: no account is signed in"
+    assert refused.get_json() == {"detail": "buddy refused the launch: no account is signed in"}
     # A 4xx with no detail is not a refusal the app wrote (a missing route answers 404 as HTML): the app could
     # not be asked.
     unrouted = _launch(client, body)
-    assert unrouted.status_code == 502 and "no refusal detail" in unrouted.get_json()["detail"]
-    assert _launch(client, body).status_code == 502
-    assert _launch(client, body).status_code == 502
-    assert _launch(client, body).status_code == 502
-    unreachable = _launch(client, body)
-    assert unreachable.status_code == 502 and "could not be reached" in unreachable.get_json()["detail"]
+    assert unrouted.status_code == 502
+    assert unrouted.get_json() == {"detail": "buddy answered the launch with 404 and no reason"}
+    failed = _launch(client, body)
+    assert failed.status_code == 502
+    assert failed.get_json() == {"detail": "buddy answered the launch with 500: boom"}
+    # A sentence the app wrote for people, and its word on whether it asks for a bug report, are passed on as written.
+    waiting = _launch(client, body)
+    assert waiting.status_code == 502
+    assert waiting.get_json() == {
+        "detail": "buddy answered the launch with 503: agent list not read",
+        "user_facing_message": starting,
+        "reportable": False,
+    }
+    gone = _launch(client, body)
+    assert gone.status_code == 400
+    assert gone.get_json() == {
+        "detail": "buddy refused the launch: chat is gone",
+        "user_facing_message": deleted.strip(),
+    }
+    for expected in (
+        "buddy answered the launch with no page path",
+        "buddy answered the launch with a path that is not a window path",
+        "buddy could not be reached for the launch: refused",
+    ):
+        no_page = _launch(client, body)
+        assert no_page.status_code == 502
+        assert set(no_page.get_json()) == {"detail"} and no_page.get_json()["detail"].startswith(expected)
     # Only the pinned window stands: nothing opened for any of them.
     assert len(_desktop_windows(client)) == 1
 

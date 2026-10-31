@@ -88,3 +88,24 @@ describe("NoticeDialog Escape", () => {
     m.render(root, []);
   });
 });
+
+describe("NoticeDialog details", () => {
+  it("keeps the details collapsed behind See details under the body, and shows nothing when there are none", () => {
+    const root = document.createElement("div");
+    const notice = makeNoticeDialog();
+    const render = (details: string | null): void =>
+      m.render(root, m(notice, { title: "Title", body: ["Body"], dismissLabel: "OK", details, onDismiss: () => {} }));
+
+    render("HTTP 500\nTraceback ...");
+    const disclosure = root.querySelector("details.see-details") as HTMLDetailsElement;
+    expect(disclosure.open).toBe(false);
+    expect(disclosure.querySelector("summary")?.textContent).toBe("See details");
+    expect(disclosure.querySelector("pre")?.textContent).toBe("HTTP 500\nTraceback ...");
+
+    render(null);
+    expect(root.querySelector(".see-details")).toBeNull();
+    render("  ");
+    expect(root.querySelector(".notice-details")).toBeNull();
+    m.render(root, []);
+  });
+});

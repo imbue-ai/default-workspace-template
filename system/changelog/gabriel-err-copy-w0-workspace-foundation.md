@@ -1,0 +1,5 @@
+The shared frontend library reads every failed request one way and words it in one place, with the status and server text behind "See details" (see `system/libs/workspace_ui/changelog/gabriel-err-copy-w0-workspace-foundation.md`).
+
+- The desktop-interface contract and the post-launch-paths plan say the shell writes no sentence of its own for a failed launch: it passes on the app's `detail` for any status, and the app's own `user_facing_message` and `reportable` when the app sent them, and the frontend words the rest.
+
+- The desktop-interface contract documents `opensHelp` in the embedder's capabilities: "Report a bug" is offered only where the chrome says it opens its bug report. The app contract carries it to app pages: the handshake gains `canReportBug` (sent again to every loaded page when it changes), a page asks the shell for the bug report with the new `shell:report-bug`, the shell answers a page's `shell:capabilities` with its handshake (so a page that connects after its frame's `load` still gets one), and `askAgentToFix` gives every "Ask an agent to fix this" button one task through `shell:start-with-text`.

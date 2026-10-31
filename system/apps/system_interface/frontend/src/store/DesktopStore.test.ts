@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cascadeFrame } from "../geometry/frames";
 import { placementOf } from "../geometry/stack";
 import { getPresentUsers, resetPresenceForTesting } from "../model/Presence";
+import { TOAST_DURATION_MS } from "@imbue/workspace-ui/src/models/toasts";
+import { notAnsweredSentence, readFailure } from "@imbue/workspace-ui/src/models/failure";
+import { HttpError } from "@imbue/workspace-ui/src/models/http";
 import { activeFocusedWindowId, activePlacements, isLayoutDirty } from "../reducers/desktopState";
 import { STILL_CONNECTING_NOTICE, resolveLaunchRun } from "../reducers/shortcuts";
 import { FakeDesktopApi, FakeDesktopSocket, PINNED_WINDOW_FRAME, offerApps, settle } from "../testing/fakeShell";
@@ -88,7 +91,7 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks"> = {},
+  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "reportBug"> = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -269,7 +272,7 @@ describe("bootstrap", () => {
     api.refusal = "the shell is restarting";
     const store = makeStore();
     await store.start(NO_LINK);
-    expect(notices()).toEqual(["Could not read the desktops and apps: the shell is restarting"]);
+    expect(notices()).toEqual(["Could not read the desktops and apps."]);
     expect(store.getState().activeDesktopId).toBeNull();
     expect(store.getState().isAppsLoaded).toBe(false);
   });
@@ -647,10 +650,7 @@ describe("opening", () => {
     expect(await store.openWindowAt("docs", "/x", "focus")).toBeNull();
     api.refusal = null;
     await store.runLaunch("gone", "new", "new");
-    expect(notices()).toEqual([
-      "Could not open docs: No registered app named 'docs'",
-      "Cannot open: gone is not registered",
-    ]);
+    expect(notices()).toEqual(["Could not open Docs.", "Cannot open: gone is not registered"]);
   });
 
   it("opens a page's shell:open on the posting window's app and desktop", async () => {
@@ -704,6 +704,7 @@ describe("windows", () => {
       resendTheme: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual([]);
@@ -721,6 +722,7 @@ describe("windows", () => {
       resendTheme: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -736,6 +738,7 @@ describe("windows", () => {
       resendTheme: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: (id) => id === "win-1",
+      greetAll: () => undefined,
     });
     await store.closeFocusedWindow();
     expect(requested).toEqual(["win-1"]);
@@ -781,6 +784,7 @@ describe("windows", () => {
       resendTheme: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     socket.deliver().onLayoutOp({ op: "refresh", args: { window: "win-1" }, requester: "" });
     socket.deliver().onLayoutOp({ op: "refresh", args: { app: "docs" }, requester: "" });
@@ -796,6 +800,7 @@ describe("windows", () => {
       reload: () => undefined,
       reloadApp: () => undefined,
       resendTheme: (app) => void resent.push(app),
+      greetAll: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
     });
@@ -815,6 +820,127 @@ describe("windows", () => {
     deliverDesktopNews("home", 2, null, "other");
     await settle();
     expect(store.getState().activeDesktopId).toBe("work");
+  });
+});
+
+describe("failure toasts", () => {
+  /** The error the REST helper throws for ``status`` answered with ``body`` to a change. */
+  function refusedWith(status: number, body: unknown, rawText: string | null = null): HttpError {
+    return new HttpError(readFailure({ status, body, rawText, requestKind: "change" }));
+  }
+
+  async function storeReportingBugs(reportBug: () => void, isOpeningHelp: boolean): Promise<DesktopStore> {
+    const store = makeStore(() => undefined, { reportBug });
+    store.setCanReportBug(isOpeningHelp);
+    await store.start(NO_LINK);
+    return store;
+  }
+
+  it("words an app's refusal of a launch by its display name, with the app's reason behind See details", async () => {
+    const store = await startedStore();
+    api.refusal = refusedWith(400, { detail: "docs refused the launch: no account is signed in" });
+    await store.runLaunch("docs", "new", "new");
+
+    expect(store.toasts.current()).toMatchObject([
+      {
+        message: "Docs couldn't open that.",
+        details: "HTTP 400\ndocs refused the launch: no account is signed in",
+        actions: [],
+        isLasting: true,
+      },
+    ]);
+  });
+
+  it("words a launch the app could not answer as the fallback, which offers Report a bug", async () => {
+    const reportBug = vi.fn();
+    const store = await storeReportingBugs(reportBug, true);
+    api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
+    await store.runLaunch("docs", "new", "new");
+
+    const [toast] = store.toasts.current();
+    expect(toast).toMatchObject({
+      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      details: "HTTP 502\ndocs answered the launch with 500: boom",
+      isLasting: true,
+    });
+    expect(toast.actions.map((action) => action.label)).toEqual(["Report a bug"]);
+    toast.actions[0].run();
+    expect(reportBug).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers no Report a bug while the embedder has not said it opens one", async () => {
+    const store = await storeReportingBugs(vi.fn(), false);
+    api.refusal = refusedWith(502, { detail: "docs answered the launch with 500: boom" });
+    await store.runLaunch("docs", "new", "new");
+    expect(store.toasts.current()[0]).toMatchObject({
+      message: "Docs couldn't open that. Try again. If this persists, report a bug.",
+      actions: [],
+    });
+  });
+
+  it("shows an app's own sentence as written, and offers Report a bug only when the app asks for one", async () => {
+    const store = await storeReportingBugs(vi.fn(), true);
+    api.refusal = refusedWith(502, {
+      detail: "docs answered the launch with 503: still loading",
+      user_facing_message: "Docs is still starting. Try again in a few seconds.",
+    });
+    await store.runLaunch("docs", "new", "new");
+    api.refusal = refusedWith(502, {
+      detail: "docs answered the launch with 500: index unreadable",
+      user_facing_message: "Docs couldn't read its notes. If this persists, report a bug.",
+      reportable: true,
+    });
+    await store.runLaunch("docs", "new", "new");
+
+    expect(
+      store.toasts.current().map((toast) => [toast.message, toast.actions.map((action) => action.label)]),
+    ).toEqual([
+      ["Docs is still starting. Try again in a few seconds.", []],
+      ["Docs couldn't read its notes. If this persists, report a bug.", ["Report a bug"]],
+    ]);
+  });
+
+  it("says only that the workspace didn't answer, never prefixed with what failed", async () => {
+    const store = await startedStore();
+    api.refusal = refusedWith(504, null, "Backend timed out");
+    await store.runLaunch("docs", "new", "new");
+    expect(store.toasts.current()[0]).toMatchObject({
+      message: notAnsweredSentence("change"),
+      details: "HTTP 504\nBackend timed out",
+      actions: [],
+    });
+  });
+
+  it("leaves a plain note where the control just pressed is the retry, its reason in the log", async () => {
+    const store = await startedStore();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.refusal = refusedWith(409, { detail: "Window win-1 is pinned and cannot be closed" });
+    await store.closeWindow("win-1");
+    expect(store.toasts.current()).toMatchObject([
+      { message: "Could not close the window.", details: null, actions: [], isLasting: false },
+    ]);
+    expect(warn).toHaveBeenCalledWith(
+      "[si] Could not close the window.",
+      "HTTP 409\nWindow win-1 is pinned and cannot be closed",
+    );
+    warn.mockRestore();
+    vi.advanceTimersByTime(TOAST_DURATION_MS);
+    expect(notices()).toEqual([]);
+  });
+
+  it("keeps a failure that asks for a bug report up with its details, wherever it happened", async () => {
+    const store = await storeReportingBugs(vi.fn(), true);
+    api.refusal = refusedWith(500, "<html>Internal Server Error</html>", "<html>Internal Server Error</html>");
+    await store.closeWindow("win-1");
+    vi.advanceTimersByTime(TOAST_DURATION_MS);
+    expect(store.toasts.current()).toMatchObject([
+      {
+        message: "Could not close the window. Try again. If this persists, report a bug.",
+        details: "HTTP 500\n<html>Internal Server Error</html>",
+        isLasting: true,
+      },
+    ]);
+    expect(store.toasts.current()[0].actions.map((action) => action.label)).toEqual(["Report a bug"]);
   });
 });
 
@@ -1210,7 +1336,7 @@ describe("gestures", () => {
     store.endShortcutDrag({ x: 130, y: 40 }, { x: 100, y: 0 });
     await settle();
     expect(cellsByApp(store)).toEqual({ docs: "0,0", notes: "1,0" });
-    expect(notices()).toEqual(["Could not move the shortcut: down"]);
+    expect(notices()).toEqual(["Could not move the shortcut."]);
   });
 });
 
@@ -1369,7 +1495,7 @@ describe("pinned entries", () => {
     expect(api.calls.length).toBe(callsBefore);
     api.refusal = "no such client";
     expect(await store.navigateOwnWindow("win-9", "/?doc=5")).toBe(false);
-    expect(notices()).toEqual(["Could not move the window: no such client"]);
+    expect(notices()).toEqual(["Could not move the window."]);
     expect(store.getDesktopsRevision()).toBe(desktopsBefore + 1);
     expect(store.takeOwnNavigation()).toBeNull();
   });
@@ -1405,7 +1531,7 @@ describe("pinned entries", () => {
     expect(store.getState().entries.buddy).toEqual({ mode: "bar", style: "avatar", position: null });
     api.refusal = "no such client";
     await store.setEntryMode("buddy", "floating");
-    expect(notices()).toEqual(["Could not change the entry: no such client"]);
+    expect(notices()).toEqual(["Could not change the entry."]);
     expect(store.getState().entries.buddy.mode).toBe("bar");
     // An app with no pinned window on the active desktop has nothing to write.
     api.refusal = null;
@@ -1428,7 +1554,7 @@ describe("pinned entries", () => {
     expect(store.getState().entries.buddy.mode).toBe("floating");
     socket.deliver().onClientEntriesChanged({ clientId: CLIENT, entries: { buddy: PLAIN_BAR } });
     await refused;
-    expect(notices()).toEqual(["Could not change the entry: no such client"]);
+    expect(notices()).toEqual(["Could not change the entry."]);
     expect(store.getState().entries).toEqual({ buddy: PLAIN_BAR });
   });
 
@@ -1501,7 +1627,7 @@ describe("the avatar", () => {
     // The window follows the broadcast, not the answer.
     expect(store.getState().avatar.design).toBe("gummy-seal");
     await store.selectAvatar("nobody");
-    expect(notices()).toEqual(["Could not change the avatar: No design nobody"]);
+    expect(notices()).toEqual(["Could not change the avatar. Try again. If this persists, report a bug."]);
   });
 
   it("keeps the initial design when the catalog cannot be read", async () => {
@@ -1550,7 +1676,7 @@ describe("desktops and shortcuts", () => {
     api.refusal = "critical";
     await store.quitApp("docs");
     expect(api.calls).toContain("quitApp:docs");
-    expect(notices()).toEqual(["Failed to quit docs: critical"]);
+    expect(notices()).toEqual(["Failed to quit docs."]);
   });
 });
 
@@ -1616,7 +1742,7 @@ describe("embedder messages", () => {
     expect(api.relayedMessages).toEqual([]);
   });
 
-  it("tells the user why, in the relay's words, when a message did not reach every app", async () => {
+  it("tells the user when a message did not reach every app, once for a refusal that says the same", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([HANDLING_APP]);
     api.refusal = "Nothing in this workspace handles 'open:url'";
@@ -1625,10 +1751,7 @@ describe("embedder messages", () => {
     api.refusal = "buddy did not take it: could not be reached";
     expect(await store.relayEmbedderMessage({ type: "minds:focus-chat", chatId: "agent-7" }, null)).toBe(false);
 
-    expect(notices()).toEqual([
-      "Nothing in this workspace handles 'open:url'",
-      "buddy did not take it: could not be reached",
-    ]);
+    expect(notices()).toEqual(["The workspace couldn't do that."]);
   });
 });
 
@@ -1740,6 +1863,26 @@ describe("links Imbue Studio hands over", () => {
     expect(api.calls.filter((call) => call.startsWith("openWindow:"))).toEqual([]);
   });
 
+  it("names the app by its display name when the shell's show refuses a link, the reason in the log", async () => {
+    const store = await startedStore();
+    socket
+      .deliver()
+      .onAppsUpdated([
+        appRecord("docs"),
+        chatLikeAppRecord("chat", { label: "chat-ab12cd34", display_name: "Chats" }),
+      ]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    api.refusal = "No chat agent-1";
+
+    await store.openLink("http://chat-ab12cd34.localhost/?chat=agent-1", SHELL_HOST, "notes");
+
+    expect(store.toasts.current()).toMatchObject([
+      { message: "Could not open Chats.", details: null, actions: [], isLasting: false },
+    ]);
+    expect(warn).toHaveBeenCalledWith("[si] Could not open Chats.", "HTTP 400\nNo chat agent-1");
+    warn.mockRestore();
+  });
+
   it("focuses or opens a link to an app's pin page itself, or to its other pages, as any other page", async () => {
     const store = await startedStore();
     socket.deliver().onAppsUpdated([appRecord("docs"), chatLikeAppRecord("chat", { label: "chat-ab12cd34" })]);
@@ -1814,13 +1957,13 @@ describe("links Imbue Studio hands over", () => {
     expect(api.calls.filter((call) => call.startsWith("openWindow"))).toEqual([]);
   });
 
-  it("tells the user why a local URL could not open, in the relay's words", async () => {
+  it("tells the user when a local URL could not open", async () => {
     const store = await startedStore();
     api.refusal = "browser did not take it: Chromium is not installed";
 
     await store.openLink("http://localhost:3000/", SHELL_HOST, null);
 
-    expect(notices()).toEqual(["browser did not take it: Chromium is not installed"]);
+    expect(notices()).toEqual(["The workspace couldn't do that."]);
   });
 
   /** A started store whose links opened outside the workspace are recorded, by where they went. */
@@ -2760,7 +2903,7 @@ describe("the phone layout", () => {
     expect(api.desktops.flatMap((desktop) => desktop.windows).map((window) => window.id)).toEqual(["chat-1"]);
     api.refusal = "the shell is restarting";
     await store.runLaunch("docs", "new", "new");
-    expect(notices()).toEqual(["Could not open docs: the shell is restarting"]);
+    expect(notices()).toEqual(["Docs couldn't open that."]);
   });
 
   it("reads the shell again on coming back into sight, following a desktop deleted meanwhile", async () => {
@@ -2797,6 +2940,7 @@ describe("the phone layout", () => {
       resendTheme: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
+      greetAll: () => undefined,
     });
     socket.deliver().onConnected();
     socket.deliver().onConnected();

@@ -40,7 +40,8 @@
  * shell.
  */
 
-/** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in. */
+/** Shell to app: sent after every `load` of the frame; says which window, desktop, path, and client this page is in,
+ *  and whether "Report a bug" can work here. */
 export const SHELL_HANDSHAKE = "shell:handshake";
 /** Shell to app: the window became visible in this client. */
 export const SHELL_SHOWN = "shell:shown";
@@ -78,6 +79,9 @@ export const SHELL_MESSAGE = "shell:message";
  *  ``<label>.localhost`` host or registered port it is, else the workspace's browser), the file in Files, an
  *  external link in the app registered for it or else outside the workspace, or says why it cannot. */
 export const SHELL_OPEN_LINK = "shell:open-link";
+/** App to shell: open Imbue Studio's bug report, as the shell's own "Report a bug" does. The shell acts on it only
+ *  where its handshake said ``canReportBug``, since only the shell can reach the embedder that opens one. */
+export const SHELL_REPORT_BUG = "shell:report-bug";
 
 /** The bare host names of this machine (a ``*.localhost`` host is local too). */
 export const LOCAL_HOSTNAMES: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -146,10 +150,10 @@ export function hasWorkspaceCoordinate(host: string): boolean {
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
- * the window belongs to, the path the window is at, and whether the Imbue Studio chrome around the
- * shell opens its settings for the files shared from the user's computer (desktop-interface
- * contracts.md section 7). The client id is required; a text field the shell does not send, a page
- * reads as "", and a flag it does not send, as false.
+ * the window belongs to, the path the window is at, whether the shell can open Imbue Studio's bug report, and
+ * whether the Imbue Studio chrome around the shell opens its settings for the files shared from the user's computer
+ * (desktop-interface contracts.md section 7). The client id is required; a text field the shell does not send, a
+ * page reads as "", and a flag it does not send, as false.
  */
 export interface ShellHandshake {
   clientId: string;
@@ -157,6 +161,7 @@ export interface ShellHandshake {
   desktopId: string;
   app: string;
   path: string;
+  canReportBug: boolean;
   opensLocalFiles: boolean;
 }
 
@@ -199,6 +204,10 @@ export interface ShellConnection {
   openPath(path: string, ifPresent: OpenIfPresent): void;
   /** Ask the shell to start something with ``text``: its launcher's primary text action (a new chat on a stock machine). */
   startWithText(text: string): void;
+  /** Whether "Report a bug" would do anything: the shell's latest handshake said ``canReportBug``. */
+  canReportBug(): boolean;
+  /** Ask the shell to open Imbue Studio's bug report. */
+  reportBug(): void;
   /** Ask the shell to draft ``text`` into a chat's composer, unsent (the chat on screen on a stock machine). */
   draftText(text: string): void;
   /** Send the shell a message for the apps registered for ``type``, with ``fields`` as its own fields. */
@@ -222,7 +231,7 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path, opensLocalFiles } = data;
+  const { clientId, windowId, desktopId, app, path, canReportBug, opensLocalFiles } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -230,6 +239,7 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     desktopId: optionalString(desktopId),
     app: optionalString(app),
     path: optionalString(path),
+    canReportBug: canReportBug === true,
     opensLocalFiles: opensLocalFiles === true,
   };
 }
@@ -393,6 +403,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   const boundWindow = window;
   const isFramed = boundWindow.parent !== boundWindow;
   let hasShell = false;
+  let canReportBug = false;
 
   function onMessage(event: MessageEvent): void {
     if (!isFramed || event.source !== boundWindow.parent) return;
@@ -404,6 +415,7 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         const handshake = readHandshake(message);
         if (handshake === null) return;
         hasShell = true;
+        canReportBug = handshake.canReportBug;
         handlers.onHandshake?.(handshake);
         return;
       }
@@ -464,6 +476,8 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     location: (path: string, title: string) => send(SHELL_LOCATION, { path, title }),
     openPath: (path: string, ifPresent: OpenIfPresent) => send(SHELL_OPEN, { path, ifPresent }),
     startWithText: (text: string) => send(SHELL_START_WITH_TEXT, { text }),
+    canReportBug: () => canReportBug,
+    reportBug: () => send(SHELL_REPORT_BUG, {}),
     draftText: (text: string) => send(SHELL_DRAFT_TEXT, { text }),
     sendMessage: (type: string, fields: Readonly<Record<string, unknown>>) =>
       send(SHELL_MESSAGE, { message: { ...fields, type } }),
@@ -475,4 +489,38 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
     },
   };
+}
+
+/** A failure an agent is asked to fix: ``whatFailed`` is a sentence stem saying what failed, as ``failureSentence``
+ *  takes ("This window couldn't be closed"), and ``details`` what went wrong underneath it (a status, a server's
+ *  text, command output), handed on verbatim; null when there is none. */
+export interface AgentFixRequest {
+  readonly whatFailed: string;
+  readonly details: string | null;
+}
+
+/** A Markdown fence for ``text`` that no run of backticks inside it can close. */
+function fenceFor(text: string): string {
+  const longestRun = Math.max(0, ...Array.from(text.matchAll(/`+/g), (run) => run[0].length));
+  return "`".repeat(Math.max(3, longestRun + 1));
+}
+
+/** The one task every "Ask an agent to fix this" button gives the agent: what failed, the details as they are, and
+ *  what to do about it. */
+function agentFixTask({ whatFailed, details }: AgentFixRequest): string {
+  const stem = whatFailed.trim();
+  const parts = [/[.!?]$/.test(stem) ? stem : `${stem}.`];
+  if (details !== null && details.trim() !== "") {
+    const fence = fenceFor(details);
+    parts.push(`Details:\n${fence}\n${details}\n${fence}`);
+  }
+  parts.push("Find out why this failed and fix it. Then tell me what was wrong and what you changed.");
+  return parts.join("\n\n");
+}
+
+/** "Ask an agent to fix this": start a chat whose first message asks an agent to fix ``failure``, through the
+ *  shell's ``shell:start-with-text`` (a page passes its connection; the shell, which is not framed, its own
+ *  ``startWithText``). */
+export function askAgentToFix(starter: Pick<ShellConnection, "startWithText">, failure: AgentFixRequest): void {
+  starter.startWithText(agentFixTask(failure));
 }

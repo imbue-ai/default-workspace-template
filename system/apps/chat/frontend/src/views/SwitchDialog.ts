@@ -17,7 +17,9 @@
 import m from "mithril";
 import { makeNoticeDialog } from "@imbue/workspace-ui/src/components/NoticeDialog";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
-import { describeRequestError } from "@imbue/workspace-ui/src/models/request-error";
+import { SeeDetails } from "@imbue/workspace-ui/src/components/SeeDetails";
+import { failureSentence, type Failure } from "@imbue/workspace-ui/src/models/failure";
+import { describeRequestError, describeRequestFailure } from "@imbue/workspace-ui/src/models/request-error";
 import { fetchAccountModelOptions } from "../models/AccountModelOptions";
 import { getChatById } from "../models/Chats";
 import type { ChatSnapshot, TransitionKind } from "../models/Chats";
@@ -56,7 +58,7 @@ interface OpenDialog {
   /** The target account's pickable models, once fetched; null while loading. */
   options: CatalogModelOption[] | null;
   /** Why the models could not be fetched, when they could not be; null otherwise. */
-  optionsError: string | null;
+  optionsError: Failure | null;
   modelId: string;
   effort: string | null;
   fast: boolean;
@@ -171,7 +173,7 @@ export function openSwitchDialog(chatId: string, target: ProviderAccount): void 
       // claim about the harness rather than a report that the request failed.
       if (open !== null && open.chatId === chatId && open.target.id === target.id) {
         open.options = [];
-        open.optionsError = describeRequestError(error);
+        open.optionsError = describeRequestFailure(error, "read");
       }
     })
     .finally(() => {
@@ -227,12 +229,14 @@ function renderPicker(dialog: OpenDialog): m.Children {
     );
   }
   if (dialog.optionsError !== null) {
-    return m(
-      "p",
-      { class: "switch-dialog-models-failed text-(length:--font-size-helper) text-secondary" },
-      `Could not load ${harness}'s models (${dialog.optionsError}). ` +
-        `${whenNothingIsPicked}; you can change it once it is running.`,
-    );
+    return m("div", { class: "switch-dialog-models-failed text-(length:--font-size-helper) text-secondary" }, [
+      m(
+        "p",
+        `${failureSentence(dialog.optionsError, "Couldn't load the list of models").message} ` +
+          `${whenNothingIsPicked}; you can change it once it is running.`,
+      ),
+      m(SeeDetails, { details: dialog.optionsError.details }),
+    ]);
   }
   if (dialog.options.length === 0) {
     return m(
