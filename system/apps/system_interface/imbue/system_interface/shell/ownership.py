@@ -9,8 +9,8 @@ from collections.abc import Sequence
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import is_owner_participant
 from workspace_layout.identity import participant_key_of
-from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
 from workspace_layout.primitives import ParticipantKey
 from workspace_layout.records import ClientRecord
 from workspace_layout.records import Desktop
