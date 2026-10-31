@@ -92,16 +92,16 @@ The notice above reports. This section gives it actions, so the user can resolve
 
 ## Generalizing
 
-The three actions are not dialog-specific and must not be. Any send can fail -- a dialog holding the input, a readiness timeout, an unconfirmed submission, a transport error -- and in every one of those cases the same three things are worth offering. What differs is only the explanation, which the backend already supplies in the harness's own words.
+The three actions are not dialog-specific and must not be. Any send can fail -- a dialog holding the input, a readiness timeout, an unconfirmed submission, a transport error -- and in every one of those cases the same three things are worth offering. What differs is only the explanation.
 
 So the notice keeps one shape for every failure:
 
 - **Title** -- "Couldn't send your message".
-- **Body** -- the failure text as received, unchanged. This is the part that varies, and it is the reason the actions can be uniform: the user is told what went wrong, then offered the same three ways out.
-- **A line inviting them to fix it themselves**, naming the agent's terminal. Many failures (an unsubmitted shell command, a dialog needing a real answer) are resolved in seconds by someone looking at the pane, and the current notice never says so.
+- **Body** -- one sentence of the chat's own for each kind of failure mngr classified, which says what happened and what to do. An unclassified failure shows the failure text as received, the only account of what went wrong. This is the part that varies, and it is the reason the actions can be uniform: the user is told what went wrong, then offered the same three ways out.
+- **A line inviting them to fix it themselves**, naming the agent's terminal, under failure text shown as received. Many failures (an unsubmitted shell command, a dialog needing a real answer) are resolved in seconds by someone looking at the pane, and the classified sentences say so where it applies.
 - **Actions** -- Cancel, Retry, Restart.
 
-**What decides whether actions appear is the operation, not the failure.** A failed *send* is repeatable, so it gets all three. A failed *interrupt* -- which shares this notice today -- is not a send: retrying it means retrying the interrupt, and forcing it is meaningless. So the notice takes an optional recovery descriptor; an operation that supplies none renders exactly today's single OK button.
+**What decides whether actions appear is the operation, not the failure.** A failed *send* is repeatable, so it gets all three. A failed *interrupt* -- which shares this notice today -- is not a send: retrying it means retrying the interrupt, and restarting then sending is meaningless. So the notice takes an optional recovery descriptor; an operation that supplies none renders exactly today's single OK button.
 
 ## The actions
 
@@ -123,12 +123,12 @@ While the retry is in flight, disable all three buttons rather than closing the 
 
 Restarts the agent, then sends the message.
 
-- Tooltip: **"Restarts the agent and sends the message"**.
+- Tooltip: **"Restarts the agent, then sends your message. Anything it's working on stops."**.
 - The restart already exists: `POST /api/agents/<id>/interrupt` runs `mngr start <agent> --restart --no-resume`, which stops the agent, ending any in-progress turn, and starts it fresh without a resume message. That is precisely "stop the agent, start the agent".
 - On success, send the message exactly as Retry does.
 - If the restart itself fails, the notice stays open and shows the restart's error instead. Do not attempt the send.
 
-**Restart is destructive and must read that way.** It ends whatever turn the agent was in the middle of, and that work is not recoverable. Give it the visual weight of a destructive action -- last position, distinct styling -- rather than making it the easiest button to reach. It exists because the failures worth forcing (a wedged pane, a surface mngr cannot name) are exactly the ones where nothing gentler works.
+**Restart is destructive and must read that way.** It ends whatever turn the agent was in the middle of, and that work is not recoverable. Give it the visual weight of a destructive action -- last position, distinct styling -- rather than making it the easiest button to reach. It exists because the failures worth restarting for (a wedged pane, a surface mngr cannot name) are exactly the ones where nothing gentler works.
 
 The `is_primary=true` refusal on that endpoint applies unchanged: the services agent must never be restarted this way, and the endpoint already refuses. Surface that refusal as the notice's new body if it happens.
 
@@ -140,7 +140,7 @@ The `is_primary=true` refusal on that endpoint applies unchanged: the services a
 - The send catch block populates the recovery; the interrupt catch block does not, so it keeps a single OK button.
 - **Restore the composer in the catch block, immediately.** The recovery record is closure state, so holding the message only there loses it to a reload or a closed tab -- the box is where it waits. Retry and Restart remove that copy once the send has actually landed, taking care that Restart has by then prepended the drained queue block above it.
 - Render two or four buttons off the same markup already used, with the focused default on Cancel, since it is the only non-acting choice. Escape and backdrop-click do what Cancel does, including restoring the text -- dismissing must never lose the message.
-- Disable the buttons while a retry or force is in flight; show which one is running.
+- Disable the buttons while a retry or restart is in flight; show which one is running.
 
 ### Backend
 
