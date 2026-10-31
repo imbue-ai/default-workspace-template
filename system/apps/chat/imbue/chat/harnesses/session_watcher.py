@@ -21,6 +21,7 @@ from abc import abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 from pydantic import Field
 
@@ -30,6 +31,9 @@ from imbue.imbue_common.frozen_model import FrozenModel
 # Called with (agent_id, newly parsed events) each time the watcher reads new lines.
 # Fanned out to the event queues (and so to the browser) and to the activity tracker.
 OnEventsCallback = Callable[[str, list[dict[str, Any]]], None]
+
+# How far a transcript's timestamp may lag the chat app's clock (the harness rounds, and writes it from its own process).
+TRANSCRIPT_CLOCK_SLACK_SECONDS: Final[float] = 2.0
 
 # Sends one message to the harness, returning whether it was accepted. Bound by the
 # composition root to the manager's send path (which resolves the agent's location).

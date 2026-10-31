@@ -141,6 +141,7 @@ from imbue.chat.harnesses.session import AgentHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
 from imbue.chat.harnesses.session import SessionDeps
 from imbue.chat.harnesses.session_watcher import StreamedReply
+from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.chat.imbue_studio_notifications import ImbueStudioNotificationsClient
@@ -257,8 +258,6 @@ _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 # How long a delivered message the transcript has not shown is kept for sending again should the agent's process
 # exit: far longer than any harness takes to write one down, short of sending a stale message hours on.
 _UNRECORDED_SEND_KEPT_SECONDS: Final[float] = 30 * 60.0
-# How far a transcript's timestamp may lag the chat app's clock (the harness rounds, and writes it from its own process).
-_TRANSCRIPT_CLOCK_SLACK_SECONDS: Final[float] = 2.0
 # How many messages sent a second time a chat keeps for its "Sent again" lines.
 _RESENT_SENDS_KEPT_PER_CHAT: Final[int] = 20
 
@@ -1721,7 +1720,7 @@ class AgentManager:
                 else send.model_copy_update(to_update(send.field_ref().closed_at, now))
                 for send in self._resent_sends_by_chat.get(chat_id, ())
             )
-        return now - _TRANSCRIPT_CLOCK_SLACK_SECONDS
+        return now - TRANSCRIPT_CLOCK_SLACK_SECONDS
 
     def note_resent_send(self, agent_id: str, text: str, sent_after: float) -> None:
         """Record a message delivered by a second send, for the "Sent again" line every window of the chat shows."""
@@ -2103,7 +2102,7 @@ class AgentManager:
         is kept until then, so it can be sent again should the process exit before the transcript holds it."""
         if not get_harness_spec(harness).resends_sends_lost_with_process:
             return self.send_message_to_agent(AgentId(agent_id), text, is_resent_when_unsure)
-        sent_after = time.time() - _TRANSCRIPT_CLOCK_SLACK_SECONDS
+        sent_after = time.time() - TRANSCRIPT_CLOCK_SLACK_SECONDS
         stops_begun_before_send = self._stops_begun_of(AgentId(agent_id))
         result = self.send_message_to_agent(AgentId(agent_id), text, is_resent_when_unsure)
         if isinstance(result, SendDelivery):

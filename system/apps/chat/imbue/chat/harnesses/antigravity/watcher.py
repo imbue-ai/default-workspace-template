@@ -53,6 +53,7 @@ from imbue.chat.harnesses.session_watcher import OnEventsCallback
 from imbue.chat.harnesses.session_watcher import QueueSnapshotCallback
 from imbue.chat.harnesses.session_watcher import ReplyDraft
 from imbue.chat.harnesses.session_watcher import ReplyDraftSources
+from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
 from imbue.chat.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.chat.watcher_common import WakeOnChangeHandler
@@ -73,8 +74,6 @@ _STEPS_QUERY = "SELECT idx, step_type, status, step_payload FROM steps WHERE idx
 _PROCESS_STARTED_MARKER_FILENAME: Final[str] = "antigravity_process_started"
 
 _FLUSH_RETRY_SECONDS: Final[float] = 5.0
-# agy stamps a turn with its own read of this host's clock.
-_FLUSH_CLOCK_SLACK_SECONDS: Final[float] = 2.0
 
 # How long to wait, after mngr reports a send accepted, for agy's store to show the turn our
 # block opened. mngr's ack fires at the BUSY edge -- before agy has written the user row -- so
@@ -642,7 +641,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             return
         before = self._turn_state.user_turn_texts()
         is_repeat = self._queue.has_been_attempted(claimed)
-        sent_after = time.time() - _FLUSH_CLOCK_SLACK_SECONDS
+        sent_after = time.time() - TRANSCRIPT_CLOCK_SLACK_SECONDS
         delivered: tuple[str, ...] = ()
         witnessed: list[dict[str, Any]] = []
         try:
