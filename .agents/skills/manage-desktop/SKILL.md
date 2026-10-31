@@ -11,7 +11,8 @@ metadata:
 The user interacts with you (and the apps you build) through a desktop defined
 in `system/apps/system_interface`: windows over a backdrop, a taskbar, and a
 launcher. Your chat is one window; every other window is a page of some app: a
-terminal, a browser, a folder in Files, another chat, an app you built.
+terminal, the Screen (the streamed Linux desktop the browser runs on), a folder in
+Files, another chat, an app you built.
 
 `uv run --no-sync workspace-layout` is the agent-facing command. Use it whenever you want
 to surface, inspect, or arrange windows. Do not hand-edit the shell's state
@@ -30,9 +31,9 @@ files.
 |---|---|
 | **desktop** | A named, shared collection of windows and shortcuts over a wallpaper. Everyone sees the same desktops and the same windows on them. |
 | **window** | One page of one app on one desktop: the app, the path under the app's origin the page is at (`chat` at `/?chat=<id>`, `terminal` at `/?session=<name>`, `files` at `/home/user/workspace/data/notes/`), and the title the page last reported. Named by an id, `win-<hex>`. |
-| **placement** | Where one *client* keeps one window on its screen: its frame, whether it is snapped or maximized, whether it is minimized. Per client, never shared. |
+| **placement** | Where one *client* keeps one window on its screen: its frame, whether it is snapped, maximized, or fullscreen (filling the whole viewport, taskbar and title bar gone), whether it is minimized. Per client, never shared. |
 | **client** | One browser (its windows share it). Each client has one active desktop and its own placements of every desktop. |
-| **launch path** | A way an app declares for opening a new page of itself, with optional parameters. A GET launch path is the page itself with the parameters as its query (`files` declares `new` at `/home/user/workspace/` with a `path` parameter); a POST launch path is posted the parameters by the shell and answers the page to open (`terminal` and `browser` declare `new` at `/new`; `chat` declares `new`, `send`, and `draft` at `/api/chats/intake`). An app that declares none offers `open` at `/`. |
+| **launch path** | A way an app declares for opening a new page of itself, with optional parameters. A GET launch path is the page itself with the parameters as its query (`files` declares `new` at `/home/user/workspace/` with a `path` parameter); a POST launch path is posted the parameters by the shell and answers the page to open (`terminal` declares `new` at `/new`; `screen` declares `browser` at `/launch/browser`; `chat` declares `new`, `send`, and `draft` at `/api/chats/intake`). An app that declares none offers `open` at `/`. |
 | **shortcut** | An icon on a desktop's backdrop that runs one app's launch path, in `focus` mode (raise the app's most recent window, opening one only when it has none) or `new` mode (always open one). |
 | **popped-out window** | A window the user dragged out of the desktop into its own Imbue Studio window (or opened there from the window menu). The desktop keeps a dashed placeholder, its *ghost*, where the window was; the user can hide the ghost. Per client, like a placement. |
 
@@ -64,7 +65,7 @@ the op is refused with the connected clients listed; pass `--client <id>` (from
 - **`open` is the one op that works with nobody to target**: with no client
   settled, the window is still written on the desktop (`--desktop`, else the
   first), unplaced, so every client sees it minimized in the taskbar. Pass
-  `--minimized` to any `open` you make for your own use (a terminal or browser you
+  `--minimized` to any `open` you make for your own use (a terminal, or the Screen you
   are driving): the window then lands out of the way of what the user is doing, and a
   window already there is left as they placed it.
 - **`open --beside` puts what you opened next to what the user is reading** --
@@ -129,7 +130,7 @@ A window argument is one of:
 - **`pinned`**, your app's pinned window on the target client's active desktop
   (the chat's root window, which the avatar opens): `navigate pinned /?chat=<id>`
   shows a chat there for that client;
-- an **app name** (`files`, `browser`), that app's most recently focused window
+- an **app name** (`files`, `screen`), that app's most recently focused window
   on the target client's active desktop.
 
 ## The verbs you'll use 95% of the time
@@ -143,10 +144,10 @@ A window argument is one of:
 | Open an app (at its default launch path) | `uv run --no-sync workspace-layout open terminal` |
 | Open a specific page of an app | `uv run --no-sync workspace-layout open files --path /home/user/workspace/data/notes/` |
 | Open a page with launch parameters | `uv run --no-sync workspace-layout open terminal --launch new --param workdir=/data` |
-| Open a web page in a new browser | `uv run --no-sync workspace-layout open https://example.com` |
+| Open a web page in the browser on the Screen | `uv run --no-sync workspace-layout open https://example.com` (the Screen's `browser` launch path: Chromium starts if it is not running and the page opens as a tab in front) |
 | Bring a window to the front | `uv run --no-sync workspace-layout focus <window>` |
 | Put a page on screen, raising a window already showing it rather than opening another | `uv run --no-sync workspace-layout show files --path /home/user/workspace/data/notes/ [--showing <other path> ...] [--repoint <page> ...]` (prints the window's id; `--repoint` names the pages whose on-screen window may be pointed at the path, and without it no window is pointed elsewhere) |
-| Close a window | `uv run --no-sync workspace-layout close <window>` (a terminal's session, or the one browser, is ended by its app once no window shows it; refused for a pinned window, which is never closed: `minimize` it instead) |
+| Close a window | `uv run --no-sync workspace-layout close <window>` (a terminal's session is ended by its app once no window shows it; the Screen and the browser on it run on; refused for a pinned window, which is never closed: `minimize` it instead) |
 
 **Every mutating op here changes what the user is looking at, live.** There is
 no staging area: `open` puts a window on their screen the moment it returns, and
@@ -173,8 +174,9 @@ and opens at the workspace folder, so the path is absolute; the `path` launch
 parameter, `open files --param path=/home/user/workspace/data/notes/`, lands in
 the same folder but as a window at `/home/user/workspace/?path=...`, and a
 window is focused only when its path matches exactly, so use one form per
-folder); a browser is `open browser
---path "/?session=<name>"`; a terminal is `open terminal --path
+folder); the Screen is `open screen` (one window of it; `--if-present new` opens a
+second view of the same Screen) and the browser on it `open screen --launch browser
+--param url=https://example.com`; a terminal is `open terminal --path
 "/?session=<name>"`.
 
 ## Arranging windows
@@ -184,7 +186,7 @@ target client's placements only:
 
 | Goal | Command |
 |---|---|
-| Snap a window to a half of the screen, or maximize it | `uv run --no-sync workspace-layout place <window> --state snapped-left\|snapped-right\|maximized` |
+| Snap a window to a half of the screen, maximize it, or fill the viewport with it | `uv run --no-sync workspace-layout place <window> --state snapped-left\|snapped-right\|maximized\|fullscreen` (`fullscreen` covers the taskbar and hides the title bar; the user leaves it from the strip at the top edge, and `restore` or another `place` brings it back; the Screen's window is the usual one to fill the viewport with) |
 | Put a window at an exact frame (fractions of the backdrop) | `uv run --no-sync workspace-layout place <window> --frame 0.05,0.05,0.6,0.7` |
 | Minimize / restore / maximize | `uv run --no-sync workspace-layout minimize <window>` / `restore <window>` / `maximize <window>` |
 | Point a window at another path under its app | `uv run --no-sync workspace-layout navigate <window> /other/path` |
@@ -275,16 +277,18 @@ row whose `title` matches) rather than guessing.
 ## What is not here, and what to use instead
 
 The shell knows windows and pages, not what backs them. What an app's page
-stands for (a chat's agent, a terminal's tmux session, a browser's Chromium) is
+stands for (a chat's agent, a terminal's tmux session, the Screen's programs) is
 the app's own to name, stop, or end:
 
 | Goal | Where it lives |
 |---|---|
 | Retitle a chat / a terminal | the chat's own route: `POST <chat url>/api/chats/<id>/rename`; the terminal offers no rename route yet |
-| Stop or start what backs a page | the app's own route (the chat's stop route; the browser's `POST /browsers/<name>/stop` and `.../start`) |
+| Stop or start what backs a page | the app's own route (the chat's stop route; the Screen service's `POST /browsers/<name>/stop` and `.../start` for the browser) |
 | End a chat | the chat's own destroy route; closing a chat window ends nothing |
-| End a terminal or the browser | `close` its last window: the terminal deletes a session no window shows, and the browser stops (profile and tabs kept) once none shows it |
+| End a terminal | `close` its last window: the terminal deletes a session no window shows |
+| End the browser | it runs on the Screen until the user quits it from inside, `POST /browsers/<name>/stop` ends it (profile and tabs kept), or the Screen is quit; closing the Screen's window ends nothing |
 | Open another chat | the chat root page (`open chat`), or `show chat --path "/?chat=<id>" --showing "/<id>" --repoint /` to show it in the pinned chat window |
+| Drive the Screen (the workspace's one streamed Linux desktop, the `screen` app) | the `screen` command (`uv run --no-sync screen run|windows|activate|shot|control ...`), never the layout ops: its window shows the desktop, and `open screen` is one window of it; the stack never stops when its window closes |
 
 `workspace-layout` refuses the old tabbed-shell verbs (`split`, `move`, `rename`,
 `delete`, `stop`, `start`, `replace-url`, `inspect`, `where`, `views`) and the

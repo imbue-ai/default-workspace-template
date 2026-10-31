@@ -1,7 +1,9 @@
 /**
  * The verbs a window's menu, and a taskbar entry's context menu, offer: only what the shell
  * itself can do (concepts.md section 2.2). Move and resize opens the grid of backdrop zones the
- * maximize control opens on hover, as a submenu; Share asks the Imbue Studio chrome
+ * maximize control opens on hover, as a submenu; Fullscreen fills the viewport with the window
+ * (Exit fullscreen brings it back) and Immersive asks the Imbue Studio chrome to take the whole
+ * app window with the keyboard locked, where the chrome can (the Screen spec, section 12); Share asks the Imbue Studio chrome
  * to open its share settings for the app (never for a critical app); Quit closes every window of
  * the app and stops its program where the workspace can honestly do so (the stop-when-no-windows
  * spec, section 7); Close removes the window for
@@ -14,6 +16,7 @@ import m from "mithril";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import type { MenuRow, SubmenuChildRow } from "@imbue/workspace-ui/src/components/menu";
 import { OPEN_SHARE_SETTINGS, sendToEmbedder } from "@imbue/workspace-ui/src/embed";
+import { glyph } from "./glyphs";
 import { windowSizeSubmenuRow } from "./WindowSizeRow";
 import type { WindowSizeActions } from "./WindowSizeRow";
 import type { AppRecord, EntryMode } from "../model/records";
@@ -22,6 +25,22 @@ import type { EntryLook } from "../reducers/desktopState";
 /** The width the shell's menus, the desktop's and the phone's, never go under, so a menu of two-word verbs is still
  *  a card. */
 export const MENU_MIN_WIDTH = 176;
+
+/** The menu row's glyph size: the icon box is cut for the shared icon set's 24-frame glyphs at this size. */
+const MENU_GLYPH_SIZE = 16;
+
+/** The fullscreen and immersive verbs of a window's menu. */
+export interface WindowFullscreenActions {
+  /** Whether the window fills the viewport now, so the row offers the way back. */
+  readonly isFullscreen: boolean;
+  /** Fill the viewport with the window, or bring a fullscreen one back to its kept frame. */
+  readonly toggleFullscreen: () => void;
+  /** Whether the chrome has the app window immersive now, so the row offers the way out. */
+  readonly isImmersive: boolean;
+  /** Enter (or leave) immersive mode; null where the chrome cannot do it (a plain browser, an older chrome). The
+   *  row runs it straight from the click, since the chrome needs the gesture's activation to go fullscreen. */
+  readonly immersive: (() => void) | null;
+}
 
 /** What the window menu's Theming submenu offers (docs/system/themeable-apps.md): On and Off once the app is
  *  themeable, and Enable theming until it is. */
@@ -84,6 +103,8 @@ export interface WindowMenuActions {
   readonly size: WindowSizeActions | null;
   /** Run after a size is picked, to take the menu down. */
   readonly onSized: () => void;
+  /** The fullscreen and immersive rows, or null where there is no window to fill the viewport with. */
+  readonly fullscreen: WindowFullscreenActions | null;
   /** Null when there is no share surface for the app (a critical app). */
   readonly share: (() => void) | null;
   /** Null when the workspace cannot stop the app (a critical one). */
@@ -127,10 +148,35 @@ function shareAndQuitRows(
   return rows;
 }
 
+/** Fullscreen (or Exit fullscreen), and Immersive (or Leave immersive) where the chrome can. */
+function fullscreenRows(actions: WindowFullscreenActions): MenuRow[] {
+  const rows: MenuRow[] = [
+    {
+      kind: "action",
+      key: "fullscreen",
+      label: actions.isFullscreen ? "Exit fullscreen" : "Fullscreen",
+      icon: { markup: glyph(actions.isFullscreen ? "exit-fullscreen" : "fullscreen", MENU_GLYPH_SIZE) },
+      onSelect: actions.toggleFullscreen,
+    },
+  ];
+  if (actions.immersive !== null) {
+    rows.push({
+      kind: "action",
+      key: "immersive",
+      label: actions.isImmersive ? "Leave immersive" : "Immersive",
+      icon: { markup: glyph("fullscreen", MENU_GLYPH_SIZE) },
+      onSelect: actions.immersive,
+    });
+  }
+  return rows;
+}
+
 /** The window menu's rows, in display order. */
 export function windowMenuRows(app: AppRecord | undefined, actions: WindowMenuActions): MenuRow[] {
   const rows: MenuRow[] = [];
-  if (actions.size !== null) rows.push(windowSizeSubmenuRow(actions.size, actions.onSized), { kind: "divider" });
+  if (actions.size !== null) rows.push(windowSizeSubmenuRow(actions.size, actions.onSized));
+  if (actions.fullscreen !== null) rows.push(...fullscreenRows(actions.fullscreen));
+  if (rows.length > 0) rows.push({ kind: "divider" });
   if (actions.theme !== null) rows.push(themeSubmenuRow(actions.theme), { kind: "divider" });
   if (actions.popOut !== null) {
     rows.push({

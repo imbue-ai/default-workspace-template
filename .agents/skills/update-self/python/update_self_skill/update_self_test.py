@@ -896,7 +896,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # Base commit: one pre-existing top-level entry (must NOT be reported as
     # newly added), plus a source file the target will leave untouched.
     _write("changelog/old-entry.md")
-    _write("system/apps/browser/src/browser/session.py", "print('hi')\n")
+    _write("system/apps/screen/src/screen/service.py", "print('hi')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "base")
     _git("tag", "base")
@@ -905,10 +905,10 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # entry (excluded), and a non-changelog source change (ignored).
     _write(".agents/changelog/my-branch.md")
     _write("system/changelog/my-branch.md")
-    _write("system/apps/browser/changelog/my-branch.md")
+    _write("system/apps/screen/changelog/my-branch.md")
     _write("system/apps/system_interface/changelog/my-branch.md")
     _write("system/services/gamma/changelog/my-branch.md")
-    _write("system/apps/browser/src/browser/session.py", "print('bye')\n")
+    _write("system/apps/screen/src/screen/service.py", "print('bye')\n")
     _git("add", "-A")
     _git("commit", "-q", "-m", "target")
     _git("tag", "target")
@@ -930,7 +930,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     added = json.loads(capsys.readouterr().out)["added"]
     assert sorted(added) == [
         ".agents/changelog/my-branch.md",
-        "system/apps/browser/changelog/my-branch.md",
+        "system/apps/screen/changelog/my-branch.md",
         "system/apps/system_interface/changelog/my-branch.md",
         "system/changelog/my-branch.md",
         "system/services/gamma/changelog/my-branch.md",
@@ -939,7 +939,7 @@ def test_changelog_entries_collects_every_bucket_not_just_top_level(
     # The worker guide has the tool run from the staged skill's scripts
     # directory. A git pathspec is cwd-relative, so from a subdirectory the
     # changelog glob matched nothing and the digest was silently empty.
-    subdir = tmp_path / "system" / "apps" / "browser"
+    subdir = tmp_path / "system" / "apps" / "screen"
     assert (
         update_self.main(
             [
@@ -1945,10 +1945,10 @@ def _mngr_requirement(package: str, subdirectory: str) -> str:
 _MNGR_BASE = _mngr_requirement("imbue-mngr", "libs/mngr")
 
 # The Python apps a workspace tree carries, as their manifests describe them:
-# the shell (critical) and the browser daemon (not).
+# the shell (critical) and the Screen service (not).
 _APP_FIXTURES = (
     ("system_interface", "system-interface", "system-interface", True),
-    ("browser", "browser", "browser-service", False),
+    ("screen", "screen", "screen-service", False),
 )
 
 
@@ -2254,7 +2254,7 @@ _FIXTURE_PROGRAMS = (
     "terminal",
     "terminal-pty",
     "files",
-    "browser",
+    "screen",
 )
 
 
@@ -2273,6 +2273,12 @@ def _apply_runner(name_status: str, repo_root: Path) -> _RecordingRunner:
     runner = _RecordingRunner(repo_root=repo_root)
     # A live stack that has settled: the same pid on every status call.
     runner.respond(("supervisorctl", "status"), _supervisor_status(4242))
+    # The one-shot boot converge has already finished, so the post-success
+    # apt-upgrade wait falls straight through.
+    runner.respond(
+        ("supervisorctl", "status", "env-converge"),
+        _Result(stdout="env-converge   EXITED   Oct 28 11:00 PM"),
+    )
     # Clean for the precondition check. The rollback's own "is anything staged
     # to commit" question is the index diff, and by then the restore has
     # staged the reverted paths.
@@ -4146,7 +4152,7 @@ def test_a_health_probe_that_never_finds_the_app_says_what_it_last_saw(
 def test_read_critical_apps_reads_only_critical_apps_the_user_can_open(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    # The fixture tree already carries the shell (critical, internal) and the browser.
+    # The fixture tree already carries the shell (critical, internal) and the Screen.
     repo_root = _make_apply_repo(tmp_path)
     _write_openable_app(repo_root, "terminal")
     _write_openable_app(repo_root, "chat")
@@ -7273,6 +7279,43 @@ def test_a_failed_apply_never_writes_the_ledger_or_moves_apt_state(
     assert not runner.ran("uv", "run", "--no-sync", "env-converge")
 
 
+def test_the_apt_upgrade_waits_for_a_still_running_boot_converge(
+    apply_repo: Path,
+) -> None:
+    # The services restart re-runs the one-shot env-converge program, whose unit
+    # installs can hold the dpkg lock for minutes; the post-success upgrade polls
+    # it to EXITED before its own apt steps run.
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+    runner.respond(
+        ("supervisorctl", "status", "env-converge"),
+        [
+            _Result(stdout="env-converge   RUNNING   pid 610, uptime 0:00:05"),
+            _Result(stdout="env-converge   RUNNING   pid 610, uptime 0:00:15"),
+            _Result(stdout="env-converge   EXITED   Oct 28 11:29 PM"),
+        ],
+    )
+
+    code = _apply(
+        runner,
+        _FakeHttp(_all_healthy),
+        _FakeSpawner(),
+        apply_repo,
+        target_ref="minds-v0.4.2",
+    )
+
+    assert code == 0
+    status_indices = [
+        index
+        for index, call in enumerate(runner.calls)
+        if call[:3] == ["supervisorctl", "status", "env-converge"]
+    ]
+    converge_index = runner.calls.index(
+        ["uv", "run", "--no-sync", "env-converge", "upgrade"]
+    )
+    assert len(status_indices) == 3
+    assert status_indices[-1] < converge_index
+
+
 def test_env_converge_failure_is_a_warning_not_a_rollback(
     apply_repo: Path, capsys
 ) -> None:
@@ -9627,4 +9670,124 @@ def test_a_user_package_sync_with_no_uv_cache_to_link_into_stops_only_that_packa
     assert not runner.ran("uv", "sync", "--locked", "--project", "system/apps/widget")
     assert (
         "warning: system/apps/widget: `uv cache dir` failed" in capsys.readouterr().err
+    )
+
+
+# apply: the registry row of a program the merged tree no longer declares
+
+
+def test_read_supervisord_programs_lists_programs_and_listeners_across_the_drop_ins(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "repo"
+    (repo_root / update_layout.SUPERVISORD_DROPIN_DIR).mkdir(parents=True)
+    (repo_root / update_layout.SUPERVISORD_CONF).write_text(
+        "[supervisord]\nnodaemon=true\n[program:cron]\ncommand=cron\n"
+    )
+    (repo_root / update_layout.SUPERVISORD_DROPIN_DIR / "screen.conf").write_text(
+        "[program:screen]\ncommand=screen-service\n\n[group:screen-stack]\nprograms=screen-xorg\n"
+    )
+    (repo_root / update_layout.SUPERVISORD_DROPIN_DIR / "screen-watch.conf").write_text(
+        "[eventlistener:screen-watch]\ncommand=screen-watch\n"
+    )
+
+    assert update_probes.read_supervisord_programs(repo_root) == frozenset(
+        {"cron", "screen", "screen-watch"}
+    )
+    assert update_probes.read_supervisord_programs(tmp_path / "no-such-repo") is None
+
+
+def test_the_apply_prunes_registry_rows_whose_program_the_merged_tree_no_longer_declares(
+    apply_repo: Path,
+) -> None:
+    # Nothing but a program's own start ever rewrote its row, and the removed browser
+    # app's program never starts again: without the prune the launcher keeps a dead
+    # "Browser" tile and the share gateway a dead origin for the life of the workspace.
+    (apply_repo / update_layout.SUPERVISORD_DROPIN_DIR).mkdir(parents=True)
+    (apply_repo / update_layout.SUPERVISORD_CONF).write_text(
+        "[supervisord]\nnodaemon=true\n"
+    )
+    (apply_repo / update_layout.SUPERVISORD_DROPIN_DIR / "screen.conf").write_text(
+        "[program:screen]\ncommand=screen-service\n"
+    )
+    registry = apply_repo / update_layout.APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        '[[apps]]\nname = "screen"\nurl = "http://localhost:8090"\nprogram = "screen"\n\n'
+        '[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nprogram = "browser"\n\n'
+        '[[apps]]\nname = "owner-exec"\nurl = "http://localhost:8650"\n'
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    removals = [
+        argv
+        for argv in runner.calls
+        if argv[1:4] == [update_layout.FORWARD_PORT_SCRIPT, "--remove", "--name"]
+    ]
+    assert [argv[4] for argv in removals] == ["browser"]
+    prune_index = runner.calls.index(removals[0])
+    restart_index = runner.calls.index(
+        ["mngr", "start", "--restart", "system-services"]
+    )
+    assert prune_index < restart_index
+
+
+def test_the_apply_prunes_no_registry_row_when_the_tree_has_no_supervisord_table(
+    apply_repo: Path,
+) -> None:
+    registry = apply_repo / update_layout.APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text(
+        '[[apps]]\nname = "browser"\nurl = "http://localhost:8081"\nprogram = "browser"\n'
+    )
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert not [
+        argv
+        for argv in runner.calls
+        if argv[1:3] == [update_layout.FORWARD_PORT_SCRIPT, "--remove"]
+    ]
+
+
+def test_the_apply_reports_a_registry_it_cannot_parse_and_prunes_nothing(
+    apply_repo: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    (apply_repo / update_layout.SUPERVISORD_DROPIN_DIR).mkdir(parents=True)
+    (apply_repo / update_layout.SUPERVISORD_CONF).write_text(
+        "[supervisord]\nnodaemon=true\n"
+    )
+    registry = apply_repo / update_layout.APPS_REGISTRY_PATH
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    registry.write_text("[[apps]\nname = ")
+    runner = _apply_runner(_DOCS_DIFF, apply_repo)
+
+    code = _apply(runner, _FakeHttp(_all_healthy), _FakeSpawner(), apply_repo)
+
+    assert code == 0
+    assert not [
+        argv
+        for argv in runner.calls
+        if argv[1:3] == [update_layout.FORWARD_PORT_SCRIPT, "--remove"]
+    ]
+    assert (
+        f"warning: could not read the app registry {update_layout.APPS_REGISTRY_PATH}"
+        in capsys.readouterr().err
+    )
+
+
+def test_recover_runs_from_the_command_line(apply_repo: Path) -> None:
+    # Boot and cron reach the rollback through the command, not the function, so the
+    # command's argument list has to match the function's; with no marker, the
+    # unattended guard answers silently.
+    assert (
+        update_self.main(
+            ["recover", "--if-stale", "--no-restart", "--repo-root", str(apply_repo)]
+        )
+        == 0
     )

@@ -104,6 +104,7 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str
         pending_logins=pending_logins,
         auth_label=_AUTH_LABEL,
         get_registered_apps=lambda: _APPS,
+        get_connect_info=lambda: {"ice_servers": [], "candidates": []},
     )
     return _GatewayHarness(app, app.test_client(), grants_path, pending_logins)
 
@@ -851,3 +852,55 @@ def test_foreign_preflight_still_requires_a_session(tmp_path: Path) -> None:
     )
 
     assert resp.status_code == 401
+
+
+def test_connect_info_answers_what_the_stack_holds_without_caching(
+    tmp_path: Path,
+) -> None:
+    grants_path = tmp_path / "share_grants.toml"
+    grants_path.write_text(_GRANTS)
+    materials = ShareMaterials(
+        workspace_domain=_DOMAIN,
+        relay_token="tok",
+        connector_url="https://connector.example.com",
+        broker_url=_BROKER_URL,
+        chrome_origin=_CHROME_ORIGIN,
+    )
+    answers: list[dict[str, object]] = [
+        {"ice_servers": [], "candidates": []},
+        {
+            "ice_servers": [
+                {
+                    "urls": ["turn:t:3478?transport=udp"],
+                    "username": "u",
+                    "credential": "c",
+                }
+            ],
+            "candidates": [
+                {
+                    "host": "relay-us1.example",
+                    "port": 40123,
+                    "protocol": "tcp",
+                    "guest_port": 59000,
+                }
+            ],
+        },
+    ]
+    app = build_gateway_app(
+        materials=materials,
+        grants_path=grants_path,
+        signing_secret=_SIGNING_SECRET,
+        jwks_cache=JwksCache("https://accounts.example.com/share/jwks.json"),
+        jti_registry=SingleUseJtiRegistry(),
+        pending_logins=PendingLoginRegistry(),
+        auth_label=_AUTH_LABEL,
+        get_registered_apps=lambda: _APPS,
+        get_connect_info=lambda: answers[0],
+    )
+    client = app.test_client()
+    first = client.get("/connect-info")
+    assert first.status_code == 200
+    assert first.get_json() == {"ice_servers": [], "candidates": []}
+    assert first.headers["Cache-Control"] == "no-store"
+    answers.pop(0)
+    assert client.get("/connect-info").get_json() == answers[0]

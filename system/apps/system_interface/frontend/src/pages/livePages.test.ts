@@ -199,6 +199,9 @@ describe("creating and positioning", () => {
     const frame = frameOf("win-1");
     expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=1");
     expect(frame.getAttribute("sandbox")).toContain("allow-same-origin");
+    // The Screen's viewer locks the pointer and the chrome's immersive mode goes fullscreen through this frame.
+    expect(frame.getAttribute("sandbox")).toContain("allow-pointer-lock");
+    expect(frame.getAttribute("allow")).toBe("clipboard-read; clipboard-write; fullscreen");
     const wrapper = wrapperOf("win-1");
     expect(wrapper.style.left).toBe("100px");
     expect(wrapper.style.top).toBe("60px");

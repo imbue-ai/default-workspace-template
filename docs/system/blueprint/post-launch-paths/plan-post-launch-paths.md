@@ -208,7 +208,7 @@ Discarding it before its first send drops it; it has no record, so a chat-app re
 The free-text rows are every launch path with a `text_param` or a `draft_param`, in launcher order, the first the primary action (Enter) and the second the secondary (Ctrl+Enter), as the launcher plan's section 3.1 has them.
 On a stock machine that is the chat's `main` (primary), `new` (secondary), and `send` and `draft` (rows with no key binding).
 Running one with text `t` fills its `text_param` or `draft_param` with `t` and launches, pinned-first: when the app has a pinned window on the active desktop (whatever its scope), the launch's target is that window, and the window is restored and raised; otherwise the target is `new`.
-A launch-path row runs as before: a GET launch path at its app's pin path raises the pinned window; every other launch path launches with target `new`.
+A launch-path row runs as before: a GET launch path at its app's pin path raises the pinned window; a launch path of an unpinned one-window app (its `default_shortcut` mode `focus`) launches with target `focus`; every other launch path launches with target `new`.
 The 2048-character bound applies to GET launch paths alone; a POST launch path's row is never disabled for length.
 
 ### 4.2 Getting Started

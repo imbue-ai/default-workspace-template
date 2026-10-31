@@ -432,11 +432,12 @@ The files app is dufs plus its location beacon; the sidecar goes.
 Its one launch path is `new` at `/[?path=]`, which dufs already serves, and the beacon reports the folder path and the folder's name as the title.
 There is nothing to navigate in-app, so it declares no navigation capability and is reloaded when it must follow.
 
-### 9.4 Browser
+### 9.4 Browser, now the Screen
 
-The browser daemon keeps its pages at `/?session=<name>` and gains `POST /new` (the `new` launch path, `url` optional), which answers the fleet's one browser (created once, started again when it was stopped, `url` opened as a tab) as `{"path": "/?session=<name>"}`; the browser is stopped, its profile kept, once a window has shown it and none does any more.
-Its page reports its path and the page title, and handles `shell:navigate` by switching session.
-The fleet CLI and the daemon's own routes are untouched.
+The browser is a launch path of the Screen (`docs/system/specs/screen/spec.md`), the workspace's one streamed Linux desktop shown as one window: its `browser` launch path (`POST /launch/browser`, `url` optional) starts the Screen's stack when it is not running and brings Chromium to the front on it, and answers the Screen's one page, `/`.
+The stack never stops for emptiness: it starts on first demand and ends only under memory pressure or by Quit, so closing the last Screen window stops nothing (D3 of that spec, superseding decision 17 of concepts.md).
+The Screen's page reports `/` with the frontmost X window's title.
+Beside the four placement states it takes the fifth, `FULLSCREEN`, which fills the viewport over the taskbar with no title bar, and asks the Imbue Studio chrome for immersive mode through the embed contract where the chrome can (the Screen spec, section 12).
 
 ## 10. Sharing, memory, and updates
 

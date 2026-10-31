@@ -73,11 +73,11 @@ describe("TitleBar", () => {
     expect(bar.querySelector('[data-part="window-icon"]')).toBeNull();
   });
 
-  it("drops the window's own actions from a background window without leaving a gap, and draws restore when maximized", () => {
+  it("drops the window's own actions from a background window without leaving a gap, and draws fullscreen and restore when maximized", () => {
     const bar = render({ chrome: MAC_CHROME, isFocused: false, state: "MAXIMIZED" });
 
     expect(bar.getAttribute("data-focused")).toBe("false");
-    expect(slotOrder(bar)).toEqual(["close", "minimize", "restore", "window-title"]);
+    expect(slotOrder(bar)).toEqual(["close", "minimize", "fullscreen", "restore", "window-title"]);
   });
 
   it("gives the first slot drawn in a run no leading margin when the slots before it are not drawn", () => {

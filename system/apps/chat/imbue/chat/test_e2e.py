@@ -2422,6 +2422,12 @@ def test_the_phone_layout_keeps_the_chat_list_in_a_drawer_over_the_chat(
     row = drawer.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
     row_box = row.bounding_box()
     assert row_box is not None and row_box["height"] >= 44, row_box
+    # Hovered first: Fortress replays a recorded human cursor trajectory for a pointer move, and
+    # a click that moves the pointer from the list button to the row can land that glide's
+    # points between the press and its release; its first point is back at the list button,
+    # far left of the row, which the drawer reads as a drag that dismisses it and swallows the
+    # tap. A hover plays the glide out before returning, so the click that follows moves nothing.
+    row.hover()
     row.click()
     expect(drawer).to_have_count(0)
     expect(page.locator(".chat-header-title")).to_have_text("test-agent")

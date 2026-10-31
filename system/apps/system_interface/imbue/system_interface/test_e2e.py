@@ -175,6 +175,9 @@ def _running_e2e_server(
     pin: tuple[str, str, str] | None = None,
     # Further registry rows, for apps a test serves itself.
     extra_rows: tuple[str, ...] = (),
+    # The stub app's default shortcut mode. ``focus`` makes it a one-window app, whose every launch lands in the
+    # window the desktop already holds; ``new`` lets each launch open a window of its own.
+    stub_shortcut_mode: str = "focus",
     # A built-in theme the workspace wears by default; None leaves the standard look and no theme folders.
     theme: str | None = None,
 ) -> Generator[E2EServer, None, None]:
@@ -202,7 +205,7 @@ def _running_e2e_server(
             registry_row_toml(
                 _STUB_APP_NAME,
                 stub_url,
-                default_shortcut=(_STUB_LAUNCH_ID, "focus"),
+                default_shortcut=(_STUB_LAUNCH_ID, stub_shortcut_mode),
                 display_name=_STUB_APP_DISPLAY_NAME,
                 launch_paths=((_STUB_LAUNCH_ID, _STUB_LAUNCH_LABEL, _STUB_LAUNCH_PATH),),
             )
@@ -2684,10 +2687,18 @@ def test_the_bar_steps_aside_for_a_soft_keyboard_on_a_touch_phone_only(tmp_path:
 
 
 @pytest.mark.timeout(120, func_only=False)
-def test_a_phone_and_a_laptop_share_the_windows_but_the_phone_moves_nothing(e2e_server: E2EServer, page: Page) -> None:
+def test_a_phone_and_a_laptop_share_the_windows_but_the_phone_moves_nothing(tmp_path: Path, page: Page) -> None:
     """A window the laptop opens is in the phone's windows sheet, and showing it on the phone writes no placement
     anywhere; a window the phone opens from the start sheet lands on the first desktop, shown on the phone and
-    minimized on the laptop; and when the laptop closes the window the phone shows, the phone goes home."""
+    minimized on the laptop; and when the laptop closes the window the phone shows, the phone goes home.
+
+    The stub opens a new window per launch here: with a focusing default shortcut it would be a one-window app,
+    whose phone launch lands in the laptop's window instead."""
+    with _running_e2e_server(tmp_path, stub_shortcut_mode="new") as e2e_server:
+        _check_a_phone_and_a_laptop_share_the_windows(e2e_server, page)
+
+
+def _check_a_phone_and_a_laptop_share_the_windows(e2e_server: E2EServer, page: Page) -> None:
     _land(page, e2e_server)
     laptop_window = _open_via_shortcut(page, e2e_server)
     laptop_client = _client_id(page)

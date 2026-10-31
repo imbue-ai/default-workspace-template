@@ -23,7 +23,7 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
-import { frameForState, frameToPixels } from "../geometry/frames";
+import { backdropFrameOf, frameForState, frameToPixels } from "../geometry/frames";
 import type { PixelRect, PixelSize } from "../geometry/frames";
 import { OVERVIEW_SCRIM_Z_INDEX } from "../geometry/stacking";
 import { wallpaperBackgroundImage } from "../model/api";
@@ -275,7 +275,8 @@ export function Overview(): m.Component<OverviewAttrs> {
     return layout.placements.flatMap((placement) => {
       const window = desktop.windows.find((candidate) => candidate.id === placement.window_id);
       if (window === undefined || placement.is_minimized || placement.is_detached) return [];
-      const rect = frameToPixels(frameForState(placement.frame, placement.state), size);
+      // A fullscreen window fills the thumbnail as a maximized one does: the thumbnail is the backdrop alone.
+      const rect = frameToPixels(backdropFrameOf(frameForState(placement.frame, placement.state)), size);
       const app = attrs.apps.find((candidate) => candidate.name === window.app);
       return [
         m(

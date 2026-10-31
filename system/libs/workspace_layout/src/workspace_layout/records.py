@@ -159,7 +159,7 @@ class WindowPlacement(FrozenModel):
 
     window_id: WindowId = Field(description="The window placed")
     frame: Frame = Field(description="The frame, kept through every state so restore has somewhere to go")
-    state: WindowState = Field(description="Normal, snapped to a half, or maximized")
+    state: WindowState = Field(description="Normal, snapped to a half, maximized, or fullscreen")
     is_minimized: bool = Field(description="Whether the window is out of sight; orthogonal to the state")
     is_detached: bool = Field(
         default=False,

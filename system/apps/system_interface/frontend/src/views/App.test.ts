@@ -1138,3 +1138,23 @@ describe("the switch to the phone layout", () => {
     }
   });
 });
+
+describe("a fullscreen window", () => {
+  it("marks the layout so the desktop paints over the taskbar, and shows the strip instead of a title bar", async () => {
+    await mountApp();
+    store.setBackdropSize({ width: 1000, height: 800 });
+    expect(document.querySelector("[data-fullscreen-window]")).toBeNull();
+    store.toggleFullscreen("win-1");
+    m.redraw.sync();
+    expect(document.querySelector("[data-fullscreen-window]")).not.toBeNull();
+    const window1 = document.querySelector('[data-window-id="win-1"]') as HTMLElement;
+    expect(window1.getAttribute("data-window-state")).toBe("FULLSCREEN");
+    expect(window1.querySelector("[data-drag-handle]")).toBeNull();
+    expect(window1.querySelector("[data-fullscreen-strip]")).not.toBeNull();
+    expect(window1.style.height).toBe(`${800 + themeMetricsRecord().taskbarHeight}px`);
+    (window1.querySelector('[data-fullscreen-control="exit-fullscreen"]') as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-fullscreen-window]")).toBeNull();
+    expect(document.querySelector('[data-window-id="win-1"]')?.getAttribute("data-window-state")).toBe("NORMAL");
+  });
+});

@@ -160,6 +160,8 @@ const WINDOW_MOTION_ATTRIBUTE = "data-window-motion";
 
 /** Marks the backdrop, the area above the taskbar whose pixels the desktop's frames are fractions of. */
 export const BACKDROP_AREA_ATTRIBUTE = "data-backdrop-area";
+/** On the desktop layout's root while a fullscreen window is on the active desktop's screen. */
+export const FULLSCREEN_WINDOW_ATTRIBUTE = "data-fullscreen-window";
 
 /** The overview's tiles as computed for one redraw: the pages are laid over them at the grid's scale. */
 interface OverviewTiling {
@@ -626,9 +628,18 @@ export function App(): m.Component<AppAttrs> {
     const window = activeDesktop(state)?.windows.find((candidate) => candidate.id === windowId);
     if (window === undefined) return null;
     const app = appByName(state, window.app);
+    const isImmersive = current.getImmersive() !== null;
     return windowMenuRows(app, {
       size: sizeActionsOf(current, windowId),
       onSized: () => menu.close(),
+      fullscreen: {
+        isFullscreen: placementOf(state.layout, windowId).state === "FULLSCREEN",
+        toggleFullscreen: () => current.toggleFullscreen(windowId),
+        isImmersive,
+        immersive: current.getCanImmerse()
+          ? () => (isImmersive ? current.leaveImmersive(windowId) : current.requestImmersive(windowId))
+          : null,
+      },
       share: app === undefined || app.critical ? null : () => openShareSettings(app),
       quit: app !== undefined && current.canStopApp(app) ? () => void current.quitApp(app.name) : null,
       popOut: current.getCanPopOut() ? () => void current.detachWindow(windowId) : null,
@@ -655,7 +666,7 @@ export function App(): m.Component<AppAttrs> {
     const look = entryLook(state, window, appByName(state, window.app));
     return taskbarEntryMenuRows({
       isMinimized: placement.is_minimized,
-      isMaximized: placement.state === "MAXIMIZED",
+      isMaximized: placement.state === "MAXIMIZED" || placement.state === "FULLSCREEN",
       isDetached: placement.is_detached,
       show: () => current.showDetachedWindow(windowId),
       showGhost: () => current.showWindowGhost(windowId),
@@ -1183,6 +1194,9 @@ export function App(): m.Component<AppAttrs> {
       case "maximize":
         current.setWindowState(windowId, "MAXIMIZED");
         return;
+      case "fullscreen":
+        current.toggleFullscreen(windowId);
+        return;
       case "restore":
         current.toggleMaximized(windowId);
         return;
@@ -1338,6 +1352,8 @@ export function App(): m.Component<AppAttrs> {
           ...partAttrs("desktop"),
           class:
             "app-layout relative flex h-dvh flex-col bg-(--desk-backdrop) bg-cover bg-center bg-(image:--desk-default-wallpaper)",
+          // A fullscreen window paints over the taskbar's band, which the backdrop otherwise clips (style.css).
+          [FULLSCREEN_WINDOW_ATTRIBUTE]: current.isFullscreenShown() ? "" : undefined,
           style: wallpaperStyle,
           "data-viewing": viewed === null ? undefined : viewed.id,
         },

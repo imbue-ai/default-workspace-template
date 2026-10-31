@@ -28,6 +28,7 @@ import { STANDARD_CHROME, type ThemeChrome } from "../model/themes";
 import { RECONNECT_BASE_MS } from "@imbue/workspace-ui/src/models/backoff";
 import {
   DesktopStore,
+  IMMERSIVE_REFUSED_NOTICE,
   NO_CHAT_APP_REASON,
   NO_MENTION_APP_REASON,
   OTHER_WORKSPACE_LINK_NOTICE,
@@ -37,7 +38,7 @@ import {
   VIEWPORT_REPORT_DEBOUNCE_MS,
   chooseInitialDesktopId,
 } from "./DesktopStore";
-import type { PopOutBridge, StoreDependencies } from "./DesktopStore";
+import type { ImmersiveBridge, PopOutBridge, StoreDependencies } from "./DesktopStore";
 import type { ClientStateReport } from "./socket";
 
 const METRICS = themeMetricsRecord();
@@ -99,7 +100,7 @@ function notices(): string[] {
 
 function makeStore(
   redraw: () => void = () => undefined,
-  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks"> = {},
+  extra: Pick<StoreDependencies, "popOut" | "soloWindowId" | "isSoloReopened" | "outsideLinks" | "immersive"> = {},
 ): DesktopStore {
   const store = new DesktopStore({
     clientId: CLIENT,
@@ -497,8 +498,28 @@ describe("opening", () => {
     expect(api.calls.filter((call) => call.startsWith("launch"))).toEqual([]);
     await store.switchDesktop("work");
     await store.runLaunch("docs", "new", "focus");
-    expect(api.calls).toContain("launch:work:docs:new:{}:new");
-    expect(api.calls).toContain("openWindow:work:docs:/new:new");
+    // The launch asks the shell to find the app's window on the desktop (one another client opened counts) and
+    // opens only when there is none.
+    expect(api.calls).toContain("launch:work:docs:new:{}:focus");
+    expect(api.calls).toContain("openWindow:work:docs:/new:focus");
+  });
+
+  it("a launch-path row of a one-window app lands in the window the desktop holds, whichever client opened it", async () => {
+    api.apps = [
+      appRecord("screen", {
+        default_shortcut: { launch: "screen", mode: "focus" },
+        launch_paths: [launchPathRecord({ id: "screen", label: "Screen", path: "/" })],
+      }),
+    ];
+    api.desktops = [desktopRecord("home", { windows: [windowRecord("win-7", "screen", "/")] })];
+    // This client never placed win-7: another client opened it.
+    api.writeLayout("home", CLIENT, { updated_at: null, placements: [] });
+    const store = await startedStore();
+    await store.runLaunchRow("screen", "screen");
+    expect(api.calls).toContain("launch:home:screen:screen:{}:focus");
+    expect(api.calls).toContain("openWindow:home:screen:/:focus");
+    expect(activeFocusedWindowId(store.getState())).toBe("win-7");
+    expect(store.getState().desktops.find((desktop) => desktop.id === "home")?.windows).toHaveLength(1);
   });
 
   /** A store whose home desktop holds buddy's independent pinned window, win-9, minimized for this client. */
@@ -516,6 +537,7 @@ describe("opening", () => {
 
   it("a launch-path row opens a new window, or raises the pinned window when its path is the pin's", async () => {
     const store = await storeWithPinnedBuddy();
+    socket.deliver().onAppsUpdated([appRecord("docs", { default_shortcut: { launch: "new", mode: "new" } })]);
     await store.runLaunchRow("docs", "new");
     expect(api.calls).toContain("launch:home:docs:new:{}:new");
     socket.deliver().onAppsUpdated([
@@ -2919,6 +2941,77 @@ describe("the phone layout", () => {
     store.onVisibilityChange(false);
     socket.deliver().onConnected();
     expect(reloaded).toEqual(["win-1"]);
+  });
+});
+
+describe("fullscreen and immersive mode", () => {
+  it("fills the viewport with a window and brings it back to its kept frame, and says when one is on screen", async () => {
+    const store = await startedStore();
+    const before = placementOf(store.getState().layout, "win-1");
+    expect(store.isFullscreenShown()).toBe(false);
+    store.toggleFullscreen("win-1");
+    const fullscreen = placementOf(store.getState().layout, "win-1");
+    expect(fullscreen.state).toBe("FULLSCREEN");
+    expect(fullscreen.frame).toEqual(before.frame);
+    expect(fullscreen.is_minimized).toBe(false);
+    expect(store.isFullscreenShown()).toBe(true);
+    // The whole viewport: the backdrop plus the taskbar's band, with no fit applied.
+    expect(store.renderedRect(fullscreen)).toEqual({ x: 0, y: 0, width: 1000, height: 800 + METRICS.taskbarHeight });
+    store.minimizeWindow("win-1");
+    expect(store.isFullscreenShown()).toBe(false);
+    store.restoreWindow("win-1");
+    expect(store.isFullscreenShown()).toBe(true);
+    store.toggleFullscreen("win-1");
+    const restored = placementOf(store.getState().layout, "win-1");
+    expect(restored.state).toBe("NORMAL");
+    expect(restored.frame).toEqual(before.frame);
+    expect(store.isFullscreenShown()).toBe(false);
+  });
+
+  it("asks the chrome for immersive mode only once it said it could, and credits the answer to the window", async () => {
+    const asks: [string, boolean][] = [];
+    const immersive: ImmersiveBridge = { requestImmersive: (windowId, isOn) => asks.push([windowId, isOn]) };
+    const store = makeStore(() => undefined, { immersive });
+    await store.start(NO_LINK);
+    expect(store.getCanImmerse()).toBe(false);
+    store.requestImmersive("win-1");
+    expect(asks).toEqual([]);
+    store.setCanImmerse(true);
+    store.requestImmersive("win-missing");
+    expect(asks).toEqual([]);
+    store.requestImmersive("win-1");
+    expect(asks).toEqual([["win-1", true]]);
+    expect(store.getImmersive()).toBeNull();
+    store.onImmersiveChanged({ isOn: true, isKeyboardLocked: true, error: null });
+    expect(store.getImmersive()).toEqual({ windowId: "win-1", isKeyboardLocked: true });
+    store.leaveImmersive("win-1");
+    expect(asks).toEqual([
+      ["win-1", true],
+      ["win-1", false],
+    ]);
+    // The mode ends on the chrome's word, not on the ask.
+    expect(store.getImmersive()).not.toBeNull();
+    store.onImmersiveChanged({ isOn: false, isKeyboardLocked: false, error: null });
+    expect(store.getImmersive()).toBeNull();
+    expect(notices()).toEqual([]);
+  });
+
+  it("notes a refused request and takes the chrome's own changes, lock or no lock", async () => {
+    const asks: [string, boolean][] = [];
+    const immersive: ImmersiveBridge = { requestImmersive: (windowId, isOn) => asks.push([windowId, isOn]) };
+    const store = makeStore(() => undefined, { immersive });
+    await store.start(NO_LINK);
+    store.setCanImmerse(true);
+    store.onImmersiveChanged({ isOn: false, isKeyboardLocked: false, error: "fullscreen refused" });
+    expect(notices()).toEqual([`${IMMERSIVE_REFUSED_NOTICE}: fullscreen refused`]);
+    expect(store.getImmersive()).toBeNull();
+    // A change the chrome made on its own names no window.
+    store.onImmersiveChanged({ isOn: true, isKeyboardLocked: false, error: null });
+    expect(store.getImmersive()).toEqual({ windowId: null, isKeyboardLocked: false });
+    // Leaving it is asked in the name of the window whose strip was pressed: the contract takes no empty id.
+    store.leaveImmersive("win-1");
+    expect(asks).toEqual([["win-1", false]]);
+    expect(store.getImmersive()).not.toBeNull();
   });
 });
 

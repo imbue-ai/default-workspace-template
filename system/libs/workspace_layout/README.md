@@ -178,6 +178,8 @@ value off its rule (an app name, a window, a path, a frame, a cell, a client id)
 is refused with a 400 that names the argument, and the command exits 1 with
 that line. The command checks only what no model owns: the retired spellings
 and verbs, flags that exclude each other, and the text forms it turns into
-records (`--frame`, `--cell`, `--param`). `place` takes `--state snapped-left|snapped-right|maximized` (the
-`WindowState` the op sets, which its description names: `as snapped-left`) or
-`--frame x,y,width,height`; the retired `--zone` is refused with that form.
+records (`--frame`, `--cell`, `--param`). `place` takes
+`--state snapped-left|snapped-right|maximized|fullscreen` (the `WindowState` the op sets, which its
+description names: `as snapped-left`; `fullscreen` fills the whole viewport, taskbar and title bar
+included, the Screen spec's L2 layer) or `--frame x,y,width,height`; the retired `--zone` is
+refused with that form.

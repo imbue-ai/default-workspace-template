@@ -16,6 +16,7 @@ function rowOf(rows: MenuRow[], key: string): ActionRow {
 }
 
 const size = { setState: vi.fn(), setFrame: vi.fn() };
+const fullscreen = { isFullscreen: false, toggleFullscreen: vi.fn(), isImmersive: false, immersive: null };
 
 describe("windowMenuRows", () => {
   it("offers Move and resize, Share, Quit, and Close for an ordinary running app", () => {
@@ -24,13 +25,14 @@ describe("windowMenuRows", () => {
     const rows = windowMenuRows(app, {
       size,
       onSized: vi.fn(),
+      fullscreen,
       share: vi.fn(),
       quit,
       popOut: null,
       close: vi.fn(),
       theme: null,
     });
-    expect(keysOf(rows)).toEqual(["size", "|", "share", "quit", "|", "close"]);
+    expect(keysOf(rows)).toEqual(["size", "fullscreen", "|", "share", "quit", "|", "close"]);
     const quitRow = rowOf(rows, "quit");
     expect(quitRow.label).toBe("Quit Docs");
     quitRow.onSelect();
@@ -44,6 +46,7 @@ describe("windowMenuRows", () => {
         windowMenuRows(stopped, {
           size,
           onSized: vi.fn(),
+          fullscreen,
           share: null,
           quit: vi.fn(),
           popOut: null,
@@ -51,7 +54,7 @@ describe("windowMenuRows", () => {
           theme: null,
         }),
       ),
-    ).toEqual(["size", "|", "quit", "|", "close"]);
+    ).toEqual(["size", "fullscreen", "|", "quit", "|", "close"]);
   });
 
   it("offers neither Share nor Quit where the caller gives none (a critical app, one the workspace cannot stop)", () => {
@@ -60,6 +63,7 @@ describe("windowMenuRows", () => {
         windowMenuRows(appRecord("docs"), {
           size,
           onSized: vi.fn(),
+          fullscreen,
           share: null,
           quit: null,
           popOut: null,
@@ -67,7 +71,7 @@ describe("windowMenuRows", () => {
           theme: null,
         }),
       ),
-    ).toEqual(["size", "|", "close"]);
+    ).toEqual(["size", "fullscreen", "|", "close"]);
   });
 
   it("drops Move and resize where the caller gives none (a window since closed)", () => {
@@ -76,6 +80,7 @@ describe("windowMenuRows", () => {
         windowMenuRows(appRecord("docs"), {
           size: null,
           onSized: vi.fn(),
+          fullscreen: null,
           share: null,
           quit: null,
           popOut: null,
@@ -91,13 +96,14 @@ describe("windowMenuRows", () => {
     const rows = windowMenuRows(appRecord("docs"), {
       size,
       onSized: vi.fn(),
+      fullscreen,
       share: null,
       quit: null,
       popOut: null,
       close,
       theme: null,
     });
-    expect(keysOf(rows)).toEqual(["size", "|", "close"]);
+    expect(keysOf(rows)).toEqual(["size", "fullscreen", "|", "close"]);
     rowOf(rows, "close").onSelect();
     expect(close).toHaveBeenCalledTimes(1);
   });
@@ -108,6 +114,7 @@ describe("windowMenuRows", () => {
         windowMenuRows(undefined, {
           size,
           onSized: vi.fn(),
+          fullscreen,
           share: vi.fn(),
           quit: vi.fn(),
           popOut: null,
@@ -115,7 +122,7 @@ describe("windowMenuRows", () => {
           theme: null,
         }),
       ),
-    ).toEqual(["size", "|", "close"]);
+    ).toEqual(["size", "fullscreen", "|", "close"]);
   });
 });
 
@@ -256,26 +263,88 @@ describe("the pull-out row", () => {
     const rows = windowMenuRows(appRecord("docs"), {
       size,
       onSized: vi.fn(),
+      fullscreen,
       share: vi.fn(),
       quit: vi.fn(),
       popOut,
       close: vi.fn(),
       theme: null,
     });
-    expect(keysOf(rows)).toEqual(["size", "|", "pop-out", "share", "quit", "|", "close"]);
+    expect(keysOf(rows)).toEqual(["size", "fullscreen", "|", "pop-out", "share", "quit", "|", "close"]);
     expect(rowOf(rows, "pop-out").label).toBe("Open in its own window");
     rowOf(rows, "pop-out").onSelect();
     expect(popOut).toHaveBeenCalledTimes(1);
     const without = windowMenuRows(appRecord("docs"), {
       size,
       onSized: vi.fn(),
+      fullscreen,
       share: null,
       quit: null,
       popOut: null,
       close: vi.fn(),
       theme: null,
     });
-    expect(keysOf(without)).toEqual(["size", "|", "close"]);
+    expect(keysOf(without)).toEqual(["size", "fullscreen", "|", "close"]);
+  });
+});
+
+describe("the fullscreen rows", () => {
+  it("offers Fullscreen after Move and resize, reading Exit fullscreen while the window fills the viewport", () => {
+    const toggleFullscreen = vi.fn();
+    const rows = windowMenuRows(appRecord("docs"), {
+      size,
+      onSized: vi.fn(),
+      fullscreen: { isFullscreen: false, toggleFullscreen, isImmersive: false, immersive: null },
+      share: null,
+      quit: null,
+      popOut: null,
+      close: vi.fn(),
+      theme: null,
+    });
+    expect(keysOf(rows)).toEqual(["size", "fullscreen", "|", "close"]);
+    expect(rowOf(rows, "fullscreen").label).toBe("Fullscreen");
+    rowOf(rows, "fullscreen").onSelect();
+    expect(toggleFullscreen).toHaveBeenCalledTimes(1);
+    const filled = windowMenuRows(appRecord("docs"), {
+      size,
+      onSized: vi.fn(),
+      fullscreen: { isFullscreen: true, toggleFullscreen, isImmersive: false, immersive: null },
+      share: null,
+      quit: null,
+      popOut: null,
+      close: vi.fn(),
+      theme: null,
+    });
+    expect(rowOf(filled, "fullscreen").label).toBe("Exit fullscreen");
+  });
+
+  it("offers Immersive only where the chrome can do it, reading Leave immersive while it is on", () => {
+    const immersive = vi.fn();
+    const rows = windowMenuRows(appRecord("docs"), {
+      size,
+      onSized: vi.fn(),
+      fullscreen: { isFullscreen: false, toggleFullscreen: vi.fn(), isImmersive: false, immersive },
+      share: null,
+      quit: null,
+      popOut: null,
+      close: vi.fn(),
+      theme: null,
+    });
+    expect(keysOf(rows)).toEqual(["size", "fullscreen", "immersive", "|", "close"]);
+    expect(rowOf(rows, "immersive").label).toBe("Immersive");
+    rowOf(rows, "immersive").onSelect();
+    expect(immersive).toHaveBeenCalledTimes(1);
+    const on = windowMenuRows(appRecord("docs"), {
+      size,
+      onSized: vi.fn(),
+      fullscreen: { isFullscreen: false, toggleFullscreen: vi.fn(), isImmersive: true, immersive },
+      share: null,
+      quit: null,
+      popOut: null,
+      close: vi.fn(),
+      theme: null,
+    });
+    expect(rowOf(on, "immersive").label).toBe("Leave immersive");
   });
 });
 
@@ -284,6 +353,7 @@ describe("the window menu's Theming submenu", () => {
     const rows = windowMenuRows(appRecord("notes"), {
       size,
       onSized: vi.fn(),
+      fullscreen: null,
       share: null,
       quit: null,
       popOut: null,
