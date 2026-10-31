@@ -783,7 +783,7 @@ class _SendAccepted(FrozenModel):
         default=False, description="Whether the send was a /compact the chat asked mngr to run in its place"
     )
     is_withdrawn: bool = Field(
-        default=False, description="Whether Stop took the send back while its agent came up, so nothing was delivered"
+        default=False, description="Whether Stop took the send back before it landed, so nothing was delivered"
     )
     is_resent: bool = Field(
         default=False,

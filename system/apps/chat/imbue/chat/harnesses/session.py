@@ -56,7 +56,7 @@ class SendOutcome(StrEnum):
     NOT_READY = "not_ready"
     # Delivery was attempted and failed -> 500.
     FAILED = "failed"
-    # Stop took the message back while it waited for the agent to come up; nothing was delivered.
+    # Stop took the message back before it landed, and its block carries it; nothing was delivered.
     WITHDRAWN = "withdrawn"
 
     @property
