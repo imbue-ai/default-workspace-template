@@ -40,11 +40,29 @@ _REPO_LOCKED_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
     re.compile(r"repository is already locked", re.IGNORECASE),
     re.compile(r"unable to create lock", re.IGNORECASE),
 )
+# The backup store refuses a data upload past the account's hard storage limit
+# with 507, which restic reports as "unexpected HTTP response (507): 507
+# Insufficient Storage" and treats as permanent (no retry).
+_QUOTA_EXCEEDED_PATTERNS: Final[tuple[re.Pattern[str], ...]] = (
+    re.compile(r"\(507\)"),
+    re.compile(r"507 Insufficient Storage", re.IGNORECASE),
+)
+# Why a `restic backup` failed, when the runner can tell: carried on the
+# RESTIC_BACKUP_FAILED event so the monitor and the desktop can name the cause.
+BACKUP_FAILURE_REASON_QUOTA_EXCEEDED: Final[str] = "quota_exceeded"
+# restic's default target pack size, pinned so an upload can never approach the
+# backup store's request body limit however the default moves.
+PACK_SIZE_MIB: Final[int] = 16
 
 
 def is_repo_missing_error(stderr: str) -> bool:
     """Return True if `stderr` looks like a 'restic repo not initialized' error."""
     return any(p.search(stderr) for p in _REPO_MISSING_PATTERNS)
+
+
+def is_quota_exceeded_error(stderr: str) -> bool:
+    """Return True if `stderr` says the backup store refused an upload for lack of storage (507)."""
+    return any(p.search(stderr) for p in _QUOTA_EXCEEDED_PATTERNS)
 
 
 def is_repo_locked_error(stderr: str) -> bool:
@@ -131,7 +149,7 @@ def backup(
     snapshot is not guaranteed to keep the inode numbers of the last one.
 
     `--exclude-if-present` skips the contents of any directory holding the
-    no-backup marker file.
+    no-backup marker file. `--pack-size` pins the pack size restic uploads in.
     """
     args: list[str] = [
         "backup",
@@ -142,6 +160,8 @@ def backup(
         "--ignore-inode",
         "--exclude-if-present",
         NO_BACKUP_MARKER_FILENAME,
+        "--pack-size",
+        str(PACK_SIZE_MIB),
         "--tag",
         tag,
     ]
@@ -224,9 +244,26 @@ def forget_snapshot_ids(
     return run_restic(args, env_overrides=env_overrides, timeout_seconds=600.0)
 
 
-def prune(env_overrides: Mapping[str, str]) -> subprocess.CompletedProcess[str]:
-    """`restic prune` -- actually delete data referenced by no remaining snapshot."""
-    return run_restic(("prune",), env_overrides=env_overrides)
+def prune(
+    env_overrides: Mapping[str, str],
+    *,
+    max_repack_bytes: int | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """`restic prune` -- actually delete data referenced by no remaining snapshot.
+
+    `max_repack_bytes` bounds how much restic repacks in this run (its
+    `--max-repack-size`): a prune writes the repacked data before it deletes the old
+    packs, so an account near its hard storage limit prunes in bounded slices.
+    """
+    args: tuple[str, ...] = ("prune",)
+    if max_repack_bytes is not None:
+        args += ("--max-repack-size", format_restic_size(max_repack_bytes))
+    return run_restic(args, env_overrides=env_overrides)
+
+
+def format_restic_size(size_bytes: int) -> str:
+    """Render a byte count in the unit suffix form restic's size flags take (whole MiB, floor)."""
+    return f"{max(0, size_bytes) // (1024 * 1024)}M"
 
 
 def find_backup_summary(stdout: str) -> dict[str, object] | None:
