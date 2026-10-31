@@ -1153,6 +1153,22 @@ describe("MessageInput send failure notice", () => {
     expect(text).not.toContain("mngr");
   });
 
+  it("shows the new failure when a sibling's Retry fails differently", async () => {
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", {
+      title: "Couldn't send the queued messages",
+      detail: "first reason",
+      kind: "not_ready",
+      retry: vi.fn(async () => Promise.reject({ kind: "unknown", toString: () => "the host hung up" })),
+    });
+    const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    (findButton(shown, "Retry")!.attrs!.onclick as () => void)();
+    await flushAsync();
+    const text = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).toContain("the host hung up");
+    expect(text).not.toContain("isn't ready for messages yet");
+  });
+
   it("words a sibling's unconfirmed send the same way", () => {
     const retry = vi.fn(async () => undefined);
     const component = MessageInput();

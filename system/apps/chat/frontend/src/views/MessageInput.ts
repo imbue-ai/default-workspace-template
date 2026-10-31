@@ -1237,6 +1237,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           clearActionFailureNotice();
         } catch (err) {
           actionFailureDetail = describeRequestError(err);
+          actionFailureKind = describeRequestErrorKind(err);
           actionFailureInFlight = null;
         }
         m.redraw();
