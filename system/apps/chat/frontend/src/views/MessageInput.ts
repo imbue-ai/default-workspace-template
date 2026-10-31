@@ -1354,7 +1354,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         // already be in the agent's input or turn and a resend can deliver it twice. The notice shows
         // its own sentence: mngr's reason for this kind is its diagnostics (the whole pane included).
         const isUnconfirmed = actionFailureKind === "submission_unconfirmed";
-        const sendFailureSentence = recovery === null ? undefined : SEND_FAILURE_SENTENCES[actionFailureKind];
+        const sendFailureSentence = SEND_FAILURE_SENTENCES[actionFailureKind];
         const retryWording = isUnconfirmed
           ? { label: "Send again", inFlight: "Sending…", tooltip: "Sends the message again, even if the agent has it" }
           : { label: "Retry", inFlight: "Retrying…", tooltip: "Tries the same thing again" };

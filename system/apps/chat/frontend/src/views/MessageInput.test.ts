@@ -1141,6 +1141,19 @@ describe("MessageInput send failure notice", () => {
     expect(renderedText(settled)).not.toContain("Couldn't confirm your message arrived");
   });
 
+  it("says what a sibling's send failure means in its own words too", () => {
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", {
+      title: "Couldn't send the queued messages",
+      detail: "mngr does not recognise this",
+      kind: "not_ready",
+      retry: vi.fn(async () => undefined),
+    });
+    const text = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).toContain("isn't ready for messages yet");
+    expect(text).not.toContain("mngr");
+  });
+
   it("words a sibling's unconfirmed send the same way", () => {
     const retry = vi.fn(async () => undefined);
     const component = MessageInput();
