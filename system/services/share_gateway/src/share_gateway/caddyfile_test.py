@@ -34,7 +34,7 @@ _CHROME_ORIGIN = "https://minds.imbue.com"
 def _render(
     apps_toml: str = _APPS_TOML,
     chrome_origin: str = _CHROME_ORIGIN,
-    is_callback_served_on_every_host: bool = False,
+    is_cookie_host_only: bool = False,
 ) -> str:
     return render_caddyfile(
         workspace_domain=_DOMAIN,
@@ -45,7 +45,7 @@ def _render(
         https_port=8443,
         gateway_port=8791,
         chrome_origin=chrome_origin,
-        is_callback_served_on_every_host=is_callback_served_on_every_host,
+        is_cookie_host_only=is_cookie_host_only,
     )
 
 
@@ -185,7 +185,7 @@ def test_caddyfile_serves_the_login_callback_on_every_host_only_for_host_only_co
 
     # Host-only cookies belong to the host that set them, so the callback that
     # sets them is routed to the gateway on every host, ahead of the auth step.
-    rendered = _render(is_callback_served_on_every_host=True)
+    rendered = _render(is_cookie_host_only=True)
     assert "handle /_auth/callback {" in rendered
     assert rendered.index("handle /_auth/callback {") < rendered.index("forward_auth 127.0.0.1:8791")
     callback_block = rendered[rendered.index("handle /_auth/callback {") :].split("}", 1)[0]
@@ -219,8 +219,23 @@ def test_caddyfile_routes_health_site_wide_and_unauthenticated() -> None:
 
 
 def test_build_frame_ancestors_policy_shapes() -> None:
-    assert build_frame_ancestors_policy(_DOMAIN, _CHROME_ORIGIN) == (f"'self' https://*.{_DOMAIN} {_CHROME_ORIGIN}")
-    assert build_frame_ancestors_policy(_DOMAIN, "") == f"'self' https://*.{_DOMAIN}"
+    assert build_frame_ancestors_policy(_DOMAIN, _CHROME_ORIGIN, None) == (
+        f"'self' https://*.{_DOMAIN} {_CHROME_ORIGIN}"
+    )
+    assert build_frame_ancestors_policy(_DOMAIN, "", None) == f"'self' https://*.{_DOMAIN}"
+    assert build_frame_ancestors_policy(_DOMAIN, _CHROME_ORIGIN, [f"a.{_DOMAIN}", f"b.{_DOMAIN}"]) == (
+        f"'self' https://a.{_DOMAIN} https://b.{_DOMAIN} {_CHROME_ORIGIN}"
+    )
+
+
+def test_caddyfile_frame_ancestors_on_a_host_only_share_name_only_its_own_hosts() -> None:
+    # Every sandbox of a region shares an auth sandbox's domain, so the wildcard would let
+    # another user's sandbox frame this one.
+    rendered = _render(is_cookie_host_only=True)
+
+    own_labels = sorted([_AUTH_LABEL, *(app.label for app in parse_registered_apps(_APPS_TOML))])
+    expected_sources = " ".join(["'self'", *(f"https://{label}.{_DOMAIN}" for label in own_labels), _CHROME_ORIGIN])
+    assert f'header Content-Security-Policy "frame-ancestors {expected_sources}"' in rendered
 
 
 def test_caddyfile_wires_forward_auth_and_loading_fallback() -> None:
@@ -268,7 +283,7 @@ def test_render_caddyfile_routes_the_agent_surface_and_strips_the_admission_toke
         https_port=8443,
         gateway_port=8791,
         chrome_origin="",
-        is_callback_served_on_every_host=False,
+        is_cookie_host_only=False,
     )
     auth_block = rendered[rendered.index("@auth host auth-x7k9q2w1.alpha.example.com") :]
     assert "handle /_agent/* {" in auth_block.split("handle {")[0]

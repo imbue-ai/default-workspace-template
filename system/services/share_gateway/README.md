@@ -48,7 +48,9 @@ three things running:
    Every response it sends, a service's or its own, carries the browser
    hardening headers (`Strict-Transport-Security`, `X-Content-Type-Options:
    nosniff`, `Referrer-Policy: same-origin`, and a `frame-ancestors` policy
-   naming who may embed the workspace) and no `Server` header, so a service
+   naming who may embed the workspace: its own hosts, `*.<domain>` or, on a
+   share marked `SHARE_COOKIE_HOST_ONLY=1`, only its own label hosts, plus
+   the hosted chrome's origin) and no `Server` header, so a service
    gets them without setting any itself; a service's own
    `Content-Security-Policy` is left in place beside the gateway's.
 3. **frpc, one per relay**: outbound tunnels to EVERY relay of the region
