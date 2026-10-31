@@ -3616,6 +3616,46 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     expect(store.renderedRect(placement)).toEqual({ x: 300, y: 300, width: 1500, height: 1500 });
   });
 
+  it("draws a viewed desktop's fullscreen window at the whole letterbox, never over the viewer's taskbar", async () => {
+    const withWindow = desktopRecord("alice", {
+      owner: "user:user-alice-0001",
+      windows: [windowRecord("win-a", "docs", "/a")],
+    });
+    api.desktops = [...api.desktops, withWindow];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: VIEWER,
+    });
+    api.ownerLayoutClientId = "alice-laptop";
+    api.ownerViewport = { width: 2000, height: 1600 };
+    const placement = placementRecord("win-a", { state: "FULLSCREEN" });
+    api.writeLayout("alice", "alice-laptop", { updated_at: "2026-10-29T00:00:00Z", placements: [placement] });
+    const store = await startedStore();
+    socket.deliver().onRosterUpdated([josh, alice]);
+
+    // The letterbox is Alice's backdrop alone: her fullscreen window fills it, with no taskbar band below, and
+    // the viewer's own backdrop keeps clipping so the taskbar keeps "Stop viewing".
+    await store.switchDesktop("alice");
+    expect(store.renderedRect(placement)).toEqual({ x: 0, y: 0, width: 2000, height: 1600 });
+    expect(store.windowRect("win-a")).toEqual({ x: 0, y: 0, width: 2000, height: 1600 });
+    expect(store.isFullscreenShown()).toBe(false);
+
+    // With no size on record the desktop is drawn at this backdrop's size, and the window fills that.
+    api.ownerViewport = null;
+    api.writeLayout("alice", "alice-laptop", { updated_at: "2026-10-29T00:01:00Z", placements: [placement] });
+    socket.deliver().onPlacementsUpdated({ desktopId: "alice", clientId: "alice-laptop", saveId: "save-again" });
+    await settle();
+    expect(store.viewingLetterbox()).toBeNull();
+    expect(store.renderedRect(placement)).toEqual({ x: 0, y: 0, width: 1000, height: 800 });
+    expect(store.isFullscreenShown()).toBe(false);
+
+    // Back on an own desktop a fullscreen window takes the whole viewport again.
+    await store.stopViewing();
+    expect(store.renderedRect(placement)).toEqual({ x: 0, y: 0, width: 1000, height: 800 + METRICS.taskbarHeight });
+  });
+
   it("never views on the phone: a window shrunk to phone width while viewing lands on the way back", async () => {
     api.ownerLayoutClientId = "alice-laptop";
     api.ownerViewport = { width: 2000, height: 1600 };

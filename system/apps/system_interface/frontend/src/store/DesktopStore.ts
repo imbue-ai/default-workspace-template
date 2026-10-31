@@ -84,6 +84,7 @@ import { isPreviewShell } from "../model/PreviewShell";
 import { noticeFromWire } from "../model/UpdateNotice";
 import type { DeepLink } from "../model/deepLinks";
 import {
+  backdropFrameOf,
   fitFrameToBackdrop,
   fitStateFrame,
   frameForState,
@@ -879,9 +880,12 @@ export class DesktopStore {
   }
 
   /** The rectangle a placement renders at, in backdrop pixels (the fit applied; the whole viewport for a
-   *  fullscreen window). */
+   *  fullscreen window). A viewed desktop's fullscreen window fills its letterbox instead: the letterbox is the
+   *  owner's backdrop alone, and the viewer's taskbar keeps "Stop viewing" (the multiplayer spec, 8.3). */
   renderedRect(placement: Placement): PixelRect {
-    return fitStateFrame(frameForState(placement.frame, placement.state), this.frameBackdrop(), this.metrics);
+    const stateFrame = frameForState(placement.frame, placement.state);
+    if (this.viewedDesktop() === null) return fitStateFrame(stateFrame, this.backdrop, this.metrics);
+    return fitFrameToBackdrop(backdropFrameOf(stateFrame), this.frameBackdrop(), this.metrics);
   }
 
   /** Whether a fullscreen window is on the active desktop's screen: the desktop then paints over the taskbar's
