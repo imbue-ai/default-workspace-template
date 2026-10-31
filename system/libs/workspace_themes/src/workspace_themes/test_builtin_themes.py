@@ -17,6 +17,7 @@ _BUILT_IN_VISIBLE_APP_NAMES = frozenset(
         "files",
         "getting-started",
         "routines",
+        "screen",
         "system-monitor",
         "terminal",
     }
