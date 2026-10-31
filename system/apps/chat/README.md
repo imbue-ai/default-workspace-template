@@ -639,6 +639,8 @@ it again, as the command's expansion, once the compaction ends; the session
 parser emits the first as an ordinary user message and the second hidden, both
 marked `non_turn_tail`. The first one's arrival is what retires the composer's
 "Sending…" bubble for it, so a message queued behind the compaction shows once.
+The idle sweep's `/compact` is recorded the same way, but the user never typed
+it, so it shows on its compaction's start chip (below) instead of as a bubble.
 
 **The "Compacting…" status.** While a chat's context is being compacted its
 activity state is `COMPACTING` (`compaction_status.py`, applied in
@@ -710,14 +712,17 @@ Where they land depends on who started it:
 - `manual` (a `/compact`): directly below the `/compact` bubble; a Codex or Pi
   chat shows no such bubble, so there they follow the last turn, as for `idle`.
 - `idle` (the sweep): after the last turn, below its reply, or appended to its
-  last chip run when it ended with no reply.
+  last chip run when it ended with no reply. In a Claude chat the sweep's
+  `/compact` lands too, and the page pairs it with the idle compaction it
+  directly precedes (running or landed): it shows no bubble and opens no turn.
 
 A step's calls live inside its collapsible step node, so a compaction that
 lands while a step is open does not join them: its chips follow that step's
 node as a chip row of their own. The event never opens a turn of its own. Either chip opens the tool chips'
-detail panel, titled with that chip's label and glyph: first a sentence saying
-why it ran, then, under a dashed rule, the summary in an output pane, clamped
-like a long tool output.
+detail panel, titled with that chip's label and glyph, on a sentence saying why
+it ran. Under a dashed rule, the start chip's panel then shows the sweep's
+`/compact` when the page paired one with it, and the finish chip's the summary,
+in an output pane clamped like a long tool output.
 
 **Why a chat was compacted.** The start chip is named for the event's
 `compaction_cause`, and the panel's sentence says why:
@@ -736,9 +741,9 @@ The finish chip reads "Compacted" whatever the cause, since the start chip
 beside it already names it.
 
 The sentence is composed by the page from the cause. It is not part of the
-event, so the transcript, the events API, and the agent never see it. A
-compaction whose event carries no summary, or one still running, opens on the
-sentence alone.
+event, so the transcript, the events API, and the agent never see it. A finish
+chip whose event carries no summary, and a start chip with no `/compact` paired
+with it, open on the sentence alone.
 
 The cause is what the app saw while the compaction ran, else what it asked for,
 else the request it recorded in the agent's `compaction_request.json` within the
@@ -748,7 +753,8 @@ compaction reading `idle` after the app restarts, since the sweep's `/compact`
 leaves `last_compaction.json` saying manual. The cause is attached in memory as
 the event is stored and streamed, so a page reload keeps it, but a compaction
 older than 10 minutes when the app first reads it has no cause and shows the
-unknown text.
+unknown text. The page then cannot tell the sweep's `/compact` before it from a
+typed one, so that `/compact` shows as a bubble.
 
 Under the chip row holding the latest idle compaction of whichever chat is open,
 a notice says "Idle chats now compact automatically to keep replies fast and

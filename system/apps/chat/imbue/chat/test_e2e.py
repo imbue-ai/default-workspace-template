@@ -792,6 +792,9 @@ async () => {
 """
 
 
+# Flaky: in CI the tall composer has twice left the transcript 20-40 px short of its bottom, with the cause not
+# yet found (MIND-649).
+@pytest.mark.flaky
 @pytest.mark.timeout(120, func_only=False)
 def test_the_transcript_reaches_its_bottom_whatever_the_composer_height(tmp_path: Path, page: Page) -> None:
     """A draft that grows the composer leaves the transcript at its bottom, the wheel can still reach that
