@@ -1,5 +1,6 @@
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,7 @@ from workspace_bare_scripts import message_chat
 from screen.messenger import ChatAgentMessenger
 
 
-def _warnings_during(action) -> list[str]:
+def _warnings_during(action: Callable[[], None]) -> list[str]:
     seen: list[str] = []
     handle = logger.add(lambda message: seen.append(message.record["message"]), level="WARNING")
     try:
