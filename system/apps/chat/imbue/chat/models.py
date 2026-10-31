@@ -652,6 +652,16 @@ class ActiveAgentSnapshot(FrozenModel):
     )
 
 
+class ResentSendSnapshot(FrozenModel):
+    """A message delivered by sending it a second time, whose first copy may have landed too."""
+
+    text: str = Field(description="What went to the agent, which its user turn holds")
+    sent_after: float = Field(description="Epoch seconds before the send began; an earlier turn is not this message")
+    closed_at: float | None = Field(
+        description="Epoch seconds the chat's next send began, or None before then: a later copy may be the user's own"
+    )
+
+
 class ChatSnapshot(FrozenModel):
     """One chat as the chat pages see it: what the ``chats_updated`` WebSocket message carries."""
 
@@ -668,6 +678,9 @@ class ChatSnapshot(FrozenModel):
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
     last_messaged_at: float | None = Field(
         description="Epoch seconds of the chat's most recent message, or None when it has never been messaged; the chat list orders on it",
+    )
+    resent_sends: tuple[ResentSendSnapshot, ...] = Field(
+        default=(), description="The chat's recent messages delivered by sending them a second time, oldest first"
     )
 
 

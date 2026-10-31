@@ -73,6 +73,8 @@ _STEPS_QUERY = "SELECT idx, step_type, status, step_payload FROM steps WHERE idx
 _PROCESS_STARTED_MARKER_FILENAME: Final[str] = "antigravity_process_started"
 
 _FLUSH_RETRY_SECONDS: Final[float] = 5.0
+# agy stamps a turn with its own read of this host's clock.
+_FLUSH_CLOCK_SLACK_SECONDS: Final[float] = 2.0
 
 # How long to wait, after mngr reports a send accepted, for agy's store to show the turn our
 # block opened. mngr's ack fires at the BUSY edge -- before agy has written the user row -- so
@@ -118,6 +120,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     _queue_snapshot_callback: Any
     _flush_send: Any
     _flush_is_alive: Any
+    _flush_note_resent: Any
     _flush_wake: threading.Event
     _flush_thread: threading.Thread | None
     _emit_embargo_until: float
@@ -160,6 +163,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         self._queue_snapshot_callback = None
         self._flush_send = None
         self._flush_is_alive = None
+        self._flush_note_resent = None
         self._flush_wake = threading.Event()
         self._flush_thread = None
         self._observer = None
@@ -487,10 +491,11 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         self._queue_snapshot_callback = callback
 
-    def set_flush_hooks(self, send: Any, is_alive: Any) -> None:
-        """Receive the ability to deliver, and to tell whether the agent is still alive."""
+    def set_flush_hooks(self, send: Any, is_alive: Any, note_resent: Any) -> None:
+        """Receive the ability to deliver, to tell whether the agent is still alive, and to record a repeat."""
         self._flush_send = send
         self._flush_is_alive = is_alive
+        self._flush_note_resent = note_resent
 
     def get_queued_messages(self) -> list[dict[str, Any]]:
         return self._queue.snapshot()
@@ -636,6 +641,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         if not claimed:
             return
         before = self._turn_state.user_turn_texts()
+        is_repeat = self._queue.has_been_attempted(claimed)
+        sent_after = time.time() - _FLUSH_CLOCK_SLACK_SECONDS
         delivered: tuple[str, ...] = ()
         witnessed: list[dict[str, Any]] = []
         try:
@@ -645,6 +652,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             self._emit_embargo_until = time.monotonic() + _EMIT_EMBARGO_CEILING_SECONDS
             if send(block):
                 delivered, witnessed = self._observe_delivery(before, block, claimed)
+                if is_repeat and delivered and self._flush_note_resent is not None:
+                    self._flush_note_resent(block, sent_after)
         finally:
             # DEPART BEFORE ARRIVE (contract A3b). The queue entry is removed FIRST, and only
             # then are the transcript events it turned into released. Emitting as we found them

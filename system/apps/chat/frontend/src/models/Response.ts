@@ -731,6 +731,12 @@ export function hasUserTurnLandedSince(chatId: string, text: string, priorTurnId
   return userTurnIdsLandedSince(getEventsForChat(chatId), text, priorTurnIds).length > 0;
 }
 
+/** The user turns among ``events`` holding exactly ``text``, oldest first. */
+export function userTurnsHolding(events: readonly TranscriptEvent[], text: string): UserMessageEvent[] {
+  const wanted = text.trim();
+  return events.filter(isSentUserTurn).filter((event) => event.content.trim() === wanted);
+}
+
 /** The ids of the user turns among ``events`` holding exactly ``text`` that are not among ``priorTurnIds`` and
  *  came after all of them, oldest first (see ``hasUserTurnLandedSince``). */
 export function userTurnIdsLandedSince(

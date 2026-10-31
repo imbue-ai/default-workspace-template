@@ -954,7 +954,7 @@ def _fake_watcher(
         set_finished_tasks_callback=lambda _callback: None,
         notify_idle=lambda: [],
         notify_busy=lambda: None,
-        set_flush_hooks=lambda _send, _is_alive: None,
+        set_flush_hooks=lambda _send, _is_alive, _note_resent: None,
         get_all_events=get_all_events,
         start=start,
         stop=stop,
@@ -991,7 +991,7 @@ def test_the_antigravity_flush_leaves_an_unconfirmed_block_to_its_own_next_pass(
     state = build_test_state(agent_manager=AgentManager.build(WebSocketBroadcaster(), messenger=messenger))
     flush_sends: list[Callable[[str], bool]] = []
     fake_watcher = _fake_watcher(lambda: [], lambda: None)
-    fake_watcher.set_flush_hooks = lambda send, _is_alive: flush_sends.append(send)
+    fake_watcher.set_flush_hooks = lambda send, _is_alive, _note_resent: flush_sends.append(send)
     try:
         with patch("imbue.chat.state.build_watcher", return_value=fake_watcher):
             state.get_or_create_watcher(_agent_info(harness=HarnessType.ANTIGRAVITY))
@@ -1146,12 +1146,16 @@ def test_a_send_delivered_by_a_second_send_answers_resent() -> None:
     agent_info = _agent_info()
     messenger = RecordingMngrMessenger(delivery=SendDelivery.RESENT)
     manager, client = _client_over(messenger)
+    seed_agent_state(manager, agent_info.id, name=agent_info.name)
     with patch("imbue.chat.server._find_active_agent", return_value=agent_info):
         response = client.post(f"/api/chats/{agent_info.id}/message", json={"message": "hello"})
 
     assert response.status_code == 200
     assert response.get_json() == {"status": "resent"}
     assert messenger.sent == [(agent_info.id, "hello")]
+    snapshot = manager.get_chat_snapshot(agent_info.id)
+    assert snapshot is not None
+    assert [send.text for send in snapshot.resent_sends] == ["hello"]
     # Delivered all the same: kept to be sent again should the agent's process exit before recording it.
     assert [send.text for send in manager._unrecorded_sends_by_agent.get(agent_info.id, [])] == ["hello"]
 

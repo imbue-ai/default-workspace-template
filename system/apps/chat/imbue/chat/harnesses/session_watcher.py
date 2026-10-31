@@ -35,6 +35,8 @@ OnEventsCallback = Callable[[str, list[dict[str, Any]]], None]
 # composition root to the manager's send path (which resolves the agent's location).
 FlushSendCallback = Callable[[str], bool]
 
+# Record a block that landed on a later pass after an earlier one was not seen to, and the time that pass began.
+FlushResentCallback = Callable[[str, float], None]
 # Whether the agent's process is currently alive -- see ``set_flush_hooks``.
 IsAliveCallback = Callable[[], bool]
 
@@ -264,7 +266,9 @@ class AgentSessionWatcher(TranscriptReader, ABC):
     def release_tap_claim(self, claimed: tuple[str, ...], generation: int) -> None:
         """Hand a tap's claim back unsettled, without charging a delivery attempt. No-op by default."""
 
-    def set_flush_hooks(self, send: "FlushSendCallback", is_alive: "IsAliveCallback") -> None:
+    def set_flush_hooks(
+        self, send: "FlushSendCallback", is_alive: "IsAliveCallback", note_resent: "FlushResentCallback"
+    ) -> None:
         """Give a watcher the two capabilities it needs to DELIVER its own queue. No-op by default.
 
         Only a harness that holds the queue on the agent's behalf needs these -- antigravity,

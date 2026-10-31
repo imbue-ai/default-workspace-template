@@ -697,6 +697,7 @@ def _deliver_message(
     # Taken before the send, which can wait out mngr's confirmation window while the compaction
     # it starts is already running.
     requested_at = time.monotonic()
+    sent_after = agent_manager.note_send_begun(agent_info.id)
     # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
     # harness still starting -- reads as Connecting on the chat until it resolves.
     with agent_manager.track_connecting_send(agent_info.id, message_id, text) as mark_connecting:
@@ -706,6 +707,8 @@ def _deliver_message(
         if not agent_manager.claim_send_for_delivery(agent_info.id, message_id):
             return SendOutcome.WITHDRAWN
         outcome = session.send(text, message_id, is_resent_when_unsure)
+        if outcome is SendOutcome.RESENT:
+            agent_manager.note_resent_send(agent_info.id, text, sent_after)
         if outcome is SendOutcome.NOT_READY:
             mark_connecting()
             outcome = _revive_and_retry_send(
@@ -1430,12 +1433,14 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
         return error_response(str(e), 500)
 
     if block:
+        sent_after = agent_manager.note_send_begun(agent_info.id)
         resend = agent_manager.send_message_kept_until_recorded(agent_info.id, agent_info.harness, block)
         if isinstance(resend, SendFailure):
             # The harness said why; passing that on rather than a generic sentence is the whole
             # point of carrying it this far.
             return model_response(SendFailureResponse(detail=resend.reason, kind=resend.kind), 500)
         if resend is SendDelivery.RESENT:
+            agent_manager.note_resent_send(agent_info.id, block, sent_after)
             return model_response(SendMessageResponse(status=RESENT_SEND_STATUS))
 
     return model_response(SendMessageResponse(status="ok"))

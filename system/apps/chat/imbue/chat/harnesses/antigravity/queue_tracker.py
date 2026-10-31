@@ -285,6 +285,11 @@ class AntigravityQueueTracker:
                 self._model_command = None
                 self._model_command_attempts = 0
 
+    def has_been_attempted(self, claimed: tuple[str, ...]) -> bool:
+        """Whether an earlier flush already tried any of these entries, which may have landed unseen."""
+        with self._lock:
+            return any(self._attempts.get(entry_id, 0) > 0 for entry_id in claimed)
+
     def begin_flush(self) -> tuple[str, tuple[str, ...], int]:
         """Claim the current queue for a flush: returns (block, claimed ids, generation).
 

@@ -180,6 +180,7 @@ from imbue.chat.models import NoProviderAccountError
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.models import QueuedMessageState
+from imbue.chat.models import ResentSendSnapshot
 from imbue.chat.models import SignedOutAccountError
 from imbue.chat.models import TransitionKind
 from imbue.chat.naming import AUTO_NAME_WORD
@@ -258,6 +259,8 @@ _RENAME_TIMEOUT_SECONDS: Final[float] = 30.0
 _UNRECORDED_SEND_KEPT_SECONDS: Final[float] = 30 * 60.0
 # How far a transcript's timestamp may lag the chat app's clock (the harness rounds, and writes it from its own process).
 _TRANSCRIPT_CLOCK_SLACK_SECONDS: Final[float] = 2.0
+# How many messages sent a second time a chat keeps for its "Sent again" lines.
+_RESENT_SENDS_KEPT_PER_CHAT: Final[int] = 20
 
 # A finished harness task's notice normally starts a turn at once; the marker of one whose notice
 # starts none (a task the user stopped from the harness's own task list) goes after this many
@@ -1273,6 +1276,7 @@ class AgentManager:
     _letting_go_counts_by_agent: dict[str, int]
     # How many such stops have begun for each agent, so a send in flight can tell that one began after it did.
     _stops_begun_by_agent: dict[str, int]
+    _resent_sends_by_chat: dict[ChatId, tuple[ResentSendSnapshot, ...]]
     # Broadcasts committed codex user-turns emitted by a ledger to the agent's transcript stream
     # (the same SSE fan-out the session watcher's events use). The ledger owns live user-turns and
     # the file reader suppresses them (Fix 1), so this is how a ledger-owned user-turn reaches the
@@ -1447,6 +1451,7 @@ class AgentManager:
         manager._lost_sends_being_resent = set()
         manager._letting_go_counts_by_agent = {}
         manager._stops_begun_by_agent = {}
+        manager._resent_sends_by_chat = {}
         manager._presence = PresenceTracker()
         manager._imbue_studio_notifications = ImbueStudioNotificationsClient(
             gateway=imbue_studio_gateway, resolve_agent_id=manager.current_agent_id_of_chat
@@ -1697,10 +1702,35 @@ class AgentManager:
 
     def _snapshot_as_shown(self, snapshot: ChatSnapshot) -> ChatSnapshot:
         with self._lock:
-            title = self._title_override_by_chat.get(snapshot.chat_id)
-        if title is None:
-            return snapshot
-        return snapshot.model_copy_update(to_update(snapshot.field_ref().title, title))
+            title = self._title_override_by_chat.get(snapshot.chat_id, snapshot.title)
+            resent_sends = self._resent_sends_by_chat.get(snapshot.chat_id, ())
+        return snapshot.model_copy_update(
+            to_update(snapshot.field_ref().title, title),
+            to_update(snapshot.field_ref().resent_sends, resent_sends),
+        )
+
+    def note_send_begun(self, agent_id: str) -> float:
+        """Close the fold of the chat's resent sends, since a copy landing from here on may be this send's own,
+        and return the time to record this send under should it be sent again."""
+        now = time.time()
+        with self._lock:
+            chat_id = self._chat_id_of_agent_locked(agent_id)
+            self._resent_sends_by_chat[chat_id] = tuple(
+                send
+                if send.closed_at is not None
+                else send.model_copy_update(to_update(send.field_ref().closed_at, now))
+                for send in self._resent_sends_by_chat.get(chat_id, ())
+            )
+        return now - _TRANSCRIPT_CLOCK_SLACK_SECONDS
+
+    def note_resent_send(self, agent_id: str, text: str, sent_after: float) -> None:
+        """Record a message delivered by a second send, for the "Sent again" line every window of the chat shows."""
+        with self._lock:
+            chat_id = self._chat_id_of_agent_locked(agent_id)
+            kept = self._resent_sends_by_chat.get(chat_id, ())
+            added = ResentSendSnapshot(text=text, sent_after=sent_after, closed_at=None)
+            self._resent_sends_by_chat[chat_id] = (*kept, added)[-_RESENT_SENDS_KEPT_PER_CHAT:]
+        self._broadcast_chats_updated()
 
     def show_automatic_title(self, chat_id: ChatId, title: str) -> None:
         """Show ``title`` for the chat at once, ahead of the rename that will make it its name; nothing while a rename
