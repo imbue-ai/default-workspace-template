@@ -33,6 +33,10 @@ rootfs back to that record at the pinned apt snapshot timestamp.
   only; path/git installs are not recorded) and installs the recorded rustup
   default toolchain first; when rust itself is absent, entries are reported
   `package_unavailable` rather than bootstrapping rustup.
+- **A uv tool named like a workspace app is never replayed.** Apps run from the
+  workspace venv, so a recorded tool whose name is the `[project]` name of a
+  package under `system/apps/` is an old per-app install, and the package
+  index's project of that name is someone else's.
 - **Versions are a function of the snapshot timestamp.** All apt sources are
   pinned to the committed `.mngr/apt-snapshot-timestamp` (see
   `system/scripts/write_apt_sources.sh`), so replaying the recorded *names* yields
@@ -85,15 +89,15 @@ rootfs back to that record at the pinned apt snapshot timestamp.
 
 ## CLI
 
-- `uv run env-converge run [--phase fast|slow|all]` -- converge (exit 3 when
+- `uv run --no-sync env-converge run [--phase fast|slow|all]` -- converge (exit 3 when
   some recorded packages were unavailable).
-- `uv run env-converge capture` -- re-capture actual state into the record
+- `uv run --no-sync env-converge capture` -- re-capture actual state into the record
   (skipped on a rootfs without the identity stamp, where the record is
   authoritative and pending replay; `--force` overrides).
-- `uv run env-converge upgrade` -- advance to the repo's committed snapshot
+- `uv run --no-sync env-converge upgrade` -- advance to the repo's committed snapshot
   timestamp: re-render sources, `apt-get full-upgrade`, re-run units,
   re-capture, and print the version deltas. Bundled into the update-self flow.
-- `uv run env-converge status` -- record vs reality summary as JSON
+- `uv run --no-sync env-converge status` -- record vs reality summary as JSON
   (including whether an upgrade is pending).
 
 The Imbue Studio in-place backup restore restarts this program

@@ -182,11 +182,11 @@ def _append_compact_summary(server: RunningWorkspace, uuid: str) -> None:
         handle.write(json.dumps(compact_summary_record(uuid, utc_iso_seconds_ago())) + "\n")
 
 
-def _append_typed_compact(server: RunningWorkspace) -> None:
-    """The record Claude Code writes as a ``/compact`` is submitted, which the page shows as the user's bubble."""
+def _append_compact_command(server: RunningWorkspace) -> None:
+    """The record Claude Code writes as a ``/compact`` is submitted, typed by the user or sent by the idle sweep."""
     record = {
         "type": "user",
-        "uuid": "uuid-typed-compact",
+        "uuid": "uuid-compact-command",
         "timestamp": utc_iso_seconds_ago(),
         "message": {"role": "user", "content": "/compact"},
     }
@@ -351,7 +351,7 @@ def _record_compaction_cause(server: RunningWorkspace, cause: str | None) -> Non
 
 @pytest.mark.parametrize("cause", ["idle", "manual", "native", None])
 @pytest.mark.timeout(60, func_only=False)
-def test_a_compaction_is_two_chips_with_the_start_named_for_its_cause_that_open_on_why_then_the_summary(
+def test_a_compaction_is_two_chips_with_the_start_named_for_its_cause_that_open_on_why_and_the_finish_then_on_the_summary(
     compaction_server: RunningWorkspace, page: Page, cause: str | None
 ) -> None:
     server = compaction_server
@@ -383,11 +383,12 @@ def test_a_compaction_is_two_chips_with_the_start_named_for_its_cause_that_open_
     expect(body.nth(1)).to_have_class(re.compile(r"\bborder-dashed\b"))
     expect(body.nth(1).locator(".compaction-summary")).to_have_text(_SUMMARY_TEXT)
 
-    # The start chip opens the same panel under its own title, and one panel is open at a time.
+    # The start chip opens on the explanation alone under its own title, and one panel is open at a time.
     started.click()
     expect(panel).to_have_count(1)
     expect(panel.locator(".tool-chip-detail-title")).to_have_text(_STARTED_LABEL_BY_CAUSE[cause])
-    expect(panel.locator(".compaction-summary")).to_have_text(_SUMMARY_TEXT)
+    expect(panel.locator(".compaction-explanation")).to_have_text(_EXPLANATION_BY_CAUSE[cause])
+    expect(panel.locator(".compaction-summary")).to_have_count(0)
     # The explanation is the page's own: what the agent and the events API read is the summary alone.
     events = get_json(f"{server.chat_url}/api/chats/{FIXTURE_AGENT_ID}/events")["events"]
     assert _EXPLANATION_BY_CAUSE[cause] not in json.dumps(events)
@@ -401,7 +402,7 @@ def test_a_typed_compact_shows_as_a_bubble_with_the_start_chip_under_it_until_th
     chat = _open_chat(page, server)
     expect(chat.locator(".message-user").first).to_contain_text("Hello agent!")
 
-    _append_typed_compact(server)
+    _append_compact_command(server)
     marker = write_compacting_marker(server.agent_info.agent_state_dir, "manual")
 
     bubble = chat.locator(".message-user", has_text="/compact")
@@ -440,6 +441,39 @@ def test_the_start_chip_follows_the_last_reply_while_an_idle_compaction_runs(
     expect(started.locator(".tool-chip-label")).to_have_text(_STARTED_LABEL_BY_CAUSE["idle"], timeout=15000)
     expect(reply.locator("xpath=following-sibling::*[1]").locator(".compaction-chip--started")).to_have_count(1)
     expect(_strip(chat).locator(".agent-activity-indicator__label")).to_have_text("Compacting while idle…")
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_the_idle_sweeps_compact_shows_on_the_start_chip_and_never_as_a_bubble(
+    compaction_server: RunningWorkspace, page: Page
+) -> None:
+    """Claude Code records the sweep's ``/compact`` as it records a typed one, but the user never typed it."""
+    server = compaction_server
+    chat = _open_chat(page, server)
+    reply = chat.locator(".message-assistant", has_text="Hello! How can I help you?")
+    expect(reply).to_be_visible(timeout=15000)
+
+    server.chat_state.agent_manager.note_compaction_requested(FIXTURE_AGENT_ID, CompactionCause.IDLE, time.monotonic())
+    _append_compact_command(server)
+
+    started = _started_chip(chat)
+    expect(started.locator(".tool-chip-label")).to_have_text(_STARTED_LABEL_BY_CAUSE["idle"], timeout=15000)
+    expect(reply.locator("xpath=following-sibling::*[1]").locator(".compaction-chip--started")).to_have_count(1)
+    started.click()
+    expect(_compaction_panel(chat).locator(".compaction-command")).to_have_text("/compact")
+
+    _record_compaction_cause(server, "idle")
+    _append_compact_summary(server, "uuid-compact-1")
+
+    finished = _finished_chip(chat)
+    expect(finished.locator(".tool-chip-label")).to_have_text(_FINISHED_LABEL, timeout=15000)
+    expect(reply.locator("xpath=following-sibling::*[1]").locator(".compaction-chip--started")).to_have_count(1)
+    started.click()
+    expect(_compaction_panel(chat).locator(".compaction-command")).to_have_text("/compact")
+    finished.click()
+    expect(_compaction_panel(chat).locator(".compaction-summary")).to_have_text(_SUMMARY_TEXT)
+    expect(_compaction_panel(chat).locator(".compaction-command")).to_have_count(0)
+    expect(chat.locator(".message-user", has_text="/compact")).to_have_count(0)
 
 
 def _append_jsonl(path: Path, records: Sequence[Mapping[str, Any]]) -> None:

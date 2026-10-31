@@ -70,6 +70,23 @@ describe("latestTurnSpan", () => {
     expect(span?.lastEventAt).toBe(Date.parse("2026-10-20T10:00:14Z"));
   });
 
+  it("reads the idle sweep's /compact as no turn, but a typed one as the turn it is", () => {
+    const compactThen = (cause: "idle" | "manual"): TranscriptEvent[] => [
+      userMessage("2026-10-20T10:00:00Z"),
+      reply("2026-10-20T10:00:14Z"),
+      { ...userMessage("2026-10-20T10:20:00Z"), content: "/compact" } as TranscriptEvent,
+      { ...userMessage("2026-10-20T10:20:30Z", "status"), compaction_cause: cause } as TranscriptEvent,
+    ];
+
+    const afterSweep = latestTurnSpan(compactThen("idle"));
+    expect(afterSweep?.openingEventId).toBe("u-2026-10-20T10:00:00Z");
+    expect(afterSweep?.hasAgentWork).toBe(true);
+
+    const afterTyped = latestTurnSpan(compactThen("manual"));
+    expect(afterTyped?.openingEventId).toBe("u-2026-10-20T10:20:00Z");
+    expect(afterTyped?.hasAgentWork).toBe(false);
+  });
+
   it("says when the agent has done nothing in the turn yet", () => {
     expect(latestTurnSpan([userMessage("2026-10-20T10:00:00Z")])).toEqual({
       openingEventId: "u-2026-10-20T10:00:00Z",

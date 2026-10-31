@@ -120,6 +120,13 @@ git worktree add -q "$WT" HEAD
   what conflicts in plain language (§3), and only then redo the merge in `/home/user/workspace`
   and resolve it interactively WITH the user, keeping their adaptations wherever
   they and the update collide.
+- **An app from an older template** (one that is a root workspace member in the template's
+  layout, with no `uv.lock` of its own) needs converting to a standalone project with
+  `uv run --no-sync user-package-migration migrate`, once the root venv is synced
+  (`references/python-packaging-migration.md` in update-self, "A user app, service or
+  lib"); until then it fails to start. When resolving a conflict in the root
+  `pyproject.toml`, keep this workspace's explicit `members` list, never the template's
+  globs.
 - **Boot smoke-check** the merged worktree -- validate `system/supervisord.conf` WITHOUT
   launching the daemon (never `supervisord -t`, which launches it):
 
@@ -210,7 +217,7 @@ version `<n>` you pulled in §1.
   paragraph, and the sections `## Workspace`, `## Migrations`, `## Templates`,
   `## Adopted templates` in that order (byte-identical to the shipped root
   file; the exact block is `VERSION_HISTORY_STARTER` in `update-self`'s
-  `scripts/update_ledger.py`) -- then append.
+  `python/update_self_skill/update_ledger.py`) -- then append.
 - **Create the heading** `### <slug>  --  <repo-url>` under `## Adopted
   templates` if this slug has none yet (an agent's first update of a given
   template; the initial adopt via `use-template` does not record here).
