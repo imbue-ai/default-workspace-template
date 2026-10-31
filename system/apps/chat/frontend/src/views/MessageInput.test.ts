@@ -75,7 +75,6 @@ const mocks = vi.hoisted(() => {
     // deferred promise.
     waitForComposerUploads: vi.fn(async (_chatId: string) => {}),
     interruptAgent: vi.fn(async () => {}),
-    // What a send the chat app delivered by sending it a second time is noted with.
     // Whether the agent's turn for a message has reached the transcript; none has, at rest.
     hasUserTurnLandedSince: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => false),
     openProviderChooser: vi.fn(),
