@@ -111,7 +111,7 @@ The notice speaks for itself on every classified kind. mngr's reasons are writte
 
 `not_ready` and `state_unknown` mean mngr refused before typing anything, so the chat app tries again after 1, 2 and 4 seconds, and only a failure on the last try reaches the notice. `state_unknown` is read before anything else in a send, so those tries take seconds. Each `not_ready` try goes through mngr's own 30-second wait for the input box, so they can take about two minutes. `agent_unreachable` means the send found the agent down and could not start it; a start can fail for a passing reason, so the chat app tries once more at once. None of these tries can double a message.
 
-A stop of the agent ends every one of the chat app's own repeats, these and the resends above, including the send at a freshly discovered location. Stop's drain hands an in-flight message back to the composer, so another try could land a message the user took back, in the turn they stopped, with its copy still in the composer. The send fails with what it had so far.
+A stop of the agent ends every one of the chat app's own repeats, these and the resends above, including the send at a freshly discovered location. Stop's drain hands an in-flight message back to the composer, so another try could land a message the user took back, in the turn they stopped, with its copy still in the composer. A send whose text the stop's block carries answers `withdrawn` rather than failing, so the page neither opens a notice nor restores a second copy. A stop that fails hands nothing back, and the send fails as usual.
 
 ## What Retry and Restart actually are
 

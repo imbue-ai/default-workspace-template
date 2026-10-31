@@ -32,6 +32,7 @@ from typing import Any
 from uuid import uuid4
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import InterruptToComposer
 from imbue.chat.harnesses.interrupt import IsCompactionInFlight
@@ -253,6 +254,8 @@ class FileHarnessSession(AgentHarnessSession):
 
     _sending: SendingRegistry
     _sending_lock: threading.Lock
+    # The in-flight sends a stop has put in its block for the composer.
+    _handed_back_tokens: set[str]
 
     @classmethod
     def build(cls, deps: SessionDeps) -> "FileHarnessSession":
@@ -260,6 +263,7 @@ class FileHarnessSession(AgentHarnessSession):
         self._deps = deps
         self._sending = SendingRegistry.build()
         self._sending_lock = threading.Lock()
+        self._handed_back_tokens = set()
         return self
 
     def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
@@ -276,6 +280,12 @@ class FileHarnessSession(AgentHarnessSession):
         try:
             self._deps.notify_agents_changed()
             return self._deps.send_to_harness(text, is_resent_when_unsure)
+        except SendFailedError:
+            # The stop's block carries this message to the composer, so its failure has nothing to return.
+            with self._sending_lock:
+                if token in self._handed_back_tokens:
+                    return SendOutcome.WITHDRAWN
+            raise
         finally:
             # Resolved on EVERY exit -- delivered/queued (a real representation exists), failed
             # (Returned, not Sending), or an exception from the send (the request 500s and the
@@ -283,6 +293,7 @@ class FileHarnessSession(AgentHarnessSession):
             # lifetime and re-inject the same text into every later stop's returned block.
             with self._sending_lock:
                 self._sending.resolve(token)
+                self._handed_back_tokens.discard(token)
             self._deps.notify_agents_changed()
 
     def is_sending(self) -> bool:
@@ -324,11 +335,24 @@ class FileHarnessSession(AgentHarnessSession):
         is_compaction_in_flight: IsCompactionInFlight,
     ) -> str:
         interrupter = self._deps.build_interrupter(agent_info)
-        return interrupter.drain_to_composer(
-            watcher,
-            restart_process,
-            settle_activity,
-            press_chord,
-            self.in_flight_block,
-            is_compaction_in_flight,
-        )
+        block: str | None = None
+        try:
+            block = interrupter.drain_to_composer(
+                watcher,
+                restart_process,
+                settle_activity,
+                press_chord,
+                self._hand_back_in_flight_block,
+                is_compaction_in_flight,
+            )
+            return block
+        finally:
+            if block is None:
+                with self._sending_lock:
+                    self._handed_back_tokens.clear()
+
+    def _hand_back_in_flight_block(self) -> str:
+        """The in-flight sends as one block, marked as handed back so a failure of theirs returns nothing."""
+        with self._sending_lock:
+            self._handed_back_tokens.update(record.token for record in self._sending.pending)
+            return self._sending.concatenated_block()

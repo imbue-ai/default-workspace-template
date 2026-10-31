@@ -873,6 +873,7 @@ def _send_to_chat(
             # The kind travels beside the detail so the chat can decide what to offer: trying again
             # can clear a blocked input, where only a restart is left for an agent that would not start.
             # A /compact the chat declines is its own refusal, not a failure.
+            logger.info("Send to chat {} failed: {}", chat_id, send_failure.kind)
             status_code = 409 if send_failure.kind in _DECLINED_SEND_FAILURE_KINDS else 500
             return _SendRefused(
                 answer=SendFailureResponse(detail=send_failure.detail, kind=send_failure.kind), status=status_code
@@ -898,6 +899,8 @@ def _send_to_chat(
             is ComposerCompactHandling.REQUESTED_FROM_MNGR
         )
         is_resent = outcome is SendOutcome.RESENT
+        if is_resent:
+            logger.info("Send to chat {} was sent again", chat_id)
         _report_unreported_runner_ends(state, chat_id)
     record_client_message_activity(state.shell, chat_id, send_message_request, state.is_secondary)
     # Recorded after the delivery, once the revived process (if any) is up and its pid can be
