@@ -1,7 +1,7 @@
 """Waking a queued agent: a message to its chat through the chat app (``message_chat``, the in-process send the
 browser fleet's wake-ups took), which falls back to ``mngr message`` when the chat app cannot take it."""
 
-import concurrent.futures
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
@@ -12,8 +12,9 @@ from workspace_bare_scripts import message_chat
 
 from screen.interfaces import AgentMessengerInterface
 
-# A send has no read timeout of its own (a chat app that never answers holds it), so it runs on a thread of
-# its own and the caller -- the lease's release and the stack's stop -- waits only this long for the answer.
+# A send has no read timeout of its own (a chat app that never answers holds it), so it runs on a daemon thread
+# of its own and the caller -- the lease's release and the stack's stop -- waits only this long for the answer;
+# a send still hanging past that never holds the service's exit either.
 MESSAGE_TIMEOUT_SECONDS: Final[float] = 60.0
 
 SendMessage = Callable[[str, str, Path], int]
@@ -27,8 +28,6 @@ class ChatAgentMessenger(AgentMessengerInterface):
     """Sends through the chat messenger from the repo root; the browser fleet's sentinel renders the nudge as a
     collapsed chip in the transcript rather than a user bubble."""
 
-    model_config = {"arbitrary_types_allowed": True}
-
     repo_root: Path = Field(frozen=True, description="Where the app registry and the ``mngr`` shim resolve from")
     send: SendMessage = Field(
         default=send_through_chat_app, frozen=True, description="The send, answering the messenger's exit code"
@@ -36,25 +35,35 @@ class ChatAgentMessenger(AgentMessengerInterface):
     timeout_seconds: float = Field(
         default=MESSAGE_TIMEOUT_SECONDS, frozen=True, description="How long a caller waits for the send's answer"
     )
-    executor: concurrent.futures.ThreadPoolExecutor = Field(
-        default_factory=lambda: concurrent.futures.ThreadPoolExecutor(thread_name_prefix="screen-wake"),
-        frozen=True,
-        description="The sends' own threads, so a slow one never holds the caller",
-    )
 
     def message_agent(self, agent_id: str, agent_name: str | None, text: str) -> None:
-        future = self.executor.submit(self.send, agent_id, text, self.repo_root)
-        try:
-            returncode = future.result(timeout=self.timeout_seconds)
-        except concurrent.futures.TimeoutError:
+        answers: list[int | OSError] = []
+
+        def run_send() -> None:
+            try:
+                answers.append(self.send(agent_id, text, self.repo_root))
+            except OSError as e:
+                answers.append(e)
+
+        thread = threading.Thread(target=run_send, name="screen-wake", daemon=True)
+        thread.start()
+        thread.join(self.timeout_seconds)
+        if thread.is_alive():
             logger.warning(
                 "The chat messenger has not answered in {}s messaging agent {} about the Screen; the message may not have landed",
                 self.timeout_seconds,
                 agent_name or agent_id,
             )
             return
-        except OSError as e:
-            logger.warning("Could not message agent {} about the Screen ({})", agent_name or agent_id, e)
+        if not answers:
+            # The send died of something other than an OSError; the thread's excepthook already printed it.
+            logger.warning(
+                "The send to agent {} about the Screen failed; the message may not have landed", agent_name or agent_id
+            )
+            return
+        returncode = answers[0]
+        if isinstance(returncode, OSError):
+            logger.warning("Could not message agent {} about the Screen ({})", agent_name or agent_id, returncode)
             return
         if returncode != message_chat.EXIT_DELIVERED:
             logger.warning(
