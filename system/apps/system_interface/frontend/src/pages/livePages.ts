@@ -23,6 +23,10 @@
  * window's page lives, laid over the whole host, plus the pages it keeps (the pinned chat window's, created
  * whether shown or not, since it is where a phone lands); every other page is destroyed rather than hidden, and a
  * window shown again gets a fresh page.
+ *
+ * While the overview is up (the multiplayer spec, section 8.2) the active desktop's pages, the minimized ones
+ * included, are laid over the overview's tiles instead of the windows: each at the size its window renders at,
+ * scaled down to its tile and inert, so the tile shows the page as it is.
  */
 
 import {
@@ -32,6 +36,7 @@ import {
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
   SHELL_HIDDEN,
+  SHELL_INPUT,
   SHELL_LOCATION,
   SHELL_MESSAGE,
   SHELL_NAVIGATE,
@@ -42,8 +47,9 @@ import {
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
-import { windowPageZIndex } from "../geometry/stacking";
+import { OVERVIEW_PAGE_Z_INDEX, windowPageZIndex } from "../geometry/stacking";
 import { windowPageUrl } from "../model/pageUrl";
+import { notePageInput } from "../model/Presence";
 import type { AppRecord, Desktop, WindowRecord } from "../model/records";
 import { navigationsToFollow } from "../reducers/following";
 import type { PageReport } from "../reducers/following";
@@ -73,6 +79,9 @@ export const LIVE_PAGE_ATTRIBUTE = "data-live-page";
 export const WINDOW_CONTENT_ATTRIBUTE = "data-window-content";
 /** The element of a window's chrome that carries its id; the gestures bind by it too. */
 export const WINDOW_ID_ATTRIBUTE = "data-window-id";
+/** The backdrop's root, which carries the active desktop's id: every content box a page lies over (a window's
+ *  chrome inside the desktop's stage, an overview tile outside it) is somewhere under it. */
+export const DESKTOP_ROOT_ATTRIBUTE = "data-desktop-id";
 
 // App pages are cross-origin iframes (each app owns its own origin), so allow-same-origin only
 // lets the framed app be a normal page on ITS origin; it grants nothing on the shell's. An app
@@ -115,6 +124,8 @@ interface LivePage {
   isCloseChordCapable: boolean;
   /** The desktop the page was last introduced to; null before its first load. */
   greetedDesktopId: string | null;
+  /** Whether the last handshake said the window was being viewed on somebody else's desktop. */
+  greetedIsViewing: boolean;
   lastSentVisibility: boolean | null;
   /** Whether the page is hidden because its app is stopped; it reloads once the app runs again. */
   isHeldForStop: boolean;
@@ -136,6 +147,13 @@ export type ShownMountPolicy = {
 /** Which pages live: every page of the desktop's windows, or the phone's shown page and the ones it keeps. */
 export type MountPolicy = { readonly kind: "all" } | ShownMountPolicy;
 
+/** The overview's tiles (the multiplayer spec, section 8.2): how far each tile scales its window down. */
+export interface OverviewPresentation {
+  /** The scale the tile of ``windowId`` draws its page at, or null for a window the overview has no tile for; a
+   *  scale that is not positive (a grid no tile fits) hides the page as no tile does. */
+  readonly scaleOf: (windowId: string) => number | null;
+}
+
 /** A pixel box relative to the pages' host. */
 interface HostRect {
   left: number;
@@ -156,6 +174,8 @@ export class LivePagesLayer implements PageDriver {
   /** The shell's layout revision the pages last followed: an independent window's stored path arrives with it. */
   private followedLayoutLoadsRevision = 0;
   private mountPolicy: MountPolicy = { kind: "all" };
+  /** The overview's tiles while it is up, else null. */
+  private overview: OverviewPresentation | null = null;
 
   constructor(
     private readonly host: HTMLElement,
@@ -168,6 +188,9 @@ export class LivePagesLayer implements PageDriver {
     setChildFrameMessageHandler(SHELL_CAPABILITIES, (frame, payload) => this.takeCapabilities(frame, payload));
     setChildFrameMessageHandler(SHELL_LOCATION, (frame, payload) => this.takeLocation(frame, payload));
     setChildFrameMessageHandler(SHELL_FOCUSED, (frame) => this.takeFocused(frame));
+    // Input inside an app's frame never bubbles to the shell's window, so the pages report it (the multiplayer
+    // spec, section 4.3) and the heartbeat's activity reads it as this client's own.
+    setChildFrameMessageHandler(SHELL_INPUT, () => notePageInput());
     setChildFrameMessageHandler(SHELL_OPEN, (frame, payload) => this.takeOpen(frame, payload));
     setChildFrameMessageHandler(SHELL_START_WITH_TEXT, (frame, payload) => this.takeStartWithText(frame, payload));
     setChildFrameMessageHandler(SHELL_DRAFT_TEXT, (frame, payload) => this.takeDraftText(frame, payload));
@@ -183,6 +206,12 @@ export class LivePagesLayer implements PageDriver {
   /** Set which pages live; applied by the next reconcile. */
   setMountPolicy(policy: MountPolicy): void {
     this.mountPolicy = policy;
+  }
+
+  /** Lay the active desktop's pages over the overview's tiles (or back over their windows, for null); applied by
+   *  the next reconcile. */
+  setOverview(overview: OverviewPresentation | null): void {
+    this.overview = overview;
   }
 
   /** Whether a window's page has been created in this client. */
@@ -319,10 +348,17 @@ export class LivePagesLayer implements PageDriver {
       this.reconcileShown(policy.windowId, policy.alsoKeep, windowsById);
       return;
     }
+    if (this.overview !== null) {
+      this.reconcileOverview(this.overview, windowsById);
+      return;
+    }
 
     const desktop = activeDesktop(state);
     const placements = desktop === null ? [] : activePlacements(state);
     const focused = activeFocusedWindowId(state);
+    // A viewed desktop is read-only (the multiplayer spec, section 8.3): every page on it is inert, the way the
+    // overview's tiles are, so the owner's windows can be looked at but not typed into.
+    const isViewing = this.store.viewedDesktop() !== null;
     const shownIds = new Set<string>();
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
@@ -343,14 +379,58 @@ export class LivePagesLayer implements PageDriver {
         this.hide(page);
         return;
       }
-      this.show(page, box, index, !this.isGestureActive && window.id === focused);
-      if (page.greetedDesktopId !== null && page.greetedDesktopId !== desktop.id) this.greet(page);
+      this.show(page, box, index, !this.isGestureActive && !isViewing && window.id === focused);
+      // A page is told again when its desktop, or whether that desktop is being viewed, changed since: a terminal
+      // attaches to its session as a viewer or as a user by it.
+      if (
+        page.greetedDesktopId !== null &&
+        (page.greetedDesktopId !== desktop.id || page.greetedIsViewing !== isViewing)
+      ) {
+        this.greet(page);
+      }
     });
     for (const page of this.pages.values()) {
       if (!shownIds.has(page.windowId)) this.hide(page);
     }
     this.followIfRevised(windowsById);
     this.focusIfChanged(focused);
+  }
+
+  /** The overview (the multiplayer spec, section 8.2): every window of the active desktop the overview has a tile
+   *  for, minimized ones included, has its page laid over the tile's content box at the tile's scale, inert; a
+   *  pulled-out window's page stays in the chrome's own window, and every other page is hidden. Nothing holds the
+   *  frame focus while the overview is up, so the focused window takes it back when the overview goes. */
+  private reconcileOverview(
+    overview: OverviewPresentation,
+    windowsById: ReadonlyMap<string, { window: WindowRecord; desktop: Desktop }>,
+  ): void {
+    const state = this.store.getState();
+    const desktop = activeDesktop(state);
+    const placements = desktop === null ? [] : activePlacements(state);
+    const shownIds = new Set<string>();
+    for (const placement of placements) {
+      const found = windowsById.get(placement.window_id);
+      const scale = overview.scaleOf(placement.window_id);
+      if (found === undefined || desktop === null || scale === null || scale <= 0) continue;
+      if (placement.is_detached || placement.window_id === this.tornOutWindowId) continue;
+      const app = appByName(state, found.window.app);
+      if (app === undefined) continue;
+      const page = this.pages.get(found.window.id) ?? this.create(found.window, app);
+      shownIds.add(found.window.id);
+      if (!this.prepareShownPage(page, app)) continue;
+      const box = this.contentBox(found.window.id);
+      if (box === null) {
+        this.hide(page);
+        continue;
+      }
+      this.showScaled(page, box, scale);
+      if (page.greetedDesktopId !== null && page.greetedDesktopId !== desktop.id) this.greet(page);
+    }
+    for (const page of this.pages.values()) {
+      if (!shownIds.has(page.windowId)) this.hide(page);
+    }
+    this.followIfRevised(windowsById);
+    this.focusIfChanged(null);
   }
 
   /** Solo mode (the pull-out-window spec, section 7.5): the one window's page over the whole host, live, and no
@@ -493,15 +573,27 @@ export class LivePagesLayer implements PageDriver {
     }
   }
 
+  /** A window's content box in the host's own pixels. The measurement is in screen pixels: while a viewed desktop is
+   *  drawn in a letterbox (the multiplayer spec, section 8.3), the host and the chrome lie under one scale, and a
+   *  page's position and size are in the host's unscaled pixels, so the box is divided by that scale. */
   private contentBox(windowId: string): HostRect | null {
-    const content = this.host.parentElement?.querySelector<HTMLElement>(
+    // Searched from the backdrop's root, not the host's parent: the overview's tiles lie outside the desktop's
+    // stage the host sits in.
+    const root = this.host.closest<HTMLElement>(`[${DESKTOP_ROOT_ATTRIBUTE}]`) ?? this.host.parentElement;
+    const content = root?.querySelector<HTMLElement>(
       `[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"] [${WINDOW_CONTENT_ATTRIBUTE}]`,
     );
     if (content === undefined || content === null) return null;
     const box = content.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) return null;
     const origin = this.host.getBoundingClientRect();
-    return { left: box.left - origin.left, top: box.top - origin.top, width: box.width, height: box.height };
+    const scale = this.store.viewingLetterbox()?.scale ?? 1;
+    return {
+      left: (box.left - origin.left) / scale,
+      top: (box.top - origin.top) / scale,
+      width: box.width / scale,
+      height: box.height / scale,
+    };
   }
 
   private create(window: WindowRecord, app: AppRecord): LivePage {
@@ -529,6 +621,7 @@ export class LivePagesLayer implements PageDriver {
       isNavigationCapable: false,
       isCloseChordCapable: false,
       greetedDesktopId: null,
+      greetedIsViewing: false,
       lastSentVisibility: null,
       isHeldForStop: false,
     };
@@ -558,6 +651,23 @@ export class LivePagesLayer implements PageDriver {
     style.top = `${box.top}px`;
     style.width = `${box.width}px`;
     style.height = `${box.height}px`;
+    style.transform = "";
+  }
+
+  /** Lay a page over an overview tile's box: at the size its window renders at (the box over the scale), scaled
+   *  down from the box's top-left corner to fill it, inert, above the overview's scrim. */
+  private showScaled(page: LivePage, box: HostRect, scale: number): void {
+    const style = page.wrapper.style;
+    style.left = `${box.left}px`;
+    style.top = `${box.top}px`;
+    style.width = `${box.width / scale}px`;
+    style.height = `${box.height / scale}px`;
+    style.transformOrigin = "top left";
+    style.transform = `scale(${scale})`;
+    style.zIndex = OVERVIEW_PAGE_Z_INDEX;
+    style.pointerEvents = "none";
+    style.display = "";
+    this.syncVisibility(page, true);
   }
 
   private show(page: LivePage, box: HostRect, stackIndex: number, isInteractive: boolean): void {
@@ -589,6 +699,8 @@ export class LivePagesLayer implements PageDriver {
     const found = findWindow(state, page.windowId);
     const desktopId = found?.desktop.id ?? state.activeDesktopId ?? "";
     const path = found === null ? "" : this.pathSeen(page, found, state);
+    // Viewed means the window's desktop is the active one and not the viewer's own (the multiplayer spec, 8.3).
+    const isViewing = desktopId === state.activeDesktopId && this.store.viewedDesktop() !== null;
     sendToChildFrame(page.frame, SHELL_HANDSHAKE, {
       clientId: state.clientId,
       windowId: page.windowId,
@@ -596,8 +708,10 @@ export class LivePagesLayer implements PageDriver {
       app: page.app,
       path,
       opensLocalFiles: this.store.getOpensLocalFiles(),
+      isViewing,
     });
     page.greetedDesktopId = desktopId;
+    page.greetedIsViewing = isViewing;
     sendToChildFrame(page.frame, SHELL_THEME, this.themeMessageFor(page, currentTheme(), isCurrentThemeRemembered()));
   }
 
@@ -622,11 +736,16 @@ export class LivePagesLayer implements PageDriver {
     return windowId === null ? undefined : this.pages.get(windowId);
   }
 
+  /** ``shell:capabilities`` from a page: what it can do, and the handshake again. The contract module is up
+   *  before the frame's load (which waits for the page's own frames, a terminal's pty among them), so greeting it
+   *  here tells a page whether it is viewed as soon as it can listen, and a viewed terminal attaches as a viewer
+   *  from its first attach rather than after its load; the page takes a repeated handshake as it is. */
   private takeCapabilities(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
     const page = this.pageOfFrame(frame);
     if (page === undefined) return;
     page.isNavigationCapable = payload.navigation === true;
     page.isCloseChordCapable = payload.closeChord === true;
+    this.greet(page);
   }
 
   private takeLocation(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {
@@ -651,10 +770,12 @@ export class LivePagesLayer implements PageDriver {
 
   /** ``shell:focused`` from a page: its window is raised. A page that is not shown (minimized, pulled out into the
    *  chrome's own window, or being pulled out) cannot have been chosen by the user, and a raise would bring its
-   *  window back onto the desktop. */
+   *  window back onto the desktop. A viewed page's focus raises nothing either (the multiplayer spec, section
+   *  8.3): the stage is inert, so the focus is the page's own doing (a composer focused on load), nobody's
+   *  gesture, and nothing to tell the user about. */
   private takeFocused(frame: HTMLIFrameElement): void {
     const page = this.pageOfFrame(frame);
-    if (page === undefined || !this.isShown(page)) return;
+    if (page === undefined || !this.isShown(page) || this.store.viewedDesktop() !== null) return;
     this.store.raiseWindow(page.windowId);
   }
 

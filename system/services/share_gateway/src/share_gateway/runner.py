@@ -41,6 +41,9 @@ from pathlib import Path
 import httpx
 from inotify_simple import INotify
 from inotify_simple import flags as inotify_flags
+from share_grants.agent_grants import AGENT_LAST_SEEN_FILE
+from share_grants.agent_grants import AgentGrantsError
+from share_grants.agent_grants import utc_now as agent_access_now
 from werkzeug.serving import BaseWSGIServer
 from werkzeug.serving import make_server
 
@@ -50,9 +53,6 @@ from share_gateway.agent_access import LastSeenStore
 from share_gateway.agent_access import default_agent_access_paths
 from share_gateway.agent_access import reconcile as reconcile_agent_access
 from share_gateway.agent_audit import events_dir_from_environ
-from share_gateway.agent_grants import AGENT_ACCESS_STATE_DIR
-from share_gateway.agent_grants import AgentGrantsError
-from share_gateway.agent_grants import utc_now as agent_access_now
 from share_gateway.agent_orientation import SKILLS_INDEX_CACHE_PATH
 from share_gateway.agent_routes import AgentAccessContext
 from share_gateway.agent_routes import register_agent_routes
@@ -456,7 +456,7 @@ def _build_agent_access_context(workspace_domain: str) -> AgentAccessContext:
         coordinates=coordinates,
         repo_root=Path.cwd(),
         environ=os.environ,
-        last_seen=LastSeenStore(AGENT_ACCESS_STATE_DIR / "last_seen.json"),
+        last_seen=LastSeenStore(AGENT_LAST_SEEN_FILE),
         skills_cache_path=SKILLS_INDEX_CACHE_PATH,
         now=agent_access_now,
     )

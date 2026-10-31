@@ -116,10 +116,12 @@ class Pin(FrozenModel):
         default=PinStyle.PLAIN, description="How the entry is drawn by a client that chose nothing"
     )
     scope: LocationScope = Field(
-        default=LocationScope.LINKED, description="Whether the pinned window keeps a path per client"
+        default=LocationScope.LINKED,
+        description="Whether the pinned window keeps a path per client",
     )
     default_mode: EntryMode = Field(
-        default=EntryMode.BAR, description="Where a client that chose nothing shows the entry"
+        default=EntryMode.BAR,
+        description="Where a client that chose nothing shows the entry",
     )
 
 
@@ -129,6 +131,22 @@ class LaunchParam(FrozenModel):
     name: LaunchParamName = Field(description="The parameter's name")
     label: NonEmptyStr = Field(description="What the parameter is called in prose")
     required: bool = Field(default=False, description="Whether the launch path refuses a request without it")
+
+
+class AppParams(FrozenModel):
+    """The declared params of a launch path about an app (the multiplayer spec, section 9.2): the shell fills them
+    with the name and the display name of the app whose window's "Chat about this app" button was pressed."""
+
+    name: LaunchParamName = Field(description="The param that takes the app's registered name")
+    display_name: LaunchParamName = Field(description="The param that takes the app's display name")
+
+    @model_validator(mode="after")
+    def _check_the_two_params_differ(self) -> Self:
+        if self.name == self.display_name:
+            raise InvalidManifestValueError(
+                f"app_params names one param {str(self.name)!r} for both the name and the display name"
+            )
+        return self
 
 
 class LaunchPath(FrozenModel):
@@ -161,17 +179,48 @@ class LaunchPath(FrozenModel):
         description="The declared param the shell fills with text to be drafted rather than sent: a free-text row of "
         "the launcher too, and what the avatar dialog's draft goes through (post-launch-paths plan section 3.1)",
     )
+    mention_param: LaunchParamName | None = Field(
+        default=None,
+        description="The declared param the shell fills with a mention of a person (``@<handle> ``) when their tray "
+        "entry is clicked (the multiplayer spec, section 7.5); never a launcher row",
+    )
+    app_params: AppParams | None = Field(
+        default=None,
+        description="The declared params the shell fills with the name and display name of the app whose window's "
+        '"Chat about this app" button was pressed (the multiplayer spec, section 9.2); never a launcher row',
+    )
 
     @model_validator(mode="after")
     def _check_params_presets_and_text_params(self) -> Self:
         param_names = [str(param.name) for param in self.params]
-        for field_name, chosen in (("text_param", self.text_param), ("draft_param", self.draft_param)):
+        chosen_params = (
+            ("text_param", self.text_param),
+            ("draft_param", self.draft_param),
+            ("mention_param", self.mention_param),
+            (
+                "app_params.name",
+                None if self.app_params is None else self.app_params.name,
+            ),
+            (
+                "app_params.display_name",
+                None if self.app_params is None else self.app_params.display_name,
+            ),
+        )
+        for field_name, chosen in chosen_params:
             if chosen is not None and chosen not in param_names:
                 raise InvalidManifestValueError(
                     f"{field_name} {str(chosen)!r} is not one of the launch path's params {param_names}"
                 )
-        if self.text_param is not None and self.draft_param is not None:
-            raise InvalidManifestValueError("a launch path declares at most one of text_param and draft_param")
+        chosen_fields = (
+            self.text_param,
+            self.draft_param,
+            self.mention_param,
+            self.app_params,
+        )
+        if sum(chosen is not None for chosen in chosen_fields) > 1:
+            raise InvalidManifestValueError(
+                "a launch path declares at most one of text_param, draft_param, mention_param, and app_params"
+            )
         for preset_name in self.presets:
             if preset_name in param_names:
                 raise InvalidManifestValueError(
@@ -191,13 +240,16 @@ class MessageHandler(FrozenModel):
 
     type: MessageType = Field(description="The message type the app handles")
     path: LaunchPathValue | None = Field(
-        default=None, description="The route under the app origin the shell POSTs the message to"
+        default=None,
+        description="The route under the app origin the shell POSTs the message to",
     )
     show: PageTemplate | None = Field(
-        default=None, description="The page of the app the shell shows for the message, built from its fields"
+        default=None,
+        description="The page of the app the shell shows for the message, built from its fields",
     )
     showing: tuple[PageTemplate, ...] = Field(
-        default=(), description="The app's other pages, built the same way, that count as already showing it"
+        default=(),
+        description="The app's other pages, built the same way, that count as already showing it",
     )
 
     @model_validator(mode="after")
@@ -217,7 +269,8 @@ class AppReference(FrozenModel):
 
     path: ReferencePath = Field(description="The literal repo-root-relative file or directory")
     note: ReferenceNote | None = Field(
-        default=None, description="One line: why it belongs to the app and which surface it uses"
+        default=None,
+        description="One line: why it belongs to the app and which surface it uses",
     )
 
 
@@ -225,7 +278,8 @@ class ScopeRules(FrozenModel):
     """What an app's footprint leaves out on top of the built-in exclusions."""
 
     exclude: tuple[ExcludeGlob, ...] = Field(
-        default=(), description="Repo-root-relative gitignore-style globs no pass ever considers"
+        default=(),
+        description="Repo-root-relative gitignore-style globs no pass ever considers",
     )
 
 
@@ -246,7 +300,8 @@ class SecretDeclaration(FrozenModel):
     file: SecretFileName = Field(description="The <file> of data/.secrets/<file>.env")
     variables: tuple[EnvVarName, ...] = Field(description="The variables the file must set; at least one")
     note: ReferenceNote | None = Field(
-        default=None, description="One line for the adopter: what the value is and where to get it"
+        default=None,
+        description="One line for the adopter: what the value is and where to get it",
     )
 
     @model_validator(mode="after")
@@ -448,7 +503,8 @@ class AppManifest(FrozenModel):
         default=None, description="The shortcut a new desktop is seeded with"
     )
     launch_paths: tuple[LaunchPath, ...] = Field(
-        default=(), description="The paths the desktop interface opens windows at, with their labels and params"
+        default=(),
+        description="The paths the desktop interface opens windows at, with their labels and params",
     )
     launcher_rank: int | None = Field(
         default=None,
@@ -467,15 +523,21 @@ class AppManifest(FrozenModel):
         description="The messages the app takes, each posted by the shell to a route under the app's origin",
     )
     references: tuple[AppReference, ...] = Field(
-        default=(), description="The artifacts outside the app's directory that belong to it"
+        default=(),
+        description="The artifacts outside the app's directory that belong to it",
     )
     scope: ScopeRules = Field(default_factory=ScopeRules, description="The app's own exclusions from its footprint")
     wiring: WiringRules = Field(default_factory=WiringRules, description="The extra supervisord programs the app owns")
     secrets: tuple[SecretDeclaration, ...] = Field(
-        default=(), description="The secret files the app runs under, for publish-template to aggregate"
+        default=(),
+        description="The secret files the app runs under, for publish-template to aggregate",
+    )
+    preview: PreviewSpec = Field(
+        description="How a throwaway instance boots for a preview (the scaffold convention by default)"
     )
     theming: AppTheming = Field(
-        default_factory=AppTheming, description="How far the app takes part in workspace themes"
+        default_factory=AppTheming,
+        description="How far the app takes part in workspace themes",
     )
     preview: PreviewSpec = Field(
         description="How a throwaway instance boots for a preview (the scaffold convention by default)"

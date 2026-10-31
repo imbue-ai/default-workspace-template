@@ -33,10 +33,11 @@ def test_every_harness_declines_the_model_bar_commands_with_the_picker_notice() 
     # elsewhere would point the user at a picker control that is not rendered for that
     # harness, which is worse than letting the text through.
     #
-    # The seed pseudo-harness is skipped: no agent ever runs on it, so no composer can
-    # type a command into it, and it declares no popups at all.
+    # The seed pseudo-harness and the room harness are skipped: no model runs on either (no
+    # agent at all on a seed, a reader of its pane on a room), so there is no model bar to
+    # point at, and neither declares a popup.
     for harness in HARNESS_SPECS:
-        if harness is HarnessType.SEED:
+        if harness in (HarnessType.SEED, HarnessType.ROOM):
             continue
         bodies = {
             command: popup.notice_body
@@ -87,6 +88,7 @@ def test_only_the_harnesses_mngr_can_compact_support_compaction_and_only_claude_
         HarnessType.OPENCODE: (False, False),
         HarnessType.ANTIGRAVITY: (False, False),
         HarnessType.SEED: (False, False),
+        HarnessType.ROOM: (False, False),
     }
 
 
@@ -99,6 +101,7 @@ def test_a_composer_compact_runs_on_every_harness_mngr_can_compact_and_is_declin
         HarnessType.OPENCODE: ComposerCompactHandling.SENT_AS_TEXT,
         HarnessType.ANTIGRAVITY: ComposerCompactHandling.SENT_AS_TEXT,
         HarnessType.SEED: ComposerCompactHandling.SENT_AS_TEXT,
+        HarnessType.ROOM: ComposerCompactHandling.SENT_AS_TEXT,
     }
     for harness, spec in HARNESS_SPECS.items():
         if spec.composer_compact_handling is not ComposerCompactHandling.SENT_AS_TEXT:

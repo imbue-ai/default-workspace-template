@@ -1,12 +1,14 @@
 /**
- * A window's title bar (concepts.md section 2.7), drawn from the theme's chrome slots
- * (docs/system/blueprint/workspace-themes/, section 4.3): the leading slots from the left edge, the trailing ones
- * ending at the right. The standard look is the app icon, the title, Refresh, and the window menu (three dots),
- * then minimize, maximize (restore when maximized), and close at the right edge; a theme may rearrange them and
- * centre the title, never drop a control. Resting on the maximize control opens the window's size menu, which the
- * window menu opens under Move and resize too. It is the drag handle (``data-drag-handle``); a double click toggles
- * maximize. A pinned window keeps its close control too, so the habit of reaching for it holds; the desktop answers
- * it by minimizing the window.
+ * A window's title bar (concepts.md section 2.7; the multiplayer spec, section 9.1), drawn from the theme's
+ * chrome slots (docs/system/blueprint/workspace-themes/, section 4.3): the leading slots from the left edge, the
+ * trailing ones ending at the right. The standard look is, while the window is focused, the window menu (three
+ * dots), Refresh, and "Chat about this app" (a speech balloon, on every window of an app that is not internal);
+ * the app icon and the title centred over the bar; then minimize, maximize (restore when maximized), and close at
+ * the right edge. A theme may rearrange the slots and align the title its own way, never drop a control; the
+ * balloon follows Refresh wherever the theme puts it. Resting on the maximize control opens the window's size
+ * menu, which the window menu opens under Move and resize too. It is the drag handle (``data-drag-handle``); a
+ * double click toggles maximize. A pinned window keeps its close control too, so the habit of reaching for it
+ * holds; the desktop answers it by minimizing the window.
  */
 
 import m from "mithril";
@@ -26,7 +28,9 @@ const TITLE_ACTION_GLYPH_SIZE = 12;
  *  at a control's size it reads as mud. 20 in a 36 bar leaves 8 above and below. */
 const APP_GLYPH_SIZE = 20;
 
-export type WindowControl = "minimize" | "maximize" | "restore" | "close" | "menu" | "refresh";
+export type WindowControl = "minimize" | "maximize" | "restore" | "close" | "menu" | "refresh" | "app-chat";
+
+const APP_CHAT_LABEL = "Chat about this app";
 
 export interface TitleBarAttrs {
   readonly title: string;
@@ -34,6 +38,9 @@ export interface TitleBarAttrs {
   readonly state: WindowState;
   readonly isFocused: boolean;
   readonly isMenuOpen: boolean;
+  /** Whether the bar offers "Chat about this app": an app that is not internal, on a machine with an app-chat launch
+   *  path (the multiplayer spec, section 9.1); absent reads as not offered. */
+  readonly hasAppChat?: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
   readonly sizeMenuTrigger: m.Attributes;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;
@@ -89,7 +96,7 @@ function control(
 const SLOT_MARGIN: Readonly<Record<ChromeSlot, string>> = {
   icon: "",
   title: "ml-1.5",
-  refresh: "ml-2",
+  refresh: "ml-0.5",
   menu: "ml-0.5",
   minimize: "",
   maximize: "ml-1",
@@ -103,8 +110,18 @@ function slotMargin(slot: ChromeSlot, isFirst: boolean): string {
 export function TitleBar(): m.Component<TitleBarAttrs> {
   return {
     view(vnode) {
-      const { title, app, state, isFocused, isMenuOpen, sizeMenuTrigger, onControl, onDoubleClick, chrome } =
-        vnode.attrs;
+      const {
+        title,
+        app,
+        state,
+        isFocused,
+        isMenuOpen,
+        hasAppChat,
+        sizeMenuTrigger,
+        onControl,
+        onDoubleClick,
+        chrome,
+      } = vnode.attrs;
       const isMaximized = state === "MAXIMIZED";
       const isTitleCentered = chrome.title_align === "center";
 
@@ -116,12 +133,12 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
       // pointer before the release.
       function isSlotShown(name: ChromeSlot): boolean {
         switch (name) {
+          case "icon":
           case "title":
             return !isTitleCentered;
           case "refresh":
           case "menu":
             return isFocused;
-          case "icon":
           case "minimize":
           case "maximize":
           case "close":
@@ -152,8 +169,8 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
             );
           case "title":
             return titleSpan(margin);
-          case "refresh":
-            return control(
+          case "refresh": {
+            const refresh = control(
               "refresh",
               "Refresh",
               icon("refresh", { size: TITLE_ACTION_GLYPH_SIZE }),
@@ -163,6 +180,15 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
                 extra: margin,
               },
             );
+            // The balloon follows Refresh wherever the theme puts it (the multiplayer spec, section 9.1).
+            if (!hasAppChat) return refresh;
+            return [
+              refresh,
+              control("app-chat", APP_CHAT_LABEL, glyph("balloon", TITLE_ACTION_GLYPH_SIZE), false, onControl, {
+                extra: "ml-0.5",
+              }),
+            ];
+          }
           case "menu":
             return control("menu", "Window menu", glyph("kebab", TITLE_ACTION_GLYPH_SIZE), isMenuOpen, onControl, {
               extra: margin,
@@ -198,10 +224,54 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
             ...partAttrs("window-title"),
             class:
               `window-title ${margin} min-w-0 truncate text-(length:--font-size-row) ` +
-              (isFocused ? "font-bold" : "font-medium opacity-70") +
-              (isTitleCentered ? " pointer-events-none absolute left-1/2 max-w-[60%] -translate-x-1/2" : ""),
+              (isFocused ? "font-bold" : "font-medium opacity-70"),
           },
           title,
+        );
+      }
+
+      /** The centred icon and title (the multiplayer spec, section 9.1): laid over the middle of the bar, the icon
+       *  only when the theme names its slot, which the runs then leave out. */
+      function centeredGroup(): m.Vnode {
+        const hasIconSlot = chrome.leading.includes("icon") || chrome.trailing.includes("icon");
+        // With no icon slot the title part itself is the positioned element, as it was before the group: a theme
+        // styles the part as the one centred patch over the bar (mac-classic's white patch over the stripes).
+        if (!hasIconSlot) {
+          return m(
+            "span",
+            {
+              ...partAttrs("window-title"),
+              class:
+                "window-title pointer-events-none absolute left-1/2 max-w-[60%] min-w-0 -translate-x-1/2 truncate " +
+                "text-(length:--font-size-row) " +
+                (isFocused ? "font-bold" : "font-medium opacity-70"),
+            },
+            title,
+          );
+        }
+        return m(
+          "span",
+          { class: "pointer-events-none absolute left-1/2 flex max-w-[60%] min-w-0 -translate-x-1/2 items-center" },
+          [
+            m(
+              "span",
+              {
+                ...partAttrs("window-icon"),
+                class: `flex shrink-0 items-center ${isFocused ? "" : "opacity-50"}`,
+              },
+              m.trust(appGlyph(app, APP_GLYPH_SIZE)),
+            ),
+            m(
+              "span",
+              {
+                ...partAttrs("window-title"),
+                class:
+                  "window-title ml-1.5 min-w-0 truncate text-(length:--font-size-row) " +
+                  (isFocused ? "font-bold" : "font-medium opacity-70"),
+              },
+              title,
+            ),
+          ],
         );
       }
 
@@ -226,7 +296,7 @@ export function TitleBar(): m.Component<TitleBarAttrs> {
           ...slotRun(chrome.leading),
           m("span", { class: "flex-1" }),
           ...slotRun(chrome.trailing),
-          isTitleCentered ? titleSpan("") : null,
+          isTitleCentered ? centeredGroup() : null,
         ],
       );
     },

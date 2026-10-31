@@ -70,7 +70,7 @@ describe("ThemeGallery", () => {
     expect(root.querySelector("[data-gallery-problems]")?.textContent).toContain(".x is a class");
     const bar = root.querySelector('[data-part="title-bar"]') as HTMLElement;
     const controls = Array.from(bar.querySelectorAll("[data-control]")).map((c) => c.getAttribute("data-control"));
-    expect(controls).toEqual(["refresh", "menu", "minimize", "maximize", "close"]);
+    expect(controls).toEqual(["menu", "refresh", "minimize", "maximize", "close"]);
   });
 
   it("draws every part of the contract, the avatar in both its kinds", () => {
