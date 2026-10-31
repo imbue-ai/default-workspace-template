@@ -1446,7 +1446,7 @@ def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_
     tmp_path: Path, page: Page
 ) -> None:
     """The chat app's own second send could not be confirmed either, so it sends nothing more itself: the notice says
-    so in its own words rather than mngr's diagnostics, offers neither Retry nor Force, and the message stays in the
+    so in its own words rather than mngr's diagnostics, offers neither Retry nor Restart, and the message stays in the
     composer and is sent again only when Send again is pressed."""
     text = "did you get this?"
     sent: list[str] = []

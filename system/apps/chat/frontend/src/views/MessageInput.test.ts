@@ -1106,7 +1106,7 @@ describe("MessageInput send failure notice", () => {
 
   it("asks the user to check the agent before sending an unconfirmed message again", async () => {
     // The chat app has already sent it twice without confirmation, and the agent may have either
-    // copy: a plain Retry or a Force (restart and resend) could deliver it a third time.
+    // copy: a plain Retry or a Restart (restart and resend) could deliver it a third time.
     // mngr's reason is diagnostics, not copy.
     mocks.sendMessage.mockRejectedValueOnce({
       kind: "submission_unconfirmed",
@@ -1313,8 +1313,8 @@ describe("MessageInput send failure notice", () => {
     expect(getOutgoingMessages("agent-delivered").map((outgoing) => outgoing.content)).toEqual(["/compact"]);
   });
 
-  it("removes the delivered message even when Force drained a queue block above it", async () => {
-    // Force prepends the rescued queue block BEFORE sending, so the delivered message is no
+  it("removes the delivered message even when Restart drained a queue block above it", async () => {
+    // Restart prepends the rescued queue block BEFORE sending, so the delivered message is no
     // longer at the front of the composer -- a prefix-only strip would leave it there, sent and
     // still in the box.
     mocks.sendMessage.mockRejectedValueOnce("nope");
@@ -1322,8 +1322,8 @@ describe("MessageInput send failure notice", () => {
     const after = await typeAndSend(component, "agent-1", "my message");
     mocks.drainToComposer.mockResolvedValueOnce({ block: "queued one" });
 
-    const force = findButton(after, "Restart");
-    (force!.attrs!.onclick as () => void)();
+    const restart = findButton(after, "Restart");
+    (restart!.attrs!.onclick as () => void)();
     await flushAsync();
 
     const composer = localStorage.getItem("message-text:agent-1") ?? "";
@@ -1349,7 +1349,7 @@ describe("MessageInput send failure notice", () => {
     expect(text).not.toContain("Retry");
   });
 
-  it("offers Cancel, Retry and Force for a failed send", async () => {
+  it("offers Cancel, Retry and Restart for a failed send", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     const text = renderedText(after);
@@ -1392,15 +1392,15 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
-  it("force restarts the agent before sending, in that order", async () => {
+  it("Restart restarts the agent before sending, in that order", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockClear();
 
-    const force = findButton(after, "Restart");
-    (force!.attrs!.onclick as () => void)();
+    const restart = findButton(after, "Restart");
+    (restart!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.drainToComposer).toHaveBeenCalledWith("agent-1");
     expect(mocks.interruptAgent).toHaveBeenCalledWith("agent-1");
@@ -1414,8 +1414,8 @@ describe("MessageInput send failure notice", () => {
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockRejectedValueOnce("restart refused");
 
-    const force = findButton(after, "Restart");
-    (force!.attrs!.onclick as () => void)();
+    const restart = findButton(after, "Restart");
+    (restart!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
@@ -2001,7 +2001,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
   });
 
-  it("offers choosing a provider instead of Retry and Force when a send is refused for a signed-out account", async () => {
+  it("offers choosing a provider instead of Retry and Restart when a send is refused for a signed-out account", async () => {
     mocks.signedOutAccountIds.clear();
     mocks.sendMessage.mockRejectedValueOnce({
       response: { kind: "account_signed_out" },

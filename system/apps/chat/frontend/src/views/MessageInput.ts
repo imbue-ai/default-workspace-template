@@ -428,7 +428,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // Component state like the notices above, NOT module state: every open chat panel mounts its
   // own MessageInput, and a module-level value would raise the notice in all of them at once.
   // `recovery` is what makes the notice actionable, and it is carried by the OPERATION rather
-  // than the failure: a send can be repeated, so it offers Cancel / Retry / Force, while a
+  // than the failure: a send can be repeated, so it offers Cancel / Retry / Restart, while a
   // failed interrupt has nothing to repeat and gets a plain OK. Any send failure qualifies --
   // a dialog holding the input, a readiness timeout, a transport error -- because the ways out
   // are the same whatever the reason; only the text differs.
@@ -447,7 +447,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   let actionFailureTitle = "Couldn't send your message";
   let actionFailureRecovery: SendRecovery | null = null;
   // Which recovery action is mid-flight, so the buttons disable rather than fire twice.
-  let actionFailureInFlight: "retry" | "force" | null = null;
+  let actionFailureInFlight: "retry" | "restart" | null = null;
   // One notice instance each: the component closes over its own dismiss handler, so sharing one
   // between notices would let whichever rendered last answer the others' Escape.
   const actionFailureNotice = makeNoticeDialog();
@@ -477,7 +477,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
     unconfirmedSends = unconfirmedSends.filter((watched) => watched.recovery !== recovery);
   }
   // Whether the chat app refused the send because the chat's account was signed out: sending again cannot help, so
-  // the notice offers choosing a provider instead of Retry and Force.
+  // the notice offers choosing a provider instead of Retry and Restart.
   let isActionFailureOnSignedOutAccount = false;
   // Retry for a failure raised by a sibling view, which knows how to repeat its own operation.
   let externalRetry: (() => Promise<void>) | null = null;
@@ -1155,11 +1155,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       ): void {
         const deliveredIds = new Set(deliveredAttachments.map((attachment) => attachment.localId));
         // Emphatically NOT "clear the composer". By this point the box can also hold a draft
-        // typed while the send was failing, and -- after Force -- the queue block drained out of
+        // typed while the send was failing, and -- after Restart -- the queue block drained out of
         // the harness so the restart would not destroy it. Wiping it wholesale would throw away
         // the very messages this feature exists to protect. Remove the one copy that was just
         // delivered, and leave everything else exactly where it is.
-        // Removed wherever it sits, not just at the front: Force drains the harness queue back
+        // Removed wherever it sits, not just at the front: Restart drains the harness queue back
         // into the composer BEFORE sending, so by now the delivered message usually has that
         // block above it and a prefix-only strip would leave it behind -- sent, and still in the
         // box. Only the first occurrence goes, so a user who genuinely typed the same text twice
@@ -1243,7 +1243,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       /**
-       * Shared tail of Retry and Force: send the message again and settle the notice.
+       * Shared tail of Retry and Restart: send the message again and settle the notice.
        *
        * Sends ``sentText`` -- what actually went to the agent, attachment references included --
        * not the typed prose, which would drop the attachments silently.
@@ -1285,18 +1285,18 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         m.redraw();
       }
 
-      /** Force: restart the agent, then send. Destructive -- it ends any in-progress turn. */
-      async function forceFailedSend(): Promise<void> {
+      /** Restart: restart the agent, then send. Destructive -- it ends any in-progress turn. */
+      async function restartFailedSend(): Promise<void> {
         const recovery = actionFailureRecovery;
         if (recovery === null || actionFailureInFlight !== null) {
           return;
         }
-        actionFailureInFlight = "force";
+        actionFailureInFlight = "restart";
         m.redraw();
         // Rescue anything queued inside the harness first. The restart below SIGKILLs the agent,
         // which drops that queue -- and a feature whose rule is "never lose the message" must not
         // have a button that quietly loses other people's. Best-effort on purpose: the agent we
-        // are about to force is often the one that is stuck, so a drain that fails or is refused
+        // are about to restart is often the one that is stuck, so a drain that fails or is refused
         // must not stop the restart the user actually asked for.
         try {
           const drained = await drainToComposer(recovery.chatId);
@@ -1310,7 +1310,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           // The restart itself, unconditionally: the drain does not guarantee one. Claude's
           // empty-queue path is a native chord, and pi/codex hand back a block without ever
           // restarting -- so a non-empty block is not evidence the process was replaced, and a
-          // wedged agent is exactly what Force is for. If this is refused (the services agent
+          // wedged agent is exactly what Restart is for. If this is refused (the services agent
           // carries is_primary=true, say) that refusal becomes the notice's text, nothing is sent.
           await interruptAgent(recovery.chatId);
         } catch (err) {
@@ -1346,7 +1346,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           });
         }
         // The chat app already tried once more for an agent that was down and would not start,
-        // and Force's restart is the stronger way to bring it up, so Retry is not offered. Every
+        // and Restart is the stronger way to bring it up, so Retry is not offered. Every
         // other kind -- and anything unclassified -- keeps it.
         const canRetryHelp = actionFailureKind !== "agent_unreachable";
         const isRepeatable = (recovery !== null || externalRetry !== null) && canRetryHelp;
@@ -1379,7 +1379,7 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                   },
                 ]
               : []),
-            // Force needs a message to send afterwards, so it is offered only for our own send --
+            // Restart needs a message to send afterwards, so it is offered only for our own send --
             // and never for an agent that is merely still starting, where restarting would
             // discard the session it was about to finish bringing up, or for one that may already
             // be working on this message, where it would cut that turn off and send it twice. It
@@ -1389,11 +1389,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               ? []
               : [
                   {
-                    label: actionFailureInFlight === "force" ? "Restarting…" : "Restart",
+                    label: actionFailureInFlight === "restart" ? "Restarting…" : "Restart",
                     tooltip: "Restarts the agent, then sends your message. Anything it's working on stops.",
                     isDestructive: true,
                     isDisabled: actionFailureInFlight !== null,
-                    run: () => void forceFailedSend(),
+                    run: () => void restartFailedSend(),
                   },
                 ]),
           ],
