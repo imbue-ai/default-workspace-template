@@ -271,6 +271,7 @@ export function renderAssistantMessage(
       id: event.event_id,
       class: "message message-assistant mb-5",
       key: event.event_id,
+      "data-message-id": event.event_id,
     },
     m(StableAssistantMessage, { event, toolResults, chatId }),
   );
@@ -331,9 +332,13 @@ export function renderAssistantRunRow(
   chatId: string,
 ): m.Vnode {
   const key = events[0].event_id;
+  // A row of one assistant message names that message. A row that folds several
+  // events, or a compaction's chips, does not: the DOM id stays the head's so
+  // virtualization can measure the row, but that id is not the row's identity.
+  const messageId = events.length === 1 && events[0].type === "assistant_message" ? events[0].event_id : undefined;
   return m(
     "div",
-    { id: key, class: "message message-assistant mb-5", key },
+    { id: key, class: "message message-assistant mb-5", key, "data-message-id": messageId },
     renderAssistantRun(events, toolResults, chatId),
   );
 }
@@ -741,10 +746,11 @@ export function renderPermissionItem(
   // row key (``perm-<event_id>``) so the rendered root's ``id`` matches the key
   // the virtualization measures by -- otherwise the measured height is cached
   // under the bare event id and never read, leaving the row stuck at its estimate
-  // and shifting content each time it crosses the window edge.
+  // and shifting content each time it crosses the window edge. data-message-id
+  // stays the event id in either case: the row is still that one message.
   return m(
     "div",
-    { id: domId, class: "message message-assistant mb-5", key: event.event_id },
+    { id: domId, class: "message message-assistant mb-5", key: event.event_id, "data-message-id": event.event_id },
     renderAssistantMessageChildren(event, toolResults, chatId, resolutionsByRequestId, secretNotesByRequestId),
   );
 }

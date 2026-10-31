@@ -130,6 +130,12 @@ export function renderUserMessage(event: UserMessageEvent): m.Vnode | null {
         ? `message message-notice-row ${NOTICE_ROW_SPACING_CLASS}`
         : `${USER_MESSAGE_ROW_CLASS} mb-5`;
   // id mirrors the assistant rows so the virtualized list can measure every
-  // rendered row's height by querying ``.message-list > [id]``.
-  return m("div", { id: event.event_id, class: messageClass, key: event.event_id }, m(StableUserMessage, { event }));
+  // rendered row's height by querying ``.message-list > [id]``. data-message-id
+  // repeats that same event beside the message marker, so an element reference
+  // can name the row without treating the DOM id as the record.
+  return m(
+    "div",
+    { id: event.event_id, class: messageClass, key: event.event_id, "data-message-id": event.event_id },
+    m(StableUserMessage, { event }),
+  );
 }
