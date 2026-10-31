@@ -85,6 +85,10 @@ class FakeReencryptRunner(ReencryptRunnerInterface):
     has_browser_state: bool = Field(
         default=True, description="Whether the source store carries a browser state"
     )
+    is_output_written: bool = Field(
+        default=True,
+        description="Whether a run that exits 0 writes its files (False: it reports success and writes nothing)",
+    )
     runs: list[RecordedRun] = Field(
         default_factory=list, description="Every run, in order"
     )
@@ -108,6 +112,8 @@ class FakeReencryptRunner(ReencryptRunnerInterface):
             return FinishedCommand(
                 returncode=self.returncode, stdout="", stderr=self.stderr
             )
+        if not self.is_output_written:
+            return FinishedCommand(returncode=0, stdout="", stderr="")
         destination = Path(argv[list(argv).index("re-encrypt") + 1])
         destination.mkdir(parents=True, exist_ok=True)
         (destination / "credentials.json.enc").write_bytes(

@@ -217,7 +217,9 @@ def test_export_credentials_leaves_the_browser_state_out_when_the_sandbox_holds_
     )
 
 
-def test_export_credentials_refuses_a_run_that_wrote_nothing(tmp_path: Path) -> None:
+def test_export_credentials_reports_a_refusal_and_needs_the_transfer_key(
+    tmp_path: Path,
+) -> None:
     paths = _paths(tmp_path)
     with pytest.raises(
         LatchkeyCommandError, match="exporting the slack credentials failed"
@@ -236,6 +238,40 @@ def test_export_credentials_refuses_a_run_that_wrote_nothing(tmp_path: Path) -> 
         export_credentials(
             FakeReencryptRunner(),
             _paths(tmp_path / "b", is_transfer_key=False),
+            "latchkey",
+            _BASE_ENV,
+            "slack",
+            None,
+        )
+
+
+def test_import_and_export_refuse_a_run_that_reported_success_but_wrote_nothing(
+    tmp_path: Path,
+) -> None:
+    importing = _paths(tmp_path / "import")
+    importing.incoming_browser_state_path.write_bytes(b"x")
+    with pytest.raises(LatchkeyCommandError, match="wrote no browser state"):
+        import_browser_state(
+            FakeReencryptRunner(has_browser_state=False),
+            importing,
+            "latchkey",
+            _BASE_ENV,
+        )
+    with pytest.raises(LatchkeyCommandError, match="wrote nothing at"):
+        export_credentials(
+            FakeReencryptRunner(is_output_written=False),
+            _paths(tmp_path / "export"),
+            "latchkey",
+            _BASE_ENV,
+            "slack",
+            None,
+        )
+    holding_state = _paths(tmp_path / "export-with-state")
+    holding_state.latchkey_browser_state_path.write_bytes(b"signed-in")
+    with pytest.raises(LatchkeyCommandError, match="wrote no browser state"):
+        export_credentials(
+            FakeReencryptRunner(has_browser_state=False),
+            holding_state,
             "latchkey",
             _BASE_ENV,
             "slack",
