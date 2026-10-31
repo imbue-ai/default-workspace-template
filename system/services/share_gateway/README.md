@@ -35,8 +35,10 @@ three things running:
    overwrite each other's sessions. Such a cookie set by the auth label would
    reach no other host, so on that share caddy also serves `/_auth/callback`
    on every service host and the gateway names the visited host, not the auth
-   origin, as the broker's callback origin; the verify path and the cookie
-   names are unchanged.
+   origin, as the broker's callback origin. The handoff token's audience is
+   then that host rather than the shared domain, so a token the broker minted
+   for one sandbox's host opens no session on another's. The verify path and
+   the cookie names are unchanged.
 2. **caddy** (`127.0.0.1:8443`): terminates the share's real TLS with the
    cert/key under `data/.secrets/share_tls/` and routes by Host -- the bare
    workspace domain to `system_interface`, `<service>.<domain>` to that

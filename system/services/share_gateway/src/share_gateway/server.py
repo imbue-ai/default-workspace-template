@@ -402,7 +402,7 @@ def build_gateway_app(
             handoff = verify_handoff_token(
                 token=token,
                 expected_nonce=state,
-                workspace_domain=workspace_domain,
+                audience=_handoff_audience_for(request.host),
                 jwks_cache=jwks_cache,
                 jti_registry=jti_registry,
             )
@@ -475,6 +475,15 @@ def build_gateway_app(
             normalized, workspace_domain, build_label_to_name(get_registered_apps()), auth_label
         )
         return f"https://{normalized}" if is_ours else auth_origin
+
+    def _handoff_audience_for(callback_host: str) -> str:
+        # The broker binds a handoff token to the workspace domain, or, on a
+        # share whose cookies are host-only, to the host its callback runs on:
+        # every sandbox of a region shares the auth domain, so a token the
+        # broker minted for one sandbox's host must not open another's.
+        if not materials.is_cookie_host_only:
+            return workspace_domain
+        return _callback_origin_for(callback_host).removeprefix("https://")
 
     def _redirect_to_broker(next_url: str, is_confirmed: bool, is_retry: bool, visited_host: str) -> Response:
         nonce = pending_logins.mint(is_retry=is_retry)

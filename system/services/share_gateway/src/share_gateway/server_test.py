@@ -470,10 +470,11 @@ def test_callback_on_an_auth_sandbox_sets_host_only_cookies_that_still_verify(
     # them to the host that set them, and the verify path reads them as it reads domain-wide ones.
     harness = _make_harness(tmp_path, is_cookie_host_only=True)
     nonce = harness.pending_logins.mint(is_retry=False)
-    token = _mint_handoff(nonce)
+    token = _mint_handoff(nonce, audience=_WEB_HOST)
 
     resp = harness.client.get(
-        f"/_auth/callback?token={token}&state={nonce}&next=https://{_WEB_HOST}/panel"
+        f"/_auth/callback?token={token}&state={nonce}&next=https://{_WEB_HOST}/panel",
+        headers={"Host": _WEB_HOST},
     )
 
     assert resp.status_code == 302
@@ -491,6 +492,29 @@ def test_callback_on_an_auth_sandbox_sets_host_only_cookies_that_still_verify(
     )
     verified = harness.client.get("/_auth/verify", headers=_verify_headers())
     assert verified.status_code == 200
+
+
+def test_callback_on_an_auth_sandbox_refuses_a_token_minted_for_another_host(
+    tmp_path: Path,
+) -> None:
+    # Every sandbox of a region shares the workspace domain, so on such a share the token must name
+    # the host the callback runs on: one the broker minted for the shared domain, or for another
+    # sandbox's host, opens no session here.
+    harness = _make_harness(tmp_path, is_cookie_host_only=True)
+    for jti, audience in (
+        ("jti-domain", _DOMAIN),
+        ("jti-other", f"screen-other111.{_DOMAIN}"),
+    ):
+        nonce = harness.pending_logins.mint(is_retry=False)
+        token = _mint_handoff(nonce, audience=audience, jti=jti, is_owner=True)
+
+        resp = harness.client.get(
+            f"/_auth/callback?token={token}&state={nonce}", headers={"Host": _WEB_HOST}
+        )
+
+        assert resp.status_code == 302
+        assert resp.headers["Location"].startswith(f"{_BROKER_URL}/share/authorize?")
+        assert set_cookies_by_name(resp) == {}
 
 
 def test_verify_without_a_session_sends_the_callback_to_the_auth_origin_on_a_domain_wide_share(

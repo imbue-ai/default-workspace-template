@@ -93,11 +93,14 @@ class SingleUseJtiRegistry:
 def verify_handoff_token(
     token: str,
     expected_nonce: str,
-    workspace_domain: str,
+    audience: str,
     jwks_cache: JwksCache,
     jti_registry: SingleUseJtiRegistry,
 ) -> RequesterIdentity:
-    """Verify a handoff token end to end and return the visitor's identity record."""
+    """Verify a handoff token end to end and return the visitor's identity record.
+
+    ``audience`` is the workspace domain, or, on a share whose cookies are host-only, the host the callback runs on.
+    """
     try:
         header = jwt.get_unverified_header(token)
     except jwt.PyJWTError as exc:
@@ -111,7 +114,7 @@ def verify_handoff_token(
             token,
             public_key,
             algorithms=[_HANDOFF_ALGORITHM],
-            audience=workspace_domain,
+            audience=audience,
         )
     except jwt.PyJWTError as exc:
         raise HandoffVerificationError(f"handoff token rejected: {exc}") from exc
