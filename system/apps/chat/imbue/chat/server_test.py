@@ -1692,6 +1692,28 @@ def test_revive_and_retry_send_keeps_the_senders_choice_on_repeating_it(
     mock_send.assert_called_once_with("hi", "m11", not is_single_send)
 
 
+def test_a_send_delivered_by_a_second_send_on_the_revive_path_is_noted_on_its_chat(tmp_path: Path) -> None:
+    agent_id = "codex-agent-12"
+    agent_info = _model_agent_info(agent_id, tmp_path, harness=HarnessType.CODEX)
+    manager, client = _client_over(RecordingMngrMessenger())
+    seed_agent_state(manager, agent_id, name=agent_info.name)
+    session = _codex_session_over(None)
+
+    with (
+        patch("imbue.chat.server._find_active_agent", return_value=agent_info),
+        patch("imbue.chat.server.start_agent", lambda name: None),
+        patch.object(AgentManager, "get_or_create_session", return_value=session),
+        patch.object(session, "is_starting_up", return_value=False),
+        patch.object(session, "send", side_effect=[SendOutcome.NOT_READY, SendOutcome.RESENT]),
+    ):
+        response = client.post(f"/api/chats/{agent_id}/message", json={"message": "hi", "message_id": "m12"})
+
+    assert response.get_json() == {"status": "resent"}
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    assert [send.text for send in snapshot.resent_sends] == ["hi"]
+
+
 def test_shoulder_tap_codex_tapped_when_a_message_is_queued(tmp_path: Path) -> None:
     """The codex tap delivers the queue early through the ledger's ``shoulder_tap``."""
     agent_id = "codex-agent-3"
