@@ -935,10 +935,15 @@ def test_a_shortcut_to_the_pin_path_raises_the_pinned_window_rather_than_opening
 
         shortcut.dblclick()
         expect(_window(page, pinned["id"])).to_be_visible(timeout=10000)
+        _window(page, pinned["id"]).locator('[data-window-control="minimize"]').click()
+        expect(_window(page, pinned["id"])).to_be_hidden()
         shortcut.dblclick()
+        expect(_window(page, pinned["id"])).to_be_visible(timeout=10000)
         page.wait_for_timeout(_NEGATIVE_SETTLE_MS)
         assert [window["id"] for window in _windows(server.base_url)] == [pinned["id"]]
 
+        _window(page, pinned["id"]).locator('[data-window-control="minimize"]').click()
+        expect(_window(page, pinned["id"])).to_be_hidden()
         shortcut.click(button="right")
         expect(page.locator('[data-menu-row="open"]')).to_be_visible()
         expect(page.locator('[data-menu-row="change-mode"]')).to_have_count(0)
