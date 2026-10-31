@@ -52,6 +52,7 @@ ROUTINES_FRONTEND_DIR = f"{ROUTINES_DIR}/frontend"
 SCREEN_DIR = "system/apps/screen"
 
 SCREEN_FRONTEND_DIR = f"{SCREEN_DIR}/frontend"
+
 # The Style Guide app, whose bundle its own server serves from inside its package.
 STYLE_GUIDE_DIR = "system/apps/style_guide"
 

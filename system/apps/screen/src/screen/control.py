@@ -244,7 +244,7 @@ class ScreenControl(MutableModel):
                 str(queued.agent_id),
                 queued.agent_name,
                 "The Screen was handed back to you (the human finished with it). The human may have moved or "
-                "resized windows and navigated the browser, so take a fresh `screen shot` (or re-`snapshot` with "
+                "resized windows and navigated the browser, so take a fresh `uv run --no-sync screen shot` (or re-`snapshot` with "
                 "playwright-cli if you drive the browser) before continuing where you left off.",
             )
 
@@ -443,5 +443,5 @@ class ScreenControl(MutableModel):
                 str(queued.agent_id),
                 queued.agent_name,
                 f"The Screen stopped ({reason}), so nothing runs on it until it is started again: "
-                "`screen control acquire` starts it when you need it.",
+                "`uv run --no-sync screen control acquire` starts it when you need it.",
             )

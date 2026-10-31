@@ -7391,7 +7391,6 @@ def _recover(
         base_url=_LIVE_BASE,
         now=now,
         is_pid_live=is_pid_live,
-        sweep_homes=(),
     )
 
 
@@ -7860,7 +7859,6 @@ def _recover_boot_path(repo: Path) -> int:
         http=_FakeHttp(_all_healthy),
         sleeper=lambda _s: None,
         base_url=_LIVE_BASE,
-        sweep_homes=(),
     )
 
 
@@ -9755,3 +9753,15 @@ def test_the_apply_prunes_no_registry_row_when_the_tree_has_no_supervisord_table
         for argv in runner.calls
         if argv[1:3] == [update_layout.FORWARD_PORT_SCRIPT, "--remove"]
     ]
+
+
+def test_recover_runs_from_the_command_line(apply_repo: Path) -> None:
+    # Boot and cron reach the rollback through the command, not the function, so the
+    # command's argument list has to match the function's; with no marker, the
+    # unattended guard answers silently.
+    assert (
+        update_self.main(
+            ["recover", "--if-stale", "--no-restart", "--repo-root", str(apply_repo)]
+        )
+        == 0
+    )

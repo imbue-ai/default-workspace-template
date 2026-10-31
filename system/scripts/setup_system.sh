@@ -94,7 +94,7 @@ install_downloaded_binary() {
 # init system; the rest are agent/runtime deps). earlyoom, the OOM-prevention
 # daemon, is not among them: it is the imbue-ai fork, installed below by
 # install_earlyoom.sh. supervisor provides the system supervisord + supervisorctl
-# that `uv run bootstrap` execs into the foreground.
+# that `bootstrap` execs into the foreground.
 # The Screen's stack (Xorg, XFCE, PulseAudio, neko, Fortress, xclip) is not baked:
 # nothing execs any of it at boot, so it installs on first boot through the
 # env-converge unit system/scripts/env.d/2000-screen.sh.

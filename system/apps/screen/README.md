@@ -12,7 +12,9 @@ from the workspace venv (`.venv/bin/screen-service`, its one install), serving o
 `http://127.0.0.1:8090`, the app's registered URL. The four programs of the stack form
 the `screen-stack` supervisord group (`screen-xorg`, `screen-pulse`, `screen-session`,
 `screen-neko`, one drop-in each, all `autostart=false`); the service starts them on
-demand and the `screen-watch` event listener ends them together.
+demand and the `screen-watch` event listener ends them together. The manifest declares
+no `[preview]` table: the Screen owns the one X display, audio sink and stream, so no
+throwaway copy can run beside the live one, and a change to it is verified live.
 
 ## The service
 
@@ -420,7 +422,7 @@ acquire|release|handoff`, `open`, `browser open [URL]` (the browser launch path)
 exit codes are the fleet CLI's: 0 ok, 1 error, 2 preempted (a human has or took
 control; end the turn), 3 busy, 4 timed out, 64 usage, 69 no service.
 
-`uv run agentic-browser-fleet` (`fleet_cli.py`, the `agentic-browser-fleet` skill) owns
+`uv run --no-sync agentic-browser-fleet` (`fleet_cli.py`, the `agentic-browser-fleet` skill) owns
 the browser: `ls [--include-tabs]`, `new [name] [--url]`, `close <name>`, `acquire <name>
 [--reclaim]`, `release <name>` (alias `unlock`), `handoff <name> "<reason>"` (alias
 `request-human`), against the fleet routes, with the same exit codes. `new` and `acquire`
@@ -443,13 +445,13 @@ built into `src/screen/static/` by `npm run build`; its tests run with `vitest r
 
 ```bash
 # Backend, from the repo root
-uv run screen-service
+.venv/bin/screen-service
 
 # Frontend
 cd system/apps/screen/frontend && npm run dev
 
 # Tests
-cd system/apps/screen && uv run pytest
+cd system/apps/screen && uv run --no-sync pytest
 ```
 
 ## Tests

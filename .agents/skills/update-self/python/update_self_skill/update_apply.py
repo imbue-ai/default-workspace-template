@@ -2238,7 +2238,6 @@ def recover(
     base_url: str | None = None,
     now: Callable[[], float] = time.time,
     is_pid_live: Callable[[int], bool] = default_is_pid_a_live_apply,
-    sweep_homes: Sequence[Path],
 ) -> int:
     """Roll back an interrupted apply from its marker.
 
