@@ -57,9 +57,11 @@ from imbue.chat.testing import is_e2e_browser_installed
 from imbue.chat.testing import put_stand_in_pi_on_path
 from imbue.chat.testing import remove_background_task_marker
 from imbue.chat.testing import running_workspace
+from imbue.chat.testing import scripted_send_mngr_messenger
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
 from imbue.system_interface.shell.desktops import DEFAULT_DESKTOP_NAME
@@ -1343,6 +1345,162 @@ def test_a_send_refused_for_a_removed_account_offers_a_provider_instead_of_retry
         notice.get_by_role("button", name="Choose a provider").click()
         expect(chat.locator('[data-e2e="provider-chooser"]')).to_be_visible(timeout=15000)
         expect(chat.locator(".message-input-textbox")).to_have_value("are you still there?")
+
+
+def _allow_mngr_config_in_pytest(tmp_path: Path) -> None:
+    """Opt the workspace's mngr project config into pytest, for a real messenger, which loads it on every send.
+
+    mngr refuses, under pytest, any config file that does not opt in, and the workspace's local layer is the create
+    defaults the chat app wrote as the account was signed in.
+    """
+    local_settings = tmp_path / "project-config" / "settings.local.toml"
+    local_settings.write_text("is_allowed_in_pytest = true\n" + local_settings.read_text())
+
+
+def _append_user_turn(session_file: Path, uuid: str, text: str) -> None:
+    """Write a user turn holding ``text`` to the fixture agent's transcript, as Claude records one it took."""
+    with open(session_file, "a") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "type": "user",
+                    "uuid": uuid,
+                    "timestamp": "2026-01-01T00:02:00Z",
+                    "message": {"role": "user", "content": text},
+                }
+            )
+            + "\n"
+        )
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_send_mngr_could_not_confirm_is_sent_again_and_says_so_under_the_message(tmp_path: Path, page: Page) -> None:
+    """mngr could not confirm the first send, so the chat app sent the message again, which landed: no notice, the
+    composer empties, and the message's bubble carries a collapsed "Sent again" line whose help says what happened.
+    When the first copy turns out to have arrived too, its second copy folds into that line rather than showing as a
+    second bubble."""
+    text = "did you get this?"
+    sent: list[str] = []
+    messenger = scripted_send_mngr_messenger([SendFailureKind.SUBMISSION_UNCONFIRMED], sent)
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        _allow_mngr_config_in_pytest(tmp_path)
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_editable(timeout=15000)
+
+        chat.locator(".message-input-textbox").fill(text)
+        chat.locator(".message-input-textbox").press("Enter")
+        wait_for(lambda: len(sent) == 2, timeout=15.0, error_message="the unconfirmed send was never sent again")
+        expect(chat.locator(".message-input-textbox")).to_have_value("")
+        expect(chat.locator(".modal-card")).to_have_count(0)
+
+        _append_user_turn(server.session_file, "resent-u-first", text)
+        bubble = chat.locator(".message-user", has_text=text)
+        expect(bubble).to_have_count(1, timeout=15000)
+        note = bubble.locator(".message-resent-note")
+        expect(note).to_contain_text("Sent again")
+        expect(note.locator(".message-resent-note-text")).to_have_count(0)
+        note.get_by_role("button", name="What does sent again mean?").click()
+        expect(note.locator(".message-resent-note-text")).to_have_text(
+            "Imbue Studio couldn't confirm the agent received this message, so it sent it again. "
+            "If the first copy arrived too, the agent may see it twice."
+        )
+
+        _append_user_turn(server.session_file, "resent-u-second", text)
+        # A reply after the second copy, so the page has drawn that copy once the reply shows.
+        with open(server.session_file, "a") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "type": "assistant",
+                        "uuid": "resent-a-after-second",
+                        "timestamp": "2026-01-01T00:02:01Z",
+                        "message": {
+                            "role": "assistant",
+                            "model": "claude-opus-4-6",
+                            "content": [{"type": "text", "text": "Got it, twice."}],
+                            "stop_reason": "end_turn",
+                            "usage": {"input_tokens": 5, "output_tokens": 4},
+                        },
+                    }
+                )
+                + "\n"
+            )
+        expect(chat.get_by_text("Got it, twice.")).to_be_visible(timeout=15000)
+        expect(chat.locator(".message-user-bubble", has_text=text)).to_have_count(1)
+        expect(chat.locator(".message-resent-note")).to_have_count(1)
+        assert sent == [text, text]
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_a_send_still_unconfirmed_when_sent_again_asks_the_user_to_check_before_sending_it_once_more(
+    tmp_path: Path, page: Page
+) -> None:
+    """The chat app's own second send could not be confirmed either, so it sends nothing more itself: the notice says
+    so in its own words rather than mngr's diagnostics, offers neither Retry nor Force, and the message stays in the
+    composer and is sent again only when Send again is pressed."""
+    text = "did you get this?"
+    sent: list[str] = []
+    messenger = scripted_send_mngr_messenger(
+        [SendFailureKind.SUBMISSION_UNCONFIRMED, SendFailureKind.SUBMISSION_UNCONFIRMED],
+        sent,
+        failure_reason=f"Timeout waiting for message submission evidence: no evidence probe confirmed the submission "
+        f"within 30s\npane content:\n❯ {text}",
+    )
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        _allow_mngr_config_in_pytest(tmp_path)
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_editable(timeout=15000)
+
+        chat.locator(".message-input-textbox").fill(text)
+        chat.locator(".message-input-textbox").press("Enter")
+
+        notice = chat.locator(".modal-card")
+        expect(notice).to_contain_text("Couldn't confirm your message arrived", timeout=15000)
+        expect(notice).to_contain_text(
+            "The agent may already have it, so check its terminal before you send it again."
+        )
+        expect(notice).not_to_contain_text("Timeout waiting")
+        expect(notice.get_by_role("button", name="Retry")).to_have_count(0)
+        expect(notice.get_by_role("button", name="Force")).to_have_count(0)
+        expect(chat.locator(".message-input-textbox")).to_have_value(text)
+        assert sent == [text, text]
+
+        notice.get_by_role("button", name="Send again").click()
+        wait_for(lambda: len(sent) == 3, timeout=15.0, error_message="Send again never sent the message")
+        expect(chat.locator(".modal-card")).to_have_count(0, timeout=15000)
+        assert sent == [text, text, text]
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_an_unconfirmed_message_whose_turn_lands_leaves_the_composer_and_closes_its_notice(
+    tmp_path: Path, page: Page
+) -> None:
+    """A send still unconfirmed after the chat app sent it again goes back in the composer with its notice, and when
+    the agent's turn for it reaches the transcript after all, the copy comes out of the composer and the notice
+    closes, so nothing is left to send a third time."""
+    text = "did you get this?"
+    sent: list[str] = []
+    messenger = scripted_send_mngr_messenger(
+        [SendFailureKind.SUBMISSION_UNCONFIRMED, SendFailureKind.SUBMISSION_UNCONFIRMED], sent
+    )
+    with running_workspace(tmp_path, find_free_port(), find_free_port(), messenger=messenger) as server:
+        _allow_mngr_config_in_pytest(tmp_path)
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        expect(chat.locator(".message-input-textbox")).to_be_editable(timeout=15000)
+        chat.locator(".message-input-textbox").fill(text)
+        chat.locator(".message-input-textbox").press("Enter")
+        notice = chat.locator(".modal-card")
+        expect(notice).to_contain_text("Couldn't confirm your message arrived", timeout=15000)
+        expect(chat.locator(".message-input-textbox")).to_have_value(text)
+
+        _append_user_turn(server.session_file, "unconfirmed-u-landed", text)
+
+        expect(chat.locator(".modal-card")).to_have_count(0, timeout=15000)
+        expect(chat.locator(".message-input-textbox")).to_have_value("")
+        assert sent == [text, text]
 
 
 @pytest.mark.timeout(120, func_only=False)

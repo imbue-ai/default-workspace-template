@@ -9,6 +9,7 @@ import threading
 import time
 import tomllib
 from collections.abc import Callable
+from collections.abc import Sequence
 from datetime import datetime
 from datetime import timezone
 from pathlib import Path
@@ -31,7 +32,9 @@ from imbue.chat.accounts import set_mru
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.activity_state import CompactionCause
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
+from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.agent_manager import FULL_SNAPSHOTS_BEFORE_A_CREATED_AGENT_IS_LET_GO
 from imbue.chat.agent_manager import HandoffCapabilities
@@ -39,11 +42,14 @@ from imbue.chat.agent_manager import PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import UNWATCHED_PENDING_COMPACTION_TIMEOUT_SECONDS
 from imbue.chat.agent_manager import _FINISHED_TASK_TURN_GRACE_PASSES
 from imbue.chat.agent_manager import _SwitchTarget
+from imbue.chat.agent_manager import _UNRECORDED_SEND_KEPT_SECONDS
+from imbue.chat.agent_manager import _UnrecordedSend
 from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
 from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _chat_project_label
 from imbue.chat.agent_manager import _rename_failure_detail
+from imbue.chat.agent_manager import _sends_the_transcript_does_not_hold
 from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
@@ -91,6 +97,7 @@ from imbue.chat.harnesses.mock_transcript_reader_test import ListTranscriptReade
 from imbue.chat.harnesses.registry import get_model_state_path
 from imbue.chat.harnesses.session import FileHarnessSession
 from imbue.chat.harnesses.session import SendOutcome
+from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MAIN_CHAT_INTRODUCTION
 from imbue.chat.main_chat import MAIN_CHAT_NAME
@@ -151,6 +158,7 @@ from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import append_observe_event
 from imbue.mngr.api.observe import get_observe_events_dir
@@ -5819,6 +5827,346 @@ def test_a_sign_in_restarts_only_the_live_agents_on_the_account(
         ]
     finally:
         manager.stop()
+
+
+def _typed_turn(text: str, display: str | None = None, at: str | None = None) -> dict[str, Any]:
+    return {
+        "type": "user_message",
+        "event_id": f"turn-{uuid4().hex}",
+        "content": text,
+        **({"display": display} if display is not None else {}),
+        **({"timestamp": at} if at is not None else {}),
+    }
+
+
+def _agent_reply(at: str) -> dict[str, Any]:
+    return {"type": "assistant_message", "content": "Hi", "timestamp": at}
+
+
+class _FixedTranscriptReader(ListTranscriptReader):
+    """A transcript of the given events, as they are."""
+
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        super().__init__([])
+        self._events = events
+
+
+def _install_resend_capabilities(
+    manager: AgentManager,
+    ensure_watcher: Callable[[AgentInfo], TranscriptReader],
+    deliver: Callable[[AgentInfo, str, str], SendOutcome],
+) -> None:
+    """Give the manager what a resend uses: the agent's transcript and the message route's delivery."""
+    manager.set_handoff_capabilities(
+        HandoffCapabilities(ensure_watcher=ensure_watcher, drain_to_composer=lambda agent_info: "", deliver=deliver)
+    )
+
+
+class _StopDuringSendMngrMessenger(RecordingMngrMessenger):
+    """A recording messenger that runs each of ``during_send`` while a send is in flight."""
+
+    during_send: list[Callable[[], None]] = []
+
+    def send_to_agent(
+        self,
+        agent_id: MngrAgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        for run in self.during_send:
+            run()
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
+class _LostSendChat:
+    """One claude chat whose transcript shows only the turns a test lands in it, and the messages sent to it
+    again after its process ended. ``is_resend_routed`` sends each resend through the chat's session, as the
+    message route does, so a resend is itself kept for sending again."""
+
+    def __init__(
+        self,
+        broadcaster: WebSocketBroadcaster,
+        *,
+        is_resend_routed: bool = False,
+        messenger: RecordingMngrMessenger | None = None,
+    ) -> None:
+        self.agent_id = f"agent-{uuid4().hex}"
+        self.manager = AgentManager.build(
+            broadcaster, messenger=messenger if messenger is not None else RecordingMngrMessenger()
+        )
+        self.transcript = _FixedTranscriptReader([])
+        self.resent: list[str] = []
+        self._is_resend_routed = is_resend_routed
+        _install_resend_capabilities(self.manager, lambda agent_info: self.transcript, self._deliver)
+        self.observe(AgentLifecycleState.RUNNING)
+
+    def observe(self, state: AgentLifecycleState) -> None:
+        details = _agent_details("Lost-Send-Chat", agent_id=MngrAgentId(self.agent_id), state=state)
+        self.manager._handle_observe_event(make_agent_state_event(details))
+
+    def send(self, text: str) -> None:
+        agent_info = self.manager.get_agent_info_by_id(self.agent_id)
+        assert agent_info is not None
+        assert self.manager.get_or_create_session(agent_info).send(text, uuid4().hex) is SendOutcome.OK
+
+    def _deliver(self, agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        self.resent.append(text)
+        if self._is_resend_routed:
+            return self.manager.get_or_create_session(agent_info).send(text, message_id)
+        return SendOutcome.OK
+
+
+def test_a_message_lost_with_its_agents_process_is_sent_again(broadcaster: WebSocketBroadcaster) -> None:
+    chat = _LostSendChat(broadcaster)
+    try:
+        chat.send("what is 5+5?")
+        chat.observe(AgentLifecycleState.DONE)
+        wait_for(lambda: chat.resent == ["what is 5+5?"], error_message="the lost message was never sent again")
+    finally:
+        chat.manager.stop()
+
+
+def test_a_message_the_transcript_holds_is_not_sent_again_when_the_process_exits(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    chat = _LostSendChat(broadcaster)
+    try:
+        chat.send("what is 5+5?")
+        chat.transcript._events.append(_typed_turn("what is 5+5?", at=_recorded_at(time.time())))
+        chat.send("and 6+6?")
+        chat.transcript._events.append(_typed_turn("and 6+6?", at=_recorded_at(time.time())))
+        chat.observe(AgentLifecycleState.DONE)
+    finally:
+        chat.manager.stop()
+    assert chat.resent == []
+
+
+def test_a_message_the_chat_app_sends_outside_a_session_is_kept_for_sending_again(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    """The flush route's queue block goes to a just-restarted agent outside its session, and is kept the same."""
+    chat = _LostSendChat(broadcaster)
+    try:
+        assert (
+            chat.manager.send_message_kept_until_recorded(chat.agent_id, HarnessType.CLAUDE, "queued block")
+            is SendDelivery.DELIVERED
+        )
+        chat.observe(AgentLifecycleState.DONE)
+        wait_for(lambda: chat.resent == ["queued block"], error_message="the lost block was never sent again")
+    finally:
+        chat.manager.stop()
+
+
+@pytest.mark.parametrize(
+    ("sent", "recorded"),
+    [
+        pytest.param("/model opus", "/model opus", id="a-machine-line"),
+        pytest.param("!ls -la", "<bash-input>ls -la</bash-input>", id="a-bash-mode-command"),
+    ],
+)
+def test_a_send_the_transcript_holds_as_a_machine_line_is_not_sent_again_when_the_process_exits(
+    broadcaster: WebSocketBroadcaster, sent: str, recorded: str
+) -> None:
+    chat = _LostSendChat(broadcaster)
+    try:
+        chat.send(sent)
+        chat.transcript._events.append(_typed_turn(recorded, display="chip", at=_recorded_at(time.time())))
+        chat.observe(AgentLifecycleState.DONE)
+    finally:
+        chat.manager.stop()
+    assert chat.resent == []
+
+
+def test_an_earlier_turn_saying_the_same_does_not_count_as_the_lost_message(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    chat = _LostSendChat(broadcaster)
+    try:
+        chat.transcript._events.append(_typed_turn("yes", at="2026-01-01T00:00:00.000Z"))
+        chat.send("yes")
+        chat.observe(AgentLifecycleState.DONE)
+        wait_for(lambda: chat.resent == ["yes"], error_message="the lost message was never sent again")
+    finally:
+        chat.manager.stop()
+
+
+def _kept_send(text: str, sent_after: float) -> _UnrecordedSend:
+    return _UnrecordedSend(text=text, sent_after=sent_after, sent_at=0.0, is_resend=False)
+
+
+def _recorded_at(epoch_seconds: float) -> str:
+    return datetime.fromtimestamp(epoch_seconds, timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+@pytest.mark.parametrize(
+    ("events", "lost_texts"),
+    [
+        pytest.param([], ["first", "second"], id="nothing-recorded"),
+        pytest.param([_typed_turn("first", at=_recorded_at(50.0))], ["first", "second"], id="recorded-before-both"),
+        pytest.param([_typed_turn("first", at=_recorded_at(150.0))], ["second"], id="recorded-between-them"),
+        pytest.param(
+            [_typed_turn("first\nsecond", at=_recorded_at(250.0))], [], id="recorded-after-both-in-other-words"
+        ),
+        pytest.param([_typed_turn("first")], [], id="a-message-it-cannot-place"),
+        pytest.param([_agent_reply(at=_recorded_at(250.0))], ["first", "second"], id="only-a-reply"),
+    ],
+)
+def test_the_sends_a_transcript_does_not_hold_are_those_after_its_last_user_message(
+    events: list[dict[str, Any]], lost_texts: list[str]
+) -> None:
+    sends = [_kept_send("first", 100.0), _kept_send("second", 200.0)]
+    assert [send.text for send in _sends_the_transcript_does_not_hold(events, sends)] == lost_texts
+
+
+def test_a_stopped_agent_is_not_sent_its_unrecorded_messages_again(broadcaster: WebSocketBroadcaster) -> None:
+    chat = _LostSendChat(broadcaster)
+    try:
+        chat.send("what is 5+5?")
+        chat.observe(AgentLifecycleState.STOPPED)
+        chat.observe(AgentLifecycleState.RUNNING)
+        chat.observe(AgentLifecycleState.DONE)
+    finally:
+        chat.manager.stop()
+    assert chat.resent == []
+
+
+def test_messages_delivered_before_or_during_a_stop_are_not_sent_again(broadcaster: WebSocketBroadcaster) -> None:
+    chat = _LostSendChat(broadcaster)
+    try:
+        chat.send("what is 5+5?")
+        with chat.manager.letting_go_of_unrecorded_sends(chat.agent_id):
+            chat.send("and 6+6?")
+            chat.observe(AgentLifecycleState.DONE)
+        chat.observe(AgentLifecycleState.RUNNING)
+        chat.observe(AgentLifecycleState.DONE)
+    finally:
+        chat.manager.stop()
+    assert chat.resent == []
+
+
+def test_a_send_a_stop_began_and_ended_during_is_not_kept_for_sending_again(broadcaster: WebSocketBroadcaster) -> None:
+    """Stop handed the message back while it was in flight, so its landing afterwards does not bring it back."""
+    messenger = _StopDuringSendMngrMessenger()
+    chat = _LostSendChat(broadcaster, messenger=messenger)
+
+    def stop_the_agent() -> None:
+        with chat.manager.letting_go_of_unrecorded_sends(chat.agent_id):
+            pass
+
+    messenger.during_send.append(stop_the_agent)
+    try:
+        chat.send("what is 5+5?")
+    finally:
+        chat.manager.stop()
+    assert chat.agent_id not in chat.manager._unrecorded_sends_by_agent
+
+
+def test_a_stop_takes_back_the_sends_in_flight_when_it_began_and_no_later_one() -> None:
+    messenger = RecordingMngrMessenger()
+    manager = AgentManager.build(WebSocketBroadcaster(), messenger=messenger)
+    agent_id = MngrAgentId()
+    manager.send_message_to_agent(agent_id, "before the stop")
+    with manager.letting_go_of_unrecorded_sends(str(agent_id)):
+        manager.send_message_to_agent(agent_id, "during the stop")
+    manager.send_message_to_agent(agent_id, "after the stop")
+    assert [is_taken_back() for is_taken_back in messenger.taken_back_checks] == [True, False, False]
+
+
+def test_stopping_a_chat_lets_go_of_the_sends_kept_for_resending(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Stopped-Chat")
+    manager._keep_unrecorded_send(agent_id, "what is 5+5?", time.time(), stops_begun_before_send=0)
+    try:
+        manager.stop_chat(ChatId(agent_id))
+    finally:
+        manager.stop()
+    assert argv_log.read_text().splitlines() == ["stop Stopped-Chat"]
+    assert agent_id not in manager._unrecorded_sends_by_agent
+
+
+def test_an_agent_the_stream_reports_removed_takes_its_kept_sends_with_it(broadcaster: WebSocketBroadcaster) -> None:
+    chat = _LostSendChat(broadcaster)
+    try:
+        chat.send("what is 5+5?")
+        details = _agent_details("Lost-Send-Chat", agent_id=MngrAgentId(chat.agent_id))
+        chat.manager._handle_observe_event(make_agent_removed_event(details.id, details.name, details.host.id))
+    finally:
+        chat.manager.stop()
+    assert chat.agent_id not in chat.manager._unrecorded_sends_by_agent
+
+
+def test_a_message_kept_too_long_is_not_sent_again(broadcaster: WebSocketBroadcaster) -> None:
+    chat = _LostSendChat(broadcaster)
+    now = time.monotonic()
+    chat.manager._unrecorded_sends_by_agent[chat.agent_id] = [
+        _UnrecordedSend(
+            text="old", sent_after=time.time(), sent_at=now - _UNRECORDED_SEND_KEPT_SECONDS - 1.0, is_resend=False
+        ),
+        _UnrecordedSend(text="new", sent_after=time.time(), sent_at=now, is_resend=False),
+    ]
+    try:
+        chat.observe(AgentLifecycleState.DONE)
+        wait_for(lambda: len(chat.resent) > 0, error_message="the fresh message was never sent again")
+    finally:
+        chat.manager.stop()
+    assert chat.resent == ["new"]
+
+
+def test_a_failed_resend_leaves_the_messages_after_it(broadcaster: WebSocketBroadcaster) -> None:
+    """They would land ahead of the one that failed, or fail the same way."""
+    chat = _LostSendChat(broadcaster)
+    tried: list[str] = []
+
+    def refuse(_agent_info: AgentInfo, text: str, _message_id: str) -> SendOutcome:
+        tried.append(text)
+        raise SendFailedError("the agent would not start")
+
+    _install_resend_capabilities(chat.manager, lambda _agent_info: chat.transcript, refuse)
+    try:
+        chat.manager._resend_sends_lost_with_process(
+            chat.agent_id, (_kept_send("first", 0.0), _kept_send("second", 0.0))
+        )
+    finally:
+        chat.manager.stop()
+    assert tried == ["first"]
+
+
+def test_nothing_lost_is_sent_to_a_chat_that_is_switching(broadcaster: WebSocketBroadcaster) -> None:
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, messenger=RecordingMngrMessenger(), chat_record_store=store)
+    agent_id, _successor = _converging_chat(manager, store, phase=HandoffPhase.SUMMARIZING, is_retiring_archived=False)
+    resent: list[str] = []
+
+    def record(_agent_info: AgentInfo, text: str, _message_id: str) -> SendOutcome:
+        resent.append(text)
+        return SendOutcome.OK
+
+    _install_resend_capabilities(manager, lambda _agent_info: _FixedTranscriptReader([]), record)
+    try:
+        assert manager.get_agent_info_by_id(agent_id) is not None
+        manager._resend_sends_lost_with_process(agent_id, (_kept_send("what is 5+5?", 0.0),))
+    finally:
+        manager.stop()
+    assert resent == []
+
+
+def test_a_message_lost_twice_is_not_sent_a_third_time(broadcaster: WebSocketBroadcaster) -> None:
+    chat = _LostSendChat(broadcaster, is_resend_routed=True)
+    try:
+        chat.send("what is 5+5?")
+        chat.observe(AgentLifecycleState.DONE)
+        wait_for(lambda: chat.resent == ["what is 5+5?"], error_message="the lost message was never sent again")
+        chat.observe(AgentLifecycleState.RUNNING)
+        chat.observe(AgentLifecycleState.DONE)
+    finally:
+        chat.manager.stop()
+    assert chat.resent == ["what is 5+5?"]
 
 
 def test_the_verbs_of_a_recorded_chat_act_on_the_right_agents(

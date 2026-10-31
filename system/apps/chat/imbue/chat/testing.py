@@ -63,6 +63,7 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import discover_agents
@@ -101,10 +102,18 @@ from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.message import AgentSendFailure
+from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import release_observe_lock
+from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import AgentIdNotFoundError
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import AgentName
+from imbue.mngr.primitives import HostId
+from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
@@ -784,9 +793,13 @@ class RecordingMngrMessenger(MngrMessenger):
 
     sent: list[tuple[str, str]] = []
     pressed: list[tuple[str, str]] = []
+    # What each send was given to tell whether a stop took it back, in send order.
+    taken_back_checks: list[Callable[[], bool]] = []
     # Each compaction requested, as ``(agent_id, instructions)``.
     compactions: list[tuple[str, str | None]] = []
     succeeds: bool = True
+    # How a succeeding send reports it got there.
+    delivery: SendDelivery = SendDelivery.DELIVERED
     # What a non-succeeding send reports, in place of a harness's own words and mngr's kind.
     failure_reason: str = "The agent could not be reached."
     failure_kind: str = "unknown"
@@ -795,10 +808,16 @@ class RecordingMngrMessenger(MngrMessenger):
     compaction_failure: SendFailure | None = None
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
         self.sent.append((str(agent_id), message))
-        return None if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
+        self.taken_back_checks.append(is_taken_back)
+        return self.delivery if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
@@ -819,10 +838,47 @@ class SummaryWritingMngrMessenger(RecordingMngrMessenger):
     """
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
         write_summary_for_request(message)
-        return super().send_to_agent(agent_id, message, known_locations)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
+def scripted_send_mngr_messenger(
+    failure_kinds: Sequence[SendFailureKind], sent: list[str], failure_reason: str = "no evidence of submission"
+) -> MngrMessenger:
+    """A real `MngrMessenger` over a fake mngr: each send fails with the next of ``failure_kinds``, and once they run
+    out every send is delivered.
+
+    So the messenger's own repeats run against mngr's answers, unlike `RecordingMngrMessenger`, which replaces them.
+    ``sent`` records each message mngr was asked to type. The agent is found by its id wherever it is looked for.
+    """
+    remaining = list(failure_kinds)
+
+    def discover(agent_id: AgentId, _mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
+        return (
+            AgentMatch(
+                agent_id=agent_id,
+                agent_name=AgentName("scripted"),
+                host_id=HostId.generate(),
+                host_name=HostName("localhost"),
+                provider_name=ProviderInstanceName("local"),
+            ),
+        )
+
+    def send(matches: Sequence[AgentMatch], message: str, _mngr_ctx: MngrContext) -> MessageResult:
+        sent.append(message)
+        if remaining:
+            kind = remaining.pop(0)
+            return MessageResult(failures=[AgentSendFailure(agent_name="scripted", reason=failure_reason, kind=kind)])
+        return MessageResult(successful_agents=[str(match.agent_id) for match in matches])
+
+    return MngrMessenger(discover=discover, send=send)
 
 
 class VanishedAgentMngrMessenger(RecordingMngrMessenger):
@@ -833,9 +889,14 @@ class VanishedAgentMngrMessenger(RecordingMngrMessenger):
     """
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
-        super().send_to_agent(agent_id, message, known_locations)
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
         raise AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}")
 
 
