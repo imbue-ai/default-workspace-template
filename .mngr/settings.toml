@@ -85,6 +85,24 @@ host_env__extend = [
     # Debian 12 lima VM on the launch-to-msg M5 runner; Ubuntu 24.04 lima
     # guests don't advertise SVE so they don't hit this.
     "OPENSSL_armcap=0",
+    # Lower memory for every Claude Code process: the chat's claude and any claude -p or
+    # claude a tool or skill launches from it. Claude Code is a Bun program, so the BUN_
+    # and BUN_JSC_ variables apply to it (NODE_OPTIONS does not) and have to be set here:
+    # settings.json `env` is applied after the runtime has started.
+    # Measured on Claude Code 2.1.307 under gVisor, a process's own (anonymous) memory:
+    # a loaded full chat 242 -> 205 MB, 261 -> 212 MB after one reply (resumed real chats,
+    # 2 to 3 runs each), a fresh chat peak 278 -> 210 MB, the claude -p helper 154 -> 134 MB.
+    # Turning the JIT off is two thirds of the saving; the timer and growth factor add the rest.
+    # Cost: about 2 to 4 more CPU seconds per short session, typing echo about 6 ms slower;
+    # reply time was unchanged in the cheap-model runs. Smol mode (BUN_OPTIONS=--smol),
+    # BUN_JSC_forceRAMSize, the other GC and allocator knobs, and Claude's own feature
+    # switches did nothing. JSC option names change between Bun releases and an unknown one
+    # makes claude exit at startup ("invalid JSC environment variable"), which is why
+    # test_workspace_claude_config.py starts the installed claude with these set: re-run it
+    # on every Claude Code version bump.
+    "BUN_JSC_useJIT=0",
+    "BUN_GC_TIMER_INTERVAL=250",
+    "BUN_JSC_smallHeapGrowthFactor=1.25",
 ]
 worktree_base_folder = "/home/user/worktrees/"
 # claude_subagent_proxy is upstream mngr's experimental Claude-Code-Task ->
