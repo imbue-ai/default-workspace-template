@@ -62,14 +62,17 @@ function pageLinesSvg(isSmall: boolean): string {
 }
 
 /** What a badge in an icon's corner says: a symbolic link, or a share read live (linked) or kept as a copy (synced). */
-export type IconBadge = "symlink" | "linked" | "synced";
+export type IconBadge = "symlink" | "linked" | "synced" | "syncing";
+
+const SYNC_ARROWS =
+  '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>';
 
 const BADGE_GLYPHS: Record<IconBadge, string> = {
   symlink: '<path d="M5 19 19 5"/><path d="M7 5h12v12"/>',
   linked:
     '<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>',
-  synced:
-    '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+  synced: SYNC_ARROWS,
+  syncing: SYNC_ARROWS,
 };
 
 /** The disc an icon's badge sits in and the glyph in it, in whole pixels: the glyph centred with an even margin, so
@@ -90,7 +93,8 @@ function badgeMetrics(size: number): { disc: number; glyph: number; right: numbe
 }
 
 /** A badge over an icon's bottom-right corner: a white disc, with a hairline edge from icon size up, holding the
- *  badge's glyph. Its own layer rather than part of the icon's drawing, so it sits on whole pixels at any size. */
+ *  badge's glyph, which turns while a sync is moving. Its own layer rather than part of the icon's drawing, so it sits
+ *  on whole pixels at any size. */
 export function cornerBadge(badge: IconBadge, size: number): m.Vnode {
   const { disc, glyph, right, bottom, line } = badgeMetrics(size);
   return m(
@@ -102,7 +106,8 @@ export function cornerBadge(badge: IconBadge, size: number): m.Vnode {
     m.trust(
       `<svg xmlns="http://www.w3.org/2000/svg" width="${glyph}" height="${glyph}" viewBox="0 0 24 24" fill="none" ` +
         `stroke="currentColor" stroke-width="${(line * 24) / glyph}" stroke-linecap="round" stroke-linejoin="round" ` +
-        `aria-hidden="true">${BADGE_GLYPHS[badge]}</svg>`,
+        `aria-hidden="true"${badge === "syncing" ? ' class="files-badge-turning motion-safe:animate-[spin_1.6s_linear_infinite]"' : ""}>` +
+        `${BADGE_GLYPHS[badge]}</svg>`,
     ),
   );
 }

@@ -7,6 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
     "app-schema",
+    # The chat messenger the fleet wakes a queued agent's chat with (message_chat).
+    "workspace-scripts",
     "click>=8.1",
     "flask>=3.0",
     "flask-sock>=0.7",

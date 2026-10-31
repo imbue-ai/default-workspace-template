@@ -63,8 +63,10 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
+from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
@@ -100,10 +102,18 @@ from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.message import AgentSendFailure
+from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import release_observe_lock
+from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import AgentIdNotFoundError
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import AgentName
+from imbue.mngr.primitives import HostId
+from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
@@ -158,16 +168,24 @@ def observer_holding_the_lock(events_base_dir: Path) -> Generator[None, None, No
         release_observe_lock(fd)
 
 
+class StandInToolUse(FrozenModel):
+    """A tool call the stand-in answers a message request with, in place of text."""
+
+    tool_use_id: str = Field(description="The id Claude Code echoes back on the call's tool_result")
+    name: str = Field(description="The tool to call, e.g. ``Read``")
+    arguments: dict[str, Any] = Field(description="The tool's input")
+
+
 class StandInAnthropicApi:
     """A loopback stand-in for the Anthropic API, to point Claude Code at with ``ANTHROPIC_BASE_URL``.
 
     It records every request's path, auth headers and body. With ``reply_for`` set, ``POST /v1/messages`` gets a
-    valid answer carrying the text ``reply_for`` picks from the request body: the server-sent events of a streamed
-    message when the request asks for a stream, else the message as JSON. Every other request, and every request
-    when ``reply_for`` is None, is answered 401, which is enough to observe the credential a request carries.
+    valid answer carrying the text or tool call ``reply_for`` picks from the request body: the server-sent events of
+    a streamed message when the request asks for a stream, else the message as JSON. Every other request, and every
+    request when ``reply_for`` is None, is answered 401, which is enough to observe the credential a request carries.
     """
 
-    def __init__(self, reply_for: Callable[[dict[str, Any]], str] | None = None) -> None:
+    def __init__(self, reply_for: Callable[[dict[str, Any]], str | StandInToolUse] | None = None) -> None:
         self.captured: list[dict[str, Any]] = []
         self.first_request_event = threading.Event()
         captured = self.captured
@@ -197,12 +215,12 @@ class StandInAnthropicApi:
 
             do_GET = do_POST
 
-            def _answer_message(self, body: dict[str, Any], text: str) -> None:
+            def _answer_message(self, body: dict[str, Any], reply: str | StandInToolUse) -> None:
                 model = str(body.get("model", "claude-haiku-4-5"))
                 if body.get("stream"):
-                    self._send(200, "text/event-stream", _streamed_message_events(model, text))
+                    self._send(200, "text/event-stream", _streamed_message_events(model, reply))
                 else:
-                    self._send(200, "application/json", json.dumps(_message(model, text)).encode())
+                    self._send(200, "application/json", json.dumps(_message(model, reply)).encode())
 
             def _send(self, status: int, content_type: str, payload: bytes) -> None:
                 self.send_response(status)
@@ -237,42 +255,53 @@ def _anthropic_error(error_type: str, message: str) -> bytes:
     return json.dumps({"type": "error", "error": {"type": error_type, "message": message}}).encode()
 
 
-def _message(model: str, text: str) -> dict[str, Any]:
+def _content_block(reply: str | StandInToolUse) -> dict[str, Any]:
+    if isinstance(reply, StandInToolUse):
+        return {"type": "tool_use", "id": reply.tool_use_id, "name": reply.name, "input": reply.arguments}
+    return {"type": "text", "text": reply}
+
+
+def _stop_reason(reply: str | StandInToolUse) -> str:
+    return "tool_use" if isinstance(reply, StandInToolUse) else "end_turn"
+
+
+def _message(model: str, reply: str | StandInToolUse) -> dict[str, Any]:
     return {
         "id": "msg_stand_in",
         "type": "message",
         "role": "assistant",
         "model": model,
-        "content": [{"type": "text", "text": text}],
-        "stop_reason": "end_turn",
+        "content": [_content_block(reply)],
+        "stop_reason": _stop_reason(reply),
         "stop_sequence": None,
         "usage": {"input_tokens": 10, "output_tokens": 5},
     }
 
 
-def _streamed_message_events(model: str, text: str) -> bytes:
+def _streamed_message_events(model: str, reply: str | StandInToolUse) -> bytes:
     started = {
         **_message(model, ""),
         "content": [],
         "stop_reason": None,
         "usage": {"input_tokens": 10, "output_tokens": 1},
     }
+    # A streamed block opens empty and its content arrives as one delta: a tool call's input as partial JSON.
+    if isinstance(reply, StandInToolUse):
+        opening_block = {**_content_block(reply), "input": {}}
+        delta = {"type": "input_json_delta", "partial_json": json.dumps(reply.arguments)}
+    else:
+        opening_block = {"type": "text", "text": ""}
+        delta = {"type": "text_delta", "text": reply}
     events: list[tuple[str, dict[str, Any]]] = [
         ("message_start", {"type": "message_start", "message": started}),
-        (
-            "content_block_start",
-            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        ),
-        (
-            "content_block_delta",
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
-        ),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": opening_block}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": delta}),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         (
             "message_delta",
             {
                 "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "delta": {"stop_reason": _stop_reason(reply), "stop_sequence": None},
                 "usage": {"output_tokens": 5},
             },
         ),
@@ -295,6 +324,14 @@ def skip_unless_pinned_claude() -> None:
         pytest.skip(f"claude on PATH is {installed!r}, not the pinned {pinned!r}; these tests assert the pin")
 
 
+def skip_unless_real_claude_agent_can_start() -> None:
+    """Skip the calling test unless ``real_claude_agent`` can start the pinned ``claude`` (mngr, tmux and git)."""
+    skip_unless_pinned_claude()
+    for binary in ("mngr", "tmux", "git"):
+        if shutil.which(binary) is None:
+            pytest.skip(f"{binary} not on PATH")
+
+
 def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
     """An isolated mngr host dir with its own profile, opted into pytest, local provider only.
 
@@ -308,6 +345,137 @@ def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
         "is_allowed_in_pytest = true\n\n[providers.modal]\nis_enabled = false\n\n[providers.docker]\nis_enabled = false\n"
     )
     (profile_dir / "tmux_onboarding_shown").write_text("")
+
+
+_REAL_CLAUDE_CREATE_TIMEOUT_SECONDS: Final[float] = 300.0
+
+
+def environment_without_own_agent_identity() -> dict[str, str]:
+    """This process's environment without the conftest's own-agent identity, which would make mngr act as that agent."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("MNGR_AGENT_")}
+
+
+@contextmanager
+def private_tmux_server(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Point every tmux call (mngr's subprocesses and its in-process sends) at a server of this test's own.
+
+    The directory is short because tmux refuses a socket path over about 100 bytes. The server's sessions are
+    killed by name at the end, never with ``kill-server``.
+    """
+    tmux_dir = Path(tempfile.mkdtemp(prefix="tmx", dir="/tmp"))
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_dir))
+    socket_path = tmux_dir / f"tmux-{os.getuid()}" / "default"
+    try:
+        yield
+    finally:
+        if socket_path.exists():
+            listed = subprocess.run(
+                ["tmux", "-S", str(socket_path), "list-sessions", "-F", "#{session_name}"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            for session_name in listed.stdout.split():
+                subprocess.run(
+                    ["tmux", "-S", str(socket_path), "kill-session", "-t", f"={session_name}"],
+                    capture_output=True,
+                    timeout=30,
+                )
+        shutil.rmtree(tmux_dir, ignore_errors=True)
+
+
+def make_git_project(project_dir: Path) -> None:
+    """An empty git repository with one commit, for ``mngr create`` to start an agent in."""
+    project_dir.mkdir()
+    git_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@test.com",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@test.com",
+    }
+    subprocess.run(["git", "init", "-q", str(project_dir)], check=True, timeout=30)
+    subprocess.run(
+        ["git", "-C", str(project_dir), "commit", "-q", "--allow-empty", "-m", "init"],
+        check=True,
+        env=git_env,
+        timeout=30,
+    )
+
+
+def prepare_stand_in_claude_profile(host_dir: Path, api: StandInAnthropicApi, api_key: str) -> None:
+    """An isolated mngr profile whose Claude agents start without dialogs and talk to ``api``.
+
+    The URL and key go in the agent's settings ``env``, which Claude Code applies over its process environment
+    (``test_claude_settings_env_auth.py``), so a key the agent's login shell exports cannot replace the stand-in's.
+    The ``env`` extends the home settings' own rather than replacing it, which mngr refuses as a narrowing.
+    """
+    prepare_isolated_mngr_host_dir(host_dir)
+    with (host_dir / "profiles" / "isolated" / "settings.toml").open("a") as settings:
+        settings.write(
+            "\n[agent_types.claude]\nauto_dismiss_dialogs_at_startup = true\n"
+            "\n[agent_types.claude.settings_overrides.env]\n"
+            f'ANTHROPIC_BASE_URL = "{api.base_url}"\n'
+            f'ANTHROPIC_API_KEY = "{api_key}"\n'
+            '\n[agent_types.claude.settings_overrides.__mngr_merge]\n"env" = "extend"\n'
+        )
+
+
+@contextmanager
+def real_claude_agent(project_dir: Path, log_path: Path, agent_name: str) -> Generator[AgentInfo, None, None]:
+    """A Claude agent ``mngr create`` starts in ``project_dir``, destroyed on exit; mngr's output goes to ``log_path``."""
+    try:
+        with open(log_path, "ab") as log:
+            created = subprocess.run(
+                ["mngr", "create", agent_name, "--type", "claude", "--no-connect", "--transfer", "none", "--yes"],
+                cwd=project_dir,
+                env=environment_without_own_agent_identity(),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=_REAL_CLAUDE_CREATE_TIMEOUT_SECONDS,
+            )
+        assert created.returncode == 0, f"mngr create failed:\n{log_path.read_text()[-4000:]}"
+        (agent,) = [candidate for candidate in discover_agents() if candidate.name == agent_name]
+        yield agent
+    finally:
+        with open(log_path, "ab") as log:
+            subprocess.run(
+                ["mngr", "destroy", agent_name, "--force"],
+                cwd=project_dir,
+                env=environment_without_own_agent_identity(),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=120,
+            )
+
+
+@contextmanager
+def stand_in_real_claude_agent(
+    project_dir: Path,
+    mngr_log_path: Path,
+    agent_name: str,
+    reply_for: Callable[[dict[str, Any]], str | StandInToolUse],
+    api_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[tuple[StandInAnthropicApi, AgentInfo], None, None]:
+    """A ``real_claude_agent`` in a fresh git project at ``project_dir``, talking to a ``StandInAnthropicApi``.
+
+    Skips the calling test unless the agent can start. Yields the stand-in, whose ``captured`` requests stay readable
+    after the block, and the agent.
+    """
+    skip_unless_real_claude_agent_can_start()
+    make_git_project(project_dir)
+    # mngr approves the key it finds in its own environment, so claude asks nothing about it.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", api_key)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    with (
+        StandInAnthropicApi(reply_for=reply_for) as api,
+        private_tmux_server(monkeypatch),
+    ):
+        prepare_stand_in_claude_profile(Path(os.environ["MNGR_HOST_DIR"]), api, api_key)
+        with real_claude_agent(project_dir, mngr_log_path, agent_name) as agent:
+            yield api, agent
 
 
 def is_chat_frontend_built() -> bool:
@@ -550,6 +718,21 @@ def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
     return str(script), log_path
 
 
+def write_gated_mngr_binary(tmp_path: Path) -> tuple[str, Path, Path]:
+    """A stand-in ``mngr`` that logs each argv on one line, then waits for a gate file before it succeeds.
+
+    Returns its path, the log's, and the gate's: a test holds a call open until it creates the gate.
+    """
+    log_path = tmp_path / "mngr-argv.log"
+    gate_path = tmp_path / "mngr-gate"
+    script = tmp_path / "gated-mngr"
+    script.write_text(
+        f'#!/bin/sh\nprintf \'%s\\n\' "$*" >> "{log_path}"\nwhile [ ! -e "{gate_path}" ]; do sleep 0.05; done\n'
+    )
+    script.chmod(0o755)
+    return str(script), log_path, gate_path
+
+
 def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Put a shell script named ``name`` first on PATH that logs its argv, then runs ``body``; returns the log.
 
@@ -563,6 +746,27 @@ def put_stand_in_cli_on_path(tmp_path: Path, name: str, body: str, monkeypatch: 
     script.chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     return log_path
+
+
+def put_stand_in_pi_on_path(
+    tmp_path: Path, provider: str, model_ids: Sequence[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Put a ``pi`` first on PATH whose bundled catalog and ``--list-models`` offer ``model_ids`` on ``provider``.
+
+    The catalog sits where ``find_provider_data_dir`` looks from the binary; every model reasons, so each offers
+    pi's default thinking levels.
+    """
+    bin_dir = tmp_path / "stand-in-pi" / "bin"
+    data_dir = bin_dir / "node_modules" / "@earendil-works" / "pi-ai" / "dist" / "providers" / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / f"{provider}.json").write_text(
+        json.dumps({"openai-completions": {model_id: {"reasoning": True} for model_id in model_ids}})
+    )
+    listing = "".join(f"{provider} {model_id}\\n" for model_id in model_ids)
+    script = bin_dir / "pi"
+    script.write_text(f"#!/bin/sh\nprintf 'provider model\\n{listing}'\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
 
 
 class InlineExecutor(Executor):
@@ -589,9 +793,13 @@ class RecordingMngrMessenger(MngrMessenger):
 
     sent: list[tuple[str, str]] = []
     pressed: list[tuple[str, str]] = []
+    # What each send was given to tell whether a stop took it back, in send order.
+    taken_back_checks: list[Callable[[], bool]] = []
     # Each compaction requested, as ``(agent_id, instructions)``.
     compactions: list[tuple[str, str | None]] = []
     succeeds: bool = True
+    # How a succeeding send reports it got there.
+    delivery: SendDelivery = SendDelivery.DELIVERED
     # What a non-succeeding send reports, in place of a harness's own words and mngr's kind.
     failure_reason: str = "The agent could not be reached."
     failure_kind: str = "unknown"
@@ -600,10 +808,16 @@ class RecordingMngrMessenger(MngrMessenger):
     compaction_failure: SendFailure | None = None
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
         self.sent.append((str(agent_id), message))
-        return None if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
+        self.taken_back_checks.append(is_taken_back)
+        return self.delivery if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
@@ -624,10 +838,47 @@ class SummaryWritingMngrMessenger(RecordingMngrMessenger):
     """
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
         write_summary_for_request(message)
-        return super().send_to_agent(agent_id, message, known_locations)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
+def scripted_send_mngr_messenger(
+    failure_kinds: Sequence[SendFailureKind], sent: list[str], failure_reason: str = "no evidence of submission"
+) -> MngrMessenger:
+    """A real `MngrMessenger` over a fake mngr: each send fails with the next of ``failure_kinds``, and once they run
+    out every send is delivered.
+
+    So the messenger's own repeats run against mngr's answers, unlike `RecordingMngrMessenger`, which replaces them.
+    ``sent`` records each message mngr was asked to type. The agent is found by its id wherever it is looked for.
+    """
+    remaining = list(failure_kinds)
+
+    def discover(agent_id: AgentId, _mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
+        return (
+            AgentMatch(
+                agent_id=agent_id,
+                agent_name=AgentName("scripted"),
+                host_id=HostId.generate(),
+                host_name=HostName("localhost"),
+                provider_name=ProviderInstanceName("local"),
+            ),
+        )
+
+    def send(matches: Sequence[AgentMatch], message: str, _mngr_ctx: MngrContext) -> MessageResult:
+        sent.append(message)
+        if remaining:
+            kind = remaining.pop(0)
+            return MessageResult(failures=[AgentSendFailure(agent_name="scripted", reason=failure_reason, kind=kind)])
+        return MessageResult(successful_agents=[str(match.agent_id) for match in matches])
+
+    return MngrMessenger(discover=discover, send=send)
 
 
 class VanishedAgentMngrMessenger(RecordingMngrMessenger):
@@ -638,9 +889,14 @@ class VanishedAgentMngrMessenger(RecordingMngrMessenger):
     """
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
-        super().send_to_agent(agent_id, message, known_locations)
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
         raise AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}")
 
 
@@ -902,9 +1158,23 @@ def serve_app(app: Flask) -> Generator[ServedApp, None, None]:
         thread.join(timeout=5.0)
 
 
+class HandshakeDrainingWebSocketClient(simple_websocket.Client):
+    """A ``simple_websocket`` client that also delivers frames read together with the handshake response.
+
+    ``simple_websocket.Client.handshake`` (1.1.0) stops at the first protocol event, the accept. Frames the
+    server sent right after accepting that arrive in the same socket read stay buffered in the protocol
+    state, and the reader thread only processes buffered events once more bytes arrive, so a server that
+    then goes quiet leaves them unread until ``receive`` times out.
+    """
+
+    def handshake(self) -> None:
+        super().handshake()
+        self.connected = self._handle_events()
+
+
 def open_ws(served: ServedApp, path: str, subprotocols: list[str] | None = None) -> simple_websocket.Client:
     """Open a WebSocket client against a ``ServedApp`` at ``path``."""
-    return simple_websocket.Client(f"{served.ws_url}{path}", subprotocols=subprotocols)
+    return HandshakeDrainingWebSocketClient(f"{served.ws_url}{path}", subprotocols=subprotocols)
 
 
 def close_ws(ws: simple_websocket.Client) -> None:
@@ -1020,6 +1290,8 @@ def make_agent_fixture(
     # the fixture transcript never loads.
     (agent_state_dir / "claude_session_id_history").write_text(f"{FIXTURE_SESSION_ID}\n")
     (agent_state_dir / "env").write_text(f"CLAUDE_CONFIG_DIR={claude_config_dir}\n")
+    # A running claude has finished starting: its SessionStart hook wrote this, so a send does not wait for it.
+    (agent_state_dir / "session_started").touch()
     session_file = make_session_file(
         projects_dir, FIXTURE_SESSION_ID, session_events if session_events is not None else _FIXTURE_SESSION_EVENTS
     )
@@ -1088,7 +1360,6 @@ def seed_failed_chat(
     account_id: str = "acct-1",
     message: str = "",
     labels: Mapping[str, str] | None = None,
-    is_installation_check_skipped: bool = False,
 ) -> ProvisionalChat:
     """Plant a provisional chat whose create failed, as the manager holds one after ``mngr create`` exits non-zero:
     what the page's "Try again" relaunches under its id."""
@@ -1098,7 +1369,6 @@ def seed_failed_chat(
         account_id=account_id,
         message=message,
         labels=dict(labels or {}),
-        is_installation_check_skipped=is_installation_check_skipped,
         phase=ProvisionalChatPhase.FAILED,
         error="mngr create exited with code 3",
     )
@@ -1184,6 +1454,7 @@ def running_workspace(
     for extra_id, extra_name in additional_agents:
         extra_state_dir = tmp_path / "agents" / extra_id
         extra_state_dir.mkdir(parents=True, exist_ok=True)
+        (extra_state_dir / "session_started").touch()
         extra_infos.append(
             AgentInfo(
                 id=extra_id,

@@ -1,31 +1,44 @@
 #!/usr/bin/env python3
-"""List what could be stopped to free memory: idle chats and workers, and the browser while no window shows the Screen.
+"""List what could be stopped to free memory: idle chats and workers, the apps, and the browser while no window shows the Screen.
 
 A lead runs this after one of its agents reports a shed (see the README's "Memory candidates"),
-shows the user the list next to the free memory, and stops only what the user approves. This
-command only reads: it never stops, kills, or re-tags anything.
+shows the user the list next to the free memory, and stops only what the user approves (a
+scheduled update may go further; see the ``update-self`` skill). This command only reads: it
+never stops, kills, or re-tags anything.
 
-It joins three sources, each read independently so one failing leaves the others intact:
+It joins four sources, each read independently so one failing leaves the others intact:
 
-- free memory, from ``/proc/meminfo`` (``MemAvailable``, else ``MemFree``; the field read is named);
+- free memory, read where the memory guard reads it (``oom_priority.meminfo``): the headroom file
+  earlyoom runs with while it is fresh, else ``/proc/meminfo``. The output names both the file and
+  the field (``MemAvailable``, else ``MemFree``), because under a memory cap the two files disagree
+  and only the guard's own figure says when the next heavy command will be shed;
 - agents, from ``mngr list --provider local`` rendered through a ``--format`` template: a chat
   (``user_created``) or worker (``agent_created``) whose state is ``WAITING``, whose chat is not
   busy, and whose latest activity is at least ``IDLE_AFTER_SECONDS`` old. A chat is busy while a
   background task will wake its agent, which ``chat_background_tasks`` reads from the chats'
-  marker files. Its memory is the summed RSS of its process trees, rooted at the pid mngr
+  marker files. Its memory is the summed anonymous memory of its process trees, rooted at the pid mngr
   reports plus every live pid the agent-pid registry holds for it;
+- apps, from the shell's ``GET /api/inventory`` joined to the programs supervisord is running: an
+  app the workspace is allowed to stop (with a program of its own that no critical app shares, and
+  neither critical nor internal itself), with how many windows show it, since that is what decides
+  whether stopping it takes something off the user's screen. Its memory is the summed anonymous
+  memory of its program's process tree;
 - browsers, from the Screen service's ``GET /browsers``: a ``running`` browser while no desktop
-  window shows the Screen it runs on, per the shell's ``GET /api/desktops``. Its memory is the
-  summed RSS of every Chromium process on its profile.
+  window shows the Screen it runs on, per the same inventory document. Its memory is the summed
+  anonymous memory of every Chromium process on its profile.
 
 A source that cannot be read is reported as unknown (``null`` candidates plus a note), never as
 "nothing to stop".
+
+``--free-memory`` prints only the free memory and reads nothing else, so it is cheap enough to
+poll while memory is short.
 
 Self-contained beyond the stdlib-only ``oom_priority`` and ``chat_background_tasks`` packages
 (imported via ``sys.path`` inserts), so it runs under a plain ``python3``.
 """
 
 import argparse
+import enum
 import http.client
 import json
 import os
@@ -53,8 +66,14 @@ from oom_priority.agent_identity import (
     WORKER_LABEL,
     is_label_true,
 )
+from oom_priority.meminfo import (
+    HOST_MEMINFO_PATH,
+    is_host_meminfo_fresh,
+    read_process_anonymous_kib,
+)
 from oom_priority.proctree import list_descendant_pids
 from oom_priority.registry import live_pids_by_agent_id
+from oom_priority.supervisor_rpc import supervised_pids
 
 # An agent counts as idle once its turn has ended (``WAITING``) and nothing -- a message to it,
 # its own work, a restart -- has happened for this long. Shorter than this, the user is likely
@@ -112,15 +131,15 @@ BROWSER_RUNNING_LIFECYCLE: Final[str] = "running"
 BROWSER_PROFILE_DIR_PREFIX: Final[str] = "browser-use-user-data-dir-"
 USER_DATA_DIR_FLAG: Final[str] = "--user-data-dir="
 
-# The shell's address and its desktops document, as workspace_layout's shell_url and windows read them.
+# The shell's address and its inventory document, as workspace_layout's shell_url and INVENTORY_ROUTE read them.
+# The one document carries both every app and every desktop's windows, so one read answers both sections.
 ENV_SHELL_URL: Final[str] = "MINDS_WORKSPACE_SERVER_URL"
 DEFAULT_SHELL_URL: Final[str] = "http://127.0.0.1:8000"
-DESKTOPS_ROUTE: Final[str] = "/api/desktops"
+INVENTORY_ROUTE: Final[str] = "/api/inventory"
 
 MEMINFO_PREFERRED_FIELD: Final[str] = "MemAvailable"
 MEMINFO_FALLBACK_FIELD: Final[str] = "MemFree"
 MEMINFO_TOTAL_FIELD: Final[str] = "MemTotal"
-RSS_STATUS_FIELD: Final[str] = "VmRSS"
 KIB_PER_MIB: Final[int] = 1024
 README_SECTION: Final[str] = (
     'system/services/oom_priority/README.md, "Memory candidates"'
@@ -132,11 +151,21 @@ _PROC_DIR: Final[Path] = Path("/proc")
 RunCommand = Callable[[Sequence[str], float], "subprocess.CompletedProcess[str]"]
 FetchJson = Callable[[str, float], Any]
 IsChatBusy = Callable[[str], bool]
+ReadSupervisedPids = Callable[[], Mapping[str, int]]
+
+
+class OutputFormat(enum.Enum):
+    """What the command prints: the full report as a table or as JSON, or only the free memory line."""
+
+    TABLE = "table"
+    JSON = "json"
+    FREE_MEMORY = "free_memory"
 
 
 class FreeMemory(NamedTuple):
-    """Free memory as ``/proc/meminfo`` states it, naming the field it came from."""
+    """Free memory as the memory guard reads it, naming the file and the field it came from."""
 
+    source: str
     field: str
     free_kib: int
     total_kib: int | None
@@ -169,7 +198,42 @@ class AgentCandidate(NamedTuple):
     last_activity: datetime
     idle_seconds: float
     pids: tuple[int, ...]
-    rss_kib: int | None
+    anonymous_kib: int | None
+
+
+class WindowIndex(NamedTuple):
+    """What the inventory's desktops say: how many windows show each app, and whether one shows the Screen
+    (the browser's windows are on it)."""
+
+    count_by_app: Mapping[str, int]
+    is_screen_shown: bool
+
+
+class ShellAnswer(NamedTuple):
+    """The shell's inventory document, read and indexed once for every section that needs it, or
+    why it could not be. ``windows`` is None when there was no document or it is not shaped as one."""
+
+    url: str
+    document: Any | None
+    windows: WindowIndex | None
+    error: str | None
+
+
+class AppCandidate(NamedTuple):
+    """A running app the workspace is allowed to stop, and how many windows show it.
+
+    ``window_count`` is what a caller weighs: stopping an app no window shows takes nothing off the
+    user's screen, while stopping one with windows leaves them on a page that does not answer until
+    the app is started again.
+    """
+
+    name: str
+    display_name: str
+    program: str
+    window_count: int
+    stops_when_no_windows: bool
+    pids: tuple[int, ...]
+    anonymous_kib: int | None
 
 
 class BrowserCandidate(NamedTuple):
@@ -180,13 +244,20 @@ class BrowserCandidate(NamedTuple):
     tab_count: int
     active_url: str | None
     pids: tuple[int, ...]
-    rss_kib: int | None
+    anonymous_kib: int | None
 
 
 class AgentSection(NamedTuple):
     """The idle agents, or None when the agent list could not be read, plus what went wrong."""
 
     candidates: tuple[AgentCandidate, ...] | None
+    notes: tuple[str, ...]
+
+
+class AppSection(NamedTuple):
+    """The stoppable running apps, or None when they could not be determined, plus what went wrong."""
+
+    candidates: tuple[AppCandidate, ...] | None
     notes: tuple[str, ...]
 
 
@@ -203,6 +274,7 @@ class Report(NamedTuple):
     generated_at: datetime
     free_memory: FreeMemory | None
     agents: AgentSection
+    apps: AppSection
     browsers: BrowserSection
 
 
@@ -210,8 +282,10 @@ class Sources(NamedTuple):
     """Where the command reads from; injectable so tests run against a fake ``/proc`` and fake services."""
 
     proc_dir: Path
+    host_meminfo: Path
     run_command: RunCommand
     fetch_json: FetchJson
+    read_supervised_pids: ReadSupervisedPids
     screen_service_url: str
     shell_url: str
     now: datetime
@@ -221,59 +295,68 @@ class Sources(NamedTuple):
 # Free memory
 
 
-def read_free_memory(meminfo_path: Path) -> FreeMemory | None:
-    """``MemAvailable`` (else ``MemFree``) and ``MemTotal``, or None when the file is absent or has neither."""
+def _parse_meminfo(path: Path) -> dict[str, int]:
+    """The ``Key: <n> kB`` lines of a meminfo file, or empty when it cannot be read."""
     try:
-        text = meminfo_path.read_text()
+        text = path.read_text()
     except OSError:
-        return None
+        return {}
     values_kib: dict[str, int] = {}
     for line in text.splitlines():
         key, _, rest = line.partition(":")
         fields = rest.split()
         if fields and fields[0].isdigit():
             values_kib[key.strip()] = int(fields[0])
-    for field in (MEMINFO_PREFERRED_FIELD, MEMINFO_FALLBACK_FIELD):
-        if field in values_kib:
-            return FreeMemory(
-                field=field,
-                free_kib=values_kib[field],
-                total_kib=values_kib.get(MEMINFO_TOTAL_FIELD),
-            )
+    return values_kib
+
+
+def read_free_memory(
+    proc_meminfo: Path, host_meminfo: Path, now: datetime
+) -> FreeMemory | None:
+    """``MemAvailable`` (else ``MemFree``) and ``MemTotal`` from the file the memory guard acts on.
+
+    The same preference ``oom_priority.meminfo.read_meminfo`` applies, and for the same reason:
+    under a memory cap the container's ``/proc/meminfo`` describes the whole machine or misses what
+    the runtime is charged, so earlyoom reads the headroom file instead while it is fresh. A reader
+    who takes ``/proc/meminfo`` for the guard's figure can be several gigabytes out, and will keep
+    rerunning a command the guard goes on shedding.
+    """
+    sources = (
+        (host_meminfo, proc_meminfo)
+        if is_host_meminfo_fresh(host_meminfo, now.timestamp())
+        else (proc_meminfo,)
+    )
+    for source in sources:
+        values_kib = _parse_meminfo(source)
+        for field in (MEMINFO_PREFERRED_FIELD, MEMINFO_FALLBACK_FIELD):
+            if field in values_kib:
+                return FreeMemory(
+                    source=str(source),
+                    field=field,
+                    free_kib=values_kib[field],
+                    total_kib=values_kib.get(MEMINFO_TOTAL_FIELD),
+                )
     return None
 
 
 # Process memory
 
 
-def read_rss_kib(pid: int, proc_dir: Path) -> int | None:
-    """A process's resident set size from ``/proc/<pid>/status``, or None when it is gone or unreadable."""
-    try:
-        text = (proc_dir / str(pid) / "status").read_text()
-    except OSError:
-        return None
-    for line in text.splitlines():
-        key, _, rest = line.partition(":")
-        fields = rest.split()
-        if key == RSS_STATUS_FIELD and fields and fields[0].isdigit():
-            return int(fields[0])
-    return None
+def process_trees_anonymous_kib(root_pids: Iterable[int], proc_dir: Path) -> int | None:
+    """Summed anonymous memory of the roots and all their descendants, each process counted once.
 
-
-def process_trees_rss_kib(root_pids: Iterable[int], proc_dir: Path) -> int | None:
-    """Summed RSS of the roots and all their descendants, each process counted once.
-
-    RSS counts shared pages in every process that maps them, so the sum overstates what stopping
-    them frees; it is a ranking, not a promise. None when no process in the trees could be read.
+    None when no process in the trees could be read.
     """
     pids: set[int] = set()
     for root in root_pids:
         pids.add(root)
         pids.update(list_descendant_pids(root, proc_dir=proc_dir))
     readings = [
-        rss
-        for rss in (read_rss_kib(pid, proc_dir) for pid in sorted(pids))
-        if rss is not None
+        anonymous
+        for anonymous in (
+            read_process_anonymous_kib(pid, proc_dir) for pid in sorted(pids)
+        )
+        if anonymous is not None
     ]
     return sum(readings) if readings else None
 
@@ -412,14 +495,18 @@ def idle_agent_candidates(
                 last_activity=agent.last_activity,
                 idle_seconds=idle_seconds,
                 pids=tuple(sorted(root_pids)),
-                rss_kib=process_trees_rss_kib(root_pids, proc_dir)
+                anonymous_kib=process_trees_anonymous_kib(root_pids, proc_dir)
                 if root_pids
                 else None,
             )
         )
     return sorted(
         candidates,
-        key=lambda c: (c.rss_kib is None, -(c.rss_kib or 0), -c.idle_seconds),
+        key=lambda c: (
+            c.anonymous_kib is None,
+            -(c.anonymous_kib or 0),
+            -c.idle_seconds,
+        ),
     )
 
 
@@ -427,9 +514,7 @@ def collect_agent_section(sources: Sources) -> AgentSection:
     agents, notes = run_mngr_list(sources.run_command)
     if agents is None:
         return AgentSection(candidates=None, notes=tuple(notes))
-    registry_pids = live_pids_by_agent_id(
-        is_alive=lambda pid: (sources.proc_dir / str(pid)).is_dir()
-    )
+    registry_pids = live_pids_by_agent_id(sources.proc_dir)
     candidates = idle_agent_candidates(
         agents, registry_pids, sources.proc_dir, sources.now, sources.is_chat_busy
     )
@@ -446,14 +531,16 @@ def fetch_json_over_http(url: str, timeout_seconds: float) -> Any:
         return json.loads(response.read())
 
 
-def is_screen_shown(desktops: Any) -> bool | None:
-    """Whether some desktop window shows the Screen (the browser's windows are on it), from the shell's desktops
-    document, or None when the document is not shaped as one (which, like an unreachable shell, means "unknown",
-    never "no")."""
-    if not isinstance(desktops, dict) or not isinstance(desktops.get("desktops"), list):
+def read_window_index(inventory: Any) -> WindowIndex | None:
+    """What the inventory's desktops say about windows, or None when it is not shaped as one
+    (which, like an unreachable shell, means "unknown", never "none").
+    """
+    if not isinstance(inventory, dict) or not isinstance(
+        inventory.get("desktops"), list
+    ):
         return None
-    is_shown = False
-    for desktop in desktops["desktops"]:
+    count_by_app: dict[str, int] = {}
+    for desktop in inventory["desktops"]:
         if not isinstance(desktop, dict) or not isinstance(
             desktop.get("windows"), list
         ):
@@ -461,9 +548,12 @@ def is_screen_shown(desktops: Any) -> bool | None:
         for window in desktop["windows"]:
             if not isinstance(window, dict) or not isinstance(window.get("app"), str):
                 return None
-            if window["app"] == SCREEN_APP_NAME:
-                is_shown = True
-    return is_shown
+            app = window["app"]
+            count_by_app[app] = count_by_app.get(app, 0) + 1
+    return WindowIndex(
+        count_by_app=count_by_app,
+        is_screen_shown=count_by_app.get(SCREEN_APP_NAME, 0) > 0,
+    )
 
 
 def chromium_pids_for_browser(browser_name: str, proc_dir: Path) -> tuple[int, ...]:
@@ -532,10 +622,14 @@ def unviewed_browser_candidates(
                 if isinstance(active_url, str) and active_url
                 else None,
                 pids=pids,
-                rss_kib=process_trees_rss_kib(pids, proc_dir) if pids else None,
+                anonymous_kib=process_trees_anonymous_kib(pids, proc_dir)
+                if pids
+                else None,
             )
         )
-    return sorted(candidates, key=lambda c: (c.rss_kib is None, -(c.rss_kib or 0)))
+    return sorted(
+        candidates, key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0))
+    )
 
 
 def _fetch(fetch_json: FetchJson, url: str) -> tuple[Any, str | None]:
@@ -545,7 +639,19 @@ def _fetch(fetch_json: FetchJson, url: str) -> tuple[Any, str | None]:
         return None, str(error)
 
 
-def collect_browser_section(sources: Sources) -> BrowserSection:
+def read_shell_inventory(sources: Sources) -> ShellAnswer:
+    """The shell's inventory document, read and indexed once for the app and browser sections both."""
+    url = f"{sources.shell_url}{INVENTORY_ROUTE}"
+    document, error = _fetch(sources.fetch_json, url)
+    return ShellAnswer(
+        url=url,
+        document=document,
+        windows=None if error is not None else read_window_index(document),
+        error=error,
+    )
+
+
+def collect_browser_section(sources: Sources, shell: ShellAnswer) -> BrowserSection:
     fleet_url = f"{sources.screen_service_url}/browsers"
     fleet, fleet_error = _fetch(sources.fetch_json, fleet_url)
     if fleet_error is not None:
@@ -567,19 +673,117 @@ def collect_browser_section(sources: Sources) -> BrowserSection:
         return BrowserSection((), ())
 
     # Only a running browser holds memory, and only the shell knows whether a window shows the Screen.
-    desktops_url = f"{sources.shell_url}{DESKTOPS_ROUTE}"
-    desktops, desktops_error = _fetch(sources.fetch_json, desktops_url)
-    is_shown = is_screen_shown(desktops) if desktops_error is None else None
-    if is_shown is None:
-        reason = desktops_error or "not a desktops document"
+    windows = shell.windows
+    if windows is None:
+        reason = shell.error or "not an inventory document"
         return BrowserSection(
             None,
             (
-                f"could not read the shell's windows at {desktops_url} ({reason}), so whether a window shows the Screen is unknown",
+                f"could not read the shell's windows at {shell.url} ({reason}), so whether a window shows the Screen is unknown",
             ),
         )
     return BrowserSection(
-        tuple(unviewed_browser_candidates(browser_records, is_shown, sources.proc_dir)),
+        tuple(
+            unviewed_browser_candidates(
+                browser_records, windows.is_screen_shown, sources.proc_dir
+            )
+        ),
+        (),
+    )
+
+
+# Apps
+
+
+def stoppable_app_candidates(
+    apps: Sequence[Mapping[str, Any]],
+    windows: WindowIndex,
+    pids_by_program: Mapping[str, int],
+    proc_dir: Path,
+) -> list[AppCandidate]:
+    """The running apps the workspace is allowed to stop, largest memory first.
+
+    The filter is the shell's own ``stoppable_program_of``
+    (``system/apps/system_interface/imbue/system_interface/shell/data_types.py``), which decides
+    what the workspace may stop, park and wake: an app with a program, not critical (the shell, the chat and the terminal are what the
+    workspace is reached and talked to through), and not sharing a critical app's program, since
+    stopping that program would take the critical app down with it. An internal app the user cannot
+    open is left out as well, and so is the Screen: its service holds almost no memory and the
+    browser's Chromium processes have their own section. Only a program supervisord reports running is
+    listed: a stopped one frees nothing, and a registry row naming a program supervisord does not
+    have at all (a stale row outlives the drop-in that ran it) could not be started again.
+    """
+    critical_programs = {
+        app["program"]
+        for app in apps
+        if app.get("critical")
+        and isinstance(app.get("program"), str)
+        and app["program"]
+    }
+    candidates: list[AppCandidate] = []
+    for app in apps:
+        name = app.get("name")
+        program = app.get("program")
+        if not isinstance(name, str) or not isinstance(program, str) or not program:
+            continue
+        if app.get("critical") or app.get("internal") or name == SCREEN_APP_NAME:
+            continue
+        if program in critical_programs:
+            continue
+        pid = pids_by_program.get(program)
+        if pid is None:
+            continue
+        display_name = app.get("display_name")
+        candidates.append(
+            AppCandidate(
+                name=name,
+                display_name=display_name
+                if isinstance(display_name, str) and display_name
+                else name,
+                program=program,
+                window_count=windows.count_by_app.get(name, 0),
+                stops_when_no_windows=bool(app.get("stop_when_no_windows")),
+                pids=(pid,),
+                anonymous_kib=process_trees_anonymous_kib((pid,), proc_dir),
+            )
+        )
+    return sorted(
+        candidates, key=lambda c: (c.anonymous_kib is None, -(c.anonymous_kib or 0))
+    )
+
+
+def collect_app_section(sources: Sources, shell: ShellAnswer) -> AppSection:
+    windows = shell.windows
+    if windows is None:
+        reason = shell.error or "not an inventory document"
+        return AppSection(
+            None,
+            (
+                f"could not read the shell's apps at {shell.url} ({reason}), so which apps run and which windows show them is unknown",
+            ),
+        )
+    apps = shell.document.get("apps") if isinstance(shell.document, dict) else None
+    if not isinstance(apps, list):
+        return AppSection(
+            None, (f"the shell at {shell.url} answered without an apps list",)
+        )
+    pids_by_program = sources.read_supervised_pids()
+    if not pids_by_program:
+        return AppSection(
+            None,
+            (
+                "could not ask supervisord which programs are running, so which apps hold memory is unknown",
+            ),
+        )
+    return AppSection(
+        tuple(
+            stoppable_app_candidates(
+                [app for app in apps if isinstance(app, dict)],
+                windows,
+                pids_by_program,
+                sources.proc_dir,
+            )
+        ),
         (),
     )
 
@@ -588,11 +792,15 @@ def collect_browser_section(sources: Sources) -> BrowserSection:
 
 
 def collect_report(sources: Sources) -> Report:
+    shell = read_shell_inventory(sources)
     return Report(
         generated_at=sources.now,
-        free_memory=read_free_memory(sources.proc_dir / "meminfo"),
+        free_memory=read_free_memory(
+            sources.proc_dir / "meminfo", sources.host_meminfo, sources.now
+        ),
         agents=collect_agent_section(sources),
-        browsers=collect_browser_section(sources),
+        apps=collect_app_section(sources, shell),
+        browsers=collect_browser_section(sources, shell),
     )
 
 
@@ -603,6 +811,7 @@ def _iso(moment: datetime) -> str:
 def report_to_json(report: Report) -> dict[str, object]:
     free = report.free_memory
     agents = report.agents.candidates
+    apps = report.apps.candidates
     browsers = report.browsers.candidates
     return {
         "generated_at": _iso(report.generated_at),
@@ -613,7 +822,7 @@ def report_to_json(report: Report) -> dict[str, object]:
             "field": free.field,
             "free_kib": free.free_kib,
             "total_kib": free.total_kib,
-            "source": "/proc/meminfo",
+            "source": free.source,
         },
         "agents": {
             "candidates": None
@@ -628,11 +837,28 @@ def report_to_json(report: Report) -> dict[str, object]:
                     "last_activity": _iso(agent.last_activity),
                     "idle_seconds": round(agent.idle_seconds),
                     "pids": list(agent.pids),
-                    "rss_kib": agent.rss_kib,
+                    "anonymous_kib": agent.anonymous_kib,
                 }
                 for agent in agents
             ],
             "notes": list(report.agents.notes),
+        },
+        "apps": {
+            "candidates": None
+            if apps is None
+            else [
+                {
+                    "name": app.name,
+                    "display_name": app.display_name,
+                    "program": app.program,
+                    "window_count": app.window_count,
+                    "stop_when_no_windows": app.stops_when_no_windows,
+                    "pids": list(app.pids),
+                    "anonymous_kib": app.anonymous_kib,
+                }
+                for app in apps
+            ],
+            "notes": list(report.apps.notes),
         },
         "browsers": {
             "candidates": None
@@ -644,7 +870,7 @@ def report_to_json(report: Report) -> dict[str, object]:
                     "tab_count": browser.tab_count,
                     "active_url": browser.active_url,
                     "pids": list(browser.pids),
-                    "rss_kib": browser.rss_kib,
+                    "anonymous_kib": browser.anonymous_kib,
                 }
                 for browser in browsers
             ],
@@ -676,20 +902,21 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[str]]) -> list[str]:
     ]
 
 
-def render_table(report: Report) -> str:
-    lines: list[str] = []
-    free = report.free_memory
+def render_free_memory(free: FreeMemory | None) -> str:
     if free is None:
-        lines.append("Free memory: unknown (no readable /proc/meminfo)")
-    else:
-        total = (
-            ""
-            if free.total_kib is None
-            else f"; {MEMINFO_TOTAL_FIELD} {_mib(free.total_kib)}"
-        )
-        lines.append(
-            f"Free memory: {_mib(free.free_kib)} ({free.field} from /proc/meminfo{total})"
-        )
+        return "Free memory: unknown (no readable meminfo)"
+    total = (
+        ""
+        if free.total_kib is None
+        else f"; {MEMINFO_TOTAL_FIELD} {_mib(free.total_kib)}"
+    )
+    return (
+        f"Free memory: {_mib(free.free_kib)} ({free.field} from {free.source}{total})"
+    )
+
+
+def render_table(report: Report) -> str:
+    lines: list[str] = [render_free_memory(report.free_memory)]
 
     lines += [
         "",
@@ -713,12 +940,35 @@ def render_table(report: Report) -> str:
                     agent.last_activity.astimezone(timezone.utc).strftime(
                         "%Y-%m-%d %H:%M"
                     ),
-                    _mib(agent.rss_kib),
+                    _mib(agent.anonymous_kib),
                 )
                 for agent in agents
             ],
         )
     lines += [f"  note: {note}" for note in report.agents.notes]
+
+    lines += ["", "Apps the workspace may stop (running):"]
+    apps = report.apps.candidates
+    if apps is None:
+        lines.append("  unknown")
+    elif not apps:
+        lines.append("  none")
+    else:
+        lines += _table(
+            ("NAME", "TITLE", "PROGRAM", "WINDOWS", "AUTO-STOP", "MEMORY"),
+            [
+                (
+                    app.name,
+                    app.display_name,
+                    app.program,
+                    str(app.window_count),
+                    "yes" if app.stops_when_no_windows else "no",
+                    _mib(app.anonymous_kib),
+                )
+                for app in apps
+            ],
+        )
+    lines += [f"  note: {note}" for note in report.apps.notes]
 
     lines += ["", "Browsers running while no window shows the Screen:"]
     browsers = report.browsers.candidates
@@ -735,7 +985,7 @@ def render_table(report: Report) -> str:
                     browser.controller,
                     str(browser.tab_count),
                     browser.active_url or "-",
-                    _mib(browser.rss_kib),
+                    _mib(browser.anonymous_kib),
                 )
                 for browser in browsers
             ],
@@ -744,7 +994,7 @@ def render_table(report: Report) -> str:
 
     lines += [
         "",
-        "Memory is summed RSS, so pages shared between processes count more than once.",
+        "Memory is each process's own anonymous memory, summed: roughly what stopping it frees.",
         f"Nothing was stopped. Stopping what the user approves: {README_SECTION}.",
     ]
     return "\n".join(lines) + "\n"
@@ -783,30 +1033,60 @@ def busy_chat_check(environ: Mapping[str, str]) -> IsChatBusy:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="List idle chats and workers, and the browser while no window shows the Screen, alongside free memory. Stops nothing."
+        description="List idle chats and workers, the apps, and the browser while no window shows the Screen, alongside free memory. Stops nothing."
     )
-    parser.add_argument(
+    parser.set_defaults(output_format=OutputFormat.TABLE)
+    output_format = parser.add_mutually_exclusive_group()
+    output_format.add_argument(
         "--json",
-        action="store_true",
+        action="store_const",
+        dest="output_format",
+        const=OutputFormat.JSON,
         help="Print the report as JSON instead of a table",
     )
+    output_format.add_argument(
+        "--free-memory",
+        action="store_const",
+        dest="output_format",
+        const=OutputFormat.FREE_MEMORY,
+        help="Print only the free memory line, reading nothing but the meminfo files",
+    )
     args = parser.parse_args()
-    sources = Sources(
-        proc_dir=_PROC_DIR,
-        run_command=_run_command,
-        fetch_json=fetch_json_over_http,
-        screen_service_url=resolve_screen_service_url(),
-        shell_url=os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/"),
-        now=datetime.now(timezone.utc),
-        is_chat_busy=busy_chat_check(os.environ),
+    sys.stdout.write(_render_output(args.output_format))
+
+
+def _render_output(output_format: OutputFormat) -> str:
+    now = datetime.now(timezone.utc)
+    match output_format:
+        case OutputFormat.FREE_MEMORY:
+            return (
+                render_free_memory(
+                    read_free_memory(_PROC_DIR / "meminfo", HOST_MEMINFO_PATH, now)
+                )
+                + "\n"
+            )
+        case OutputFormat.JSON:
+            return (
+                json.dumps(report_to_json(_collect_live_report(now)), indent=2) + "\n"
+            )
+        case OutputFormat.TABLE:
+            return render_table(_collect_live_report(now))
+
+
+def _collect_live_report(now: datetime) -> Report:
+    return collect_report(
+        Sources(
+            proc_dir=_PROC_DIR,
+            host_meminfo=HOST_MEMINFO_PATH,
+            run_command=_run_command,
+            fetch_json=fetch_json_over_http,
+            read_supervised_pids=supervised_pids,
+            screen_service_url=resolve_screen_service_url(),
+            shell_url=os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/"),
+            now=now,
+            is_chat_busy=busy_chat_check(os.environ),
+        )
     )
-    report = collect_report(sources)
-    output = (
-        json.dumps(report_to_json(report), indent=2) + "\n"
-        if args.json
-        else render_table(report)
-    )
-    sys.stdout.write(output)
 
 
 if __name__ == "__main__":

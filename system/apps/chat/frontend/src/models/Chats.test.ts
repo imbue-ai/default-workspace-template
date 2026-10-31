@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { buildAgentTerminalUrl } from "./Chats";
+import { buildAgentTerminalUrl, isLaunchInFlight, launchChat } from "./Chats";
 
 describe("buildAgentTerminalUrl", () => {
   function stubPage(terminalLabel: string | null): void {
@@ -35,5 +35,31 @@ describe("buildAgentTerminalUrl", () => {
     );
     stubPage(null);
     expect(buildAgentTerminalUrl("a").startsWith("http://terminal.host-0af1b2c3d4e5f60718293a4b5c6d7e8f.")).toBe(true);
+  });
+});
+
+describe("launchChat", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("marks the chat's launch in flight from the post until the backend reports the chat creating, and not after a refusal", async () => {
+    // The create route's URL is resolved off the page's base-path meta tag; the page here has none.
+    vi.stubGlobal("document", { querySelector: () => null });
+    let settle: (response: Response) => void = () => undefined;
+    vi.stubGlobal("fetch", () => new Promise<Response>((resolve) => (settle = resolve)));
+    const launched = launchChat("agent-7a1b", "acct-1");
+    expect(isLaunchInFlight("agent-7a1b")).toBe(true);
+    settle(new Response(JSON.stringify({ chat_id: "agent-7a1b", name: "x", display_name: "x" }), { status: 201 }));
+    await launched;
+    // The backend's own word (its creating push) is what ends the in-flight mark, not the 201.
+    expect(isLaunchInFlight("agent-7a1b")).toBe(true);
+
+    vi.stubGlobal(
+      "fetch",
+      async () => new Response(JSON.stringify({ detail: "not waiting to be launched" }), { status: 400 }),
+    );
+    await expect(launchChat("agent-9c2d", "acct-1")).rejects.toThrow("not waiting to be launched");
+    expect(isLaunchInFlight("agent-9c2d")).toBe(false);
   });
 });

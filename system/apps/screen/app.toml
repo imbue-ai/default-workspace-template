@@ -39,3 +39,7 @@ programs = ["screen-xorg", "screen-session", "screen-pulse", "screen-neko", "scr
 [[message_handlers]]
 type = "open:url"
 path = "/api/open-url"
+
+# The Screen shows a desktop and other sites; the window around it is themed.
+[theming]
+mode = "none"

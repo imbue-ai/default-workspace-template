@@ -84,7 +84,7 @@ def profile_dir_for(profile_root: Path, name: BrowserName) -> Path:
 
 @pure
 def stopped_hint(name: BrowserName) -> str:
-    return f"start it with `agentic-browser-fleet new`, or with `POST /browsers/{name}/start` on the Screen service"
+    return f"start it with `uv run --no-sync agentic-browser-fleet new`, or with `POST /browsers/{name}/start` on the Screen service"
 
 
 class Browser(MutableModel):

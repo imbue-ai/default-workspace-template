@@ -12,13 +12,13 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Final
 
-from imbue.imbue_common.frozen_model import FrozenModel
-from imbue.imbue_common.primitives import NonEmptyStr
-from imbue.imbue_common.pure import pure
 from pydantic import Field
 
 from app_manifest.errors import SuiteSelectionError
 from app_manifest.primitives import RepoRelativePath
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.primitives import NonEmptyStr
+from imbue.imbue_common.pure import pure
 
 # The working directory of a command run from the repo root, and how uv.lock records the root
 # project's own directory.
@@ -33,13 +33,11 @@ _NAME_SEPARATOR_PATTERN: Final[re.Pattern[str]] = re.compile(r"[-_.]+")
 
 
 class PythonMember(FrozenModel):
-    """A uv workspace member."""
+    """A Python package of the workspace: a uv workspace member, or a user package."""
 
-    directory: RepoRelativePath = Field(description="The member's directory")
+    directory: RepoRelativePath = Field(description="The package's directory")
     name: NonEmptyStr = Field(description="Its normalized distribution name")
-    dependencies: tuple[str, ...] = Field(
-        description="Normalized names of everything it depends on"
-    )
+    dependencies: tuple[str, ...] = Field(description="Normalized names of everything it depends on")
 
 
 class NpmPackage(FrozenModel):
@@ -63,16 +61,12 @@ class LockfileChange(FrozenModel):
     """What a ``uv.lock`` change did, and who depends on what it upgraded."""
 
     added: tuple[NonEmptyStr, ...] = Field(description="Packages only the new lock has")
-    upgraded: tuple[LockedPackageChange, ...] = Field(
-        description="Packages locked at another version or source"
-    )
+    upgraded: tuple[LockedPackageChange, ...] = Field(description="Packages locked at another version or source")
     removed: tuple[NonEmptyStr, ...] = Field(description="Packages only the old lock had")
     dependent_members: tuple[RepoRelativePath, ...] = Field(
         description="Workspace members that depend on an upgraded package, directly or transitively"
     )
-    is_root_dependent: bool = Field(
-        description="Whether the root project depends directly on an upgraded package"
-    )
+    is_root_dependent: bool = Field(description="Whether the root project depends directly on an upgraded package")
 
 
 @pure
@@ -144,21 +138,36 @@ def read_python_members(repo_root: Path) -> tuple[PythonMember, ...]:
     members: list[PythonMember] = []
     for pattern in _string_list(workspace.get("members")):
         for member_directory in sorted(repo_root.glob(pattern)):
-            pyproject_path = member_directory / "pyproject.toml"
-            if member_directory in excluded or not pyproject_path.is_file():
+            if member_directory in excluded:
                 continue
-            pyproject = _read_toml(pyproject_path)
-            name = _table(pyproject.get("project")).get("name")
-            if not isinstance(name, str) or not name:
-                continue
-            members.append(
-                PythonMember(
-                    directory=RepoRelativePath(member_directory.relative_to(repo_root).as_posix()),
-                    name=NonEmptyStr(normalize_distribution_name(name)),
-                    dependencies=_declared_dependency_names(pyproject),
-                )
-            )
+            member = _read_python_package(repo_root, member_directory)
+            if member is not None:
+                members.append(member)
     return tuple(members)
+
+
+def read_user_package_members(repo_root: Path, directories: Sequence[str]) -> tuple[PythonMember, ...]:
+    """Each user package (``directories``, from :func:`read_user_packages`) with what it
+    depends on: not a workspace member, but a consumer of whatever it depends on by path."""
+    packages = (_read_python_package(repo_root, repo_root / directory) for directory in directories)
+    return tuple(package for package in packages if package is not None)
+
+
+def _read_python_package(repo_root: Path, directory: Path) -> PythonMember | None:
+    """The package whose ``pyproject.toml`` is in ``directory``; None without one, or one
+    that names no project."""
+    pyproject_path = directory / "pyproject.toml"
+    if not pyproject_path.is_file():
+        return None
+    pyproject = _read_toml(pyproject_path)
+    name = _table(pyproject.get("project")).get("name")
+    if not isinstance(name, str) or not name:
+        return None
+    return PythonMember(
+        directory=RepoRelativePath(directory.relative_to(repo_root).as_posix()),
+        name=NonEmptyStr(normalize_distribution_name(name)),
+        dependencies=_declared_dependency_names(pyproject),
+    )
 
 
 @pure
@@ -186,14 +195,13 @@ def _reverse_transitive_closure(
 
 @pure
 def python_consumers(members: Sequence[PythonMember]) -> dict[str, tuple[str, ...]]:
-    """Each member directory's consumers: the members that depend on it, directly or transitively."""
+    """Each package directory's consumers: the packages that depend on it, directly or transitively."""
     directory_by_name = {str(member.name): str(member.directory) for member in members}
     edges = {
         str(member.directory): [
             directory_by_name[dependency]
             for dependency in member.dependencies
-            if dependency in directory_by_name
-            and directory_by_name[dependency] != str(member.directory)
+            if dependency in directory_by_name and directory_by_name[dependency] != str(member.directory)
         ]
         for member in members
     }
@@ -238,8 +246,7 @@ def npm_consumers(packages: Sequence[NpmPackage]) -> dict[str, tuple[str, ...]]:
         str(package.directory): [
             directory_by_name[dependency]
             for dependency in package.dependencies
-            if dependency in directory_by_name
-            and directory_by_name[dependency] != str(package.directory)
+            if dependency in directory_by_name and directory_by_name[dependency] != str(package.directory)
         ]
         for package in packages
     }
@@ -249,14 +256,47 @@ def npm_consumers(packages: Sequence[NpmPackage]) -> dict[str, tuple[str, ...]]:
 def read_root_ignored_directories(repo_root: Path) -> tuple[str, ...]:
     """The directories the root pytest configuration's ``--ignore=`` options leave out."""
     root_pyproject = _read_toml(repo_root / "pyproject.toml")
-    pytest_options = _table(
-        _table(_table(root_pyproject.get("tool")).get("pytest")).get("ini_options")
-    )
+    pytest_options = _table(_table(_table(root_pyproject.get("tool")).get("pytest")).get("ini_options"))
     return tuple(
         option.removeprefix("--ignore=").rstrip("/")
         for option in _string_list(pytest_options.get("addopts"))
         if option.startswith("--ignore=")
     )
+
+
+# Where a package lives: a built-in one is a root workspace member, and any other directory
+# here with a pyproject.toml is a user package, a standalone project with its own lock and venv.
+PACKAGE_PARENT_DIRECTORIES = ("system/apps", "system/services", "system/libs")
+
+
+def read_user_packages(repo_root: Path, members: Sequence[PythonMember]) -> tuple[str, ...]:
+    """The packages under ``system/`` the root workspace does not name: standalone projects,
+    each run as its own pytest root from its own directory and venv."""
+    member_directories = {str(member.directory) for member in members}
+    found: list[str] = []
+    for parent in PACKAGE_PARENT_DIRECTORIES:
+        directory = repo_root / parent
+        if not directory.is_dir():
+            continue
+        for child in sorted(directory.iterdir()):
+            relative = f"{parent}/{child.name}"
+            if (child / "pyproject.toml").is_file() and relative not in member_directories:
+                found.append(relative)
+    return tuple(found)
+
+
+def package_import_names(pyproject: Mapping[str, object], package_directory: Path) -> tuple[str, ...]:
+    """The top-level modules a package installs: its hatch wheel's ``packages``, else every
+    ``src/<name>/`` (or ``<name>/``) with an ``__init__.py``."""
+    wheel = _table(_table(_table(_table(pyproject.get("tool")).get("hatch")).get("build")).get("targets")).get("wheel")
+    declared = _string_list(_table(wheel).get("packages"))
+    if declared:
+        return tuple(entry.removeprefix("src/").strip("/").replace("/", ".") for entry in declared)
+    for base in (package_directory / "src", package_directory):
+        names = tuple(sorted(init_file.parent.name for init_file in base.glob("*/__init__.py")))
+        if names:
+            return names
+    return ()
 
 
 def read_own_root_units(repo_root: Path, members: Sequence[PythonMember]) -> tuple[str, ...]:
@@ -380,30 +420,18 @@ def classify_lockfile_change(base_lock: str, head_lock: str) -> LockfileChange:
         if directory is not None:
             directory_by_name[normalized] = directory
     dependents = _reverse_transitive_closure(edges)
-    reached = {
-        dependent
-        for upgraded_name in upgraded_names
-        for dependent in dependents.get(upgraded_name, ())
-    }
+    reached = {dependent for upgraded_name in upgraded_names for dependent in dependents.get(upgraded_name, ())}
     dependent_members = sorted(
         directory_by_name[name]
         for name in reached
         if name in directory_by_name and directory_by_name[name] != ROOT_DIRECTORY
     )
-    root_names = [
-        name for name, directory in directory_by_name.items() if directory == ROOT_DIRECTORY
-    ]
-    is_root_dependent = any(
-        edges.get(root_name, set()) & upgraded_names for root_name in root_names
-    )
+    root_names = [name for name, directory in directory_by_name.items() if directory == ROOT_DIRECTORY]
+    is_root_dependent = any(edges.get(root_name, set()) & upgraded_names for root_name in root_names)
     return LockfileChange(
-        added=tuple(
-            NonEmptyStr(name) for name in sorted(head_identities.keys() - base_identities.keys())
-        ),
+        added=tuple(NonEmptyStr(name) for name in sorted(head_identities.keys() - base_identities.keys())),
         upgraded=upgraded,
-        removed=tuple(
-            NonEmptyStr(name) for name in sorted(base_identities.keys() - head_identities.keys())
-        ),
+        removed=tuple(NonEmptyStr(name) for name in sorted(base_identities.keys() - head_identities.keys())),
         dependent_members=tuple(RepoRelativePath(directory) for directory in dependent_members),
         is_root_dependent=is_root_dependent,
     )

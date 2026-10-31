@@ -1,0 +1,1 @@
+`describeRequestErrorKind` now recognises mngr's `submission_unconfirmed` send-failure kind (the message was typed and Enter sent, but nothing confirmed the agent took it), so the chat can give it its own notice. mngr's `agent_not_found` still reads as `unknown`: nothing was typed, so the default Retry fits it.

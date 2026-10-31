@@ -17,13 +17,22 @@ vi.hoisted(() => {
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
 });
 
-const agentState: { agent: ChatSnapshot | null; provisional: { account_id: string } | undefined } = {
+const agentState: {
+  agent: ChatSnapshot | null;
+  provisional: { account_id: string; phase?: string; model_pick?: unknown } | undefined;
+} = {
   agent: null,
   provisional: undefined,
 };
+// Every launch choice made for a chat with no agent yet, as (chat id, account id, pick).
+const launchChoices: [string, string, unknown][] = [];
 vi.mock("../models/Chats", () => ({
   getChatById: () => agentState.agent ?? undefined,
   getProvisionalChat: () => agentState.provisional,
+  setLaunchChoice: (chatId: string, accountId: string, pick: unknown) => {
+    launchChoices.push([chatId, accountId, pick]);
+    return Promise.resolve();
+  },
 }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
@@ -171,8 +180,6 @@ vi.mock("./SwitchDialog", async (importOriginal) => ({
 
 import m from "mithril";
 
-import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
-
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
 import { getPendingAccountId, setPendingAccount, setPendingSwitch, setSwitchSending } from "../models/PendingLane";
@@ -306,9 +313,27 @@ describe("the combo card", () => {
     expect(ROOT().querySelector(".model-selector-loading")?.textContent).toBe("Loading…");
   });
 
-  it("names the account a chat with no agent yet starts on, with no menu to open", () => {
+  it("names the account a chat with no agent yet starts on, and lets its model be chosen before it runs", () => {
     agentState.agent = null;
-    agentState.provisional = { account_id: "" };
+    agentState.provisional = { account_id: "", phase: "creating", model_pick: null };
+    catalogState.catalog = catalogOf({
+      options: [OPUS, { ...OPUS, id: "sonnet", label: "Sonnet", efforts: LOW_MEDIUM_HIGH, default_effort: "medium" }],
+    });
+    launchChoices.length = 0;
+    render();
+    expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
+
+    click(".model-selector-trigger");
+    click('[data-menu-row="model"]');
+    clickSubmenuRow("Sonnet");
+
+    // At the model's own starting effort: a harness refuses a model that has efforts picked without one.
+    expect(launchChoices).toEqual([["a1", "acct-1", { model_id: "sonnet", effort: "medium", fast: false }]]);
+  });
+
+  it("keeps the plain chip for a chat whose create failed", () => {
+    agentState.agent = null;
+    agentState.provisional = { account_id: "", phase: "failed", model_pick: null };
     render();
     expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
     expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
@@ -394,43 +419,6 @@ describe("the combo card", () => {
     render();
     expect(ROOT().querySelector(".model-selector-trigger")?.textContent).toContain("next");
     setPendingAccount("a1", null);
-  });
-
-  it("renders a read-only harness without an effort control", () => {
-    // agy: its `/model` is an interactive TUI with no scriptable form, so a picker there
-    // offers a switch that cannot work.
-    const withEffort = {
-      ...OPUS,
-      efforts: [
-        { level: "low", in_picker: true },
-        { level: "high", in_picker: true },
-      ],
-    };
-    catalogState.catalog = catalogOf({ switch_mode: "read_only", options: [withEffort] });
-    settingsState.choice = {
-      identity: { model_id: "opus", effort: "low", fast: false },
-      matched: withEffort,
-      pending: null,
-    };
-    render();
-    click(".model-selector-trigger");
-    expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);
-  });
-
-  it("stops explaining a read-only harness once its catalog says the model can be switched", () => {
-    vi.useFakeTimers();
-    catalogState.catalog = catalogOf({ switch_mode: "read_only" });
-    render();
-    click(".model-selector-trigger");
-    const modelRow = document.querySelector<HTMLElement>('[data-menu-row="model"]')!;
-    expect(hoverTooltipText(modelRow)).toContain("run /model or /effort");
-
-    catalogState.catalog = catalogOf();
-    render();
-    // The read-only value row gives way to the interactive submenu row; whatever element
-    // stands in the slot now must explain nothing.
-    const switched = document.querySelector<HTMLElement>('[data-menu-row="model"]')!;
-    expect(hoverTooltipText(switched)).toBeNull();
   });
 
   it("renders an effort slider only when there is more than one stop", () => {
@@ -981,6 +969,9 @@ describe("the combo card", () => {
     if (row === null) throw new Error("no fast row");
     expect(row.textContent).toContain("Fast mode");
     expect(row.textContent).toContain("Auto (off now)");
+    expect(row.getAttribute("data-hover-tooltip")).toBe(
+      "Fast mode makes the model reply faster. It's the same model, just as smart, only quicker. It costs more to run, so turn it on when speed matters and leave it off otherwise.",
+    );
     expect(document.querySelector(".fast-limit-input")).toBeNull();
 
     click('[data-menu-row="fast"]');
@@ -1175,6 +1166,8 @@ describe("the combo card", () => {
     expect(submenu.querySelector(".autocompact-help")?.textContent).toBe(
       "Saves ~50% by compacting right before the cache expires.",
     );
+    // The rule above "New chats start with" is the menu's own separator part, which themes dress.
+    expect(submenu.querySelector('[role="separator"]')?.getAttribute("data-part")).toBe("menu-separator");
 
     click('[data-autocompact="on"]');
     expect(autocompactWrites).toEqual([]);
@@ -1256,30 +1249,6 @@ describe("the combo card", () => {
     chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, autocompact_default: false };
     click('[data-menu-row="autocompact"]');
     expect(document.querySelector('[data-autocompact="off"]')?.getAttribute("aria-checked")).toBe("true");
-  });
-
-  it("states auto-compact on a read-only harness without a submenu to open", () => {
-    catalogState.catalog = catalogOf({ switch_mode: "read_only", supports_compaction: true });
-    autocompactState.state = { is_enabled: false };
-    render();
-    click(".model-selector-trigger");
-    const row = document.querySelector<HTMLElement>('[data-menu-row="autocompact"]');
-    if (row === null) throw new Error("no auto-compact row");
-    expect(row.textContent).toContain("Off");
-    expect(row.querySelector("svg")).toBeNull();
-    click('[data-menu-row="autocompact"]');
-    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
-  });
-
-  it("gives a read-only harness no model list to open", () => {
-    // agy's `/model` is an interactive TUI with no scriptable form. A chevron on that row
-    // would be a promise the card cannot keep.
-    catalogState.catalog = catalogOf({ switch_mode: "read_only" });
-    render();
-    click(".model-selector-trigger");
-    expect(document.querySelector('[data-menu-row="model"]')?.querySelector("svg")).toBeNull();
-    click('[data-menu-row="model"]');
-    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
   it("survives a dynamic harness with no static options", () => {

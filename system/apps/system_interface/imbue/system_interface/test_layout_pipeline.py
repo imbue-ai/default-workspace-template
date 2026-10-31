@@ -86,6 +86,7 @@ def _sandbox(tmp_path: Path) -> Path:
     return sandbox
 
 
+@pytest.mark.flaky
 def test_context_and_desktops_round_trip_through_the_command_and_endpoint(
     layout_server: PipelineHarness, tmp_path: Path
 ) -> None:

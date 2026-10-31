@@ -58,6 +58,7 @@ _BUILTIN_SERVICE_ORDER = (
     "files",
     "routines",
     "getting-started",
+    "style-guide",
     "system-monitor",
     "resource_sampler",
 )

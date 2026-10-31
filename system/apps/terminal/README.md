@@ -1,16 +1,21 @@
 # terminal
 
 The terminal app: a web terminal served by [ttyd](https://github.com/tsl0922/ttyd),
-run as two supervisord programs declared in `system/supervisord.conf.d/` and both
-installed as entry points of this package's uv tool (`system/scripts/build_workspace.sh`,
-like every Python app with a manifest):
+run as two supervisord programs declared in `system/supervisord.conf.d/`, each
+running one of this package's entry points from the workspace venv
+(`.venv/bin/terminal-app`, `.venv/bin/terminal-pty`), like every Python app:
 
 - `terminal` (`terminal-app`) is the terminal origin. It serves the **wrapper pages**
   on 7681 (`pages.py`): `/?session=<name>` frames the session's ttyd page from the
   pty origin, reports its path and the session's title to the shell through the app
   contract (the shell's built module, served from this origin at
   `/_static/app_contract.js`), re-points the frame on `shell:navigate`,
-  and passes the shell's `ttyd-focus` grant on to ttyd. On a phone-sized page (the shell's rule: at most 500px one way and 1000px the other),
+  and passes the shell's `ttyd-focus` grant on to ttyd. On `shell:theme` it loads that theme's
+  bundle (served from this origin at `/_static/themes/<path>`, `workspace_themes.flask_routes`) into an unseen frame,
+  reads the theme's `--term-*` tokens there, and posts `{type: "terminal:theme", theme}` (xterm's color keys) into
+  the pty frame, again on every load of that frame; `theme` is null under the standard theme, for a bundle that
+  fails to load, or for a theme that sets no terminal tokens, which leaves xterm its own colors (the terminal is
+  `[theming] mode = "none"`, so nothing else of it is themed). On a phone-sized page (the shell's rule: at most 500px one way and 1000px the other),
   with a coarse pointer (a phone; never a mouse-driven desktop window), it shows a key strip under the frame (Esc, Tab, a one-shot Ctrl, the arrows) that
   posts `{type: "terminal:key", key, ctrl}` and `{type: "terminal:ctrl", armed}` into
   the frame, followed by a `ttyd-focus`; the pty page posts
@@ -46,7 +51,8 @@ like every Python app with a manifest):
   body tag; then it registers its manifest and port, and execs
   `ttyd -p 7683 -a -t disableLeaveAlert=true [-I index.html] -W bash -c <dispatch>`.
   The script feeds the wrapper's strip keys to xterm (`window.term`, which the
-  patched client exposes) with the sequences xterm sends for them, applies an armed
+  patched client exposes) with the sequences xterm sends for them, sets the wrapper's
+  `terminal:theme` palette on xterm once `window.term` exists (null puts xterm's own colors back), applies an armed
   Ctrl to the next typed key by wrapping xterm's internal `triggerDataEvent`, and
   focuses xterm when the terminal is tapped (iOS raises the soft keyboard only for a
   focus made in a tap on the focused frame itself).
@@ -136,9 +142,10 @@ main create template writes.
 
 ## Tests
 
-`uv run pytest system/apps/terminal` from the repo root. The unit tests drive
+`uv run --no-sync pytest system/apps/terminal` from the repo root. The unit tests drive
 the real source and tmux client over a fake `tmux` on `PATH`
 (`testing.py`); `test_terminal_app.py` runs `terminal-app` and `terminal-pty`
 as processes, the latter around a fake `ttyd`; `test_phone_keys.py` (marked
 `browser`) drives the wrapper page's key strip in Chromium against a recording
-frame, a stub `window.term`, and the real patched ttyd client with the script added.
+frame, a stub `window.term`, and the real patched ttyd client with the script added;
+`test_terminal_theme.py` (also `browser`) checks that a theme the shell sends reaches xterm as its palette.

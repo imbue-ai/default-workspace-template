@@ -23,7 +23,11 @@ export const immersiveBridge: ImmersiveBridge = {
 export function connectEmbedderToStore(store: DesktopStore): void {
   setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
     store.setCanPopOut(message.canPopOut === true);
-    store.setCanOpenLinksOutside(message.opensExternalLinks === true);
+    store.setOutsideLinkCapabilities({
+      opensExternalLinks: message.opensExternalLinks === true,
+      opensCustomSchemeLinks: message.opensCustomSchemeLinks === true,
+    });
+    store.setOpensLocalFiles(message.opensLocalFiles === true);
     store.setCanImmerse(message.immersive === true);
   });
   setEmbedderMessageHandler(IMMERSIVE_CHANGED, (message) => {

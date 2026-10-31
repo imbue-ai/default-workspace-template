@@ -20,3 +20,8 @@ const ALIVE_STATES: ReadonlySet<string> = new Set(["RUNNING", "RUNNING_UNKNOWN_A
 export function isAgentProcessDead(state: string): boolean {
   return !ALIVE_STATES.has(state) && state !== "UNKNOWN";
 }
+
+/** True iff ``state`` POSITIVELY says the agent process is up, for what may skip starting it. */
+export function isAgentProcessAlive(state: string): boolean {
+  return ALIVE_STATES.has(state);
+}

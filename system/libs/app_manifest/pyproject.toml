@@ -3,7 +3,7 @@ name = "app-manifest"
 version = "0.1.0"
 description = "The app manifest (app.toml) and app registry (data/.state/apps.toml) models every workspace app is described by"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "click>=8.1",
     # The Content-Security-Policy helper hooks a Flask app or blueprint; every workspace app is one.
@@ -38,3 +38,16 @@ dev = [
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
 [tool.ty]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP006", "UP007"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+case-sensitive = true
+order-by-type = false
+known-first-party = ["app_manifest", "imbue"]

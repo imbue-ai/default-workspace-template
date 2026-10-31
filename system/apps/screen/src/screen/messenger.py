@@ -1,42 +1,30 @@
-"""Waking a queued agent: a message to its chat through the chat app (``system/scripts/message_chat.py``), the path
-the browser fleet's wake-ups took."""
+"""Waking a queued agent: a message to its chat through the chat app (``message_chat``, the in-process send the
+browser fleet's wake-ups took), which falls back to ``mngr message`` when the chat app cannot take it."""
 
-import subprocess
-import sys
 from pathlib import Path
-from typing import Final
 
 from loguru import logger
 from pydantic import Field
+from workspace_bare_scripts import message_chat
 
 from screen.interfaces import AgentMessengerInterface
 
-MESSAGE_CHAT_SCRIPT: Final[Path] = Path("system") / "scripts" / "message_chat.py"
-_MESSAGE_TIMEOUT_SECONDS: Final[float] = 60.0
-
 
 class ChatAgentMessenger(AgentMessengerInterface):
-    """Runs the chat messenger script from the repo root; the ``--browser-fleet`` flag renders the nudge as a
+    """Sends through the chat messenger from the repo root; the browser fleet's sentinel renders the nudge as a
     collapsed chip in the transcript rather than a user bubble."""
 
-    repo_root: Path = Field(frozen=True, description="Where the script and the ``mngr`` shim resolve from")
+    repo_root: Path = Field(frozen=True, description="Where the app registry and the ``mngr`` shim resolve from")
 
     def message_agent(self, agent_id: str, agent_name: str | None, text: str) -> None:
         try:
-            completed = subprocess.run(
-                [sys.executable, str(MESSAGE_CHAT_SCRIPT), agent_id, "--browser-fleet", "--message", text],
-                cwd=self.repo_root,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=_MESSAGE_TIMEOUT_SECONDS,
-                check=False,
-            )
-        except (OSError, subprocess.TimeoutExpired) as e:
+            returncode = message_chat.send(agent_id, message_chat.wrap_browser_fleet_nudge(text), cwd=self.repo_root)
+        except OSError as e:
             logger.warning("Could not message agent {} about the Screen ({})", agent_name or agent_id, e)
             return
-        if completed.returncode != 0:
+        if returncode != message_chat.EXIT_DELIVERED:
             logger.warning(
-                "message_chat.py exited {} messaging agent {} about the Screen; the message may not have landed",
-                completed.returncode,
+                "the chat messenger answered {} messaging agent {} about the Screen; the message may not have landed",
+                returncode,
                 agent_name or agent_id,
             )

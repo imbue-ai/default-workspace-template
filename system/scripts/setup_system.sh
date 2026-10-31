@@ -10,12 +10,18 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 # Pin $HOME to the image-build home. Several installers below follow $HOME (the
-# claude.ai installer, the uv installer, `uv python install` / `uv tool install`),
+# claude.ai installer, the uv installer, `uv tool install`),
 # while the checks and PATH entries in this script are fixed to /root/.local. A
 # live re-provision (the update apply, or an agent running this by hand) runs
 # under HOME=/home/user -- root's passwd home at runtime -- so without this pin
 # the installers "succeed" into the wrong home and the version checks fail.
 export HOME=/root
+
+# Pin the Python every uv command below resolves to. uv's default for an
+# open-ended request moves with the uv release, so without this a uv bump would
+# quietly move the tools to a new Python; changing it is a deliberate edit here,
+# in build_workspace.sh and in install_dependencies.sh.
+export UV_PYTHON=3.12
 
 # Skip if this exact repo tree was already provisioned (e.g. baked into the image).
 . "$(dirname "$0")/_provision_guard.sh"
@@ -44,18 +50,18 @@ fi
 # agent_types.claude.version in .mngr/settings.toml.
 provision_drop_inherited_pins
 : "${TTYD_VERSION:=1.7.7}"
-: "${UV_VERSION:=0.11.7}"
-: "${NODE_VERSION:=22.23.2}"
-: "${CLAUDE_CODE_VERSION:=2.1.293}"
+: "${UV_VERSION:=0.13.4}"
+: "${NODE_VERSION:=24.22.1}"
+: "${CLAUDE_CODE_VERSION:=2.1.307}"
 : "${CODEX_VERSION:=0.161.0}"
 : "${PI_VERSION:=0.87.1}"
 : "${PLAYWRIGHT_CLI_VERSION:=0.1.18}"
-: "${OPENCODE_VERSION:=1.18.19}"
-: "${MODAL_VERSION:=1.4.2}"
+: "${OPENCODE_VERSION:=1.19.4}"
+: "${MODAL_VERSION:=1.6.2}"
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
-: "${LATCHKEY_VERSION:=3.19.3}"
+: "${LATCHKEY_VERSION:=3.19.4}"
 : "${MCPC_VERSION:=0.7.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
@@ -102,7 +108,7 @@ rm -rf /var/lib/apt/lists/*
 # The Debian `supervisor` package enables a systemd unit that immediately starts
 # a supervisord against the default /etc/supervisor/supervisord.conf. On
 # systemd-based providers (lima/VPS) that daemon grabs /var/run/supervisor.sock
-# and makes `uv run bootstrap`'s `supervisord -c /home/user/workspace/system/supervisord.conf`
+# and makes `bootstrap`'s `supervisord -c /home/user/workspace/system/supervisord.conf`
 # fail with "Another program is already listening". We always launch our own
 # supervisord from bootstrap, so disable + mask the packaged unit. Guarded so
 # it is a no-op on docker (no systemd / no systemctl on the slim image).
@@ -209,17 +215,6 @@ rm -rf /tmp/frp.tar.gz "/tmp/frp_${FRP_VERSION}_linux_${frp_goarch}"
 curl -LsSf "${CURL_RETRY[@]}" "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
 export PATH="/root/.local/bin:$PATH"
 
-# Ensure a uv-managed Python that satisfies the workspace lockfile (>=3.12).
-# The Docker base image ships 3.12, but other bases (e.g. a Debian VM whose
-# system Python is 3.11) do not -- and the root pyproject's requires-python
-# (>=3.11) lets uv otherwise pick the system 3.11, which the frozen lock then
-# rejects. Fetch a managed 3.12 here so install_dependencies.sh /
-# build_workspace.sh can pin uv to it. No-op when system Python is already
-# >=3.12, so the Docker build is unchanged.
-if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
-    uv python install 3.12
-fi
-
 # Make /root/.local/bin discoverable in login and interactive shells. The docker
 # image also sets ENV PATH; the Lima VM relies on these profile writes.
 if ! grep -q '/root/.local/bin' /root/.bashrc 2>/dev/null; then
@@ -238,10 +233,9 @@ curl -fsSL "${CURL_RETRY[@]}" https://claude.ai/install.sh > /tmp/install_claude
 bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"
 test -x /root/.local/bin/claude
 # Fail the build/provision right here on a pin mismatch. mngr's own runtime
-# version check still runs when a claude agent is created, but since the
-# services agent stopped being a claude agent that check would not fire until
-# the first chat agent is created on first boot -- far too late to catch a
-# Dockerfile/settings.toml desync cheaply.
+# version check only warns (version_mismatch = "WARN" in .mngr/settings.toml)
+# and does not run until the first chat agent is created on first boot, so this
+# is the one place an installer/pin desync fails loudly.
 installed_claude_version="$(/root/.local/bin/claude --version | awk '{print $1}')"
 if [ "${installed_claude_version}" != "${CLAUDE_CODE_VERSION}" ]; then
     echo "Installed claude version ${installed_claude_version} does not match pinned CLAUDE_CODE_VERSION ${CLAUDE_CODE_VERSION}" >&2
@@ -251,17 +245,22 @@ fi
 # Node.js as a pinned, sha256-verified nodejs.org release tarball (installed to
 # /usr/local so node/npm/npx land on PATH). NOT the trixie apt nodejs (20.x): the
 # pi CLI ships an `undici` that calls `worker_threads.markAsUncloneable`, which is
-# absent on Node 20 and crashes pi at import -- so we pin Node 22 LTS. Installs like
+# absent on Node 20 and crashes pi at import -- so we pin Node 24 LTS. Installs like
 # gh/caddy/restic above: fixed version, checksummed download.
 node_arch="$(uname -m)"
 case "${node_arch}" in
-    x86_64) node_goarch="x64"; node_sha256="b294a556e639d64338823920e5866c21c02741742d2e1529ee1a225c1ec9252a" ;;
-    aarch64) node_goarch="arm64"; node_sha256="013b59cfd2819703a6f4a14ab891fc46fc2a4e3f5bcd92de3fb4929b43e35b30" ;;
+    x86_64) node_goarch="x64"; node_sha256="eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c" ;;
+    aarch64) node_goarch="arm64"; node_sha256="33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3" ;;
     *) echo "Unsupported architecture for node: ${node_arch}" >&2; exit 1 ;;
 esac
 curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${node_goarch}.tar.gz" -o /tmp/node.tar.gz
 echo "${node_sha256}  /tmp/node.tar.gz" | sha256sum -c -
 # --strip-components=1 lands bin/node, bin/npm, bin/npx, lib/node_modules under /usr/local.
+# Extracting over an older Node leaves the old npm's files beside the new
+# one's, and npm then loads a stale nested dependency and fails every install,
+# so the bundled npm and corepack trees are removed first. Global packages
+# installed beside them are kept.
+rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack
 tar -xzf /tmp/node.tar.gz -C /usr/local --strip-components=1
 rm /tmp/node.tar.gz
 command -v node npm >/dev/null
@@ -286,14 +285,15 @@ if [ ! -x "${codex_native_binary}" ]; then
     exit 1
 fi
 
-# OpenCode CLI (pinned; standalone binary, no Node needed). Its installer reads
+# OpenCode CLI (pinned; standalone binary, no Node needed). Keep in sync with
+# agent_types.opencode.version in .mngr/settings.toml. Its installer reads
 # VERSION and hardcodes $HOME/.opencode/bin, which is NOT on PATH, so symlink the
 # binary into /usr/local/bin like the other downloaded tools.
 curl -fsSL https://opencode.ai/install | VERSION="${OPENCODE_VERSION}" bash
 ln -sf "$HOME/.opencode/bin/opencode" /usr/local/bin/opencode
 opencode --version >/dev/null
 
-# Pi CLI (pinned; npm-installed, needs Node 22 above -- crashes on Node 20). Keep
+# Pi CLI (pinned; npm-installed, needs the Node above -- crashes on Node 20). Keep
 # in sync with agent_types.pi-coding.version in .mngr/settings.toml.
 npm install -g "@earendil-works/pi-coding-agent@${PI_VERSION}"
 command -v pi >/dev/null
@@ -304,16 +304,16 @@ command -v playwright-cli >/dev/null
 # Antigravity CLI (agy). Installed via a vendored, version-LOCKED copy of Google's
 # installer: the upstream one queries a "latest" manifest, and that manifest is the
 # ONLY source of a release's opaque build id, so a version can be pinned only by
-# capturing its URL + sha512 while it is current. agy_install-1.1.22.sh holds those.
+# capturing its URL + sha512 while it is current. agy_install.sh holds those.
 # Reachable two ways depending on how we were invoked (mirrors the secret-scanner
 # dual-name resolution below): in a Dockerfile build it is baked beside this script as
 # default-workspace-template-install-agy; run straight from the repo (Lima/Modal) it is
-# its sibling agy_install-1.1.22.sh. Installed into /usr/local/bin explicitly rather
+# its sibling agy_install.sh. Installed into /usr/local/bin explicitly rather
 # than the installer's $HOME/.local/bin default, so agy sits with every other
 # downloaded tool and does not depend on HOME surviving into the runtime image.
 agy_installer_dir="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$agy_installer_dir/agy_install-1.1.22.sh" ]; then
-    bash "$agy_installer_dir/agy_install-1.1.22.sh" /usr/local/bin
+if [ -f "$agy_installer_dir/agy_install.sh" ]; then
+    bash "$agy_installer_dir/agy_install.sh" /usr/local/bin
 else
     bash "$agy_installer_dir/default-workspace-template-install-agy" /usr/local/bin
 fi
@@ -360,7 +360,7 @@ cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
 [ -d /home/user/workspace/system/services/env_converge ] || exit 0
 [ -e /var/lib/minds/env-converge/rootfs-id ] || exit 0
 cd /home/user/workspace || exit 0
-MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run env-converge capture >/dev/null 2>&1 || true
+MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run --no-sync env-converge capture >/dev/null 2>&1 || true
 HOOK
 chmod +x /usr/local/bin/env-converge-capture-hook
 printf 'DPkg::Post-Invoke { "/usr/local/bin/env-converge-capture-hook || true"; };\n' \

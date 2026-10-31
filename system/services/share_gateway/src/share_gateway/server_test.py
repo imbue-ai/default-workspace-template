@@ -1,32 +1,35 @@
 import base64
 import hashlib
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
 from pathlib import Path
-from urllib.parse import parse_qs, urlsplit
+from urllib.parse import parse_qs
+from urllib.parse import urlsplit
 
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from flask import Flask
 from flask.testing import FlaskClient
+from werkzeug.test import TestResponse
 
-from share_gateway.caddyfile import RegisteredApp, build_label_to_name
+from share_gateway.caddyfile import RegisteredApp
+from share_gateway.caddyfile import build_label_to_name
 from share_gateway.grants import load_grants
-from share_gateway.handoff import JwksCache, SingleUseJtiRegistry
-from share_gateway.identity import IDENTITY_HEADER, RequesterIdentity
+from share_gateway.handoff import JwksCache
+from share_gateway.handoff import SingleUseJtiRegistry
+from share_gateway.identity import IDENTITY_HEADER
+from share_gateway.identity import RequesterIdentity
 from share_gateway.materials import ShareMaterials
-from share_gateway.server import (
-    PAGE_CONTENT_SECURITY_POLICY,
-    PendingLoginRegistry,
-    build_gateway_app,
-    forwarded_client_ip,
-)
-from share_gateway.session_cookie import (
-    PARTITIONED_SESSION_COOKIE_NAME,
-    SESSION_COOKIE_NAME,
-    mint_session_cookie_value,
-)
+from share_gateway.server import PAGE_CONTENT_SECURITY_POLICY
+from share_gateway.server import PendingLoginRegistry
+from share_gateway.server import build_gateway_app
+from share_gateway.server import forwarded_client_ip
+from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
+from share_gateway.session_cookie import SESSION_COOKIE_NAME
+from share_gateway.session_cookie import mint_session_cookie_value
 from share_gateway.testing import set_cookies_by_name
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
@@ -133,9 +136,8 @@ def _session_cookie_for(
     return mint_session_cookie_value(_SIGNING_SECRET, identity, _DOMAIN)
 
 
-def _identity_header(response: object) -> dict[str, object]:
-    headers = getattr(response, "headers")
-    return json.loads(headers[IDENTITY_HEADER])
+def _identity_header(response: TestResponse) -> dict[str, object]:
+    return json.loads(response.headers[IDENTITY_HEADER])
 
 
 def _install_session(
@@ -485,9 +487,8 @@ def test_callback_clamps_foreign_next_to_the_shell_label(tmp_path: Path) -> None
     assert resp.headers["Location"] == f"https://{_SHELL_HOST}/"
 
 
-def _broker_query(response: object) -> dict[str, list[str]]:
-    headers = getattr(response, "headers")
-    location = headers["Location"]
+def _broker_query(response: TestResponse) -> dict[str, list[str]]:
+    location = response.headers["Location"]
     assert location.startswith(f"{_BROKER_URL}/share/authorize?")
     return parse_qs(
         location.removeprefix(f"{_BROKER_URL}/share/authorize?"), keep_blank_values=True

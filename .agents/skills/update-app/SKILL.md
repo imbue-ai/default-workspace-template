@@ -35,9 +35,12 @@ touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.t
 If it says `critical = true` -- the shell (`system_interface`), the chat, the
 terminal, and any user app that declares it -- or if the change is under
 `system/libs/workspace_ui/` (the shared library both critical bundles are built
-from) or `system/libs/workspace_layout/` (the layout wire contract the shell, the
-chat, and the terminal all run), **follow [`references/critical-app.md`](references/critical-app.md) and
-stop reading here.** A critical app is never edited in the served tree: that
+from), `system/libs/workspace_layout/` (the layout wire contract the shell, the
+chat, and the terminal all run), or `system/libs/workspace_themes/` (the theme
+catalog and theme route the same three run), **follow [`references/critical-app.md`](references/critical-app.md) and
+stop reading here** -- for the whole change: when it also touches an ordinary
+app or a skill, those go through that flow with it. A critical app is never
+edited in the served tree: that
 flow runs the same live loop against an isolated worktree, with a preview window
 as the user's view, and goes live through the atomic update apply once a
 background worker has hardened the change. Everything below is for an app or
@@ -132,11 +135,12 @@ another chat editing sequentially on top is safe; only *simultaneous* editing
 needs the lease.
 
 **An in-flight harden pass does not block you -- the foreground wins.** If
-`tk ready` also shows an in-progress `update <name>` or `heal <name>` ticket
-(a background pass hardening an earlier change to this service), proceed with
+`tk ready` also shows an in-progress `update` or `heal` ticket whose title
+lists `<name>` among the creations its pass covers (a background pass hardening
+an earlier change to this service), proceed with
 your edit; your change simply makes that pass stale. Leave a note on that
-ticket (`tk add-note <id> "..."`) so its owner coalesces at merge time. The
-full contention rules live in
+ticket (`tk add-note <id> "..."`) so its owner catches the pass up to cover
+it at merge time. The full contention rules live in
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).
 
 ## The live change loop
@@ -166,7 +170,7 @@ keep the service up: it is a routine with `--app <name>`, made with the
 `manage-routines` skill, never a thread or scheduler inside the service.
 The reverse holds: an app that no longer does anything between
 requests can go back to `true`. The field is read at registration, so the
-restart in step 2 is what applies it; `uv run app-manifest validate-manifest
+restart in step 2 is what applies it; `uv run --no-sync app-manifest validate-manifest
 system/apps/<package>/app.toml` checks the file.
 
 An app with an `api_schema_path` in its manifest describes its own API there:
@@ -191,28 +195,44 @@ don't watch their own source, so a code change is **not** live until the
 process restarts:
 
 - **Backend change** (Python / server logic, for an app or a
-  daemon): restart the program.
+  daemon): restart the program. For an app, steps 2 to 4 of this loop are
+  one call -- it restarts without waiting out the program's 30 s `startsecs`
+  window, waits for the port, checks a marker, and refreshes or opens the
+  window:
+
+  ```bash
+  uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<text unique to your change>" --refresh
+  ```
+
+  With no window open yet, pass `--open` instead of `--refresh`: the call
+  opens the window only after the checks pass, the order step 3 asks for.
+
+  A daemon with no port cannot use `verify_app.py` (it needs a port to
+  check), so bounce it with supervisord directly; the call waits out the
+  program's `startsecs`, which is 30 s only if its block sets `startsecs=30`:
 
   ```bash
   supervisorctl restart <name>
   supervisorctl status <name>   # confirm it came back RUNNING
   ```
 
-- **Dependency or entry-point change to an app** (its `pyproject.toml`):
-  an app with an `app.toml` manifest runs from its own uv tool environment,
-  an editable install of `system/apps/<package>/` that picks up source
-  edits on its own but not a new dependency or console script. Reinstall
-  the tool, then restart (an app with no `app.toml` runs from the root
-  venv: for it, only the `uv sync --all-packages` below is needed):
+- **Dependency or entry-point change to an app** (its `pyproject.toml`): an
+  app's venv is an editable install of `system/apps/<package>/` that picks up
+  source edits on its own but not a new dependency or console script. A
+  user-built app is a standalone project with its own lock and venv: change its
+  dependencies in its own directory, then restart (its program syncs its venv
+  from its lock at start):
 
   ```bash
-  uv tool install -e system/apps/<package> --reinstall
-  uv sync --all-packages            # the app is also a workspace member; keep the lockfile current
-  supervisorctl restart <name>
+  (cd system/apps/<package> && uv add <dependency>)   # or `uv lock` after a hand edit
+  uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<text>" --refresh
   ```
 
-  (Background services under `system/services/` run from the root venv
-  instead: `uv sync --all-packages`, then restart.)
+  That touches only the app's own `pyproject.toml`, `uv.lock` and venv, never
+  the root lock or the chat's environment. A built-in app runs from the root
+  venv instead: `uv lock` and `uv sync --all-packages` at the repo root, then
+  restart. (A user service under `system/services/` works like a user app: `uv
+  add` in its directory, then `supervisorctl restart <name>`.)
 
 - **Frontend-only change** (templates, static JS/CSS served fresh on each
   request): no restart needed -- the next request already serves the new
@@ -228,7 +248,7 @@ process restarts:
   path for landing an `update-self` merge -- that restarts the whole services
   agent (`mngr start --restart system-services`) so `bootstrap` re-runs too,
   and must be followed by
-  `python3 system/scripts/refresh_workspace_view.py` (see step 3).
+  `uv run --no-sync system/scripts/refresh_workspace_view.py` (see step 3).
 
 If it doesn't come back `RUNNING`, read
 `/var/log/supervisor/<name>-stderr.log` or
@@ -264,7 +284,7 @@ window refresh is not enough -- the workspace shell itself was bounced. Rebuild
 the user's whole view instead:
 
 ```bash
-python3 system/scripts/refresh_workspace_view.py
+uv run --no-sync system/scripts/refresh_workspace_view.py
 ```
 
 Nothing else does this for you. The Imbue Studio app only intervenes when a workspace
@@ -278,9 +298,12 @@ names any channel that did not land on stderr and is never a reason to stop.
 Confirm the change actually does the right thing, exercised as the user
 would (not just "the process is up"):
 
-- **App**: `curl` against the registered backend URL
-  `http://127.0.0.1:<port>/` then a Playwright assertion on a
-  marker unique to your change. The recipe is in
+- **App**: the `verify_app.py --restart --marker ... --refresh` call of
+  step 2 is this check (HTTP against the registered backend URL
+  `http://127.0.0.1:<port>/`, the marker unique to your change, and
+  `--screenshot` for a rendered page only with `--open`, before any window
+  exists); add one `curl` of a changed route to the same call when the change
+  is an API. The recipe is in
   `build-app`'s [verify reference](../build-app/references/verify.md);
   the symptom-indexed gotchas (connection refused, a window stuck on the
   loading page, broken WebSockets) are in that skill's
@@ -328,7 +351,7 @@ where the data dies. Encode these, cheapest first:
   point it at the live store.** Boot a throwaway instance against a *copy* of
   the store on a *spare* port, exercise it there, then tear it down with its
   copy. The shared
-  [`serve_isolated_instance.py`](../../shared/scripts/serve_isolated_instance.py)
+  [`serve_isolated_instance.py`](../../shared/scripts/agents_shared/serve_isolated_instance.py)
   script owns all of it -- `--copy` copies the store into the instance's own
   space on disk, it picks a free port, injects it (via the
   `<PACKAGE_UPPER>_PORT` override) plus your data-dir override pointed at the
@@ -336,16 +359,21 @@ where the data dies. Encode these, cheapest first:
   and deletes the copy:
 
   ```bash
-  URL=$(python3 .agents/shared/scripts/serve_isolated_instance.py up \
+  URL=$(python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
       --copy data=data/.apps/<name> \
       --env '<PACKAGE_UPPER>_DATA_DIR={copy:data}' \
       --health-path /health \
-      -- uv run <name>)
+      --project system/apps/<package> \
+      -- <name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
-  python3 .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
+  python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <name>-test
   ```
+
+  `--project` boots a user-built app (a standalone project with its own lock and
+  venv) from its own venv, synced first, as its program does; drop it, and run
+  `-- .venv/bin/<name>`, for a built-in app, which runs from the root venv.
 
   **Never copy app data into `/tmp`.** In the workspace container `/tmp` is a
   small RAM disk (about 1 GiB): a copy of any real store fails part way with
@@ -361,7 +389,7 @@ where the data dies. Encode these, cheapest first:
   port, leaving the port, the service registration, and any window untouched:
 
   ```bash
-  python3 .agents/shared/scripts/serve_isolated_instance.py refresh --name <name>-test
+  python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py refresh --name <name>-test
   ```
 
   A change that only alters files the running process reads from disk on each
@@ -380,19 +408,24 @@ where the data dies. Encode these, cheapest first:
   names, surfaced as the labeled `<name>-preview` app:
 
   ```bash
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \
       --app <name> --worktree <dir>          # prints <name>-preview
   uv run --no-sync workspace-layout open <name>-preview   # puts a window of it in front of the user
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>   # after a rebuild, in place
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name>   # after a rebuild, in place
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
   ```
 
-  The worktree needs its own environment before the first `up`. A fresh
-  `git worktree add` has no `.venv`, and without one the app's command
-  resolves to the live install, so the preview silently serves the live code.
-  Run `uv sync --all-packages` in the worktree first, and again before
-  `refresh` after changing a dependency or entry point. If the app has a
-  frontend, build it there too.
+  Every `up` and `refresh` syncs the app's venv in the worktree and then starts
+  the app from it, so the preview serves the worktree's code: a built-in app
+  from the worktree's root `.venv` (`uv sync --all-packages --frozen`), a
+  user-built app from its own project's (`uv sync --locked`). That boot sync
+  counts against the preview's health wait, so on a fresh `git worktree add`
+  run the same sync there once before the first `up`. The sync never relocks:
+  after changing a dependency in the worktree, run `uv lock` (in the app's
+  directory, for a user-built app) before `refresh`, or a built-in app's
+  preview boots without the change and a user-built app's fails its `--locked`
+  sync.
+  If the app has a frontend, build it in the worktree too.
 
   `--with <sibling>` boots a sibling app's preview from the same worktree first
   and points the app's copied registry at it: a shell preview frames the
@@ -479,14 +512,18 @@ and hold the harden pass until you are sure the user is satisfied. A single
 larger-scope change this gate is the *working* result, not just the mock,
 exactly as `build-app`'s Step 5 gates on the working site.)
 
-- **A change you and the user discussed and applied live, or repeatable
-  work you did by hand** -> invoke `update-creation` with
-  `type=app`. It opens a tracking ticket, dispatches the generic
-  harden worker to verify/test the change on its own branch, proxies the
-  gates, merges, and refreshes the window on go-live.
+- **A change you and the user discussed and applied live, or repeatable work you
+  did by hand** -> invoke `update-creation` once for the whole change, listing
+  every creation it touched: each app as `app:<name>`, each background service
+  as `service:<package>`, and any skill the same change edited as
+  `skill:<name>`. Two apps changed to work together are one pass with one
+  worker, never one per app. It opens a tracking ticket, dispatches the generic
+  harden worker to verify/test the change on its own branch, proxies the gates,
+  merges, and refreshes each window on go-live.
 - **The service errored or produced a wrong result and you worked around
-  it** -> invoke `heal-creation` with `type=app` (or `type=service` for a
-  background service) at turn-end instead.
+  it** -> invoke `heal-creation` at turn-end instead, again once, covering
+  every creation the failure spans (`app:<name>`, or `service:<package>` for
+  a background service).
 - **A critical app** (the shell, the chat, the terminal, or a user app whose
   manifest says so) never reaches this step from here: its live loop, harden
   handoff, and go-live through the atomic update apply are all
@@ -497,7 +534,7 @@ skills; this skill's turn-end step is just the service-shaped entry into
 them.
 
 Both flows enforce single-flight per creation: if another chat already has a
-harden pass in flight for this service, they leave a note on its ticket
-instead of dispatching a sibling, and the eventual superseding pass covers
-both changes. See
+harden pass in flight for any creation in yours, they leave a note on its
+ticket instead of dispatching a sibling, and that pass catches up at merge
+time to cover both changes. See
 [`.agents/shared/references/harden-contention.md`](../../shared/references/harden-contention.md).

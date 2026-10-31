@@ -412,6 +412,14 @@ export function pinnedWindowOf(state: DesktopState, app: string): WindowRecord |
   return activeDesktop(state)?.windows.find((window) => window.app === app && window.is_pinned) ?? null;
 }
 
+/** The pinned window the avatar stands for, on the active desktop: the one whose pin declares the avatar style,
+ *  else the first pinned window there; null with none. The shell names no app: whichever app declares the style
+ *  is the avatar's. */
+export function avatarPinnedWindow(state: DesktopState): WindowRecord | null {
+  const pinned = taskbarEntries(state).filter((entry) => entry.isPinned);
+  return pinned.find((entry) => entry.look?.declaredStyle === "avatar")?.window ?? pinned[0]?.window ?? null;
+}
+
 /** A window of any desktop, with the desktop it is on. */
 export function findWindow(state: DesktopState, windowId: string): { desktop: Desktop; window: WindowRecord } | null {
   for (const desktop of state.desktops) {

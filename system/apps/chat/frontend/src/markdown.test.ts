@@ -68,18 +68,31 @@ describe("renderMarkdown links", () => {
 
   it("opens every web link in a new browsing context, with no opener or referrer, should nothing route it", () => {
     const anchors = render(
-      "[Docs](https://example.com/docs), [mail](mailto:a@example.com), [call](tel:+15551234), [app](http://localhost:3000/) and [api](http://127.0.0.1:8080/x)",
+      "[Docs](https://example.com/docs), [mail](mailto:a@example.com), [call](tel:+15551234), [local call](tel:5551234), [app](http://localhost:3000/) and [api](http://127.0.0.1:8080/x)",
     ).querySelectorAll("a");
     expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
       "https://example.com/docs",
       "mailto:a@example.com",
       "tel:+15551234",
+      "tel:5551234",
       "http://localhost:3000/",
       "http://127.0.0.1:8080/x",
     ]);
     expect(Array.from(anchors, (a) => [a.getAttribute("target"), a.getAttribute("rel")])).toEqual(
-      Array(5).fill(["_blank", "noopener noreferrer"]),
+      Array(6).fill(["_blank", "noopener noreferrer"]),
     );
+  });
+
+  it("keeps a custom-scheme link, which an app of the workspace or of the user's system opens", () => {
+    const anchors = render(
+      "[channel](slack://channel?team=T1&id=C1), [text me](sms:+15551234) and [settings](x-apple.systempreferences:com.apple.preference.security)",
+    ).querySelectorAll("a");
+    expect(Array.from(anchors, (a) => a.getAttribute("href"))).toEqual([
+      "slack://channel?team=T1&id=C1",
+      "sms:+15551234",
+      "x-apple.systempreferences:com.apple.preference.security",
+    ]);
+    expect(Array.from(anchors, (a) => a.getAttribute("target"))).toEqual(Array(3).fill("_blank"));
   });
 
   it("names a file by its file URL, whether written as an absolute path or as a file URL", () => {
@@ -102,9 +115,14 @@ describe("renderMarkdown links", () => {
     "[the skill](.agents/skills/assist/SKILL.md)",
     "[guide](docs/guide.md:12)",
     "[report](q4.md:12)",
+    "[build](Makefile:3:1)",
+    "[code](app.ts:12-20)",
+    "[app](localhost:3000/dashboard)",
+    "[api](example.com:8080/x?q=1)",
+    "[run](javascript:alert(1))",
+    "[page](data:text/html,<p>hi</p>)",
     "[section](#usage)",
     "[remote file](file://server.example/share/notes.md)",
-    "[text me](sms:+15551234)",
     "[cdn](//cdn.example.com/lib.js)",
     "[broken](/home/user/%zz)",
   ])("renders %s as its label text with no link", (source) => {

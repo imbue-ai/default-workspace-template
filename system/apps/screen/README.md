@@ -8,7 +8,7 @@ streaming it over WebRTC make up the stack; this package is the service that own
 them, the viewer page, the control lease, and the `screen` command agents drive it with.
 
 It runs as the `screen` supervisord program (`system/supervisord.conf.d/screen.conf`)
-from its own uv tool environment (`system/scripts/build_workspace.sh`), serving on
+from the workspace venv (`.venv/bin/screen-service`, its one install), serving on
 `http://127.0.0.1:8090`, the app's registered URL. The four programs of the stack form
 the `screen-stack` supervisord group (`screen-xorg`, `screen-pulse`, `screen-session`,
 `screen-neko`, one drop-in each, all `autostart=false`); the service starts them on
@@ -177,10 +177,11 @@ browser fleet's were.
 ## Upgrading a workspace that ran the browser app
 
 A workspace built before the Screen takes it through `update-self` like any
-release; the apply does what the browser app's removal needs. It uninstalls the
-old `browser` uv tool before installing the `screen` one (both declare the
-`agentic-browser-fleet` console script, and uv refuses to install over another
-tool's script), copying the old environment aside so a rollback restores it.
+release; the apply does what the browser app's removal needs. The workspace
+venv it syncs for the merged tree carries `screen` in place of `browser` (both
+declare the `agentic-browser-fleet` console script, which now resolves to the
+Screen's), and a per-app `browser` uv tool an older workspace still holds is
+dropped the way every per-app tool is (`tool_env.py drop-app-tools`).
 It builds the viewer with the other frontend bundles. It removes the browser
 app's registry row before the restart, since no program re-registers it. The
 restart ends the old `xvfb` and `browser` programs with the old supervisord,

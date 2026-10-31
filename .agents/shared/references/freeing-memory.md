@@ -13,29 +13,32 @@ what could be freed and let them choose; you never stop anything on your own.
    python3 system/services/oom_priority/bin/memory_candidates.py
    ```
 
-   It prints the workspace's free memory, the chats and background agents that
-   have sat idle (with when each was last active and how much memory it holds),
-   and the browsers no window is showing. A chat or agent that ended its turn
-   to wait on a background task is not idle -- the task will wake it, and
-   stopping it would lose the work -- so it is never listed. It only reads; it
-   stops nothing. A section it could not read says so: that means "unknown",
-   not "nothing to stop". `system/services/oom_priority/README.md` ("Memory
-   candidates") has the details.
+   It prints the workspace's free memory as the memory daemon reads it, the
+   chats and background agents that have sat idle (with when each was last
+   active and how much memory it holds), the apps the workspace may stop (with
+   how many windows show each), and the browsers no window is showing. A chat or
+   agent that ended its turn to wait on a background task is not idle -- the
+   task will wake it, and stopping it would lose the work -- so it is never
+   listed. It only reads; it stops nothing. A section it could not read says so:
+   that means "unknown", not "nothing to stop".
+   `system/services/oom_priority/README.md` ("Memory candidates") has the
+   details.
 
 2. **Offer them to the user.** In plain language, say that the workspace ran
    low on memory and something was paused, how much memory is free, and each
    candidate with what it is, when it was last used, and how large it is next
-   to the others. Do not quote a candidate's memory as what stopping it frees:
-   the figures rank candidates, and a browser's can run several times what it
-   frees. After stopping something, the free memory the command reports again
-   is the real answer. Say that a stopped chat comes back by itself the next time
-   they send it a message. Ask which, if any, to stop. Never pick for them, and
-   never offer the chat they are talking to you in.
+   to the others. A candidate's memory is its processes' own memory, roughly
+   what stopping it frees, but say "about": pages a browser's processes share
+   count more than once. After stopping something, the free memory the command
+   reports again is the real answer. Say that a stopped chat comes back by
+   itself the next time they send it a message. Ask which, if any, to stop.
+   Never pick for them, and never offer the chat they are talking to you in.
 
 3. **Stop only what they approve**, each the way the README's "Memory
    candidates" section says (a chat with `mngr stop`, a background agent with
-   the launcher's `stop`, a browser through the browser service), then run the
-   candidates command again and tell them what is free now.
+   the launcher's `stop`, a browser through the browser service, an app with
+   `supervisorctl stop <program>`), then run the candidates command again and
+   tell them what is free now.
 
 4. **Answer whoever reported the shed.** For a worker waiting on a `question`
    gate, reply that it can rerun, or to wait if nothing was freed and memory is
@@ -46,3 +49,8 @@ what could be freed and let them choose; you never stop anything on your own.
 
 Run this once per shed report, not on a schedule: listing is cheap, but every
 offer is a question the user has to stop and answer.
+
+One flow does not ask: a workspace update frees memory on its own judgment, and
+a scheduled one may go further than this page allows. Its rule is
+`.agents/skills/update-self/references/freeing-memory-for-an-update.md`, and it
+is that flow's alone.

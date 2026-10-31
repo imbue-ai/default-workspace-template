@@ -35,8 +35,15 @@ from routines.primitives import WEEKDAYS_IN_ORDER
 from routines.primitives import Weekday
 
 LEGACY_CRON_DIR: Final[Path] = Path("data/.state/cron.d")
-LEGACY_JOB_STATE_DIR: Final[Path] = Path("data/.state/jobs")
+# Where the retired runner kept each job's state: minds-v0.8.7 moved it from the second to the first on the job's
+# next run, so a job that never ran on 0.8.7 still has it in the second.
+LEGACY_JOB_STATE_DIRS: Final[tuple[Path, ...]] = (Path("data/.state/jobs"), Path("system/data/.state/jobs"))
 LIVE_CRON_DIR: Final[Path] = Path("/etc/cron.d")
+# The shell cron runs a job's command with when its entry sets no SHELL.
+CRON_DEFAULT_SHELL: Final[str] = "/bin/sh"
+# A character that makes the shell do more with a command than split it into words.
+_SHELL_SYNTAX_PATTERN: Final[re.Pattern[str]] = re.compile(r"""[|&;<>()$`\\"'*?\[\]{}~#!]""")
+_NEVER: Final[datetime] = datetime.min.replace(tzinfo=timezone.utc)
 # Where a test points the live cron directory; unset in a workspace.
 LIVE_CRON_DIR_ENV: Final[str] = "ROUTINES_LIVE_CRON_DIR"
 CARETAKER_ROUTINE_ID: Final[RoutineId] = RoutineId("caretaker")
@@ -45,6 +52,9 @@ _RUN_AUTOMATION_SUFFIX: Final[str] = "run_automation.sh"
 _ENV_WRAPPER_SUFFIX: Final[str] = "with_agent_env.sh"
 _CARETAKER_CHECK_SUFFIX: Final[str] = "caretaker_check.sh"
 _CRON_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9_-]+$")
+# Entries that stay with cron untouched: the Imbue Studio app writes its update dispatcher's entry, and rewrites
+# it whenever it arms an update, so a routine of it would run beside the cron line rather than replace it.
+_ENTRIES_OWNED_BY_THE_APP: Final[frozenset[str]] = frozenset({"update-self-dispatch"})
 # Where every pre-routines cron line found the env wrapper, and where it lives now: an entry left in place
 # keeps running only if it names the wrapper where it is.
 LEGACY_ENV_WRAPPER_PATH: Final[str] = "/home/user/workspace/system/libs/automations/with_agent_env.sh"
@@ -96,8 +106,35 @@ def _strip_redirect(tokens: list[str]) -> list[str]:
     return cleaned
 
 
-def _convert_run_job(tokens: list[str], file_name: str) -> ConvertedEntry | SkippedEntry:
+@pure
+def _text_after_words(text: str, count: int) -> str:
+    """What follows the first ``count`` words of ``text``, as written."""
+    parts = text.split(maxsplit=count)
+    return parts[count] if len(parts) > count else ""
+
+
+@pure
+def _cron_command_text(text: str) -> str | None:
+    """The command cron hands the shell for ``text``, with ``\\%`` as ``%``; None when a bare ``%`` starts the
+    command's input, which a routine has no form for."""
+    pieces = re.split(r"(\\.)", text)
+    if any("%" in piece for piece in pieces[::2]):
+        return None
+    return "".join("%" if piece == "\\%" else piece for piece in pieces)
+
+
+@pure
+def _command_of(text: str, words: list[str], shell: str) -> tuple[str, ...]:
+    """The argv that runs ``text`` as cron did: its words when the shell would only split it, else the text
+    through the shell."""
+    if any(_SHELL_SYNTAX_PATTERN.search(word) for word in words) or (words and "=" in words[0]):
+        return (shell, "-c", text)
+    return tuple(words)
+
+
+def _convert_run_job(text: str, file_name: str, shell: str) -> ConvertedEntry | SkippedEntry:
     """``<id> --every N [--at H] [--retry-after N] <command...>`` after the runner's name."""
+    tokens = text.split()
     if not tokens:
         return SkippedEntry(file_name=file_name, reason="the runner line names no job")
     try:
@@ -123,26 +160,27 @@ def _convert_run_job(tokens: list[str], file_name: str) -> ConvertedEntry | Skip
             index += 2
     except ValueError as e:
         return SkippedEntry(file_name=file_name, reason=str(e))
-    command = rest[index:]
-    if every is None or not command:
+    command_text = _text_after_words(text, 1 + index)
+    words = _strip_redirect(command_text.split())
+    if every is None or not words:
         return SkippedEntry(file_name=file_name, reason="the runner line has no cadence or no command")
     if at is not None and every.approximate_seconds < SECONDS_PER_DAY:
         logger.warning("Dropping the due hour of {}: its cadence is shorter than a day", routine_id)
         at = None
     is_caretaker = routine_id == CARETAKER_ROUTINE_ID and any(
-        token.endswith(_CARETAKER_CHECK_SUFFIX) for token in command
+        token.endswith(_CARETAKER_CHECK_SUFFIX) for token in words
     )
-    skill = _skill_of(command)
+    skill = _skill_of(words)
     fields: dict[str, object] = {
         "title": routine_id.as_title,
-        "what": " ".join(command),
+        "what": " ".join(words),
         "every": every,
         "at": at,
     }
     if skill is not None:
         fields["skill"] = skill
     else:
-        fields["command"] = tuple(command)
+        fields["command"] = _command_of(command_text, words, shell)
     if retry_after is not None:
         fields["retry_after"] = retry_after
     try:
@@ -178,17 +216,20 @@ def _skill_of(command: list[str]) -> str | None:
 
 
 @pure
-def _convert_plain_line(fields: list[str], command: list[str], file_name: str) -> ConvertedEntry | SkippedEntry:
+def _convert_plain_line(
+    fields: list[str], command_text: str, file_name: str, shell: str
+) -> ConvertedEntry | SkippedEntry:
     """The cron shapes a definition can say: every N minutes or hours, daily at a time, weekly, monthly."""
     minute, hour, day_of_month, month, day_of_week = fields
     try:
         routine_id = _routine_id_from_name(file_name)
     except InvalidRoutineIdError as e:
         return SkippedEntry(file_name=file_name, reason=str(e))
+    words = _strip_redirect(command_text.split())
     values: dict[str, object] = {
         "title": routine_id.as_title,
-        "what": " ".join(command),
-        "command": tuple(command),
+        "what": " ".join(words),
+        "command": _command_of(command_text, words, shell),
     }
     if month != "*":
         return SkippedEntry(file_name=file_name, reason="a schedule naming a month has no routine form")
@@ -267,26 +308,45 @@ def _weekdays_of(field: str) -> tuple[Weekday, ...] | None:
 def convert_cron_entry(text: str, file_name: str) -> list[ConvertedEntry | SkippedEntry]:
     """Every job line of one entry file as a definition or a reason it stays."""
     results: list[ConvertedEntry | SkippedEntry] = []
+    shell = CRON_DEFAULT_SHELL
     for line in text.splitlines():
         stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" in stripped.split()[0]:
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" in stripped.split()[0]:
+            name, _, value = stripped.partition("=")
+            if name.strip() == "SHELL":
+                shell = _unquoted(value.strip()) or CRON_DEFAULT_SHELL
             continue
         tokens = stripped.split()
         if len(tokens) < 7:
             results.append(SkippedEntry(file_name=file_name, reason="the line is not a cron job"))
             continue
-        fields, command = tokens[:5], _strip_redirect(tokens[6:])
-        if command and command[0].endswith(_ENV_WRAPPER_SUFFIX):
-            command = command[1:]
+        command_text = _cron_command_text(_text_after_words(stripped, 6))
+        if command_text is None:
+            results.append(
+                SkippedEntry(file_name=file_name, reason="a bare % feeds the command input, which a routine cannot")
+            )
+            continue
+        if command_text.split()[0].endswith(_ENV_WRAPPER_SUFFIX):
+            command_text = _text_after_words(command_text, 1)
         runner_index = next(
-            (index for index, token in enumerate(command) if token.endswith(_RUN_JOB_SUFFIX)),
+            (index for index, token in enumerate(command_text.split()) if token.endswith(_RUN_JOB_SUFFIX)),
             None,
         )
         if runner_index is not None:
-            results.append(_convert_run_job(command[runner_index + 1 :], file_name))
+            results.append(_convert_run_job(_text_after_words(command_text, runner_index + 1), file_name, shell))
         else:
-            results.append(_convert_plain_line(fields, command, file_name))
+            results.append(_convert_plain_line(tokens[:5], command_text, file_name, shell))
     return results
+
+
+@pure
+def _unquoted(value: str) -> str:
+    """A cron environment value with the matching quotes around it removed, as cron removes them."""
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        return value[1:-1]
+    return value
 
 
 def _read_epoch(path: Path) -> datetime | None:
@@ -323,7 +383,8 @@ def migrate_cron_entries(
     states: StateStoreInterface,
     live_cron_dir: Path = LIVE_CRON_DIR,
 ) -> MigrationReport:
-    """Convert every entry under data/.state/cron.d, carry the runner's state over, and remove both copies."""
+    """Convert every entry under data/.state/cron.d but the app's, carry the runner's state over, and remove both
+    copies."""
     durable_dir = repo_root / LEGACY_CRON_DIR
     if not durable_dir.is_dir():
         return MigrationReport(converted=(), enabled_caretaker=False, skipped=())
@@ -332,6 +393,8 @@ def migrate_cron_entries(
     is_caretaker_enabled = False
     for entry_path in sorted(durable_dir.iterdir()):
         if not entry_path.is_file() or not _CRON_NAME_PATTERN.fullmatch(entry_path.name):
+            continue
+        if entry_path.name in _ENTRIES_OWNED_BY_THE_APP:
             continue
         try:
             text = entry_path.read_text(encoding="utf-8")
@@ -433,10 +496,15 @@ def _leave_in_place(entry_path: Path, text: str, live_copy: Path) -> None:
 def _carry_over_job_state(
     repo_root: Path, legacy_job_name: str, routine_id: RoutineId, states: StateStoreInterface
 ) -> None:
-    job_dir = repo_root / LEGACY_JOB_STATE_DIR / legacy_job_name
-    if not job_dir.is_dir():
+    """The job's state from whichever place holds its latest success, the newer place on a tie."""
+    candidates = [
+        (_read_epoch(job_dir / "last_success"), job_dir)
+        for job_dir in (repo_root / state_dir / legacy_job_name for state_dir in LEGACY_JOB_STATE_DIRS)
+        if job_dir.is_dir()
+    ]
+    if not candidates:
         return
-    last_success = _read_epoch(job_dir / "last_success")
+    last_success, job_dir = max(candidates, key=lambda candidate: candidate[0] or _NEVER)
     failures = NonNegativeInt(_read_count(job_dir / "failures"))
 
     def carry(state: RoutineState) -> RoutineState:
