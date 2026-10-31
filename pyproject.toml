@@ -162,6 +162,7 @@ app-manifest = { workspace = true }
 workspace-themes = { workspace = true }
 app-schema = { workspace = true }
 workspace-layout = { workspace = true }
+workspace-profile = { workspace = true }
 routines = { workspace = true }
 # The built-in apps, which the root dependencies name so a root-closure sync keeps them.
 browser = { workspace = true }

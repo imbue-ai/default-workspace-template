@@ -782,6 +782,7 @@ dependencies = [
     { name = "watchdog" },
     { name = "werkzeug" },
     { name = "workspace-layout" },
+    { name = "workspace-profile" },
     { name = "workspace-themes" },
 ]
 
@@ -832,6 +833,7 @@ requires-dist = [
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
     { name = "workspace-layout", editable = "system/libs/workspace_layout" },
+    { name = "workspace-profile", editable = "system/libs/workspace_profile" },
     { name = "workspace-themes", editable = "system/libs/workspace_themes" },
 ]
 
@@ -1294,6 +1296,7 @@ dependencies = [
     { name = "loguru" },
     { name = "pydantic" },
     { name = "werkzeug" },
+    { name = "workspace-profile" },
     { name = "workspace-themes" },
 ]
 
@@ -1317,6 +1320,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7" },
     { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
+    { name = "workspace-profile", editable = "system/libs/workspace_profile" },
     { name = "workspace-themes", editable = "system/libs/workspace_themes" },
 ]
 
@@ -4146,6 +4150,7 @@ dependencies = [
     { name = "watchdog" },
     { name = "werkzeug" },
     { name = "workspace-layout" },
+    { name = "workspace-profile" },
     { name = "workspace-themes" },
 ]
 
@@ -4185,6 +4190,7 @@ requires-dist = [
     { name = "watchdog", specifier = ">=4.0" },
     { name = "werkzeug", specifier = ">=3.0" },
     { name = "workspace-layout", editable = "system/libs/workspace_layout" },
+    { name = "workspace-profile", editable = "system/libs/workspace_profile" },
     { name = "workspace-themes", editable = "system/libs/workspace_themes" },
 ]
 
@@ -4281,6 +4287,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "werkzeug" },
     { name = "workspace-layout" },
+    { name = "workspace-profile" },
     { name = "workspace-themes" },
 ]
 
@@ -4304,6 +4311,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.0" },
     { name = "werkzeug", specifier = ">=3.0" },
     { name = "workspace-layout", editable = "system/libs/workspace_layout" },
+    { name = "workspace-profile", editable = "system/libs/workspace_profile" },
     { name = "workspace-themes", editable = "system/libs/workspace_themes" },
 ]
 
