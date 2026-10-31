@@ -3847,6 +3847,7 @@ describe("viewing another's desktop (the multiplayer spec, section 8.3)", () => 
     store.minimizeWindow("win-b");
     store.restoreWindow("win-b");
     store.setWindowState("win-a", "MAXIMIZED");
+    store.toggleFullscreen("win-a");
     await store.closeWindow("win-a");
     await store.closeOrMinimizeWindow("win-b");
     await store.setDesktopWallpaper("alice", null);
