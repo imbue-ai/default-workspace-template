@@ -39,7 +39,7 @@ TRANSCRIPT_CLOCK_SLACK_SECONDS: Final[float] = 2.0
 # composition root to the manager's send path (which resolves the agent's location).
 FlushSendCallback = Callable[[str], bool]
 
-# Record a block that landed on a later pass after an earlier one was not seen to, and the time that pass began.
+# Record a block that landed on a later pass after an earlier one was not seen to, and the time the first pass began.
 FlushResentCallback = Callable[[str, float], None]
 # Whether the agent's process is currently alive -- see ``set_flush_hooks``.
 IsAliveCallback = Callable[[], bool]

@@ -95,6 +95,8 @@ class AntigravityQueueTracker:
     # true -- a turn opened first, or an attempt failed.
     _pending_send: set[str]
     _attempts: dict[str, int]
+    # When each entry of the latest flush first went out, in epoch seconds.
+    _first_flushed_at: dict[str, float]
     _publish: PublishCallback | None
     _wake: Callable[[], None] | None
     # The model switch waiting for agy to be idle: the slash command the worker types ahead of
@@ -114,6 +116,7 @@ class AntigravityQueueTracker:
         self._generation = 0
         self._pending_send = set()
         self._attempts = {}
+        self._first_flushed_at = {}
         self._publish = None
         self._wake = None
         self._model_command = None
@@ -285,10 +288,15 @@ class AntigravityQueueTracker:
                 self._model_command = None
                 self._model_command_attempts = 0
 
-    def has_been_attempted(self, claimed: tuple[str, ...]) -> bool:
-        """Whether an earlier flush already tried any of these entries, which may have landed unseen."""
+    def note_flush_began(self, claimed: tuple[str, ...], began_at: float) -> float | None:
+        """Record a flush of these entries, and return when an earlier one first tried any of them, or None.
+
+        A block an earlier flush tried may have landed unseen, and that copy is stamped from then.
+        """
         with self._lock:
-            return any(self._attempts.get(entry_id, 0) > 0 for entry_id in claimed)
+            earlier = [self._first_flushed_at[entry_id] for entry_id in claimed if entry_id in self._first_flushed_at]
+            self._first_flushed_at = {entry_id: self._first_flushed_at.get(entry_id, began_at) for entry_id in claimed}
+            return min(earlier, default=None)
 
     def begin_flush(self) -> tuple[str, tuple[str, ...], int]:
         """Claim the current queue for a flush: returns (block, claimed ids, generation).

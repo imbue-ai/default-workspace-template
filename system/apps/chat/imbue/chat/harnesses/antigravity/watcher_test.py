@@ -6,6 +6,7 @@ thread, so the scan/cursor/two-phase logic is tested without timing flakiness.
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,6 +36,7 @@ from imbue.chat.harnesses.model import ModelAxis
 from imbue.chat.harnesses.model import ModelIdentity
 from imbue.chat.harnesses.session_watcher import ReplyDraft
 from imbue.chat.harnesses.session_watcher import ReplyDraftSources
+from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 
 _STATUS_RUNNING = 2
 _STATUS_DONE = 3
@@ -741,7 +743,7 @@ def _repick_while_typing(tmp_path: Path, watcher: AntigravitySessionWatcher) -> 
 
 
 def _parked_then_committed_watcher(
-    tmp_path: Path, conv: str, sent: list[str], resent: list[str]
+    tmp_path: Path, conv: str, sent: list[str], resent: list[tuple[str, float]]
 ) -> AntigravitySessionWatcher:
     """A watcher whose first send of a block parks and whose later ones commit, recording what it notes as resent."""
     watcher = _flushing_watcher(tmp_path, conv, sent, does_commit=False)
@@ -763,21 +765,26 @@ def _parked_then_committed_watcher(
             append_step(_conv_db_path(tmp_path, conv), (100, _TYPE_USER, _STATUS_DONE, _user_payload(text)))
         return True
 
-    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: resent.append(text))
+    watcher.set_flush_hooks(_send, lambda: True, lambda text, sent_after: resent.append((text, sent_after)))
     return watcher
 
 
 def test_a_block_that_lands_on_a_later_pass_is_noted_as_sent_again(tmp_path: Path) -> None:
     sent: list[str] = []
-    resent: list[str] = []
+    resent: list[tuple[str, float]] = []
     watcher = _parked_then_committed_watcher(tmp_path, "conv-repeat", sent, resent)
     watcher._queue.enqueue("hello", "t0")
 
     watcher._attempt_flush()
+    first_pass_ended_at = time.time()
     assert (sent, resent) == (["hello"], [])
 
     watcher._attempt_flush()
-    assert (sent, resent) == (["hello", "hello"], ["hello"])
+    assert sent == ["hello", "hello"]
+    ((text, sent_after),) = resent
+    assert text == "hello"
+    # A first copy that landed during the first pass still counts as this message.
+    assert sent_after < first_pass_ended_at - TRANSCRIPT_CLOCK_SLACK_SECONDS
 
 
 def _raise_on_slash_commands(watcher: AntigravitySessionWatcher, sent: list[str]) -> None:

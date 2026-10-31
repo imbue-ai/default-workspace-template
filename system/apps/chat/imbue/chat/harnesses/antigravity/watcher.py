@@ -640,8 +640,7 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
         if not claimed:
             return
         before = self._turn_state.user_turn_texts()
-        is_repeat = self._queue.has_been_attempted(claimed)
-        sent_after = time.time() - TRANSCRIPT_CLOCK_SLACK_SECONDS
+        first_flushed_at = self._queue.note_flush_began(claimed, time.time())
         delivered: tuple[str, ...] = ()
         witnessed: list[dict[str, Any]] = []
         try:
@@ -651,8 +650,8 @@ class AntigravitySessionWatcher(AgentSessionWatcher, TranscriptLoader):
             self._emit_embargo_until = time.monotonic() + _EMIT_EMBARGO_CEILING_SECONDS
             if send(block):
                 delivered, witnessed = self._observe_delivery(before, block, claimed)
-                if is_repeat and delivered and self._flush_note_resent is not None:
-                    self._flush_note_resent(block, sent_after)
+                if first_flushed_at is not None and delivered and self._flush_note_resent is not None:
+                    self._flush_note_resent(block, first_flushed_at - TRANSCRIPT_CLOCK_SLACK_SECONDS)
         finally:
             # DEPART BEFORE ARRIVE (contract A3b). The queue entry is removed FIRST, and only
             # then are the transcript events it turned into released. Emitting as we found them
