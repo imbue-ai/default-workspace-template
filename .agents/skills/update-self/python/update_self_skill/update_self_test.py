@@ -1945,7 +1945,7 @@ def _mngr_requirement(package: str, subdirectory: str) -> str:
 _MNGR_BASE = _mngr_requirement("imbue-mngr", "libs/mngr")
 
 # The Python apps a workspace tree carries, as their manifests describe them:
-# the shell (critical) and the browser daemon (not).
+# the shell (critical) and the Screen service (not).
 _APP_FIXTURES = (
     ("system_interface", "system-interface", "system-interface", True),
     ("screen", "screen", "screen-service", False),
