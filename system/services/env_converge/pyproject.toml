@@ -3,7 +3,7 @@ name = "env-converge"
 version = "0.1.0"
 description = "Environment record + boot-time convergence: capture installed packages (apt/npm/uv/binaries) into ~/.mngr/plugin/env-converge and converge the rootfs back to the record at the pinned apt snapshot timestamp"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "loguru>=0.7.0",
     "imbue-common",

@@ -21,6 +21,7 @@
  */
 
 import m from "mithril";
+import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import type { PixelRect, ResizeEdge } from "../geometry/frames";
 import { RESIZE_EDGES } from "../geometry/frames";
 import { windowChromeZIndex } from "../geometry/stacking";
@@ -30,6 +31,7 @@ import { rectStyle } from "./pixelStyle";
 import { TitleBar } from "./TitleBar";
 import type { WindowControl } from "./TitleBar";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
+import type { ThemeChrome } from "../model/themes";
 
 // The handles' sizes are theme tokens (contracts.md section 11): an edge is a strip of
 // --desk-resize-edge overhanging the border by --desk-resize-overhang, inset from the corners,
@@ -90,6 +92,8 @@ export interface WindowAttrs {
   readonly onRaise: () => void;
   readonly onControl: (control: WindowControl, event: MouseEvent) => void;
   readonly onToggleMaximize: () => void;
+  /** The theme's arrangement of the title bar. */
+  readonly chrome: ThemeChrome;
 }
 
 /** What a window shows in place of its page while the app behind it is stopped and the workspace cannot bring
@@ -181,6 +185,7 @@ export function Window(): m.Component<WindowAttrs> {
           "data-minimized": "false",
           "data-focused": isFocused ? "true" : "false",
           "data-pinned": window.is_pinned ? "true" : "false",
+          ...partAttrs("window"),
           class: "window absolute",
           style: {
             ...rectStyle(rect),
@@ -195,6 +200,7 @@ export function Window(): m.Component<WindowAttrs> {
             "div",
             {
               "data-window-frame": "",
+              ...partAttrs("window-frame"),
               // No border: the shadow is what separates a window from the backdrop, and a line
               // around it only competes. Focus is the title bar's, which changes colour with it.
               // A fullscreen window has no backdrop around it to be separated from.
@@ -214,6 +220,7 @@ export function Window(): m.Component<WindowAttrs> {
                     sizeMenuTrigger: attrs.sizeMenuTrigger,
                     onControl: attrs.onControl,
                     onDoubleClick: attrs.onToggleMaximize,
+                    chrome: attrs.chrome,
                   }),
               // Transparent and inert like the root: the live page sits under this chrome in the stacking
               // order, shows through here, and takes the pointer; only the shield and the placeholders catch
@@ -222,6 +229,7 @@ export function Window(): m.Component<WindowAttrs> {
                 "div",
                 {
                   "data-window-content": "",
+                  ...partAttrs("window-content"),
                   class: "window-content relative min-h-0 flex-1 [&>*]:pointer-events-auto",
                 },
                 [

@@ -62,7 +62,9 @@ seed_workspace_onto_volume() {
     # Stage: cross-filesystem copy from the image layer onto the volume.
     # `cp -a` preserves mode/owner/timestamps. Land on a sibling path so
     # the final rename below is a single inode-level operation on the
-    # same filesystem.
+    # same filesystem. The workspace's .venv is a symlink, so this copies the
+    # link alone: it names the venv the build baked into the image beside the
+    # uv cache, at the same path at runtime.
     echo "default-workspace-template-seed: staging $SEED_SOURCE -> $SEED_STAGING"
     cp -a "$SEED_SOURCE" "$SEED_STAGING"
 

@@ -3,7 +3,7 @@ name = "system-monitor"
 version = "0.1.0"
 description = "The System Monitor app: how much CPU, memory and disk the workspace is using, what is using them, what the memory guard stopped, and the state of the backups"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
     "app-schema",

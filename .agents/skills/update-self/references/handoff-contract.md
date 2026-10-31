@@ -10,8 +10,8 @@ target release's own copy (or the local one, when the ref predates the skill).
 
 - **Steps 1-2 always run from the local copy.** They are what decide `$REF`,
   so by construction they cannot come from the target. A future version's
-  Steps 1-2 must stay "check the backup, the lease and clean-tree checks, then
-  resolve a ref into `$REF`".
+  Steps 1-2 must stay "check the backup, take the lease and save a dirty tree,
+  then resolve a ref into `$REF`", honoring a pinned message (below).
 - **The target's flow is entered at Step 3**, and everything from there on --
   the worker dispatch, the report audit, and the apply (Step 5b runs the
   staged copy's `update_self.py apply`) -- is the target version's. A future
@@ -36,24 +36,51 @@ target release's own copy (or the local one, when the ref predates the skill).
   `.agents/skills/update-self/scripts/update_self.py` resolves to the
   workspace's own copy, which may predate a subcommand the prose relies on --
   the `run-status` writes in particular fail exactly on the first update into
-  the release that ships them.
+  the release that ships them. The one exception is the verdict after the
+  staged copy exits 75 (system Python older than the target's floor): the
+  staged copy exits 75 on every subcommand there, so the command it prints for
+  that verdict runs the local copy, and is skipped when the local copy
+  predates `run-status`.
 - **The task-file template keeps `lead_agent` and `finish_report_path`** (a
   test holds this too): an older workspace's lead follows the staged prose but
   launches with its own `launch-task/create_worker.py`, which may predate
   launch-time `lead_agent` stamping; under an old launcher the line is the
   only thing that gives the worker a report address.
 - **The prose asks of `create_worker.py` only what every supported launcher
-  provides** (`scripts/launcher_contract_test.py` pins that set to the oldest
+  provides** (`python/update_self_skill/launcher_contract_test.py` pins that set to the oldest
   release the app updates from). Clearing the previous pass's worker uses
   plain `mngr list` / `mngr destroy` for this reason.
 - **The report poll runs the staged skill's own `scripts/run_in_background.py`**,
-  a byte-identical mirror of `system/scripts/run_in_background.py` (a test
-  holds the two equal), not the workspace's `system/scripts/` copy, which an
+  whose code (`python/update_self_skill/run_in_background.py`) is a
+  byte-identical mirror of `system/scripts/workspace_bare_scripts/run_in_background.py`
+  (a test holds the two equal), not the workspace's `system/scripts/` copy, which an
   older tree lacks. It is standard-library only, wraps the floor launcher's
   `await`, and looks up its messenger in the workspace's tree:
   `system/scripts/message_chat.py` where there is one (minds-v0.6.1 on), else
-  `mngr message`. `scripts/staged_runner_test.py` holds what it asks of each
+  `mngr message`. `python/update_self_skill/staged_runner_test.py` holds what it asks of each
   to the oldest release that has it.
+
+## The scheduled entry: a pinned target and ceiling
+
+The Imbue Studio app starts every pass with one message, scheduled or pressed,
+that names the target and the app's ceiling, so the lead never has to reach the
+app (which may be closed, on a laptop that is asleep). The app writes that
+message and the template only reads it, from Steps 1 and 2 of the workspace's
+*local* copy, so it is a contract with every release's Steps 1 and 2:
+
+- **Step 2 must honor the pin in every version.** One that knows the pin reads
+  its `Ceiling:`, and a `Target:` the user chose, into `resolve-target`. One
+  that predates the pin follows the message's own instruction to append
+  `--ceiling <ref>` to `resolve-target`, so `--ceiling` must stay an accepted
+  spelling of `--app-version`. Neither kind asks the app, and Step 3a's
+  re-check passes the same pin.
+- **Step 1 must never stop to ask.** Nobody may be watching a pass, so a future
+  Step 1 must keep taking an abandoned lease over by rule and saving a dirty
+  tree as one commit rather than refusing it.
+
+The `--ceiling` instruction exists only for the Step 2 copies that predate the
+pin; the app drops it once the oldest release it updates from reads the pin
+itself.
 
 ## What the apply must tolerate
 
@@ -63,9 +90,19 @@ take effect for the very update that ships them, which also means the apply
 must keep tolerating older pre-merge trees: guarded imports (the
 `oom_priority` bands module is loaded off the pre-merge tree and refused
 wholesale when it lacks any attribute the apply reads), no assumptions about
-the pre-merge layout, and a `scripts/` directory that is staged and run as one
-unit (the entry script imports its sibling modules by name from its own
-directory).
+the pre-merge layout, and a skill directory that is staged and run as one unit
+(the entry scripts put the skill's own `python/` on `sys.path` and import the
+`update_self_skill` package from there, so the staged copy's own code never
+resolves from the workspace's tree or venv).
+
+A caught-up pass (SKILL.md 5b, the worker guide's §7) lands a catch-up merge
+whose first parent is the worker's line and whose second parent is the
+workspace's `HEAD` from before the apply. So the `update-self:` merge stays on
+`HEAD`'s first-parent line, where the apply and `resolve_template_base.py` look
+for it (`footprint-ranges` finds it by its subject alone), but the commits
+other chats made during the pass do not. A tool that walks the first-parent
+line to list the workspace's own commits misses them; find them through the
+second parent of a catch-up merge instead.
 
 ## Trust
 

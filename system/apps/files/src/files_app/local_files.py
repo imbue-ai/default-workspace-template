@@ -21,6 +21,7 @@ from files_app.sources import EntryRecord
 from files_app.sources import FileData
 from files_app.sources import FilesError
 from files_app.sources import FolderData
+from files_app.sources import FolderStamps
 from files_app.sources import PageData
 
 # What a file page offers to edit: small, and text.
@@ -42,10 +43,27 @@ class LocalFiles:
             raise FilesError(404, f"There's nothing at {path}.")
         return target
 
+    def stamps(self, paths: list[str]) -> FolderStamps:
+        """What each folder is at now, from one stat: it moves when anything in the folder is added, removed or
+        renamed (not when a file in it is only edited). None for a path that is not a folder."""
+        return FolderStamps(stamps={path: self._stamp(path) for path in paths})
+
+    def _stamp(self, path: str) -> str | None:
+        try:
+            status = self._on_disk(path).stat()
+        except OSError:
+            return None
+        if not stat.S_ISDIR(status.st_mode):
+            return None
+        # The inode too, so a folder replaced by another of the same name reads as changed.
+        return f"{status.st_ino}:{status.st_mtime_ns}"
+
     def describe(self, path: str) -> PageData:
         target = self._existing(path)
         if target.is_dir():
-            return FolderData(entries=tuple(_entries_of(target)))
+            # Taken before the read, so a change during it moves the stamp past what is listed.
+            stamp = self._stamp(path)
+            return FolderData(entries=tuple(_entries_of(target)), stamp=stamp)
         return FileData(is_text=_is_text(target))
 
     def read(self, path: str, headers: Headers) -> Response | None:

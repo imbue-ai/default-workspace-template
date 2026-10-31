@@ -71,9 +71,9 @@ FOLLOW_DEBOUNCE_SECONDS: Final[float] = 0.25
 
 LEASE_LOST_MESSAGE: Final[str] = (
     "browser is not yours right now -- the human took control, or your lease expired. "
-    "Run `agentic-browser-fleet ls` to see who holds it."
+    "Run `uv run --no-sync agentic-browser-fleet ls` to see who holds it."
 )
-NOT_YOURS_MESSAGE: Final[str] = "this browser is not yours -- run `agentic-browser-fleet ls`"
+NOT_YOURS_MESSAGE: Final[str] = "this browser is not yours -- run `uv run --no-sync agentic-browser-fleet ls`"
 
 _DISCOVERY_TIMEOUT_SECONDS: Final[float] = 5.0
 _UPSTREAM_OPEN_TIMEOUT_SECONDS: Final[float] = 10.0
@@ -183,7 +183,7 @@ class BrowserProxy(MutableModel):
                 return LEASE_LOST_MESSAGE
             if is_last_page:
                 return (
-                    f"{method} would close the browser's last page. Use `agentic-browser-fleet close` to end the "
+                    f"{method} would close the browser's last page. Use `uv run --no-sync agentic-browser-fleet close` to end the "
                     "browser instead."
                 )
         return None

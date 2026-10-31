@@ -8,11 +8,13 @@ streaming it over WebRTC make up the stack; this package is the service that own
 them, the viewer page, the control lease, and the `screen` command agents drive it with.
 
 It runs as the `screen` supervisord program (`system/supervisord.conf.d/screen.conf`)
-from its own uv tool environment (`system/scripts/build_workspace.sh`), serving on
+from the workspace venv (`.venv/bin/screen-service`, its one install), serving on
 `http://127.0.0.1:8090`, the app's registered URL. The four programs of the stack form
 the `screen-stack` supervisord group (`screen-xorg`, `screen-pulse`, `screen-session`,
 `screen-neko`, one drop-in each, all `autostart=false`); the service starts them on
-demand and the `screen-watch` event listener ends them together.
+demand and the `screen-watch` event listener ends them together. The manifest declares
+no `[preview]` table: the Screen owns the one X display, audio sink and stream, so no
+throwaway copy can run beside the live one, and a change to it is verified live.
 
 ## The service
 
@@ -177,10 +179,11 @@ browser fleet's were.
 ## Upgrading a workspace that ran the browser app
 
 A workspace built before the Screen takes it through `update-self` like any
-release; the apply does what the browser app's removal needs. It uninstalls the
-old `browser` uv tool before installing the `screen` one (both declare the
-`agentic-browser-fleet` console script, and uv refuses to install over another
-tool's script), copying the old environment aside so a rollback restores it.
+release; the apply does what the browser app's removal needs. The workspace
+venv it syncs for the merged tree carries `screen` in place of `browser` (both
+declare the `agentic-browser-fleet` console script, which now resolves to the
+Screen's), and a per-app `browser` uv tool an older workspace still holds is
+dropped the way every per-app tool is (`tool_env.py drop-app-tools`).
 It builds the viewer with the other frontend bundles. It removes the browser
 app's registry row before the restart, since no program re-registers it. The
 restart ends the old `xvfb` and `browser` programs with the old supervisord,
@@ -419,7 +422,7 @@ acquire|release|handoff`, `open`, `browser open [URL]` (the browser launch path)
 exit codes are the fleet CLI's: 0 ok, 1 error, 2 preempted (a human has or took
 control; end the turn), 3 busy, 4 timed out, 64 usage, 69 no service.
 
-`uv run agentic-browser-fleet` (`fleet_cli.py`, the `agentic-browser-fleet` skill) owns
+`uv run --no-sync agentic-browser-fleet` (`fleet_cli.py`, the `agentic-browser-fleet` skill) owns
 the browser: `ls [--include-tabs]`, `new [name] [--url]`, `close <name>`, `acquire <name>
 [--reclaim]`, `release <name>` (alias `unlock`), `handoff <name> "<reason>"` (alias
 `request-human`), against the fleet routes, with the same exit codes. `new` and `acquire`
@@ -442,13 +445,13 @@ built into `src/screen/static/` by `npm run build`; its tests run with `vitest r
 
 ```bash
 # Backend, from the repo root
-uv run screen-service
+.venv/bin/screen-service
 
 # Frontend
 cd system/apps/screen/frontend && npm run dev
 
 # Tests
-cd system/apps/screen && uv run pytest
+cd system/apps/screen && uv run --no-sync pytest
 ```
 
 ## Tests

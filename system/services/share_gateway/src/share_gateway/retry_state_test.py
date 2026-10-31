@@ -3,9 +3,9 @@ from datetime import datetime
 from datetime import timezone
 from pathlib import Path
 
+from share_gateway.retry_state import ProvisioningRetryState
 from share_gateway.retry_state import RETRY_DELAYS_SECONDS
 from share_gateway.retry_state import STATUS_RETRYING
-from share_gateway.retry_state import ProvisioningRetryState
 from share_gateway.retry_state import ShareStackStartError
 from share_gateway.retry_state import delay_for_failed_attempt
 from share_gateway.retry_state import remove_gateway_status

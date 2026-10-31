@@ -7,6 +7,8 @@ requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
     "app-schema",
+    # The chat messenger the fleet wakes a queued agent's chat with (message_chat).
+    "workspace-scripts",
     "click>=8.1",
     "flask>=3.0",
     "flask-sock>=0.7",
@@ -84,7 +86,7 @@ addopts = [
 default-flags=["report"]
 default-flags-tui=["report"]
 default-flags-ide=["report"]
-format-command="uv run ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
+format-command="uv run --no-sync ruff format --force-exclude --config pyproject.toml --stdin-filename {filename}"
 
 [tool.ruff]
 line-length = 119

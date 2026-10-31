@@ -64,6 +64,30 @@ describe("the bubbles of a chat switching harness", () => {
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
   });
 
+  it("brings a held background-task report back with the notice decision the snapshot carried", () => {
+    const chat = `a-${Math.random()}`;
+    const decision = {
+      display: "notice",
+      display_label: "Background task",
+      display_body: "Build (finished)",
+    } as const;
+    push([
+      chatSnapshotFixture(chat, {
+        handoff: rebindStateFixture({
+          held_sends: [
+            { message_id: "trigger-1", text: "Carry on on the other account" },
+            { message_id: "m-report", text: "<background-task-report>...", ...decision },
+          ],
+        }),
+      }),
+    ]);
+    push([chatSnapshotFixture(chat)]);
+    expect(getOutgoingMessages(chat).map((o) => [o.messageId, o.displayDecision])).toEqual([
+      ["trigger-1", undefined],
+      ["m-report", decision],
+    ]);
+  });
+
   it("consumes the returning bubbles with the successor's items that landed while the sends were still held", () => {
     // The backend delivers the held sends before it clears the switch, so the prompt's turn (the
     // confirming message's real form) and a held send's queued entry can land while the

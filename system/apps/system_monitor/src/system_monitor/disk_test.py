@@ -78,7 +78,7 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
     assert by_id["other"]["items"] == [
         {
             "name": "System software",
-            "hint": "the workspace's tools",
+            "hint": "the workspace's tools and installed packages",
             "bytes": 1500 * _MIB,
         },
         {

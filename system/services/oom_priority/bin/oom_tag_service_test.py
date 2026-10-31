@@ -9,13 +9,13 @@ that the band is actually applied and survives the exec.
 
 from __future__ import annotations
 
-import configparser
 import os
 import subprocess
 import sys
 from pathlib import Path
 
 from oom_priority import bands
+from oom_priority.supervisord_testing import supervisord_commands
 
 _SCRIPT = Path(__file__).parent / "oom_tag_service.py"
 _SUPERVISORD_CONF = Path(__file__).resolve().parents[3] / "supervisord.conf"
@@ -27,32 +27,9 @@ _HAS_WRITABLE_PROC_OOM = os.access(_PROC_OOM, os.W_OK)
 _USER_SERVICE_KEY = "user"
 
 
-def _command_by_supervisord_program() -> dict[str, str]:
-    """Every program / event listener the workspace defines, and its command.
-
-    supervisord's config is an ini file, so ``configparser`` reads it directly:
-    that skips the file's prose comments (which mention the wrapper by name
-    without invoking it) and folds continuation lines, both of which a
-    line-by-line scan has to special-case. Interpolation is off because
-    supervisord's own ``%(ENV_x)s`` syntax is not configparser's.
-
-    Programs live one per file under ``supervisord.conf.d/``, so the main config
-    declares none of them. ``configparser`` does not follow supervisord's
-    ``[include]``, so the drop-ins are read after it (``system/test_supervisord_layout.py``
-    pins that directory as the one the include glob names). Reading only the main
-    config would leave the band checks below asserting over nothing at all while
-    appearing to pass, which is exactly the silent gap they exist to close.
-    """
-    parser = configparser.ConfigParser(interpolation=None)
-    parser.read(_SUPERVISORD_CONF)
-    parser.read(
-        sorted((_SUPERVISORD_CONF.parent / "supervisord.conf.d").glob("*.conf"))
-    )
-    return {
-        section.partition(":")[2]: parser[section].get("command", "")
-        for section in parser.sections()
-        if section.startswith(("program:", "eventlistener:"))
-    }
+def _supervised_commands() -> dict[str, str]:
+    """Every program and event listener the workspace defines, and its command."""
+    return supervisord_commands(_SUPERVISORD_CONF, ("program", "eventlistener"))
 
 
 def _service_key_of(command: str) -> str | None:
@@ -128,10 +105,7 @@ def test_every_service_key_in_supervisord_conf_has_a_band() -> None:
     # miss for months (this is what happened to `xvfb`). Catch it here instead.
     keys = [
         key
-        for key in (
-            _service_key_of(command)
-            for command in _command_by_supervisord_program().values()
-        )
+        for key in (_service_key_of(command) for command in _supervised_commands().values())
         if key is not None
     ]
     assert keys, f"no oom_tag_service.py invocations found in {_SUPERVISORD_CONF}"
@@ -168,7 +142,7 @@ def test_every_built_in_supervisord_program_has_an_explicit_band() -> None:
     # into a workspace). For those the fallback is not an oversight: the wrapper
     # and the backstop then independently agree on USER_SERVICE, and a user's own
     # app belongs above every built-in, not inside their map.
-    command_by_program = _command_by_supervisord_program()
+    command_by_program = _supervised_commands()
     assert command_by_program, f"no program sections found in {_SUPERVISORD_CONF}"
     implicit = sorted(
         {

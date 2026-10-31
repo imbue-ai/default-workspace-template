@@ -98,6 +98,7 @@ from imbue.system_interface.shell.clients import client_view
 from imbue.system_interface.shell.data_types import ClientArrivalOutcome
 from imbue.system_interface.shell.data_types import ClientDesktopView
 from imbue.system_interface.shell.data_types import LaunchRequest
+from imbue.system_interface.shell.data_types import PageShowRequest
 from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
@@ -137,6 +138,8 @@ from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.route_helpers import require_client
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.theme_routes import ThemeChoiceRequest
+from imbue.system_interface.shell.theme_routes import require_available_theme
 from imbue.system_interface.shell.wallpapers import BUNDLED_WALLPAPERS_DIRNAME
 from imbue.system_interface.shell.wallpapers import WALLPAPER_ROUTE_PREFIX
 from imbue.system_interface.shell.wallpapers import WallpaperDirectories
@@ -248,6 +251,15 @@ def set_desktop_wallpaper(desktop_id: str) -> ResponseReturnValue:
     return model_response(shell.desktop_view(desktop))
 
 
+def set_desktop_theme(desktop_id: str) -> ResponseReturnValue:
+    """Set the theme one desktop wears, and answer the desktop; null wears the workspace's default."""
+    body = parse_request_body(ThemeChoiceRequest)
+    shell = _shell()
+    desktop = shell.desktops.set_theme(desktop_id, require_available_theme(shell.themes.load(), body.theme))
+    shell.broadcast_desktops_updated()
+    return model_response(shell.desktop_view(desktop))
+
+
 def delete_desktop(desktop_id: str) -> ResponseReturnValue:
     """Remove a desktop and answer the one its clients fall back to; the last desktop cannot be removed."""
     outcome = _shell().delete_desktop(desktop_id)
@@ -322,6 +334,17 @@ def launch(desktop_id: str) -> ResponseReturnValue:
         LaunchResponse(window=_shell().window_view(outcome.window), path=str(outcome.path), is_new=outcome.is_new),
         HTTP_CREATED if outcome.is_new else 200,
     )
+
+
+def show_page(client_id: str) -> ResponseReturnValue:
+    """``POST /api/clients/<client_id>/show``: the ``show`` op (section 8) for a client's own page, which cannot reach
+    the loopback op route, answered as the op answers it."""
+    body = parse_request_body(PageShowRequest)
+    shell = _shell()
+    arguments = ShowArgs(
+        app=body.app, path=body.path, showing=body.showing, repoint=body.repoint, client=ClientId(client_id)
+    )
+    return _show(shell, arguments, _resolve_target(shell, arguments, None), None)
 
 
 # Section 5.4: placements
@@ -473,6 +496,9 @@ def register_desktop_routes(application: Flask) -> None:
         endpoint="set_desktop_wallpaper",
     )
     application.add_url_rule(
+        "/api/desktops/<desktop_id>/theme", view_func=set_desktop_theme, methods=["POST"], endpoint="set_desktop_theme"
+    )
+    application.add_url_rule(
         "/api/desktops/<desktop_id>/delete", view_func=delete_desktop, methods=["POST"], endpoint="delete_desktop"
     )
     application.add_url_rule(
@@ -498,6 +524,9 @@ def register_desktop_routes(application: Flask) -> None:
     )
     application.add_url_rule(
         "/api/desktops/<desktop_id>/launch", view_func=launch, methods=["POST"], endpoint="launch"
+    )
+    application.add_url_rule(
+        "/api/clients/<client_id>/show", view_func=show_page, methods=["POST"], endpoint="show_page"
     )
     application.add_url_rule(
         "/api/desktops/<desktop_id>/windows/<window_id>/close",

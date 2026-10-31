@@ -10,17 +10,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
+import { TourController } from "../model/tour";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
+import { FakeTourApi } from "../testing/fakeTour";
 import {
   appRecord,
   desktopRecord,
   launchPathRecord,
   placementRecord,
+  themeCatalog,
   themeMetricsRecord,
+  themeRecord,
   windowRecord,
 } from "../testing/records";
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
+import { THEME_DESIGN_PROMPT } from "./DesktopSettingsDialog";
 import { App } from "./App";
+import { enableThemingPrompt } from "./WindowMenu";
 
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
@@ -35,6 +41,7 @@ const gestures: GestureSource = {
 let api: FakeDesktopApi;
 let socket: FakeDesktopSocket;
 let store: DesktopStore;
+let tour: TourController;
 /** Every link the store opened outside the workspace, by where it went. */
 let openedOutside: string[];
 
@@ -66,11 +73,18 @@ async function mountApp(options: { isDetached?: boolean; soloWindowId?: string }
     outsideLinks: {
       openInEmbedder: (url) => openedOutside.push(`embedder:${url}`),
       openInBrowser: (url) => openedOutside.push(`browser:${url}`),
+      launchInSystemApp: (url) => openedOutside.push(`app:${url}`),
     },
   });
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs")]);
-  mountView(() => m(App, { store, gestures, host: "127.0.0.1:8000", protocol: "http:" }));
+  tour = new TourController({
+    api: new FakeTourApi({ isSeen: true }),
+    highlightChrome: () => undefined,
+    isAutoStartAllowed: () => false,
+    redraw: () => m.redraw(),
+  });
+  mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
 }
 
 beforeEach(async () => {
@@ -483,6 +497,33 @@ describe("the avatar chooser", () => {
   });
 });
 
+describe("the window menu's Theming submenu", () => {
+  it("drafts Enable theming into the main chat, not the chat on screen", async () => {
+    offerApps(api, socket, [appRecord("docs", { theming: "unthemed" }), buddy]);
+    api.postLaunchAnswer = "/?chat=agent-1";
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    m.redraw.sync();
+
+    (document.querySelector('[data-window-control="menu"]') as HTMLElement).click();
+    m.redraw.sync();
+    (document.querySelector('[data-menu-row="theme"]') as HTMLElement).click();
+    m.redraw.sync();
+    const enable = document.querySelector('[data-menu-row="theme-enable"]') as HTMLElement;
+    enable.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    enable.click();
+    await settle();
+
+    expect(api.calls).toContain(
+      `launch:home:buddy:draft:${JSON.stringify({ message: enableThemingPrompt("Docs") })}:window:win-9:without-page`,
+    );
+  });
+});
+
 describe("the element menu", () => {
   function menuRowKeys(): string[] {
     return Array.from(document.body.querySelectorAll('[data-menu-part="menu"] [data-menu-row]')).map(
@@ -558,6 +599,65 @@ describe("the element menu", () => {
     expect(launch).toContain('\\"data-taskbar-entry\\":\\"win-1\\"');
     expect(launch).toContain('\\"app\\":\\"system_interface\\"');
     expect(launch.endsWith(":window:win-9")).toBe(true);
+  });
+});
+
+/** Open Desktop settings from the desktops menu. */
+function openDesktopSettings(): void {
+  (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
+  m.redraw.sync();
+  const row = document.querySelector('[data-menu-part="menu"] [data-menu-row="settings"]') as HTMLElement;
+  row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  row.click();
+  m.redraw.sync();
+}
+
+describe("the desktop settings' Make your own...", () => {
+  it("closes the dialog and drafts the theme prompt into the pinned window's chat", async () => {
+    pinnedEntry();
+    openDesktopSettings();
+    (document.querySelector("[data-make-theme]") as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-desktop-settings]")).toBeNull();
+    await settle();
+    expect(api.calls).toContain(
+      `launch:home:buddy:draft:${JSON.stringify({ message: THEME_DESIGN_PROMPT })}:window:win-9`,
+    );
+  });
+});
+
+describe("the desktop settings' theme row", () => {
+  beforeEach(() => {
+    api.themeCatalog = themeCatalog(themeRecord("paper"), themeRecord("ink"));
+    socket.deliver().onThemesChanged(api.themeCatalog);
+  });
+
+  async function saveSettingsWithTheme(theme: string | null, isWorkspaceDefault: boolean): Promise<void> {
+    openDesktopSettings();
+    if (theme !== null) {
+      (document.querySelector(`[data-theme="${theme}"]`) as HTMLButtonElement).click();
+      m.redraw.sync();
+    }
+    if (isWorkspaceDefault) {
+      const asDefault = document.querySelector("[data-theme-as-workspace-default]") as HTMLInputElement;
+      asDefault.checked = true;
+      asDefault.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    (document.querySelector(".desktop-settings-save") as HTMLButtonElement).click();
+    await settle();
+  }
+
+  const themeCalls = (): string[] => api.calls.filter((call) => /^set(Desktop|Default)Theme/.test(call));
+
+  it("saves a desktop's own theme, a workspace default in its place, and nothing when unchanged", async () => {
+    await saveSettingsWithTheme("paper", false);
+    expect(themeCalls()).toEqual(["setDesktopTheme:home:paper"]);
+
+    await saveSettingsWithTheme("ink", true);
+    expect(themeCalls()).toEqual(["setDesktopTheme:home:paper", "setDefaultTheme:ink", "setDesktopTheme:home:null"]);
+
+    await saveSettingsWithTheme(null, false);
+    expect(themeCalls()).toHaveLength(3);
   });
 });
 

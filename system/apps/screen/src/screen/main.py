@@ -116,6 +116,8 @@ def build_service(arguments: ScreenServiceArguments, proxy_server: ProxyServer) 
         on_stopping=fleet.prepare_for_stack_stop,
     )
     service.attach_stack(stack)
+    # After the stack is attached: loading broadcasts state, which reads it.
+    fleet.load_saved()
     return service
 
 

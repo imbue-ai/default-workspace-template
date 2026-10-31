@@ -31,7 +31,7 @@ Facts this design builds on, as of `main` at `2cf9763de` (2026-10-20).
 - A chat agent notifies the user through `POST /api/v1/agents/<agent-id>/notifications` on the Imbue Studio app, via the latchkey gateway, with `message`, an optional `title`, and `watched_by` (`.agents/skills/notify-user/scripts/notify_user.py`).
   The feed resolves the entry's destination from the agent's chat: a click lands in that chat.
   There is no way to send the user to an app page.
-- A built-in app is a Flask program with an `app.toml` manifest, installed as its own uv tool, registered through `forward_port.py`, serving an OpenAPI document through `system/libs/app_schema`; the ones with a real interface (the shell, the chat, Getting Started, Files) are Mithril and Tailwind builds in the npm workspace at `system/package.json` over `system/libs/workspace_ui`.
+- A built-in app is a Flask program with an `app.toml` manifest, run from the workspace venv, registered through `forward_port.py`, serving an OpenAPI document through `system/libs/app_schema`; the ones with a real interface (the shell, the chat, Getting Started, Files) are Mithril and Tailwind builds in the npm workspace at `system/package.json` over `system/libs/workspace_ui`.
   System Monitor (`system/apps/system_monitor`) is the reference for an app that reads machine state and stores nothing.
 - A published template that users adopted, `nicholasgjokaj-star/routines`, showed the value of one window over everything scheduled, with plain-language rows, automatic-versus-manual runs, next-run times, problems sorted first, a run-in-flight indicator, and a Fix button that hands an agent the evidence.
   It recovered all of it by parsing cron command lines, kept history only for jobs an agent remembered to wrap, modelled only cron commands, could not notify, and matched none of the workspace's conventions.
@@ -398,10 +398,13 @@ The daily routines-only check is a second definition later, `caretaker-routines.
 `routines migrate-cron` converts what a workspace has:
 
 - Every `data/.state/cron.d` entry whose line runs `run_job.sh` becomes a definition: the job id, `--every`, `--at`, and `--retry-after` map to the fields; a command that is `run_automation.sh <skill>` becomes `skill`; a `caretaker` entry becomes the switch on the shipped definition.
-  `data/.state/jobs/<id>/` becomes the state's `last_succeeded_at` and `consecutive_failures`.
+  `data/.state/jobs/<id>/` becomes the state's `last_succeeded_at` and `consecutive_failures`; a job that never ran on minds-v0.8.7 still keeps it under `system/data/.state/jobs/<id>/`, and when both hold one, the later success wins.
   The title is the id with the hyphens read as spaces, and `what` is the command, until an agent describes it.
 - A plain cron line whose five fields are one of the shapes section 5 expresses becomes a definition the same way; one that is not is left in place with a warning in the boot log, since the daemon still runs it.
+- A command is its words when the shell would only split it; one with quoting, operators or expansions runs through the entry's `SHELL` (else `/bin/sh`) as the text cron ran.
+  `\%` is a literal `%`; a line whose bare `%` feeds the command input is left in place.
 - Both copies of every converted entry are removed.
+- The Imbue Studio app's `update-self-dispatch` entry stays with cron, untouched: the app rewrites it whenever it arms an update, so a routine of it would run beside the cron line rather than replace it.
 
 The bootstrap runs it at every boot, after the first-boot commit and before writing the tick entry; it is a no-op once nothing is left, and the recovery guard is never touched.
 The definitions it writes are committed as every definition write is (section 4), one commit per definition; a commit the index refuses leaves the file written and the entry converted, as for any write.

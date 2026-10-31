@@ -16,6 +16,11 @@ created or changed; the Routines app (`http://routines.<workspace-host>/`) is
 where the user sees them. Nothing is registered anywhere else: no cron lines,
 no supervisord programs, no extra template.
 
+Workspace updates are not routines either: the Imbue Studio app schedules
+them through its own `update-self-dispatch` cron entry, which runs the update
+dispatcher and its watchdog. Never make a routine that runs update-self or that
+dispatcher; it would start a second update beside the app's.
+
 Services that run continuously are not routines; they stay under supervisord
 (the `update-app` skill). An app that needs periodic work makes it a routine
 with `--app <name>`, never a loop or a thread inside its service.
