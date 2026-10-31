@@ -880,6 +880,7 @@ def _prepare_boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _StubSubpr
         "_write_update_recovery_cron_entry",
         "_write_routines_tick_cron_entry",
         "_ensure_supervisor_log_dir",
+        "_configure_latchkey_gateway_env",
     ):
         monkeypatch.setattr(f"bootstrap.manager.{name}", lambda: None)
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
