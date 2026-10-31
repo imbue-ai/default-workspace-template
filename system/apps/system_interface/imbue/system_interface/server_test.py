@@ -950,7 +950,7 @@ def test_websocket_connect_sends_the_connected_users(app: Flask) -> None:
 
 @pytest.mark.flaky
 @pytest.mark.timeout(15)
-def test_a_registered_windows_disconnect_broadcasts_clients_updated_and_an_unregistered_ones_does_not(
+def test_a_windows_registration_and_its_disconnect_each_broadcast_clients_updated_and_an_unregistered_close_does_not(
     app: Flask,
 ) -> None:
     broadcaster = state_of(app).shell.broadcaster
@@ -967,8 +967,18 @@ def test_a_registered_windows_disconnect_broadcasts_clients_updated_and_an_unreg
                 poll_interval=0.05,
                 error_message="the window never registered",
             )
-            # The unregistered socket's close, handled by now, announced nothing.
-            assert "clients_updated" not in [message["type"] for message in drain_messages(observer_queue)]
+            wait_for(
+                lambda: not observer_queue.empty(),
+                timeout=5.0,
+                poll_interval=0.05,
+                error_message="the window's registration was never announced",
+            )
+            # The registration is announced once (beside the move its first report made); the unregistered
+            # socket's close, handled by now, announced nothing.
+            assert [message["type"] for message in drain_messages(observer_queue)] == [
+                "active_desktop_changed",
+                "clients_updated",
+            ]
             close_ws(registered)
             # The broadcast follows the unregister, so the message is what is waited for, not the client's leaving.
             wait_for(

@@ -485,8 +485,8 @@ one of the viewer's own. On every other client the owner of
 a desktop somebody else is on wears a ring in their colour in the tray, read
 off the clients and the desktop moves the socket announces; a move by a client
 the last read did not list, a change in who is here, and the shell's
-`clients_updated` (a window's socket closed, a stale client pruned) read the
-clients again, so the ring follows a viewing window that closes while its
+`clients_updated` (a window's socket registered its client or closed, a
+stale client pruned) read the clients again, so the ring follows a viewing window that closes while its
 person stays connected elsewhere.
 The launcher's window rows name the owner of a desktop that is not the
 viewer's. The phone layout offers no overview.

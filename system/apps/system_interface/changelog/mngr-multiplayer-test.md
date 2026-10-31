@@ -6,7 +6,7 @@ The shell knows who is here (the mngr repo's `specs/multiplayer-refinements/spec
 
 - The heartbeat reports how long ago the page last saw keyboard or pointer input (`input_age_seconds`) rather than a moment by the page's own clock; the shell stamps the moment itself, never later than its own now, keeps the newest, and announces the roster whenever a person's newest input time moves, so every window's "Active" and "Idle · 4m" follow real typing. A page from before the age may still send `last_input_at`, accepted and clamped; an age beyond a century is refused with 400, like any malformed body.
 
-- A `clients_updated` push follows a registered window's disconnect and the prune of a stale client, so a page re-reads the clients listing.
+- A `clients_updated` push follows a window's socket registering its client, a registered window's disconnect, and the prune of a stale client, so a page re-reads the clients listing and the tray's ring follows a window that reconnects.
 
 - A visiting agent's presence comes from the share gateway's last-seen record (which it now refreshes every 10 seconds), so an agent with a grant shows as connected while it is calling in.
 

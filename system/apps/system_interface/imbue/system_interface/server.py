@@ -862,10 +862,16 @@ def _run_ws_broadcast_loop(
         while not shutdown:
             incoming = websocket.receive(timeout=0)
             while incoming is not None:
-                if _handle_client_state_message(
-                    str(incoming), client_queue, shell, is_first_report=not is_client_registered
+                if (
+                    _handle_client_state_message(
+                        str(incoming), client_queue, shell, is_first_report=not is_client_registered
+                    )
+                    and not is_client_registered
                 ):
                     is_client_registered = True
+                    # A window registering changes which clients are connected (a socket that dropped and came
+                    # back among them), which the tray's viewing ring reads off the clients listing.
+                    ws_broadcaster.broadcast_clients_updated()
                 incoming = websocket.receive(timeout=0)
             try:
                 message = client_queue.get(timeout=1.0)
