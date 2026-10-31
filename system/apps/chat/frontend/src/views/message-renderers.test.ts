@@ -10,6 +10,8 @@ import {
 } from "./message-renderers";
 import { isSkillExpansionUserMessage } from "./message-classification";
 import { setBlockExpanded } from "./expansion-state";
+import { resetResendStatesForTesting } from "./auth-recovery";
+import { getOutgoingMessages } from "../models/OutgoingMessages";
 import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import {
   closeProviderChooser,
@@ -39,6 +41,8 @@ const switching = vi.hoisted(() => {
     // The account ids the page lists as signed in, and whether it has read that list yet; the rest
     // of the providers module is real.
     signedInAccountIds: new Set<string>(),
+    // When each signed-in account last finished a sign-in; absent reads as never stamped.
+    signedInAtById: new Map<string, string>(),
     areAccountsLoaded: true,
   };
 });
@@ -46,7 +50,9 @@ vi.mock("./SwitchDialog", () => ({ beginSwitchToAccountId: switching.beginSwitch
 vi.mock("../models/Providers", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Providers")>()),
   accountForAgent: (accountId?: string) =>
-    accountId !== undefined && switching.signedInAccountIds.has(accountId) ? { id: accountId } : null,
+    accountId !== undefined && switching.signedInAccountIds.has(accountId)
+      ? { id: accountId, signed_in_at: switching.signedInAtById.get(accountId) ?? null }
+      : null,
   areAccountsLoaded: () => switching.areAccountsLoaded,
 }));
 vi.mock("../models/Chats", async (importOriginal) => ({
@@ -56,15 +62,27 @@ vi.mock("../models/Chats", async (importOriginal) => ({
 
 // The render paths ask the detail cache for on-demand payloads (and kick off fetches);
 // stub those three so tests control the state machine without mithril's XHR.
-const { mockDetailState, mockRequestDetail } = vi.hoisted(() => ({
+const { mockDetailState, mockRequestDetail, transcript } = vi.hoisted(() => ({
   mockDetailState: vi.fn(),
   mockRequestDetail: vi.fn(),
+  // The chat's held transcript, and the send the recovered sign-in note makes.
+  transcript: {
+    events: [] as unknown[],
+    sendMessage: vi.fn(async () => "ok"),
+    noteResentSend: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => {}),
+  },
+}));
+vi.mock("../models/ResentSends", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../models/ResentSends")>()),
+  noteResentSend: transcript.noteResentSend,
 }));
 vi.mock("../models/Response", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Response")>()),
   getEventDetailState: mockDetailState,
   getEventDetailVersion: () => 0,
   requestEventDetail: mockRequestDetail,
+  getEventsForChat: () => transcript.events,
+  sendMessage: transcript.sendMessage,
 }));
 
 function skillToolCall(ts: string, callId: string): TranscriptEvent {
@@ -674,6 +692,7 @@ describe("the auth-error note's switch link", () => {
     vi.mocked(startChatOnAccount).mockClear();
     switching.chat = chatSnapshotFixture("chat-1", { active_agent: { harness: "codex", account_id: OPENAI_ID } });
     switching.signedInAccountIds = new Set([OPENAI_ID, ANTHROPIC_ID]);
+    switching.signedInAtById = new Map();
     switching.areAccountsLoaded = true;
   });
 
@@ -725,6 +744,234 @@ describe("the auth-error note's switch link", () => {
     expect(switching.beginSwitchToAccountId).toHaveBeenCalledExactlyOnceWith("chat-1", ANTHROPIC_ID);
     expect(startChatOnAccount).not.toHaveBeenCalled();
     expect(isProviderChooserOpen()).toBe(false);
+  });
+
+  describe("once the account has signed in again", () => {
+    const PROMPT = {
+      timestamp: "2026-08-05T23:59:59.000Z",
+      type: "user_message",
+      event_id: "prompt-1",
+      source: "test",
+      content: "Summarize the deploy thread",
+    };
+
+    beforeEach(() => {
+      resetResendStatesForTesting();
+      transcript.sendMessage.mockClear();
+      switching.signedInAtById = new Map([[OPENAI_ID, "2026-08-06T00:05:00.000Z"]]);
+    });
+
+    it("stops asking for a sign-in and offers the failed message again while nothing came after it", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      expect(allText(children)).toContain("Signed in again.");
+      expect(findButton(children, "Sign in again")).toBeNull();
+      expect(collectClasses(children)).not.toContain("message-api-error");
+      findButton(children, "Send your message again")!.attrs.onclick();
+      await Promise.resolve();
+      expect(transcript.sendMessage).toHaveBeenCalledExactlyOnceWith(
+        "chat-1",
+        "Summarize the deploy thread",
+        expect.any(String),
+      );
+    });
+
+    it("sends a prompt that carried context as it was first sent, and paints only the user's words", async () => {
+      transcript.events = [
+        {
+          ...PROMPT,
+          display: "prompt_with_context",
+          content: "<context>seed</context>\nSummarize the deploy thread",
+          display_body: "Summarize the deploy thread",
+        },
+        authErrorEvent(),
+      ];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+      const bubblesBefore = getOutgoingMessages("chat-1").length;
+
+      findButton(children, "Send your message again")!.attrs.onclick();
+      expect(
+        getOutgoingMessages("chat-1")
+          .slice(bubblesBefore)
+          .map((bubble) => bubble.content),
+      ).toEqual(["Summarize the deploy thread"]);
+      await Promise.resolve();
+      expect(transcript.sendMessage).toHaveBeenCalledExactlyOnceWith(
+        "chat-1",
+        "<context>seed</context>\nSummarize the deploy thread",
+        expect.any(String),
+      );
+    });
+
+    it("offers the message the failure refused when the failure was written ahead of it", () => {
+      transcript.events = [authErrorEvent(), PROMPT];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      expect(findButton(children, "Send your message again")).not.toBeNull();
+    });
+
+    it("says the chat app is sending the message again, and offers no send of its own, while it does", () => {
+      switching.chat = chatSnapshotFixture("chat-1", {
+        active_agent: { harness: "codex", account_id: OPENAI_ID, is_resending_after_sign_in: true },
+      });
+      transcript.events = [PROMPT, authErrorEvent()];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      expect(allText(children)).toContain("Sending your message again");
+      expect(findButton(children, "Send your message again")).toBeNull();
+    });
+
+    it("offers nothing to send for a prompt that carried no words of the user's", () => {
+      transcript.events = [
+        { ...PROMPT, display: "prompt_with_context", content: "<context>seed</context>", display_body: "" },
+        authErrorEvent(),
+      ];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      expect(allText(children)).toContain("Signed in again.");
+      expect(findButton(children, "Send your message again")).toBeNull();
+    });
+
+    it("drops the sending bubble of a resend the chat app took back", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      transcript.sendMessage.mockResolvedValueOnce("withdrawn");
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      const bubblesBefore = getOutgoingMessages("chat-1").length;
+      findButton(children, "Send your message again")!.attrs.onclick();
+      expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore + 1);
+      await vi.waitFor(() => expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore));
+    });
+
+    it("sends none of the remaining messages once Stop took one back", async () => {
+      const second = { ...PROMPT, event_id: "prompt-2", content: "And the release notes" };
+      transcript.events = [PROMPT, second, authErrorEvent()];
+      transcript.sendMessage.mockResolvedValueOnce("withdrawn");
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      findButton(children, "Send your message again")!.attrs.onclick();
+      await vi.waitFor(() =>
+        expect(allText(renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"))).not.toContain(
+          "Send your message again",
+        ),
+      );
+      expect(transcript.sendMessage).toHaveBeenCalledExactlyOnceWith(
+        "chat-1",
+        "Summarize the deploy thread",
+        expect.any(String),
+      );
+    });
+
+    it("says the resend didn't go and offers it again when the send fails", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      transcript.sendMessage.mockRejectedValueOnce(new Error("offline"));
+      vi.spyOn(console, "error").mockImplementationOnce(() => {});
+      const bubblesBefore = getOutgoingMessages("chat-1").length;
+
+      findButton(
+        renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"),
+        "Send your message again",
+      )!.attrs.onclick();
+      await vi.waitFor(() => expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore));
+
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+      expect(allText(children)).toContain("That didn't send.");
+      expect(findButton(children, "Try again")).not.toBeNull();
+    });
+
+    it("takes a resend the chat app had to send twice as sent, and says so under the message", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      transcript.sendMessage.mockResolvedValueOnce("resent");
+      transcript.noteResentSend.mockClear();
+
+      findButton(
+        renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"),
+        "Send your message again",
+      )!.attrs.onclick();
+      await vi.waitFor(() =>
+        expect(transcript.noteResentSend).toHaveBeenCalledExactlyOnceWith(
+          "chat-1",
+          "Summarize the deploy thread",
+          expect.any(Set),
+        ),
+      );
+
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+      expect(allText(children)).not.toContain("That didn't send.");
+      expect(allText(children)).not.toContain("Couldn't confirm your message arrived");
+    });
+
+    it("asks the user to check the agent before sending a resend mngr could not confirm again", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      transcript.sendMessage.mockRejectedValueOnce({ response: { kind: "submission_unconfirmed" } });
+      vi.spyOn(console, "error").mockImplementationOnce(() => {});
+      const bubblesBefore = getOutgoingMessages("chat-1").length;
+
+      findButton(
+        renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"),
+        "Send your message again",
+      )!.attrs.onclick();
+      await vi.waitFor(() => expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore));
+
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+      expect(allText(children)).toContain("Couldn't confirm your message arrived");
+      expect(allText(children)).not.toContain("That didn't send.");
+      expect(findButton(children, "Try again")).toBeNull();
+      expect(findButton(children, "Send again")).not.toBeNull();
+    });
+
+    it("reads a resend that got no answer as unconfirmed, and sends it again under the same id", async () => {
+      transcript.events = [PROMPT, authErrorEvent()];
+      transcript.sendMessage.mockRejectedValueOnce({ code: 0, response: null });
+      vi.spyOn(console, "error").mockImplementationOnce(() => {});
+      const bubblesBefore = getOutgoingMessages("chat-1").length;
+
+      findButton(
+        renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"),
+        "Send your message again",
+      )!.attrs.onclick();
+      await vi.waitFor(() => expect(getOutgoingMessages("chat-1")).toHaveLength(bubblesBefore));
+
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+      expect(allText(children)).toContain("Couldn't confirm your message arrived");
+      expect(findButton(children, "Try again")).toBeNull();
+      findButton(children, "Send again")!.attrs.onclick();
+      await vi.waitFor(() => expect(transcript.sendMessage).toHaveBeenCalledTimes(2));
+      const [first, second] = transcript.sendMessage.mock.calls as unknown as [string, string, string][];
+      expect(second[2]).toBe(first[2]);
+    });
+
+    it("offers nothing to send once the user has written since", () => {
+      transcript.events = [
+        PROMPT,
+        authErrorEvent(),
+        { ...PROMPT, event_id: "prompt-2", timestamp: "2026-08-06T00:01:00.000Z", content: "Never mind" },
+      ];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      expect(allText(children)).toContain("Signed in again.");
+      expect(findButton(children, "Send your message again")).toBeNull();
+    });
+
+    it("still asks for a sign-in when the account last signed in before the turn failed", () => {
+      switching.signedInAtById = new Map([[OPENAI_ID, "2026-08-05T00:00:00.000Z"]]);
+      transcript.events = [PROMPT, authErrorEvent()];
+      const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
+
+      expect(findButton(children, "Sign in again")).not.toBeNull();
+      expect(allText(children)).not.toContain("Signed in again.");
+    });
+
+    it("leaves a failure of an agent the chat switched away from as it was, offering no send", () => {
+      const predecessorFailure = { ...authErrorEvent(), agent_id: "agent-before-the-switch" };
+      transcript.events = [{ ...PROMPT, agent_id: "agent-before-the-switch" }, predecessorFailure];
+      const children = renderAssistantMessageChildren(predecessorFailure, new Map(), "chat-1");
+
+      expect(allText(children)).not.toContain("Signed in again.");
+      expect(findButton(children, "Send your message again")).toBeNull();
+      expect(findButton(children, "Sign in again")).not.toBeNull();
+    });
   });
 
   it("is not offered until the chat itself is known", () => {

@@ -124,6 +124,7 @@ function account(id: string, laneId: string, label: string): ProviderAccount {
     name: "",
     label,
     reauth_method: "subscription",
+    signed_in_at: null,
   };
 }
 
@@ -170,6 +171,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic (Claude Code)",
         reauth_method: "subscription",
+        signed_in_at: null,
       },
       {
         id: "a2",
@@ -183,6 +185,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic 2 (Claude Code)",
         reauth_method: "subscription",
+        signed_in_at: null,
       },
     ];
     const text = render();
@@ -213,6 +216,7 @@ describe("the provider chooser", () => {
         name: "",
         label: "Anthropic (Claude Code)",
         reauth_method: "subscription",
+        signed_in_at: null,
       },
     ];
     const root = document.createElement("div");

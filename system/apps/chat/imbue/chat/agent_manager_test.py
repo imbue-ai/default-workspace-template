@@ -48,11 +48,14 @@ from imbue.chat.agent_manager import _build_chat_create_command
 from imbue.chat.agent_manager import _build_chat_display_label_command
 from imbue.chat.agent_manager import _build_chat_rename_command
 from imbue.chat.agent_manager import _chat_project_label
+from imbue.chat.agent_manager import _has_new_user_turn_saying
+from imbue.chat.agent_manager import _ids_of_user_turns_saying
 from imbue.chat.agent_manager import _rename_failure_detail
 from imbue.chat.agent_manager import _sends_the_transcript_does_not_hold
 from imbue.chat.agent_manager import chat_status_for_agent
 from imbue.chat.agent_manager import is_rebind_target
 from imbue.chat.agent_manager import launch_role_templates
+from imbue.chat.agent_manager import user_turns_refused_for_sign_in
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
@@ -136,6 +139,7 @@ from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import build_test_state
 from imbue.chat.testing import drain_is_connecting_pushes
 from imbue.chat.testing import is_chat_connecting
+from imbue.chat.testing import is_chat_resending_after_sign_in
 from imbue.chat.testing import make_agent_fixture
 from imbue.chat.testing import make_chat_agent_entry
 from imbue.chat.testing import make_chat_handoff_record
@@ -156,7 +160,9 @@ from imbue.chat.testing import write_last_compaction_record
 from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
+from imbue.concurrency_group.errors import ConcurrencyGroupError
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.concurrency_group.subprocess_utils import ProcessSetupError
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
@@ -5839,8 +5845,94 @@ def _typed_turn(text: str, display: str | None = None, at: str | None = None) ->
     }
 
 
-def _agent_reply(at: str) -> dict[str, Any]:
-    return {"type": "assistant_message", "content": "Hi", "timestamp": at}
+def _agent_reply(at: str | None = None, is_auth_error: bool = False) -> dict[str, Any]:
+    return {
+        "type": "assistant_message",
+        "content": "Login expired" if is_auth_error else "Hi",
+        "is_auth_error": is_auth_error,
+        **({"timestamp": at} if at is not None else {}),
+    }
+
+
+@pytest.mark.parametrize(
+    ("events", "expected"),
+    [
+        pytest.param(
+            [_typed_turn("hi"), _agent_reply(), _typed_turn("Who is Aaron?"), _agent_reply(is_auth_error=True)],
+            ("Who is Aaron?",),
+            id="the-message-the-auth-error-answered",
+        ),
+        pytest.param(
+            [_typed_turn("first"), _typed_turn("second"), _agent_reply(is_auth_error=True), {"type": "special"}],
+            ("first", "second"),
+            id="every-message-of-the-turn-in-order",
+        ),
+        pytest.param(
+            [
+                _typed_turn("hi"),
+                _agent_reply(is_auth_error=True),
+                _typed_turn("hi again"),
+                _agent_reply(is_auth_error=True),
+            ],
+            ("hi", "hi again"),
+            id="every-refused-turn-since-the-last-answer",
+        ),
+        pytest.param(
+            [
+                _typed_turn("hi"),
+                _agent_reply(is_auth_error=True),
+                _typed_turn("hello?"),
+                _typed_turn("hi"),
+                _agent_reply(is_auth_error=True),
+            ],
+            ("hi", "hello?"),
+            id="a-message-typed-again-once",
+        ),
+        pytest.param(
+            [
+                _typed_turn("hi"),
+                _agent_reply(),
+                _agent_reply(is_auth_error=True, at="2026-10-28T00:39:55.644Z"),
+                _typed_turn("what is 2+2?", at="2026-10-28T00:39:55.530Z"),
+            ],
+            ("what is 2+2?",),
+            id="the-error-written-ahead-of-the-message-it-refused",
+        ),
+        pytest.param(
+            [
+                _typed_turn("hi", at="2026-10-28T00:39:55.530Z"),
+                _agent_reply(is_auth_error=True, at="2026-10-28T00:39:55.644Z"),
+                _typed_turn("again", at="2026-10-28T00:41:00.000Z"),
+            ],
+            (),
+            id="a-message-sent-after-the-error",
+        ),
+        pytest.param(
+            [_typed_turn("hi"), _agent_reply(is_auth_error=True), _agent_reply(is_auth_error=True)],
+            ("hi",),
+            id="a-repeated-auth-error",
+        ),
+        pytest.param(
+            [_typed_turn("hi"), _typed_turn("nudge", display="chip"), _agent_reply(is_auth_error=True)],
+            ("hi",),
+            id="not-a-machine-line",
+        ),
+        pytest.param([_typed_turn("hi"), _agent_reply()], (), id="a-reply-that-is-not-an-auth-error"),
+        pytest.param(
+            [_typed_turn("hi"), _agent_reply(is_auth_error=True), _typed_turn("again")], (), id="the-user-spoke-since"
+        ),
+        pytest.param(
+            [_typed_turn("do it"), _agent_reply(), {"type": "tool_result"}, _agent_reply(is_auth_error=True)],
+            (),
+            id="a-turn-the-agent-had-worked-on",
+        ),
+        pytest.param([], (), id="an-empty-transcript"),
+    ],
+)
+def test_the_turns_refused_for_sign_in_are_the_unanswered_ones_an_auth_error_refused(
+    events: list[dict[str, Any]], expected: tuple[str, ...]
+) -> None:
+    assert user_turns_refused_for_sign_in(events) == expected
 
 
 class _FixedTranscriptReader(ListTranscriptReader):
@@ -5851,15 +5943,381 @@ class _FixedTranscriptReader(ListTranscriptReader):
         self._events = events
 
 
+class _ResendTranscripts:
+    """Each agent's transcript as a resend reads it, one reader per agent; a message delivered with ``land``
+    shows up in it, as a real send's turn does."""
+
+    def __init__(self, events_of: Callable[[str], list[dict[str, Any]]]) -> None:
+        self._events_of = events_of
+        self._reader_by_agent: dict[str, _FixedTranscriptReader] = {}
+        self.read_agent_ids: list[str] = []
+
+    def reader(self, agent_info: AgentInfo) -> TranscriptReader:
+        self.read_agent_ids.append(agent_info.id)
+        return self._reader_by_agent.setdefault(agent_info.id, _FixedTranscriptReader(self._events_of(agent_info.id)))
+
+    def land(self, agent_info: AgentInfo, text: str) -> SendOutcome:
+        self._reader_by_agent[agent_info.id]._events.append(_typed_turn(text))
+        return SendOutcome.OK
+
+
 def _install_resend_capabilities(
     manager: AgentManager,
     ensure_watcher: Callable[[AgentInfo], TranscriptReader],
     deliver: Callable[[AgentInfo, str, str], SendOutcome],
 ) -> None:
-    """Give the manager what a resend uses: the agent's transcript and the message route's delivery."""
+    """Give the manager what a re-auth resend uses: the agent's transcript and the message route's delivery."""
     manager.set_handoff_capabilities(
         HandoffCapabilities(ensure_watcher=ensure_watcher, drain_to_composer=lambda agent_info: "", deliver=deliver)
     )
+
+
+def test_a_sign_in_resends_the_message_its_failure_refused_once_the_agent_is_back(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    account = f"acct-{uuid4().hex}"
+    refused_id, answered_id = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    seed_agent_state(manager, refused_id, name="Refused-Chat", labels={"account": account})
+    seed_agent_state(manager, answered_id, name="Answered-Chat", labels={"account": account})
+    transcripts = {
+        refused_id: [
+            _typed_turn("hi"),
+            _agent_reply(),
+            _typed_turn("Who is Aaron?"),
+            _agent_reply(is_auth_error=True),
+        ],
+        answered_id: [_typed_turn("hi"), _agent_reply()],
+    }
+    # Each send, and whether the agent's restart had run by then.
+    delivered: list[tuple[str, str, bool]] = []
+
+    landing = _ResendTranscripts(lambda agent_id: transcripts[agent_id])
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        is_restarted = f"start {agent_info.name} --restart --no-resume" in argv_log.read_text().splitlines()
+        delivered.append((agent_info.id, text, is_restarted))
+        return landing.land(agent_info, text)
+
+    _install_resend_capabilities(manager, landing.reader, deliver)
+    try:
+        assert manager.restart_agents_on_account(account) == 2
+        wait_for(
+            lambda: not is_chat_resending_after_sign_in(manager, refused_id),
+            timeout=10.0,
+            error_message="the refused message's resend never settled",
+        )
+    finally:
+        manager.stop()
+    assert delivered == [(refused_id, "Who is Aaron?", True)]
+
+
+def test_every_chat_on_a_signed_in_account_reports_its_resend_until_it_settles(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log, gate = write_gated_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    refused_id, answered_id = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    seed_agent_state(manager, refused_id, name="Refused-Chat", labels={"account": "acct-1"})
+    seed_agent_state(manager, answered_id, name="Answered-Chat", labels={"account": "acct-1"})
+    transcripts = {
+        refused_id: [_typed_turn("hi"), _agent_reply(is_auth_error=True)],
+        answered_id: [_typed_turn("hi"), _agent_reply()],
+    }
+    landing = _ResendTranscripts(lambda agent_id: transcripts[agent_id])
+    delivered: list[str] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        delivered.append(agent_info.id)
+        return landing.land(agent_info, text)
+
+    _install_resend_capabilities(manager, landing.reader, deliver)
+    try:
+        manager.restart_agents_on_account_in_background("acct-1")
+        # From the moment the sign-in lands, before any restart has finished.
+        assert is_chat_resending_after_sign_in(manager, refused_id)
+        assert is_chat_resending_after_sign_in(manager, answered_id)
+        gate.touch()
+        wait_for(
+            lambda: not any(is_chat_resending_after_sign_in(manager, agent_id) for agent_id in transcripts),
+            timeout=10.0,
+            error_message="a chat kept reporting its resend after it settled",
+        )
+    finally:
+        manager.stop()
+    assert delivered == [refused_id]
+
+
+def test_a_restart_that_fails_after_a_sign_in_ends_its_resend(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    failing_mngr = tmp_path / "mngr"
+    failing_mngr.write_text("#!/bin/sh\necho 'no such agent' >&2\nexit 1\n")
+    failing_mngr.chmod(0o755)
+    manager = AgentManager.build(broadcaster, mngr_binary=str(failing_mngr))
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Unrestartable-Chat", labels={"account": "acct-1"})
+    try:
+        assert manager.restart_agents_on_account("acct-1") == 0
+        assert not is_chat_resending_after_sign_in(manager, agent_id)
+    finally:
+        manager.stop()
+
+
+def test_a_restart_that_cannot_run_after_a_sign_in_ends_every_resend(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager = AgentManager.build(broadcaster, mngr_binary=str(tmp_path / "no-such-mngr"))
+    agent_ids = [f"agent-{uuid4().hex}" for _ in range(2)]
+    for index, agent_id in enumerate(agent_ids):
+        seed_agent_state(manager, agent_id, name=f"Unstartable-Chat-{index}", labels={"account": "acct-1"})
+    try:
+        with pytest.raises(ProcessSetupError):
+            manager.restart_agents_on_account("acct-1")
+        assert not any(is_chat_resending_after_sign_in(manager, agent_id) for agent_id in agent_ids)
+    finally:
+        manager.stop()
+
+
+def test_a_sign_in_whose_restart_thread_cannot_start_ends_every_resend(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    agent_ids = [f"agent-{uuid4().hex}" for _ in range(2)]
+    for index, agent_id in enumerate(agent_ids):
+        seed_agent_state(manager, agent_id, name=f"Shutting-Down-Chat-{index}", labels={"account": "acct-1"})
+    # A stopped manager's thread group takes no new threads, as when a sign-in lands during shutdown.
+    manager.stop()
+    with pytest.raises(ConcurrencyGroupError):
+        manager.restart_agents_on_account_in_background("acct-1")
+    assert not any(is_chat_resending_after_sign_in(manager, agent_id) for agent_id in agent_ids)
+
+
+def test_a_chat_reports_its_resend_until_the_later_of_two_overlapping_sign_ins_settles(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Twice-Signed-In-Chat", labels={"account": "acct-1"})
+    try:
+        manager._begin_resends_after_sign_in("acct-1")
+        manager._begin_resends_after_sign_in("acct-1")
+        manager._end_resend_after_sign_in(agent_id)
+        assert is_chat_resending_after_sign_in(manager, agent_id)
+        manager._end_resend_after_sign_in(agent_id)
+        assert not is_chat_resending_after_sign_in(manager, agent_id)
+    finally:
+        manager.stop()
+
+
+def test_overlapping_sign_ins_resend_a_refused_message_once(broadcaster: WebSocketBroadcaster, tmp_path: Path) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Twice-Signed-In-Chat", labels={"account": "acct-1"})
+    landing = _ResendTranscripts(lambda _agent_id: [_typed_turn("hi"), _agent_reply(is_auth_error=True)])
+    delivered: list[str] = []
+    second_resend = threading.Thread(target=manager._resend_turn_refused_for_sign_in, args=(agent_id,))
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        delivered.append(text)
+        if len(delivered) == 1:
+            # The second sign-in's resend starts while the first is still delivering, and waits for it.
+            second_resend.start()
+            second_resend.join(timeout=0.5)
+            assert second_resend.is_alive()
+        return landing.land(agent_info, text)
+
+    _install_resend_capabilities(manager, landing.reader, deliver)
+    try:
+        manager._begin_resends_after_sign_in("acct-1")
+        manager._begin_resends_after_sign_in("acct-1")
+        manager._resend_turn_refused_for_sign_in(agent_id)
+        second_resend.join(timeout=10.0)
+        assert not second_resend.is_alive()
+        assert not is_chat_resending_after_sign_in(manager, agent_id)
+    finally:
+        manager.stop()
+    assert delivered == ["hi"]
+
+
+def test_a_resend_the_agent_refuses_does_not_fail_the_restarts(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    account = f"acct-{uuid4().hex}"
+    for name in ("First-Chat", "Second-Chat"):
+        seed_agent_state(manager, f"agent-{uuid4().hex}", name=name, labels={"account": account})
+    attempted: list[str] = []
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        attempted.append(agent_info.name)
+        raise SendFailedError("the agent is in shell mode", "blocked_input")
+
+    _install_resend_capabilities(
+        manager,
+        lambda agent_info: _FixedTranscriptReader([_typed_turn("hi"), _agent_reply(is_auth_error=True)]),
+        deliver,
+    )
+    try:
+        assert manager.restart_agents_on_account(account) == 2
+        wait_for(lambda: len(attempted) == 2, timeout=10.0, error_message="a refused message was never resent")
+        assert sorted(attempted) == ["First-Chat", "Second-Chat"]
+    finally:
+        manager.stop()
+
+
+@pytest.mark.parametrize(
+    ("outcome", "expected_attempts"),
+    [
+        pytest.param(SendOutcome.OK, ["first", "second"], id="each-lands-in-order"),
+        pytest.param(SendOutcome.RESENT, ["first", "second"], id="each-lands-sent-again-by-the-chat-app"),
+        pytest.param(SendOutcome.WITHDRAWN, ["first"], id="stop-took-it-back"),
+        pytest.param(SendOutcome.NOT_READY, ["first"], id="not-ready"),
+        pytest.param(SendOutcome.FAILED, ["first"], id="failed"),
+    ],
+)
+def test_a_resend_sends_each_refused_message_until_one_does_not_land(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, outcome: SendOutcome, expected_attempts: list[str]
+) -> None:
+    mngr_binary, _argv_log = write_recording_mngr_binary(tmp_path)
+    manager = AgentManager.build(broadcaster, mngr_binary=mngr_binary)
+    account = f"acct-{uuid4().hex}"
+    seed_agent_state(manager, f"agent-{uuid4().hex}", name="Resent-Chat", labels={"account": account})
+    attempted: list[str] = []
+    landing = _ResendTranscripts(
+        lambda agent_id: [_typed_turn("first"), _typed_turn("second"), _agent_reply(is_auth_error=True)]
+    )
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        attempted.append(text)
+        if not outcome.is_delivered:
+            return outcome
+        landing.land(agent_info, text)
+        return outcome
+
+    _install_resend_capabilities(manager, landing.reader, deliver)
+    try:
+        assert manager.restart_agents_on_account(account) == 1
+        wait_for(
+            lambda: len(attempted) >= len(expected_attempts),
+            timeout=10.0,
+            error_message="the refused messages were never resent",
+        )
+    finally:
+        manager.stop()
+    assert attempted == expected_attempts
+
+
+def test_a_sign_in_resends_nothing_to_a_chat_that_is_switching(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    manager, store, argv_log = _handoff_manager(broadcaster, tmp_path, [])
+    _converging_chat(manager, store, phase=HandoffPhase.FAILED, is_retiring_archived=False)
+    # A chat on the same account that is not switching, so the run shows the resend does happen.
+    settled_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, settled_id, name="Settled-Chat", labels={"account": "acct-anthropic"})
+    attempted: list[tuple[str, str]] = []
+    landing = _ResendTranscripts(lambda agent_id: [_typed_turn("hi"), _agent_reply(is_auth_error=True)])
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        attempted.append((agent_info.id, text))
+        return landing.land(agent_info, text)
+
+    _install_resend_capabilities(manager, landing.reader, deliver)
+    try:
+        assert manager.restart_agents_on_account("acct-anthropic") == 2
+    finally:
+        manager.stop()
+    assert "start Chat-1 --restart --no-resume" in argv_log.read_text().splitlines()
+    assert (set(landing.read_agent_ids), attempted) == ({settled_id}, [(settled_id, "hi")])
+
+
+def test_a_resent_turn_lands_when_a_turn_with_its_text_is_new_even_once_the_original_left_the_tail() -> None:
+    original = _typed_turn("second")
+    seen = _ids_of_user_turns_saying([_typed_turn("first"), original, _agent_reply(is_auth_error=True)], "second")
+
+    assert not _has_new_user_turn_saying([original, _agent_reply()], "second", seen)
+    assert _has_new_user_turn_saying([_agent_reply(), _typed_turn("second\n")], "second", seen)
+
+
+def _set_queued_messages(manager: AgentManager, agent_id: str, *contents: str) -> None:
+    with manager._lock:
+        agent = manager._agents[agent_id]
+        queued = tuple(
+            QueuedMessageState(queued_id=f"q{index}", content=content, timestamp="t")
+            for index, content in enumerate(contents)
+        )
+        manager._agents[agent_id] = agent.model_copy_update(to_update(agent.field_ref().queued_messages, queued))
+
+
+def test_a_resend_waits_for_its_message_while_the_agent_holds_it_in_its_queue(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager = AgentManager.build(broadcaster)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Busy-Chat")
+    agent_info = manager.get_agent_info_by_id(agent_id)
+    assert agent_info is not None
+    refused_second = _typed_turn("second")
+    reader = _FixedTranscriptReader([_typed_turn("first"), refused_second, _agent_reply(is_auth_error=True)])
+    _set_queued_messages(manager, agent_id, "second")
+    seen = frozenset({refused_second["event_id"]})
+    wait = threading.Thread(target=manager._wait_for_resent_turn, args=(agent_info, reader, "second", seen, 0.1))
+    try:
+        wait.start()
+        # Well past its landing timeout, and still waiting, since the agent has the message queued.
+        wait.join(timeout=0.6)
+        assert wait.is_alive()
+        _set_queued_messages(manager, agent_id)
+        reader._events.append(_typed_turn("second"))
+        wait.join(timeout=5.0)
+        assert not wait.is_alive()
+        # Neither queued nor landed: the wait ends at its timeout.
+        started = time.monotonic()
+        manager._wait_for_resent_turn(agent_info, reader, "never sent", frozenset(), timeout_seconds=0.1)
+        assert time.monotonic() - started < 5.0
+    finally:
+        manager.stop()
+        wait.join(timeout=5.0)
+
+
+def test_a_sign_in_resends_nothing_to_an_agent_its_chat_moved_on_from_during_the_restart(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    mngr_binary, argv_log, gate = write_gated_mngr_binary(tmp_path)
+    store = InMemoryChatRecordStore()
+    manager = AgentManager.build(broadcaster, chat_record_store=store, mngr_binary=mngr_binary)
+    first, second = f"agent-{uuid4().hex}", f"agent-{uuid4().hex}"
+    seed_agent_state(manager, first, name="Chat-1", labels={"account": "acct-1"})
+    # Restarted after Chat-1, so once its resend runs, Chat-1's has been started too.
+    settled_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, settled_id, name="Settled-Chat", labels={"account": "acct-1"})
+    attempted: list[str] = []
+    landing = _ResendTranscripts(lambda agent_id: [_typed_turn("hi"), _agent_reply(is_auth_error=True)])
+
+    def deliver(agent_info: AgentInfo, text: str, message_id: str) -> SendOutcome:
+        attempted.append(agent_info.id)
+        return landing.land(agent_info, text)
+
+    _install_resend_capabilities(manager, landing.reader, deliver)
+    try:
+        manager.restart_agents_on_account_in_background("acct-1")
+        wait_for(lambda: argv_log.exists() and argv_log.read_text() != "", error_message="the restart never ran")
+        # The chat finishes moving to another agent while the restart is still running.
+        seed_agent_state(manager, second, name="Chat-1-next", labels={"account": "acct-2", "chat_id": first})
+        store.write(make_two_member_chat_record(first, second))
+        manager.refresh_chat_records()
+        gate.touch()
+        wait_for(lambda: settled_id in attempted, error_message="the settled chat's message was never resent")
+    finally:
+        manager.stop()
+    assert argv_log.read_text().splitlines()[0] == "start Chat-1 --restart --no-resume"
+    assert (set(landing.read_agent_ids), attempted) == ({settled_id}, [settled_id])
 
 
 class _StopDuringSendMngrMessenger(RecordingMngrMessenger):

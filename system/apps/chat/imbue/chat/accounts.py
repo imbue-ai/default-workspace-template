@@ -32,6 +32,8 @@ import threading
 import uuid
 from collections.abc import Generator
 from collections.abc import Sequence
+from datetime import datetime
+from datetime import timezone
 from pathlib import Path
 from typing import Final
 
@@ -47,6 +49,7 @@ from imbue.chat.harnesses.lanes import account_label
 from imbue.chat.harnesses.lanes import get_lane
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
+from imbue.mngr.utils.file_utils import atomic_write
 
 logger = _loguru_logger
 
@@ -57,6 +60,9 @@ logger = _loguru_logger
 INDEX_VERSION: Final = 2
 
 _INDEX_FILENAME: Final = "index.json"
+# When the account last finished a sign-in, kept in the account's folder rather than the index so
+# the index's shape (and an older build's reading of it) is unchanged.
+SIGNED_IN_AT_FILENAME: Final = ".signed_in_at"
 _ACCOUNTS_RELATIVE_PATH: Final = (".minds", "accounts")
 
 _ACCOUNTS_ROOT_ENV_VAR: Final = "MINDS_ACCOUNTS_ROOT"
@@ -152,6 +158,19 @@ def accounts_root(home: Path | None = None) -> Path:
 
 def account_dir(account_id: str, home: Path | None = None) -> Path:
     return accounts_root(home) / account_id
+
+
+def read_signed_in_at(account_id: str, home: Path | None = None) -> str | None:
+    """When the account last finished a sign-in (ISO 8601, UTC), or None for one never stamped."""
+    try:
+        return (account_dir(account_id, home) / SIGNED_IN_AT_FILENAME).read_text().strip() or None
+    except FileNotFoundError:
+        return None
+
+
+def stamp_signed_in(account_id: str, home: Path | None = None) -> None:
+    """Record that the account finished a sign-in now."""
+    atomic_write(account_dir(account_id, home) / SIGNED_IN_AT_FILENAME, datetime.now(timezone.utc).isoformat())
 
 
 def index_path(home: Path | None = None) -> Path:
@@ -305,6 +324,7 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
 
     This is the commit point of a sign-in. Everything before it is provisional.
     Idempotent: committing an id that is already indexed returns the existing row.
+    Every commit, a re-authentication included, stamps the folder with when it signed in.
     """
     path = account_dir(account_id, home)
     if not path.is_dir():
@@ -317,15 +337,17 @@ def commit_account(account_id: str, lane: str, display: str, home: Path | None =
         # bring-your-own-key lane may name a different provider, and leaving the old noun
         # there makes every label a lie ("OpenRouter (Pi)" for a Groq key).
         existing = next((a for a in index.accounts if a.id == account_id), None)
+        # `Account.lane` is immutable, and this is where that is enforced. Keeping the
+        # stored value and ignoring the argument would let a re-auth on the WRONG lane
+        # commit: the row still says anthropic while codex's config sits in its folder, and
+        # every chat bound there resolves a claude harness against codex credentials.
+        if existing is not None and existing.lane != lane:
+            raise AccountError(
+                f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; an account's lane never changes"
+            )
+        # Before the index write, so the account list that write announces to every chat page carries it.
+        stamp_signed_in(account_id, home)
         if existing is not None:
-            # `Account.lane` is immutable, and this is where that is enforced. Keeping the
-            # stored value and ignoring the argument would let a re-auth on the WRONG lane
-            # commit: the row still says anthropic while codex's config sits in its folder, and
-            # every chat bound there resolves a claude harness against codex credentials.
-            if existing.lane != lane:
-                raise AccountError(
-                    f"account {account_id} is on lane {existing.lane!r}, not {lane!r}; an account's lane never changes"
-                )
             if existing.display != display:
                 existing = existing.model_copy_update(to_update(existing.field_ref().display, display))
             rows = tuple(existing if a.id == account_id else a for a in index.accounts)
