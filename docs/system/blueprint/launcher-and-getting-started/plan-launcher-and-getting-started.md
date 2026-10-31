@@ -88,12 +88,13 @@ The row's caption shows the text it will send (section 4.2), so what Enter does 
 
 ### 3.3 Running a launch-path row
 
-A launch-path row runs its launch path in one of two modes, decided by the manifest rather than by the row:
+A launch-path row runs its launch path in one of three modes, decided by the manifest rather than by the row:
 
 - a launch path whose `path` equals its app's pin `path` runs in **focus** mode: the app's pinned window on the active desktop is restored and raised, and nothing is opened (the shell's own rule that a focus-mode open at the home path finds the pinned window);
+- every launch path of an unpinned app whose `default_shortcut` mode is `focus` (a one-window app: the Screen, Getting Started, Memory & disk) runs in **one** mode: the launch's target is `focus`, so the shell lands it in the app's window already on the desktop, whichever client opened it, raised in this client's layout, and opens one only when there is none (the Screen spec, section 4.1);
 - every other launch path runs in **new** mode, as its shortcut does: a new window at the path.
 
-On a stock machine "Chat" raises the pinned chat window and "Terminal", "File Viewer", and "Browser" open windows.
+On a stock machine "Chat" raises the pinned chat window, "Screen" and "Browser" land in the one Screen window, and "Terminal" and "File Viewer" open windows.
 
 ### 3.4 The first-visit window
 

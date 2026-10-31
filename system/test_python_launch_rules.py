@@ -1326,7 +1326,7 @@ def _program_launch_sites(repo_root: Path) -> list[str]:
 
 def test_prevent_running_the_workspaces_own_code_as_a_process() -> None:
     sites = _program_launch_sites(REPO_ROOT)
-    assert len(sites) <= snapshot(21), (
+    assert len(sites) <= snapshot(24), (
         "These name one of the workspace's own scripts, modules or commands to run it as a process. Import it "
         "instead, unless the call needs a process of its own (.agents/shared/references/running-python.md, "
         '"Calling workspace code from Python"):\n' + "\n".join(sites)

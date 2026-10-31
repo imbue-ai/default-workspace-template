@@ -144,6 +144,28 @@ def test_wiring_attributes_each_block_to_the_file_it_is_written_in(tmp_path: Pat
     ]
 
 
+def test_a_declared_wiring_program_may_be_an_event_listener(tmp_path: Path) -> None:
+    # A watcher the app owns is a supervisord event listener, declared in its own kind of section.
+    build_news_workspace(tmp_path)
+    write_supervisord_conf(tmp_path, ())
+    write_supervisord_dropin(tmp_path, "news", ("program:news",))
+    write_supervisord_dropin(tmp_path, "news-watch", ("eventlistener:news-watch",))
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "news",
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n[wiring]\nprograms = ["news-watch"]\n',
+        is_icon_written=True,
+    )
+
+    wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
+
+    # Drop-ins are read in name order, as supervisord reads them.
+    assert [(section.path, list(section.sections)) for section in wiring] == [
+        ("system/supervisord.conf.d/news-watch.conf", ["eventlistener:news-watch"]),
+        ("system/supervisord.conf.d/news.conf", ["program:news"]),
+    ]
+
+
 def test_a_declared_wiring_program_with_no_block_is_an_error(tmp_path: Path) -> None:
     build_news_workspace(tmp_path)
     manifest_path = write_app_manifest(
@@ -153,7 +175,8 @@ def test_a_declared_wiring_program_with_no_block_is_an_error(tmp_path: Path) -> 
         is_icon_written=True,
     )
 
-    with pytest.raises(ScopeComputationError, match="program:xvfb"):
+    # The error names both section kinds the block could have taken.
+    with pytest.raises(ScopeComputationError, match="program:xvfb or eventlistener:xvfb"):
         find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
 
 

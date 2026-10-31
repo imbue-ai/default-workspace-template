@@ -66,6 +66,11 @@ def _program_commands() -> dict[str, str]:
     return supervisord_commands(_SUPERVISORD_CONF, ("program",))
 
 
+def _program_or_listener_commands() -> dict[str, str]:
+    """Every program and event listener the config declares: what a manifest's wiring may name."""
+    return supervisord_commands(_SUPERVISORD_CONF, ("program", "eventlistener"))
+
+
 def _manifest_path_constant(module_file: Path) -> str | None:
     """The ``MANIFEST_PATH = Path("...")`` an entry-point module declares, read from its source.
 
@@ -212,14 +217,18 @@ def test_built_in_app_footprint_carries_the_drop_ins_that_run_it(
 
     for program in (manifest.program, *manifest.wiring.programs):
         dropin = f"system/supervisord.conf.d/{program}.conf"
-        assert sections_by_path.get(dropin) == [f"program:{program}"], (
+        # A wiring program may be an event listener (the Screen's watcher), declared in its own section kind.
+        assert sections_by_path.get(dropin) in (
+            [f"program:{program}"],
+            [f"eventlistener:{program}"],
+        ), (
             f"{manifest_path} runs program {program!r}, whose drop-in the footprint does not "
             f"carry as wiring: {sections_by_path}"
         )
 
 
 def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
-    command_by_program = _program_commands()
+    command_by_program = _program_or_listener_commands()
     for manifest_path in _every_manifest_path():
         for program in load_manifest(
             manifest_path, repo_root=_REPO_ROOT
@@ -233,9 +242,12 @@ def test_every_declared_wiring_program_has_a_supervisord_block() -> None:
 def test_the_first_label_of_every_standalone_program_is_a_reserved_app_name() -> None:
     # An app named after a standalone program's first label would claim that program as
     # its <name>-<role> sidecar when its footprint is computed, so the label is reserved.
-    app_programs = {
-        load_manifest(path, repo_root=_REPO_ROOT).program
-        for path in _every_manifest_path()
+    manifests = [
+        load_manifest(path, repo_root=_REPO_ROOT) for path in _every_manifest_path()
+    ]
+    # A program an app's manifest declares as its wiring (the Screen's stack members) is that app's, not standalone.
+    app_programs = {manifest.program for manifest in manifests} | {
+        program for manifest in manifests for program in manifest.wiring.programs
     }
     standalone_labels = {
         program.partition("-")[0]
@@ -457,10 +469,36 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["chat"].priority == "chat"
     assert by_name["terminal"].critical is True
     assert by_name["files"].critical is False
-    assert by_name["browser"].critical is False
-    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, System Monitor, and the Style
-    # Guide stop once no window shows them; the browser keeps running, since agents drive its browsers with no window; and the
-    # critical ones (which the manifest refuses the field on) never stop.
+    assert by_name["screen"].critical is False
+    # The Screen (docs/system/specs/screen/spec.md D2 and section 18): one page at its root, the browser a launch
+    # path of it, the stack's programs and the watcher its wiring, never stopped for emptiness, band ``screen``.
+    assert by_name["screen"].program == "screen"
+    assert by_name["screen"].priority == "screen"
+    assert by_name["screen"].system is True
+    assert by_name["screen"].default_shortcut is not None
+    assert by_name["screen"].default_shortcut.launch == "screen"
+    assert by_name["screen"].default_shortcut.mode == "focus"
+    assert [
+        (entry.id, entry.path, entry.method.value)
+        for entry in by_name["screen"].launch_paths
+    ] == [
+        ("screen", "/", "GET"),
+        ("browser", "/launch/browser", "POST"),
+    ]
+    assert [param.name for param in by_name["screen"].launch_paths[1].params] == ["url"]
+    assert by_name["screen"].wiring.programs == (
+        "screen-xorg",
+        "screen-session",
+        "screen-pulse",
+        "screen-neko",
+        "screen-watch",
+    )
+    assert [
+        (handler.type, handler.path) for handler in by_name["screen"].message_handlers
+    ] == [("open:url", "/api/open-url")]
+    # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, System Monitor, and the
+    # Style Guide stop once no window shows them; the Screen never stops for emptiness (the Screen spec, D3);
+    # and the critical ones (which the manifest refuses the field on) never stop.
     assert {
         name: manifest.stop_when_no_windows for name, manifest in by_name.items()
     } == {
@@ -469,7 +507,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "terminal": False,
         "terminal-pty": False,
         "files": True,
-        "browser": False,
+        "screen": False,
         "getting-started": True,
         "routines": True,
         "system-monitor": True,
@@ -490,14 +528,14 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "terminal": "system",
         "terminal-pty": "internal",
         "files": "app",
-        "browser": "system",
+        "screen": "system",
         "getting-started": "system",
         "routines": "app",
         "system-monitor": "system",
         "style-guide": "system",
     }
     # Getting Started (launcher-and-getting-started plan section 3.6): one window is what it is for, so its shortcut
-    # focuses it like the browser's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
+    # focuses it like the Screen's; it declares no launch path, so the desktop synthesizes ``open`` at its root.
     assert by_name["getting-started"].critical is False
     assert by_name["getting-started"].program == "getting-started"
     assert by_name["getting-started"].priority == "getting-started"
@@ -542,18 +580,17 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         (10, "chat"),
         (15, "getting-started"),
         (20, "files"),
-        (30, "browser"),
+        (30, "screen"),
         (40, "terminal"),
         (45, "routines"),
         (50, "system-monitor"),
     ]
-    # Every seeded shortcut opens a new window of its app; the one browser is focused instead
-    # (docs/system/specs/window-bound-resources.md section 3.1).
+    # Every seeded shortcut opens a new window of its app; the one Screen is focused instead (the Screen spec D2).
     for name, mode in (
         ("chat", "new"),
         ("terminal", "new"),
         ("files", "new"),
-        ("browser", "focus"),
+        ("screen", "focus"),
     ):
         shortcut = by_name[name].default_shortcut
         assert shortcut is not None
@@ -576,7 +613,6 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     for name, launch_path, method in (
         ("terminal", "/new", "POST"),
         ("files", "/home/user/workspace/", "GET"),
-        ("browser", "/new", "POST"),
     ):
         assert [
             (entry.id, entry.path, entry.method.value)
@@ -618,7 +654,7 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert by_name["chat"].launch_paths[3].text_param == "message"
     assert by_name["chat"].launch_paths[4].text_param is None
     assert by_name["chat"].launch_paths[4].draft_param == "message"
-    for name in ("terminal", "files", "browser"):
+    for name in ("terminal", "files"):
         assert by_name[name].launch_paths[0].text_param is None, name
         assert by_name[name].launch_paths[0].draft_param is None, name
         assert by_name[name].launch_paths[0].presets == {}, name
@@ -626,9 +662,6 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
         "workdir"
     ]
     assert [param.name for param in by_name["files"].launch_paths[0].params] == ["path"]
-    assert [param.name for param in by_name["browser"].launch_paths[0].params] == [
-        "url"
-    ]
 
 
 def test_every_package_the_template_ships_is_a_root_member() -> None:

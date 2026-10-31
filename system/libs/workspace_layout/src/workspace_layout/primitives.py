@@ -164,12 +164,14 @@ class IfPresent(LowerCaseStrEnum):
 
 
 class WindowState(UpperCaseStrEnum):
-    """How one client shows a window: at its frame, snapped to a half, or maximized (a wire value)."""
+    """How one client shows a window: at its frame, snapped to a half, maximized over the backdrop, or fullscreen over
+    the whole viewport, taskbar included (a wire value)."""
 
     NORMAL = auto()
     SNAPPED_LEFT = auto()
     SNAPPED_RIGHT = auto()
     MAXIMIZED = auto()
+    FULLSCREEN = auto()
 
 
 class ShowOutcome(LowerCaseStrEnum):
