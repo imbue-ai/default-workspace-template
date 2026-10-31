@@ -108,20 +108,12 @@ class RegistryRow(FrozenModel):
     reader, and a key a newer registration script added must not hide an app from an older shell.
     """
 
-    model_config = ConfigDict(
-        frozen=True, extra="ignore", arbitrary_types_allowed=False
-    )
+    model_config = ConfigDict(frozen=True, extra="ignore", arbitrary_types_allowed=False)
 
     name: AppName = Field(description="The registered app name")
-    url: AppUrl = Field(
-        description="Where the app is reachable from inside the workspace"
-    )
-    label: str = Field(
-        default="", description="The unguessable origin label; never an identifier"
-    )
-    icon: str | None = Field(
-        default=None, description="The registered SVG markup, verbatim"
-    )
+    url: AppUrl = Field(description="Where the app is reachable from inside the workspace")
+    label: str = Field(default="", description="The unguessable origin label; never an identifier")
+    icon: str | None = Field(default=None, description="The registered SVG markup, verbatim")
     internal: bool = Field(default=False, description="Hidden from every open surface")
     system: bool = Field(
         default=False,
@@ -132,9 +124,7 @@ class RegistryRow(FrozenModel):
         default=None,
         description="The supervisord program that runs the app, when supervised",
     )
-    display_name: DisplayName | None = Field(
-        default=None, description="What users see; absent on manifest-less rows"
-    )
+    display_name: DisplayName | None = Field(default=None, description="What users see; absent on manifest-less rows")
     description: AppDescription | None = Field(
         default=None,
         description="One line saying what the app is for, when its manifest declares one",
@@ -152,9 +142,7 @@ class RegistryRow(FrozenModel):
         default=False,
         description="Whether the shell may stop the app's program once no window shows it",
     )
-    priority: PriorityName = Field(
-        default=DEFAULT_PRIORITY, description="The memory-shedding band name"
-    )
+    priority: PriorityName = Field(default=DEFAULT_PRIORITY, description="The memory-shedding band name")
     default_shortcut: DefaultShortcut | None = Field(
         default=None, description="The shortcut a new desktop is seeded with"
     )
@@ -201,9 +189,7 @@ def read_registry(path: Path) -> list[RegistryRow]:
         raise RegistryReadError(f"registry {path} is not valid TOML: {e}") from e
     raw_rows = data.get("apps", [])
     if not isinstance(raw_rows, list):
-        raise RegistryReadError(
-            f"registry {path} has an 'apps' key that is not an array of tables"
-        )
+        raise RegistryReadError(f"registry {path} has an 'apps' key that is not an array of tables")
     rows: list[RegistryRow] = []
     for row_idx, raw_row in enumerate(raw_rows):
         try:
@@ -212,9 +198,7 @@ def read_registry(path: Path) -> list[RegistryRow]:
             logger.warning(
                 "Skipped registry row {} ({}) in {}: {}",
                 row_idx,
-                raw_row.get("name", "<unnamed>")
-                if isinstance(raw_row, dict)
-                else "<not a table>",
+                raw_row.get("name", "<unnamed>") if isinstance(raw_row, dict) else "<not a table>",
                 path,
                 describe_validation_error(e),
             )
@@ -231,9 +215,7 @@ def read_origin_label(path: Path, name: AppName) -> str:
     try:
         rows = read_registry(path)
     except RegistryReadError as e:
-        logger.warning(
-            "Could not read the app registry for the origin label of {}: {}", name, e
-        )
+        logger.warning("Could not read the app registry for the origin label of {}: {}", name, e)
         return ""
     for row in rows:
         if row.name == name:

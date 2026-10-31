@@ -4,19 +4,19 @@ Multiplayer, part one (the mngr repo's `specs/multiplayer-refinements/spec.md`, 
 
 - The desktop interface contract (`docs/system/blueprint/desktop-interface/contracts.md`) gains the participant key (section 4.3), the heartbeat's input age (`input_age_seconds`, stamped by the shell; an older page's `last_input_at` accepted and clamped) and the roster route (5.1), the refusal of a present `X-Imbue-Identity` header that does not parse (5.5, with the client inventory's participants), the `roster_updated` push (6; on a person's input time moving too, a burst of file events announced once, never an unchanged document) beside the new `clients_updated` push (a registered window's disconnect, a pruned client), and the handshake's third trigger, the page's `shell:capabilities` (7).
 
-- `system/scripts/message_chat.py` says a chat room is answered with `mngr message --start <room>`, never through the script: a send no proxy vouched for is nobody's speech, raising no bubble and acting on no mention.
+- `system/scripts/workspace_bare_scripts/message_chat.py` says a chat room is answered with `mngr message --start <room>`, never through the script: a send no proxy vouched for is nobody's speech, raising no bubble and acting on no mention.
 
 - The grants parsers the share gateway and the shell both need now live in one library, `system/libs/share_grants`.
 
 Chat rooms (the mngr repo's `specs/multiplayer-refinements/spec.md`, section 7):
 
-- The new `room` agent type (`[agent_types.room]` in `.mngr/settings.toml`): a chat room's agent, whose process, `system/scripts/room_agent.py`, appends what `mngr message <room>` types into its pane to the room's common transcript, so `mngr transcript <room>` reads a room and `mngr message <room>` posts into one as the workspace's agent. It reads its pane unbuffered, so a pasted paragraph longer than a terminal line arrives whole, and launches through the OOM band wrapper like every chat.
+- The new `room` agent type (`[agent_types.room]` in `.mngr/settings.toml`): a chat room's agent, whose process, `system/scripts/workspace_bare_scripts/room_agent.py`, appends what `mngr message <room>` types into its pane to the room's common transcript, so `mngr transcript <room>` reads a room and `mngr message <room>` posts into one as the workspace's agent. It reads its pane unbuffered, so a pasted paragraph longer than a terminal line arrives whole, and launches through the OOM band wrapper like every chat.
 
-- `system/scripts/require_create_account.py` lets a create through on no account when `MINDS_CREATE_WITHOUT_ACCOUNT=1` is set, which the chat app sets for a room's create.
+- `system/scripts/workspace_bare_scripts/require_create_account.py` lets a create through on no account when `MINDS_CREATE_WITHOUT_ACCOUNT=1` is set, which the chat app sets for a room's create.
 
 - `AGENTS.md` tells the agent what a `[from: <name> in #<room>]` prefix means and how to read and answer the room with `mngr transcript` and `mngr message`.
 
-`system/scripts/forward_port.py` copies a launch path's `mention_param` onto the registry row beside its `text_param` and `draft_param` (the multiplayer spec, section 7.5).
+`system/scripts/workspace_bare_scripts/forward_port.py` copies a launch path's `mention_param` onto the registry row beside its `text_param` and `draft_param` (the multiplayer spec, section 7.5).
 
 `workspace_layout`'s `EntryPresentation` gains `is_window_shown` (default true): whether a client lists a pinned window in its taskbar, false after that client closed it.
 
@@ -30,4 +30,4 @@ The desktop-interface blueprint (`docs/system/blueprint/desktop-interface/`) rec
 
 The contract table's chat row (`docs/system/blueprint/desktop-interface/contracts.md`, section 2) lists the `main` launch path ("Send to main chat", `target = "main_chat"`) the manifest declares and the manifest test asserts, which the row had left out since the path was added.
 
-The app-chat phase of the multiplayer spec (the mngr repo's `specs/multiplayer-refinements/spec.md`, section 9): `system/scripts/forward_port.py` copies a launch path's `app_params` pair onto the registry row; the new `system/scripts/rename_chat.py` renames the chat under one title to another through the chat app's rename route, for an app whose display name changed; the desktop-interface blueprint (`contracts.md` sections 2, 5.3, 5.5, and 12; `concepts.md` section 2.7) and the post-launch-paths plan (the `show` launch target, the `app_chat` intake target) record the title bar, the launch target, and the launch path field; `system/test_app_manifests.py` holds the chat manifest to its seventh launch path.
+The app-chat phase of the multiplayer spec (the mngr repo's `specs/multiplayer-refinements/spec.md`, section 9): `system/scripts/workspace_bare_scripts/forward_port.py` copies a launch path's `app_params` pair onto the registry row; the new `system/scripts/rename_chat.py` renames the chat under one title to another through the chat app's rename route, for an app whose display name changed; the desktop-interface blueprint (`contracts.md` sections 2, 5.3, 5.5, and 12; `concepts.md` section 2.7) and the post-launch-paths plan (the `show` launch target, the `app_chat` intake target) record the title bar, the launch target, and the launch path field; `system/test_app_manifests.py` holds the chat manifest to its seventh launch path.

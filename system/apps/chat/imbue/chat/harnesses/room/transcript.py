@@ -1,7 +1,7 @@
 """A room's transcript: the common transcript its agent keeps, which the chat app appends to and reads.
 
 A room (the multiplayer spec, section 7.3) is an mngr agent of the ``room`` type whose process is a reader of
-its own pane (``system/scripts/room_agent.py``). Its transcript is one file, the common transcript at
+its own pane (``system/scripts/workspace_bare_scripts/room_agent.py``). Its transcript is one file, the common transcript at
 ``events/room/common_transcript/events.jsonl`` under the agent's state dir, in the ATIF stream shape ``mngr
 transcript`` renders: a header line, then one ``step`` per message, the author under the step's ``extra`` as a
 participant key (and the name it was called, for an author the roster does not hold). Two writers append to it:
@@ -34,7 +34,7 @@ from imbue.chat.authors import split_author_prefix
 from imbue.imbue_common.pure import pure
 from imbue.mngr.agents.common_transcript_records import PINNED_ATIF_SCHEMA_VERSION
 
-# Pinned beside ``system/scripts/room_agent.py``'s copy: the reader writes the same file in the same shape.
+# Pinned beside ``system/scripts/workspace_bare_scripts/room_agent.py``'s copy: the reader writes the same file in the same shape.
 TRANSCRIPT_RELATIVE_PATH: Final[Path] = Path("events") / "room" / "common_transcript" / "events.jsonl"
 ROOM_EMITTER: Final[str] = "room"
 # The ``source`` a room's turn carries on the page.

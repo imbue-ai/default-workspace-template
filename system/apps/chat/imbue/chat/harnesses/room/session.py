@@ -29,7 +29,8 @@ class RoomHarnessSession(AgentHarnessSession):
     def is_starting_up(self) -> bool:
         return False
 
-    def send(self, text: str, message_id: str) -> SendOutcome:
+    def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
+        # The append is this process's own write, never an unconfirmed delivery, so there is nothing to send again.
         state_dir = self._deps.state_dir
         append_record(transcript_path(state_dir), state_dir.name, person_step_record(text, message_id))
         return SendOutcome.OK

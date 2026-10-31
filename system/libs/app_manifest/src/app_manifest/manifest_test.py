@@ -93,12 +93,8 @@ def test_stop_when_no_windows_defaults_to_false_and_is_refused_on_a_critical_app
         {"name": "news", "display_name": "News", "icon": "icon.svg"}
     )
     assert manifest.stop_when_no_windows is False
-    with pytest.raises(
-        ValidationError, match="critical app cannot declare stop_when_no_windows"
-    ):
-        AppManifest.model_validate(
-            {**_full_manifest_data(), "critical": True, "stop_when_no_windows": True}
-        )
+    with pytest.raises(ValidationError, match="critical app cannot declare stop_when_no_windows"):
+        AppManifest.model_validate({**_full_manifest_data(), "critical": True, "stop_when_no_windows": True})
     assert AppManifest.model_validate(
         {**_full_manifest_data(), "critical": True, "stop_when_no_windows": False}
     ).critical
@@ -156,9 +152,7 @@ def test_a_description_is_one_non_empty_line_of_at_most_200_characters(
     description: str,
 ) -> None:
     with pytest.raises(ValidationError):
-        AppManifest.model_validate(
-            {**_full_manifest_data(), "description": description}
-        )
+        AppManifest.model_validate({**_full_manifest_data(), "description": description})
 
 
 def test_a_manifest_reads_its_description_and_api_schema_path() -> None:
@@ -174,9 +168,7 @@ def test_a_manifest_reads_its_description_and_api_schema_path() -> None:
     assert AppManifest.model_validate(_full_manifest_data()).description is None
     assert AppManifest.model_validate(_full_manifest_data()).api_schema_path is None
     with pytest.raises(ValidationError):
-        AppManifest.model_validate(
-            {**_full_manifest_data(), "api_schema_path": "api/schema?x=1"}
-        )
+        AppManifest.model_validate({**_full_manifest_data(), "api_schema_path": "api/schema?x=1"})
     with pytest.raises(ValidationError, match="also declares description"):
         AppManifest.model_validate(
             {**_full_manifest_data(), "api_schema_path": "/api/schema"}
@@ -254,6 +246,11 @@ def test_a_message_handler_shows_a_page_built_from_the_message_and_names_the_pag
             {"type": "shell:open", "path": "/api/open"},
             "app contract's own prefix",
             id="shell-prefix",
+        ),
+        pytest.param(
+            {"type": "open:file", "path": "/api/open", "showing": ["{path}/"]},
+            "only beside 'show'",
+            id="showing-alone",
         ),
         pytest.param(
             {"type": "Open:file", "path": "/api/open"},
@@ -739,9 +736,7 @@ def test_launcher_rank_must_be_a_positive_integer(rank: object) -> None:
 
 
 def test_minimal_manifest_takes_the_documented_defaults() -> None:
-    manifest = AppManifest.model_validate(
-        {"name": "news", "display_name": "News", "icon": "icon.svg"}
-    )
+    manifest = AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg"})
 
     assert manifest.critical is False
     assert manifest.priority == "user"
@@ -786,9 +781,7 @@ def test_program_defaults_to_the_name_but_an_explicit_program_wins() -> None:
 )
 def test_invalid_names_are_rejected(name: str) -> None:
     with pytest.raises(ValidationError, match="invalid app name"):
-        AppManifest.model_validate(
-            {"name": name, "display_name": "X", "icon": "icon.svg"}
-        )
+        AppManifest.model_validate({"name": name, "display_name": "X", "icon": "icon.svg"})
 
 
 @pytest.mark.parametrize(
@@ -796,12 +789,7 @@ def test_invalid_names_are_rejected(name: str) -> None:
     ["terminal", "my-app", "app2", "a", "system_interface", "openvscode-server-4"],
 )
 def test_valid_names_are_accepted(name: str) -> None:
-    assert (
-        AppManifest.model_validate(
-            {"name": name, "display_name": "X", "icon": "icon.svg"}
-        ).name
-        == name
-    )
+    assert AppManifest.model_validate({"name": name, "display_name": "X", "icon": "icon.svg"}).name == name
 
 
 @pytest.mark.parametrize("display_name", ["", "   ", "x" * 65])
@@ -809,27 +797,21 @@ def test_display_name_must_be_non_empty_and_at_most_64_characters(
     display_name: str,
 ) -> None:
     with pytest.raises(ValidationError, match="display_name"):
-        AppManifest.model_validate(
-            {"name": "news", "display_name": display_name, "icon": "icon.svg"}
-        )
+        AppManifest.model_validate({"name": "news", "display_name": display_name, "icon": "icon.svg"})
 
 
 def test_icon_is_required_unless_internal() -> None:
     with pytest.raises(ValidationError, match="icon is required"):
         AppManifest.model_validate({"name": "news", "display_name": "News"})
 
-    internal = AppManifest.model_validate(
-        {"name": "owner-exec", "display_name": "Owner exec", "internal": True}
-    )
+    internal = AppManifest.model_validate({"name": "owner-exec", "display_name": "Owner exec", "internal": True})
     assert internal.icon is None
 
 
 @pytest.mark.parametrize("icon", ["icon.png", "/abs/icon.svg", "icon"])
 def test_icon_must_be_a_relative_svg_path(icon: str) -> None:
     with pytest.raises(ValidationError, match="invalid icon"):
-        AppManifest.model_validate(
-            {"name": "news", "display_name": "News", "icon": icon}
-        )
+        AppManifest.model_validate({"name": "news", "display_name": "News", "icon": icon})
 
 
 def test_default_shortcut_mode_must_be_focus_or_new() -> None:
@@ -870,9 +852,7 @@ def test_load_manifest_reads_a_file_and_resolves_its_icon(tmp_path: Path) -> Non
     app_dir.mkdir()
     (app_dir / "icon.svg").write_text(APP_ICON_MARKUP)
     manifest_path = app_dir / "app.toml"
-    manifest_path.write_text(
-        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
-    )
+    manifest_path.write_text('name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n')
 
     manifest = load_manifest(manifest_path)
 
@@ -882,9 +862,7 @@ def test_load_manifest_reads_a_file_and_resolves_its_icon(tmp_path: Path) -> Non
 
 def test_load_manifest_reports_a_missing_icon_file(tmp_path: Path) -> None:
     manifest_path = tmp_path / "app.toml"
-    manifest_path.write_text(
-        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
-    )
+    manifest_path.write_text('name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n')
 
     with pytest.raises(ManifestLoadError, match="does not exist"):
         load_manifest(manifest_path)
@@ -926,14 +904,10 @@ def _manifest_with_preview(preview: dict[str, object]) -> AppManifest:
     )
 
 
-def test_a_manifest_without_a_preview_table_previews_by_the_scaffold_convention() -> (
-    None
-):
+def test_a_manifest_without_a_preview_table_previews_by_the_scaffold_convention() -> None:
     # The scaffold binds <PACKAGE_UPPER>_PORT/_HOST and reads <PACKAGE_UPPER>_DATA_DIR, with the
     # package name being the app name with hyphens as underscores.
-    manifest = AppManifest.model_validate(
-        {"name": "news-feed", "display_name": "News", "icon": "icon.svg"}
-    )
+    manifest = AppManifest.model_validate({"name": "news-feed", "display_name": "News", "icon": "icon.svg"})
 
     assert manifest.preview == scaffold_preview_spec(AppName("news-feed"))
     assert manifest.preview.env == {
@@ -991,9 +965,7 @@ def test_an_explicit_preview_table_says_what_it_needs_and_nothing_else() -> None
         ({"health_path": "health"}, "start with '/'"),
     ],
 )
-def test_a_preview_table_that_cannot_be_resolved_is_rejected(
-    preview: dict[str, object], problem: str
-) -> None:
+def test_a_preview_table_that_cannot_be_resolved_is_rejected(preview: dict[str, object], problem: str) -> None:
     with pytest.raises(ValidationError, match=problem):
         _manifest_with_preview(preview)
 
@@ -1063,9 +1035,7 @@ def test_a_manifest_reads_its_references_and_scope() -> None:
 
 
 def test_a_manifest_without_references_or_scope_takes_the_empty_defaults() -> None:
-    manifest = AppManifest.model_validate(
-        {"name": "news", "display_name": "News", "icon": "icon.svg"}
-    )
+    manifest = AppManifest.model_validate({"name": "news", "display_name": "News", "icon": "icon.svg"})
 
     assert manifest.references == ()
     assert manifest.scope.exclude == ()
@@ -1170,9 +1140,7 @@ def test_duplicate_reference_paths_are_rejected() -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "exclude_glob", ["", "  ", "/abs/**", "../outside/**", "system\\apps\\**"]
-)
+@pytest.mark.parametrize("exclude_glob", ["", "  ", "/abs/**", "../outside/**", "system\\apps\\**"])
 def test_exclude_globs_must_be_repo_relative(exclude_glob: str) -> None:
     with pytest.raises(ValidationError, match="exclude glob"):
         AppManifest.model_validate(
@@ -1197,12 +1165,8 @@ def test_an_exclude_glob_cannot_negate_its_way_past_the_built_in_excludes() -> N
         )
 
 
-def test_load_manifest_derives_the_repo_root_from_the_apps_layout(
-    tmp_path: Path,
-) -> None:
-    manifest_path = write_app_manifest(
-        tmp_path, "news", _REFERENCING_MANIFEST, is_icon_written=True
-    )
+def test_load_manifest_derives_the_repo_root_from_the_apps_layout(tmp_path: Path) -> None:
+    manifest_path = write_app_manifest(tmp_path, "news", _REFERENCING_MANIFEST, is_icon_written=True)
     write_repo_file(tmp_path, ".agents/skills/news-refresh/SKILL.md", "# refresh\n")
     write_repo_file(tmp_path, "system/scripts/run_news.sh", "#!/bin/sh\n")
 
@@ -1217,9 +1181,7 @@ def test_load_manifest_derives_the_repo_root_from_the_apps_layout(
 def test_load_manifest_rejects_a_reference_to_something_that_does_not_exist(
     tmp_path: Path,
 ) -> None:
-    manifest_path = write_app_manifest(
-        tmp_path, "news", _REFERENCING_MANIFEST, is_icon_written=True
-    )
+    manifest_path = write_app_manifest(tmp_path, "news", _REFERENCING_MANIFEST, is_icon_written=True)
     write_repo_file(tmp_path, ".agents/skills/news-refresh/SKILL.md", "# refresh\n")
 
     with pytest.raises(ManifestLoadError, match="run_news.sh"):
@@ -1248,8 +1210,7 @@ def test_load_manifest_rejects_a_reference_to_another_apps_directory(
     manifest_path = write_app_manifest(
         tmp_path,
         "news",
-        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
-        '[[references]]\npath = "system/apps/files/src"\n',
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n[[references]]\npath = "system/apps/files/src"\n',
         is_icon_written=True,
     )
     write_repo_file(tmp_path, "system/apps/files/src/runner.py", "\n")
@@ -1266,8 +1227,7 @@ def test_load_manifest_accepts_a_reference_to_a_file_directly_under_the_apps_dir
     manifest_path = write_app_manifest(
         tmp_path,
         "news",
-        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
-        '[[references]]\npath = "system/apps/README.md"\n',
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n[[references]]\npath = "system/apps/README.md"\n',
         is_icon_written=True,
     )
     write_repo_file(tmp_path, "system/apps/README.md", "# apps\n")

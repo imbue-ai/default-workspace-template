@@ -17,6 +17,7 @@ from playwright.sync_api import sync_playwright
 
 from imbue.chat.agent_manager import AgentManager
 from imbue.chat.testing import FORTRESS_CHROMIUM_PATH
+from imbue.chat.testing import private_tmux_server
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 
 
@@ -307,27 +308,6 @@ def git_work_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def isolated_tmux(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
-    """Point every tmux call (a real ``mngr create``'s agent, mngr's subprocesses and its in-process sends) at a
-    server of the test's own. The directory is short because tmux refuses a socket path over about 100 bytes. The
-    server's sessions are killed by name at the end, never with ``kill-server``."""
-    tmux_tmpdir = Path(tempfile.mkdtemp(prefix="chat-tmux-", dir="/tmp"))
-    monkeypatch.delenv("TMUX", raising=False)
-    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_tmpdir))
-    socket_path = tmux_tmpdir / f"tmux-{os.getuid()}" / "default"
-    try:
+    """A tmux server of the test's own, for a real ``mngr create`` and everything it starts."""
+    with private_tmux_server(monkeypatch):
         yield
-    finally:
-        if socket_path.exists():
-            listed = subprocess.run(
-                ["tmux", "-S", str(socket_path), "list-sessions", "-F", "#{session_name}"],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            for session_name in listed.stdout.split():
-                subprocess.run(
-                    ["tmux", "-S", str(socket_path), "kill-session", "-t", f"={session_name}"],
-                    capture_output=True,
-                    timeout=30,
-                )
-        shutil.rmtree(tmux_tmpdir, ignore_errors=True)

@@ -136,9 +136,7 @@ def footprint(
 
 
 def _app_scope(repo_root: Path, manifest_path: Path) -> CreationScope:
-    resolved_manifest_path = (
-        manifest_path if manifest_path.is_absolute() else repo_root / manifest_path
-    )
+    resolved_manifest_path = manifest_path if manifest_path.is_absolute() else repo_root / manifest_path
     manifest = load_manifest(resolved_manifest_path, repo_root=repo_root)
     return compute_app_scope(repo_root, resolved_manifest_path, manifest)
 
@@ -317,9 +315,7 @@ def select_tests(
             )
     except AppManifestError as e:
         raise click.ClickException(str(e)) from e
-    rendered = (
-        render_selection_json(selection) if output_format == "json" else render_selection(selection)
-    )
+    rendered = render_selection_json(selection) if output_format == "json" else render_selection(selection)
     click.echo(rendered, nl=False)
 
 

@@ -375,6 +375,10 @@ class HarnessSpec(FrozenModel):
     # session revives one itself. A room's send appends to its transcript and starts nothing, so a stopped room
     # stays stopped until ``mngr message``, the start verb, or boot (the multiplayer spec, section 11).
     is_revived_by_send: bool = True
+    # Whether a message the harness took can be lost with its process: mngr counts a message as delivered
+    # once the harness shows it, which can be before the harness writes it down (claude, while its startup
+    # hooks run). The chat sends such a message again when the process exits before the transcript holds it.
+    resends_sends_lost_with_process: bool = False
 
 
 HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
@@ -411,6 +415,7 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         # the Chat context) even with no turn in flight, which cancels a compaction.
         can_interrupt_compaction=True,
         composer_compact_handling=ComposerCompactHandling.FORWARDED_TO_HARNESS,
+        resends_sends_lost_with_process=True,
     ),
     HarnessType.CODEX: HarnessSpec(
         name=HarnessType.CODEX,
@@ -516,9 +521,9 @@ HARNESS_SPECS: Final[dict[HarnessType, HarnessSpec]] = {
         tracker_class=AntigravityActivityTracker,
         process_started_marker_filename=AntigravityActivityTracker.marker_filename,
         binding_class=AntigravityAccountBinding,
-        # Display-only model bar: agy's `/model` is an interactive TUI picker with no
-        # scriptable one-shot form, so the bar reflects and never drives. The session subclass
-        # exists only to absorb catalog staleness -- see its switch_options.
+        # A pick is held for the flush worker, which types agy's `/model` between turns (see
+        # antigravity/model.py). The session subclass also absorbs catalog staleness -- see
+        # its switch_options.
         resolver_class=AntigravityModelResolver,
         catalog_factory=lambda: ANTIGRAVITY_CATALOG,
         session_class=AntigravityHarnessSession,

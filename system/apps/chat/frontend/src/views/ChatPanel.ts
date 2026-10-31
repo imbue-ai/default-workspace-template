@@ -80,6 +80,7 @@ import {
 import { ActivityIndicator, turnStatusPlacement } from "./ActivityIndicator";
 import { TurnDoneMark } from "./TurnDoneMark";
 import type { TranscriptEvent } from "../models/Response";
+import { getResentSendsVersion, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
@@ -733,14 +734,20 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // render version (bumped on any data mutation) plus those two -- so a
     // scroll-only redraw reuses the cached rows.
     const renderKey =
-      `${chatId}|${getRenderVersion(chatId)}|${tailTurnSettled ? 1 : 0}|` +
+      `${chatId}|${getRenderVersion(chatId)}|${getResentSendsVersion(chatId)}|${tailTurnSettled ? 1 : 0}|` +
       `${liveCompaction === null ? "-" : (liveCompaction.cause ?? "unknown")}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
       if (liveCompaction === null) closeRunningCompactionChips();
-      cachedRows = buildConversationRows(chatId, events, tailTurnSettled, liveCompaction);
+      cachedRows = buildConversationRows(
+        chatId,
+        events,
+        tailTurnSettled,
+        liveCompaction,
+        resentTurnsIn(chatId, events),
+      );
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;

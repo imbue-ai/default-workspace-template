@@ -133,7 +133,7 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `RepoRelativePath`, `ReferencePath`, `ExcludeGlob` (no leading `!`: a
   gitignore negation would re-include a built-in exclude), `ReferenceNote`) and
   the name rule shared with `forward_port.py` (a drift test in
-  `system/scripts/forward_port_test.py` keeps them identical), with
+  `system/scripts/workspace_bare_scripts/forward_port_test.py` keeps them identical), with
   `canonical_name_from_title(title)` (the name a user-facing title registers
   as) and `is_name_conflict(candidate_title, taken_names)` (whether a title
   would collide with a name already taken) for apps that mint names from titles,
@@ -316,7 +316,8 @@ Selection reads only what the workspace declares. A path selects:
   both, that file alone -- except for a path in an app's frontend, which
   selects only what the npm package bullet below says;
 - its consumers: every workspace member that depends on its package, directly
-  or transitively (`pyproject.toml` dependencies and dependency groups) -- not
+  or transitively (`pyproject.toml` dependencies and dependency groups), a
+  member inside a skill (its `python/` project) selecting the whole skill -- not
   for a test file, which nothing that depends on the package runs, and not for
   a path in an app's frontend, which is built into the app's own bundle;
 - for a path in an app other than a test file or a frontend path, the tests
@@ -344,7 +345,7 @@ A path in no package, skill or npm package, that is not npm root
 configuration, a supervisord block, `uv.lock`, a guard, a collected test file,
 markdown under `.agents/` (agent prose, which only the always-run prose checks
 and the apps referencing it read), or other markdown those checks read, runs
-the full root suite (`uv run pytest` from the repo root), which replaces the
+the full root suite (`uv run --no-sync pytest` from the repo root), which replaces the
 other root-collected commands; so does a change to the root `pyproject.toml` or
 `conftest.py`, and a `uv.lock` change that cannot be compared. A `system/*.py`
 that is not a test file (a `system/conftest.py`, say) is no guard, so it runs

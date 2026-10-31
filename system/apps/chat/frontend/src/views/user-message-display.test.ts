@@ -271,3 +271,44 @@ describe("user-message-display other people's turns", () => {
     expect(authorOfTurn({ author: "user:bob-2", author_name: "Bob" })).toBeNull();
   });
 });
+
+describe("user-message-display sent-again line", () => {
+  const event: UserMessageEvent = {
+    timestamp: "2026-01-01T00:00:00Z",
+    type: "user_message",
+    event_id: "evt-resent",
+    source: "claude",
+    role: "user",
+    content: "did you get this?",
+  };
+
+  function renderRow(isResent: boolean): HTMLElement {
+    const root = document.createElement("div");
+    m.render(root, renderUserMessage(event, isResent));
+    return root;
+  }
+
+  it("draws no line under a message sent once", () => {
+    expect(renderRow(false).querySelector(".message-resent-note")).toBeNull();
+  });
+
+  it("draws one collapsed line under the bubble of a message sent again, which its help opens", () => {
+    const collapsed = renderRow(true);
+    expect(collapsed.querySelector(".message-user-bubble")?.textContent).toBe("did you get this?");
+    const note = collapsed.querySelector(".message-resent-note");
+    expect(note?.textContent).toBe("Sent again?");
+    const help = collapsed.querySelector<HTMLButtonElement>(".message-resent-note-help");
+    expect(help?.getAttribute("aria-expanded")).toBe("false");
+
+    help!.click();
+    const opened = renderRow(true);
+    expect(opened.querySelector(".message-resent-note-help")?.getAttribute("aria-expanded")).toBe("true");
+    expect(opened.querySelector(".message-resent-note-text")?.textContent).toBe(
+      "Imbue Studio couldn't confirm the agent received this message, so it sent it again. " +
+        "If the first copy arrived too, the agent may see it twice.",
+    );
+
+    opened.querySelector<HTMLButtonElement>(".message-resent-note-help")!.click();
+    expect(renderRow(true).querySelector(".message-resent-note-text")).toBeNull();
+  });
+});

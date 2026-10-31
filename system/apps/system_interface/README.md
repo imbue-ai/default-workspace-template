@@ -46,8 +46,8 @@ format. In brief:
 
 ## What the process serves
 
-The `system-interface` tool (the shell's own uv tool environment, run by
-supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
+The `system-interface` entry point (`.venv/bin/system-interface` in the
+workspace venv, run by supervisord from the repo root) listens on `http://127.0.0.1:8000` and serves:
 
 - `/` and the SPA catch-all: the desktop, built into
   `imbue/system_interface/static/`; `/assets/<path>` for its bundle.
@@ -617,7 +617,7 @@ policy).
 # Backend, from the repo root (the registry path and the state directory
 # default are relative to it; run elsewhere, the shell finds no registry and
 # lists no apps)
-uv run system-interface
+.venv/bin/system-interface
 
 # Frontend (with hot reload)
 cd system/apps/system_interface/frontend
@@ -717,8 +717,8 @@ frame, plus the Imbue Studio app's own refresh endpoint). On any failure it reve
 the merge as a forward revert commit, restores the pre-apply snapshots it took
 before anything destructive ran, and re-confirms health; the exit code reports
 the outcome (`0` applied, `2` rolled back, `3` emergency, `1` precondition).
-The scripts under `.agents/skills/update-self/scripts/` and that skill's
-`SKILL.md` are the reference.
+The `update_self_skill` package in `.agents/skills/update-self/python/` and that
+skill's `SKILL.md` are the reference.
 
 ## When the bundle is missing
 

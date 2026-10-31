@@ -143,7 +143,10 @@ def test_the_page_carries_the_workspaces_name_and_what_a_phone_saves_to_its_home
     assert page.count("<title>") == 1
     assert f'<meta name="apple-mobile-web-app-title" content="{escaped}">' in page
     assert '<meta name="theme-color" content="#fafaf8">' in page
-    assert '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">' in page
+    assert (
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1">'
+        in page
+    )
     assert page.count('name="viewport"') == 1
     assert '<link rel="apple-touch-icon" href="/apple-touch-icon.png">' in page
     assert '<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">' in page
@@ -155,7 +158,7 @@ def test_the_page_carries_the_workspaces_name_and_what_a_phone_saves_to_its_home
 def test_tags_the_build_already_carries_are_replaced_rather_than_repeated(tmp_path: Path) -> None:
     built = (
         "<html><head>"
-        '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5">'
         '<meta name="theme-color" content="#000000">'
         '<link rel="manifest" href="/stale.webmanifest">'
         "</head><body></body></html>"
@@ -163,7 +166,7 @@ def test_tags_the_build_already_carries_are_replaced_rather_than_repeated(tmp_pa
     page = _named_workspace_app(tmp_path, built, "Lab").test_client().get("/").text
 
     assert page.count('name="viewport"') == 1
-    assert "width=device-width, initial-scale=1, viewport-fit=cover" in page
+    assert 'content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"' in page
     assert page.count('name="theme-color"') == 1 and "#000000" not in page
     assert page.count('rel="manifest"') == 1 and "stale" not in page
     assert page.count("<title>") == 1 and "<title>Lab</title>" in page

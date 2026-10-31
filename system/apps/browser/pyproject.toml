@@ -3,7 +3,7 @@ name = "browser"
 version = "0.1.0"
 description = "Live Chromium with human-in-the-loop control, streamed, driven by agents over gated CDP"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # The manifest primitives the daemon names itself with.
     "app-manifest",
@@ -33,6 +33,8 @@ dependencies = [
     "websockets>=13",
     # The shell's layout client: the fleet opens a browser's window, the daemon reads the shell's windows.
     "workspace-layout",
+    # The chat messenger the fleet wakes a queued agent's chat with (message_chat).
+    "workspace-scripts",
 ]
 
 # Entry point is "browser-service", not "browser" (historically because browser-use

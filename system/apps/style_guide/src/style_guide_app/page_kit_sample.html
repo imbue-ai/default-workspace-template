@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Page kit sample</title>
+    <!-- A page built as plain HTML, the way docs/system/themeable-apps.md has one wear the workspace's look: the kit's
+         stylesheet gives its plain controls the standard look, and its script wears the theme the page is told. -->
+    <link rel="stylesheet" href="/_static/workspace_theme.css" />
+    <script src="/_static/workspace_theme.js"></script>
+  </head>
+  <body>
+    <main style="padding: 16px 20px">
+      <h1>A plain page</h1>
+      <p>
+        Plain HTML with no classes of its own, wearing the kit: body text, a <a href="#top">link</a>, and
+        <code>inline code</code>.
+      </p>
+
+      <h2>Buttons</h2>
+      <p>
+        <button type="button" data-variant="primary">Primary</button>
+        <button type="button">A plain button</button>
+        <button type="button" data-variant="ghost">Ghost</button>
+        <button type="button" data-variant="destructive">Destructive</button>
+        <button type="button" disabled>Disabled</button>
+      </p>
+
+      <h2>Fields</h2>
+      <p>
+        <input type="text" placeholder="A text input" aria-label="A text input" />
+        <select aria-label="A select">
+          <option>A select</option>
+          <option>Another option</option>
+        </select>
+      </p>
+      <p><textarea rows="2" aria-label="A text area">A text area</textarea></p>
+
+      <h2>Marked parts</h2>
+      <p>
+        <span data-part="badge">A badge</span>
+      </p>
+      <div style="display: flex; gap: 12px; align-items: flex-start">
+        <button type="button" data-part="tile">A tile: a card that opens something</button>
+        <div>
+          <div data-part="list-row" aria-current="true">The current row</div>
+          <div data-part="list-row">Another row</div>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

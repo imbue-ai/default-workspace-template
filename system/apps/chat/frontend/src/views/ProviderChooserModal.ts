@@ -60,10 +60,9 @@ import {
   isPickingAccount,
   isRoomChoiceOffered,
   pickRoom,
-  loadAccounts,
+  loadLanesAndAccountsWithRetry,
   pickAccount,
   takeChooserAccountId,
-  loadLanes,
   startFlow,
   submitCode,
   submitKey,
@@ -384,8 +383,7 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
     busy = true;
     error = null;
     try {
-      await loadLanes();
-      await loadAccounts();
+      await loadLanesAndAccountsWithRetry();
     } catch (e) {
       error = (e as Error).message || "Could not reach the workspace.";
     } finally {
@@ -402,7 +400,11 @@ export function ProviderChooserModal(): m.Component<ProviderChooserModalAttrs> {
         m(
           "div",
           { class: css.FOOTER_ROW },
-          m(Button, { variant: "primary", disabled: busy, onclick: () => void load() }, "Try again"),
+          m(
+            Button,
+            { variant: "primary", disabled: busy, "data-e2e": "retry-providers", onclick: () => void load() },
+            "Try again",
+          ),
         ),
       ];
     }

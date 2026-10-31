@@ -35,7 +35,7 @@ class HarnessType(StrEnum):
     # the segment reads through the registry like any archived one.
     SEED = "seed"
     # A chat room (the multiplayer spec, section 7.3): an mngr agent of the template's ``room`` type, whose
-    # process reads its pane into the room's transcript (``system/scripts/room_agent.py``) and whose chat is a
+    # process reads its pane into the room's transcript (``system/scripts/workspace_bare_scripts/room_agent.py``) and whose chat is a
     # message log among the workspace's people with no AI agent.
     ROOM = "room"
 

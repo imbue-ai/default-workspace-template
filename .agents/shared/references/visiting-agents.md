@@ -14,7 +14,7 @@ You hold no account of the person's and no access to anything outside this works
 <!-- exec-only:start -->
 - `wsvisit run -- <command>` runs a command inside the workspace from its repository root (`/home/user/workspace`); `--cwd` picks another directory and `--timeout <seconds>` raises the default of 600 seconds (never above 3600).
 - `wsvisit read <path>` and `wsvisit write <path> --from <local file>` move a single file; for anything larger, run `tar` or `git` inside.
-- Anything that outlives one command goes through `python3 system/scripts/run_in_background.py`, which the workspace provides for exactly that.
+- Anything that outlives one command goes through `python3 system/scripts/workspace_bare_scripts/run_in_background.py`, which the workspace provides for exactly that.
 - Chat agents in this workspace share its main checkout, so make code changes on a branch in a worktree under `/home/user/worktrees/` (named `mngr/<your-name>-<task>`), and say what you did in your commit messages, which the changes feed shows to everyone who connects after you.
   Files under `data/` (documents, uploads, app data) are edited in place.
 - Keep your own process, memory, and context on your side.

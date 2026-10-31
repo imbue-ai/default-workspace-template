@@ -144,6 +144,13 @@ class SendMessageRequest(FrozenModel):
             "composer if it never committed. '' for legacy callers, which the backend then mints for."
         ),
     )
+    is_single_send: bool = Field(
+        default=False,
+        description=(
+            "Whether the user asked for this send from a failure notice, so it goes out once: a send that "
+            "comes back unconfirmed is not repeated automatically"
+        ),
+    )
     client_id: str = Field(default="", description="Per-browser client id of the sender ('' for legacy callers)")
     desktop_id: str = Field(
         default="", description="The id of the desktop the sender was on at send time ('' for legacy callers)"
@@ -169,8 +176,9 @@ class SendMessageResponse(FrozenModel):
 
     status: str = Field(
         description=(
-            "Status of the send operation: 'ok', 'compaction_requested', or 'withdrawn' (Stop took it back while "
-            "the agent was coming up, and nothing was delivered)"
+            "Status of the send operation: 'ok', 'resent' (delivered by a second send, mngr having been unable to "
+            "confirm the first, which may have landed too), 'compaction_requested', or 'withdrawn' (Stop took it "
+            "back while the agent was coming up, and nothing was delivered)"
         )
     )
 
@@ -761,12 +769,6 @@ class CreateChatRequest(FrozenModel):
         "``account``, ``project``, ``chat_id``, ``chat_seq``, ``autocompact``) are refused, and a chat minted "
         "earlier keeps the ones it was minted with",
     )
-    is_installation_check_skipped: bool = Field(
-        default=False,
-        description="Create the chat even if the workspace's claude binary no longer matches the template's pin, "
-        "so the update chat that repairs that can still be made (``message_chat.py --create`` asks for it on "
-        "every create); a chat minted earlier keeps its own",
-    )
     should_wait: bool = Field(
         default=False,
         description="Answer once the chat's ``mngr create`` has finished, with its failure reason when it "
@@ -833,9 +835,6 @@ class ProvisionalChat(FrozenModel):
     )
     message: str = Field(default="", description="The first message the chat sends once it launches; empty for none")
     labels: dict[str, str] = Field(default_factory=dict, description="The extra labels its create was asked for")
-    is_installation_check_skipped: bool = Field(
-        default=False, description="Whether its create waves the claude version check"
-    )
     phase: ProvisionalChatPhase = Field(description="Where the creation stands")
     error: str | None = Field(default=None, description="Why the creation failed, in the failed phase")
     is_seeded: bool = Field(
