@@ -119,6 +119,7 @@ members = [
     "system/libs/bootstrap",
     "system/libs/chat_background_tasks",
     "system/libs/github_sync",
+    "system/libs/latchkey_access",
     "system/libs/mngr_cli_contract",
     "system/libs/pytest_executable_tmp",
     "system/libs/pytest_workspace_env",
@@ -165,6 +166,7 @@ workspace-themes = { workspace = true }
 app-schema = { workspace = true }
 workspace-layout = { workspace = true }
 workspace-profile = { workspace = true }
+latchkey-access = { workspace = true }
 routines = { workspace = true }
 # The built-in apps, which the root dependencies name so a root-closure sync keeps them.
 chat = { workspace = true }
