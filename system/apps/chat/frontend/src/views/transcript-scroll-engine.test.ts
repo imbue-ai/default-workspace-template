@@ -6,7 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.hoisted(() => {
   globalThis.requestAnimationFrame ??= ((cb: FrameRequestCallback): number =>
     setTimeout(() => cb(0), 0) as unknown as number) as typeof globalThis.requestAnimationFrame;
-  globalThis.cancelAnimationFrame ??= ((id: number): void => clearTimeout(id)) as typeof globalThis.cancelAnimationFrame;
+  globalThis.cancelAnimationFrame ??= ((id: number): void =>
+    clearTimeout(id)) as typeof globalThis.cancelAnimationFrame;
 });
 
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
