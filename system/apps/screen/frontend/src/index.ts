@@ -337,11 +337,15 @@ class Viewer {
       }
       this.signInError = null;
       this.session = session;
+      // A stopped socket's close lands after the fact, possibly once its replacement is open: only the viewer's
+      // own socket speaks for isNekoOpen.
       const socket = new NekoSocket(
         session.token,
-        () => this.onNekoOpen(),
         () => {
-          this.isNekoOpen = false;
+          if (this.socket === socket) this.onNekoOpen();
+        },
+        () => {
+          if (this.socket === socket) this.isNekoOpen = false;
         },
       );
       this.socket = socket;
