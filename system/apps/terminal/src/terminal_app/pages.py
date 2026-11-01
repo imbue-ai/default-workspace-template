@@ -677,7 +677,7 @@ def build_pages_blueprint(
         return error_response(str(error), HTTP_NOT_FOUND)
 
     @blueprint.errorhandler(InvalidIdentityHeaderError)
-    def _unreadable_identity_header(error: InvalidIdentityHeaderError) -> ResponseReturnValue:
+    def answer_unreadable_identity_header(error: InvalidIdentityHeaderError) -> ResponseReturnValue:
         return error_response(str(error), HTTP_BAD_REQUEST)
 
     @blueprint.errorhandler(InvalidTerminalValueError)
