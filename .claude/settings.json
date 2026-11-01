@@ -9,6 +9,10 @@
         "hooks": [
           {
             "type": "command",
+            "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/session_start_sync.sh"
+          },
+          {
+            "type": "command",
             "command": "${MNGR_AGENT_WORK_DIR:-.}/system/scripts/ensure_tk_on_path.sh"
           },
           {

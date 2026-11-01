@@ -3,7 +3,7 @@ name = "routines"
 version = "0.1.0"
 description = "Routines: everything in the workspace that runs on a schedule. The definitions, the scheduler, the runner for command runs and skill runs, the run ledger, and the routines command"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
     "chat-background-tasks",

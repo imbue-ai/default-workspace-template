@@ -63,9 +63,12 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
+from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.authors import AuthorStore
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatAgentEntry
@@ -81,6 +84,8 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.lounge import LoungeKeeper
+from imbue.chat.mentions import MentionStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ChatSnapshot
@@ -91,19 +96,30 @@ from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import build_chat_shell_client
 from imbue.chat.state import ChatAppState
+from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.message import AgentSendFailure
+from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import release_observe_lock
+from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import AgentIdNotFoundError
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import AgentName
+from imbue.mngr.primitives import HostId
+from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
@@ -158,16 +174,24 @@ def observer_holding_the_lock(events_base_dir: Path) -> Generator[None, None, No
         release_observe_lock(fd)
 
 
+class StandInToolUse(FrozenModel):
+    """A tool call the stand-in answers a message request with, in place of text."""
+
+    tool_use_id: str = Field(description="The id Claude Code echoes back on the call's tool_result")
+    name: str = Field(description="The tool to call, e.g. ``Read``")
+    arguments: dict[str, Any] = Field(description="The tool's input")
+
+
 class StandInAnthropicApi:
     """A loopback stand-in for the Anthropic API, to point Claude Code at with ``ANTHROPIC_BASE_URL``.
 
     It records every request's path, auth headers and body. With ``reply_for`` set, ``POST /v1/messages`` gets a
-    valid answer carrying the text ``reply_for`` picks from the request body: the server-sent events of a streamed
-    message when the request asks for a stream, else the message as JSON. Every other request, and every request
-    when ``reply_for`` is None, is answered 401, which is enough to observe the credential a request carries.
+    valid answer carrying the text or tool call ``reply_for`` picks from the request body: the server-sent events of
+    a streamed message when the request asks for a stream, else the message as JSON. Every other request, and every
+    request when ``reply_for`` is None, is answered 401, which is enough to observe the credential a request carries.
     """
 
-    def __init__(self, reply_for: Callable[[dict[str, Any]], str] | None = None) -> None:
+    def __init__(self, reply_for: Callable[[dict[str, Any]], str | StandInToolUse] | None = None) -> None:
         self.captured: list[dict[str, Any]] = []
         self.first_request_event = threading.Event()
         captured = self.captured
@@ -197,12 +221,12 @@ class StandInAnthropicApi:
 
             do_GET = do_POST
 
-            def _answer_message(self, body: dict[str, Any], text: str) -> None:
+            def _answer_message(self, body: dict[str, Any], reply: str | StandInToolUse) -> None:
                 model = str(body.get("model", "claude-haiku-4-5"))
                 if body.get("stream"):
-                    self._send(200, "text/event-stream", _streamed_message_events(model, text))
+                    self._send(200, "text/event-stream", _streamed_message_events(model, reply))
                 else:
-                    self._send(200, "application/json", json.dumps(_message(model, text)).encode())
+                    self._send(200, "application/json", json.dumps(_message(model, reply)).encode())
 
             def _send(self, status: int, content_type: str, payload: bytes) -> None:
                 self.send_response(status)
@@ -237,42 +261,53 @@ def _anthropic_error(error_type: str, message: str) -> bytes:
     return json.dumps({"type": "error", "error": {"type": error_type, "message": message}}).encode()
 
 
-def _message(model: str, text: str) -> dict[str, Any]:
+def _content_block(reply: str | StandInToolUse) -> dict[str, Any]:
+    if isinstance(reply, StandInToolUse):
+        return {"type": "tool_use", "id": reply.tool_use_id, "name": reply.name, "input": reply.arguments}
+    return {"type": "text", "text": reply}
+
+
+def _stop_reason(reply: str | StandInToolUse) -> str:
+    return "tool_use" if isinstance(reply, StandInToolUse) else "end_turn"
+
+
+def _message(model: str, reply: str | StandInToolUse) -> dict[str, Any]:
     return {
         "id": "msg_stand_in",
         "type": "message",
         "role": "assistant",
         "model": model,
-        "content": [{"type": "text", "text": text}],
-        "stop_reason": "end_turn",
+        "content": [_content_block(reply)],
+        "stop_reason": _stop_reason(reply),
         "stop_sequence": None,
         "usage": {"input_tokens": 10, "output_tokens": 5},
     }
 
 
-def _streamed_message_events(model: str, text: str) -> bytes:
+def _streamed_message_events(model: str, reply: str | StandInToolUse) -> bytes:
     started = {
         **_message(model, ""),
         "content": [],
         "stop_reason": None,
         "usage": {"input_tokens": 10, "output_tokens": 1},
     }
+    # A streamed block opens empty and its content arrives as one delta: a tool call's input as partial JSON.
+    if isinstance(reply, StandInToolUse):
+        opening_block = {**_content_block(reply), "input": {}}
+        delta = {"type": "input_json_delta", "partial_json": json.dumps(reply.arguments)}
+    else:
+        opening_block = {"type": "text", "text": ""}
+        delta = {"type": "text_delta", "text": reply}
     events: list[tuple[str, dict[str, Any]]] = [
         ("message_start", {"type": "message_start", "message": started}),
-        (
-            "content_block_start",
-            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
-        ),
-        (
-            "content_block_delta",
-            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text}},
-        ),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": opening_block}),
+        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": delta}),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         (
             "message_delta",
             {
                 "type": "message_delta",
-                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "delta": {"stop_reason": _stop_reason(reply), "stop_sequence": None},
                 "usage": {"output_tokens": 5},
             },
         ),
@@ -295,6 +330,14 @@ def skip_unless_pinned_claude() -> None:
         pytest.skip(f"claude on PATH is {installed!r}, not the pinned {pinned!r}; these tests assert the pin")
 
 
+def skip_unless_real_claude_agent_can_start() -> None:
+    """Skip the calling test unless ``real_claude_agent`` can start the pinned ``claude`` (mngr, tmux and git)."""
+    skip_unless_pinned_claude()
+    for binary in ("mngr", "tmux", "git"):
+        if shutil.which(binary) is None:
+            pytest.skip(f"{binary} not on PATH")
+
+
 def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
     """An isolated mngr host dir with its own profile, opted into pytest, local provider only.
 
@@ -308,6 +351,137 @@ def prepare_isolated_mngr_host_dir(host_dir: Path) -> None:
         "is_allowed_in_pytest = true\n\n[providers.modal]\nis_enabled = false\n\n[providers.docker]\nis_enabled = false\n"
     )
     (profile_dir / "tmux_onboarding_shown").write_text("")
+
+
+_REAL_CLAUDE_CREATE_TIMEOUT_SECONDS: Final[float] = 300.0
+
+
+def environment_without_own_agent_identity() -> dict[str, str]:
+    """This process's environment without the conftest's own-agent identity, which would make mngr act as that agent."""
+    return {key: value for key, value in os.environ.items() if not key.startswith("MNGR_AGENT_")}
+
+
+@contextmanager
+def private_tmux_server(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
+    """Point every tmux call (mngr's subprocesses and its in-process sends) at a server of this test's own.
+
+    The directory is short because tmux refuses a socket path over about 100 bytes. The server's sessions are
+    killed by name at the end, never with ``kill-server``.
+    """
+    tmux_dir = Path(tempfile.mkdtemp(prefix="tmx", dir="/tmp"))
+    monkeypatch.delenv("TMUX", raising=False)
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_dir))
+    socket_path = tmux_dir / f"tmux-{os.getuid()}" / "default"
+    try:
+        yield
+    finally:
+        if socket_path.exists():
+            listed = subprocess.run(
+                ["tmux", "-S", str(socket_path), "list-sessions", "-F", "#{session_name}"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            for session_name in listed.stdout.split():
+                subprocess.run(
+                    ["tmux", "-S", str(socket_path), "kill-session", "-t", f"={session_name}"],
+                    capture_output=True,
+                    timeout=30,
+                )
+        shutil.rmtree(tmux_dir, ignore_errors=True)
+
+
+def make_git_project(project_dir: Path) -> None:
+    """An empty git repository with one commit, for ``mngr create`` to start an agent in."""
+    project_dir.mkdir()
+    git_env = {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "test",
+        "GIT_AUTHOR_EMAIL": "test@test.com",
+        "GIT_COMMITTER_NAME": "test",
+        "GIT_COMMITTER_EMAIL": "test@test.com",
+    }
+    subprocess.run(["git", "init", "-q", str(project_dir)], check=True, timeout=30)
+    subprocess.run(
+        ["git", "-C", str(project_dir), "commit", "-q", "--allow-empty", "-m", "init"],
+        check=True,
+        env=git_env,
+        timeout=30,
+    )
+
+
+def prepare_stand_in_claude_profile(host_dir: Path, api: StandInAnthropicApi, api_key: str) -> None:
+    """An isolated mngr profile whose Claude agents start without dialogs and talk to ``api``.
+
+    The URL and key go in the agent's settings ``env``, which Claude Code applies over its process environment
+    (``test_claude_settings_env_auth.py``), so a key the agent's login shell exports cannot replace the stand-in's.
+    The ``env`` extends the home settings' own rather than replacing it, which mngr refuses as a narrowing.
+    """
+    prepare_isolated_mngr_host_dir(host_dir)
+    with (host_dir / "profiles" / "isolated" / "settings.toml").open("a") as settings:
+        settings.write(
+            "\n[agent_types.claude]\nauto_dismiss_dialogs_at_startup = true\n"
+            "\n[agent_types.claude.settings_overrides.env]\n"
+            f'ANTHROPIC_BASE_URL = "{api.base_url}"\n'
+            f'ANTHROPIC_API_KEY = "{api_key}"\n'
+            '\n[agent_types.claude.settings_overrides.__mngr_merge]\n"env" = "extend"\n'
+        )
+
+
+@contextmanager
+def real_claude_agent(project_dir: Path, log_path: Path, agent_name: str) -> Generator[AgentInfo, None, None]:
+    """A Claude agent ``mngr create`` starts in ``project_dir``, destroyed on exit; mngr's output goes to ``log_path``."""
+    try:
+        with open(log_path, "ab") as log:
+            created = subprocess.run(
+                ["mngr", "create", agent_name, "--type", "claude", "--no-connect", "--transfer", "none", "--yes"],
+                cwd=project_dir,
+                env=environment_without_own_agent_identity(),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=_REAL_CLAUDE_CREATE_TIMEOUT_SECONDS,
+            )
+        assert created.returncode == 0, f"mngr create failed:\n{log_path.read_text()[-4000:]}"
+        (agent,) = [candidate for candidate in discover_agents() if candidate.name == agent_name]
+        yield agent
+    finally:
+        with open(log_path, "ab") as log:
+            subprocess.run(
+                ["mngr", "destroy", agent_name, "--force"],
+                cwd=project_dir,
+                env=environment_without_own_agent_identity(),
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=120,
+            )
+
+
+@contextmanager
+def stand_in_real_claude_agent(
+    project_dir: Path,
+    mngr_log_path: Path,
+    agent_name: str,
+    reply_for: Callable[[dict[str, Any]], str | StandInToolUse],
+    api_key: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[tuple[StandInAnthropicApi, AgentInfo], None, None]:
+    """A ``real_claude_agent`` in a fresh git project at ``project_dir``, talking to a ``StandInAnthropicApi``.
+
+    Skips the calling test unless the agent can start. Yields the stand-in, whose ``captured`` requests stay readable
+    after the block, and the agent.
+    """
+    skip_unless_real_claude_agent_can_start()
+    make_git_project(project_dir)
+    # mngr approves the key it finds in its own environment, so claude asks nothing about it.
+    monkeypatch.setenv("ANTHROPIC_API_KEY", api_key)
+    monkeypatch.delenv("CLAUDE_CODE_OAUTH_TOKEN", raising=False)
+    with (
+        StandInAnthropicApi(reply_for=reply_for) as api,
+        private_tmux_server(monkeypatch),
+    ):
+        prepare_stand_in_claude_profile(Path(os.environ["MNGR_HOST_DIR"]), api, api_key)
+        with real_claude_agent(project_dir, mngr_log_path, agent_name) as agent:
+            yield api, agent
 
 
 def is_chat_frontend_built() -> bool:
@@ -541,11 +715,17 @@ def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
 
     One line per invocation, whatever the arguments hold: a newline inside an argument (a
     ``--message`` carrying a whole conversation) is written as a space, so a reader can still
-    count the calls and split a line into its tokens.
+    count the calls and split a line into its tokens. A create run with the no-account mark in
+    its environment (a room's) ends its line with ``MINDS_CREATE_WITHOUT_ACCOUNT=<value>``.
     """
     log_path = tmp_path / "mngr-argv.log"
     script = tmp_path / "fake-mngr"
-    script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" >> \"{log_path}\"\n")
+    script.write_text(
+        "#!/bin/sh\n"
+        "printf '%s%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" "
+        '"${MINDS_CREATE_WITHOUT_ACCOUNT:+ MINDS_CREATE_WITHOUT_ACCOUNT=$MINDS_CREATE_WITHOUT_ACCOUNT}" '
+        f'>> "{log_path}"\n'
+    )
     script.chmod(0o755)
     return str(script), log_path
 
@@ -625,9 +805,13 @@ class RecordingMngrMessenger(MngrMessenger):
 
     sent: list[tuple[str, str]] = []
     pressed: list[tuple[str, str]] = []
+    # What each send was given to tell whether a stop took it back, in send order.
+    taken_back_checks: list[Callable[[], bool]] = []
     # Each compaction requested, as ``(agent_id, instructions)``.
     compactions: list[tuple[str, str | None]] = []
     succeeds: bool = True
+    # How a succeeding send reports it got there.
+    delivery: SendDelivery = SendDelivery.DELIVERED
     # What a non-succeeding send reports, in place of a harness's own words and mngr's kind.
     failure_reason: str = "The agent could not be reached."
     failure_kind: str = "unknown"
@@ -636,10 +820,16 @@ class RecordingMngrMessenger(MngrMessenger):
     compaction_failure: SendFailure | None = None
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
         self.sent.append((str(agent_id), message))
-        return None if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
+        self.taken_back_checks.append(is_taken_back)
+        return self.delivery if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
@@ -660,10 +850,47 @@ class SummaryWritingMngrMessenger(RecordingMngrMessenger):
     """
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
         write_summary_for_request(message)
-        return super().send_to_agent(agent_id, message, known_locations)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
+def scripted_send_mngr_messenger(
+    failure_kinds: Sequence[SendFailureKind], sent: list[str], failure_reason: str = "no evidence of submission"
+) -> MngrMessenger:
+    """A real `MngrMessenger` over a fake mngr: each send fails with the next of ``failure_kinds``, and once they run
+    out every send is delivered.
+
+    So the messenger's own repeats run against mngr's answers, unlike `RecordingMngrMessenger`, which replaces them.
+    ``sent`` records each message mngr was asked to type. The agent is found by its id wherever it is looked for.
+    """
+    remaining = list(failure_kinds)
+
+    def discover(agent_id: AgentId, _mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
+        return (
+            AgentMatch(
+                agent_id=agent_id,
+                agent_name=AgentName("scripted"),
+                host_id=HostId.generate(),
+                host_name=HostName("localhost"),
+                provider_name=ProviderInstanceName("local"),
+            ),
+        )
+
+    def send(matches: Sequence[AgentMatch], message: str, _mngr_ctx: MngrContext) -> MessageResult:
+        sent.append(message)
+        if remaining:
+            kind = remaining.pop(0)
+            return MessageResult(failures=[AgentSendFailure(agent_name="scripted", reason=failure_reason, kind=kind)])
+        return MessageResult(successful_agents=[str(match.agent_id) for match in matches])
+
+    return MngrMessenger(discover=discover, send=send)
 
 
 class VanishedAgentMngrMessenger(RecordingMngrMessenger):
@@ -674,9 +901,14 @@ class VanishedAgentMngrMessenger(RecordingMngrMessenger):
     """
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
-        super().send_to_agent(agent_id, message, known_locations)
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
         raise AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}")
 
 
@@ -734,10 +966,13 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
+    http_client: httpx.Client | None = None,
     is_secondary: bool = False,
     shell: ShellLayoutInterface | None = None,
     secret_requests: SecretRequestStore | None = None,
     chat_namer: ChatNamer | None = None,
+    authors: AuthorStore | None = None,
+    mentions: MentionStore | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -749,6 +984,9 @@ def build_test_state(
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     event_queues = AgentEventQueues()
+    # Match production: a secondary chat feeds no tray and makes no Lounge (the multiplayer spec, section 11).
+    tray_feed = None if is_secondary else TrayFeed(shell=shell if shell is not None else DisconnectedShell())
+    lounge = None if is_secondary else LoungeKeeper(agent_manager=manager)
     # Match production: route the codex ledger's live user-turns onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
     state = ChatAppState(
@@ -766,7 +1004,7 @@ def build_test_state(
         agent_manager=manager,
         event_queues=event_queues,
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
-        http_client=httpx.Client(follow_redirects=False, timeout=30.0),
+        http_client=http_client if http_client is not None else httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
         is_secondary=is_secondary,
         shell=shell if shell is not None else DisconnectedShell(),
@@ -775,7 +1013,19 @@ def build_test_state(
         # rooted in its tmp_path.
         secret_requests=secret_requests if secret_requests is not None else build_temporary_secret_request_store(),
         chat_namer=chat_namer,
+        # Never this package's own data/: a test that reads the annotations back injects a store under its tmp_path.
+        authors=authors if authors is not None else AuthorStore(root=Path(tempfile.mkdtemp(prefix="chat-authors-"))),
+        roster=RosterClient(shell=shell if shell is not None else DisconnectedShell()),
+        mentions=mentions
+        if mentions is not None
+        else MentionStore(root=Path(tempfile.mkdtemp(prefix="chat-mentions-"))),
+        # The tray's feed goes to the shell given (a fake records it); a disconnected one drops it.
+        tray_feed=tray_feed,
+        lounge=lounge,
     )
+    if tray_feed is not None:
+        manager.set_chats_updated_listener(tray_feed.report_chats)
+    manager.set_participants_reader(state.authors.participant_keys)
     # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's
     # that nobody is streaming, and removing a chat's active agent ends the chat's streams.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
@@ -1107,6 +1357,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
     """A listed chat as the pages see it: one idle claude agent, for tests that reason over snapshots alone."""
     return ChatSnapshot(
         chat_id=ChatId(chat_id),
+        kind=ChatKind.AGENT,
         title=name.replace("-", " "),
         name=name,
         project=None,
@@ -1140,7 +1391,6 @@ def seed_failed_chat(
     account_id: str = "acct-1",
     message: str = "",
     labels: Mapping[str, str] | None = None,
-    is_installation_check_skipped: bool = False,
 ) -> ProvisionalChat:
     """Plant a provisional chat whose create failed, as the manager holds one after ``mngr create`` exits non-zero:
     what the page's "Try again" relaunches under its id."""
@@ -1150,7 +1400,6 @@ def seed_failed_chat(
         account_id=account_id,
         message=message,
         labels=dict(labels or {}),
-        is_installation_check_skipped=is_installation_check_skipped,
         phase=ProvisionalChatPhase.FAILED,
         error="mngr create exited with code 3",
     )
@@ -1251,7 +1500,8 @@ def running_workspace(
 
     registry_path = tmp_path / "registry" / "apps.toml"
     # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
-    # the four POST launch paths onto the intake route (post-launch-paths plan section 7.1).
+    # the five POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
+    # section 7.5, for the mention into the Lounge).
     write_registry(
         registry_path,
         registry_row_toml(
@@ -1266,21 +1516,36 @@ def running_workspace(
                 ("new", "New Chat", "/api/chats/intake"),
                 ("send", "Send to chat...", "/api/chats/intake"),
                 ("draft", "Draft into chat", "/api/chats/intake"),
+                ("lounge", "Mention in the Lounge", "/api/chats/intake"),
+                ("app-chat", "Chat about this app", "/api/chats/intake"),
             ),
             launch_params={
                 "main": ("message",),
                 "new": ("account_id", "message"),
                 "send": ("message",),
                 "draft": ("message",),
+                "lounge": ("message",),
+                "app-chat": ("app", "app_display_name"),
             },
             launch_text_params={"main": "message", "new": "message", "send": "message"},
             launch_draft_params={"draft": "message"},
-            launch_methods={"main": "POST", "new": "POST", "send": "POST", "draft": "POST"},
+            launch_mention_params={"lounge": "message"},
+            launch_app_params={"app-chat": ("app", "app_display_name")},
+            launch_methods={
+                "main": "POST",
+                "new": "POST",
+                "send": "POST",
+                "draft": "POST",
+                "lounge": "POST",
+                "app-chat": "POST",
+            },
             launch_presets={
                 "main": {"target": "main_chat"},
                 "new": {"target": "new_chat"},
                 "send": {"target": "chat_selector"},
                 "draft": {"target": "current_chat", "is_draft": "true"},
+                "lounge": {"target": "lounge", "is_draft": "true"},
+                "app-chat": {"target": "app_chat"},
             },
         ),
         *extra_rows,

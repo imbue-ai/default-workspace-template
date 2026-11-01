@@ -61,13 +61,17 @@ specifics, but the shape below holds for all of them.
      integration is cheap, or when the rough version should simply become the real
      thing.
    - *Type 2 -- detached prototype:* a separate throwaway (a hand-built HTML mock,
-     a fake UI). Cheapest and fastest, no real wiring, discarded after. Prefer it
+     a fake UI) -- something the user opens and clicks. A picture of it shows
+     none of the interactions, so show pictures only when the user asks for
+     them. Cheapest and fastest, no real wiring, discarded after. Prefer it
      for the fastest look-and-feel loop, or for comparing directions when a fake
      conveys the idea and real wiring is costly -- but it may *not convince* when
      real rendering matters.
 
    Keep this phase **throwaway either way: no commits on the served branch and no
-   production state** (no production scripts, services, or tests). Producing a
+   production state** (nothing production-grade: no production scripts, data
+   layers, or tests; the scaffold a specialization sets up to serve the prototype
+   is fine). Producing a
    Type 2 prototype by hand, in-context, is fine as long as its *output* is real.
    Committing a Type 1 edit on an *isolated throwaway branch* is also fine -- a
    worktree-based live loop depends on exactly those commits; what matters is that

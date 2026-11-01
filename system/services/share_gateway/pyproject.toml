@@ -3,13 +3,14 @@ name = "share-gateway"
 version = "0.1.0"
 description = "In-workspace sharing gateway: TLS termination, grants enforcement, and the frpc relay tunnel for shared workspaces"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "cryptography>=42",
     "flask>=3.0",
     "httpx>=0.27",
     "inotify_simple>=2.0.0",
     "pyjwt>=2.8",
+    "share-grants",
     "werkzeug>=3.1",
 ]
 
@@ -32,3 +33,16 @@ dev = [
 
 # Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
 [tool.ty]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP006", "UP007"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+case-sensitive = true
+order-by-type = false
+known-first-party = ["share_gateway", "imbue"]

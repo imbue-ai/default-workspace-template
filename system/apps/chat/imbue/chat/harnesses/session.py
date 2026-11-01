@@ -41,6 +41,7 @@ from imbue.chat.harnesses.interrupt import SettleActivity
 from imbue.chat.harnesses.model import ModelOption
 from imbue.chat.harnesses.sending_registry import SendingRegistry
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
+from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.imbue_common.frozen_model import FrozenModel
 
 
@@ -48,12 +49,19 @@ class SendOutcome(StrEnum):
     """How a session's ``send`` resolved; the endpoint maps these to HTTP statuses."""
 
     OK = "ok"
+    # Delivered by a second send: mngr could not confirm the first, which may have landed too.
+    RESENT = "resent"
     # The harness cannot accept messages yet (its daemon is still starting); retryable -> 503.
     NOT_READY = "not_ready"
     # Delivery was attempted and failed -> 500.
     FAILED = "failed"
     # Stop took the message back while it waited for the agent to come up; nothing was delivered.
     WITHDRAWN = "withdrawn"
+
+    @property
+    def is_delivered(self) -> bool:
+        """Whether the message reached the agent."""
+        return self in (SendOutcome.OK, SendOutcome.RESENT)
 
 
 class ShoulderTapOutcome(FrozenModel):
@@ -109,8 +117,8 @@ class SessionDeps(FrozenModel):
 
     harness: HarnessType
     state_dir: Path
-    # Deliver one message through mngr's locked message API (blocking); True = delivered/queued.
-    send_to_harness: Callable[[str], bool]
+    # Deliver one message through mngr's locked message API (blocking): OK or RESENT when delivered/queued.
+    send_to_harness: Callable[[str, bool], SendOutcome]
     # Push a fresh agents snapshot to clients (tap-button greying rides this).
     notify_agents_changed: Callable[[], None]
     # Whether the harness's process has launched but not yet written its ready marker (False for a
@@ -152,7 +160,7 @@ class AgentHarnessSession(ABC):
 
     # Liveness
 
-    def ensure_live(self) -> None:
+    def ensure_live(self) -> None:  # noqa: B027
         """Bring up whatever live backend the harness needs (blocking OK). No-op default:
         a file harness has no daemon to connect."""
 
@@ -161,19 +169,23 @@ class AgentHarnessSession(ABC):
         connecting). Default: the harness's own ready marker says it has not finished starting."""
         return self._deps.is_harness_starting_up()
 
-    def on_lifecycle_dead(self) -> None:
+    def on_lifecycle_dead(self) -> None:  # noqa: B027
         """The agent's mngr lifecycle is positively dead; drop live state that died with it.
         Level-triggered: called on every recompute observing a dead lifecycle, and must stay
         idempotent. No-op default."""
 
-    def close(self) -> None:
+    def close(self) -> None:  # noqa: B027
         """Terminal teardown (the manager stopped tracking the agent). No-op default."""
 
     # Messages
 
     @abstractmethod
-    def send(self, text: str, message_id: str) -> SendOutcome:
-        """Deliver one message, owning its whole Sending lifecycle (contract A1)."""
+    def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
+        """Deliver one message, owning its whole Sending lifecycle (contract A1).
+
+        ``is_resent_when_unsure`` says whether a send mngr cannot confirm may be sent once more. Only a session
+        that delivers through mngr's send can come back unconfirmed; any other ignores it.
+        """
 
     def is_sending(self) -> bool:
         """Whether any send is currently in flight (greys the shoulder-tap button)."""
@@ -182,6 +194,13 @@ class AgentHarnessSession(ABC):
     def in_flight_block(self) -> str:
         """The still-in-flight (Sending) messages as one concatenated block ('' = none)."""
         return ""
+
+    def read_streamed_reply(self) -> StreamedReply | None:
+        """The reply the harness's live connection is streaming, which its transcript may not hold yet.
+
+        None by default: a file harness has no live connection to stream one.
+        """
+        return None
 
     # Turn control
 
@@ -218,7 +237,7 @@ class AgentHarnessSession(ABC):
         """The option set the switch endpoint validates against; static catalog by default."""
         return self._deps.catalog_options()
 
-    def note_offered_options(self, options: tuple[ModelOption, ...]) -> None:
+    def note_offered_options(self, options: tuple[ModelOption, ...]) -> None:  # noqa: B027
         """A picker-open fetch produced ``options``; a harness with a per-agent dynamic set
         records them (codex, D2 reconciliation). No-op default."""
 
@@ -243,7 +262,7 @@ class FileHarnessSession(AgentHarnessSession):
         self._sending_lock = threading.Lock()
         return self
 
-    def send(self, text: str, message_id: str) -> SendOutcome:
+    def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
         # Record as Sending BEFORE delivery (contract A1): while the synchronous send is in
         # flight the message has no on-disk harness record yet, so a concurrent interrupt reads
         # this to return a not-yet-committed send to the composer rather than lose it (A4).
@@ -256,8 +275,7 @@ class FileHarnessSession(AgentHarnessSession):
         # it never stays stuck greyed.
         try:
             self._deps.notify_agents_changed()
-            success = self._deps.send_to_harness(text)
-            return SendOutcome.OK if success else SendOutcome.FAILED
+            return self._deps.send_to_harness(text, is_resent_when_unsure)
         finally:
             # Resolved on EVERY exit -- delivered/queued (a real representation exists), failed
             # (Returned, not Sending), or an exception from the send (the request 500s and the

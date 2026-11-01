@@ -10,7 +10,7 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 # Pin $HOME to the image-build home. Several installers below follow $HOME (the
-# claude.ai installer, the uv installer, `uv python install` / `uv tool install`),
+# claude.ai installer, the uv installer, `uv tool install`),
 # while the checks and PATH entries in this script are fixed to /root/.local. A
 # live re-provision (the update apply, or an agent running this by hand) runs
 # under HOME=/home/user -- root's passwd home at runtime -- so without this pin
@@ -61,7 +61,7 @@ provision_drop_inherited_pins
 : "${GH_VERSION:=2.96.0}"
 : "${CADDY_VERSION:=2.11.4}"
 : "${FRP_VERSION:=0.70.1}"
-: "${LATCHKEY_VERSION:=3.19.3}"
+: "${LATCHKEY_VERSION:=3.19.4}"
 : "${MCPC_VERSION:=0.7.0}"
 : "${RESTIC_VERSION:=0.18.1}"
 
@@ -94,28 +94,21 @@ install_downloaded_binary() {
 # init system; the rest are agent/runtime deps). earlyoom, the OOM-prevention
 # daemon, is not among them: it is the imbue-ai fork, installed below by
 # install_earlyoom.sh. supervisor provides the system supervisord + supervisorctl
-# that `uv run bootstrap` execs into the foreground.
-# xvfb + xclip (the browser fleet's virtual display and its clipboard bridge)
-# are baked here, NOT deferred to the env.d browser unit: [program:xvfb] execs
-# Xvfb directly at boot, and a binary that static service config promises at
-# every boot must exist in the image. They are a few MB; only the heavy
-# Fortress/Chromium stack stays deferred.
+# that `bootstrap` execs into the foreground.
+# The Screen's stack (Xorg, XFCE, PulseAudio, neko, Fortress, xclip) is not baked:
+# nothing execs any of it at boot, so it installs on first boot through the
+# env-converge unit system/scripts/env.d/2000-screen.sh.
 apt-get update
 apt-get install -y --no-install-recommends \
     bash build-essential ca-certificates cron curl fd-find git git-lfs jq less nano \
     openssh-server procps restic ripgrep rsync sqlite3 supervisor tini tmux unison util-linux wget \
-    xclip xvfb xxd xmlstarlet
-# Runtime libraries the pixelflux/pcmflux wheels (the browser fleet's H.264 + Opus
-# media pipes) dlopen at import -- without libva pixelflux's import raises (guarded in
-# videopipe.py) -- plus xdpyinfo, which videopipe uses to size the capture. Baked small.
-apt-get install -y --no-install-recommends \
-    libva2 libva-drm2 libva-x11-2 libpixman-1-0 x11-utils pulseaudio pulseaudio-utils
+    xxd xmlstarlet
 rm -rf /var/lib/apt/lists/*
 
 # The Debian `supervisor` package enables a systemd unit that immediately starts
 # a supervisord against the default /etc/supervisor/supervisord.conf. On
 # systemd-based providers (lima/VPS) that daemon grabs /var/run/supervisor.sock
-# and makes `uv run bootstrap`'s `supervisord -c /home/user/workspace/system/supervisord.conf`
+# and makes `bootstrap`'s `supervisord -c /home/user/workspace/system/supervisord.conf`
 # fail with "Another program is already listening". We always launch our own
 # supervisord from bootstrap, so disable + mask the packaged unit. Guarded so
 # it is a no-op on docker (no systemd / no systemctl on the slim image).
@@ -222,17 +215,6 @@ rm -rf /tmp/frp.tar.gz "/tmp/frp_${FRP_VERSION}_linux_${frp_goarch}"
 curl -LsSf "${CURL_RETRY[@]}" "https://astral.sh/uv/${UV_VERSION}/install.sh" | sh
 export PATH="/root/.local/bin:$PATH"
 
-# Ensure a uv-managed Python that satisfies the workspace lockfile (>=3.12).
-# The Docker base image ships 3.12, but other bases (e.g. a Debian VM whose
-# system Python is 3.11) do not -- and the root pyproject's requires-python
-# (>=3.11) lets uv otherwise pick the system 3.11, which the frozen lock then
-# rejects. Fetch a managed 3.12 here so install_dependencies.sh /
-# build_workspace.sh can pin uv to it. No-op when system Python is already
-# >=3.12, so the Docker build is unchanged.
-if ! python3 -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' 2>/dev/null; then
-    uv python install 3.12
-fi
-
 # Make /root/.local/bin discoverable in login and interactive shells. The docker
 # image also sets ENV PATH; the Lima VM relies on these profile writes.
 if ! grep -q '/root/.local/bin' /root/.bashrc 2>/dev/null; then
@@ -251,10 +233,9 @@ curl -fsSL "${CURL_RETRY[@]}" https://claude.ai/install.sh > /tmp/install_claude
 bash /tmp/install_claude.sh "${CLAUDE_CODE_VERSION}"
 test -x /root/.local/bin/claude
 # Fail the build/provision right here on a pin mismatch. mngr's own runtime
-# version check still runs when a claude agent is created, but since the
-# services agent stopped being a claude agent that check would not fire until
-# the first chat agent is created on first boot -- far too late to catch a
-# Dockerfile/settings.toml desync cheaply.
+# version check only warns (version_mismatch = "WARN" in .mngr/settings.toml)
+# and does not run until the first chat agent is created on first boot, so this
+# is the one place an installer/pin desync fails loudly.
 installed_claude_version="$(/root/.local/bin/claude --version | awk '{print $1}')"
 if [ "${installed_claude_version}" != "${CLAUDE_CODE_VERSION}" ]; then
     echo "Installed claude version ${installed_claude_version} does not match pinned CLAUDE_CODE_VERSION ${CLAUDE_CODE_VERSION}" >&2
@@ -304,7 +285,8 @@ if [ ! -x "${codex_native_binary}" ]; then
     exit 1
 fi
 
-# OpenCode CLI (pinned; standalone binary, no Node needed). Its installer reads
+# OpenCode CLI (pinned; standalone binary, no Node needed). Keep in sync with
+# agent_types.opencode.version in .mngr/settings.toml. Its installer reads
 # VERSION and hardcodes $HOME/.opencode/bin, which is NOT on PATH, so symlink the
 # binary into /usr/local/bin like the other downloaded tools.
 curl -fsSL https://opencode.ai/install | VERSION="${OPENCODE_VERSION}" bash
@@ -322,16 +304,16 @@ command -v playwright-cli >/dev/null
 # Antigravity CLI (agy). Installed via a vendored, version-LOCKED copy of Google's
 # installer: the upstream one queries a "latest" manifest, and that manifest is the
 # ONLY source of a release's opaque build id, so a version can be pinned only by
-# capturing its URL + sha512 while it is current. agy_install-1.1.22.sh holds those.
+# capturing its URL + sha512 while it is current. agy_install.sh holds those.
 # Reachable two ways depending on how we were invoked (mirrors the secret-scanner
 # dual-name resolution below): in a Dockerfile build it is baked beside this script as
 # default-workspace-template-install-agy; run straight from the repo (Lima/Modal) it is
-# its sibling agy_install-1.1.22.sh. Installed into /usr/local/bin explicitly rather
+# its sibling agy_install.sh. Installed into /usr/local/bin explicitly rather
 # than the installer's $HOME/.local/bin default, so agy sits with every other
 # downloaded tool and does not depend on HOME surviving into the runtime image.
 agy_installer_dir="$(cd "$(dirname "$0")" && pwd)"
-if [ -f "$agy_installer_dir/agy_install-1.1.22.sh" ]; then
-    bash "$agy_installer_dir/agy_install-1.1.22.sh" /usr/local/bin
+if [ -f "$agy_installer_dir/agy_install.sh" ]; then
+    bash "$agy_installer_dir/agy_install.sh" /usr/local/bin
 else
     bash "$agy_installer_dir/default-workspace-template-install-agy" /usr/local/bin
 fi
@@ -378,7 +360,7 @@ cat > /usr/local/bin/env-converge-capture-hook << 'HOOK'
 [ -d /home/user/workspace/system/services/env_converge ] || exit 0
 [ -e /var/lib/minds/env-converge/rootfs-id ] || exit 0
 cd /home/user/workspace || exit 0
-MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run env-converge capture >/dev/null 2>&1 || true
+MNGR_HOST_DIR="${MNGR_HOST_DIR:-/home/user/.mngr}" timeout 120 uv run --no-sync env-converge capture >/dev/null 2>&1 || true
 HOOK
 chmod +x /usr/local/bin/env-converge-capture-hook
 printf 'DPkg::Post-Invoke { "/usr/local/bin/env-converge-capture-hook || true"; };\n' \

@@ -67,6 +67,8 @@
  * tool calls beside it, or follows the wrap-up reply when it landed after one
  * (`trailing_status`). While the agent compacts, the compaction running now is
  * placed the same way, at the end of the transcript, until its event lands.
+ * The `/compact` the idle sweep sends a Claude agent breaks nothing either: it
+ * shows on its compaction's start chip, not as a bubble.
  *
  * This module reads no timestamps. Pending placeholders are ordered by
  * transcript position; grouping and the positioning of any transitioned step
@@ -103,6 +105,8 @@ import {
   secretResolutionNoteOf,
   secretResolutionOf,
   secretResolutionRequestIdOf,
+  sweepCompactCommandIds,
+  sweepCompactCommands,
 } from "./message-classification";
 
 export type StepStatus = "pending" | "active" | "done";
@@ -610,6 +614,8 @@ export function buildSections(
 ): SectionView[] {
   const { deco, knownSteps, createdOrder } = buildDecorationMap(events, toolResults);
   const noticeAnchorId = autocompactNoticeAnchorId(events);
+  const compactCommands = sweepCompactCommands(events, liveCompaction?.cause ?? null);
+  const compactCommandIds = sweepCompactCommandIds(compactCommands);
 
   const builders: SectionBuilder[] = [];
   let current: SectionBuilder | null = null;
@@ -736,12 +742,14 @@ export function buildSections(
       }
       if (isStatusUserMessage(e)) {
         if (current === null) current = ensureSection(null, "section-pre");
-        current.entries.push({ kind: "status", part: landedCompaction(e, e.event_id === noticeAnchorId) });
+        const command = compactCommands.byCompactionId.get(e.event_id) ?? null;
+        current.entries.push({ kind: "status", part: landedCompaction(e, e.event_id === noticeAnchorId, command) });
         continue;
       }
-      if (isNonBoundaryUserMessage(e)) {
+      if (isNonBoundaryUserMessage(e) || compactCommandIds.has(e.event_id)) {
         // Skill expansions and hidden framework injections (/welcome, image notes, resume
-        // markers) render nowhere on the user rail, so they are dropped here.
+        // markers) render nowhere on the user rail, so they are dropped here, as is the idle
+        // sweep's /compact, which its compaction's start chip shows.
         continue;
       }
 
@@ -801,7 +809,7 @@ export function buildSections(
   // The compaction running now goes where its event will land: at the end of the transcript.
   if (liveCompaction !== null && !endsOnLandedCompaction(events)) {
     if (current === null) current = ensureSection(null, "section-pre");
-    current.entries.push({ kind: "status", part: runningCompaction(liveCompaction.cause) });
+    current.entries.push({ kind: "status", part: runningCompaction(liveCompaction.cause, compactCommands.running) });
   }
 
   // Pending roster: created steps that never transitioned anywhere, in

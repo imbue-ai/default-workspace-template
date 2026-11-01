@@ -6,11 +6,13 @@ import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from wsgiref.types import WSGIApplication
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import Encoding
 from cryptography.hazmat.primitives.serialization import PublicFormat
 from flask import Flask
+from werkzeug.serving import WSGIRequestHandler
 from werkzeug.serving import make_server
 from werkzeug.wrappers import Request
 from werkzeug.wrappers import Response
@@ -32,6 +34,22 @@ def set_cookies_by_name(response: Response) -> dict[str, str]:
 
 
 @contextmanager
+def serve_wsgi(
+    app: WSGIApplication, request_handler: type[WSGIRequestHandler] | None = None
+) -> Generator[str, None, None]:
+    """Serve ``app`` on a loopback port through ``request_handler`` until the block ends; yields its base URL."""
+    server = make_server("127.0.0.1", 0, app, request_handler=request_handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield f"http://127.0.0.1:{server.server_port}"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+@contextmanager
 def serve_json(body: object) -> Generator[str, None, None]:
     """Serve ``body`` as JSON at every path of a loopback server; yields the server's URL."""
 
@@ -39,14 +57,8 @@ def serve_json(body: object) -> Generator[str, None, None]:
     def app(request: Request) -> Response:
         return Response(json.dumps(body), mimetype="application/json")
 
-    server = make_server("127.0.0.1", 0, app)
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield f"http://127.0.0.1:{server.server_port}/share/jwks.json"
-    finally:
-        server.shutdown()
-        thread.join()
+    with serve_wsgi(app) as base_url:
+        yield f"{base_url}/share/jwks.json"
 
 
 def _git_environ(repo: Path) -> dict[str, str]:
@@ -130,6 +142,7 @@ def build_agent_test_app(
         pending_logins=PendingLoginRegistry(),
         auth_label=auth_label,
         get_registered_apps=lambda: apps,
+        get_connect_info=lambda: {"ice_servers": [], "candidates": []},
         admit_agent=build_agent_admitter(context, lambda: list(apps)),
     )
     register_agent_routes(

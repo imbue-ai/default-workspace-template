@@ -2,6 +2,8 @@
 name: datalib
 description: Search and mirror the user's own personal data (chat history, Slack, email, GitHub, Notion, contacts, messages) with datalib, an UNANNOUNCED feature that is off by default. Use ONLY when the user explicitly says "datalib" -- never suggest, mention, or start it proactively, and never reach for it just because a request is about their past messages or mail.
 compatibility: Nothing of datalib is installed until this skill is first used; scripts/install_datalib.sh then downloads the binaries and datalib's own Node runtime (about 195 MB together). Needs curl and the latchkey gateway (present in a default-workspace-template agent).
+metadata:
+  author: imbue
 ---
 
 # datalib
@@ -35,7 +37,7 @@ DATA_ROOT="$HOME/workspace/data/.skills/datalib/Default"   # the data root holdi
 DATALIB_CONFIG="$DATA_ROOT/config.toml"
 
 # Nothing of datalib is installed until it is first used. This installs the
-# binaries (pinned to datalib v0.45.0), datalib's agent guide, and the Node
+# binaries (pinned to datalib v0.48.0), datalib's agent guide, and the Node
 # runtime a sync shells out to, about 195 MB together on the first run, then
 # adds the Datalib app to the workspace and starts it; from then on the app is
 # listed. After the first run it only checks that all of it is in place and
@@ -57,11 +59,11 @@ mkdir -p "$DATA_ROOT"
 
    ```bash
    # File the sync. Prints one request id per line (one per source).
-   python3 .agents/skills/datalib/scripts/sync_request.py open slack/ingest --by "${MINDS_CHAT_ID:-agent}"
+   uv run --no-sync .agents/skills/datalib/python/datalib_skill/sync_request.py open slack/ingest --by "${MINDS_CHAT_ID:-agent}"
 
    # Wait for those requests in the background, then END YOUR TURN.
-   python3 system/scripts/run_in_background.py --description "Sync Slack into datalib" -- \
-     python3 .agents/skills/datalib/scripts/sync_request.py wait <request-id>...
+   python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Sync Slack into datalib" -- \
+     uv run --no-sync .agents/skills/datalib/python/datalib_skill/sync_request.py wait <request-id>...
    ```
 
    Tell the user the sync is running and that you will answer when it is
@@ -119,15 +121,34 @@ mkdir -p "$DATA_ROOT"
    alongside it, since a list in that file *replaces* the defaults rather than
    adding to them (see `system/services/host_backup/README.md`).
 
-## Driving datalib: read its agent guide
+## Driving datalib: start at `datalib-step help`
 
-datalib ships its own guide for agents using it. **Read it before doing any
-datalib work** -- how to write the pipeline config, run a sync, query the
-mirrored data, and use the HTTP API all live there, and they change with the
-version pinned above. The install script saved a copy beside the binaries:
+datalib documents itself, and everything it has to say is reachable from one
+page. **Run this before doing any datalib work:**
 
 ```bash
-cat "$HOME/.local/share/datalib/v0.45.0/docs/agent_user.md"
+datalib-step help
+```
+
+It prints the steps that set a source up from the shell (`datalib-dag init`,
+`datalib-step examples <type> --append`, a probe, a sync, a search), then an
+index of every other page. Those pages print from the installed binary, so
+they always match the tools you have:
+
+- `datalib-step help agent` -- the agent guide: how to write the config, run a
+  sync, query the mirrored data, use the HTTP API, and troubleshoot.
+- `datalib-step help raw-stores` -- what each source's raw store holds, and
+  how to read it and follow its changes. Read it before querying a store
+  directly.
+- `datalib-step help apps` -- building on datalib: who starts syncs, how fresh
+  the mirror is, and adding a step of your own.
+- `datalib-step help <type>` and `datalib-step examples <type>` -- one source:
+  what it mirrors, how it signs in, and its config.
+
+The install script also saved the agent guide as a file beside the binaries:
+
+```bash
+cat "$HOME/.local/share/datalib/v0.48.0/docs/agent_user.md"
 ```
 
 It is the guide at the same tag the binaries are installed from, so it matches
@@ -135,7 +156,7 @@ the tools you have. Two docs it links are saved with it, at the same relative
 paths: `user/getting_your_data.md` (each source's setup) and
 `user/config_examples/all_sources.toml` (a config naming every source). Its
 other relative links resolve against
-`https://github.com/imbue-ai/datalib/blob/v0.45.0/docs/`, and that is also
+`https://github.com/imbue-ai/datalib/blob/v0.48.0/docs/`, and that is also
 where to read the guide if the local copy is missing. Don't rely on remembered
 command lines or config shapes -- go read it.
 
@@ -181,7 +202,10 @@ to hold:
 If a sync of one of these sources returns Cloudflare challenge pages instead
 of data, check proxying first; an Imbue Studio app too old to do either is the
 other likely cause. Failing both, fall back to an on-disk export (the `claude`
-source's `export` method) for that data and tell the user why.
+or `chatgpt` source's `export` method) for that data and tell the user why. A
+`chatgpt` source can also take both: its export fills in every conversation
+first, past the API's rate limit, and the API then downloads only what changed
+since (`datalib-step help chatgpt`).
 
 ## Notes
 

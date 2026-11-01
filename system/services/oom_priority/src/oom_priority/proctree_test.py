@@ -1,8 +1,20 @@
-"""Tests for the /proc process-tree walk, against a fake ``/proc`` layout."""
+"""Tests for the /proc process-tree walk and identity readers, against a fake ``/proc`` layout."""
 
+import os
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
-from oom_priority.proctree import list_descendant_pids
+import pytest
+
+from oom_priority.proctree import (
+    is_thread,
+    list_descendant_pids,
+    read_environ_value,
+    read_start_ticks,
+)
+from oom_priority.testing import write_fake_process
 
 
 def _write_fake_proc_children(proc_dir: Path, pid: int, children: list[int]) -> None:
@@ -40,3 +52,59 @@ def test_descendant_walk_leaves_out_threads_listed_as_children(tmp_path: Path) -
     _write_fake_proc_status(tmp_path, 14, tgid=11)
     found = list_descendant_pids(10, proc_dir=tmp_path)
     assert sorted(found) == [11, 12]
+
+
+def test_start_ticks_are_read_past_a_command_name_with_spaces_and_parentheses(
+    tmp_path: Path,
+) -> None:
+    write_fake_process(tmp_path, 42, start_ticks=123456, comm="a) b (c")
+    assert read_start_ticks(42, proc_dir=tmp_path) == 123456
+    assert read_start_ticks(43, proc_dir=tmp_path) is None
+
+
+def test_a_command_name_that_is_not_utf8_neither_hides_the_start_time_nor_raises(
+    tmp_path: Path,
+) -> None:
+    # The kernel writes comm into stat and status as raw bytes.
+    write_fake_process(tmp_path, 42, start_ticks=123456, tgid=7)
+    entry = tmp_path / "42"
+    for name in ("stat", "status"):
+        (entry / name).write_bytes(
+            (entry / name).read_bytes().replace(b"claude", b"cl\xffude")
+        )
+    assert read_start_ticks(42, proc_dir=tmp_path) == 123456
+    assert is_thread(42, proc_dir=tmp_path)
+
+
+@pytest.mark.skipif(not Path("/proc/self/stat").exists(), reason="needs a real /proc")
+def test_a_real_process_has_a_start_time_and_its_thread_is_not_a_process() -> None:
+    assert read_start_ticks(os.getpid()) is not None
+    assert not is_thread(os.getpid())
+
+    is_running = threading.Event()
+    is_done = threading.Event()
+    thread = threading.Thread(target=lambda: (is_running.set(), is_done.wait(5)))
+    thread.start()
+    try:
+        assert is_running.wait(5)
+        assert thread.native_id is not None
+        assert is_thread(thread.native_id)
+    finally:
+        is_done.set()
+        thread.join()
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/environ").exists(), reason="needs a real /proc"
+)
+def test_a_real_processs_environment_is_read_as_it_was_started() -> None:
+    child = subprocess.Popen(
+        [sys.executable, "-c", "import sys; sys.stdin.read()"],
+        stdin=subprocess.PIPE,
+        env={"OTHER": "MNGR_AGENT_ID=agent-def", "MNGR_AGENT_ID": "agent-abc"},
+    )
+    try:
+        assert read_environ_value(child.pid, "MNGR_AGENT_ID") == "agent-abc"
+        assert read_environ_value(child.pid, "MISSING") is None
+    finally:
+        child.communicate()

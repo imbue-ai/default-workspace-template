@@ -20,14 +20,17 @@ vi.hoisted(() => {
 const agentState: {
   agent: ChatSnapshot | null;
   provisional: { account_id: string; phase?: string; model_pick?: unknown } | undefined;
+  mainChatId: string | null;
 } = {
   agent: null,
   provisional: undefined,
+  mainChatId: null,
 };
 // Every launch choice made for a chat with no agent yet, as (chat id, account id, pick).
 const launchChoices: [string, string, unknown][] = [];
 vi.mock("../models/Chats", () => ({
   getChatById: () => agentState.agent ?? undefined,
+  getMainChatId: () => agentState.mainChatId,
   getProvisionalChat: () => agentState.provisional,
   setLaunchChoice: (chatId: string, accountId: string, pick: unknown) => {
     launchChoices.push([chatId, accountId, pick]);
@@ -137,8 +140,10 @@ const providerState: { accounts: unknown[]; defaultId: string | null; isLoaded: 
   defaultId: null,
   isLoaded: true,
 };
-// Every time something opened the provider chooser, with whether it asked to hear of the sign-in.
-const chooserOpens: { hasOnSignedIn: boolean }[] = [];
+// Every time something opened the provider chooser, with whether it asked to hear of the sign-in and whether it
+// offered a room; the last intent is kept so a test can pick the room.
+const chooserOpens: { hasOnSignedIn: boolean; hasOnRoomChosen: boolean }[] = [];
+let lastChooserIntent: { onRoomChosen?: () => void } = {};
 // Every pin or unpin the star asked the server for, as (account id, pinned) pairs.
 const pins: [string, boolean][] = [];
 vi.mock("../models/Providers", () => ({
@@ -154,8 +159,13 @@ vi.mock("../models/Providers", () => ({
   areAccountsLoaded: () => providerState.isLoaded,
   isAccountSignedOut: (id?: string | null) =>
     !!id && providerState.isLoaded && !providerState.accounts.some((a) => (a as { id: string }).id === id),
-  openProviderChooser: (intent: { onSignedIn?: unknown } = {}) =>
-    chooserOpens.push({ hasOnSignedIn: intent.onSignedIn !== undefined }),
+  openProviderChooser: (intent: { onSignedIn?: unknown; onRoomChosen?: () => void } = {}) => {
+    lastChooserIntent = intent;
+    chooserOpens.push({
+      hasOnSignedIn: intent.onSignedIn !== undefined,
+      hasOnRoomChosen: intent.onRoomChosen !== undefined,
+    });
+  },
   deleteAccount: () => Promise.resolve(),
   renameAccount: () => Promise.resolve(),
   loadAccounts: () => Promise.resolve(),
@@ -172,15 +182,18 @@ vi.mock("../shell", () => ({
 // armed card's Model row reopens it. Both recorded by account id.
 const begun: string[] = [];
 const reopened: string[] = [];
+const roomSwitches: string[] = [];
+// The chats awaiting their first send that were launched as rooms, by chat id.
+const roomLaunches: string[] = [];
 vi.mock("./SwitchDialog", async (importOriginal) => ({
   takeBackSwitch: (await importOriginal<typeof import("./SwitchDialog")>()).takeBackSwitch,
   beginSwitchTo: (_chatId: string, account: { id: string }) => begun.push(account.id),
   openSwitchDialog: (_chatId: string, account: { id: string }) => reopened.push(account.id),
+  switchToRoom: (chatId: string) => Promise.resolve(roomSwitches.push(chatId)),
+  launchAwaitingChatAsRoom: (chatId: string) => Promise.resolve(roomLaunches.push(chatId)),
 }));
 
 import m from "mithril";
-
-import { hoverTooltipText } from "@imbue/workspace-ui/src/testing/tooltip";
 
 import type { ChatSnapshot } from "../models/Chats";
 import { chatSnapshotFixture, handoffStateFixture, rebindStateFixture } from "../models/chatSnapshotFixture";
@@ -295,8 +308,12 @@ beforeEach(() => {
   providerState.defaultId = null;
   providerState.isLoaded = true;
   chooserOpens.length = 0;
+  lastChooserIntent = {};
+  roomLaunches.length = 0;
   agentState.provisional = undefined;
   agentState.agent = chatSnapshotFixture("a1", { active_agent: { harness: "claude", account_id: "acct-1" } });
+  agentState.mainChatId = null;
+  roomSwitches.length = 0;
   catalogState.catalog = catalogOf();
   settingsState.choice = { identity: { model_id: "opus", effort: null, fast: false }, matched: OPUS, pending: null };
   providerState.accounts = [ACCOUNT];
@@ -339,6 +356,11 @@ describe("the combo card", () => {
     render();
     expect(ROOT().querySelector(".model-selector-provisional")?.textContent).toBe("Anthropic");
     expect(ROOT().querySelector(".model-selector-trigger")).toBeNull();
+    // With an account signed in the first send launches on it, so this press is the one way to the room row.
+    click(".model-selector-provisional");
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: false, hasOnRoomChosen: true }]);
+    lastChooserIntent.onRoomChosen?.();
+    expect(roomLaunches).toEqual(["a1"]);
   });
 
   it("says a chat with no agent yet is not connected when no provider is signed in, and opens the chooser", () => {
@@ -348,7 +370,7 @@ describe("the combo card", () => {
     render();
     expect(screenText()).toContain("Not connected");
     click(".model-selector-not-connected");
-    expect(chooserOpens).toEqual([{ hasOnSignedIn: false }]);
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: false, hasOnRoomChosen: true }]);
   });
 
   it("does not call a chat not connected before the account list has loaded", () => {
@@ -373,7 +395,7 @@ describe("the combo card", () => {
     render();
     expect(screenText()).toContain("Not connected");
     click(".model-selector-not-connected");
-    expect(chooserOpens).toEqual([{ hasOnSignedIn: true }]);
+    expect(chooserOpens).toEqual([{ hasOnSignedIn: true, hasOnRoomChosen: false }]);
   });
 
   it("keeps a chip under a running chat that names no account while providers are signed in", () => {
@@ -421,43 +443,6 @@ describe("the combo card", () => {
     render();
     expect(ROOT().querySelector(".model-selector-trigger")?.textContent).toContain("next");
     setPendingAccount("a1", null);
-  });
-
-  it("renders a read-only harness without an effort control", () => {
-    // agy: its `/model` is an interactive TUI with no scriptable form, so a picker there
-    // offers a switch that cannot work.
-    const withEffort = {
-      ...OPUS,
-      efforts: [
-        { level: "low", in_picker: true },
-        { level: "high", in_picker: true },
-      ],
-    };
-    catalogState.catalog = catalogOf({ switch_mode: "read_only", options: [withEffort] });
-    settingsState.choice = {
-      identity: { model_id: "opus", effort: "low", fast: false },
-      matched: withEffort,
-      pending: null,
-    };
-    render();
-    click(".model-selector-trigger");
-    expect(document.querySelector<HTMLInputElement>('input[type="range"]')?.disabled).toBe(true);
-  });
-
-  it("stops explaining a read-only harness once its catalog says the model can be switched", () => {
-    vi.useFakeTimers();
-    catalogState.catalog = catalogOf({ switch_mode: "read_only" });
-    render();
-    click(".model-selector-trigger");
-    const modelRow = document.querySelector<HTMLElement>('[data-menu-row="model"]')!;
-    expect(hoverTooltipText(modelRow)).toContain("run /model or /effort");
-
-    catalogState.catalog = catalogOf();
-    render();
-    // The read-only value row gives way to the interactive submenu row; whatever element
-    // stands in the slot now must explain nothing.
-    const switched = document.querySelector<HTMLElement>('[data-menu-row="model"]')!;
-    expect(hoverTooltipText(switched)).toBeNull();
   });
 
   it("renders an effort slider only when there is more than one stop", () => {
@@ -726,6 +711,21 @@ describe("the combo card", () => {
     expect(getPendingAccountId("a1")).toBeNull();
     expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
     expect(started).toEqual([]);
+  });
+
+  it("offers to make the chat a room from the Provider submenu, the main chat included", () => {
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="providers"]');
+    clickSubmenuRow("Chat room");
+    expect(roomSwitches).toEqual(["a1"]);
+    expect(document.querySelector('[data-menu-part="menu"]')).toBeNull();
+
+    agentState.mainChatId = "a1";
+    render();
+    click(".model-selector-trigger");
+    click('[data-menu-row="providers"]');
+    expect(document.querySelector(".model-provider-menu-room")).not.toBeNull();
   });
 
   it("hands an account on the chat's own harness to the dialog too, now that a chat can change account in place", () => {
@@ -1301,30 +1301,6 @@ describe("the combo card", () => {
     chatSettingsState.settings = { ...DEFAULT_CHAT_SETTINGS, autocompact_default: false };
     click('[data-menu-row="autocompact"]');
     expect(document.querySelector('[data-autocompact="off"]')?.getAttribute("aria-checked")).toBe("true");
-  });
-
-  it("states auto-compact on a read-only harness without a submenu to open", () => {
-    catalogState.catalog = catalogOf({ switch_mode: "read_only", supports_compaction: true });
-    autocompactState.state = { is_enabled: false };
-    render();
-    click(".model-selector-trigger");
-    const row = document.querySelector<HTMLElement>('[data-menu-row="autocompact"]');
-    if (row === null) throw new Error("no auto-compact row");
-    expect(row.textContent).toContain("Off");
-    expect(row.querySelector("svg")).toBeNull();
-    click('[data-menu-row="autocompact"]');
-    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
-  });
-
-  it("gives a read-only harness no model list to open", () => {
-    // agy's `/model` is an interactive TUI with no scriptable form. A chevron on that row
-    // would be a promise the card cannot keep.
-    catalogState.catalog = catalogOf({ switch_mode: "read_only" });
-    render();
-    click(".model-selector-trigger");
-    expect(document.querySelector('[data-menu-row="model"]')?.querySelector("svg")).toBeNull();
-    click('[data-menu-row="model"]');
-    expect(document.querySelector('[data-menu-part="submenu"]')).toBeNull();
   });
 
   it("survives a dynamic harness with no static options", () => {
