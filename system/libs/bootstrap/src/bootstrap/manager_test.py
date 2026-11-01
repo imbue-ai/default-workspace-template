@@ -28,15 +28,12 @@ from bootstrap.manager import (
     UPDATE_RECOVER_CRON_NAME,
     UPDATE_RECOVER_EXIT_EMERGENCY,
     WORKSPACE_ROOT_DIR,
-    TimezoneFetchError,
     _apply_container_timezone,
     _configure_git_global,
     _ensure_git_identity,
-    _fetch_user_timezone,
     _initialize_workspace_main_branch,
     _install_runtime_cron_entries,
     _migrate_cron_entries_to_routines,
-    _parse_timezone_response,
     _read_host_name,
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
@@ -563,38 +560,47 @@ def test_apply_container_timezone_tolerates_oserror(tmp_path: Path) -> None:
 # _set_container_timezone
 
 
-def _set_timezone_in(tmp_path: Path, fetched_tz_name: str) -> tuple[Path, Path]:
-    """Run _set_container_timezone against tmp paths; return (localtime, cache).
+def _set_timezone_in(
+    tmp_path: Path, timezone_file_content: str | None
+) -> tuple[Path, Path]:
+    """Run _set_container_timezone against tmp paths; return (localtime, timezone file).
 
-    Repeat calls on one ``tmp_path`` share the cache, like successive boots.
+    ``timezone_file_content`` is what the creating client wrote to
+    ``data/.state/user_timezone`` (None leaves the file as it is, absent on the
+    first call). Repeat calls on one ``tmp_path`` share the file, like
+    successive boots.
     """
     zoneinfo = tmp_path / "zoneinfo"
     if not zoneinfo.exists():
         _make_zoneinfo_tree(tmp_path)
     etc = tmp_path / "etc"
     etc.mkdir(exist_ok=True)
-    cache = tmp_path / "data" / ".state" / "user_timezone"
+    timezone_file = tmp_path / "data" / ".state" / "user_timezone"
+    if timezone_file_content is not None:
+        timezone_file.parent.mkdir(parents=True, exist_ok=True)
+        timezone_file.write_text(timezone_file_content)
     _set_container_timezone(
-        fetched_tz_name,
-        cache_path=cache,
+        timezone_file_path=timezone_file,
         zoneinfo_dir=zoneinfo,
         localtime_path=etc / "localtime",
         timezone_path=etc / "timezone",
     )
-    return etc / "localtime", cache
+    return etc / "localtime", timezone_file
 
 
-def test_set_container_timezone_falls_back_to_the_last_applied_zone(
-    tmp_path: Path,
-) -> None:
-    # A boot whose fetch succeeded, then a boot on a fresh rootfs (recreated
-    # container) whose fetch failed: the second must still land on the user's
-    # zone rather than the image's UTC.
-    localtime, cache = _set_timezone_in(tmp_path, "America/New_York")
-    assert cache.read_text() == "America/New_York\n"
+def test_set_container_timezone_applies_the_zone_the_file_names(tmp_path: Path) -> None:
+    localtime, _ = _set_timezone_in(tmp_path, "America/New_York\n")
+
+    assert Path(os.readlink(localtime)).name == "New_York"
+
+
+def test_set_container_timezone_reapplies_on_a_fresh_rootfs(tmp_path: Path) -> None:
+    # A recreated container loses /etc/localtime; the next boot must land back
+    # on the user's zone rather than the image's UTC.
+    localtime, _ = _set_timezone_in(tmp_path, "America/New_York\n")
     localtime.unlink()
 
-    _set_timezone_in(tmp_path, "")
+    _set_timezone_in(tmp_path, None)
 
     assert Path(os.readlink(localtime)).name == "New_York"
 
@@ -602,89 +608,27 @@ def test_set_container_timezone_falls_back_to_the_last_applied_zone(
 def test_set_container_timezone_leaves_the_image_zone_with_nothing_to_apply(
     tmp_path: Path,
 ) -> None:
-    localtime, cache = _set_timezone_in(tmp_path, "")
+    localtime, timezone_file = _set_timezone_in(tmp_path, None)
     assert not localtime.exists()
-    assert not cache.exists()
+    assert not timezone_file.exists()
 
 
-def test_set_container_timezone_falls_back_when_the_fetched_zone_cannot_be_applied(
+def test_set_container_timezone_leaves_the_image_zone_on_an_unusable_name(
     tmp_path: Path,
 ) -> None:
-    localtime, cache = _set_timezone_in(tmp_path, "America/New_York")
-    localtime.unlink()
-
-    _set_timezone_in(tmp_path, "Mars/Olympus_Mons")
-
-    assert cache.read_text() == "America/New_York\n"
-    assert Path(os.readlink(localtime)).name == "New_York"
-
-
-def test_set_container_timezone_tolerates_a_non_utf8_cache(tmp_path: Path) -> None:
-    cache = tmp_path / "data" / ".state" / "user_timezone"
-    cache.parent.mkdir(parents=True)
-    cache.write_bytes(b"\xff\xfe")
-
-    localtime, _ = _set_timezone_in(tmp_path, "")
+    localtime, _ = _set_timezone_in(tmp_path, "Mars/Olympus_Mons\n")
 
     assert not localtime.exists()
 
 
-def test_set_container_timezone_applies_the_fetched_zone_when_the_cache_is_unwritable(
-    tmp_path: Path,
-) -> None:
-    cache = tmp_path / "data" / ".state" / "user_timezone"
-    cache.mkdir(parents=True)
+def test_set_container_timezone_tolerates_a_non_utf8_file(tmp_path: Path) -> None:
+    timezone_file = tmp_path / "data" / ".state" / "user_timezone"
+    timezone_file.parent.mkdir(parents=True)
+    timezone_file.write_bytes(b"\xff\xfe")
 
-    localtime, _ = _set_timezone_in(tmp_path, "America/New_York")
+    localtime, _ = _set_timezone_in(tmp_path, None)
 
-    assert Path(os.readlink(localtime)).name == "New_York"
-
-
-# _fetch_user_timezone
-
-
-def test_fetch_user_timezone_returns_empty_when_gateway_env_missing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
-    monkeypatch.delenv("LATCHKEY_GATEWAY_PASSWORD", raising=False)
-    assert _fetch_user_timezone() == ""
-
-
-# _parse_timezone_response
-
-
-def test_parse_timezone_response_returns_the_zone_name() -> None:
-    assert (
-        _parse_timezone_response(b'{"timezone": "America/New_York"}')
-        == "America/New_York"
-    )
-
-
-def test_parse_timezone_response_accepts_the_documented_unknown_answer() -> None:
-    """{"timezone": ""} is the desktop client's valid "unknown" answer -- it must
-    come back as "" (fall back to UTC), not raise (which would be retried)."""
-    assert _parse_timezone_response(b'{"timezone": ""}') == ""
-
-
-@pytest.mark.parametrize(
-    "body",
-    [
-        b"[]",
-        b'"America/New_York"',
-        b"{}",
-        b'{"timezone": null}',
-        b'{"timezone": 42}',
-    ],
-)
-def test_parse_timezone_response_rejects_wrong_shapes(body: bytes) -> None:
-    with pytest.raises(TimezoneFetchError):
-        _parse_timezone_response(body)
-
-
-def test_parse_timezone_response_rejects_a_non_json_body() -> None:
-    with pytest.raises(ValueError):
-        _parse_timezone_response(b"<html>bad gateway</html>")
+    assert not localtime.exists()
 
 
 # _recover_interrupted_update

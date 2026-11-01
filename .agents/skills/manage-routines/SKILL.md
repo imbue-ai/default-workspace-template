@@ -27,9 +27,10 @@ with `--app <name>`, never a loop or a thread inside its service.
 
 ## First: confirm the timezone
 
-Schedules are in the container's local time, which the bootstrap sets from the
-user's machine at each boot. The user may have moved since, so before writing
-a schedule check it:
+Schedules are in the container's local time, which the bootstrap applies at
+each boot from `data/.state/user_timezone` (written once by the client that
+created the workspace). The user may have moved since, so before writing a
+schedule check it:
 
 ```bash
 latchkey curl http://latchkey-self.invalid/minds-api-proxy/api/v1/timezone   # -> {"timezone": "America/Los_Angeles"}

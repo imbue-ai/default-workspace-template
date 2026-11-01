@@ -13,6 +13,10 @@
 #                                                   link classifier is tested against
 #   style_guide.md                                  the base code style guide,
 #                                                   docs/system/style_guide.md
+#   apps/minds/imbue/minds/desktop_client/workspace_profile_contract.json
+#                                                   the workspace profile snapshot's
+#                                                   format and keys, which
+#                                                   workspace_profile is tested against
 #
 # A sparse, blob-filtered fetch pulls only those paths and the result carries a
 # .commit marker naming the pin and the asset list, so re-running with both
@@ -30,6 +34,7 @@ ASSET_PATHS=(
     apps/minds/imbue/minds/desktop_client/static
     apps/minds/electron/link-externality-vectors.json
     style_guide.md
+    apps/minds/imbue/minds/desktop_client/workspace_profile_contract.json
 )
 
 read -r GIT_URL REV < <(python3 "$REPO_ROOT/system/scripts/workspace_bare_scripts/list_mngr_plugins.py" --pin --repo-root "$REPO_ROOT")
