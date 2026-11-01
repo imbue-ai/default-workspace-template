@@ -123,7 +123,8 @@ under `system/apps/<your-package>/` so they get an isolated window and origin.
   manual port checks (`ss -tln`) is unnecessary. If you are picking a port
   manually for the wrap-existing escape hatch, check `ss -tln` and avoid `8000`
   (system_interface), `8010` (the chat app), `8030` (the Getting Started app),
-  `8040` (the System Monitor app) and `8081` (the browser service).
+  `8040` (the System Monitor app), `8083` (the Screen's CDP proxy) and `8090` (the
+  Screen service).
   Two things do not show up there: the `agent-observer` program binds no port at
   all, and a preview of any app (`update-app`'s `preview_app.py`) takes free
   ports at boot, so nothing to avoid is written down for it.
@@ -536,6 +537,24 @@ Two cases, two patterns:
 - **Static assets shipped alongside the .py file** (templates,
   default configs, bundled JSON): `Path(__file__).parent / "assets/..."`
   is the right pattern.
+
+### Renaming an app
+
+An app's `display_name` names more than its windows: every window's "Chat
+about this app" button opens the chat titled `<display_name> Chat` (the
+multiplayer spec, section 9). The button finds that chat again by the
+`app_chat` label it carries with the app's registered name, so a renamed app
+keeps its chat; its title is what no longer matches, so rename the chat too.
+`system/scripts/rename_chat.py` does it through the chat app's rename route
+(`POST /api/chats/<id>/rename`, beside the send route `message_chat.py` posts
+to):
+
+```bash
+python3 system/scripts/rename_chat.py --title "<old display name> Chat" --new-title "<new display name> Chat"
+```
+
+It exits 0 when the chat was renamed or there is no chat under the old title
+(nothing to do), and non-zero when the chat app is unreachable or refused.
 
 ## Step 3: Verify (one call)
 

@@ -83,8 +83,9 @@ Bootstrap's role is only the fast phase: it applies the overlay symlinks from
 `system/scripts/env.d/overlay-paths.json` synchronously before exec'ing supervisord,
 so no service ever writes to a rootfs path that should persist.
 
-Heavy packages not needed by boot-time services (currently the Fortress
-browser + its Chromium apt libs) install this way on first boot. If something
+Heavy packages not needed by boot-time services (currently the Screen's stack
+with the neko binary, and the Fortress browser + its Chromium apt libs, all in
+`system/scripts/env.d/2000-screen.sh`) install this way on first boot. If something
 tries to use one before its unit has finished, it fails loudly -- that is
 acceptable. Check `supervisorctl status env-converge`,
 `/var/log/supervisor/env-converge-stdout.log`, or the concrete satisfied

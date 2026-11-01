@@ -405,13 +405,21 @@ The intake route is how a text enters a chat from outside a chat page
 text, how the receiving chat is chosen (`target`: `new_chat`, `main_chat` (the
 main chat, else the most recently messaged chat, else a new one; the desktop launcher's Enter), `current_chat` from
 the `window_path` the text was typed into, else the main chat, else the most recently messaged chat;
-`chat_selector`, the one chat there is or the user's pick; or `chat` with a
-`chat_id`), and whether the text is sent or drafted (`is_draft`), plus the
-sender's `client_id` and `desktop_id` for the shell's activity log. The chat's
-manifest declares the desktop's `new`, `send`, and `draft` launch paths as POSTs
-onto it with those fields preset, so the launcher's rows, the Getting Started
-tiles, the avatar dialog's "Design your own...", and `workspace-layout open chat
---launch new --param message=...` all arrive here through the shell. The route
+`chat_selector`, the one chat there is or the user's pick; `lounge`, the chat
+titled Lounge, made as a room when there is none; `app_chat`, the chat labelled `app_chat` with the `app`'s
+registered name, else the one titled "<app_display_name> Chat" by the rule a
+create refuses a taken name by (`naming.py`'s `is_name_conflict`: canonical
+forms compared case-insensitively, so "docs chat" is found rather than refused),
+made with that title and label on the default account when there is none (a
+window's "Chat about this app"; the intake is held with a `hint` the root puts
+on the composer); or `chat` with a `chat_id`),
+and whether the text is sent or drafted (`is_draft`), plus the sender's
+`client_id` and `desktop_id` for the shell's activity log. The chat's manifest
+declares the desktop's `main`, `new`, `send`, `draft`, `lounge`, and `app-chat`
+launch paths as POSTs onto it with those fields preset, so the launcher's rows, the
+Getting Started tiles, the avatar dialog's "Design your own...", a click on a
+person in the tray, and `workspace-layout open chat --launch new --param
+message=...` all arrive here through the shell. The route
 answers the pure path the shell opens or navigates a window at: `/?chat=<id>` for
 a send or a create it finished on the server (a send is delivered in the
 background unless `is_delivery_awaited`), `/?chat=<id>&intake=<token>` for a
@@ -970,6 +978,124 @@ Studio app shows nothing to a user already reading the chat. When a report turns
 chat from unwatched to watched, the app is told the chat was read
 (`imbue_studio_notifications.py`, through the latchkey gateway as the chat's current
 agent, off the request thread).
+
+## Who said what
+
+Every request reaches the chat app with the shell's `X-Imbue-Identity` header
+(`identity.py`; the keys are `workspace_layout.identity`): the owner, a signed-in
+person the workspace is shared with (`user:<id>`), or a visiting agent
+(`agent:<id>`). A present header that does not parse is refused with 400; only a
+missing or blank one reads as the owner (an in-workspace caller, such as a
+script). Every route that delivers a person's words attributes them the same
+way: the message route, a new chat's first message (the create's and the
+new-chat intake's), and the message that confirms a switch. A send from anyone but the owner is delivered
+to the harness as `[from: <name>] <text>` when the harness the words are for reads
+a prefix (`authors.py`; an agent's chat does, a room does not, the harness being the
+switch's target while one is in flight, the room being created for a chat with no
+agent yet, else the active agent's; never for a slash command or bash-mode input,
+which the harness would not understand prefixed), and every sender a proxy vouched
+for, the owner's page included, is recorded in the chat's `authors.jsonl` beside
+its transcript: the message id, the sender's key and name, and the hash of the
+delivered text. The owner's sends are never prefixed, and a request with no header
+is delivered as typed and recorded nowhere. A send to an id the app does not know
+(no listed agent, no chat being created) answers 404 before anything is written.
+When the transcript's `user_message` events are
+read (the backlog, the live stream, `GET /api/chats/<chat-id>/events`), each is
+stamped `author` and `author_name` from the nearest annotation whose hash matches
+its text, else from a `[from: <name>]` prefix the harness kept (a turn merged from
+several queued messages), else not at all: an unstamped turn is the owner's. The
+prefix is stripped into `display_body` so the page never shows it, and a send held
+while the chat converges is listed in the snapshot's `held_sends` without it too; the
+terminal view shows the pane as it is.
+
+The page draws its own turns on the right and another person's on the left under
+their name and picture, from two routes: `GET /api/me` answers the page's own
+participant key, and `GET /api/participants` relays the shell's roster
+(`GET /api/roster` there; `roster_client.py` caches it briefly), with every
+picture the shell serves from its own origin (a person's profile picture, the
+workspace agent's avatar icon) rewritten to `GET /api/participants/<key>/picture`
+(the shell URL's query kept, so a versioned picture stays cached), which the chat
+app proxies from the shell -- asked at that path with the page's own query, its
+caching answer relayed -- so the page needs no second origin.
+The agent's prose is drawn as bubbles under that picture and the workspace's name,
+one per reply (tool chips and cards sit between them, outside the bubbles).
+
+## Rooms and mentions
+
+A room is a second kind of chat (the multiplayer spec, section 7.3): a message log
+among the workspace's people with no AI agent. Like every chat it is an mngr agent,
+of the template's `room` type (`[agent_types.room]` in `.mngr/settings.toml`): its
+process is the room's reader, `system/scripts/workspace_bare_scripts/room_agent.py`, which appends what
+`mngr message <room>` types into its pane to the room's transcript, the common
+transcript at `events/room/common_transcript/events.jsonl` under the agent's state
+dir, which `mngr transcript <room>` renders. The chat app's `room` harness
+(`harnesses/room/`) tails that one file and appends people's messages to it through
+the room's harness session, so the chat routes serve a room as they serve any chat:
+`/events` and `/stream` answer its messages as `user_message` events stamped with
+their authors from the chat's annotations (a message the reader appended is the
+workspace agent's), `/message` appends, and rename, delete, stop, start, presence,
+and watchers work unchanged. A chat snapshot's `kind` says which a chat is, from
+the harness its active agent runs; the main chat may be switched into a room and
+keeps its star, though make-main never stars a room and the star never falls to
+one. Agent chats and rooms are one list, one id shape, and one push.
+
+A room starts from the awaiting chat's provider chooser ("Chat room (no provider)",
+`POST /api/chats/create` with `"kind": "room"`), which the create guard
+(`system/scripts/require_create_account.py`) lets through on no account; the
+awaiting chat's provider chip opens that chooser, as does its first send while
+nothing is signed in. A chat
+converts to a room and back through the ordinary switch (`POST /api/chats/<id>/handoff`
+with `"kind": "room"`, or with an account): a switch to a room is a fresh-start
+handoff on no account, and a switch off a room takes the room's transcript as the
+summary its successor reads, so a converted chat keeps its whole history as segments.
+The workspace agent reads a room with `mngr transcript <room>` and answers into it
+with `mngr message --start <room>` (a bare `mngr message` refuses a stopped room);
+a visiting agent reads and posts through the chat routes
+with its own identity.
+
+A mention is `@<handle>` (`mention_parser.py`, section 7.1): the roster's handles as
+the shell assigned them, `@agent` for the workspace's agent, and every chat's title
+(spaces as hyphens, `@Main-chat`), resolved case-insensitively after the people;
+`GET /api/mentions` answers the table a room's composer offers from its `@` popover.
+A mention acts only in a room (`mentions.py`, section 7.4): a mentioned person's
+pending mentions (`data/.apps/chat/mentions/<key>.jsonl`; `GET /api/mentions/pending`
+answers the requester's own, `mentions_updated` on `/api/ws` says they changed) mark
+the room's row with an `@` until a page of theirs watches it, and the owner is told
+through the Imbue Studio app's feed as the room's own agent, so the notification opens
+the room (a room the app cannot post as sends none); `@agent` or a chat's title sends
+that chat (the main chat for `@agent`) the room's message as `[from: <name> in #<room>]
+<text>` through the ordinary send path, and the room's snapshot names the chat in
+`awaiting_chat_ids` (its row shows a working dot) until the workspace agent posts into
+the room. In an agent chat a handle is a word the agent reads like any other, and the
+composer offers no popover.
+
+The Lounge (`lounge.py`, section 7.5) is the chat titled "Lounge", of either kind, that a
+click on a person in the desktop's tray opens: found by title alone, so a Lounge converted
+into an agent chat through the switch, or a chat the user named so, is the Lounge. A room
+under that title is made the first time the roster the shell answers holds anyone besides
+the owner (a person, an invited email, or a visiting agent; the roster is read once a
+minute), and again when a click needs the Lounge after it was deleted or renamed, only
+while no chat of any kind carries the title. The `lounge` intake target resolves to it,
+making the room when there is no such chat; the manifest's `lounge` launch path
+(`presets = {target = "lounge", is_draft = "true"}`, `mention_param = "message"`) is what
+the shell runs with `@<handle> ` when a person's entry is clicked, so the mention lands in
+the Lounge's composer, unsent. A secondary chat makes no Lounge (403).
+
+The tray's feed (`tray_feed.py`, sections 6.4 and 6.5): every message a person or a
+visiting agent sends (the send route, an intake's send, a room's first message once it has
+landed, a new agent chat's first message as its create is accepted) is posted to the shell
+as a speech bubble (`POST /api/bubbles`, with the people it mentions when the chat is a
+room), as is every turn the workspace agent closes with text (an assistant turn
+of the chat's live agent's own session, or its post into a room), cut to the bubble's
+length. The agent's turns reach the feed through the session watcher a page's stream
+builds (`ChatAppState.bubble_agent_turns`, in its `on_events`), which memory shedding
+evicts, so the agent's bubbles rise for the turns of the chats a page is reading: a turn in
+a chat nobody has open raises none (the spec's section 11). And every chat-list push is
+posted as what each chat is doing (`POST /api/chats-activity`), the last report posted
+again once a minute, since the shell keeps it in memory alone and one restarted since the
+last chat-list change would otherwise paint nothing on the agent's card. Both go through
+`ShellLayoutInterface`, best-effort, on a thread of their own, the activity reports
+coalesced; a secondary chat posts neither.
 
 ## Memory shedding
 

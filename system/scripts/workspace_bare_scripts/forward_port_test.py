@@ -97,7 +97,10 @@ def test_legacy_underscore_label_survives_re_registration(tmp_path: Path) -> Non
     apps_file.write_text(
         '[[apps]]\nname = "system_interface"\nurl = "http://localhost:8000"\nlabel = "system_interface-abcd1234"\n'
     )
-    result = _run(["--name", "system_interface", "--url", "http://localhost:8001", "--no-icon"], apps_file)
+    result = _run(
+        ["--name", "system_interface", "--url", "http://localhost:8001", "--no-icon"],
+        apps_file,
+    )
     assert result.returncode == 0, result.stderr
     rows = _read_apps(apps_file)
     assert len(rows) == 1
@@ -770,6 +773,24 @@ params = [{name = "message", label = "Draft", required = false}]
 presets = {target = "current_note", is_draft = "true"}
 draft_param = "message"
 
+[[launch_paths]]
+id = "mention"
+label = "Mention someone"
+path = "/api/intake"
+method = "POST"
+params = [{name = "message", label = "Mention", required = false}]
+presets = {target = "lounge", is_draft = "true"}
+mention_param = "message"
+
+[[launch_paths]]
+id = "app-chat"
+label = "Chat about this app"
+path = "/api/intake"
+method = "POST"
+params = [{name = "app", label = "App", required = true}, {name = "app_display_name", label = "App name", required = true}]
+presets = {target = "app_chat"}
+app_params = {name = "app", display_name = "app_display_name"}
+
 [pin]
 path = "/"
 style = "avatar"
@@ -819,8 +840,8 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["description"] == "Browse and open the files in this workspace."
     assert row["api_schema_path"] == "/api/schema"
     assert "actions" not in row
-    # The row carries each launch path's param NAMES (the launcher reads them), its presets, and its method, text
-    # and draft params, and none of those keys at all for a launch path that declares none of them.
+    # The row carries each launch path's param NAMES (the launcher reads them), its presets, and its method, text,
+    # draft, and mention params, and none of those keys at all for a launch path that declares none of them.
     assert row["launch_paths"] == [
         {
             "id": "new",
@@ -838,6 +859,24 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
             "draft_param": "message",
             "params": ["message"],
             "presets": {"target": "current_note", "is_draft": "true"},
+        },
+        {
+            "id": "mention",
+            "label": "Mention someone",
+            "path": "/api/intake",
+            "method": "POST",
+            "mention_param": "message",
+            "params": ["message"],
+            "presets": {"target": "lounge", "is_draft": "true"},
+        },
+        {
+            "id": "app-chat",
+            "label": "Chat about this app",
+            "path": "/api/intake",
+            "method": "POST",
+            "params": ["app", "app_display_name"],
+            "presets": {"target": "app_chat"},
+            "app_params": {"name": "app", "display_name": "app_display_name"},
         },
     ]
     assert row["pin"] == {

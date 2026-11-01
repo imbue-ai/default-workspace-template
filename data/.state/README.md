@@ -4,7 +4,7 @@ Machine state the workspace services read and write:
 
 - `apps.toml` - The registry of running apps and their ports.
 - `oom_priority/` - The memory-pressure shed ledger and agent-pid registry.
-- `browser-screenshots/` - Shared browser service state. (The browser's instance records are `data/.apps/browser/instances.json`; a `browser-fleet.json` here is an older copy of them, read only until the daemon first writes that file.)
+- `screen/` - The Screen's rendered `xorg.conf`, `neko.yaml`, `pulse.pa`, its control lease (`control.json`), the display modes added this stack life (`modes.json`), why the stack last ended (`stop_reason`) and the events its watcher appends (`events/screen/events.jsonl`). (The browser's instance records are `data/.apps/browser/instances.json`.)
 - `workspace_main_branch_initialized` - First-boot marker for moving the workspace onto a clean `main` branch. (A workspace first booted by an older build has `initial_chat_created` instead, which counts the same.)
 - `last-restic-prune` - Backup maintenance timestamp.
 - `user_timezone` - The user's IANA timezone, written once by the client that created the workspace and applied by the bootstrap at each boot.

@@ -13,7 +13,8 @@ from terminal_app.pages import (
     SessionPage,
     render_page,
 )
-from terminal_app.primitives import TerminalTitle, TmuxSessionName
+from terminal_app.primitives import VIEWER_ARGUMENT, TerminalTitle, TmuxSessionName
+from terminal_app.pty_page import PTY_PAGE_SCRIPT
 from terminal_app.sessions import TmuxSessionSource
 from terminal_app.store import JsonTerminalSessionStore
 from terminal_app.testing import (
@@ -90,7 +91,7 @@ def test_an_unregistered_pty_leaves_the_label_empty(
     assert config["page"] == {
         "name": "terminal-3",
         "title": "Terminal 3",
-        "pty_path": "/?arg=_&arg=session&arg=terminal-3",
+        "pty_path": "/?arg=_&arg=session&arg=terminal-3&arg=",
         "pty_label": "",
     }
     assert session.json == config["page"]
@@ -172,7 +173,7 @@ def test_the_session_api_answers_what_the_page_refreshes_from(
     assert response.json == {
         "name": "terminal-3",
         "title": "Terminal 3",
-        "pty_path": "/?arg=_&arg=session&arg=terminal-3",
+        "pty_path": "/?arg=_&arg=session&arg=terminal-3&arg=",
         "pty_label": TEST_PTY_LABEL,
     }
 
@@ -231,6 +232,44 @@ def test_the_app_contract_module_is_served_from_the_terminals_own_origin(pages_c
     assert 'import("/_static/app_contract.js")' in pages_client.get("/").text
 
 
+def test_the_wrapper_hands_the_pty_frames_input_reports_up_to_the_shell(pages_client: FlaskClient) -> None:
+    """Typing happens in the pty frame, on another origin, so the wrapper's own contract never sees it: the pty page
+    reports it as ``shell:input``, and the wrapper forwards exactly that type from its frame to the shell (the
+    multiplayer spec, section 4.3)."""
+    assert 'window.parent.postMessage({ type: "shell:input" }, "*")' in PTY_PAGE_SCRIPT
+    assert 'window.addEventListener(type, reportInput, { capture: true, passive: true })' in PTY_PAGE_SCRIPT
+    wrapper = pages_client.get("/?session=terminal-1").text
+    assert 'event.source === frame.contentWindow && data.type === "shell:input"' in wrapper
+    assert 'window.parent.postMessage({ type: "shell:input" }, "*")' in wrapper
+
+
+def test_the_wrapper_attaches_the_pty_as_a_viewer_when_the_shell_says_the_window_is_viewed(
+    pages_client: FlaskClient,
+) -> None:
+    """A window viewed on somebody else's desktop (the multiplayer spec, section 8.3) frames the pty with the viewer
+    argument the session script reads as a read-only attach that never sizes the window, and attaches again the
+    other way when the shell's word changes."""
+    wrapper = pages_client.get("/?session=terminal-1").text
+    assert "onHandshake: (handshake) => takeViewing(handshake.isViewing)" in wrapper
+    assert f'(isViewing ? "&arg={VIEWER_ARGUMENT}" : "")' in wrapper
+
+
+def test_a_framed_wrapper_holds_its_first_pointing_of_the_pty_until_the_shells_handshake(
+    pages_client: FlaskClient,
+) -> None:
+    """Pointed before the shell has said whether the window is viewed, a viewed terminal would attach as a full
+    client and size its owner's window for a moment: while framed, the first pointing waits for the handshake (or
+    gives up after a grace and attaches plainly); unframed, the page points at once."""
+    wrapper = pages_client.get("/?session=terminal-1").text
+    assert "let isHandshakeAwaited = window.parent !== window;" in wrapper
+    assert "if (!isHandshakeAwaited) {\n        pointFrameAt(" in wrapper
+    assert "const HANDSHAKE_GRACE_MS = 2000;" in wrapper
+    assert "if (isHandshakeAwaited) {\n    setTimeout(() => {" in wrapper
+    assert "}, HANDSHAKE_GRACE_MS);" in wrapper
+    # The first handshake points the held frame even when it says the window is not viewed.
+    assert "if (next === isViewing && !isFirstWord) return;" in wrapper
+
+
 def test_a_missing_app_contract_module_says_the_shell_is_not_built(
     session_source: TmuxSessionSource, tmp_path: Path
 ) -> None:
@@ -246,7 +285,7 @@ def test_render_page_keeps_a_script_closer_out_of_the_config_and_escapes_the_tit
     page = SessionPage(
         name=TmuxSessionName("terminal-1"),
         title=TerminalTitle("R&D <tests>"),
-        pty_path="/?arg=_&arg=session&arg=terminal-1",
+        pty_path="/?arg=_&arg=session&arg=terminal-1&arg=",
         pty_label="</script>",
     )
     page_html = render_page(PageConfig(session=TmuxSessionName("terminal-1"), page=page))

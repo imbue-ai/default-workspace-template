@@ -16,6 +16,7 @@ from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
 from app_manifest.registry import read_registry
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import WallpaperKind
 from workspace_layout.primitives import WallpaperName
 from workspace_layout.primitives import WindowId
@@ -37,10 +38,13 @@ from imbue.system_interface.shell.desktop_document import BackdropSize
 from imbue.system_interface.shell.desktop_document import FitMetrics
 from imbue.system_interface.shell.desktop_document import GridDimensions
 from imbue.system_interface.shell.desktop_document import GridMetrics
+from imbue.system_interface.shell.desktop_document import MAXIMIZED_FRAME
 from imbue.system_interface.shell.desktop_document import PINNED_WINDOW_FRAME
+from imbue.system_interface.shell.desktop_document import VIEWPORT
 from imbue.system_interface.shell.desktop_document import apps_with_a_default_shortcut
 from imbue.system_interface.shell.desktop_document import apps_with_a_shortcut_on
 from imbue.system_interface.shell.desktop_document import apps_with_their_default_shortcut_on
+from imbue.system_interface.shell.desktop_document import backdrop_frame_of
 from imbue.system_interface.shell.desktop_document import cascade_frame
 from imbue.system_interface.shell.desktop_document import clamp_frame_into_unit_square
 from imbue.system_interface.shell.desktop_document import default_launch_path_id
@@ -48,6 +52,7 @@ from imbue.system_interface.shell.desktop_document import desktop_seeded_from
 from imbue.system_interface.shell.desktop_document import effective_placements
 from imbue.system_interface.shell.desktop_document import find_window_at
 from imbue.system_interface.shell.desktop_document import fit_frame_to_backdrop
+from imbue.system_interface.shell.desktop_document import fit_state_frame
 from imbue.system_interface.shell.desktop_document import focused_window_id
 from imbue.system_interface.shell.desktop_document import frame_for_state
 from imbue.system_interface.shell.desktop_document import grid_dimensions
@@ -62,6 +67,7 @@ from imbue.system_interface.shell.desktop_document import reading_order_cell
 from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktop_document import snap_zone_for_release
 from imbue.system_interface.shell.desktop_document import unsnap_frame
+from imbue.system_interface.shell.desktop_document import viewport_rect
 from imbue.system_interface.shell.desktop_document import with_default_shortcuts_offered
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_ensured
 from imbue.system_interface.shell.desktop_document import with_pinned_windows_placed
@@ -76,6 +82,7 @@ from imbue.system_interface.shell.desktop_document import with_window_raised
 from imbue.system_interface.shell.desktop_document import with_window_reattached
 from imbue.system_interface.shell.desktop_document import with_window_restored
 from imbue.system_interface.shell.desktop_document import with_window_state
+from imbue.system_interface.shell.desktop_document import with_windows_side_by_side
 from imbue.system_interface.shell.desktop_document import without_pin_marks
 from imbue.system_interface.shell.desktop_document import without_shortcut
 from imbue.system_interface.shell.errors import InvalidShellValueError
@@ -141,6 +148,26 @@ def test_snap_frame_vectors(state_name: str) -> None:
     placement_frame = Frame(x=0.1, y=0.1, width=0.3, height=0.3)
     assert frame_for_state(placement_frame, WindowState(state_name)) == _frame(_VECTORS["snap_frames"][state_name])
     assert frame_for_state(placement_frame, WindowState.NORMAL) == placement_frame
+
+
+def test_the_fullscreen_frame_is_the_viewport_and_reads_as_the_whole_backdrop() -> None:
+    assert _VECTORS["snap_frames"]["FULLSCREEN"] == "viewport"
+    placement_frame = Frame(x=0.1, y=0.1, width=0.3, height=0.3)
+    assert frame_for_state(placement_frame, WindowState.FULLSCREEN) is VIEWPORT
+    assert backdrop_frame_of(VIEWPORT) == MAXIMIZED_FRAME
+    assert backdrop_frame_of(placement_frame) == placement_frame
+
+
+@pytest.mark.parametrize("case", _VECTORS["fullscreen"], ids=lambda case: case["name"])
+def test_fullscreen_vectors(case: dict[str, Any]) -> None:
+    metrics = FitMetrics.model_validate(_VECTORS["fit_metrics"])
+    backdrop = BackdropSize.model_validate(case["backdrop"])
+    assert viewport_rect(backdrop, metrics.taskbar_height).model_dump() == pytest.approx(case["expected"])
+    assert fit_state_frame(VIEWPORT, backdrop, metrics).model_dump() == pytest.approx(case["expected"])
+    # A frame goes through the fit rule unchanged by the viewport's existence.
+    assert fit_state_frame(MAXIMIZED_FRAME, backdrop, metrics) == fit_frame_to_backdrop(
+        MAXIMIZED_FRAME, backdrop, metrics
+    )
 
 
 @pytest.mark.parametrize(
@@ -513,15 +540,22 @@ def test_each_app_is_seeded_with_its_default_shortcut_preferring_one_taking_no_t
             # A preview frame or an isolated test server registers with no program.
             registry_row_toml("preview-1", "http://localhost:3"),
             registry_row_toml("vm-exec", "http://localhost:4", program="vm-exec", is_internal=True),
-            # With no default declared, the first launch path taking no typed or drafted text is the shortcut...
+            # With no default declared, the first launch path taking no typed or drafted text and no mention is the
+            # shortcut...
             registry_row_toml(
                 "journal",
                 "http://localhost:5",
                 program="journal",
-                launch_paths=[("write", "Write", "/write"), ("draft", "Draft", "/draft"), ("read", "Read", "/")],
-                launch_params={"write": ["entry"], "draft": ["entry"]},
+                launch_paths=[
+                    ("write", "Write", "/write"),
+                    ("draft", "Draft", "/draft"),
+                    ("mention", "Mention", "/mention"),
+                    ("read", "Read", "/"),
+                ],
+                launch_params={"write": ["entry"], "draft": ["entry"], "mention": ["entry"]},
                 launch_text_params={"write": "entry"},
                 launch_draft_params={"draft": "entry"},
+                launch_mention_params={"mention": "entry"},
             ),
             # ...or the first launch path of all, when every one takes text.
             registry_row_toml(
@@ -683,6 +717,10 @@ def test_the_verbs_edit_one_placement_and_the_stack() -> None:
     maximized = with_window_state(minimized, _WIN_2, WindowState.MAXIMIZED)
     assert maximized.placements[-1].window_id == _WIN_2 and maximized.placements[-1].state is WindowState.MAXIMIZED
     assert maximized.placements[-1].frame == cascade_frame(0)
+    fullscreen = with_window_state(maximized, _WIN_2, WindowState.FULLSCREEN)
+    assert fullscreen.placements[-1].state is WindowState.FULLSCREEN
+    assert fullscreen.placements[-1].frame == cascade_frame(0)
+    assert with_window_restored(fullscreen, _WIN_2).placements[-1].state is WindowState.NORMAL
     restored = with_window_restored(maximized, _WIN_1)
     assert restored.placements[-1].window_id == _WIN_1
     assert restored.placements[-1].is_minimized is False and restored.placements[-1].state is WindowState.NORMAL
@@ -757,8 +795,10 @@ def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_window
         1,
         [WindowId("win-00000000000000ff"), WindowId("win-00000000000000fe")],
         later,
+        ParticipantKey("user:user-alice"),
     )
     assert (seeded.id, seeded.name, seeded.color, seeded.glyph) == ("alice", "Alice", "#16A34A", 1)
+    assert seeded.owner == "user:user-alice" and source.owner is None
     assert seeded.shortcuts == source.shortcuts and seeded.wallpaper == source.wallpaper
     copied, copied_pinned = seeded.windows
     assert (copied.id, copied.app, copied.path, copied.title) == ("win-00000000000000ff", "terminal", settled.path, "")
@@ -776,4 +816,47 @@ def test_a_desktop_seeded_from_another_copies_its_shortcuts_wallpaper_and_window
     ensured = with_pinned_windows_ensured(without_pin_marks(seeded, {AppName("chat")}), [chat_pin], later)
     assert ensured.desktop is seeded and ensured.is_written is False
     with pytest.raises(InvalidShellValueError):
-        desktop_seeded_from(source, DesktopId("bob"), "Bob", "#16A34A", 1, [], later)
+        desktop_seeded_from(source, DesktopId("bob"), "Bob", "#16A34A", 1, [], later, None)
+
+
+def _placed(window_id: WindowId, x: float, width: float, is_minimized: bool = False) -> WindowPlacement:
+    return WindowPlacement(
+        window_id=window_id,
+        frame=Frame(x=x, y=0.1, width=width, height=0.5),
+        state=WindowState.NORMAL,
+        is_minimized=is_minimized,
+    )
+
+
+def test_side_by_side_snaps_the_shown_window_to_the_half_its_centre_is_on_and_puts_it_on_top() -> None:
+    """The multiplayer spec, section 9.2: the shown window keeps the side its frame's centre is already on, the window
+    it is laid out beside takes the other, and the shown one ends on top; a minimized or never-placed shown window
+    counts as being on the right."""
+    centred_left = _layout(_placed(_WIN_1, 0.1, 0.3), _placed(_WIN_2, 0.5, 0.4))
+    laid = with_windows_side_by_side(centred_left, _WIN_1, _WIN_2)
+    assert [(placement.window_id, placement.state, placement.is_minimized) for placement in laid.placements] == [
+        (_WIN_2, WindowState.SNAPPED_RIGHT, False),
+        (_WIN_1, WindowState.SNAPPED_LEFT, False),
+    ]
+    assert laid.placements[-1].frame == centred_left.placements[0].frame
+
+    centred_right = _layout(_placed(_WIN_2, 0.0, 0.2), _placed(_WIN_1, 0.4, 0.5))
+    laid = with_windows_side_by_side(centred_right, _WIN_1, _WIN_2)
+    assert [(placement.window_id, placement.state) for placement in laid.placements] == [
+        (_WIN_2, WindowState.SNAPPED_LEFT),
+        (_WIN_1, WindowState.SNAPPED_RIGHT),
+    ]
+
+    minimized_on_the_left = _layout(_placed(_WIN_1, 0.0, 0.3, is_minimized=True), _placed(_WIN_2, 0.0, 0.3))
+    laid = with_windows_side_by_side(minimized_on_the_left, _WIN_1, _WIN_2)
+    assert [(placement.window_id, placement.state, placement.is_minimized) for placement in laid.placements] == [
+        (_WIN_2, WindowState.SNAPPED_LEFT, False),
+        (_WIN_1, WindowState.SNAPPED_RIGHT, False),
+    ]
+
+    never_placed = _layout(_placed(_WIN_2, 0.6, 0.3))
+    laid = with_windows_side_by_side(never_placed, _WIN_1, _WIN_2)
+    assert [(placement.window_id, placement.state) for placement in laid.placements] == [
+        (_WIN_2, WindowState.SNAPPED_LEFT),
+        (_WIN_1, WindowState.SNAPPED_RIGHT),
+    ]

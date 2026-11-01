@@ -28,12 +28,15 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   (`id`, `label`, `path`, `method` (`GET`, the default, opens a window at the
   path with the params as its query; `POST` posts them to the path and opens a
   window at the path the app answers), `params`, `presets` (fixed name-value
-  pairs sent with every launch), and an optional `text_param` or `draft_param`
-  naming the one of its params the desktop fills with typed text, sent or
-  drafted; `client_id`, `desktop_id`, and `window_path` are reserved for the
-  shell's launch envelope and can name neither a param nor a preset; `open` is
-  reserved for the root launch path the shell synthesizes for an app that
-  declares none), `LaunchPathMethod`,
+  pairs sent with every launch), and an optional `text_param`, `draft_param`,
+  or `mention_param` naming the one of its params the desktop fills with typed
+  text, sent or drafted, or with a mention of the person whose tray entry was
+  clicked, or an `app_params` pair (`name`, `display_name`) naming the two
+  distinct params the desktop fills with the app whose window's "Chat about
+  this app" button was pressed; `client_id`, `desktop_id`, and `window_path`
+  are reserved for the shell's launch envelope and can name neither a param
+  nor a preset; `open` is reserved for the root launch path the shell
+  synthesizes for an app that declares none), `LaunchPathMethod`,
   `MessageHandler` (`type`, a `MessageType`: a lowercase prefix, `:`, and a
   lowercase kebab-case name, never `shell:`, unique within the manifest; and
   exactly one of `path`, the route under the app's origin the shell posts each
@@ -179,16 +182,18 @@ goes to stdout; with it, the parent directories are created.
   `--for-path` path. A directory ends in `/`.
 - `wiring` is the supervisord sections the app owns: its own
   `program:<program>` block, every `program:<name>-<role>` sidecar, and every
-  program the manifest's `[wiring] programs` declares (the browser declares
-  `xvfb`, which exists only for it; a declared program with no block is an
-  error). The first label of every standalone program is a reserved app name,
-  so the sidecar prefix cannot claim an unrelated program. One entry per file a
-  block is written in, so a footprint names the file a change would have to
-  edit: the browser's own `program:browser` block is in
-  `system/supervisord.conf.d/browser.conf` and the `xvfb` it declares is in
-  `system/supervisord.conf.d/xvfb.conf`, so its footprint carries both. Empty
-  when nothing runs any of them, which is the normal state before an app is
-  first registered.
+  program the manifest's `[wiring] programs` declares (the Screen declares the
+  four programs of its stack and its `screen-watch` listener, which exist only
+  for it; a declared program with no block is an error). The first label of
+  every standalone program is a reserved app name, so the sidecar prefix cannot
+  claim an unrelated program. One entry per file a block is written in, so a
+  footprint names the file a change would have to edit: the Screen's own
+  `program:screen` block is in `system/supervisord.conf.d/screen.conf` and each
+  program it declares is in its own drop-in beside it (`screen-xorg.conf`,
+  `screen-pulse.conf`, `screen-session.conf`, `screen-neko.conf`,
+  `screen-watch.conf`), so its footprint carries all six. Empty when nothing
+  runs any of them, which is the normal state before an app is first
+  registered.
 - `references` copies the manifest's entries through, with `kind` derived from
   the path prefix (`skill`, `shared`, `script`, `service`, `doc`, `other`).
 - `context` is the surface a creation is judged against: empty for an app; for a

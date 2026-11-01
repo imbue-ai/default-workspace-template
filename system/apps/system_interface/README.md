@@ -22,14 +22,17 @@ format. In brief:
   posted the params by the shell and answers the page to open; an app that
   declares none offers `open` at its root.
 - A **desktop** is a named, shared collection of windows and shortcuts over a
-  wallpaper, with a colour and a glyph. Everyone sees the same desktops and
-  the same windows on them; a signed-in visitor gets a desktop of their own,
-  seeded from the first one, the first time they arrive (see "Who is here").
+  wallpaper, owned by convention (the multiplayer spec, section 8.1): the
+  owner's carry no owner key, a visitor's carry theirs. Everyone sees the same
+  desktops and the same windows on them; a signed-in visitor gets a desktop of
+  their own, seeded from the first one, the first time they arrive (see "Who
+  is here"), and looking at someone else's desktop is switching onto it with
+  the viewing chrome on (see "The desktop, the taskbar, and the launcher").
 - A **window** is one page of one app on one desktop: the app, the path under
   its origin the page is at, and the title the page last reported. That is
   the whole of what the shell knows about what a window shows.
 - A **placement** is where one client keeps one window: its frame in fractions
-  of the backdrop, whether it is snapped or maximized, whether it is
+  of the backdrop, whether it is snapped, maximized, or fullscreen, whether it is
   minimized, whether it is pulled out into a desktop window of the Imbue Studio app's
   own; the order is the stack. A **client** is one browser context,
   identified by a stored id, with an active desktop. Truth is shared,
@@ -58,10 +61,11 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   into this app's static output; every app serves those same files from its
   own origin, since a cross-origin module import carries no cookie and the
   forwarder refuses it. The desktop's own chrome draws the element menu too: a
-  right-click the views leave alone opens it, and the entry, shortcut, and
-  desktop menus end with its reference rows
+  right-click the views leave alone opens it, and the entry, shortcut,
+  backdrop, and overview thumbnail menus end with its reference rows
   (`docs/system/blueprint/element-reference-menu/`).
 - The shell routes of contracts sections 5 and 8: desktops (`/api/desktops`,
+  `/api/desktops/order`,
   `.../<id>/settings|wallpaper|delete|shortcuts|shortcuts/move|shortcuts/remove`),
   windows (`/api/desktops/<id>/windows`, `.../windows/<window>/close|location`),
   placements (`/api/placements/<desktop>`), wallpapers (`/api/wallpapers`,
@@ -71,7 +75,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   (`/api/client-activity`), the inventory (`/api/inventory`), each client's
   pinned-entry presentation
   (`/api/clients/<client>/entries/<app>`), what a client's phone shows
-  (`/api/clients/<client>/shown`), the avatar (`/api/avatars`,
+  (`/api/clients/<client>/shown`), the backdrop size a client's desktop layout
+  draws in (`/api/clients/<client>/viewport`), the avatar (`/api/avatars`,
   `/api/avatars/<id>/image.svg|source.svg|icon.png`, `/api/avatar-selection`; the
   registration `POST /api/avatars` is loopback-only), the embedder-message
   relay (`/api/embedder-messages`), and the loopback-only op route
@@ -87,8 +92,9 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.
-- Presence (`/api/presence`, `/api/presence/heartbeat`): who is connected
-  right now, with their identity and profile (see "Who is here").
+- Presence (`/api/presence`, `/api/presence/heartbeat`) and the roster
+  (`/api/roster`): who is connected right now, with their identity and
+  profile, and everyone who may be here (see "Who is here").
 - The show-around tour's record (`GET` and `POST /api/tour`, `{"is_seen",
   "resume_index"}`): whether the tour of the desktop
   (`frontend/src/model/tourCards.ts`) has run in this workspace, and the card it
@@ -103,7 +109,7 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   (`minds:highlight-chrome`); the chat card's Next snaps the pinned chat to the
   right half of the desktop, revealing the shortcuts.
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
-  `presence_updated`, `placements_updated`, `active_desktop_changed`,
+  `presence_updated`, `roster_updated`, `placements_updated`, `active_desktop_changed`,
   `client_entries_changed`, `avatar_status`, `avatar_selection_changed`,
   `themes_changed`, and `layout_op` (contracts section 6); it accepts each
   client's `client_state` report.
@@ -125,8 +131,9 @@ and the profile cache.
 
 ### The desktop model
 
-- **Records** (`shell/data_types.py`): a `Desktop` (name, colour, glyph,
-  wallpaper, shortcuts, windows), a `Window` (an app, a path
+- **Records** (`shell/data_types.py`): a `Desktop` (name, wallpaper,
+  shortcuts, windows, and its owner by convention; the colour and glyph of the
+  retired switcher stay in the record), a `Window` (an app, a path
   under its origin, and the title its page last reported; shared), and per
   client a `DesktopLayout` of `WindowPlacement`s (frame in fractions of the
   backdrop, state, minimized, detached; the order is the stack).
@@ -146,8 +153,9 @@ and the profile cache.
   `avatar_status` on change.
 - **State files**: a fresh workspace gets one desktop, `Home`, seeded from
   every registered app's default shortcut (its `default_shortcut`, else, for
-  an app a program runs, its first launch path taking no text, or its first
-  when every one takes text) on the first read after the registry has been read.
+  an app a program runs, its first launch path taking no text and no mention,
+  or its first when every one takes one) on the first read after the registry
+  has been read.
   An app that registers later has its default shortcut added to every
   desktop once, on the registry change and on every read;
   `default_shortcuts_offered.json` lists the apps offered so far, so a
@@ -162,9 +170,15 @@ and the profile cache.
   every geometry rule (cascade, fit, snap zones, un-snap, the grid, nearest
   free cell, reading order, shortcut placement) as pure functions over the
   records. The rules the frontend also applies pass the shared vectors in
-  `docs/system/blueprint/desktop-interface/geometry_vectors.json`.
+  `docs/system/blueprint/desktop-interface/geometry_vectors.json`. Whose a
+  desktop is, and the reorder that moves only the requester's own, are the
+  pure functions of `shell/ownership.py`, which the editor stays apart from.
 - **Routes** (`shell/desktop_routes.py`): the desktop, window, placement,
-  arrival, and wallpaper routes above. A placements save carries a save id
+  arrival, and wallpaper routes above. A desktop create takes the name
+  (the shell picks the rest) and writes the requester's key as its owner
+  (none for the workspace owner); `POST /api/desktops/order` lists the
+  requester's own desktops in a new order and leaves the others in place,
+  refusing an order that is not exactly their own. A placements save carries a save id
   and the stamp it was based on; a save over a newer arrangement is refused
   with 409 and the browser refetches. `GET /api/inventory` is
   `{desktops, apps, clients}`, each `app` carrying its `launch_paths`,
@@ -304,35 +318,63 @@ that declared `closeChord` keeps its window on the close chord (it is only sent
 Every request that reaches the shell carries the requester's identity in the
 `X-Imbue-Identity` header, stamped by whichever proxy admitted it -- the local
 `mngr forward` or the share gateway (the header contract is in
-`system/services/share_gateway/README.md`): `owner`, and on a shared
-workspace the account's `user_id` and `email`. Nothing more: what to call an
+`system/services/share_gateway/README.md`): `owner`, on a shared
+workspace the account's `user_id` and `email`, and for a visiting agent its
+`agent_id`, `agent_name`, and `granter`. A present header that does not
+parse is refused with 400 on every route; only a missing or blank one reads as
+the owner of a workspace that has not shared. Nothing more: what to call an
 account and what it looks like is its profile, which the shell fetches from
-imbue_cloud (below). The shell page posts `/api/presence/heartbeat` (no body)
-every 30 seconds while the tab is visible, once immediately when it becomes
-visible, and nothing when it goes away. The page sends nothing about who it
-is; the heartbeat's answer is the requester's own identity record, which is
-what the account affordances render. A heartbeat whose identity carries no
-user id -- the owner of an unshared workspace, or a request that came through
-no current proxy -- answers 204 and records nothing: there is nobody to name.
+imbue_cloud (below). The shell page posts `/api/presence/heartbeat` every 30
+seconds while the tab is visible, once immediately when it becomes visible,
+and nothing when it goes away, carrying how long ago the page last saw
+keyboard or pointer input (an age, never a moment by the page's own clock: the
+shell stamps it, so a skewed clock pins nobody active or idle). The page sends
+nothing about who it is; the heartbeat's answer
+is the requester's own identity record and the participant key its entries
+carry (the multiplayer spec's section 4.1: `user:<user_id>`, or `owner` for
+the owner of a workspace that has not shared, who reveals no account until
+they share), which is what the account affordances render. A visiting agent
+never heartbeats (its presence is the gateway's last-seen record); its
+request answers 204.
 
-Each user has one file, `data/.state/presence/users/<user_id>.json`, holding
-their identity snapshot (`user_id`, `email`, `owner`, `first_seen`), written
-on first sight and rewritten only when the email or owner flag changes; a
-heartbeat just touches the file's mtime. A user is connected while that mtime
-is within 70 seconds (two missed heartbeats plus slack), and the mtime is
-their last seen. Files are never removed: whoever is not connected is still
-the record of who was last here, and when. Apps read the directory the same
-way. The shell sends the connected set on every WebSocket connect and pushes
-`presence_updated` -- one entry per user, however many tabs -- when a
-heartbeat brings someone in and, from a sweep every 10 seconds, when
-someone's heartbeats have stopped. The taskbar's Presence tray widget draws
-one profile picture per connected user once two or more are connected (one is
-just you): everyone else first, the requester's own entry last with an accent
-ring and "(you)" on its hover text, the own entry being the one whose
-`user_id` the heartbeat's answer names. A changed name or profile picture
+Each person has one file, `data/.state/presence/users/<id>.json` (`<id>`
+their user id, or `owner`), holding their identity snapshot (`user_id`,
+`email`, `owner`, `first_seen`) and the newest input time a page of theirs
+reported (`last_input_at`), written on first sight and rewritten when any of
+those change; a heartbeat just touches the file's mtime. A person is
+connected while that mtime is within 70 seconds (two missed heartbeats plus
+slack), and the mtime is their last seen; they are active while their newest
+input is within 60 seconds and idle otherwise. Files are never removed:
+whoever is not connected is still the record of who was last here, and when.
+Apps read the directory the same way. The shell sends the connected set on
+every WebSocket connect and pushes `presence_updated` -- one entry per
+account, however many tabs; the `owner` record names none and is left out --
+when a heartbeat brings someone in and, from a sweep every 10 seconds, when
+someone's heartbeats have stopped. The taskbar's tray draws the roster (below)
+rather than the connected set: one picture per person, faded while they are
+away, the viewer's own entry last, the own entry being the one whose
+participant key the heartbeat's answer names. A changed name or profile picture
 reaches the tray through the profile cache (below) within five minutes. A
 visitor granted a single app never loads the shell and so never appears: they
 are in one app, not in the workspace.
+
+**The roster.** Everyone who may be here, whether or not they are, is the
+roster (`roster.py`; `GET /api/roster`, and `roster_updated` on the socket on
+connect, with every `presence_updated`, whenever a heartbeat moves a person's
+newest input time, and whenever one of its files changes -- a burst of file
+events announced once, a second later, and a document equal to the last one
+pushed never pushed again): the owner first, then every account the workspace-level grants of
+`data/.secrets/share_grants.toml` name, then every invited email still in
+them, then every visiting agent of `data/.secrets/agent_access/grants.toml`
+(both parsed by the `share_grants` library the gateway parses them with), and
+the workspace's own agent last, named after the workspace and pictured by the
+selected avatar. Each entry carries its key, kind, name, picture, email, the
+handle it is mentioned by (`@agent` for the workspace agent, reserved first;
+a later collision gets `-2`, `-3`, ...), its colour (one of eight, by the
+key's hash), and whether it is here: a person by their heartbeats, a visiting
+agent by the gateway's `data/.state/agent_access/last_seen.json`, under the
+same 70-second window. The apps read the roster from here rather than from
+its files: it is the one place names, keys, and handles are decided.
 
 **Profiles.** A user's display name and profile picture come from imbue_cloud,
 not the header: the shell (`profiles.py`) fetches `GET {broker_url}/users/<user_id>/profile`
@@ -344,7 +386,17 @@ cached for 5 minutes under `data/.state/presence/profiles/<user_id>.json`, so
 a connector outage costs one failed fetch per user per 5 minutes and no
 request ever hangs or fails on it. The profile rides on each present user
 over the wire (`display_name`, `profile_picture_url`, null when there is none)
-and names a visitor's desktop on their first arrival.
+and names a visitor's desktop on their first arrival. The picture itself is
+served from the shell's own origin, since the pages' content security policy
+admits no outside image: the roster points at
+`GET /api/roster/<key>/picture?v=<version>`, which fetches the bytes once from
+the profile's URL (5 second bound) and keeps them under
+`data/.state/presence/profiles/<user_id>.picture.json` until the profile names
+another URL (a fetch that fails is remembered there for the same 5 minutes, so
+a dead picture host costs one fetch per person per 5 minutes too); `v` is a
+digest of that URL, so a newer picture is a newer address
+and an answer under the current version is cached by the page for good (one
+under an older version, or none, is the same bytes uncached).
 
 The same header decides where a page lands. A shell page posts its arrival
 (`POST /api/clients/<client_id>/arrive`) before it reads the inventory
@@ -360,21 +412,155 @@ first desktop: its shortcuts, its wallpaper, and a new window at the path of
 each window open there. It is remembered in `users.json`, every later client
 of that user lands on it, a returning client keeps the desktop it was on (when
 it last arrived as that same user), and if it has been deleted the next
-arrival seeds another and says so. Every desktop stays shared and in
-everyone's switcher; there is no private mode.
+arrival seeds another and says so. Every desktop stays shared and reachable
+from everyone's launcher; there is no private mode. The seeded desktop is
+written with the visitor's key as its owner (the multiplayer spec, section
+8.1), so their card and their overview list it as theirs; a desktop whose owner
+has since left the grants is left behind, listed in the owner's overview under
+"Left behind" so it can be viewed and deleted.
 
 ### The desktop, the taskbar, and the launcher
 
-The backdrop shows the active desktop's shortcuts and windows; each window is
-an iframe of an app page under a title bar with the page's title and the
-window menu. The taskbar shows the desktop switcher, one entry per window of
-the active desktop, the launcher button, and the tray (the Presence widget,
-the desktop switcher, the update-staleness banner). A pinned window's entry may float above
-the windows instead, drawn as the workspace's avatar (the chat's default); its
-context menu moves it between the bar and the desktop, switches its style, and
-opens the avatar chooser. Desktops are created, renamed, recoloured,
-re-wallpapered, and deleted from the switcher; shortcuts are added, moved, and
-removed on the backdrop.
+The backdrop shows the active desktop's shortcuts and windows; each window is an
+iframe of an app page under a title bar with the window menu, Refresh, and "Chat
+about this app" on the left while it is focused, the page's title centred, and
+the window controls on the right. The taskbar shows the launcher field, the
+overview button, one entry per window of the active desktop, and the tray. A
+pinned window's entry is a plain entry like any other window's, except that its
+Close closes the window for this client alone (minimized, and the entry out of
+this client's bar until something shows the window again); the entry's context
+menu moves the app's creature -- the workspace's avatar, docked in the tray by
+default -- between the tray and a spot floating above the windows, and opens the
+avatar chooser. Shortcuts are added, moved, and removed on the backdrop.
+
+**Desktops** (the multiplayer spec, section 8; `frontend/src/views/Overview.ts`,
+`model/Ownership.ts`). The overview button (four squares, "Manage Desktops")
+opens the overview over the backdrop: the active desktop's windows as live,
+inert tiles scaled into a grid (the live-page layer lays each window's page
+over its tile; a minimized window's tile is faint), a click raising one, and
+below them one thumbnail per desktop the viewer owns, drawn from its wallpaper
+and this client's placements of it, the active one outlined. A click switches,
+a double-click on the name renames, a drag sideways reorders (`POST
+/api/desktops/order`), a right-click offers "Delete desktop...", confirmed in
+place and refused for the last desktop, and the plus makes "Desktop N" with
+the seeded shortcuts, owned by the viewer. The owner also sees the desktops
+left behind by people no longer in the roster, after a thin rule. Escape or a
+click on the bare backdrop closes it. The backdrop's own context menu offers
+"New desktop", "Show all desktops", and "Change wallpaper...", which opens the
+wallpaper chooser (`WallpaperChooserDialog.ts`, what the settings dialog
+became: a desktop's colour and glyph are no longer shown or edited). A person's
+tray card lists the desktops they own, and a click on one of somebody else's
+*views* it: the client switches there with the viewing chrome on, an outline
+in the owner's colour around the whole desktop, the taskbar included, and a
+chip in that colour with their picture, "<Name> · <Desktop name>", and "Stop
+viewing" in place of the tray, the overview button hidden meanwhile (and the
+backdrop menu's "Show all desktops" disabled). Stop viewing goes back to the
+desktop the window came from, else the viewer's first. A viewed desktop is
+shown as its owner has it, live: the layout read is the owner's newest
+client's written one (`?of=owner` on the placements read), refreshed on every
+`placements_updated` push for the desktop and by a slow backstop poll, and it
+is read-only from every side -- the desktop's stage (the wallpaper, the
+shortcut grid, the windows, the ghosts, the pages host) is `inert`, so nothing
+on it takes a press, a key, or focus and Tab reaches nothing inside it; the
+taskbar's entries mirror theirs without acting; the backdrop menu keeps "New
+desktop" and disables "Change wallpaper...", "Change theme...", and "Show all
+desktops"; the launcher's launch, window, and free-text rows stand down with
+"Stop viewing to open things here"; every change the store could still make
+(shortcuts, wallpaper, theme, launches, the app chat, closing, raising,
+minimizing, restoring, resizing, navigating, a bubble's chat) is refused with
+one "Stop viewing first" note per gesture, and a viewed page's focus report
+raises nothing; the owner's layout is reloaded whole on every read, so nothing
+that slipped through outlives the next poll; and nothing a viewing window
+holds is saved as the viewer's layout. The overview never opens while viewing,
+and one opened before the first heartbeat answered closes when the answer
+lands. The shell greets a page again when it says what it can do
+(`shell:capabilities`), so a terminal learns it is viewed before its frame's
+load and attaches as a viewer from the first moment. When the viewed desktop
+is deleted the window lands on the desktop it left for it, else the viewer's
+first own desktop, else -- a visitor with none left -- the desktop the shell
+seeds when they arrive again, the letterbox and the way back cleared; Stop
+viewing with nowhere to go arrives again the same way. The phone layout never
+views: a phone-width window whose active desktop is somebody else's lands on
+one of the viewer's own. On every other client the owner of
+a desktop somebody else is on wears a ring in their colour in the tray, read
+off the clients and the desktop moves the socket announces; a move by a client
+the last read did not list, a change in who is here, and the shell's
+`clients_updated` (a window's socket registered its client or closed, a
+stale client pruned) read the clients again, so the ring follows a viewing window that closes while its
+person stays connected elsewhere.
+The launcher's window rows name the owner of a desktop that is not the
+viewer's. The phone layout offers no overview.
+
+**App chat** (the multiplayer spec, section 9; `frontend/src/views/TitleBar.ts`,
+`store/DesktopStore.ts` `openAppChat`). Every window of an app that is not
+internal carries "Chat about this app" (a speech balloon) in its focused title
+bar, the chat app's windows included. It runs the first launch path of the
+machine that declares `app_params` (the chat app's `app-chat`, which names the
+window's app and its display name in the params the path declares) through the
+launch route's `show` target: the shell shows the answered page as the `show` op
+would (a window already at the path raised, else the pinned window pointed at
+it, else a window opened) and lays the two windows out for this client, the chat
+snapped to the half of the backdrop its frame's centre was already on (the right
+when it is minimized or was never placed) and the app's window to the other, the
+chat on top; the pinned window's own balloon, whose show navigates that very
+window, lays nothing out, and neither does a show whose window, or the window
+beside it, is pulled out into a window of the chrome's own. The chat app answers
+the chat about the app: the one labelled `app_chat` with the app's name (so a
+renamed app keeps its chat), else the one titled "<App display name> Chat", made
+with both on the default provider when there is none (so the chat app's own
+windows open "Chat Chat"), with a pending intake whose `hint` the chat root puts
+on the composer as its placeholder, "How do you want to change <App>?", and
+focuses. The shell names no app in any of this.
+
+**The tray** (the multiplayer spec, section 6; `frontend/src/views/SystemTray.ts`
+and `views/tray/`) is where the people and the agent live: the share button (a
+dashed circle with a plus, drawn only under an Imbue Studio chrome that has said
+what it can do, which it asks to open the share panel on the whole workspace
+through `minds:open-share-settings` with no service named), one 32px picture per
+roster entry in roster order (a profile picture, else a monogram on the person's
+colour; a dashed envelope for an invited email; a monogram tile for a visiting
+agent; a neutral silhouette for the owner of a workspace that has not shared;
+faded while the entry is not here; stacked from four entries on, each
+tucked under the one before it, spread while the pointer is over them; hopping
+once when it arrives and when a bubble of its appears), the viewer's own
+picture, and the agent's avatar at 36px in its mood, attending while the pinned
+chat window is focused -- the one creature's docked home, not drawn while this
+client floats the avatar over the windows instead. Hovering
+an entry for 180ms opens its card above it: a person's shows the picture, the name
+("(you)", "(owner)"; "You" for the owner of an unshared workspace), the status
+line ("Active", "Idle · 4m", "Offline · last seen 3h ago", "Invited"), what they
+are looking at (the window at the top of the stack on the active desktop of
+their newest client, read from `GET /api/clients` as the card opens), and their
+desktops (every desktop is the owner's until the desktops phase gives them
+owners), with "New desktop" on your own; a visiting agent's shows its name,
+"Visiting agent", and the status line. The agent's card shows the face, the
+workspace name with a pencil that opens the avatar chooser, "Working" or
+"Idle", and the chats under "Working on" (status working or background) and
+"Needs you" (attention), a click showing that chat through the same
+`minds:focus-chat` relay the Imbue Studio app's notifications use. Clicking a
+person drafts a mention of them (`@<handle> `) through the first launch path of
+the machine that declares a `mention_param` (the chat app's, into the Lounge),
+into its pinned window on this desktop when there is one; clicking the agent
+runs the primary text action with nothing to send, which opens the main chat;
+clicking your own picture does nothing. The shell names no app in any of this.
+
+The chat app feeds the tray over loopback: `POST /api/bubbles` with every message
+somebody sends and every turn the agent closes with text (`{"speaker", "chat_id",
+"chat_title", "text", "message_id", "mentions"}`), which the shell broadcasts as
+`bubble` to every window but the speaker's own clients (the clients whose records
+carry the speaker's key; the owner's under either of their keys, the account's or
+the synthetic `owner`, whichever the bubble carries; a window looking at the
+bubble's chat drops it on receipt unless it mentions the viewer); and
+`POST /api/chats-activity` with what every chat is doing (`{"chats": [{"chat_id",
+"title", "status", "kind"}]}`), kept and broadcast as `chats_activity`, and sent on
+connect once reported. A speech bubble is a rounded card hanging above the tray
+with an arrow at the speaker's entry, holding what was said, a dismiss X, and a
+click that opens the chat it was said in; it lives five seconds after its last
+change, a person's new message replaces their bubble, the agent's new message
+within its bubble's lifetime is appended (folding past three lines into "and N
+more"), bubbles of different speakers stack upward in arrival order, and a mention
+of the viewer wears an accent border and stays until dismissed or its chat is
+opened (`model/Bubbles.ts`, a pure reducer; the timers are the store's).
 
 The launcher is a text field ("Open an app or send a message") and the menu it
 opens above itself (`frontend/src/views/LauncherMenu.ts`, its rows computed by

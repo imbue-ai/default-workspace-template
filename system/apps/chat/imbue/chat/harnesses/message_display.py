@@ -32,6 +32,8 @@ from typing import assert_never
 
 from pydantic import Field
 
+from imbue.chat.authors import AUTHOR_NAME_FIELD
+from imbue.chat.authors import split_author_prefix
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -524,11 +526,21 @@ def stamp_user_message_display(event: dict[str, Any], content: str, *, is_meta: 
     The ONE call every user-message emit site makes (each harness's normal path AND
     claude's queued-command attachment path), so a new wire field or a precedence change
     lands everywhere at once instead of in per-parser copies.
+
+    A ``[from: <name>] `` prefix (the multiplayer spec, section 5.3) is read here too: the name
+    is stamped as ``author_name`` (the key is joined later, from the chat's annotations), the
+    detectors run on the words behind it, and the page is handed those words as the body, so
+    the prefix the agent reads is never shown.
     """
-    decision = classify_user_message(content, is_meta=is_meta)
+    author_name, spoken = split_author_prefix(content)
+    if author_name is not None:
+        event[AUTHOR_NAME_FIELD] = author_name
+    decision = classify_user_message(spoken, is_meta=is_meta)
+    if decision is None and author_name is not None:
+        decision = MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=spoken)
     if decision is not None:
         decision.apply_to(event)
-    if is_non_turn_tail(content, is_meta=is_meta):
+    if is_non_turn_tail(spoken, is_meta=is_meta):
         event["non_turn_tail"] = True
 
 

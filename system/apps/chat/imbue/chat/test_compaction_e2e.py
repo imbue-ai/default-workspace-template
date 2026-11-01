@@ -228,7 +228,10 @@ def test_turning_auto_compact_off_writes_the_chats_setting_and_the_default_contr
 
     submenu = _open_autocompact_submenu(chat)
     expect(submenu.locator('[data-autocompact="on"]')).to_have_attribute("aria-checked", "true")
-    submenu.locator('[data-autocompact="off"]').click()
+    # Pressed, not clicked: Fortress replays a recorded human cursor trajectory after a click
+    # that moved the pointer, and a glide from the Auto-compact row to this option crosses the
+    # menu's other rows, which take the hover and change the submenu under the test.
+    submenu.locator('[data-autocompact="off"]').press("Space")
 
     wait_for(
         lambda: autocompact_path.is_file() and json.loads(autocompact_path.read_text()) == {"is_enabled": False},
@@ -242,7 +245,7 @@ def test_turning_auto_compact_off_writes_the_chats_setting_and_the_default_contr
     expect(submenu.locator('[data-autocompact-default="on"]')).to_have_attribute("aria-checked", "true")
     assert _settings(server)["autocompact_default"] is True
 
-    default_off_segment.click()
+    default_off_segment.press("Space")
     wait_for(
         lambda: _settings(server)["autocompact_default"] is False,
         timeout=10.0,

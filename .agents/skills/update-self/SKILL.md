@@ -605,17 +605,18 @@ path below instead.
 **When the update touches a critical app (`system/apps/system_interface/`,
 `system/apps/chat/`, `system/apps/terminal/`, `system/apps/terminal_pty/`),
 `system/apps/getting_started/frontend/`, `system/apps/files/frontend/`,
-`system/apps/routines/frontend/`, `system/apps/style_guide/frontend/`,
+`system/apps/routines/frontend/`, `system/apps/screen/frontend/`,
+`system/apps/style_guide/frontend/`,
 `system/libs/workspace_ui/`,
 `system/libs/workspace_layout/`, `system/libs/workspace_themes/`, or `system/package.json` /
 `system/package-lock.json` at all** (every critical app's tree, plus the
-Getting Started, Files, Routines and Style Guide frontends, the shared library,
+Getting Started, Files, Routines, Screen and Style Guide frontends, the shared library,
 and the npm files, whose change rebuilds every frontend bundle, and the layout
 wire contract and theme library the critical apps run), also take the `editing
 critical app <name>` lease for each critical app it touches through the apply,
 as `update-app/references/critical-app.md` does (`<name>` is the app's
 `app.toml` name, so `system/apps/terminal_pty/` is `terminal-pty`; the Getting
-Started, Files, Routines and Style Guide frontends, `workspace_ui`, and the npm files count as both
+Started, Files, Routines, Screen and Style Guide frontends, `workspace_ui`, and the npm files count as both
 `system_interface` and `chat`; `workspace_layout` and `workspace_themes` each count as
 `system_interface`, `chat`, and `terminal`). Take them all or none, as that reference says:
 check each one in `tk ready` (`grep -E -- "- editing critical app <name>$"`,
@@ -626,6 +627,17 @@ and if any is held by another agent, release the ones you took and surface it
 instead of proceeding. Take them right before the apply, once the chats are
 paused and the last fast-forward check below has passed, so no catch-up round
 runs while you hold them, and release them afterwards.
+
+**The frontends must actually be rebuilt when an update touches them.** The
+served pages are the built `static/` bundles, not the source the update
+changed, and the shared `workspace_ui` library is compiled into every one of
+them (including behavior the shell depends on from every app page, like the
+`shell:input` activity reports its presence reads) -- an update applied
+without the rebuild leaves every page running the old code while the tree
+says otherwise. The apply command below does this itself (a change under any
+frontend source directory or `workspace_ui` re-emits the bundles); the rule
+matters when landing such an update any other way: never hand-apply one
+without running `npm run build` for every affected frontend.
 
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
@@ -731,10 +743,10 @@ python3 data/.tasks/update-self/skill-at-target/.agents/skills/update-self/scrip
 ```
 
 When the report names the worker's **built frontend bundles** (the shell's
-`static/`, the chat app's, the Getting Started app's, the Files app's, the Routines app's, and the Style Guide's), append
+`static/`, the chat app's, the Getting Started app's, the Files app's, the Routines app's, the Screen's, and the Style Guide's), append
 `--worker-bundle system_interface=<path> --worker-bundle chat=<path>
 --worker-bundle getting_started=<path> --worker-bundle files=<path> --worker-bundle routines=<path>
---worker-bundle style_guide=<path>` so the
+--worker-bundle screen=<path> --worker-bundle style_guide=<path>` so the
 exact builds the worker validated
 are installed instead of a live build; the apply installs them only as a set (one
 `npm run build` emits them all), and builds live when any is missing or stale.
