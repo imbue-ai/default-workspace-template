@@ -3,10 +3,11 @@
  *
  * A compaction shows as two chips beside the agent's tool calls: one for its
  * start, named as the activity strip names it while it runs ("Compacting while
- * idle…"), and one for its finish ("Compacted"). Both open the same
- * panel: why it ran and where to change that, then the summary the agent carries
- * on from. While a compaction runs, its start chip stands alone where the pair
- * will land (see `buildSections`).
+ * idle…"), and one for its finish ("Compacted"). Both panels open on why it ran
+ * and where to change that. The start chip's then shows the `/compact` the idle
+ * sweep sent, when the transcript has it, and the finish chip's the summary the
+ * agent carries on from. While a compaction runs, its start chip stands alone
+ * where the pair will land (see `buildSections`).
  */
 
 import m from "mithril";
@@ -28,22 +29,32 @@ export interface CompactionPart {
   event_id: string;
   event: UserMessageEvent | null;
   cause: CompactionCause | null;
+  /** The `/compact` the idle sweep sent for it, shown on its start chip in place of a bubble. */
+  command: UserMessageEvent | null;
   /** Whether the one-time Auto-compact notice goes under this compaction's chip row. */
   isNoticeAnchor: boolean;
 }
 
-export function landedCompaction(event: UserMessageEvent, isNoticeAnchor: boolean): CompactionPart {
+export function landedCompaction(
+  event: UserMessageEvent,
+  isNoticeAnchor: boolean,
+  command: UserMessageEvent | null = null,
+): CompactionPart {
   return {
     type: "compaction",
     event_id: event.event_id,
     event,
     cause: event.compaction_cause ?? null,
+    command,
     isNoticeAnchor,
   };
 }
 
-export function runningCompaction(cause: CompactionCause | null): CompactionPart {
-  return { type: "compaction", event_id: RUNNING_COMPACTION_ID, event: null, cause, isNoticeAnchor: false };
+export function runningCompaction(
+  cause: CompactionCause | null,
+  command: UserMessageEvent | null = null,
+): CompactionPart {
+  return { type: "compaction", event_id: RUNNING_COMPACTION_ID, event: null, cause, command, isNoticeAnchor: false };
 }
 
 /** Why the context was compacted and where to change it, as markdown, for who started the compaction. */
@@ -82,17 +93,15 @@ function renderExplanation(cause: CompactionCause | null): m.Vnode {
   );
 }
 
-/** The panel both chips open: the explanation, then the summary once there is one. */
-function panelSections(cause: CompactionCause | null, summary: string): StatusChipSection[] {
+/** A chip's panel: the explanation, then the chip's own output when it has one. */
+function panelSections(cause: CompactionCause | null, marker: string, output: string): StatusChipSection[] {
   const sections: StatusChipSection[] = [{ kind: "content", render: () => renderExplanation(cause) }];
-  if (summary) sections.push({ kind: "output", marker: "compaction-summary", text: summary });
+  if (output) sections.push({ kind: "output", marker, text: output });
   return sections;
 }
 
 /** The chips a compaction shows as: its start, and its finish once it has landed. */
 export function compactionChips(part: CompactionPart): StatusChip[] {
-  const summary = part.event === null ? "" : eventSummary(part.event);
-  const sections = panelSections(part.cause, summary);
   const started: StatusChip = {
     kind: "status",
     id: `compaction-started:${part.event_id}`,
@@ -100,7 +109,7 @@ export function compactionChips(part: CompactionPart): StatusChip[] {
     icon: "package-open",
     chipClass: "compaction-chip compaction-chip--started",
     detailClass: "compaction-detail",
-    sections,
+    sections: panelSections(part.cause, "compaction-command", part.command?.content.trim() ?? ""),
   };
   if (part.event === null) return [started];
   return [
@@ -112,7 +121,7 @@ export function compactionChips(part: CompactionPart): StatusChip[] {
       icon: "package",
       chipClass: "compaction-chip compaction-chip--finished",
       detailClass: "compaction-detail",
-      sections,
+      sections: panelSections(part.cause, "compaction-summary", eventSummary(part.event)),
     },
   ];
 }

@@ -1,0 +1,49 @@
+name = "screen"
+display_name = "Screen"
+description = "The workspace's one streamed Linux desktop, a window the person or an agent drives, one at a time; the browser runs on it."
+api_schema_path = "/api/schema"
+icon = "icon.svg"
+critical = false
+# The stack never stops for emptiness: it starts on first demand and ends only under memory
+# pressure or by Quit (docs/system/specs/screen/spec.md D3).
+stop_when_no_windows = false
+priority = "screen"
+launcher_rank = 30
+# Part of the workspace itself rather than an app built on it, so the Share tab tucks it under its
+# System group rather than offering it up front.
+system = true
+
+# The launch path id is ``screen`` rather than the spec's ``open``: the manifest schema reserves ``open`` for the
+# root launch path the shell synthesizes for an app that declares none, and this app declares two.
+[default_shortcut]
+launch = "screen"
+mode = "focus"
+
+[[launch_paths]]
+id = "screen"
+label = "Screen"
+path = "/"
+
+[[launch_paths]]
+id = "browser"
+label = "Browser"
+path = "/launch/browser"
+method = "POST"
+params = [{name = "url", label = "Start page", required = false}]
+
+# No [preview] table, on purpose: the Screen owns the workspace's one X display (:99), its PulseAudio
+# sink and its neko stream, so a second instance cannot run beside the live one; a change to the Screen
+# is verified live (the update-app skill's refresh), never on a throwaway copy.
+
+# The four programs of the stack the service starts on demand, and the listener that ends them
+# together; each lives in its own drop-in beside system/supervisord.conf.d/screen.conf.
+[wiring]
+programs = ["screen-xorg", "screen-session", "screen-pulse", "screen-neko", "screen-watch"]
+
+[[message_handlers]]
+type = "open:url"
+path = "/api/open-url"
+
+# The Screen shows a desktop and other sites; the window around it is themed.
+[theming]
+mode = "none"

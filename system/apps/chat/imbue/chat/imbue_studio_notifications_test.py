@@ -1,4 +1,5 @@
-"""The read call to the Imbue Studio app: its shape and headers, and that every failure is dropped quietly."""
+"""The read call and the mention notification to the Imbue Studio app: their shape and headers, and that every
+failure is dropped quietly."""
 
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -73,6 +74,31 @@ def test_an_unreachable_gateway_is_ignored() -> None:
         assert client.mark_chat_read(ChatId("agent-chat1")).result(timeout=_FUTURE_TIMEOUT_SECONDS) is None
     finally:
         client.shutdown()
+
+
+def test_notify_mention_posts_the_title_the_message_and_a_focus_destination_as_the_chats_own_agent() -> None:
+    with _served_client(200, {"agent-lounge": "agent-lounge"}) as (gateway, client):
+        client.notify_mention(ChatId("agent-lounge"), "Bob mentioned you in Lounge", "@Josh look").result(
+            timeout=_FUTURE_TIMEOUT_SECONDS
+        )
+
+    (received,) = gateway.received
+    assert received.path == "/minds-api-proxy/api/v1/agents/agent-lounge/notifications"
+    assert received.body == {
+        "title": "Bob mentioned you in Lounge",
+        "message": "@Josh look",
+        "destination": {"type": "minds:focus-chat", "chatId": "agent-lounge"},
+    }
+    assert received.headers["X-Latchkey-Gateway-Password"] == "gateway-password-7731"
+
+
+def test_no_mention_is_posted_for_a_chat_with_no_agent() -> None:
+    with _served_client(200, {}) as (gateway, client):
+        assert (
+            client.notify_mention(ChatId("agent-gone"), "title", "message").result(timeout=_FUTURE_TIMEOUT_SECONDS)
+            is None
+        )
+    assert gateway.received == []
 
 
 def test_nothing_is_posted_for_a_chat_with_no_agent_or_without_a_gateway() -> None:

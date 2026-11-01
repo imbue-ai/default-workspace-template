@@ -28,16 +28,10 @@ _PAGE_WITH_SCRIPTS = (
 
 
 def _sha256_source(body: str) -> str:
-    return (
-        "'sha256-"
-        + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode()
-        + "'"
-    )
+    return "'sha256-" + base64.b64encode(hashlib.sha256(body.encode()).digest()).decode() + "'"
 
 
-def test_inline_script_hashes_cover_each_inline_body_once_and_skip_external_and_empty_scripts() -> (
-    None
-):
+def test_inline_script_hashes_cover_each_inline_body_once_and_skip_external_and_empty_scripts() -> None:
     assert inline_script_hashes(_PAGE_WITH_SCRIPTS) == (
         _sha256_source('\n  import { a } from "/a.js";\n'),
         _sha256_source("console.log(1)"),
@@ -48,18 +42,17 @@ def test_inline_script_hashes_cover_each_inline_body_once_and_skip_external_and_
 
 
 def test_url_origin_keeps_the_scheme_host_and_port_and_refuses_a_relative_url() -> None:
-    assert url_origin("https://raw.githubusercontent.com/imbue-ai/x/main/catalog.json") == "https://raw.githubusercontent.com"
+    assert (
+        url_origin("https://raw.githubusercontent.com/imbue-ai/x/main/catalog.json")
+        == "https://raw.githubusercontent.com"
+    )
     assert url_origin("http://localhost:8030/api?x=1") == "http://localhost:8030"
     with pytest.raises(PolicySourceError):
         url_origin("catalog/new-tab-templates.json")
 
 
-def test_build_document_policy_appends_hashes_to_script_src_and_applies_overrides() -> (
-    None
-):
-    policy = build_document_policy(
-        _PAGE_WITH_SCRIPTS, {"script-src": "'self' blob:", "worker-src": "blob:"}
-    )
+def test_build_document_policy_appends_hashes_to_script_src_and_applies_overrides() -> None:
+    policy = build_document_policy(_PAGE_WITH_SCRIPTS, {"script-src": "'self' blob:", "worker-src": "blob:"})
 
     directives = dict(part.split(" ", 1) for part in policy.split("; "))
     assert directives["script-src"] == " ".join(
@@ -77,24 +70,18 @@ def test_build_document_policy_appends_hashes_to_script_src_and_applies_override
     assert "media-src" not in directives
     assert directives["object-src"] == "'none'"
     assert "frame-ancestors" not in directives
-    assert build_document_policy("<p>plain</p>").startswith(
-        "default-src 'self'; script-src 'self'; "
-    )
+    assert build_document_policy("<p>plain</p>").startswith("default-src 'self'; script-src 'self'; ")
 
 
 def _app(tmp_path: Path) -> Flask:
     app = Flask("under-test", static_folder=None)
     document = tmp_path / "built.html"
-    document.write_text(
-        "<!doctype html><html><body><script src=/bundle.js></script></body></html>"
-    )
+    document.write_text("<!doctype html><html><body><script src=/bundle.js></script></body></html>")
     blueprint = Blueprint("pages", __name__)
 
     @blueprint.get("/")
     def page() -> Response:
-        return Response(
-            "<html><body><script>work()</script></body></html>", mimetype="text/html"
-        )
+        return Response("<html><body><script>work()</script></body></html>", mimetype="text/html")
 
     @blueprint.get("/built")
     def built() -> Response:
@@ -129,8 +116,5 @@ def test_attach_document_policy_stamps_html_responses_only_and_keeps_a_routes_ow
     built = client.get("/built")
     assert built.headers["Content-Security-Policy"] == build_document_policy("")
     assert_document_policy_admits_page(built)
-    assert (
-        client.get("/own-policy").headers["Content-Security-Policy"]
-        == "default-src 'none'"
-    )
+    assert client.get("/own-policy").headers["Content-Security-Policy"] == "default-src 'none'"
     assert "Content-Security-Policy" not in client.get("/data").headers

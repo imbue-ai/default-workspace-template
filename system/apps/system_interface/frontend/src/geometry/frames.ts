@@ -19,6 +19,17 @@ export const SNAPPED_LEFT_FRAME: Frame = Object.freeze({ x: 0, y: 0, width: 0.5,
 export const SNAPPED_RIGHT_FRAME: Frame = Object.freeze({ x: 0.5, y: 0, width: 0.5, height: 1 });
 export const MAXIMIZED_FRAME: Frame = Object.freeze({ x: 0, y: 0, width: 1, height: 1 });
 
+/** The whole viewport, the backdrop plus the taskbar's band below it: what a FULLSCREEN window renders at (the
+ *  Screen spec, section 12). No frame in fractions of the backdrop reaches past the backdrop, so the viewport is
+ *  its own value rather than a frame, spelled as the shared vectors spell it. */
+export const VIEWPORT_FRAME = "viewport";
+export type ViewportFrame = typeof VIEWPORT_FRAME;
+/** What a window state renders at: a frame of the backdrop, or the viewport. */
+export type StateFrame = Frame | ViewportFrame;
+
+/** The states a drag released at an edge snaps to, each standing for a frame of the backdrop. */
+export type SnapZone = "SNAPPED_LEFT" | "SNAPPED_RIGHT" | "MAXIMIZED";
+
 // The rest of the halves and the quarters the size menu offers. Unlike the two side halves and
 // the maximized frame, no window STATE stands for these -- a window placed in one is normal at
 // that frame, so a drag moves it away as it would any other window.
@@ -54,6 +65,8 @@ export interface FitMetrics {
   readonly windowMinHeight: number;
   readonly titleMinVisible: number;
   readonly titleBarHeight: number;
+  /** The taskbar's band below the backdrop, which the viewport adds. */
+  readonly taskbarHeight: number;
 }
 
 function clampNumber(value: number, low: number, high: number): number {
@@ -83,11 +96,9 @@ export function cascadeFrame(placedCount: number): Frame {
   );
 }
 
-/** The frame a window renders at: its own when normal, the fixed half or whole otherwise. */
-export function frameForState(placementFrame: Frame, state: WindowState): Frame {
-  switch (state) {
-    case "NORMAL":
-      return placementFrame;
+/** The frame of the backdrop a snap zone stands for. */
+export function snapFrame(zone: SnapZone): Frame {
+  switch (zone) {
     case "SNAPPED_LEFT":
       return SNAPPED_LEFT_FRAME;
     case "SNAPPED_RIGHT":
@@ -95,6 +106,32 @@ export function frameForState(placementFrame: Frame, state: WindowState): Frame 
     case "MAXIMIZED":
       return MAXIMIZED_FRAME;
   }
+}
+
+/** The frame a window renders at: its own when normal, the fixed half or whole of the backdrop when snapped or
+ *  maximized, and the whole viewport when fullscreen. */
+export function frameForState(placementFrame: Frame, state: WindowState): StateFrame {
+  switch (state) {
+    case "NORMAL":
+      return placementFrame;
+    case "SNAPPED_LEFT":
+    case "SNAPPED_RIGHT":
+    case "MAXIMIZED":
+      return snapFrame(state);
+    case "FULLSCREEN":
+      return VIEWPORT_FRAME;
+  }
+}
+
+/** The part of the backdrop a rendered frame covers: a fullscreen window covers all of it (and the taskbar too,
+ *  which the backdrop's fractions cannot say); what a rule over backdrop frames reads a window as. */
+export function backdropFrameOf(stateFrame: StateFrame): Frame {
+  return stateFrame === VIEWPORT_FRAME ? MAXIMIZED_FRAME : stateFrame;
+}
+
+/** The viewport in backdrop pixels: the backdrop from its top-left corner, plus the taskbar's band below it. */
+export function viewportRect(backdrop: PixelSize, taskbarHeight: number): PixelRect {
+  return { x: 0, y: 0, width: backdrop.width, height: backdrop.height + taskbarHeight };
 }
 
 /** The rectangle nudged into the backdrop: horizontally at least the minimum visible title width stays
@@ -122,8 +159,14 @@ export function fitFrameToBackdrop(frame: Frame, backdrop: PixelSize, metrics: F
   return clampRectIntoBackdrop(scaled, backdrop, metrics);
 }
 
+/** The rectangle a rendered frame takes: the fit rule for a frame, the viewport as it is for the viewport. */
+export function fitStateFrame(stateFrame: StateFrame, backdrop: PixelSize, metrics: FitMetrics): PixelRect {
+  if (stateFrame === VIEWPORT_FRAME) return viewportRect(backdrop, metrics.taskbarHeight);
+  return fitFrameToBackdrop(stateFrame, backdrop, metrics);
+}
+
 /** The state a drag released at the pointer snaps to, or null outside every zone; the top edge wins a corner. */
-export function snapZoneForRelease(pointer: PixelPoint, backdrop: PixelSize, threshold: number): WindowState | null {
+export function snapZoneForRelease(pointer: PixelPoint, backdrop: PixelSize, threshold: number): SnapZone | null {
   if (pointer.y <= threshold) return "MAXIMIZED";
   if (pointer.x <= threshold) return "SNAPPED_LEFT";
   if (pointer.x >= backdrop.width - threshold) return "SNAPPED_RIGHT";

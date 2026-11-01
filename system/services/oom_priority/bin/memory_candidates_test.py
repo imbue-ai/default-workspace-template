@@ -1,7 +1,6 @@
 """Tests for the memory candidates command, against a fake ``/proc``, a fake ``mngr list`` and fake
-browser-service and shell answers (all injected through ``Sources``)."""
+Screen-service and shell answers (all injected through ``Sources``)."""
 
-import importlib.util
 import json
 import os
 import string
@@ -14,6 +13,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import memory_candidates
 import pytest
 from chat_background_tasks import markers
 from chat_background_tasks.testing import runner_task
@@ -23,13 +23,9 @@ from oom_priority.meminfo import HOST_MEMINFO_MAX_AGE_SECONDS
 from oom_priority.testing import FAKE_BOOT_ID, write_fake_process
 
 _SCRIPT = Path(__file__).parent / "memory_candidates.py"
-_spec = importlib.util.spec_from_file_location("memory_candidates", _SCRIPT)
-assert _spec is not None and _spec.loader is not None
-memory_candidates = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(memory_candidates)
 
 _NOW = datetime(2026, 9, 24, 12, 0, tzinfo=timezone.utc)
-_BROWSER_URL = "http://browser.test"
+_SCREEN_URL = "http://screen.test"
 _SHELL_URL = "http://shell.test"
 _PROFILE_ROOT = "/home/user/.mngr/browser-profiles"
 
@@ -248,14 +244,14 @@ def _sources(
     is_chat_busy: Callable[[str], bool] = _never_busy,
     supervised_pids: Mapping[str, int] | None = None,
     host_meminfo: Path | None = None,
-) -> object:
+) -> memory_candidates.Sources:
     return memory_candidates.Sources(
         proc_dir=proc_dir,
         host_meminfo=host_meminfo if host_meminfo is not None else proc_dir / "absent",
         run_command=mngr,
         fetch_json=http,
         read_supervised_pids=lambda: dict(supervised_pids or {}),
-        browser_service_url=_BROWSER_URL,
+        screen_service_url=_SCREEN_URL,
         shell_url=_SHELL_URL,
         now=_NOW,
         is_chat_busy=is_chat_busy,
@@ -317,11 +313,12 @@ def test_lists_idle_chats_and_workers_with_last_activity_and_the_memory_of_their
         _sources(
             proc,
             _FakeMngr([chat, worker]),
-            _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}),
+            _FakeHttp({f"{_SCREEN_URL}/browsers": _fleet()}),
         )
     )
 
     agents = report.agents.candidates
+    assert agents is not None
     assert [(a.kind, a.name, a.display_name) for a in agents] == [
         ("chat", "chat-a", "Trip plan"),
         ("worker", "fix-login", None),
@@ -385,7 +382,7 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
 
     report = memory_candidates.collect_report(
         _sources(
-            proc, _FakeMngr(records), _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()})
+            proc, _FakeMngr(records), _FakeHttp({f"{_SCREEN_URL}/browsers": _fleet()})
         )
     )
 
@@ -396,7 +393,7 @@ def test_lists_only_idle_local_chats_and_workers_never_infrastructure_or_active_
         "(waiting, not on a background task, no activity for 15m or more):\n  none"
         in table
     )
-    assert "Browsers no window shows (running):\n  none" in table
+    assert "Browsers running while no window shows the Screen:\n  none" in table
 
 
 def test_an_agent_whose_chat_waits_on_a_background_task_is_not_a_candidate(
@@ -433,18 +430,19 @@ def test_an_agent_whose_chat_waits_on_a_background_task_is_not_a_candidate(
 
     report = memory_candidates.collect_report(
         _sources(
-            proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}), is_chat_busy
+            proc, mngr, _FakeHttp({f"{_SCREEN_URL}/browsers": _fleet()}), is_chat_busy
         )
     )
 
+    assert report.agents.candidates is not None
     assert [a.name for a in report.agents.candidates] == ["finished"]
 
 
-def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(
+def test_lists_running_browsers_while_no_window_shows_the_screen_with_their_chromium_memory(
     tmp_path: Path, runtime_dir: Path
 ) -> None:
     proc = tmp_path / "proc"
-    # browser-1's Chromium (a renderer beneath it); browser-10 is shown, so its match must not leak into browser-1.
+    # browser-1's Chromium (a renderer beneath it); browser-10's must not leak into browser-1's by prefix.
     _fake_process(
         proc,
         300,
@@ -475,15 +473,8 @@ def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(
         _browser("browser-2", "stopped"),
         _browser("browser-3", "init"),
     )
-    # browser-10 is shown only in one client's own path of a window whose home path names no browser.
-    inventory = _inventory(
-        {
-            "app": "browser",
-            "path": "/new",
-            "client_paths": {"client-1": "/?session=browser-10"},
-        },
-        {"app": "chat", "path": "/?session=browser-1"},
-    )
+    # A chat window shows nothing of the Screen, so every running browser is a candidate.
+    inventory = _inventory({"app": "chat", "path": "/?chat=chat-a"})
 
     report = memory_candidates.collect_report(
         _sources(
@@ -491,7 +482,7 @@ def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(
             _FakeMngr([]),
             _FakeHttp(
                 {
-                    f"{_BROWSER_URL}/browsers": fleet,
+                    f"{_SCREEN_URL}/browsers": fleet,
                     f"{_SHELL_URL}/api/inventory": inventory,
                 }
             ),
@@ -499,11 +490,35 @@ def test_lists_running_browsers_no_window_shows_with_their_chromium_memory(
     )
 
     browsers = report.browsers.candidates
+    assert browsers is not None
     assert [(b.name, b.controller, b.tab_count, b.active_url) for b in browsers] == [
-        ("browser-1", "free", 2, "https://b.test/")
+        ("browser-1", "free", 2, "https://b.test/"),
+        ("browser-10", "free", 1, "https://c.test/"),
     ]
     assert browsers[0].pids == (300,)
     assert browsers[0].anonymous_kib == 1000
+    assert browsers[1].pids == (310,)
+    assert browsers[1].anonymous_kib == 900
+
+
+def test_a_running_browser_is_not_a_candidate_while_a_window_shows_the_screen(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
+    proc = tmp_path / "proc"
+    fleet = _fleet(_browser("browser-1", "running", tabs=[("https://a.test/", True)]))
+    inventory = _inventory(
+        {"app": "screen", "path": "/"}, {"app": "chat", "path": "/?chat=chat-a"}
+    )
+    http = _FakeHttp(
+        {
+            f"{_SCREEN_URL}/browsers": fleet,
+            f"{_SHELL_URL}/api/inventory": inventory,
+        }
+    )
+
+    report = memory_candidates.collect_report(_sources(proc, _FakeMngr([]), http))
+
+    assert report.browsers.candidates == ()
 
 
 def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
@@ -524,18 +539,18 @@ def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
             _app("lineup-scout", program="lineup-scout", stop_when_no_windows=True),
             # Never offered: the workspace is reached and talked to through its critical apps, an
             # internal app has no window to lose and no user who asked for it, an app with no
-            # program cannot be started again, and the browser has its own section.
+            # program cannot be started again, and the Screen's browser has its own section.
             _app("chat", program="chat", critical=True),
             _app("system-monitor", program="system-monitor", internal=True),
             _app("docs", program=""),
-            _app("browser", program="browser"),
+            _app("screen", program="screen"),
             # Registered but not running, so stopping it frees nothing.
             _app("setlist-playlists", program="setlist-playlists"),
         ],
     )
     http = _FakeHttp(
         {
-            f"{_BROWSER_URL}/browsers": _fleet(),
+            f"{_SCREEN_URL}/browsers": _fleet(),
             f"{_SHELL_URL}/api/inventory": inventory,
         }
     )
@@ -550,12 +565,13 @@ def test_lists_the_apps_the_workspace_may_stop_with_how_many_windows_show_them(
                 "lineup-scout": 410,
                 "chat": 420,
                 "system-monitor": 430,
-                "browser": 440,
+                "screen": 440,
             },
         )
     )
 
     apps = report.apps.candidates
+    assert apps is not None
     assert [
         (a.name, a.display_name, a.window_count, a.anonymous_kib) for a in apps
     ] == [
@@ -589,7 +605,7 @@ def test_an_app_sharing_a_critical_apps_program_is_never_offered(
     )
     http = _FakeHttp(
         {
-            f"{_BROWSER_URL}/browsers": _fleet(),
+            f"{_SCREEN_URL}/browsers": _fleet(),
             f"{_SHELL_URL}/api/inventory": inventory,
         }
     )
@@ -601,49 +617,13 @@ def test_an_app_sharing_a_critical_apps_program_is_never_offered(
     assert report.apps.candidates == ()
 
 
-def test_a_window_the_browser_read_cannot_parse_leaves_the_apps_listed(
-    tmp_path: Path, runtime_dir: Path
-) -> None:
-    """The browser read needs a window's paths; the counts need only its app. One malformed record
-    takes the browsers to unknown and leaves the apps standing."""
-    proc = tmp_path / "proc"
-    _fake_process(proc, 600, 2048)
-    inventory = _inventory(
-        {"app": "browser", "path": None, "client_paths": {"c": "/?session=browser-1"}},
-        {"app": "daily-digest", "path": "/"},
-        apps=[_app("daily-digest", program="daily-digest")],
-    )
-    http = _FakeHttp(
-        {
-            f"{_BROWSER_URL}/browsers": _fleet(_browser("browser-1", "running")),
-            f"{_SHELL_URL}/api/inventory": inventory,
-        }
-    )
-
-    report = memory_candidates.collect_report(
-        _sources(proc, _FakeMngr([]), http, supervised_pids={"daily-digest": 600})
-    )
-
-    assert [(a.name, a.window_count) for a in report.apps.candidates] == [
-        ("daily-digest", 1)
-    ]
-    assert report.browsers.candidates is None
-    # The note names the window, not the document: the shell answered, and the apps section above
-    # was read from that same answer.
-    assert "so which browsers no window shows is unknown" in report.browsers.notes[0]
-    assert (
-        "a browser window carried a path the read could not parse"
-        in report.browsers.notes[0]
-    )
-
-
 def test_apps_are_unknown_rather_than_none_when_supervisord_cannot_be_asked(
     tmp_path: Path, runtime_dir: Path
 ) -> None:
     proc = tmp_path / "proc"
     http = _FakeHttp(
         {
-            f"{_BROWSER_URL}/browsers": _fleet(),
+            f"{_SCREEN_URL}/browsers": _fleet(),
             f"{_SHELL_URL}/api/inventory": _inventory(
                 apps=[_app("daily-digest", program="daily-digest")]
             ),
@@ -664,7 +644,7 @@ def test_a_failed_mngr_list_reports_agents_as_unknown_and_still_lists_browsers(
     proc = tmp_path / "proc"
     fleet = _fleet(_browser("browser-1", "running"))
     http = _FakeHttp(
-        {f"{_BROWSER_URL}/browsers": fleet, f"{_SHELL_URL}/api/inventory": _inventory()}
+        {f"{_SCREEN_URL}/browsers": fleet, f"{_SHELL_URL}/api/inventory": _inventory()}
     )
 
     report = memory_candidates.collect_report(
@@ -680,6 +660,7 @@ def test_a_failed_mngr_list_reports_agents_as_unknown_and_still_lists_browsers(
     assert report.agents.candidates is None
     assert len(report.agents.notes) == 1
     assert report.agents.notes[0].startswith("could not run `mngr list`: ")
+    assert report.browsers.candidates is not None
     assert [b.name for b in report.browsers.candidates] == ["browser-1"]
     assert (
         "Idle chats and workers (waiting, not on a background task, no activity for 15m or more):\n  unknown\n  note: could not run"
@@ -699,9 +680,10 @@ def test_a_listing_error_keeps_the_agents_mngr_did_list_and_notes_the_error(
     )
 
     report = memory_candidates.collect_report(
-        _sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
+        _sources(proc, mngr, _FakeHttp({f"{_SCREEN_URL}/browsers": _fleet()}))
     )
 
+    assert report.agents.candidates is not None
     assert [a.name for a in report.agents.candidates] == ["chat-a"]
     assert report.agents.notes == (
         "mngr list exited 1: Errors while listing:; host-2: ssh timed out",
@@ -715,7 +697,7 @@ def test_a_listing_that_fails_with_no_agents_is_unknown_not_empty(
     mngr = _FakeMngr([], returncode=1, stderr="Error: cannot load the local provider\n")
 
     report = memory_candidates.collect_report(
-        _sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
+        _sources(proc, mngr, _FakeHttp({f"{_SCREEN_URL}/browsers": _fleet()}))
     )
 
     assert report.agents.candidates is None
@@ -733,7 +715,7 @@ def test_a_listing_none_of_whose_lines_parse_is_unknown_not_empty(
     )
 
     report = memory_candidates.collect_report(
-        _sources(proc, mngr, _FakeHttp({f"{_BROWSER_URL}/browsers": _fleet()}))
+        _sources(proc, mngr, _FakeHttp({f"{_SCREEN_URL}/browsers": _fleet()}))
     )
 
     assert report.agents.candidates is None
@@ -766,7 +748,7 @@ def test_an_unreachable_browser_service_reports_browsers_as_unknown_and_still_li
     )
     http = _FakeHttp(
         {
-            f"{_BROWSER_URL}/browsers": urllib.error.URLError(
+            f"{_SCREEN_URL}/browsers": urllib.error.URLError(
                 ConnectionRefusedError(61, "Connection refused")
             )
         }
@@ -776,8 +758,9 @@ def test_an_unreachable_browser_service_reports_browsers_as_unknown_and_still_li
 
     assert report.browsers.candidates is None
     assert report.browsers.notes[0].startswith(
-        f"could not reach the browser service at {_BROWSER_URL}/browsers:"
+        f"could not reach the Screen service at {_SCREEN_URL}/browsers:"
     )
+    assert report.agents.candidates is not None
     assert [a.name for a in report.agents.candidates] == ["chat-a"]
 
 
@@ -792,7 +775,7 @@ def test_an_unreadable_shell_leaves_browsers_unknown_rather_than_calling_them_un
     ):
         http = _FakeHttp(
             {
-                f"{_BROWSER_URL}/browsers": fleet,
+                f"{_SCREEN_URL}/browsers": fleet,
                 f"{_SHELL_URL}/api/inventory": inventory_answer,
             }
         )
@@ -806,7 +789,8 @@ def test_an_unreadable_shell_leaves_browsers_unknown_rather_than_calling_them_un
         )
         assert report.browsers.candidates is None
         assert (
-            "so which browsers no window shows is unknown" in report.browsers.notes[0]
+            "so whether a window shows the Screen is unknown"
+            in report.browsers.notes[0]
         )
 
 
@@ -876,7 +860,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
     _fake_process(proc, 400, 256)
     http = _FakeHttp(
         {
-            f"{_BROWSER_URL}/browsers": _fleet(browser),
+            f"{_SCREEN_URL}/browsers": _fleet(browser),
             f"{_SHELL_URL}/api/inventory": _inventory(
                 {"app": "daily-digest", "path": "/"},
                 apps=[_app("daily-digest", program="daily-digest")],
@@ -946,7 +930,7 @@ def test_json_report_shape(tmp_path: Path, runtime_dir: Path) -> None:
 
 def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -> None:
     """End to end through the real wiring: a fake ``mngr`` on PATH printing two rendered agents, one of whose chats
-    waits on a background task, and a browser service nothing listens on."""
+    waits on a background task, and a Screen service nothing listens on."""
     bindir = tmp_path / "bin"
     bindir.mkdir()
     long_ago = datetime.now(timezone.utc) - timedelta(hours=3)
@@ -968,7 +952,7 @@ def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -
         **os.environ,
         "PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}",
         "OOM_PRIORITY_RUNTIME_DIR": str(tmp_path / "runtime"),
-        "MINDS_BROWSER_SERVICE_URL": "http://127.0.0.1:9",
+        "MINDS_SCREEN_SERVICE_URL": "http://127.0.0.1:9",
         markers.MARKER_ROOT_ENV: str(tmp_path / "background_tasks"),
     }
 
@@ -988,7 +972,7 @@ def test_the_script_runs_under_a_plain_python3_and_prints_json(tmp_path: Path) -
     ]
     assert document["browsers"]["candidates"] is None
     assert document["browsers"]["notes"][0].startswith(
-        "could not reach the browser service at http://127.0.0.1:9/browsers"
+        "could not reach the Screen service at http://127.0.0.1:9/browsers"
     )
 
 

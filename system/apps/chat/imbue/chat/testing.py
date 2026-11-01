@@ -63,10 +63,12 @@ from imbue.chat.accounts import mint_account_dir
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import SendFailedError
 from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.agent_discovery import discover_agents
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.authors import AuthorStore
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_records import ChatAgentEntry
@@ -82,6 +84,8 @@ from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.chat.harnesses.interrupt import MESSAGE_LOCK_FILENAME
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.signed_in import SignedIn
+from imbue.chat.lounge import LoungeKeeper
+from imbue.chat.mentions import MentionStore
 from imbue.chat.models import ActiveAgentSnapshot
 from imbue.chat.models import AgentStateItem
 from imbue.chat.models import ChatSnapshot
@@ -92,19 +96,30 @@ from imbue.chat.models import ModelPick
 from imbue.chat.models import ProvisionalChat
 from imbue.chat.models import ProvisionalChatPhase
 from imbue.chat.primitives import ChatId
+from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestStore
 from imbue.chat.server import create_application
 from imbue.chat.shell_client import build_chat_shell_client
 from imbue.chat.state import ChatAppState
+from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.mngr.api.find import AgentMatch
+from imbue.mngr.api.message import AgentSendFailure
+from imbue.mngr.api.message import MessageResult
 from imbue.mngr.api.observe import acquire_observe_lock
 from imbue.mngr.api.observe import release_observe_lock
+from imbue.mngr.config.data_types import MngrContext
 from imbue.mngr.errors import AgentIdNotFoundError
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
+from imbue.mngr.primitives import AgentName
+from imbue.mngr.primitives import HostId
+from imbue.mngr.primitives import HostName
+from imbue.mngr.primitives import ProviderInstanceName
 from imbue.mngr.utils.polling import wait_for
 from imbue.mngr_claude.claude_config import COMPACTING_MARKER_FILENAME
 from imbue.mngr_claude.claude_config import LAST_COMPACTION_FILENAME
@@ -700,11 +715,17 @@ def write_recording_mngr_binary(tmp_path: Path) -> tuple[str, Path]:
 
     One line per invocation, whatever the arguments hold: a newline inside an argument (a
     ``--message`` carrying a whole conversation) is written as a space, so a reader can still
-    count the calls and split a line into its tokens.
+    count the calls and split a line into its tokens. A create run with the no-account mark in
+    its environment (a room's) ends its line with ``MINDS_CREATE_WITHOUT_ACCOUNT=<value>``.
     """
     log_path = tmp_path / "mngr-argv.log"
     script = tmp_path / "fake-mngr"
-    script.write_text(f"#!/bin/sh\nprintf '%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" >> \"{log_path}\"\n")
+    script.write_text(
+        "#!/bin/sh\n"
+        "printf '%s%s\\n' \"$(printf '%s' \"$*\" | tr '\\n' ' ')\" "
+        '"${MINDS_CREATE_WITHOUT_ACCOUNT:+ MINDS_CREATE_WITHOUT_ACCOUNT=$MINDS_CREATE_WITHOUT_ACCOUNT}" '
+        f'>> "{log_path}"\n'
+    )
     script.chmod(0o755)
     return str(script), log_path
 
@@ -784,9 +805,13 @@ class RecordingMngrMessenger(MngrMessenger):
 
     sent: list[tuple[str, str]] = []
     pressed: list[tuple[str, str]] = []
+    # What each send was given to tell whether a stop took it back, in send order.
+    taken_back_checks: list[Callable[[], bool]] = []
     # Each compaction requested, as ``(agent_id, instructions)``.
     compactions: list[tuple[str, str | None]] = []
     succeeds: bool = True
+    # How a succeeding send reports it got there.
+    delivery: SendDelivery = SendDelivery.DELIVERED
     # What a non-succeeding send reports, in place of a harness's own words and mngr's kind.
     failure_reason: str = "The agent could not be reached."
     failure_kind: str = "unknown"
@@ -795,10 +820,16 @@ class RecordingMngrMessenger(MngrMessenger):
     compaction_failure: SendFailure | None = None
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
         self.sent.append((str(agent_id), message))
-        return None if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
+        self.taken_back_checks.append(is_taken_back)
+        return self.delivery if self.succeeds else SendFailure(reason=self.failure_reason, kind=self.failure_kind)
 
     def press_key_chord_to_agent(self, agent_id: AgentId, key: str, known_locations: Sequence[AgentMatch]) -> bool:
         self.pressed.append((str(agent_id), key))
@@ -819,10 +850,47 @@ class SummaryWritingMngrMessenger(RecordingMngrMessenger):
     """
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
         write_summary_for_request(message)
-        return super().send_to_agent(agent_id, message, known_locations)
+        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
+
+
+def scripted_send_mngr_messenger(
+    failure_kinds: Sequence[SendFailureKind], sent: list[str], failure_reason: str = "no evidence of submission"
+) -> MngrMessenger:
+    """A real `MngrMessenger` over a fake mngr: each send fails with the next of ``failure_kinds``, and once they run
+    out every send is delivered.
+
+    So the messenger's own repeats run against mngr's answers, unlike `RecordingMngrMessenger`, which replaces them.
+    ``sent`` records each message mngr was asked to type. The agent is found by its id wherever it is looked for.
+    """
+    remaining = list(failure_kinds)
+
+    def discover(agent_id: AgentId, _mngr_ctx: MngrContext) -> Sequence[AgentMatch]:
+        return (
+            AgentMatch(
+                agent_id=agent_id,
+                agent_name=AgentName("scripted"),
+                host_id=HostId.generate(),
+                host_name=HostName("localhost"),
+                provider_name=ProviderInstanceName("local"),
+            ),
+        )
+
+    def send(matches: Sequence[AgentMatch], message: str, _mngr_ctx: MngrContext) -> MessageResult:
+        sent.append(message)
+        if remaining:
+            kind = remaining.pop(0)
+            return MessageResult(failures=[AgentSendFailure(agent_name="scripted", reason=failure_reason, kind=kind)])
+        return MessageResult(successful_agents=[str(match.agent_id) for match in matches])
+
+    return MngrMessenger(discover=discover, send=send)
 
 
 class VanishedAgentMngrMessenger(RecordingMngrMessenger):
@@ -833,9 +901,14 @@ class VanishedAgentMngrMessenger(RecordingMngrMessenger):
     """
 
     def send_to_agent(
-        self, agent_id: AgentId, message: str, known_locations: Sequence[AgentMatch]
-    ) -> SendFailure | None:
-        super().send_to_agent(agent_id, message, known_locations)
+        self,
+        agent_id: AgentId,
+        message: str,
+        known_locations: Sequence[AgentMatch],
+        is_resent_when_unsure: bool = True,
+        is_taken_back: Callable[[], bool] = lambda: False,
+    ) -> SendDelivery | SendFailure:
+        super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
         raise AgentIdNotFoundError(f"No agent(s) found matching: {agent_id}")
 
 
@@ -893,10 +966,13 @@ def build_test_state(
     claude_auth_service: ClaudeAuthService | None = None,
     auth_flows: AuthFlowService | None = None,
     latchkey_http_client: httpx.Client | None = None,
+    http_client: httpx.Client | None = None,
     is_secondary: bool = False,
     shell: ShellLayoutInterface | None = None,
     secret_requests: SecretRequestStore | None = None,
     chat_namer: ChatNamer | None = None,
+    authors: AuthorStore | None = None,
+    mentions: MentionStore | None = None,
 ) -> ChatAppState:
     """Build a `ChatAppState` for tests, injecting fakes where provided.
 
@@ -908,6 +984,9 @@ def build_test_state(
     """
     manager = agent_manager if agent_manager is not None else AgentManager.build(WebSocketBroadcaster())
     event_queues = AgentEventQueues()
+    # Match production: a secondary chat feeds no tray and makes no Lounge (the multiplayer spec, section 11).
+    tray_feed = None if is_secondary else TrayFeed(shell=shell if shell is not None else DisconnectedShell())
+    lounge = None if is_secondary else LoungeKeeper(agent_manager=manager)
     # Match production: route the codex ledger's live user-turns onto the event fan-out.
     manager.set_transcript_broadcaster(event_queues.broadcast_batch)
     state = ChatAppState(
@@ -925,7 +1004,7 @@ def build_test_state(
         agent_manager=manager,
         event_queues=event_queues,
         claude_auth_service=claude_auth_service if claude_auth_service is not None else ClaudeAuthService(),
-        http_client=httpx.Client(follow_redirects=False, timeout=30.0),
+        http_client=http_client if http_client is not None else httpx.Client(follow_redirects=False, timeout=30.0),
         latchkey_http_client=latchkey_http_client if latchkey_http_client is not None else httpx.Client(timeout=30.0),
         is_secondary=is_secondary,
         shell=shell if shell is not None else DisconnectedShell(),
@@ -934,7 +1013,19 @@ def build_test_state(
         # rooted in its tmp_path.
         secret_requests=secret_requests if secret_requests is not None else build_temporary_secret_request_store(),
         chat_namer=chat_namer,
+        # Never this package's own data/: a test that reads the annotations back injects a store under its tmp_path.
+        authors=authors if authors is not None else AuthorStore(root=Path(tempfile.mkdtemp(prefix="chat-authors-"))),
+        roster=RosterClient(shell=shell if shell is not None else DisconnectedShell()),
+        mentions=mentions
+        if mentions is not None
+        else MentionStore(root=Path(tempfile.mkdtemp(prefix="chat-mentions-"))),
+        # The tray's feed goes to the shell given (a fake records it); a disconnected one drops it.
+        tray_feed=tray_feed,
+        lounge=lounge,
     )
+    if tray_feed is not None:
+        manager.set_chats_updated_listener(tray_feed.report_chats)
+    manager.set_participants_reader(state.authors.participant_keys)
     # Match production: eviction drops a destroyed agent's transcripts, the release a stopped chat's
     # that nobody is streaming, and removing a chat's active agent ends the chat's streams.
     manager.set_watcher_eviction_callback(state.stop_and_remove_watcher)
@@ -1266,6 +1357,7 @@ def make_chat_snapshot(chat_id: str, last_messaged_at: float | None = None, name
     """A listed chat as the pages see it: one idle claude agent, for tests that reason over snapshots alone."""
     return ChatSnapshot(
         chat_id=ChatId(chat_id),
+        kind=ChatKind.AGENT,
         title=name.replace("-", " "),
         name=name,
         project=None,
@@ -1408,7 +1500,8 @@ def running_workspace(
 
     registry_path = tmp_path / "registry" / "apps.toml"
     # The chat's row as ``forward_port.py`` writes it from ``system/apps/chat/app.toml``: the chat list at ``/`` and
-    # the four POST launch paths onto the intake route (post-launch-paths plan section 7.1).
+    # the five POST launch paths onto the intake route (post-launch-paths plan section 7.1; the multiplayer spec,
+    # section 7.5, for the mention into the Lounge).
     write_registry(
         registry_path,
         registry_row_toml(
@@ -1423,21 +1516,36 @@ def running_workspace(
                 ("new", "New Chat", "/api/chats/intake"),
                 ("send", "Send to chat...", "/api/chats/intake"),
                 ("draft", "Draft into chat", "/api/chats/intake"),
+                ("lounge", "Mention in the Lounge", "/api/chats/intake"),
+                ("app-chat", "Chat about this app", "/api/chats/intake"),
             ),
             launch_params={
                 "main": ("message",),
                 "new": ("account_id", "message"),
                 "send": ("message",),
                 "draft": ("message",),
+                "lounge": ("message",),
+                "app-chat": ("app", "app_display_name"),
             },
             launch_text_params={"main": "message", "new": "message", "send": "message"},
             launch_draft_params={"draft": "message"},
-            launch_methods={"main": "POST", "new": "POST", "send": "POST", "draft": "POST"},
+            launch_mention_params={"lounge": "message"},
+            launch_app_params={"app-chat": ("app", "app_display_name")},
+            launch_methods={
+                "main": "POST",
+                "new": "POST",
+                "send": "POST",
+                "draft": "POST",
+                "lounge": "POST",
+                "app-chat": "POST",
+            },
             launch_presets={
                 "main": {"target": "main_chat"},
                 "new": {"target": "new_chat"},
                 "send": {"target": "chat_selector"},
                 "draft": {"target": "current_chat", "is_draft": "true"},
+                "lounge": {"target": "lounge", "is_draft": "true"},
+                "app-chat": {"target": "app_chat"},
             },
         ),
         *extra_rows,
