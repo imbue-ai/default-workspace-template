@@ -28,7 +28,7 @@ import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
 import type { OutsideLinkOpener, PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
-import { getOwnIdentity, startPresenceHeartbeat } from "./model/Presence";
+import { getOwnIdentity, onOwnIdentityChanged, startPresenceHeartbeat } from "./model/Presence";
 import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour";
 import type { TourAction } from "./model/tourCards";
 import { avatarPinnedWindow } from "./reducers/desktopState";
@@ -141,7 +141,10 @@ function bootstrap(): void {
     setIconTheme,
   });
   const gestures = new PointerGestureSource();
-  // Say this window is here (and learn who it is) for as long as it stays visible.
+  // Say this window is here (and learn who it is) for as long as it stays visible. Until the first answer the
+  // active desktop reads as the viewer's own, so a window that landed on somebody else's re-reads the layout as
+  // the owner's once it knows (the multiplayer spec, section 8.3).
+  onOwnIdentityChanged(() => desktopStore.takeViewerIdentityKnown());
   startPresenceHeartbeat();
   // The pointer hides while text is typed into the shell's own fields (the launcher, the settings);
   // each framed page does the same for itself.

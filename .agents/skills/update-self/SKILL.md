@@ -630,6 +630,17 @@ instead of proceeding. Take them right before the apply, once the chats are
 paused and the last fast-forward check below has passed, so no catch-up round
 runs while you hold them, and release them afterwards.
 
+**The frontends must actually be rebuilt when an update touches them.** The
+served pages are the built `static/` bundles, not the source the update
+changed, and the shared `workspace_ui` library is compiled into every one of
+them (including behavior the shell depends on from every app page, like the
+`shell:input` activity reports its presence reads) -- an update applied
+without the rebuild leaves every page running the old code while the tree
+says otherwise. The apply command below does this itself (a change under any
+frontend source directory or `workspace_ui` re-emits the bundles); the rule
+matters when landing such an update any other way: never hand-apply one
+without running `npm run build` for every affected frontend.
+
 The apply run from here keeps its own run record and raises no "recently
 updated" notice: `--keep-rollback-point` is the careful flow's, not this one's.
 

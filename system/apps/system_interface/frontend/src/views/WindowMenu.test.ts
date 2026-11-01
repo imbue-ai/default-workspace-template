@@ -141,9 +141,8 @@ describe("taskbarEntryMenuRows", () => {
     desktopShortcut: null,
   };
 
-  it("offers a pinned entry the float and style verbs in place of Close", () => {
+  it("offers a pinned entry the float verb and, when the pin declares the avatar, its chooser", () => {
     const setMode = vi.fn();
-    const setStyle = vi.fn();
     const changeAvatar = vi.fn();
     const pinnedEntries = (look: EntryLook, options: { isMinimized?: boolean } = {}) =>
       taskbarEntryMenuRows({
@@ -151,26 +150,36 @@ describe("taskbarEntryMenuRows", () => {
         close: vi.fn(),
         isMinimized: options.isMinimized ?? false,
         isMaximized: false,
-        presentation: { look, setMode, setStyle, changeAvatar },
+        presentation: { look, setMode, changeAvatar },
       });
     const inBar = pinnedEntries(
-      { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null },
+      { mode: "bar", style: "avatar", declaredStyle: "avatar", position: null, isWindowShown: true },
       { isMinimized: true },
     );
-    expect(keysOf(inBar)).toEqual(["restore", "maximize", "|", "float", "style-plain", "change-avatar", "|", "close"]);
-    expect(rowOf(inBar, "style-plain").label).toBe("Show as plain entry");
+    expect(keysOf(inBar)).toEqual(["restore", "maximize", "|", "float", "change-avatar", "|", "close"]);
     expect(rowOf(inBar, "change-avatar").label).toBe("Change avatar...");
     rowOf(inBar, "change-avatar").onSelect();
     expect(changeAvatar).toHaveBeenCalledTimes(1);
     rowOf(inBar, "float").onSelect();
     expect(setMode).toHaveBeenCalledWith("floating");
-    rowOf(inBar, "style-plain").onSelect();
-    expect(setStyle).toHaveBeenCalledWith("plain");
-    const floating = pinnedEntries({ mode: "floating", style: "plain", declaredStyle: "avatar", position: null });
-    expect(keysOf(floating)).toEqual(["minimize", "maximize", "|", "move-to-taskbar", "style-avatar", "|", "close"]);
-    expect(rowOf(floating, "style-avatar").label).toBe("Show as avatar");
-    // A pin declaring no style offers no style row.
-    const plainPin = pinnedEntries({ mode: "bar", style: "plain", declaredStyle: "plain", position: null });
+    const floating = pinnedEntries({
+      mode: "floating",
+      style: "plain",
+      declaredStyle: "avatar",
+      position: null,
+      isWindowShown: true,
+    });
+    expect(keysOf(floating)).toEqual(["minimize", "maximize", "|", "move-to-taskbar", "change-avatar", "|", "close"]);
+    rowOf(floating, "move-to-taskbar").onSelect();
+    expect(setMode).toHaveBeenCalledWith("bar");
+    // A pin declaring no avatar offers no chooser row.
+    const plainPin = pinnedEntries({
+      mode: "bar",
+      style: "plain",
+      declaredStyle: "plain",
+      position: null,
+      isWindowShown: true,
+    });
     expect(keysOf(plainPin)).toEqual(["minimize", "maximize", "|", "float", "|", "close"]);
   });
 

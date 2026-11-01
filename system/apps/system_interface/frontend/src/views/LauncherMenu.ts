@@ -146,6 +146,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
         {
           ...rowAttrs(row, index, attrs),
           "data-launch": shortcutKey(row.app.name, row.launchPath.id),
+          ...hoverTooltipAttrs(row.disabledReason),
           oncontextmenu:
             onAppShortcutContextMenu !== null && appShortcutOf(row.app)?.launch === row.launchPath.id
               ? (event: MouseEvent) => {
@@ -168,6 +169,7 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
           ...rowAttrs(row, index, attrs),
           "data-launcher-window": row.window.id,
           "data-minimized": row.isMinimized ? "true" : "false",
+          ...hoverTooltipAttrs(row.disabledReason),
         },
         [
           glyphCell(appGlyph(row.app, appSize), attrs.isSheet),
@@ -179,6 +181,10 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
           ),
           m("span", { class: CAPTION_CLASS }, row.app?.display_name ?? row.window.app),
           row.isOnActiveDesktop || attrs.isSheet ? null : m("span", { class: CAPTION_CLASS }, row.desktopName),
+          // Whose desktop the window is on, when it is not the viewer's (the multiplayer spec, section 8.2).
+          row.ownerName === null || attrs.isSheet
+            ? null
+            : m("span", { class: CAPTION_CLASS, "data-launcher-window-owner": "" }, row.ownerName),
           keys,
         ],
       );

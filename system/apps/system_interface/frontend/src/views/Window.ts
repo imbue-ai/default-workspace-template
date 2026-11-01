@@ -77,6 +77,8 @@ export interface WindowAttrs {
   readonly isFocused: boolean;
   readonly isTouch: boolean;
   readonly isMenuOpen: boolean;
+  /** Whether the title bar offers "Chat about this app" (the multiplayer spec, section 9.1). */
+  readonly hasAppChat: boolean;
   /** Spread onto the maximize control: resting on it opens the window's size menu. */
   readonly sizeMenuTrigger: m.Attributes;
   /** Whether the shield covers the content: every unfocused window, and every window while a menu or the
@@ -217,6 +219,7 @@ export function Window(): m.Component<WindowAttrs> {
                     state,
                     isFocused,
                     isMenuOpen: attrs.isMenuOpen,
+                    hasAppChat: attrs.hasAppChat,
                     sizeMenuTrigger: attrs.sizeMenuTrigger,
                     onControl: attrs.onControl,
                     onDoubleClick: attrs.onToggleMaximize,

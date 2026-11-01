@@ -40,29 +40,37 @@ function slotOrder(bar: HTMLElement): string[] {
 }
 
 describe("TitleBar", () => {
-  it("draws the standard slots and marks every part a theme styles", () => {
+  it("draws the standard slots, the icon and title centred, and marks every part a theme styles", () => {
     const bar = render();
 
     expect(bar.getAttribute("data-focused")).toBe("true");
-    expect(slotOrder(bar)).toEqual([
-      "window-icon",
-      "window-title",
-      "refresh",
-      "menu",
-      "minimize",
-      "maximize",
-      "close",
-    ]);
+    expect(slotOrder(bar)).toEqual(["menu", "refresh", "minimize", "maximize", "close"]);
     expect(bar.querySelector('[data-control="close"]')?.getAttribute("data-part")).toBe("window-control");
-    expect(bar.querySelector('[data-part="window-title"]')?.textContent).toBe("Plan");
+    // The icon and title sit together in the centred group, laid over the middle of the bar.
+    const title = bar.querySelector('[data-part="window-title"]') as HTMLElement;
+    expect(title.textContent).toBe("Plan");
+    expect(title.parentElement?.className).toContain("absolute");
+    expect(title.parentElement?.querySelector('[data-part="window-icon"]')).not.toBeNull();
+  });
+
+  it("offers Chat about this app after Refresh when the window's app takes one", () => {
+    const bar = render({ hasAppChat: true });
+
+    expect(slotOrder(bar)).toEqual(["menu", "refresh", "app-chat", "minimize", "maximize", "close"]);
+    expect(bar.querySelector('[data-window-control="app-chat"]')?.getAttribute("aria-label")).toBe(
+      "Chat about this app",
+    );
+    expect(slotOrder(render({ hasAppChat: false }))).toEqual(["menu", "refresh", "minimize", "maximize", "close"]);
   });
 
   it("arranges the controls as the theme's chrome says and centres the title over the bar", () => {
     const bar = render({ chrome: MAC_CHROME });
 
     expect(slotOrder(bar)).toEqual(["close", "refresh", "menu", "minimize", "maximize", "window-title"]);
+    // The chrome names no icon slot, so the title part itself is the centred element the theme styles.
+    const title = bar.querySelector('[data-part="window-title"]') as HTMLElement;
+    expect(title.className).toContain("absolute");
     expect(bar.querySelector('[data-part="window-icon"]')).toBeNull();
-    expect(bar.querySelector('[data-part="window-title"]')?.className).toContain("absolute");
   });
 
   it("drops the window's own actions from a background window without leaving a gap, and draws fullscreen and restore when maximized", () => {

@@ -8,7 +8,11 @@ Usage, from the repo root (every skill's cwd)::
     python3 system/scripts/message_chat.py <chat-id> --browser-fleet -m "a browser-fleet nudge"
     python3 system/scripts/message_chat.py --create --name "assist-1a2b3c" --label auto_open=true -m "/assist ..."
 
-This is the in-workspace replacement for ``mngr message <agent>``. A chat is
+This is the in-workspace replacement for ``mngr message <agent>``, for a chat with an
+agent. A chat room (a chat among the people here, with no agent of its own) is answered
+with ``mngr message --start <room>`` and never through this script: a send no proxy
+vouched for is nobody's speech, so it would raise no bubble in anyone's tray and its
+``@mentions`` would act on nothing. A chat is
 addressed by its chat id (``$MINDS_CHAT_ID`` on an agent the chat app created; the
 id of its first agent, so ``$MNGR_AGENT_ID`` for an agent that is its own chat),
 never by its mngr name: a rename changes the name mid-task, and once a chat can
@@ -143,7 +147,7 @@ class Outcome(Enum):
 
 
 class ChatAppAnswer:
-    """One HTTP answer from the send route."""
+    """One HTTP answer from the chat app: a send's, a rename's, or a listing's."""
 
     def __init__(self, status: int, body: object) -> None:
         self.status = status
@@ -235,6 +239,48 @@ def chat_app_url(environ: Mapping[str, str], cwd: Path) -> str:
     return CHAT_APP_FALLBACK_URL
 
 
+def _chat_app_connection(base_url: str) -> http.client.HTTPConnection:
+    """A connection to the chat app at ``base_url`` whose every socket operation gives up after the connect
+    timeout, until the caller lifts it."""
+    parsed = urllib.parse.urlsplit(base_url)
+    return http.client.HTTPConnection(
+        parsed.hostname or "127.0.0.1",
+        parsed.port or 80,
+        timeout=CONNECT_TIMEOUT_SECONDS,
+    )
+
+
+def _answer_of(status: int, raw: bytes) -> ChatAppAnswer:
+    """The answer with ``raw`` as its JSON body, or no body when it is empty or not JSON."""
+    try:
+        parsed_body: object = json.loads(raw.decode("utf-8")) if raw else None
+    except ValueError:
+        parsed_body = None
+    return ChatAppAnswer(status, parsed_body)
+
+
+def get_json(base_url: str, path: str) -> ChatAppAnswer:
+    """GET ``path`` and answer what came back, within the connect timeout.
+
+    Raises ``ChatAppUnreachableError`` when the chat app cannot be connected to or does not
+    answer in time; unlike a send, the whole exchange is bounded by the connect timeout, since
+    a read changes no state (there is nothing acted on to be careful about) and a listing is
+    quick.
+    """
+    connection = _chat_app_connection(base_url)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        raw = response.read()
+    except (OSError, http.client.HTTPException) as exc:
+        raise ChatAppUnreachableError(
+            f"could not read {path} from the chat app at {base_url}: {exc}"
+        ) from exc
+    finally:
+        connection.close()
+    return _answer_of(response.status, raw)
+
+
 def post_json(base_url: str, path: str, body: Mapping[str, object]) -> ChatAppAnswer:
     """POST ``body`` and wait for the answer, however long it takes.
 
@@ -243,12 +289,7 @@ def post_json(base_url: str, path: str, body: Mapping[str, object]) -> ChatAppAn
     ``http.client.HTTPException``, which the caller treats as a failure rather than a
     reason to back off, because the request may have been acted on.
     """
-    parsed = urllib.parse.urlsplit(base_url)
-    connection = http.client.HTTPConnection(
-        parsed.hostname or "127.0.0.1",
-        parsed.port or 80,
-        timeout=CONNECT_TIMEOUT_SECONDS,
-    )
+    connection = _chat_app_connection(base_url)
     try:
         connection.connect()
     except OSError as exc:
@@ -274,11 +315,7 @@ def post_json(base_url: str, path: str, body: Mapping[str, object]) -> ChatAppAn
         raw = response.read()
     finally:
         connection.close()
-    try:
-        parsed_body: object = json.loads(raw.decode("utf-8")) if raw else None
-    except ValueError:
-        parsed_body = None
-    return ChatAppAnswer(response.status, parsed_body)
+    return _answer_of(response.status, raw)
 
 
 def _post_until_answered(
