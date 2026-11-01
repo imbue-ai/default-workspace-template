@@ -2990,6 +2990,9 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
             assert not page.evaluate("() => document.activeElement?.closest('.desktop-stage') !== null"), (
                 "Tab reached something on the viewed desktop"
             )
+        # Tab cycles through the shell's own chrome, Stop viewing included, so Enter must not land where Tab left it.
+        page.evaluate("() => document.activeElement?.blur()")
+        close_control.focus()
         page.keyboard.press("Enter")
         assert [window["id"] for window in _windows(e2e_server.base_url, "alice")] == [copied["id"]]
         expect(_window(visitor, copied["id"])).to_be_visible()
