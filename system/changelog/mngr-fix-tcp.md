@@ -1,0 +1,1 @@
+- The Lima provider's guest image (`[providers.lima]` `default_image_url_*` in `.mngr/settings.toml`) moved to the Debian 13 genericcloud release `20261026-2643`, whose kernel `6.12.113-1` carries the fix for CVE-2026-98432, in step with the gen-2 cloud slice guest image.
