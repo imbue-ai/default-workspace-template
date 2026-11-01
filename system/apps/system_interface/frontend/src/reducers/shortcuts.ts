@@ -1,6 +1,7 @@
 /**
  * What a shortcut, a launcher tile, or a desktop's menu comes to (desktop-interface plan sections
- * 3.6, 4.8, 4.9): a focus-mode shortcut raises the app's most recently focused window in this
+ * 3.6, 4.8, 4.9): a shortcut to the app's pin path raises its pinned window, as the launcher's row
+ * for that path does; a focus-mode shortcut raises the app's most recently focused window in this
  * client's layout and opens at the launch path only when there is none; a new desktop is minted
  * ``Desktop <n>``; a shortcut added from a tile lands at the first free cell in reading order over
  * the current grid.
@@ -9,9 +10,9 @@
 import { drawnCells, firstFreeCellInReadingOrder, placeShortcuts } from "../geometry/grid";
 import type { GridDimensions } from "../geometry/grid";
 import { mostRecentlyFocusedWindowOfApp } from "../geometry/stack";
-import { launchPathOf } from "../model/launch";
+import { launchPathOf, launchRowKindOf } from "../model/launch";
 import type { Desktop, DesktopShortcut, GridCell, ShortcutMode } from "../model/records";
-import { activeDesktop, appByName } from "./desktopState";
+import { activeDesktop, appByName, pinnedWindowOf } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
 export type ShortcutRun =
@@ -24,8 +25,9 @@ export type ShortcutRun =
 /** What the user is told when a shortcut is run before the apps are known. */
 export const STILL_CONNECTING_NOTICE = "Still connecting to the workspace; try again in a moment.";
 
-/** What running the launch path of ``app`` in ``mode`` on the active desktop comes to. An app the page does not
- *  know is ``connecting`` until the first app list lands, and unregistered after. */
+/** What running the launch path of ``app`` in ``mode`` on the active desktop comes to. A launch path at the app's
+ *  pin path raises the pinned window in either mode, since the pinned window is that page on every desktop. An app
+ *  the page does not know is ``connecting`` until the first app list lands, and unregistered after. */
 export function resolveLaunchRun(
   state: DesktopState,
   appName: string,
@@ -41,6 +43,10 @@ export function resolveLaunchRun(
   if (launchPath === null) return { kind: "unavailable", reason: `${app.display_name} has no launch path ${launch}` };
   const desktop = activeDesktop(state);
   if (desktop === null) return { kind: "unavailable", reason: "there is no desktop to open on" };
+  if (launchRowKindOf(app, launchPath) === "focus") {
+    const pinned = pinnedWindowOf(state, app.name);
+    if (pinned !== null) return { kind: "raise", windowId: pinned.id };
+  }
   if (mode === "focus") {
     const recent = mostRecentlyFocusedWindowOfApp(state.layout, desktop, app.name);
     if (recent !== null) return { kind: "raise", windowId: recent.id };

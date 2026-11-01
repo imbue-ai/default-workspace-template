@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { appRecord, desktopRecord, layoutRecord, placementRecord, windowRecord } from "../testing/records";
+import {
+  appRecord,
+  chatLikeAppRecord,
+  desktopRecord,
+  layoutRecord,
+  placementRecord,
+  windowRecord,
+} from "../testing/records";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
 import { cellForAddedShortcut, nextDesktopName, resolveLaunchRun } from "./shortcuts";
@@ -36,6 +43,33 @@ describe("resolveLaunchRun", () => {
     const state = stateWith();
     expect(resolveLaunchRun(state, "notes", "new", "focus")).toEqual({ kind: "open", app: "notes", launch: "new" });
     expect(resolveLaunchRun(state, "docs", "new", "new")).toEqual({ kind: "open", app: "docs", launch: "new" });
+  });
+
+  it("a shortcut to the pin path raises the pinned window in either mode, even over a more recent window", () => {
+    const desktop = desktopRecord("home", {
+      windows: [windowRecord("win-pin", "chat", "/", { is_pinned: true }), windowRecord("win-other", "chat", "/")],
+    });
+    const state = [
+      { type: "apps_updated", apps: [chatLikeAppRecord("chat")] } as DesktopEvent,
+      { type: "desktops_updated", desktops: [desktop] } as DesktopEvent,
+      { type: "desktop_activated", desktopId: "home" } as DesktopEvent,
+      {
+        type: "layout_loaded",
+        desktopId: "home",
+        layout: layoutRecord([placementRecord("win-pin", { is_minimized: true }), placementRecord("win-other")]),
+      } as DesktopEvent,
+    ].reduce(reduceDesktopState, initialDesktopState("client-1", MODES));
+    expect(resolveLaunchRun(state, "chat", "root", "new")).toEqual({ kind: "raise", windowId: "win-pin" });
+    expect(resolveLaunchRun(state, "chat", "root", "focus")).toEqual({ kind: "raise", windowId: "win-pin" });
+  });
+
+  it("a shortcut to the pin path opens as its mode says while the desktop holds no pinned window", () => {
+    const state = [
+      { type: "apps_updated", apps: [chatLikeAppRecord("chat")] } as DesktopEvent,
+      { type: "desktops_updated", desktops: [desktopRecord("home")] } as DesktopEvent,
+      { type: "desktop_activated", desktopId: "home" } as DesktopEvent,
+    ].reduce(reduceDesktopState, initialDesktopState("client-1", MODES));
+    expect(resolveLaunchRun(state, "chat", "root", "new")).toEqual({ kind: "open", app: "chat", launch: "root" });
   });
 
   it("says why a shortcut cannot run", () => {

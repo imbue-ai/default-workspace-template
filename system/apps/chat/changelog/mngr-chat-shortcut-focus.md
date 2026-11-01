@@ -1,0 +1,1 @@
+The Chat icon on the desktop no longer opens a second copy of the chat list: a double click shows the pinned chat window, the same as the launcher's "Chat" row. The chat's default shortcut is now in focus mode.

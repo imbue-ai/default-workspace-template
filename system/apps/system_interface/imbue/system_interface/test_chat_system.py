@@ -131,7 +131,7 @@ def test_the_shells_inventory_lists_the_chat_app_with_its_launch_path(tmp_path: 
             {"target": "lounge", "is_draft": "true"},
             {"target": "app_chat"},
         ]
-        assert listed["default_shortcut"] == {"launch": "root", "mode": "new"}
+        assert listed["default_shortcut"] == {"launch": "root", "mode": "focus"}
 
 
 @pytest.mark.timeout(60, func_only=False)

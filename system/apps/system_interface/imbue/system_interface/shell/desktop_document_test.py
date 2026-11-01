@@ -616,7 +616,7 @@ def test_an_untouched_desktop_seeded_before_a_late_app_registered_is_seeded_agai
         ("browser", "new", 3, 0),
         ("terminal", "new", 4, 0),
     ]
-    assert reconciled.shortcuts[0].mode is ShortcutMode.NEW
+    assert reconciled.shortcuts[0].mode is ShortcutMode.FOCUS
 
 
 def test_a_touched_desktop_gets_a_late_apps_shortcut_at_the_next_free_cell_with_nothing_else_moved(
@@ -631,7 +631,7 @@ def test_a_touched_desktop_gets_a_late_apps_shortcut_at_the_next_free_cell_with_
     assert reconciled.shortcuts[:-1] == touched.shortcuts
     (chat,) = (shortcut for shortcut in reconciled.shortcuts if shortcut.target.app == "chat")
     assert chat == reconciled.shortcuts[-1]
-    assert (chat.target.launch, chat.mode, chat.cell) == ("root", ShortcutMode.NEW, next_shortcut_cell(touched))
+    assert (chat.target.launch, chat.mode, chat.cell) == ("root", ShortcutMode.FOCUS, next_shortcut_cell(touched))
     assert chat.cell == GridCell(column=0, row=0)
 
 
