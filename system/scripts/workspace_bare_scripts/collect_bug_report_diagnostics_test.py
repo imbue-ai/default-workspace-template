@@ -1958,9 +1958,9 @@ def test_a_stopped_agent_is_never_asked_for_its_pane(tmp_path: Path) -> None:
         panes_by_agent={"awake": "awake pane\n", "asleep": "asleep pane\n"},
         stopped_agents=("asleep",),
     )
-    module = _load_collector(mngr_binary=stub, agents_dir=tmp_path / "agents")
+    collector = _collector(mngr_binary=stub, agents_dir=tmp_path / "agents")
 
-    members, _dropped = module.collect_agent_log_members(5.0, is_pane_included=True)
+    members, _dropped = collector.collect_agent_log_members(5.0, is_pane_included=True)
 
     assert [content for _name, content, _mtime in members] == ["awake pane"]
     invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
@@ -1981,9 +1981,9 @@ def test_chats_are_read_several_at_a_time(tmp_path: Path) -> None:
         events_by_agent={name: _chat_events(name) for name in names},
         transcript_rendezvous_dir=rendezvous,
     )
-    module = _load_collector(mngr_binary=stub)
+    collector = _collector(mngr_binary=stub)
 
-    members = module.collect_transcript_members(30.0)
+    members = collector.collect_transcript_members(30.0)
 
     assert len(members) == len(names)
     seen_in_flight = [

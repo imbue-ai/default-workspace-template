@@ -1025,7 +1025,9 @@ class Collector:
         if is_pane_included:
             # A stopped agent's pane is gone, and asking mngr for it costs a CLI start
             # that only fails.
-            capturable = [agent for agent in agents if agent.state != STOPPED_AGENT_STATE]
+            capturable = [
+                agent for agent in agents if agent.state != STOPPED_AGENT_STATE
+            ]
             panes = map_concurrently(
                 lambda agent: self.capture_pane(agent.target, timeout), capturable
             )
@@ -1141,7 +1143,9 @@ class Collector:
             parts = line.split("|")
             if len(parts) != 6:
                 continue
-            name, agent_id, target, chat_id, chat_seq, state = (p.strip() for p in parts)
+            name, agent_id, target, chat_id, chat_seq, state = (
+                p.strip() for p in parts
+            )
             if not name or not agent_id or not target:
                 continue
             agents.append(
