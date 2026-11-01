@@ -202,6 +202,8 @@ def _write_mngr_stub(
     events_by_agent: Mapping[str, str] | None = None,
     panes_by_agent: Mapping[str, str] | None = None,
     chat_of_agent: Mapping[str, tuple[str, int]] | None = None,
+    stopped_agents: Sequence[str] = (),
+    transcript_rendezvous_dir: Path | None = None,
     exit_code: int = 0,
 ) -> Path:
     """Write a stub standing in for the workspace's mngr.
@@ -209,7 +211,7 @@ def _write_mngr_stub(
     The collector asks mngr three things -- which agents exist, what was said in
     one, and what is on one's pane -- so the stub answers exactly those three
     shapes: the pipe template
-    ``{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}``
+    ``{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}|{state}``
     for ``list``, raw JSONL for ``transcript``, and pane text for ``capture``. Both
     per-agent targets arrive as the pinned ``id@host-id.provider`` form the
     listing handed out, so the stub keys its canned answers by the id in front
@@ -218,7 +220,13 @@ def _write_mngr_stub(
 
     ``chat_of_agent`` maps an agent name to the ``(chat id, sequence)`` it is a
     segment of; an agent absent from it lists with both label columns empty,
-    which is what mngr prints for an agent carrying neither.
+    which is what mngr prints for an agent carrying neither. Every agent lists as
+    ``RUNNING`` but those in ``stopped_agents``, which list as ``STOPPED``.
+
+    With a ``transcript_rendezvous_dir``, each ``transcript`` call announces itself
+    there and waits (up to five seconds) for a second call to be in flight before
+    answering, then records how many calls it saw: one call at a time sees only
+    itself.
     """
     events_dir = tmp_path / "stub-events"
     events_dir.mkdir(parents=True, exist_ok=True)
@@ -230,11 +238,12 @@ def _write_mngr_stub(
         (panes_dir / _agent_id_for(agent_name)).write_text(pane, encoding="utf-8")
     chat_labels = chat_of_agent or {}
     listing = "".join(
-        "{}|{}|{}|{}|{}\n".format(
+        "{}|{}|{}|{}|{}|{}\n".format(
             name,
             _agent_id_for(name),
             _target_for(name),
             *(chat_labels.get(name) or ("", "")),
+            "STOPPED" if name in stopped_agents else "RUNNING",
         )
         for name in agents
     )
@@ -252,6 +261,15 @@ def _write_mngr_stub(
         "fi\n"
         'if [ "$1" = "transcript" ]; then\n'
         '  agent_id="${2%%@*}"\n'
+        f'  rendezvous="{transcript_rendezvous_dir or ""}"\n'
+        '  if [ -n "$rendezvous" ]; then\n'
+        '    mkdir -p "$rendezvous/started-$agent_id"\n'
+        "    i=0\n"
+        '    while set -- "$rendezvous"/started-*; [ $# -lt 2 ] && [ $i -lt 50 ]; do\n'
+        "      i=$((i + 1)); sleep 0.1\n"
+        "    done\n"
+        '    echo $# > "$rendezvous/seen-$agent_id"\n'
+        "  fi\n"
         f'  f="{events_dir}/$agent_id"\n'
         '  if [ -f "$f" ]; then cat "$f"; fi\n'
         "  exit 0\n"
@@ -466,15 +484,30 @@ def test_every_agent_is_a_transcript_candidate(
     collector = _collector(mngr_binary=stub)
 
     assert collector.list_agents(5.0) == [
-        ("chatty", "agent-chatty", "agent-chatty@stub-host-id.local", "", 1),
+        (
+            "chatty",
+            "agent-chatty",
+            "agent-chatty@stub-host-id.local",
+            "",
+            1,
+            "RUNNING",
+        ),
         (
             "system-services",
             "agent-system-services",
             "agent-system-services@stub-host-id.local",
             "",
             1,
+            "RUNNING",
         ),
-        ("worker", "agent-worker", "agent-worker@stub-host-id.local", "", 1),
+        (
+            "worker",
+            "agent-worker",
+            "agent-worker@stub-host-id.local",
+            "",
+            1,
+            "RUNNING",
+        ),
     ]
 
 
@@ -1926,6 +1959,49 @@ def test_an_agent_that_is_not_running_contributes_no_pane(tmp_path: Path) -> Non
     assert collector.capture_pane("agent-chatty@stub-host-id.local", 5.0) is None
 
 
+def test_a_stopped_agent_is_never_asked_for_its_pane(tmp_path: Path) -> None:
+    """A stopped agent's tmux session is gone, so asking mngr for its pane only
+    spends a CLI start on a failure."""
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=("awake", "asleep"),
+        panes_by_agent={"awake": "awake pane\n", "asleep": "asleep pane\n"},
+        stopped_agents=("asleep",),
+    )
+    collector = _collector(mngr_binary=stub, agents_dir=tmp_path / "agents")
+
+    members, _dropped = collector.collect_agent_log_members(5.0, is_pane_included=True)
+
+    assert [content for _name, content, _mtime in members] == ["awake pane"]
+    invocations = (tmp_path / "stub-argv.log").read_text(encoding="utf-8")
+    assert [
+        line for line in invocations.splitlines() if line.startswith("capture ")
+    ] == ["capture agent-awake@stub-host-id.local --full --no-start"]
+
+
+def test_chats_are_read_several_at_a_time(tmp_path: Path) -> None:
+    """Each read is a whole mngr CLI start, so reads overlap: every read here
+    finds another in flight beside it."""
+    names = ("first", "second", "third", "fourth")
+    rendezvous = tmp_path / "rendezvous"
+    rendezvous.mkdir()
+    stub = _write_mngr_stub(
+        tmp_path,
+        agents=names,
+        events_by_agent={name: _chat_events(name) for name in names},
+        transcript_rendezvous_dir=rendezvous,
+    )
+    collector = _collector(mngr_binary=stub)
+
+    members = collector.collect_transcript_members(30.0)
+
+    assert len(members) == len(names)
+    seen_in_flight = [
+        int((rendezvous / f"seen-{_agent_id_for(name)}").read_text()) for name in names
+    ]
+    assert min(seen_in_flight) >= 2
+
+
 def test_a_chatty_agent_log_cannot_crowd_the_rest_out_of_the_archive(
     tmp_path: Path,
 ) -> None:
@@ -2325,5 +2401,5 @@ def test_a_whole_collection_asks_mngr_for_the_agent_listing_once(
     list_calls = [line for line in invocations.splitlines() if line.startswith("list ")]
     assert list_calls == [
         "list --provider local --format "
-        "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}"
+        "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}|{state}"
     ], invocations
