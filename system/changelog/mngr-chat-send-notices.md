@@ -1,0 +1,1 @@
+`docs/specs/chat-send-failure-system.md` and `docs/specs/send-failure-notice.md` now describe the notice's own sentence for each kind of send failure, the Restart button, a stopped send answering `withdrawn`, and the chat app keeping the sends behind "Sent again".

@@ -65,16 +65,25 @@ export function describeRequestError(error: unknown): string {
  * a kind to what the user is offered lives here, in the workspace.
  *
  * Anything unrecognised (an older backend, a kind added later) reads as "unknown", for which
- * callers offer nothing kind-specific. mngr's "agent_not_found", "not_submitted" and "state_unknown"
- * are among these on purpose: nothing was delivered or typed that a plain Retry could double.
+ * callers offer nothing kind-specific.
  */
 export type SendFailureKind =
-  "input_blocked" | "not_ready" | "agent_unreachable" | "submission_unconfirmed" | "unknown";
+  | "input_blocked"
+  | "not_ready"
+  | "state_unknown"
+  | "agent_unreachable"
+  | "agent_not_found"
+  | "not_submitted"
+  | "submission_unconfirmed"
+  | "unknown";
 
 const KNOWN_SEND_FAILURE_KINDS: ReadonlySet<string> = new Set([
   "input_blocked",
   "not_ready",
+  "state_unknown",
   "agent_unreachable",
+  "agent_not_found",
+  "not_submitted",
   "submission_unconfirmed",
 ]);
 

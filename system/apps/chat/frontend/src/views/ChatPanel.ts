@@ -80,7 +80,7 @@ import {
 import { ActivityIndicator, turnStatusPlacement } from "./ActivityIndicator";
 import { TurnDoneMark } from "./TurnDoneMark";
 import type { TranscriptEvent } from "../models/Response";
-import { getResentSendsVersion, resentTurnsIn } from "../models/ResentSends";
+import { getResentSendsKey, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
@@ -734,7 +734,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // render version (bumped on any data mutation) plus those two -- so a
     // scroll-only redraw reuses the cached rows.
     const renderKey =
-      `${chatId}|${getRenderVersion(chatId)}|${getResentSendsVersion(chatId)}|${tailTurnSettled ? 1 : 0}|` +
+      `${chatId}|${getRenderVersion(chatId)}|${getResentSendsKey(chatId)}|${tailTurnSettled ? 1 : 0}|` +
       `${liveCompaction === null ? "-" : (liveCompaction.cause ?? "unknown")}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no

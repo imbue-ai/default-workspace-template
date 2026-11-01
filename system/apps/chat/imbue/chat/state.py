@@ -248,6 +248,7 @@ class ChatAppState(MutableModel):
                     SendDelivery,
                 ),
                 lambda: self.agent_manager.is_agent_alive(agent_info.id),
+                lambda text, sent_after: self.agent_manager.note_resent_send(agent_info.id, text, sent_after),
             )
             self.watchers[agent_info.id] = watcher
             self._starting_watchers[id(watcher)] = watcher

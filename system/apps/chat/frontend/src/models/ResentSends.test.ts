@@ -2,19 +2,25 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("mithril", () => ({ default: { request: vi.fn(), redraw: vi.fn() } }));
 
-import { announceMessageSent, appendEvents, getEventsForChat, sentUserTurnIds } from "./Response";
+const mocks = vi.hoisted(() => ({
+  resentSendsByChat: new Map<string, { text: string; sent_after: number; closed_at: number | null }[]>(),
+}));
+
+vi.mock("./Chats", () => ({
+  getChatById: (chatId: string) => {
+    const resentSends = mocks.resentSendsByChat.get(chatId);
+    return resentSends === undefined ? undefined : { resent_sends: resentSends };
+  },
+}));
+
 import type { TranscriptEvent } from "./Response";
-import { getResentSendsVersion, noteResentSend, resentTurnsIn } from "./ResentSends";
+import { getResentSendsKey, resentTurnsIn } from "./ResentSends";
 
-let counter = 0;
+const SECOND = 1_800_000_000;
 
-function freshChat(): string {
-  return `resent-chat-${counter++}`;
-}
-
-function userTurn(id: string, content: string): TranscriptEvent {
+function userTurn(id: string, content: string, atSecond: number): TranscriptEvent {
   return {
-    timestamp: "2026-01-01T00:00:00Z",
+    timestamp: new Date(atSecond * 1000).toISOString(),
     type: "user_message",
     event_id: id,
     source: "test",
@@ -24,62 +30,69 @@ function userTurn(id: string, content: string): TranscriptEvent {
   };
 }
 
+function resendHello(chatId: string, closedAt: number | null = null): void {
+  mocks.resentSendsByChat.set(chatId, [{ text: "hello", sent_after: SECOND, closed_at: closedAt }]);
+}
+
 describe("resentTurnsIn", () => {
-  it("notes nothing until the resent message's turn lands, then its first copy", () => {
-    const chat = freshChat();
-    appendEvents(chat, [userTurn("before", "hello")]);
-    const versionBefore = getResentSendsVersion(chat);
-    noteResentSend(chat, "hello", sentUserTurnIds(chat));
-    expect(getResentSendsVersion(chat)).not.toBe(versionBefore);
-    expect(resentTurnsIn(chat, getEventsForChat(chat)).notedTurnIds).toEqual(new Set());
-
-    appendEvents(chat, [userTurn("copy-1", "hello")]);
-    const turns = resentTurnsIn(chat, getEventsForChat(chat));
-    expect(turns.notedTurnIds).toEqual(new Set(["copy-1"]));
-    expect(turns.foldedTurnIds).toEqual(new Set());
+  it("notes the first copy that landed after the send, not the same words sent before it", () => {
+    resendHello("first-copy");
+    const turns = resentTurnsIn("first-copy", [userTurn("before", "hello", SECOND - 5)]);
+    expect([...turns.notedTurnIds]).toEqual([]);
+    const landed = resentTurnsIn("first-copy", [
+      userTurn("before", "hello", SECOND - 5),
+      userTurn("first", "hello", SECOND + 1),
+    ]);
+    expect([...landed.notedTurnIds]).toEqual(["first"]);
+    expect([...landed.foldedTurnIds]).toEqual([]);
   });
 
-  it("folds the second copy of a resent message into the first's line", () => {
-    const chat = freshChat();
-    noteResentSend(chat, "hello", sentUserTurnIds(chat));
-    appendEvents(chat, [userTurn("copy-1", "hello"), userTurn("reply-gap", "unrelated"), userTurn("copy-2", "hello")]);
-    const turns = resentTurnsIn(chat, getEventsForChat(chat));
-    expect(turns.notedTurnIds).toEqual(new Set(["copy-1"]));
-    expect(turns.foldedTurnIds).toEqual(new Set(["copy-2"]));
+  it("folds the second copy into the first's line, and only that one", () => {
+    resendHello("folding");
+    const turns = resentTurnsIn("folding", [
+      userTurn("first", "hello", SECOND + 1),
+      userTurn("second", "hello", SECOND + 2),
+      userTurn("third", "hello", SECOND + 3),
+    ]);
+    expect([...turns.notedTurnIds]).toEqual(["first"]);
+    expect([...turns.foldedTurnIds]).toEqual(["second"]);
   });
 
-  it("folds only one copy: a third is the user's own", () => {
-    const chat = freshChat();
-    noteResentSend(chat, "yes", sentUserTurnIds(chat));
-    appendEvents(chat, [userTurn("copy-1", "yes"), userTurn("copy-2", "yes"), userTurn("copy-3", "yes")]);
-    expect(resentTurnsIn(chat, getEventsForChat(chat)).foldedTurnIds).toEqual(new Set(["copy-2"]));
+  it("does not fold a copy that landed after the chat's next send, which may be the user's own", () => {
+    resendHello("closed", SECOND + 2);
+    const turns = resentTurnsIn("closed", [
+      userTurn("first", "hello", SECOND + 1),
+      userTurn("later", "hello", SECOND + 3),
+    ]);
+    expect([...turns.foldedTurnIds]).toEqual([]);
   });
 
-  it("does not fold a copy that lands after this page sent the chat something else", () => {
-    // The user may have sent the same words again themselves.
-    const chat = freshChat();
-    noteResentSend(chat, "yes", sentUserTurnIds(chat));
-    appendEvents(chat, [userTurn("copy-1", "yes")]);
-    announceMessageSent(chat);
-    appendEvents(chat, [userTurn("later-yes", "yes")]);
-    const turns = resentTurnsIn(chat, getEventsForChat(chat));
-    expect(turns.notedTurnIds).toEqual(new Set(["copy-1"]));
-    expect(turns.foldedTurnIds).toEqual(new Set());
+  it("still folds a second copy that landed before the chat's next send", () => {
+    resendHello("before-close", SECOND + 5);
+    const turns = resentTurnsIn("before-close", [
+      userTurn("first", "hello", SECOND + 1),
+      userTurn("second", "hello", SECOND + 3),
+    ]);
+    expect([...turns.foldedTurnIds]).toEqual(["second"]);
   });
 
-  it("still folds a second copy that had landed before the next send", () => {
-    const chat = freshChat();
-    noteResentSend(chat, "yes", sentUserTurnIds(chat));
-    appendEvents(chat, [userTurn("copy-1", "yes"), userTurn("copy-2", "yes")]);
-    announceMessageSent(chat);
-    expect(resentTurnsIn(chat, getEventsForChat(chat)).foldedTurnIds).toEqual(new Set(["copy-2"]));
+  it("notes a turn with no timestamp, which counts as landing after the send", () => {
+    resendHello("no-timestamp");
+    const turn = { ...userTurn("first", "hello", SECOND), timestamp: "" };
+    expect([...resentTurnsIn("no-timestamp", [turn]).notedTurnIds]).toEqual(["first"]);
   });
 
-  it("notes nothing in another chat", () => {
-    const chat = freshChat();
-    const other = freshChat();
-    noteResentSend(chat, "hello", sentUserTurnIds(chat));
-    appendEvents(other, [userTurn("other-copy", "hello")]);
-    expect(resentTurnsIn(other, getEventsForChat(other)).notedTurnIds).toEqual(new Set());
+  it("notes nothing in a chat with no resent sends", () => {
+    expect([...resentTurnsIn("other", [userTurn("first", "hello", SECOND + 1)]).notedTurnIds]).toEqual([]);
+  });
+});
+
+describe("getResentSendsKey", () => {
+  it("changes when a send is added or closed", () => {
+    const before = getResentSendsKey("keyed");
+    resendHello("keyed");
+    const added = getResentSendsKey("keyed");
+    resendHello("keyed", SECOND + 1);
+    expect(new Set([before, added, getResentSendsKey("keyed")]).size).toBe(3);
   });
 });

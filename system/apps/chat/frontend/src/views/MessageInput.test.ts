@@ -76,8 +76,6 @@ const mocks = vi.hoisted(() => {
     // deferred promise.
     waitForComposerUploads: vi.fn(async (_chatId: string) => {}),
     interruptAgent: vi.fn(async () => {}),
-    // What a send the chat app delivered by sending it a second time is noted with.
-    noteResentSend: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => {}),
     // Whether the agent's turn for a message has reached the transcript; none has, at rest.
     hasUserTurnLandedSince: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => false),
     openProviderChooser: vi.fn(),
@@ -110,7 +108,6 @@ vi.mock("../models/Response", () => ({
   interruptAgent: mocks.interruptAgent,
   mintMessageId: () => `m-${Math.random().toString(36).slice(2)}`,
 }));
-vi.mock("../models/ResentSends", () => ({ noteResentSend: mocks.noteResentSend }));
 vi.mock("../models/Handoffs", () => ({ switchChat: mocks.switchChat, cancelHandoff: mocks.cancelHandoff }));
 // The armed choice is served from here; whether a switch request is out is the real module's.
 vi.mock("../models/PendingLane", async (importOriginal) => {
@@ -991,6 +988,13 @@ describe("MessageInput first send of a chat with no seed", () => {
     expect(mocks.sendMessage).toHaveBeenCalledTimes(1);
     expect(mocks.sendMessage.mock.calls[0]).toEqual(expect.arrayContaining(["agent-1", "Plan my week"]));
   });
+
+  it("drops the bubble of a first send that Stop took back, which no turn will retire", async () => {
+    mocks.sendMessage.mockResolvedValueOnce("withdrawn");
+    await typeAndSend(MessageInput(), "agent-1", "Taken back");
+
+    expect(getOutgoingMessages("agent-1").map((outgoing) => outgoing.content)).not.toContain("Taken back");
+  });
 });
 
 describe("MessageInput stop while connecting", () => {
@@ -1095,15 +1099,57 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).not.toHaveBeenCalled();
   });
 
+  it("names the failed upload even over a send failure that landed during the upload wait", async () => {
+    mocks.getComposerAttachments.mockReturnValue([
+      { localId: "a1", fileName: "notes.pdf", status: "error", error: "boom" },
+    ]);
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", { title: "Couldn't send your message", detail: "x", kind: "not_ready" });
+    component.view!({ attrs: { chatId: "agent-1" } } as never);
+    const after = await typeAndSend(component, "agent-1", "here you go");
+    mocks.getComposerAttachments.mockReturnValue([]);
+    expect(renderedText(after)).toContain("notes.pdf");
+    expect(renderedText(after)).not.toContain("isn't ready for messages yet");
+  });
+
   it("withholds Retry when the agent is unreachable, since it cannot help", async () => {
-    // A pane that is gone will not be there on the next attempt. Force restarts the agent, which
-    // is the only thing that can deliver the message, so it stays.
-    mocks.sendMessage.mockRejectedValueOnce({ kind: "agent_unreachable", toString: () => "pane is gone" });
+    // The chat app already tried the start once more, and Restart is the stronger way to bring it up.
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "agent_unreachable", toString: () => "start timed out" });
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     const text = renderedText(after);
-    expect(text).toContain("Force");
+    expect(text).toContain("Restart");
     expect(text).not.toContain("Retry");
-    expect(text).toContain("restarting it is the only way");
+    expect(text).toContain("Restart it to send your message");
+    expect(text).not.toContain("start timed out");
+  });
+
+  it("doesn't mention restarting on a notice that has no Restart button", async () => {
+    raiseFailureNotice("agent-1", { title: "Couldn't send your message", detail: "x", kind: "agent_unreachable" });
+    const text = renderedText(MessageInput().view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).toContain("The agent isn't running and didn't start.");
+    expect(text).not.toContain("Restart");
+  });
+
+  it("says what a send failure means in its own words, not mngr's", async () => {
+    for (const [kind, sentence] of [
+      ["input_blocked", "waiting on something in its terminal"],
+      ["not_ready", "isn't ready for messages yet"],
+      ["state_unknown", "Couldn't reach the agent just now"],
+      ["agent_not_found", "Couldn't find the agent"],
+      ["not_submitted", "didn't take your message"],
+    ]) {
+      mocks.sendMessage.mockRejectedValueOnce({ kind, toString: () => "mngr does not recognise this" });
+      const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+      const text = renderedText(after);
+      expect(text).toContain(sentence);
+      expect(text).not.toContain("mngr");
+    }
+  });
+
+  it("keeps the reason for a failure nothing classified, the only account of what went wrong", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "unknown", toString: () => "the host hung up" });
+    const after = await typeAndSend(MessageInput(), "agent-1", "hello");
+    expect(renderedText(after)).toContain("the host hung up");
   });
 
   it("keeps Retry for a blocked input, which a person can clear", async () => {
@@ -1111,29 +1157,20 @@ describe("MessageInput send failure notice", () => {
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     const text = renderedText(after);
     expect(text).toContain("Retry");
-    expect(text).toContain("Force");
+    expect(text).toContain("Restart");
   });
 
-  it("notes a message the chat app delivered by sending it again, and shows no notice", async () => {
-    mocks.noteResentSend.mockClear();
+  it("shows no notice for a message the chat app delivered by sending it again", async () => {
     mocks.sendMessage.mockResolvedValueOnce("resent");
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
-    // Its turn is looked for among the turns that were not there before the send, by the text sent.
-    expect(mocks.noteResentSend).toHaveBeenCalledWith("agent-1", "hello", new Set(["turn-before-the-send"]));
     expect(renderedText(after)).not.toContain("Couldn't confirm your message arrived");
     expect(renderedText(after)).not.toContain("Couldn't send your message");
     expect(findByTag(after, "textarea")?.attrs?.value).toBe("");
   });
 
-  it("notes nothing for a message delivered the first time", async () => {
-    mocks.noteResentSend.mockClear();
-    await typeAndSend(MessageInput(), "agent-1", "hello");
-    expect(mocks.noteResentSend).not.toHaveBeenCalled();
-  });
-
   it("asks the user to check the agent before sending an unconfirmed message again", async () => {
     // The chat app has already sent it twice without confirmation, and the agent may have either
-    // copy: a plain Retry or a Force (restart and resend) could deliver it a third time.
+    // copy: a plain Retry or a Restart (restart and resend) could deliver it a third time.
     // mngr's reason is diagnostics, not copy.
     mocks.sendMessage.mockRejectedValueOnce({
       kind: "submission_unconfirmed",
@@ -1148,7 +1185,7 @@ describe("MessageInput send failure notice", () => {
     expect(text).toContain("Cancel");
     expect(findButton(after, "Send again")).toBeTruthy();
     expect(findButton(after, "Retry")).toBeUndefined();
-    expect(findButton(after, "Force")).toBeUndefined();
+    expect(findButton(after, "Restart")).toBeUndefined();
     expect(localStorage.getItem("message-text:agent-1")).toContain("hello");
   });
 
@@ -1165,6 +1202,35 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).toHaveBeenLastCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
     const settled = component.view!({ attrs: { chatId: "agent-1" } } as never);
     expect(renderedText(settled)).not.toContain("Couldn't confirm your message arrived");
+  });
+
+  it("says what a sibling's send failure means in its own words too", () => {
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", {
+      title: "Couldn't send the queued messages",
+      detail: "mngr does not recognise this",
+      kind: "not_ready",
+      retry: vi.fn(async () => undefined),
+    });
+    const text = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).toContain("isn't ready for messages yet");
+    expect(text).not.toContain("mngr");
+  });
+
+  it("shows the new failure when a sibling's Retry fails differently", async () => {
+    const component = MessageInput();
+    raiseFailureNotice("agent-1", {
+      title: "Couldn't send the queued messages",
+      detail: "first reason",
+      kind: "not_ready",
+      retry: vi.fn(async () => Promise.reject({ kind: "unknown", toString: () => "the host hung up" })),
+    });
+    const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
+    (findButton(shown, "Retry")!.attrs!.onclick as () => void)();
+    await flushAsync();
+    const text = renderedText(component.view!({ attrs: { chatId: "agent-1" } } as never));
+    expect(text).toContain("the host hung up");
+    expect(text).not.toContain("isn't ready for messages yet");
   });
 
   it("words a sibling's unconfirmed send the same way", () => {
@@ -1296,7 +1362,7 @@ describe("MessageInput send failure notice", () => {
       expect(text).toContain(detail);
       expect(text).not.toContain("Couldn't send your message");
       expect(text).not.toContain("Retry");
-      expect(text).not.toContain("Force");
+      expect(text).not.toContain("Restart");
       expect(text).not.toContain("terminal");
       expect(findByTag(after, "textarea")?.attrs?.value).toBe("/compact");
       expect(error).not.toHaveBeenCalled();
@@ -1327,8 +1393,8 @@ describe("MessageInput send failure notice", () => {
     expect(getOutgoingMessages("agent-delivered").map((outgoing) => outgoing.content)).toEqual(["/compact"]);
   });
 
-  it("removes the delivered message even when Force drained a queue block above it", async () => {
-    // Force prepends the rescued queue block BEFORE sending, so the delivered message is no
+  it("removes the delivered message even when Restart drained a queue block above it", async () => {
+    // Restart prepends the rescued queue block BEFORE sending, so the delivered message is no
     // longer at the front of the composer -- a prefix-only strip would leave it there, sent and
     // still in the box.
     mocks.sendMessage.mockRejectedValueOnce("nope");
@@ -1336,8 +1402,8 @@ describe("MessageInput send failure notice", () => {
     const after = await typeAndSend(component, "agent-1", "my message");
     mocks.drainToComposer.mockResolvedValueOnce({ block: "queued one" });
 
-    const force = findButton(after, "Force");
-    (force!.attrs!.onclick as () => void)();
+    const restart = findButton(after, "Restart");
+    (restart!.attrs!.onclick as () => void)();
     await flushAsync();
 
     const composer = localStorage.getItem("message-text:agent-1") ?? "";
@@ -1363,13 +1429,13 @@ describe("MessageInput send failure notice", () => {
     expect(text).not.toContain("Retry");
   });
 
-  it("offers Cancel, Retry and Force for a failed send", async () => {
+  it("offers Cancel, Retry and Restart for a failed send", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
     const after = await typeAndSend(MessageInput(), "agent-1", "hello");
     const text = renderedText(after);
     expect(text).toContain("Cancel");
     expect(text).toContain("Retry");
-    expect(text).toContain("Force");
+    expect(text).toContain("Restart");
   });
 
   it("puts the message back in the composer immediately, not only on Cancel", async () => {
@@ -1406,30 +1472,30 @@ describe("MessageInput send failure notice", () => {
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
-  it("force restarts the agent before sending, in that order", async () => {
+  it("Restart restarts the agent before sending, in that order", async () => {
     mocks.sendMessage.mockRejectedValueOnce("nope");
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockClear();
 
-    const force = findButton(after, "Force");
-    (force!.attrs!.onclick as () => void)();
+    const restart = findButton(after, "Restart");
+    (restart!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.drainToComposer).toHaveBeenCalledWith("agent-1");
     expect(mocks.interruptAgent).toHaveBeenCalledWith("agent-1");
     expect(mocks.sendMessage).toHaveBeenCalledWith("agent-1", "hello", expect.stringMatching(/^m-/), true);
   });
 
-  it("does not send when the restart itself fails", async () => {
-    mocks.sendMessage.mockRejectedValueOnce("nope");
+  it("does not send when the restart itself fails, and shows the restart's error", async () => {
+    mocks.sendMessage.mockRejectedValueOnce({ kind: "input_blocked", toString: () => "a dialog is open" });
     const component = MessageInput();
     const after = await typeAndSend(component, "agent-1", "hello");
     mocks.sendMessage.mockClear();
     mocks.interruptAgent.mockRejectedValueOnce("restart refused");
 
-    const force = findButton(after, "Force");
-    (force!.attrs!.onclick as () => void)();
+    const restart = findButton(after, "Restart");
+    (restart!.attrs!.onclick as () => void)();
     await flushAsync();
     expect(mocks.sendMessage).not.toHaveBeenCalled();
     const shown = component.view!({ attrs: { chatId: "agent-1" } } as never);
@@ -2072,7 +2138,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     expect(findByTag(tree, "textarea")?.attrs?.disabled).toBe(true);
   });
 
-  it("offers choosing a provider instead of Retry and Force when a send is refused for a signed-out account", async () => {
+  it("offers choosing a provider instead of Retry and Restart when a send is refused for a signed-out account", async () => {
     mocks.signedOutAccountIds.clear();
     mocks.sendMessage.mockRejectedValueOnce({
       response: { kind: "account_signed_out" },
@@ -2086,7 +2152,7 @@ describe("MessageInput on a chat whose account was signed out", () => {
     expect(text).toContain("Couldn't send your message");
     expect(text).toContain("You signed out of the account this chat runs on.");
     expect(text).not.toContain("Retry");
-    expect(text).not.toContain("Force");
+    expect(text).not.toContain("Restart");
     expect(text).not.toContain("open the agent's terminal");
     (findButton(after, "Choose a provider")!.attrs!.onclick as () => void)();
     const dismissed = component.view!({ attrs: { chatId: "agent-signed-out" } } as never);

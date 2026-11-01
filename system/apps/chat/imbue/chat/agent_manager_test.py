@@ -8492,6 +8492,51 @@ def test_the_sweep_callback_maps_the_agent_name_to_its_id_and_marks_the_compacti
     assert _activity_of(agent_manager, agent_id) == ActivityState.COMPACTING
 
 
+def test_a_message_sent_again_shows_on_its_chat_until_the_next_send_closes_its_fold(
+    broadcaster: WebSocketBroadcaster,
+) -> None:
+    manager = AgentManager.build(broadcaster)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Chat")
+
+    manager.note_resent_send(agent_id, "hello", manager.note_send_begun(agent_id))
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    assert [(send.text, send.closed_at) for send in snapshot.resent_sends] == [("hello", None)]
+
+    manager.note_send_begun(agent_id)
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    assert all(send.closed_at is not None for send in snapshot.resent_sends)
+
+
+def test_a_chat_keeps_only_its_latest_messages_sent_again(broadcaster: WebSocketBroadcaster) -> None:
+    manager = AgentManager.build(broadcaster)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Chat")
+
+    for count in range(25):
+        manager.note_resent_send(agent_id, f"message {count}", 0.0)
+
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    assert [send.text for send in snapshot.resent_sends] == [f"message {count}" for count in range(5, 25)]
+
+
+def test_removing_a_chats_agent_forgets_its_messages_sent_again(broadcaster: WebSocketBroadcaster) -> None:
+    manager = AgentManager.build(broadcaster)
+    agent_id = f"agent-{uuid4().hex}"
+    seed_agent_state(manager, agent_id, name="Chat")
+    manager.note_resent_send(agent_id, "hello", 0.0)
+
+    manager.remove_agent(agent_id)
+
+    seed_agent_state(manager, agent_id, name="Chat")
+    snapshot = manager.get_chat_snapshot(agent_id)
+    assert snapshot is not None
+    assert snapshot.resent_sends == ()
+
+
 # Rooms (the multiplayer spec, section 7.3): a chat whose agent is the room's reader.
 
 

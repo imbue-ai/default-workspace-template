@@ -625,7 +625,7 @@ COMPACT_WHILE_STOPPED_DETAIL: Final[str] = "The agent isn't running. Send it a m
 # The message route's status for a /compact the chat asked mngr to run instead of sending it, which
 # no transcript turn will echo.
 COMPACTION_REQUESTED_SEND_STATUS: Final[str] = "compaction_requested"
-# The message route's status for a send Stop took back while its agent came up: nothing reached the agent.
+# The message route's status for a send Stop took back before it landed: nothing reached the agent.
 WITHDRAWN_SEND_STATUS: Final[str] = "withdrawn"
 # The message route's status for a send delivered by a second send, mngr having been unable to confirm the
 # first, which may have landed too.
@@ -726,6 +726,7 @@ def _deliver_message(
     # Taken before the send, which can wait out mngr's confirmation window while the compaction
     # it starts is already running.
     requested_at = time.monotonic()
+    sent_after = agent_manager.note_send_begun(agent_info.id)
     # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
     # harness still starting -- reads as Connecting on the chat until it resolves. A room's send
     # starts nothing (it appends to the room's transcript), so a stopped room stays stopped and
@@ -747,6 +748,8 @@ def _deliver_message(
                 SendMessageRequest(message=text, message_id=message_id, is_single_send=not is_resent_when_unsure),
                 message_id,
             )
+        if outcome is SendOutcome.RESENT:
+            agent_manager.note_resent_send(agent_info.id, text, sent_after)
         # A delivered send means the agent is up: mngr's own send auto-starts a stopped
         # file-harness agent (``is_start_desired``), and the observe stream would not see that
         # revival for minutes. Reflect it now, as the codex revive above does, so the UI's
@@ -813,7 +816,7 @@ class _SendAccepted(FrozenModel):
         default=False, description="Whether the send was a /compact the chat asked mngr to run in its place"
     )
     is_withdrawn: bool = Field(
-        default=False, description="Whether Stop took the send back while its agent came up, so nothing was delivered"
+        default=False, description="Whether Stop took the send back before it landed, so nothing was delivered"
     )
     is_resent: bool = Field(
         default=False,
@@ -912,6 +915,7 @@ def _send_to_chat(
             # The kind travels beside the detail so the chat can decide what to offer: trying again
             # can clear a blocked input, where only a restart is left for an agent that would not start.
             # A /compact the chat declines is its own refusal, not a failure.
+            logger.info("Send to chat {} failed: {}", chat_id, send_failure.kind)
             status_code = 409 if send_failure.kind in _DECLINED_SEND_FAILURE_KINDS else 500
             return _SendRefused(
                 answer=SendFailureResponse(detail=send_failure.detail, kind=send_failure.kind), status=status_code
@@ -1617,12 +1621,15 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
         return error_response(str(e), 500)
 
     if block:
+        sent_after = agent_manager.note_send_begun(agent_info.id)
         resend = agent_manager.send_message_kept_until_recorded(agent_info.id, agent_info.harness, block)
         if isinstance(resend, SendFailure):
             # The harness said why; passing that on rather than a generic sentence is the whole
             # point of carrying it this far.
+            logger.info("Flush of chat {}'s queue failed: {}", chat_id, resend.kind)
             return model_response(SendFailureResponse(detail=resend.reason, kind=resend.kind), 500)
         if resend is SendDelivery.RESENT:
+            agent_manager.note_resent_send(agent_info.id, block, sent_after)
             return model_response(SendMessageResponse(status=RESENT_SEND_STATUS))
 
     return model_response(SendMessageResponse(status="ok"))
