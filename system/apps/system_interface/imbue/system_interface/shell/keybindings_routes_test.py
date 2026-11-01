@@ -1,6 +1,8 @@
 """The shell's keybindings routes: the manifest, the catalog, and the save / discard / deliver flows."""
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -220,14 +222,21 @@ def _fake_gateway_app(record: dict[str, Any]) -> Flask:
     return gateway
 
 
-def test_the_everywhere_save_files_one_permission_request_and_delivers_once_granted(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+@contextmanager
+def _served_fake_gateway(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
+    """Serve the stand-in gateway and point the shell's environment at it; yields the gateway's record."""
     record: dict[str, Any] = {"puts": [], "requests": [], "is_granted": False}
     with serve_app(_fake_gateway_app(record)) as served:
         monkeypatch.setenv(ENV_GATEWAY, f"http://{served.host}:{served.port}")
         monkeypatch.setenv(ENV_GATEWAY_PASSWORD, "pw")
         monkeypatch.setenv(ENV_AGENT_ID, "agent-under-test")
+        yield record
+
+
+def test_the_everywhere_save_files_one_permission_request_and_delivers_once_granted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with _served_fake_gateway(monkeypatch) as record:
         client = _client(tmp_path)
         _write_snapshot(tmp_path, {"files": {"rename": ["f3"]}})
 
@@ -271,11 +280,7 @@ def test_the_everywhere_save_files_one_permission_request_and_delivers_once_gran
 def test_a_denied_resolution_keeps_the_saves_and_allows_a_later_refiling(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    record: dict[str, Any] = {"puts": [], "requests": [], "is_granted": False}
-    with serve_app(_fake_gateway_app(record)) as served:
-        monkeypatch.setenv(ENV_GATEWAY, f"http://{served.host}:{served.port}")
-        monkeypatch.setenv(ENV_GATEWAY_PASSWORD, "pw")
-        monkeypatch.setenv(ENV_AGENT_ID, "agent-under-test")
+    with _served_fake_gateway(monkeypatch) as record:
         client = _client(tmp_path)
 
         client.post(
