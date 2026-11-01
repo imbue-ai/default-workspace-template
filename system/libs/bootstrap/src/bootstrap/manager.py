@@ -39,6 +39,7 @@ from bootstrap.claude_state_migration import (
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
 SUPERVISORD_CONF = Path("system/supervisord.conf")
+CLOCK_ENV_FILE = Path("system/clock.env")
 # Container-local directory for supervisord's own log + the per-service logs. Not
 # under data/, so these are never backed up.
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
@@ -714,6 +715,22 @@ def _sync_workspace_venv() -> None:
     logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
 
 
+def _read_clock_env(path: Path) -> dict[str, str]:
+    if not path.is_file():
+        return {}
+    variables: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key, separator, value = stripped.partition("=")
+        if not separator or not key:
+            logger.error("Ignoring {}: {!r} is not a KEY=VALUE line", path, line)
+            return {}
+        variables[key] = value
+    return variables
+
+
 def _exec_supervisord() -> None:
     """Replace this process with supervisord running in the foreground.
 
@@ -723,7 +740,11 @@ def _exec_supervisord() -> None:
     [unix_http_server] socket that `supervisorctl` talks to.
     """
     logger.info("Launching supervisord with config {}", SUPERVISORD_CONF)
-    os.execvp("supervisord", ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)])
+    os.execvpe(
+        "supervisord",
+        ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)],
+        {**os.environ, **_read_clock_env(CLOCK_ENV_FILE)},
+    )
 
 
 def _run_env_converge_fast_phase() -> None:

@@ -476,6 +476,13 @@ if [ -f "$setup_dir/install_earlyoom.sh" ]; then
 else
     bash "$setup_dir/default-workspace-template-install-earlyoom"
 fi
+# libfaketime, for a workspace whose creator shifts the clock of supervisord's
+# programs (see install_libfaketime.sh), and the tmux shim that keeps tmux off it.
+if [ -f "$setup_dir/install_libfaketime.sh" ]; then
+    bash "$setup_dir/install_libfaketime.sh"
+else
+    bash "$setup_dir/default-workspace-template-install-libfaketime"
+fi
 # The agents' Claude and Codex plugins, pinned like the CLIs above (see
 # install_agent_plugins.sh).
 if [ -f "$setup_dir/install_agent_plugins.sh" ]; then
