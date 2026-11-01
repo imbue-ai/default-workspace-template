@@ -112,6 +112,17 @@ to a provider account on its `mngr create`, and a create that names no account
 gets the workspace's default one from `.mngr/settings.local.toml`, which the
 chat app maintains; `~/.claude` holds no credential.)
 
+A workspace may carry `system/clock.env`, one `KEY=VALUE` per line that no
+shell reads. It belongs to whatever created the workspace, never to a
+service: an evaluation harness writes it to start every program on a shifted
+clock (libfaketime's `LD_PRELOAD` and `FAKETIME_*` variables, against the
+library at `/usr/local/lib/faketime/libfaketime.so.1`), so it can let days
+pass between two steps of a task. `bootstrap` puts its variables in
+supervisord's environment alone, so the agents' tmux sessions never carry
+them. A program must not override or unset them (no `environment=`, no `env
+-u` in its command), or that service would leave the clock the rest of the
+workspace keeps. A workspace without the file runs on the real clock.
+
 One built-in program has no app directory and no manifest: `agent-observer`
 runs `mngr observe --quiet` from the primary agent's work dir and writes the
 agent lifecycle event file under `MNGR_HOST_DIR` that every chat instance

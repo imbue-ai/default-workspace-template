@@ -41,6 +41,10 @@ from bootstrap.claude_state_migration import (
 SUPERVISORD_CONF = Path("system/supervisord.conf")
 # The workspace venv, relative to the repo root like the config above.
 WORKSPACE_VENV = Path(".venv")
+# Optional variables for supervisord's environment alone (see system/supervisord.conf),
+# relative to the repo root like the config above. Not under data/: it belongs to
+# whatever created the workspace and is never backed up.
+CLOCK_ENV_FILE = Path("system/clock.env")
 # Container-local directory for supervisord's own log + the per-service logs. Not
 # under data/, so these are never backed up.
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
@@ -709,8 +713,11 @@ def _sync_workspace_venv() -> None:
     logger.info("Workspace venv converged (uv sync --all-packages --frozen)")
 
 
-def _supervisord_environment(environ: Mapping[str, str], venv: Path) -> dict[str, str]:
-    """``environ`` with ``venv`` activated the way ``uv run`` activates it.
+def _supervisord_environment(
+    environ: Mapping[str, str], venv: Path, clock_env: Mapping[str, str]
+) -> dict[str, str]:
+    """``environ`` with ``venv`` activated the way ``uv run`` activates it, and
+    ``clock_env`` (``CLOCK_ENV_FILE``'s variables) on top.
 
     supervisord's programs inherit this environment, so a command a program runs by
     bare name (the agent observer's ``mngr``, a ``python`` a service shells out to)
@@ -719,11 +726,37 @@ def _supervisord_environment(environ: Mapping[str, str], venv: Path) -> dict[str
     and a user package's line execs its own project's ``.venv/bin``, so neither
     depends on this. The bootstrap window starts this program from ``.venv/bin``
     rather than under ``uv run``, so nothing else has put the venv there.
+
+    ``clock_env`` reaches supervisord and its programs only: this process's own
+    environment, and so the tmux server and every agent's shell, never carries it.
     """
     path = os.pathsep.join(
         entry for entry in (str(venv / "bin"), environ.get("PATH", "")) if entry
     )
-    return {**environ, "VIRTUAL_ENV": str(venv), "PATH": path}
+    return {**environ, "VIRTUAL_ENV": str(venv), "PATH": path, **clock_env}
+
+
+def _read_clock_env(path: Path) -> dict[str, str]:
+    """The ``KEY=VALUE`` lines of ``path``; empty when there is no such file.
+
+    No shell reads the file: a value is everything after the first ``=``, taken
+    literally. Blank lines and lines starting with ``#`` are skipped. A file with
+    any other line is ignored whole, with an error logged, rather than half
+    applied, and never fails the boot: the services start either way.
+    """
+    if not path.is_file():
+        return {}
+    variables: dict[str, str] = {}
+    for line in path.read_text().splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        key, separator, value = stripped.partition("=")
+        if not separator or not key:
+            logger.error("Ignoring {}: {!r} is not a KEY=VALUE line", path, line)
+            return {}
+        variables[key] = value
+    return variables
 
 
 def _exec_supervisord() -> None:
@@ -738,7 +771,9 @@ def _exec_supervisord() -> None:
     os.execvpe(
         "supervisord",
         ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)],
-        _supervisord_environment(os.environ, WORKSPACE_VENV.resolve()),
+        _supervisord_environment(
+            os.environ, WORKSPACE_VENV.resolve(), _read_clock_env(CLOCK_ENV_FILE)
+        ),
     )
 
 

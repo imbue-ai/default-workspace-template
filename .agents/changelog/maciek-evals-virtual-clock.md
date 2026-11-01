@@ -1,0 +1,1 @@
+The service-processes reference describes `system/clock.env`: the variables whatever created the workspace hands supervisord's programs (an evaluation harness's shifted clock), which a program must not override or unset.
