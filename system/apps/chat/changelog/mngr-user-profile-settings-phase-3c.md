@@ -1,1 +1,3 @@
 The chat's send shortcut becomes rebindable (user-profile-state spec, phase 3C): new `/api/keybindings/actions` and `/api/keybindings/me` routes declare and resolve the one `send-message` action (default Enter, with Ctrl/Cmd+Enter also sending), and the composer matches the resolved chords instead of a hard-coded Enter, re-fetched when the shell announces a change (`shell:keybindings-changed`, forwarded to the inner chat pages).
+
+The gateway access the chat app's backend reads from its environment (`latchkey_gateway.py`) moves into the new `latchkey-access` library, shared with the shell; the call sites import `GatewayAccess` from there and the module is gone.

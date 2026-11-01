@@ -20,11 +20,11 @@ from typing import Any
 from typing import Final
 
 import httpx
+from latchkey_access.gateway import GatewayAccess
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 
-from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.primitives import ChatId
 from imbue.imbue_common.mutable_model import MutableModel
 

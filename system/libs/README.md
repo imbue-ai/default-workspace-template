@@ -18,6 +18,9 @@ README for details.
   a member of the npm workspace at `system/package.json`): the design
   system's token layer, the shared components, and the browser-side app
   contract and embed modules the frontends build from.
+- `latchkey_access/` - The latchkey gateway as a workspace program reaches it: the
+  environment and header names of the agent-to-gateway contract, and `GatewayAccess`,
+  which reads the environment and builds a request's URL and headers.
 - `routines/` - Everything that runs on a schedule: the routine definitions
   under `system/routines/`, the scheduler, the runner for command runs and
   skill runs (automations), the run ledger, the cron env wrapper, and the

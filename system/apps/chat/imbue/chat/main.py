@@ -11,6 +11,7 @@ import httpx
 from app_manifest.primitives import AppUrl
 from app_manifest.registry import register_app
 from flask import Flask
+from latchkey_access.gateway import GatewayAccess
 from loguru import logger as _loguru_logger
 from workspace_layout.client import DisconnectedShell
 
@@ -36,7 +37,6 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.registry import build_one_shot_completion
-from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.lounge import LoungeKeeper
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MainChatStore

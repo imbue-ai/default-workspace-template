@@ -11,6 +11,8 @@ dependencies = [
     "flask>=3.0",
     "httpx>=0.27",
     "imbue-common",
+    # The latchkey gateway's environment and header names, which the relay client builds its requests from.
+    "latchkey-access",
     "loguru>=0.7",
     "pydantic>=2.0",
     "werkzeug>=3.0",

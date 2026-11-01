@@ -10,6 +10,7 @@ from app_schema.routes import model_response
 from app_schema.routes import parse_request_body
 from flask import Flask
 from flask.typing import ResponseReturnValue
+from latchkey_access.gateway import GatewayAccess
 from pydantic import Field
 from workspace_profile.errors import InvalidChordError
 from workspace_profile.keybindings import normalize_chord
@@ -23,7 +24,6 @@ from workspace_profile.snapshot import load_workspace_profile_snapshot
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.shell.gateway_access import GatewayAccess
 from imbue.system_interface.shell.keybindings import SHELL_KEYBINDINGS_MANIFEST
 from imbue.system_interface.shell.keybindings import discard_unsent_keybinding
 from imbue.system_interface.shell.keybindings import fetch_app_keybindings_manifests

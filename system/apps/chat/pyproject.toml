@@ -20,6 +20,8 @@ dependencies = [
     "imbue-mngr-opencode",
     "imbue-mngr-antigravity",
     "imbue-mngr-autocompact",
+    # The latchkey gateway's address, credentials and headers, read from the environment mngr injects.
+    "latchkey-access",
     "oom-priority",
     "pexpect>=4.9",
     "pydantic-settings>=2.13.1",

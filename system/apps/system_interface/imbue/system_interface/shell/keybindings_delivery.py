@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Final
 
 import httpx
+from latchkey_access.gateway import GatewayAccess
 from loguru import logger
 from pydantic import Field
 from workspace_profile.keybindings import KEYBINDINGS_SETTING_KEY
@@ -28,7 +29,6 @@ from workspace_profile.snapshot import load_workspace_profile_snapshot
 from imbue.imbue_common.enums import UpperCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
-from imbue.system_interface.shell.gateway_access import GatewayAccess
 from imbue.system_interface.shell.keybindings import clear_delivered_keybindings
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import read_json_object
