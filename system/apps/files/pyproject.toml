@@ -16,7 +16,9 @@ dependencies = [
     "werkzeug>=3.0",
     # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
     "workspace-themes",
-    # Resolves account-keyed settings (keybindings) for a request identity, and parses the identity header.
+    # Parses the request identity header the keybindings read resolves for.
+    "workspace-layout",
+    # Resolves account-keyed settings (keybindings) for a request identity.
     "workspace-profile",
 ]
 
