@@ -9,7 +9,7 @@ import {
 } from "../testing/records";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopEvent, DesktopState } from "./desktopState";
-import { cellForAddedShortcut, nextDesktopName, nextGlyphIndex, resolveLaunchRun } from "./shortcuts";
+import { cellForAddedShortcut, nextDesktopName, resolveLaunchRun } from "./shortcuts";
 
 const MODES = { isPhone: false, isTouch: false };
 const home = desktopRecord("home", {
@@ -99,7 +99,7 @@ describe("resolveLaunchRun", () => {
 });
 
 describe("new desktops and added shortcuts", () => {
-  it("mints the first free Desktop N and the first unused glyph", () => {
+  it("mints the first free Desktop N", () => {
     expect(nextDesktopName([{ id: "home", name: "Home" }])).toBe("Desktop 1");
     expect(
       nextDesktopName([
@@ -107,9 +107,6 @@ describe("new desktops and added shortcuts", () => {
         { id: "x", name: "desktop 2" },
       ]),
     ).toBe("Desktop 3");
-    expect(nextGlyphIndex([0, 1, 3], 10)).toBe(2);
-    expect(nextGlyphIndex([0, 1, 2, 3, 4, 5, 6, 7, 8, 9], 10)).toBe(0);
-    expect(nextGlyphIndex([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 0], 10)).toBe(1);
   });
 
   it("puts an added shortcut at the first free cell in reading order over the current grid", () => {

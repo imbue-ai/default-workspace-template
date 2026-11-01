@@ -14,8 +14,8 @@ from datetime import timedelta
 from datetime import timezone
 
 import httpx
+from share_grants.json_values import is_json_object
 
-from share_gateway.json_values import is_json_object
 from share_gateway.log import log as _log
 
 _FETCH_TIMEOUT_SECONDS = 15.0

@@ -28,6 +28,7 @@ describe("isForwardedToShell", () => {
   it("passes the Imbue Studio messages and the shell messages the root re-posts as its own", () => {
     expect(isForwardedToShell({ type: "minds:ready" })).toBe(true);
     expect(isForwardedToShell({ type: "shell:focused" })).toBe(true);
+    expect(isForwardedToShell({ type: "shell:input" })).toBe(true);
     expect(isForwardedToShell({ type: "shell:open", path: "/agent-1.agent-2.sess-3", ifPresent: "focus" })).toBe(true);
     expect(isForwardedToShell({ type: "shell:draft-text", text: "Explain this element:" })).toBe(true);
     expect(

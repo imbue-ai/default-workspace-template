@@ -34,7 +34,7 @@ import {
   setSwitchSending,
 } from "../models/PendingLane";
 import type { ProviderAccount } from "../models/Providers";
-import { beginSwitchToAccountId, openSwitchDialog } from "./SwitchDialog";
+import { beginSwitchToAccountId, launchAwaitingChatAsRoom, openSwitchDialog } from "./SwitchDialog";
 import { addOutgoing, clearOutgoing, dropOutgoing, getOutgoingMessages } from "../models/OutgoingMessages";
 import { noteResentSend } from "../models/ResentSends";
 import { describeRequestError, describeRequestErrorKind } from "@imbue/workspace-ui/src/models/request-error";
@@ -60,6 +60,7 @@ import {
   refuseSendToFailedChat,
   isHandoffCancellable,
   isLaunchInFlight,
+  isRoomChat,
   launchChat,
   whenChatRegistered,
 } from "../models/Chats";
@@ -70,6 +71,10 @@ import { apiUrl } from "@imbue/workspace-ui/src/base-path";
 import { harnessLabel } from "./harness-labels";
 import { handoffComposerPlaceholder } from "./handoff-phase";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
+import { ensureMentionHandles, matchingHandles } from "../models/Mentions";
+import type { MentionHandle } from "../models/Mentions";
+import { MENTION_ROW_CAP, insertMention, mentionDraftAt, mentionPopover } from "./MentionPopover";
+import type { MentionDraft } from "./MentionPopover";
 import { icon, spinnerIcon, stopIcon } from "@imbue/workspace-ui/src/components/icons";
 import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
@@ -110,6 +115,7 @@ const TOOLBAR_CLASS =
 const ATTACHMENT_DETAIL_CLASS = "composer-attachment-detail truncate text-[11px] leading-[1.3]";
 
 const MESSAGE_TEXT_KEY_PREFIX = "message-text:";
+const COMPOSER_HINT_KEY_PREFIX = "composer-hint:";
 
 // The kind of the server's refusal of a send to a chat whose account was signed out.
 const ACCOUNT_SIGNED_OUT_SEND_FAILURE_KIND = "account_signed_out";
@@ -150,6 +156,10 @@ function messageTextKey(chatId: string): string {
   return `${MESSAGE_TEXT_KEY_PREFIX}${chatId}`;
 }
 
+function composerHintKey(chatId: string): string {
+  return `${COMPOSER_HINT_KEY_PREFIX}${chatId}`;
+}
+
 // Blocks handed back to the composer from OUTSIDE this component (a native shoulder tap whose combined
 // resend failed -- see QueuedMessageView), keyed by agent. The composer's own ``messageText`` is a
 // per-instance closure, so a sibling view cannot merge into it directly; it drops the block here and
@@ -157,6 +167,14 @@ function messageTextKey(chatId: string): string {
 // merge-not-drop rule Stop's drain-to-composer uses. Persisted to localStorage regardless, so the text
 // survives even if the composer is not currently mounted -- never swallowed (contract A1a).
 const pendingComposerPrepends = new Map<string, string>();
+
+// The hint a chat's composer shows as its placeholder until its next send (the multiplayer spec, section 9.2:
+// "How do you want to change <app>?"), by chat; set from outside the component, as the prepends are, and taken
+// up on the composer's next view pass, which also focuses it once. Persisted to localStorage as the prepends
+// are: the chat root sets it from its own document, and the page's composer (another document, with a map of
+// its own) reads it from there when it mounts.
+const composerHints = new Map<string, string>();
+const pendingComposerFocuses = new Set<string>();
 
 /** A failure raised from OUTSIDE this component, waiting for the composer to show it. */
 interface PendingFailureNotice {
@@ -250,6 +268,24 @@ function restoreToComposer(chatId: string, text: string, attachments: readonly C
   ]);
 }
 
+/** Show ``hint`` as ``chatId``'s composer placeholder until its next send, and focus the composer: what the chat
+ *  root hands a page when an intake carried a hint (a window's "Chat about this app"), from the page's own document
+ *  when it is loaded, else from the root's, where only the persisted hint reaches the page. */
+export function setComposerHint(chatId: string, hint: string): void {
+  if (!hint) {
+    return;
+  }
+  localStorage.setItem(composerHintKey(chatId), hint);
+  composerHints.set(chatId, hint);
+  pendingComposerFocuses.add(chatId);
+  m.redraw();
+}
+
+function clearComposerHint(chatId: string): void {
+  composerHints.delete(chatId);
+  localStorage.removeItem(composerHintKey(chatId));
+}
+
 /** Hand ``block`` back to ``chatId``'s composer (prepended above any draft), from a sibling view or from outside
  *  the page. An element reference in it is attached as a file first, and only the prompt naming it goes in the
  *  text (``stageElementReferences``). */
@@ -269,11 +305,16 @@ export function prependToComposer(chatId: string, block: string): void {
   if (!block) {
     return;
   }
+  const existingDraft = localStorage.getItem(messageTextKey(chatId)) ?? "";
+  // The block already leads the draft (the app-chat button pressed again while its lead-in sits unsent):
+  // prepending it once more would stack identical copies. Checked before staging, which attaches files.
+  if (existingDraft.startsWith(block)) {
+    return;
+  }
   const text = stageElementReferences(chatId, block);
   if (!text) {
     return;
   }
-  const existingDraft = localStorage.getItem(messageTextKey(chatId)) ?? "";
   const merged = existingDraft.trim().length === 0 ? text : `${text}\n\n${existingDraft}`;
   localStorage.setItem(messageTextKey(chatId), merged);
   pendingComposerPrepends.set(chatId, merged);
@@ -376,7 +417,11 @@ function providerNotice(markerClass: string, sentence: string, onChoose: () => v
 function composeRow(leading: m.Children | undefined, boxChildren: m.Children[]): m.Vnode {
   return m("div", { class: "message-input-compose-row flex items-end gap-1.5" }, [
     leading ?? null,
-    m("div", { class: `${INPUT_BOX_CLASS} min-w-0 flex-1`, ...appPartAttrs("chat", "composer") }, boxChildren),
+    m(
+      "div",
+      { class: `${INPUT_BOX_CLASS} relative min-w-0 flex-1`, ...appPartAttrs("chat", "composer") },
+      boxChildren,
+    ),
   ]);
 }
 
@@ -406,6 +451,9 @@ addModelChoiceFailureListener((chatId, detail) =>
 function chooseProviderToContinue(chatId: string): void {
   openProviderChooser({ onSignedIn: (chosen) => beginSwitchToAccountId(chatId, chosen) });
 }
+
+/** What an awaiting chat's first send launches it as: a chat on an account, or a room. */
+type FirstSendChoice = { kind: "account"; id: string } | { kind: "room" };
 
 export function MessageInput(): m.Component<MessageInputAttrs> {
   let messageText = "";
@@ -490,6 +538,58 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
   // The chat whose switch-and-send message is still being prepared (uploads, the composer guard):
   // not sent yet, so the switch is still the next send's.
   let switchPreparingChatId: string | null = null;
+  // The mention being typed, while the caret follows an ``@`` (section 7.2); null otherwise.
+  let mentionDraft: MentionDraft | null = null;
+
+  function mentionRows(): MentionHandle[] {
+    return mentionDraft === null ? [] : matchingHandles(mentionDraft.query).slice(0, MENTION_ROW_CAP);
+  }
+
+  /** Read the mention under the caret after the text changed or the caret moved; a fresh ``@`` asks for the table.
+   *  Only in a room (section 7.2): in an agent chat a handle is a word the agent reads like any other. */
+  function updateMentionDraft(textarea: HTMLTextAreaElement): void {
+    if (currentChatId === null || !isRoomChat(currentChatId)) {
+      mentionDraft = null;
+      return;
+    }
+    const previous = mentionDraft;
+    mentionDraft = mentionDraftAt(textarea.value, textarea.selectionStart ?? textarea.value.length, previous);
+    if (mentionDraft !== null && previous === null) void ensureMentionHandles().then(() => m.redraw());
+  }
+
+  function pickMention(handle: MentionHandle): void {
+    if (mentionDraft === null || messageTextareaElement === null || currentChatId === null) return;
+    const inserted = insertMention(messageText, mentionDraft, handle.handle);
+    messageText = inserted.text;
+    messageTextareaElement.value = inserted.text;
+    messageTextareaElement.setSelectionRange(inserted.caret, inserted.caret);
+    localStorage.setItem(messageTextKey(currentChatId), messageText);
+    mentionDraft = null;
+    refitComposer();
+    focusMessageTextarea();
+    m.redraw();
+  }
+
+  /** The popover's keys while a mention is being typed; whether the key was taken. */
+  function handleMentionKeydown(event: KeyboardEvent): boolean {
+    if (mentionDraft === null) return false;
+    const rows = mentionRows();
+    if (event.key === "Escape") {
+      mentionDraft = null;
+      return true;
+    }
+    if (rows.length === 0) return false;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      const step = event.key === "ArrowDown" ? 1 : -1;
+      mentionDraft = { ...mentionDraft, index: (mentionDraft.index + step + rows.length) % rows.length };
+      return true;
+    }
+    if (event.key === "Enter" || event.key === "Tab") {
+      pickMention(rows[Math.min(mentionDraft.index, rows.length - 1)]);
+      return true;
+    }
+    return false;
+  }
 
   function focusMessageTextarea(): void {
     messageTextareaElement?.focus();
@@ -644,6 +744,12 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       if (currentChatId !== chatId) {
         currentChatId = chatId;
         messageText = localStorage.getItem(messageTextKey(chatId)) ?? "";
+        const persistedHint = localStorage.getItem(composerHintKey(chatId));
+        if (persistedHint !== null && !composerHints.has(chatId)) {
+          // Set by the chat root before this page loaded: taken up as a live hint would be, focusing once.
+          composerHints.set(chatId, persistedHint);
+          pendingComposerFocuses.add(chatId);
+        }
         isInterruptInFlight = false;
         isCancelSwitchInFlight = false;
         // The notices name a command typed for the previous agent, so they must not follow the
@@ -682,6 +788,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         pendingComposerPrepends.delete(chatId);
         messageText = pendingPrepend;
       }
+      if (pendingComposerFocuses.delete(chatId)) {
+        // After this pass has drawn the textarea the hint is for.
+        queueMicrotask(focusMessageTextarea);
+      }
+      const composerHint = composerHints.get(chatId) ?? null;
 
       // After the hand-back above is adopted: the failed send's copy arrives through it.
       for (const { recovery, priorTurnIds } of unconfirmedSends) {
@@ -803,6 +914,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
         if (prepared === null) {
           return;
         }
+        // The hint asked a question; the send answered it.
+        clearComposerHint(chatId);
         const { text: sentText, finalText, attachments: sentAttachments } = prepared;
 
         // Paint an optimistic "Sending…" bubble at the tail immediately -- the ONE
@@ -831,8 +944,8 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             getChatById(chatId) === undefined &&
             !isLaunchInFlight(chatId)
           ) {
-            const accountId = await chooseAccountForFirstSend(awaiting);
-            if (accountId === null) {
+            const choice = await chooseAccountForFirstSend(awaiting);
+            if (choice === null) {
               // The chooser closed with no sign-in: nothing was launched, and the message is
               // the user's to keep.
               dropOutgoing(chatId, outgoingId);
@@ -840,14 +953,19 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
               m.redraw();
               return;
             }
-            if (!awaiting.is_seeded) {
-              await launchChat(chatId, accountId);
+            if (choice.kind === "room") {
+              // A room is launched like a chat on an account, on none: the message rides the launch and is
+              // appended once the room is up.
+              await launchChat(chatId, "", finalText, "room");
+            } else if (awaiting.is_seeded) {
+              await launchChat(chatId, choice.id, finalText, "agent");
+            } else {
+              await launchChat(chatId, choice.id, "", "agent");
               priorTurnIds = sentUserTurnIds(chatId);
               noteIfResent(chatId, finalText, priorTurnIds, await sendMessage(chatId, finalText, messageId));
               refocusAfterSend();
               return;
             }
-            await launchChat(chatId, accountId, finalText);
             try {
               await whenChatRegistered(chatId);
             } catch (err) {
@@ -914,18 +1032,23 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       /**
-       * The account a chat's first send launches it on: the one the chat was minted for when it
+       * What a chat's first send launches it as: the account the chat was minted for when it
        * names one (an intake's), else the signed-in one when there is one, else whatever the
-       * provider chooser produces, or null when it is dismissed instead.
+       * provider chooser produces; a room when the chooser's room row was picked instead
+       * (section 7.3), or null when the chooser closed with neither.
        */
-      async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<string | null> {
+      async function chooseAccountForFirstSend(provisional: ProvisionalChat): Promise<FirstSendChoice | null> {
         await whenAccountsReadyToChoose();
         const account = accountForFirstSend(provisional.account_id);
         if (account !== null) {
-          return account.id;
+          return { kind: "account", id: account.id };
         }
         return new Promise((resolve) => {
-          openProviderChooser({ onSignedIn: (accountId) => resolve(accountId), onDismissed: () => resolve(null) });
+          openProviderChooser({
+            onSignedIn: (accountId) => resolve({ kind: "account", id: accountId }),
+            onDismissed: () => resolve(null),
+            onRoomChosen: () => resolve({ kind: "room" }),
+          });
         });
       }
 
@@ -1082,6 +1205,11 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
       }
 
       function handleKeydown(event: KeyboardEvent): void {
+        if (handleMentionKeydown(event)) {
+          event.preventDefault();
+          m.redraw();
+          return;
+        }
         if (event.key === "Enter" && !event.shiftKey) {
           event.preventDefault();
           void handleSubmit();
@@ -1510,12 +1638,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
             const awaiting = getProvisionalChat(awaitingChatId);
             if (awaiting?.phase !== "awaiting_first_send" || getChatById(awaitingChatId) !== undefined) return;
             if (isLaunchInFlight(awaitingChatId)) return;
-            launchChat(awaitingChatId, accountId).catch((error: unknown) => {
+            launchChat(awaitingChatId, accountId, "", "agent").catch((error: unknown) => {
               console.error(
                 `The chat ${awaitingChatId} could not be started on sign-in: ${describeRequestError(error)}`,
               );
             });
           },
+          onRoomChosen: () => void launchAwaitingChatAsRoom(awaitingChatId),
         });
       }
 
@@ -1612,6 +1741,14 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           vnode.attrs.leading,
           // With no provider to send to, the composer stays in view, holding any draft, but takes nothing.
           [
+            mentionPopover({
+              rows: mentionRows(),
+              selectedIndex: mentionDraft?.index ?? 0,
+              onPick: pickMention,
+              onHover: (index) => {
+                if (mentionDraft !== null) mentionDraft = { ...mentionDraft, index };
+              },
+            }),
             m(
               "div",
               {
@@ -1627,12 +1764,17 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     "px-1 py-1 font-sans text-(length:--font-size-body) leading-[1.4] text-primary focus:outline-none " +
                     "placeholder:text-faint group-data-[stacked]/row:col-span-3 group-data-[stacked]/row:col-start-1 " +
                     "disabled:cursor-not-allowed disabled:opacity-60",
+                  // A switch off a room holds the message like any switch, so its wording comes first.
                   placeholder:
                     handoff !== null
                       ? handoffComposerPlaceholder(handoff)
-                      : isAgentWorking
-                        ? "Type to queue more messages..."
-                        : "Type a message...",
+                      : composerHint !== null
+                        ? composerHint
+                        : isRoomChat(chatId)
+                          ? "Message (tag @agent to ask the agent)"
+                          : isAgentWorking
+                            ? "Type to queue more messages..."
+                            : "Type a message...",
                   rows: 1,
                   disabled: isComposerDisabled,
                   value: messageText,
@@ -1658,8 +1800,13 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
                     const textarea = event.target as HTMLTextAreaElement;
                     messageText = textarea.value;
                     localStorage.setItem(messageTextKey(chatId), messageText);
+                    updateMentionDraft(textarea);
                     refitComposer();
                     if (messageText.trim() !== "") warmUpStoppedChat(chatId);
+                  },
+                  onclick: (event: MouseEvent) => updateMentionDraft(event.target as HTMLTextAreaElement),
+                  onblur: () => {
+                    mentionDraft = null;
                   },
                   onkeydown: handleKeydown,
                   onpaste: handlePaste,

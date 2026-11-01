@@ -26,6 +26,7 @@ from app_manifest.registry import RegistryLaunchPath
 from app_manifest.registry import RegistryRow
 from pydantic import Field
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import WindowId
 from workspace_layout.primitives import WindowPage
@@ -648,6 +649,8 @@ def desktop_seeded_from(
     # One fresh id per window of ``source``, in that order.
     window_ids: Sequence[WindowId],
     opened_at: datetime,
+    # Whose desktop it is: the visitor it is seeded for (the multiplayer spec, section 8.1).
+    owner: ParticipantKey | None,
 ) -> Desktop:
     """A new desktop holding the source's shortcuts, wallpaper, and a window at each of its windows' paths (desktop
     plan section 3.10): the same pages, as new windows, so closing one closes nothing of the source's. A pinned
@@ -662,6 +665,7 @@ def desktop_seeded_from(
         glyph=glyph,
         wallpaper=source.wallpaper,
         shortcuts=source.shortcuts,
+        owner=owner,
         windows=tuple(
             Window(
                 id=window_id,
@@ -691,17 +695,23 @@ def launcher_order(rows: Sequence[RegistryRow]) -> tuple[RegistryRow, ...]:
 
 
 @pure
-def _takes_text(launch_path: RegistryLaunchPath) -> bool:
-    return launch_path.text_param is not None or launch_path.draft_param is not None
+def _takes_text_mention_or_app(launch_path: RegistryLaunchPath) -> bool:
+    """Whether the launch path needs something filled in: typed or drafted text, a mention of a person, or an app."""
+    return (
+        launch_path.text_param is not None
+        or launch_path.draft_param is not None
+        or launch_path.mention_param is not None
+        or launch_path.app_params is not None
+    )
 
 
 @pure
 def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
     """The shortcut an app is given on a desktop: its ``default_shortcut`` when it declares one naming a launch path it
     offers, whether or not that path takes text; else, for a supervised app (one whose row names a ``program``), its
-    first launch path that takes no typed or drafted text, or its first launch path when every one takes text,
-    focusing. A manifest-less row with no program (a preview, an isolated test server) gets none, and neither does an
-    internal app."""
+    first launch path that takes no typed or drafted text, no mention, and no app, or its first launch path when
+    every one takes one, focusing. A manifest-less row with no program (a preview, an isolated test server) gets none,
+    and neither does an internal app."""
     if row.internal:
         return None
     offered = effective_launch_paths(row)
@@ -710,7 +720,7 @@ def _default_shortcut_choice(row: RegistryRow) -> DefaultShortcut | None:
         return row.default_shortcut if is_offered else None
     if row.program is None:
         return None
-    first = next((path for path in offered if not _takes_text(path)), offered[0])
+    first = next((path for path in offered if not _takes_text_mention_or_app(path)), offered[0])
     return DefaultShortcut(launch=first.id, mode=ShortcutMode.FOCUS)
 
 
@@ -1023,6 +1033,19 @@ def with_window_state(layout: DesktopLayout, window_id: WindowId, state: WindowS
             to_update(current.field_ref().state, state),
         ),
     )
+
+
+@pure
+def with_windows_side_by_side(layout: DesktopLayout, shown_id: WindowId, beside_id: WindowId) -> DesktopLayout:
+    """The two windows snapped to the backdrop's halves, the shown one on top (the multiplayer spec, section 9.2):
+    the shown window takes the half its frame's centre is already on (the right when it is minimized or has never
+    been placed), and the window it is laid out beside takes the other."""
+    is_placed = any(placement.window_id == shown_id for placement in layout.placements)
+    shown = placement_of(layout, shown_id)
+    is_shown_right = not is_placed or shown.is_minimized or shown.frame.x + shown.frame.width / 2 >= 0.5
+    shown_state = WindowState.SNAPPED_RIGHT if is_shown_right else WindowState.SNAPPED_LEFT
+    beside_state = WindowState.SNAPPED_LEFT if is_shown_right else WindowState.SNAPPED_RIGHT
+    return with_window_state(with_window_state(layout, beside_id, beside_state), shown_id, shown_state)
 
 
 @pure

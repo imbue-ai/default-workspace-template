@@ -6,6 +6,11 @@ class InvalidLayoutValueError(WorkspaceLayoutError, ValueError):
     """A value on the shell's layout wire (an id, a requester) does not satisfy its rule."""
 
 
+class InvalidIdentityHeaderError(InvalidLayoutValueError):
+    """A present ``X-Imbue-Identity`` header that does not parse: never a proxy's, so the request is refused rather
+    than read as the owner's (the multiplayer spec, D10)."""
+
+
 class ShellOpError(WorkspaceLayoutError):
     """The shell did not carry out what it was asked."""
 

@@ -1,0 +1,481 @@
+"""The roster (the multiplayer spec, section 4.2): everyone who may be in the workspace, in display order.
+
+The owner first (under ``user:<id>`` once they have heartbeated as an account, else the synthetic ``owner`` key),
+then every account the people's grants name, then every invited email, then every visiting agent the gateway's
+grants name, and the workspace's own agent last. A person's name and picture are their profile; an invited email
+has neither; a visiting agent has the name it joined under; the workspace agent is named after the workspace and
+pictured by the selected avatar design. Presence comes from the heartbeat files for people and from the gateway's
+last-seen record for visiting agents, under one connected window. Handles are assigned in roster order, so a
+collision suffixes the later entry; the workspace agent's ``agent`` is reserved before anyone else's.
+
+``GET /api/roster`` answers the document, and ``roster_updated`` carries the same body whenever presence changes
+(someone came or went, or a person's newest input time moved), a grants file changes (the desktop and the gateway
+both write them, so the shell watches them), and on connect. The announcer pushes a document only when it differs
+from the one it last pushed, and the watch folds a burst of file events (an atomic replace fires twice; the gateway
+rewrites its last-seen record every ten seconds per working visiting agent) into one announcement.
+"""
+
+import threading
+from collections.abc import Callable
+from datetime import datetime
+from datetime import timedelta
+from pathlib import Path
+from typing import Any
+from typing import Final
+
+from loguru import logger
+from pydantic import Field
+from pydantic import PrivateAttr
+from share_grants.agent_grants import AgentGrant
+from share_grants.agent_grants import read_agent_last_seen_times
+from share_grants.grants import Grants
+from watchdog.observers.api import BaseObserver
+from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.primitives import OWNER_PARTICIPANT_KEY
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import ParticipantKind
+from workspace_layout.primitives import UserId
+from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
+from workspace_layout.roster import RosterDocument
+from workspace_layout.roster import RosterParticipant
+from workspace_layout.roster import assign_handles
+from workspace_layout.roster import participant_color
+from workspace_layout.shell_url import ROSTER_ROUTE
+
+from imbue.imbue_common.frozen_model import FrozenModel
+from imbue.imbue_common.logging import format_nanosecond_iso_timestamp
+from imbue.imbue_common.mutable_model import MutableModel
+from imbue.imbue_common.pure import pure
+from imbue.system_interface.avatar.selection import AvatarSelectionStore
+from imbue.system_interface.file_watch import start_file_watch
+from imbue.system_interface.file_watch import stop_file_watch
+from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
+from imbue.system_interface.presence import ParticipantPresence
+from imbue.system_interface.presence import PresenceStore
+from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.profiles import UserProfile
+from imbue.system_interface.profiles import picture_version_of
+from imbue.system_interface.shell.share_grants import AgentGrantsReader
+from imbue.system_interface.shell.share_grants import ShareGrantsReader
+from imbue.system_interface.shell.users import UserStore
+from imbue.system_interface.workspace_name import WorkspaceNameSource
+from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
+
+# The workspace agent's handle (``@agent``), reserved before anyone else's is assigned.
+WORKSPACE_AGENT_HANDLE: Final[str] = "agent"
+# What the owner of a workspace that has not shared is called: nobody else is here to tell them apart from.
+ANONYMOUS_OWNER_NAME: Final[str] = "Owner"
+# The pixel size the roster asks the avatar's icon at: the biggest the cards draw it.
+_AVATAR_ICON_SIZE: Final[int] = 64
+# How often a watched file whose directory does not exist yet is tried again.
+ROSTER_WATCH_RETRY_SECONDS: Final[float] = 10.0
+# How long the watch waits after a file event for the rest of its burst before announcing once.
+ROSTER_WATCH_COALESCE_SECONDS: Final[float] = 1.0
+# A grants document as the roster read it: its path and the version (mtime) on disk, None while there is none.
+_GrantsDocument = tuple[Path, int | None]
+
+
+class _WarnedEntries(MutableModel):
+    """The grants entries of one document already warned about, under the version they were seen in."""
+
+    version: int | None = Field(frozen=True, description="The document's version (mtime) the entries were seen in")
+    entries: set[str] = Field(default_factory=set, description="The refused entries warned about under it")
+
+
+class _Entry(FrozenModel):
+    """One roster entry before its handle is assigned."""
+
+    key: ParticipantKey = Field(description="The participant's key")
+    kind: ParticipantKind = Field(description="What the participant is")
+    display_name: str = Field(description="What to call them")
+    handle_name: str = Field(description="What their handle is made from: the name, or an invited email's local part")
+    profile_picture_url: str | None = Field(description="Their picture, when there is one")
+    email: str | None = Field(description="Their email, when known")
+    is_owner: bool = Field(description="Whether this is the owner")
+    is_connected: bool = Field(description="Whether they are here now")
+    last_seen: str | None = Field(description="When they were last here")
+    last_input_at: str | None = Field(description="When their newest page last saw input")
+
+
+@pure
+def participant_picture_route(key: ParticipantKey, profile_picture_url: str) -> str:
+    """Where the shell serves a person's picture from its own origin (the multiplayer spec, section 4.2): the
+    roster's picture route, versioned by the connector's URL so a page never shows a cached older picture."""
+    return f"{ROSTER_ROUTE}/{key}/picture?v={picture_version_of(profile_picture_url)}"
+
+
+@pure
+def _email_local_part(email: str | None) -> str | None:
+    if email is None or "@" not in email:
+        return None
+    local_part = email.split("@", 1)[0]
+    return local_part if local_part else None
+
+
+@pure
+def _person_name(profile: UserProfile | None, known_name: str | None, email: str | None, user_id: str) -> str:
+    """A person's name: their profile's, else the one recorded at their last arrival, else their email's local
+    part, else their id."""
+    if profile is not None and profile.display_name:
+        return profile.display_name
+    if known_name:
+        return known_name
+    local_part = _email_local_part(email)
+    return local_part if local_part is not None else user_id
+
+
+@pure
+def _format_moment(moment: datetime) -> str:
+    return format_nanosecond_iso_timestamp(moment)
+
+
+@pure
+def _anonymous_owner_entry(presence: ParticipantPresence | None) -> _Entry:
+    """The owner of a workspace that has not shared: no account, so a fixed name and no profile, present as their
+    heartbeats under the ``owner`` key say."""
+    return _Entry(
+        key=OWNER_PARTICIPANT_KEY,
+        kind=ParticipantKind.PERSON,
+        display_name=ANONYMOUS_OWNER_NAME,
+        handle_name=ANONYMOUS_OWNER_NAME,
+        profile_picture_url=None,
+        email=None,
+        is_owner=True,
+        is_connected=presence.is_connected if presence is not None else False,
+        last_seen=presence.last_seen if presence is not None else None,
+        last_input_at=presence.last_input_at if presence is not None else None,
+    )
+
+
+@pure
+def _with_handles(entries: list[_Entry]) -> list[RosterParticipant]:
+    """The entries as the wire carries them: handles assigned in order, the agent's reserved, each with its colour."""
+    people = [entry for entry in entries if entry.kind is not ParticipantKind.WORKSPACE_AGENT]
+    handles = assign_handles([entry.handle_name for entry in people], taken=[WORKSPACE_AGENT_HANDLE])
+    handle_by_key = {entry.key: handle for entry, handle in zip(people, handles, strict=True)}
+    return [
+        RosterParticipant(
+            key=entry.key,
+            kind=entry.kind,
+            display_name=entry.display_name,
+            profile_picture_url=entry.profile_picture_url,
+            email=entry.email,
+            handle=handle_by_key.get(entry.key, WORKSPACE_AGENT_HANDLE),
+            color=participant_color(entry.key),
+            is_owner=entry.is_owner,
+            is_connected=entry.is_connected,
+            last_seen=entry.last_seen,
+            last_input_at=entry.last_input_at,
+        )
+        for entry in entries
+    ]
+
+
+class RosterSource(MutableModel):
+    """Computes the roster from the grants, the presence files, the profiles, and the gateway's last-seen record."""
+
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
+
+    presence: PresenceStore = Field(frozen=True, description="The heartbeat files of everyone who has been here")
+    profiles: ProfileResolver = Field(frozen=True, description="Each account's name and picture")
+    users: UserStore = Field(frozen=True, description="What the shell recorded of each visitor at their arrivals")
+    share_grants: ShareGrantsReader = Field(frozen=True, description="The people's grants")
+    agent_grants: AgentGrantsReader = Field(frozen=True, description="The visiting agents' grants")
+    agent_last_seen_path: Path = Field(frozen=True, description="The gateway's record of each agent's last request")
+    workspace_name: WorkspaceNameSource = Field(frozen=True, description="What the workspace agent is named after")
+    avatar_selection: AvatarSelectionStore = Field(frozen=True, description="The design the agent is pictured by")
+    connected_window: timedelta = Field(
+        default=PRESENCE_CONNECTED_WINDOW, frozen=True, description="How long a sighting counts as connected"
+    )
+
+    # The grants entries already warned about, per document (its path), under the version of it they were seen in,
+    # so a hand-edited entry the key refuses is warned about once rather than on every roster build. One record per
+    # path, replaced whole when the version moves: the roster is built from several threads at once and this
+    # source carries no lock, so the bookkeeping never iterates what another build may be adding to.
+    _warned_entries_by_path: dict[Path, _WarnedEntries] = PrivateAttr(default_factory=dict)
+
+    def owner_key(self, now: datetime) -> ParticipantKey:
+        """The owner's key as the presence records say it (the multiplayer spec, section 4.4): the account whose
+        heartbeats say it owns the workspace, else the synthetic ``owner`` of a workspace that has not shared."""
+        return self._owner_key(self.presence.presence_by_participant(now))
+
+    def document(self, now: datetime) -> RosterDocument:
+        presence_by_key = self.presence.presence_by_participant(now)
+        grants = self.share_grants.read_grants()
+        entries = [
+            *self._people(grants, presence_by_key, now),
+            *self._invited(grants),
+            *self._visiting_agents(now),
+            self._workspace_agent(),
+        ]
+        return RosterDocument(participants=tuple(_with_handles(entries)))
+
+    def _people(
+        self, grants: Grants | None, presence_by_key: dict[ParticipantKey, ParticipantPresence], now: datetime
+    ) -> list[_Entry]:
+        """The owner first, then every account the grants name, each named and pictured from its profile."""
+        owner_key = self._owner_key(presence_by_key)
+        granted_ids = sorted(grants.workspace.users) if grants is not None else []
+        document = self._share_grants_document()
+        granted_keys = [self._key_or_none(f"user:{user_id}", document) for user_id in granted_ids]
+        keys = [owner_key, *(key for key in granted_keys if key is not None)]
+        # The owner may be granted too; they are listed once, first.
+        ordered = list(dict.fromkeys(keys))
+        user_ids = [UserId(str(key).removeprefix("user:")) for key in ordered if key != OWNER_PARTICIPANT_KEY]
+        profile_by_user_id = self.profiles.resolve_many(user_ids, now)
+        known_by_user_id = {str(record.user_id): record for record in self.users.list_users()}
+        entries: list[_Entry] = []
+        for key in ordered:
+            presence = presence_by_key.get(key)
+            if key == OWNER_PARTICIPANT_KEY:
+                entries.append(_anonymous_owner_entry(presence))
+                continue
+            user_id = str(key).removeprefix("user:")
+            profile = profile_by_user_id.get(user_id)
+            known = known_by_user_id.get(user_id)
+            email = (presence.email if presence is not None and presence.email else None) or (
+                known.email if known is not None else None
+            )
+            display_name = _person_name(profile, known.display_name if known is not None else None, email, user_id)
+            entries.append(
+                _Entry(
+                    key=key,
+                    kind=ParticipantKind.PERSON,
+                    display_name=display_name,
+                    handle_name=display_name,
+                    profile_picture_url=(
+                        participant_picture_route(key, profile.profile_picture_url)
+                        if profile is not None and profile.profile_picture_url is not None
+                        else None
+                    ),
+                    email=email,
+                    is_owner=key == owner_key,
+                    is_connected=presence.is_connected if presence is not None else False,
+                    last_seen=presence.last_seen if presence is not None else None,
+                    last_input_at=presence.last_input_at if presence is not None else None,
+                )
+            )
+        return entries
+
+    def _owner_key(self, presence_by_key: dict[ParticipantKey, ParticipantPresence]) -> ParticipantKey:
+        """The owner's key: the account whose heartbeats say it owns the workspace, else the synthetic one."""
+        for key, presence in presence_by_key.items():
+            if presence.owner and key != OWNER_PARTICIPANT_KEY:
+                return key
+        return OWNER_PARTICIPANT_KEY
+
+    def _invited(self, grants: Grants | None) -> list[_Entry]:
+        """Every email the grants still name: invited, not yet signed up, with no profile and no presence."""
+        if grants is None:
+            return []
+        document = self._share_grants_document()
+        keyed = [(email, self._key_or_none(f"email:{email}", document)) for email in sorted(grants.workspace.emails)]
+        return [
+            _Entry(
+                key=key,
+                kind=ParticipantKind.INVITED,
+                display_name=email,
+                handle_name=_email_local_part(email) or email,
+                profile_picture_url=None,
+                email=email,
+                is_owner=False,
+                is_connected=False,
+                last_seen=None,
+                last_input_at=None,
+            )
+            for email, key in keyed
+            if key is not None
+        ]
+
+    def _visiting_agents(self, now: datetime) -> list[_Entry]:
+        """Every unexpired agent grant, connected while the gateway saw it within the window."""
+        last_seen_by_id = read_agent_last_seen_times(self.agent_last_seen_path)
+        document = self._agent_grants_document()
+        keyed = [
+            (grant, self._key_or_none(f"agent:{grant.agent_id}", document))
+            for grant in self.agent_grants.read_active_grants(now)
+        ]
+        return [
+            self._visiting_agent(grant, key, last_seen_by_id.get(grant.agent_id), now)
+            for grant, key in keyed
+            if key is not None
+        ]
+
+    def _share_grants_document(self) -> _GrantsDocument:
+        return (self.share_grants.share_grants_path, self.share_grants.document_version())
+
+    def _agent_grants_document(self) -> _GrantsDocument:
+        return (self.agent_grants.agent_grants_path, self.agent_grants.document_version())
+
+    def _key_or_none(self, value: str, document: _GrantsDocument) -> ParticipantKey | None:
+        """The participant key of a grants entry, or None for an entry the key's alphabet refuses (a hand-edited
+        file: the desktop validates what it writes), which is left out of the roster and warned about once per
+        version of the document it came from, so one bad entry costs one entry rather than the whole roster."""
+        try:
+            return ParticipantKey(value)
+        except InvalidLayoutValueError as e:
+            path, version = document
+            warned = self._warned_entries_by_path.get(path)
+            if warned is None or warned.version != version:
+                # The document's older versions are forgotten; the other document's record stands.
+                warned = _WarnedEntries(version=version)
+                self._warned_entries_by_path[path] = warned
+            if value not in warned.entries:
+                warned.entries.add(value)
+                logger.warning("Left a grants entry out of the roster: {}", e)
+            return None
+
+    def _visiting_agent(
+        self, grant: AgentGrant, key: ParticipantKey, last_seen: datetime | None, now: datetime
+    ) -> _Entry:
+        return _Entry(
+            key=key,
+            kind=ParticipantKind.VISITING_AGENT,
+            display_name=grant.name,
+            handle_name=grant.name,
+            profile_picture_url=None,
+            email=None,
+            is_owner=False,
+            is_connected=last_seen is not None and now - last_seen < self.connected_window,
+            last_seen=_format_moment(last_seen) if last_seen is not None else None,
+            last_input_at=None,
+        )
+
+    def _workspace_agent(self) -> _Entry:
+        """The workspace's own agent: named after the workspace, pictured by the selected design's icon."""
+        design = self.avatar_selection.read()
+        return _Entry(
+            key=WORKSPACE_AGENT_PARTICIPANT_KEY,
+            kind=ParticipantKind.WORKSPACE_AGENT,
+            display_name=self.workspace_name.resolve(),
+            handle_name=WORKSPACE_AGENT_HANDLE,
+            profile_picture_url=f"/api/avatars/{design}/icon.png?size={_AVATAR_ICON_SIZE}",
+            email=None,
+            is_owner=False,
+            is_connected=True,
+            last_seen=None,
+            last_input_at=None,
+        )
+
+
+class RosterAnnouncer(MutableModel):
+    """How the roster reaches every window: computed afresh and pushed as ``roster_updated``, unless it is the very
+    document last pushed, which every window already holds. One announcement at a time, computed and pushed under
+    the one lock: the heartbeat route, the sweep, and the watch announce from threads of their own, and a document
+    computed earlier must never go out after a newer one, which the skip of an equal document would then leave
+    standing."""
+
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
+
+    roster: RosterSource = Field(frozen=True, description="What the document is computed from")
+    broadcaster: WebSocketBroadcaster = Field(frozen=True, description="Where the document is pushed")
+    now: Callable[[], datetime] = Field(frozen=True, description="The clock the document is computed at")
+
+    _lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _last_announced: dict[str, Any] | None = PrivateAttr(default=None)
+
+    def announce(self) -> None:
+        """Push the roster as it is now, when it differs from the one last pushed."""
+        with self._lock:
+            document = self.roster.document(self.now()).model_dump(mode="json")
+            if document == self._last_announced:
+                return
+            self._last_announced = document
+            self.broadcaster.broadcast_roster_updated(document)
+
+
+def build_roster_announcer(
+    roster: RosterSource, broadcaster: WebSocketBroadcaster, now: Callable[[], datetime]
+) -> RosterAnnouncer:
+    return RosterAnnouncer(roster=roster, broadcaster=broadcaster, now=now)
+
+
+class RosterWatch(MutableModel):
+    """Announces the roster whenever one of the files it is computed from changes: the two grants documents and the
+    gateway's last-seen record. The gateway creates the agent-access directories when the workspace is first shared,
+    which is after the shell started on a fresh workspace, so a file whose directory does not exist yet is tried
+    again every ``retry_interval_seconds`` until it is watched, and a watch that starts late announces the roster
+    once, since the file may have been written before it began. A burst of events (an atomic replace fires twice)
+    is announced once, ``coalesce_seconds`` after its first event."""
+
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
+
+    watched_paths: tuple[Path, ...] = Field(frozen=True, description="The files whose change re-announces the roster")
+    announce: Callable[[], None] = Field(frozen=True, description="How the roster reaches the windows")
+    retry_interval_seconds: float = Field(
+        default=ROSTER_WATCH_RETRY_SECONDS, frozen=True, description="How often a not-yet-watchable file is tried"
+    )
+    coalesce_seconds: float = Field(
+        default=ROSTER_WATCH_COALESCE_SECONDS,
+        frozen=True,
+        description="How long after a file event the rest of its burst is waited for before the one announcement",
+    )
+
+    _observers: list[BaseObserver] = PrivateAttr(default_factory=list)
+    _pending: list[Path] = PrivateAttr(default_factory=list)
+    _stop: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _thread: threading.Thread | None = PrivateAttr(default=None)
+    _coalesce_lock: threading.Lock = PrivateAttr(default_factory=threading.Lock)
+    _coalesce_timer: threading.Timer | None = PrivateAttr(default=None)
+
+    @property
+    def pending_paths(self) -> tuple[Path, ...]:
+        """The files not watched yet, their directories still missing."""
+        return tuple(self._pending)
+
+    def start(self) -> None:
+        self._pending = list(self.watched_paths)
+        self._watch_pending()
+        if self._pending:
+            thread = threading.Thread(target=self._run, daemon=True, name="roster-watch")
+            self._thread = thread
+            thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=5)
+        for observer in self._observers:
+            stop_file_watch(observer)
+        self._observers = []
+        with self._coalesce_lock:
+            if self._coalesce_timer is not None:
+                self._coalesce_timer.cancel()
+                self._coalesce_timer = None
+
+    def note_change(self) -> None:
+        """One file event: the first of a burst starts the wait, the rest ride it, and one announcement follows."""
+        with self._coalesce_lock:
+            if self._coalesce_timer is not None or self._stop.is_set():
+                return
+            timer = threading.Timer(self.coalesce_seconds, self._announce_coalesced)
+            timer.daemon = True
+            self._coalesce_timer = timer
+            timer.start()
+
+    def _announce_coalesced(self) -> None:
+        with self._coalesce_lock:
+            self._coalesce_timer = None
+        self.announce()
+
+    def _watch_pending(self) -> bool:
+        """Start the watch of every pending file whose directory now exists; whether any started."""
+        still_pending: list[Path] = []
+        is_any_started = False
+        for path in self._pending:
+            if not path.parent.is_dir():
+                still_pending.append(path)
+                continue
+            observer = start_file_watch(path, self.note_change)
+            if observer is not None:
+                self._observers.append(observer)
+                is_any_started = True
+        self._pending = still_pending
+        return is_any_started
+
+    def _run(self) -> None:
+        while not self._stop.wait(timeout=self.retry_interval_seconds):
+            if self._watch_pending():
+                self.note_change()
+            if not self._pending:
+                return

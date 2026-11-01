@@ -3,8 +3,8 @@
  * 3.6, 4.8, 4.9): a shortcut to the app's pin path raises its pinned window, as the launcher's row
  * for that path does; a focus-mode shortcut raises the app's most recently focused window in this
  * client's layout and opens at the launch path only when there is none; a new desktop is minted
- * ``Desktop <n>`` with the next unused glyph; a shortcut added from a tile lands at the first free
- * cell in reading order over the current grid.
+ * ``Desktop <n>``; a shortcut added from a tile lands at the first free cell in reading order over
+ * the current grid.
  */
 
 import { drawnCells, firstFreeCellInReadingOrder, placeShortcuts } from "../geometry/grid";
@@ -61,15 +61,6 @@ export function nextDesktopName(desktops: readonly Pick<Desktop, "name" | "id">[
   let index = 1;
   while (takenNames.has(`desktop ${index}`) || takenIds.has(`desktop-${index}`)) index += 1;
   return `Desktop ${index}`;
-}
-
-/** The glyph a fresh desktop gets: the first of the ``glyphCount`` glyphs nobody uses, then repeating. */
-export function nextGlyphIndex(usedGlyphs: readonly number[], glyphCount: number): number {
-  const used = new Set(usedGlyphs);
-  for (let index = 0; index < glyphCount; index += 1) {
-    if (!used.has(index)) return index;
-  }
-  return usedGlyphs.length % glyphCount;
 }
 
 /** Where a shortcut added with no cell goes: the first cell in reading order over the current grid
