@@ -58,6 +58,7 @@ from imbue.chat.authors import split_author_prefix
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.autocompact import ChatAutoCompactor
+from imbue.chat.autocompact import compact_stale_opted_in_agents
 from imbue.chat.background_tasks import BackgroundTask
 from imbue.chat.background_tasks import BackgroundTaskReader
 from imbue.chat.chat_autocompact import ChatAutocompactState
@@ -1564,6 +1565,9 @@ class AgentManager:
             if autocompactor is not None
             else ChatAutoCompactor.build(
                 list_opted_in_chat_agent_names=manager.get_opted_in_running_chat_agent_names,
+                compact=lambda names: compact_stale_opted_in_agents(
+                    names, manager.get_provider_names_of_agents(names)
+                ),
                 on_compaction_requested=manager.note_sweep_compaction_requested,
                 on_sweep_started=manager.note_sweep_started,
                 on_sweep_finished=manager.note_sweep_finished,
@@ -2466,6 +2470,25 @@ class AgentManager:
             if (default_state if state is None else state).is_enabled:
                 opted_in_names.append(name)
         return opted_in_names
+
+    def get_provider_names_of_agents(self, agent_names: Sequence[str]) -> tuple[str, ...] | None:
+        """The providers the named tracked agents are on, as the observe stream reported them; None while any of
+        them has not been reported yet. A name several tracked agents share names the providers of them all."""
+        with self._lock:
+            agent_ids_by_name: dict[str, list[str]] = {}
+            for agent in self._agents.values():
+                agent_ids_by_name.setdefault(agent.name, []).append(agent.id)
+            provider_names: set[str] = set()
+            for name in agent_names:
+                agent_ids = agent_ids_by_name.get(name)
+                if not agent_ids:
+                    return None
+                for agent_id in agent_ids:
+                    match = self._match_by_agent_id.get(agent_id)
+                    if match is None:
+                        return None
+                    provider_names.add(str(match.provider_name))
+        return tuple(sorted(provider_names))
 
     def get_harness_of_agent_named(self, agent_name: str) -> str | None:
         """The harness a tracked agent runs, by its name; None for a name no tracked agent has."""
@@ -5043,6 +5066,9 @@ class AgentManager:
         for agent_info in agents:
             self._ensure_activity_tracking(agent_info.id)
             self._ensure_model_tracking(agent_info.id)
+        # The app serves before this first read finishes, and a page that connected meanwhile was sent no chat
+        # list (``_run_ws_broadcast_loop``): this push is its first.
+        self._broadcast_chats_updated()
 
     def _refresh_agents(self) -> None:
         """Re-discover all agents and broadcast updates."""

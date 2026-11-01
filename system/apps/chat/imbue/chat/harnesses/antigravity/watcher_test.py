@@ -629,7 +629,7 @@ def test_a_loader_reads_a_settled_conversation_with_no_thread_and_releases_what_
     assert [event["type"] for event in events] == ["user_message", "assistant_message"]
     assert {event["agent_id"] for event in events} == {agent_id}
     assert loader.get_total_event_count() == 2
-    assert loader._thread is None and loader._observer is None
+    assert loader._thread is None and loader._active_watch_observer is None
     assert loader._connections != {}
     loader.close()
     assert loader._connections == {}
