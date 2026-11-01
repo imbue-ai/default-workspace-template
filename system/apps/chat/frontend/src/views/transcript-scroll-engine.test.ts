@@ -56,6 +56,14 @@ async function flushMicrotasks(): Promise<void> {
   }
 }
 
+// A constructable ResizeObserver stand-in: jsdom has none, and the engine does
+// `new ResizeObserver(...)` in attach(), so a plain mock factory is not enough.
+class StubResizeObserver {
+  observe = vi.fn();
+  unobserve = vi.fn();
+  disconnect = vi.fn();
+}
+
 describe("transcript scroll engine repositions after a chat switch", () => {
   let engine: TranscriptScrollEngine;
   let element: HTMLElement;
@@ -63,11 +71,7 @@ describe("transcript scroll engine repositions after a chat switch", () => {
 
   beforeEach(() => {
     originalResizeObserver = globalThis.ResizeObserver;
-    globalThis.ResizeObserver = vi.fn(() => ({
-      observe: vi.fn(),
-      unobserve: vi.fn(),
-      disconnect: vi.fn(),
-    })) as unknown as typeof globalThis.ResizeObserver;
+    globalThis.ResizeObserver = StubResizeObserver as unknown as typeof globalThis.ResizeObserver;
     element = makeScrollElement();
     engine = createTranscriptScrollEngine({ dataSource: makeDataSource() });
   });
