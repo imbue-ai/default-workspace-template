@@ -642,7 +642,6 @@ def test_a_compact_typed_in_a_codex_or_pi_chat_asks_mngr_and_shows_the_compactio
         expect(_compaction_panel(chat).locator(".compaction-summary")).to_have_text(_SUMMARY_TEXT)
 
 
-@pytest.mark.flaky
 @pytest.mark.timeout(60, func_only=False)
 def test_the_auto_compact_notice_shows_under_the_compactions_chip_row_until_it_is_dismissed(
     compaction_server: RunningWorkspace, page: Page
@@ -650,11 +649,18 @@ def test_the_auto_compact_notice_shows_under_the_compactions_chip_row_until_it_i
     server = compaction_server
     assert _settings(server)["is_autocompact_notice_shown"] is False
     chat = _open_chat(page, server)
+    # Wait for the seeded transcript before triggering the compaction. _open_chat only waits for the
+    # composer, but the live event stream delivers to already-subscribed clients only: a compacted
+    # event broadcast before this chat's snapshot+stream are established is dropped, so neither the
+    # finished chip nor the notice ever render. The non-flaky sibling tests wait here for this reason.
+    expect(chat.locator(".message-assistant", has_text="Hello! How can I help you?")).to_be_visible(timeout=15000)
 
     _record_compaction_cause(server, "idle")
     _append_compact_summary(server, "uuid-compact-1")
 
-    chip_group = chat.locator(".tool-chip-group", has=_finished_chip(chat))
+    finished = _finished_chip(chat)
+    expect(finished.locator(".tool-chip-label")).to_have_text(_FINISHED_LABEL, timeout=15000)
+    chip_group = chat.locator(".tool-chip-group", has=finished)
     notice = chip_group.locator("xpath=following-sibling::*[1]")
     expect(notice).to_have_class(re.compile(r"\bautocompact-notice\b"), timeout=15000)
     expect(notice).to_have_text(_AUTOCOMPACT_NOTICE_TEXT)

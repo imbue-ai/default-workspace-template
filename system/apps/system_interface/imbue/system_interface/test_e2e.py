@@ -2226,13 +2226,23 @@ def test_an_independent_pinned_window_keeps_a_path_per_client_and_an_agent_navig
         pinned = _pinned_window(server.base_url)
         assert pinned["scope"] == "independent"
         with _second_client(page, server) as other_page:
-            for client_page in (page, other_page):
-                _taskbar_entry(client_page, pinned["id"]).click()
-                expect(_window(client_page, pinned["id"])).to_be_visible(timeout=15000)
-            frame = _page_frame(page, pinned["id"])
-            other_frame = _page_frame(other_page, pinned["id"])
             client_id = _client_id(page)
             other_client_id = _client_id(other_page)
+            for client_page, this_client_id in ((page, client_id), (other_page, other_client_id)):
+                _taskbar_entry(client_page, pinned["id"]).click()
+                expect(_window(client_page, pinned["id"])).to_be_visible(timeout=15000)
+                # Wait for the restore to be durable server-side before navigating. The taskbar click shows the
+                # window optimistically, but a concurrent layout refetch can re-apply the pre-restore (minimized)
+                # placement and drop the window from the DOM, so the later .window-title assertion finds nothing.
+                _wait_for_stored_placement(
+                    server,
+                    this_client_id,
+                    pinned["id"],
+                    lambda placement: not placement["is_minimized"],
+                    "the pinned-window restore",
+                )
+            frame = _page_frame(page, pinned["id"])
+            other_frame = _page_frame(other_page, pinned["id"])
 
             frame.evaluate("() => window.__navigateTo('/?doc=1')")
             other_frame.evaluate("() => window.__navigateTo('/?doc=2')")
@@ -2902,6 +2912,9 @@ def _css_rgb(hex_color: str) -> str:
     return f"rgb({red}, {green}, {blue})"
 
 
+# Flaky: a multi-client viewing race -- the owner reads alice's stored layout while the visitor's window
+# restore is still landing there, so the viewed window can read as minimized and not render. The
+# durable-restore wait below is the root-cause attempt; retried on offload like the sibling pinned-window test.
 @pytest.mark.flaky
 @pytest.mark.timeout(90, func_only=False)
 def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chrome_on(
@@ -2925,6 +2938,18 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
         (copied,) = _windows(e2e_server.base_url, "alice")
         _taskbar_entry(visitor, copied["id"]).click()
         expect(_window(visitor, copied["id"])).to_be_visible(timeout=15000)
+        # Wait for the visitor's restore to be durable in alice's placements before the owner views the desktop:
+        # the taskbar click shows the window optimistically for the visitor, but the owner reads alice's stored
+        # layout, and if the restore has not landed there yet the owner sees the window as minimized and it never
+        # renders (so viewed_window below finds nothing).
+        _wait_for_stored_placement(
+            e2e_server,
+            _client_id(visitor),
+            copied["id"],
+            lambda placement: not placement["is_minimized"],
+            "alice's copied-window restore",
+            desktop_id="alice",
+        )
         entry = page.locator('[data-tray-person="user:user-alice"]')
         expect(entry).to_be_visible(timeout=15000)
         entry.hover()
