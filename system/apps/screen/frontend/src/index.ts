@@ -47,7 +47,7 @@ import {
   postTakeControl,
   type VerbOutcome,
 } from "./service_client";
-import type { NekoSessionAnswer, ScreenStateDocument, ServiceEvent } from "./state";
+import type { ConnectInfo, NekoSessionAnswer, ScreenStateDocument, ServiceEvent } from "./state";
 import { EMPTY_CONNECT_INFO, isOpenToFirstInput, isOwnSessionController } from "./state";
 import { DetailsPanel, describePath, entriesOf, summarizeStats } from "./stream_details";
 import { Strip } from "./strip";
@@ -97,6 +97,7 @@ class Viewer {
   private noticeTimer = 0;
   private isAudioEnabled = false;
   private isNekoOpen = false;
+  private connectInfoFetch: Promise<ConnectInfo> | null = null;
   private lastInputSeenAt = 0;
   private reportLocation: ((title: string) => void) | null = null;
 
@@ -416,15 +417,20 @@ class Viewer {
     const videoId = this.state.video_id;
     // A network that needed a relay last time gets the relay servers up front (spec section 5.3).
     const isRelay = readNeedsRelay(pageStorage());
-    fetchConnectInfo(isRelay)
+    const fetching = fetchConnectInfo(isRelay);
+    this.connectInfoFetch = fetching;
+    fetching
       .then((connectInfo) => {
-        // A release while the fetch was in flight means a hidden viewer: it asks for nothing until seen again.
-        if (this.visibility.wantsMedia) this.stream?.request(videoId, connectInfo, isRelay);
+        // A later request superseded this fetch, or a release while it was in flight means a hidden viewer: either
+        // way this answer asks for nothing.
+        if (this.connectInfoFetch !== fetching || !this.visibility.wantsMedia) return;
+        this.stream?.request(videoId, connectInfo, isRelay);
       })
       .catch((error) => {
         console.error("[screen] connect-info failed", error);
-        // Forgotten, so the belt's next evaluation asks again rather than waiting for a hide and a show.
-        this.visibility.reset();
+        // Forgotten, so the belt's next evaluation asks again; a superseded fetch says nothing about the media a
+        // later one brought.
+        if (this.connectInfoFetch === fetching) this.visibility.reset();
       });
     return true;
   }

@@ -223,7 +223,7 @@ It announces the choice on its own WebSocket (section 10.2), and every viewer se
 ### 8.2 Visibility
 
 A viewer is visible when its document is not hidden, the shell said `shown` (or never said `hidden`), its stage intersects the viewport (an IntersectionObserver), and its stage has a size (read every 1.5 seconds by a belt that both clears and restores that one input, so a frame the observer missed never leaves the viewer hidden for good); it re-evaluates on `visibilitychange`, on the shell's messages, on intersection changes, and on every belt reading.
-A request the viewer could not make yet (no stream, state, or socket) leaves it wanting media, and a failed `connect-info` fetch forgets the media, so the next evaluation asks again rather than waiting for another hide and show.
+A request the viewer could not make yet (no stream, state, or socket) leaves it wanting media, and a failed `connect-info` fetch forgets the media, so the next evaluation asks again rather than waiting for another hide and show; the answer or failure of a fetch that a later request superseded is ignored.
 Hidden for 5 seconds: `signal/close` (the WebSocket stays, the lease is untouched).
 Visible again: `signal/request`.
 Neko stops the encoder when the last session has closed its media, which is D10's zero-cost state.
