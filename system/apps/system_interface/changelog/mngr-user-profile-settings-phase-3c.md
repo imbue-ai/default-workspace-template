@@ -9,3 +9,5 @@ Keyboard shortcuts become rebindable, per account or per workspace (user-profile
 - A `keybindings_changed` WebSocket broadcast and a `shell:keybindings-changed` push to every framed page make apps re-fetch their resolved chords; a watch on the profile snapshot announces changes other computers deliver. The launcher's secondary-send chord is the shell's first rebindable action.
 
 - `workspace_profile` joins the update-staleness dependency lists.
+
+- The viewing e2e test (`test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chrome_on`) is marked flaky: it fails intermittently in CI on the viewed window's visibility, on main as well, and passes locally.
