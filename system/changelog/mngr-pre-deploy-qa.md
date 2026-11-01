@@ -1,0 +1,1 @@
+The Screen spec's visibility section (8.2) now names the fourth input the viewer reads, the stage's size as the 1.5 s belt sees it, and says that a request the viewer could not make yet, a failed connect-info fetch, and a fetch a later request superseded each leave the viewer asking again rather than hidden for good.
