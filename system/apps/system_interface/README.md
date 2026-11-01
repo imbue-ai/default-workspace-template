@@ -467,8 +467,9 @@ is read-only from every side -- the desktop's stage (the wallpaper, the
 shortcut grid, the windows, the ghosts, the pages host) is `inert`, so nothing
 on it takes a press, a key, or focus and Tab reaches nothing inside it; the
 taskbar's entries mirror theirs without acting; the backdrop menu keeps "New
-desktop" and disables "Change wallpaper...", "Change theme...", and "Show all
-desktops"; the launcher's launch, window, and free-text rows stand down with
+desktop" and "Keyboard shortcuts..." (the viewer's own wherever they are) and
+disables "Change wallpaper...", "Change theme...", and "Show all desktops";
+the launcher's launch, window, and free-text rows stand down with
 "Stop viewing to open things here"; every change the store could still make
 (shortcuts, wallpaper, theme, launches, the app chat, closing, raising,
 minimizing, restoring, resizing, navigating, a bubble's chat) is refused with
