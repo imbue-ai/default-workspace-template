@@ -59,6 +59,9 @@ export const SHELL_NAVIGATE = "shell:navigate";
 export const SHELL_CAPABILITIES = "shell:capabilities";
 /** App to shell: the page received focus; the shell raises its window. */
 export const SHELL_FOCUSED = "shell:focused";
+/** App to shell: a person touched the page (a pointer press or a key), throttled. The shell's presence heartbeat
+ *  reads activity off it, since input inside an app's frame never bubbles to the shell's own window. */
+export const SHELL_INPUT = "shell:input";
 /** App to shell: the page reports where it is and what it is called. */
 export const SHELL_LOCATION = "shell:location";
 /** App to shell: open another page of this app beside this one. */
@@ -146,10 +149,11 @@ export function hasWorkspaceCoordinate(host: string): boolean {
 
 /**
  * What the shell says about the frame it created: the client, the window, its desktop, the app
- * the window belongs to, the path the window is at, and whether the Imbue Studio chrome around the
+ * the window belongs to, the path the window is at, whether the Imbue Studio chrome around the
  * shell opens its settings for the files shared from the user's computer (desktop-interface
- * contracts.md section 7). The client id is required; a text field the shell does not send, a page
- * reads as "", and a flag it does not send, as false.
+ * contracts.md section 7), and whether the window is being viewed on somebody else's desktop. The
+ * client id is required; a text field the shell does not send, a page reads as "", and a flag it
+ * does not send, as false.
  */
 export interface ShellHandshake {
   clientId: string;
@@ -158,6 +162,9 @@ export interface ShellHandshake {
   app: string;
   path: string;
   opensLocalFiles: boolean;
+  /** Whether the window is being looked at on somebody else's desktop (the multiplayer spec, section 8.3): the page
+   *  is inert there, and one that attaches to something shared (a terminal's tmux session) attaches as a viewer. */
+  isViewing: boolean;
 }
 
 /**
@@ -222,7 +229,7 @@ function optionalString(value: unknown): string {
 }
 
 function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
-  const { clientId, windowId, desktopId, app, path, opensLocalFiles } = data;
+  const { clientId, windowId, desktopId, app, path, opensLocalFiles, isViewing } = data;
   if (typeof clientId !== "string" || clientId === "") return null;
   return {
     clientId,
@@ -231,6 +238,7 @@ function readHandshake(data: Record<string, unknown>): ShellHandshake | null {
     app: optionalString(app),
     path: optionalString(path),
     opensLocalFiles: opensLocalFiles === true,
+    isViewing: isViewing === true,
   };
 }
 
@@ -288,6 +296,10 @@ function isHandedOn(url: URL): boolean {
 }
 const PRIMARY_BUTTON = 0;
 const MIDDLE_BUTTON = 1;
+
+/** How often at most the page reports input (``shell:input``): activity is measured in minutes, so a report every
+ *  20 seconds loses nothing and keeps the message traffic negligible. */
+const INPUT_REPORT_INTERVAL_MS = 20_000;
 
 /** The link a click landed in, if any (through shadow roots too). */
 function clickedLink(event: MouseEvent): HTMLAnchorElement | HTMLAreaElement | null {
@@ -436,6 +448,16 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
     boundWindow.parent.postMessage({ type, ...payload }, "*");
   }
 
+  // Input inside the page never bubbles to the shell's window, so the page reports it (the multiplayer spec,
+  // section 4.3): at most one message per interval, which is plenty for an active/idle call measured in minutes.
+  let lastInputReportAt = 0;
+  const onInput = (): void => {
+    const now = Date.now();
+    if (now - lastInputReportAt < INPUT_REPORT_INTERVAL_MS) return;
+    lastInputReportAt = now;
+    send(SHELL_INPUT, {});
+  };
+
   // On the window, the last stop of a click's bubbling, so the page's own handlers see it first.
   const onLinkClick = (event: MouseEvent): void => {
     if (hasShell) followLinkClick(event, boundWindow, send);
@@ -454,6 +476,9 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
   if (isFramed) {
     boundWindow.addEventListener("click", onLinkClick);
     boundWindow.addEventListener("auxclick", onLinkClick);
+    for (const type of ["pointerdown", "keydown"]) {
+      boundWindow.addEventListener(type, onInput, { capture: true, passive: true });
+    }
     boundWindow.open = routedOpen;
   }
   send(SHELL_CAPABILITIES, { navigation: capabilities.navigation, closeChord: capabilities.closeChord });
@@ -472,6 +497,9 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
       boundWindow.removeEventListener("message", onMessage);
       boundWindow.removeEventListener("click", onLinkClick);
       boundWindow.removeEventListener("auxclick", onLinkClick);
+      for (const type of ["pointerdown", "keydown"]) {
+        boundWindow.removeEventListener(type, onInput, { capture: true });
+      }
       if (boundWindow.open === routedOpen) boundWindow.open = nativeOpen;
     },
   };

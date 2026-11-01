@@ -8,6 +8,7 @@ import pytest
 from app_manifest.primitives import AppName
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.ops import OpRequester
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
@@ -21,12 +22,13 @@ from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.shell.app_lifecycle import WAKE_BUDGET_COUNT
 from imbue.system_interface.shell.app_theming import AppThemingStore
+from imbue.system_interface.shell.desktops import DESKTOP_GLYPH_COLORS
 from imbue.system_interface.shell.errors import LaunchUnavailableError
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
 from imbue.system_interface.shell.liveness import probe_all_app_liveness
+from imbue.system_interface.shell.primitives import GLYPH_COUNT
 from imbue.system_interface.shell.route_helpers import resolve_client
 from imbue.system_interface.shell.state import ShellState
 from imbue.system_interface.shell.testing import FakeLivenessProber
@@ -50,6 +52,7 @@ from imbue.system_interface.testing import serve_app
 from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 
 _NOT_LOOPBACK = {"REMOTE_ADDR": "10.0.0.7"}
+_BOB_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _TERMINAL_REQUESTER = {"app": "terminal", "marker": "terminal-7"}
 
 
@@ -133,6 +136,66 @@ def test_client_activity_is_appended_with_its_desktop(client: FlaskClient, app: 
         ("message", "c1", "home")
     ]
     assert events[0]["key"] == "agent-1" and events[0]["text"] == "hi"
+
+
+# The tray's feed (the multiplayer spec, sections 6.4 and 6.5)
+
+
+def _bubble_body(speaker: str) -> dict[str, Any]:
+    return {
+        "speaker": speaker,
+        "chat_id": "agent-00000000000000000000000000000042",
+        "chat_title": "Lounge",
+        "text": "hi all",
+        "message_id": "m-1",
+        "mentions": ["user:user-josh-0001"],
+    }
+
+
+def test_a_bubble_reaches_every_window_but_the_speakers_own_clients(
+    client: FlaskClient, app: Flask, broadcaster: WebSocketBroadcaster
+) -> None:
+    """Bob's laptop arrived as Bob and the owner's as the owner (unshared, so under the synthetic key); Bob's bubble
+    is sent to the owner's window and to a window that has not registered yet, and not to Bob's own."""
+    assert client.post("/api/clients/bob-laptop/arrive", headers=identity_headers(_BOB_IDENTITY)).status_code == 200
+    assert client.post("/api/clients/owner-laptop/arrive").status_code == 200
+    bobs = broadcaster.register()
+    broadcaster.set_client_info(bobs, "bob-laptop", "home")
+    owners = broadcaster.register()
+    broadcaster.set_client_info(owners, "owner-laptop", "home")
+    unregistered = broadcaster.register()
+
+    assert client.post("/api/bubbles", json=_bubble_body("user:user-bob-4471")).status_code == 204
+
+    assert drain_messages(bobs) == []
+    assert drain_messages(owners) == [{"type": "bubble", **_bubble_body("user:user-bob-4471")}]
+    assert drain_messages(unregistered) == [{"type": "bubble", **_bubble_body("user:user-bob-4471")}]
+    assert (
+        client.post("/api/bubbles", json=_bubble_body("user:user-bob-4471"), environ_base=_NOT_LOOPBACK).status_code
+        == 403
+    )
+    assert client.post("/api/bubbles", json={"speaker": "user:x"}).status_code == 400
+
+
+def test_the_chats_activity_is_kept_and_broadcast(
+    client: FlaskClient, app: Flask, broadcaster: WebSocketBroadcaster
+) -> None:
+    window = broadcaster.register()
+    report = {
+        "chats": [
+            {"chat_id": "agent-1", "title": "Main chat", "status": "working", "kind": "agent"},
+            {"chat_id": "agent-2", "title": "Lounge", "status": "idle", "kind": "room"},
+        ]
+    }
+
+    assert client.post("/api/chats-activity", json=report).status_code == 204
+
+    assert drain_messages(window) == [{"type": "chats_activity", **report}]
+    kept = state_of(app).shell.chats_activity.current()
+    assert kept is not None and kept.model_dump(mode="json") == report
+    assert client.post("/api/chats-activity", json=report, environ_base=_NOT_LOOPBACK).status_code == 403
+    napping = {"chats": [{"chat_id": "x", "title": "", "status": "napping", "kind": "agent"}]}
+    assert client.post("/api/chats-activity", json=napping).status_code == 400
 
 
 # Section 5: stop and start
@@ -316,6 +379,8 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
                 "presets": {},
                 "text_param": None,
                 "draft_param": None,
+                "mention_param": None,
+                "app_params": None,
             }
         ],
         "files": [
@@ -328,6 +393,8 @@ def test_clients_and_the_inventory_document_are_served(client: FlaskClient, app:
                 "presets": {},
                 "text_param": None,
                 "draft_param": None,
+                "mention_param": None,
+                "app_params": None,
             }
         ],
     }
@@ -381,9 +448,11 @@ def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_
         "last_seen",
         "is_connected",
         "user_id",
+        "participant",
         "entries",
         "shown_history",
         "desktop_revision",
+        "viewport",
     }
     assert (record["id"], record["is_connected"], record["shown_history"]) == ("c1", True, [first, "home", second])
     document = client.get("/api/inventory").get_json()
@@ -393,6 +462,36 @@ def test_a_client_records_what_its_phone_layout_shows_and_the_inventory_carries_
     assert by_id["c2"]["shown_history"] == []
     listed = {entry["id"]: entry for entry in client.get("/api/clients").get_json()["clients"]}
     assert listed["c1"]["shown_history"] == [first, "home", second]
+
+
+def test_a_client_records_its_backdrop_size_and_the_listing_and_the_inventory_carry_it(
+    client: FlaskClient, app: Flask
+) -> None:
+    """``POST /api/clients/<id>/viewport`` (the multiplayer spec, section 8.3): the desktop layout's backdrop size,
+    kept on the record through the client's later reports; an unknown client is a 404, and a size that is not two
+    positive numbers a 400."""
+    _register_client(app, "c1", "home")
+    _record_client(app, "c2", "home")
+
+    answer = client.post("/api/clients/c1/viewport", json={"width": 1440, "height": 823.5}, environ_base=_NOT_LOOPBACK)
+    assert answer.status_code == 200
+    assert answer.get_json()["viewport"] == {"width": 1440.0, "height": 823.5}
+    listed = {entry["id"]: entry for entry in client.get("/api/clients").get_json()["clients"]}
+    assert listed["c1"]["viewport"] == {"width": 1440.0, "height": 823.5}
+    assert listed["c2"]["viewport"] is None
+    by_id = {entry["id"]: entry for entry in client.get("/api/inventory").get_json()["clients"]}
+    assert by_id["c1"]["viewport"] == {"width": 1440.0, "height": 823.5}
+    # A later report of the client keeps the size it reported.
+    _register_client(app, "c1", "home")
+    recorded = _shell(app).clients.get_client("c1")
+    assert recorded is not None and recorded.viewport is not None
+    assert (recorded.viewport.width, recorded.viewport.height) == (1440.0, 823.5)
+
+    assert client.post("/api/clients/nobody/viewport", json={"width": 10, "height": 10}).status_code == 404
+    assert client.post("/api/clients/c1/viewport", json={"width": 0, "height": 10}).status_code == 400
+    assert client.post("/api/clients/c1/viewport", json={"width": 10}).status_code == 400
+    recorded_after = _shell(app).clients.get_client("c1")
+    assert recorded_after is not None and recorded_after.viewport == recorded.viewport
 
 
 def test_recording_a_window_no_desktop_holds_or_an_unknown_client_is_a_404_and_records_nothing(
@@ -865,14 +964,21 @@ def test_a_clients_entry_presentation_is_written_announced_to_that_client_and_ch
     )
     assert written.status_code == 200
     assert written.get_json()["entries"] == {
-        "buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}}
+        "buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}, "is_window_shown": True}
     }
     assert written.get_json()["is_connected"] is True
     assert drain_messages(first_queue) == [
         {
             "type": "client_entries_changed",
             "client_id": "c1",
-            "entries": {"buddy": {"mode": "floating", "style": "avatar", "position": {"x": 0.25, "y": 0.5}}},
+            "entries": {
+                "buddy": {
+                    "mode": "floating",
+                    "style": "avatar",
+                    "position": {"x": 0.25, "y": 0.5},
+                    "is_window_shown": True,
+                }
+            },
         }
     ]
     assert drain_messages(second_queue) == []
@@ -946,10 +1052,25 @@ def test_desktops_are_created_settled_papered_and_deleted(client: FlaskClient, a
     assert created.get_json()["id"] == "research" and len(created.get_json()["shortcuts"]) == 2
     assert client.post("/api/desktops", json={"name": "research!", "color": "#12B5A5", "glyph": 4}).status_code == 409
     assert client.post("/api/desktops", json={"name": "Bad", "color": "red", "glyph": 4}).status_code == 400
+    assert client.post("/api/desktops", json={"name": "Bad", "glyph": GLYPH_COUNT}).status_code == 400
     settled = client.post(
         "/api/desktops/research/settings", json={"name": "Research 2", "color": "#222222", "glyph": 2}
     )
     assert settled.status_code == 200 and settled.get_json()["name"] == "Research 2"
+    # The desktops phase renames alone (the multiplayer spec, S7): the colour and glyph stay as written.
+    renamed = client.post("/api/desktops/research/settings", json={"name": "Research 3"})
+    assert renamed.status_code == 200
+    assert (renamed.get_json()["name"], renamed.get_json()["color"], renamed.get_json()["glyph"]) == (
+        "Research 3",
+        "#222222",
+        2,
+    )
+    # A create with no colour or glyph takes the next free glyph and its colour, and the owner's desktop no owner.
+    plain = client.post("/api/desktops", json={"name": "Plain"})
+    assert plain.status_code == 201
+    assert (plain.get_json()["glyph"], plain.get_json()["owner"]) == (1, None)
+    assert plain.get_json()["color"] == DESKTOP_GLYPH_COLORS[1]
+    assert client.post("/api/desktops/plain/delete").status_code == 200
     assert (
         client.post("/api/desktops/missing/settings", json={"name": "x", "color": "#222222", "glyph": 2}).status_code
         == 404
@@ -2433,6 +2554,113 @@ def test_a_visiting_user_gets_a_desktop_seeded_from_the_first_and_their_later_cl
     ]
 
 
+def test_viewing_a_desktop_reads_its_owners_newest_written_layout(client: FlaskClient, app: Flask) -> None:
+    """``?of=owner`` on the placements read (the multiplayer spec, section 8.3): the desktop as its owner last
+    arranged it -- the layout of the owner's most recently seen client that has written one, whoever asks; the
+    workspace owner's clients fold under either of their keys; a desktop whose owner never wrote one answers the
+    defaults."""
+    _arrive(client, "c-owner-old", None)
+    _arrive(client, "c-owner-new", None)
+    _arrive(client, "c-alice", _ALICE)
+    window = _open_window(client, "terminal", "/?session=terminal-1", client_id="c-owner-old").get_json()["window"]
+    placement = {
+        "window_id": window["id"],
+        "frame": {"x": 0.1, "y": 0.1, "width": 0.5, "height": 0.5},
+        "state": "NORMAL",
+        "is_minimized": False,
+    }
+    # Opening the window wrote the opener's placement at once, so its save names that layout as its base.
+    opened_stamp = client.get("/api/placements/home?client=c-owner-old").get_json()["updated_at"]
+    old = client.post(
+        "/api/placements/home",
+        json={
+            "client_id": "c-owner-old",
+            "save_id": "save-00000000000000aa",
+            "base_updated_at": opened_stamp,
+            "placements": [placement],
+        },
+    )
+    assert old.status_code == 200
+    newer = client.post(
+        "/api/placements/home",
+        json={
+            "client_id": "c-owner-new",
+            "save_id": "save-00000000000000ab",
+            "placements": [{**placement, "frame": {"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6}}],
+        },
+    )
+    assert newer.status_code == 200
+    _arrive(client, "c-owner-new", None)
+    # Each of the owner's clients reported its own backdrop size; the viewer draws the chosen layout at its client's.
+    assert client.post("/api/clients/c-owner-old/viewport", json={"width": 800, "height": 600}).status_code == 200
+    assert client.post("/api/clients/c-owner-new/viewport", json={"width": 1920, "height": 1080}).status_code == 200
+
+    # Alice's view of the owner's desktop is the owner's newest client's layout, not her own (which is unwritten).
+    # The owner read names no client, as a viewing window sends it.
+    viewed = client.get("/api/placements/home?of=owner", headers=identity_headers(_ALICE)).get_json()
+    (viewed_placement,) = viewed["placements"]
+    assert viewed_placement["frame"] == {"x": 0.2, "y": 0.2, "width": 0.6, "height": 0.6}
+    assert viewed["updated_at"] == newer.get_json()["updated_at"]
+    assert viewed["viewport"] == {"width": 1920.0, "height": 1080.0}
+    # Her own read of the same desktop stays her own, untouched by the owner's.
+    assert client.get("/api/placements/home?client=c-alice").get_json()["placements"] == []
+    # A desktop whose owner has written no layout answers the defaults a fresh client reads, and no size.
+    assert client.get("/api/placements/alice?of=owner").get_json() == {
+        "version": 1,
+        "updated_at": None,
+        "placements": [],
+        "window_paths": {},
+        "viewport": None,
+    }
+
+
+def test_a_visitors_desktops_carry_their_key_and_the_order_route_moves_only_the_requesters_own(
+    client: FlaskClient, app: Flask
+) -> None:
+    """The desktop seeded for a visitor, and one they create, are written with their key; the owner's carry none
+    (the multiplayer spec, section 8.1). The order route lists the requester's own desktops in the order given and
+    leaves the others where they were (section 8.2), refusing an order that is not exactly their own."""
+    seeded = _arrive(client, "c-alice", _ALICE)["created_desktop"]
+    assert seeded["owner"] == "user:user-alice"
+    made = client.post("/api/desktops", json={"name": "Alice's Lab"}, headers=identity_headers(_ALICE))
+    assert made.status_code == 201 and made.get_json()["owner"] == "user:user-alice"
+    owners = client.post("/api/desktops", json={"name": "Work"})
+    assert owners.status_code == 201 and owners.get_json()["owner"] is None
+    assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == [
+        "home",
+        "alice",
+        "alice-s-lab",
+        "work",
+    ]
+
+    client_queue = _register_client(app, "c-owner", "home")
+    reordered = client.post("/api/desktops/order", json={"desktop_ids": ["work", "home"]})
+    assert reordered.status_code == 200
+    assert [desktop["id"] for desktop in reordered.get_json()["desktops"]] == ["work", "alice", "alice-s-lab", "home"]
+    assert "desktops_updated" in {message["type"] for message in drain_messages(client_queue)}
+    assert [desktop["id"] for desktop in client.get("/api/inventory").get_json()["desktops"]] == [
+        "work",
+        "alice",
+        "alice-s-lab",
+        "home",
+    ]
+    alices = client.post(
+        "/api/desktops/order", json={"desktop_ids": ["alice-s-lab", "alice"]}, headers=identity_headers(_ALICE)
+    )
+    assert alices.status_code == 200
+    assert [desktop["id"] for desktop in alices.get_json()["desktops"]] == ["work", "alice-s-lab", "alice", "home"]
+    # An order naming another's desktop, missing one of the requester's, or naming one twice is refused whole.
+    for order in (["work", "home", "alice"], ["work"], ["work", "work"]):
+        refused = client.post("/api/desktops/order", json={"desktop_ids": order})
+        assert refused.status_code == 400, order
+    assert [desktop["id"] for desktop in client.get("/api/desktops").get_json()["desktops"]] == [
+        "work",
+        "alice-s-lab",
+        "alice",
+        "home",
+    ]
+
+
 def test_a_visiting_users_deleted_desktop_is_seeded_again_with_the_old_name_reported(
     client: FlaskClient, app: Flask
 ) -> None:
@@ -2718,6 +2946,149 @@ def test_a_post_launch_path_is_posted_with_its_presets_params_and_envelope_and_l
     )
     # Nothing was posted for the refused launches.
     assert len(poster.posts) == 4
+
+
+def test_a_show_launch_puts_the_page_on_screen_by_the_show_rule_and_lays_it_out_beside_a_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """The ``show`` target (the multiplayer spec, section 9.2): the page lands where the ``show`` op would put it (a
+    window already at the path raised, else the app's pinned window navigated, else a new window), and when the
+    target names a window, the shown window is snapped beside it, the shown one on top."""
+    poster = _RecordingLaunchPoster(
+        [
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-9"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-9"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-10"}),
+            LaunchPostOutcome(status_code=200, body={"path": "/?chat=agent-11"}),
+        ]
+    )
+    app = _launching_shell(tmp_path, broadcaster, poster)
+    client = app.test_client()
+    _register_client(app, "c1", "home")
+    (pinned,) = _desktop_windows(client)
+    terminal = _open_window(client, "terminal", "/?session=t1").get_json()["window"]
+
+    # Nothing shows the answered path yet: the pinned window is navigated there for this client. Never placed by
+    # this client (so minimized at the pinned frame), it takes the right half and the terminal the left.
+    shown = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "hi"},
+            "target": {"kind": "show", "beside": terminal["id"]},
+        },
+    )
+    assert shown.status_code == 200, shown.get_json()
+    assert shown.get_json()["is_new"] is False
+    assert (shown.get_json()["window"]["id"], shown.get_json()["window"]["path"]) == (pinned["id"], "/?chat=agent-9")
+    assert poster.posts[0].body == {"target": "new_chat", "message": "hi", "client_id": "c1", "desktop_id": "home"}
+    assert [
+        (placement["window_id"], placement["state"], placement["is_minimized"])
+        for placement in _placements(client, "c1")
+    ] == [
+        (terminal["id"], "SNAPPED_LEFT", False),
+        (pinned["id"], "SNAPPED_RIGHT", False),
+    ]
+
+    # A window of the app already at the path is raised rather than navigated; the layout is made again from where
+    # the windows stand, so nothing moves.
+    raised = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "hi"},
+            "target": {"kind": "show", "beside": terminal["id"]},
+        },
+    )
+    assert raised.status_code == 200 and raised.get_json()["window"]["id"] == pinned["id"]
+    assert [(placement["window_id"], placement["state"]) for placement in _placements(client, "c1")] == [
+        (terminal["id"], "SNAPPED_LEFT"),
+        (pinned["id"], "SNAPPED_RIGHT"),
+    ]
+
+    # Beside the pinned window itself (its own balloon): the show navigates that very window to the new page, so
+    # there is nothing to lay it out beside and the placements stay.
+    own = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "hi"},
+            "target": {"kind": "show", "beside": pinned["id"]},
+        },
+    )
+    assert own.status_code == 200, own.get_json()
+    assert (own.get_json()["window"]["id"], own.get_json()["window"]["path"]) == (pinned["id"], "/?chat=agent-10")
+    assert [(placement["window_id"], placement["state"]) for placement in _placements(client, "c1")] == [
+        (terminal["id"], "SNAPPED_LEFT"),
+        (pinned["id"], "SNAPPED_RIGHT"),
+    ]
+
+    # Beside a window pulled out into a window of the chrome's own: the pinned window is navigated as before, and
+    # nothing is laid out, since snapping the pulled-out window would pull it back.
+    _pull_out(client, terminal["id"])
+    beside_pulled_out = _launch(
+        client,
+        {
+            "app": "buddy",
+            "launch": "new",
+            "params": {"message": "hi"},
+            "target": {"kind": "show", "beside": terminal["id"]},
+        },
+    )
+    assert beside_pulled_out.status_code == 200, beside_pulled_out.get_json()
+    assert beside_pulled_out.get_json()["window"]["path"] == "/?chat=agent-11"
+    assert [
+        (placement["window_id"], placement["state"], placement["is_detached"])
+        for placement in _placements(client, "c1")
+    ] == [
+        (terminal["id"], "SNAPPED_LEFT", True),
+        (pinned["id"], "SNAPPED_RIGHT", False),
+    ]
+
+    # An app with no pinned window and nothing at the path gets a new window, laid out beside none, and placed
+    # minimized for the client when the launch says so (the phone), as an open is.
+    opened = _launch(
+        client,
+        {
+            "app": "terminal",
+            "launch": "new",
+            "params": {"workdir": "/tmp"},
+            "target": {"kind": "show"},
+            "minimized": True,
+        },
+    )
+    assert opened.status_code == 201, opened.get_json()
+    assert opened.get_json()["is_new"] is True and opened.get_json()["window"]["app"] == "terminal"
+    (opened_placement,) = [
+        placement
+        for placement in _placements(client, "c1")
+        if placement["window_id"] == opened.get_json()["window"]["id"]
+    ]
+    assert opened_placement["is_minimized"] is True
+
+    # The window laid out beside must be on the desktop; only the show kind lays out beside one, and the show kind
+    # points no named window at the page.
+    assert (
+        _launch(
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "show", "beside": "win-00000000000000ff"}}
+        ).status_code
+        == 404
+    )
+    assert (
+        _launch(
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "new", "beside": pinned["id"]}}
+        ).status_code
+        == 400
+    )
+    assert (
+        _launch(
+            client, {"app": "buddy", "launch": "new", "target": {"kind": "show", "window_id": pinned["id"]}}
+        ).status_code
+        == 400
+    )
 
 
 def test_a_post_launch_the_app_refuses_or_cannot_answer_is_passed_on_and_opens_nothing(

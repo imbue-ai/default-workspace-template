@@ -2,8 +2,8 @@
  * One taskbar entry (plan section 4.10): a window of the active desktop, drawn as the app's own icon
  * tile with the window's title beside it, dimmed while minimized, the focused one marked. A click
  * restores and raises, minimizes the focused window, or raises; a right click or long press opens
- * the entry's menu. A pinned entry in the ``avatar`` style draws the workspace's avatar in place of
- * the icon, wearing the current mood.
+ * the entry's menu. A pinned window's entry is a plain entry like every other window's: the avatar
+ * creature lives in the tray or floats (the multiplayer spec, section 6.4), never in the bar.
  *
  * The icon says which app and the title says which window, so neither has to do both: the icon is
  * smaller than the entry, and the title takes the room that leaves, truncated where the bar runs
@@ -15,8 +15,8 @@ import { partAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { targetElementOf } from "@imbue/workspace-ui/src/context_menu_rows";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
-import type { AvatarState, TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
-import { entryStyleParts } from "./AvatarImage";
+import type { TaskbarEntry as TaskbarEntryRecord } from "../reducers/desktopState";
+import { appGlyph } from "./glyphs";
 
 /** The intrinsic size the glyph markup carries; the drawing fills the tile (``[&>svg]:size-full``). */
 const ENTRY_GLYPH_MARKUP_SIZE = 48;
@@ -24,7 +24,6 @@ const DETACHED_GLYPH_SIZE = 12;
 
 export interface TaskbarEntryAttrs {
   readonly entry: TaskbarEntryRecord;
-  readonly avatar: AvatarState;
   readonly isMenuOpen: boolean;
   readonly onClick: () => void;
   readonly onContextMenu: (x: number, y: number, target: Element) => void;
@@ -32,11 +31,10 @@ export interface TaskbarEntryAttrs {
 
 export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
   view(vnode) {
-    const { entry, avatar, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
+    const { entry, isMenuOpen, onClick, onContextMenu } = vnode.attrs;
     // Out of sight here either way: minimized, or shown in a desktop window of the chrome's own.
     const isDimmed = entry.isMinimized || entry.isDetached;
     const look = entry.look;
-    const { isAvatar, attrs, tooltip, image } = entryStyleParts(entry, avatar, ENTRY_GLYPH_MARKUP_SIZE, "size-full");
     return m(
       "button",
       {
@@ -45,16 +43,13 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
         "data-pinned": entry.isPinned ? "true" : "false",
         "data-pinned-entry": look === null ? undefined : entry.window.app,
         "data-entry-mode": look === null ? undefined : "bar",
-        "data-entry-style": look === null ? undefined : look.style,
-        ...attrs,
         "data-minimized": entry.isMinimized ? "true" : "false",
         "data-detached": entry.isDetached ? "true" : "false",
         "data-focused": entry.isFocused ? "true" : "false",
         ...partAttrs("taskbar-entry"),
         "aria-pressed": entry.isFocused ? "true" : "false",
-        // The visible title names it; this is the same string, with the avatar's staleness note when
-        // there is one, so a reader is told what a looker can see.
-        "aria-label": tooltip,
+        // The visible title names it; this is the same string, so a reader is told what a looker can see.
+        "aria-label": entry.title,
         class:
           // A labelled chip: the icon and the name sit in it, and the chip is what carries the
           // states. Body text -- this is a name being read, not a dense list.
@@ -73,7 +68,7 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
           // is being read rather than scanned.
           (isDimmed ? "text-faint hover:text-primary " : "text-primary "),
         // The bubble carries the whole of a title the chip had to cut short.
-        ...hoverTooltipAttrs(tooltip, "above"),
+        ...hoverTooltipAttrs(entry.title, "above"),
         onclick: onClick,
         oncontextmenu: (event: MouseEvent) => {
           event.preventDefault();
@@ -93,13 +88,10 @@ export const TaskbarEntry: m.Component<TaskbarEntryAttrs> = {
               // The bar's own quieter cast, the same in every state, selected included: the tint
               // behind the icon is what says selected, and the icon has no reason to sit
               // differently on it.
-              "justify-center shadow-(--desk-taskbar-entry-shadow) " +
-              (isAvatar ? "rounded-2xl [&>img]:size-full " : "rounded-[32%] [&>svg]:size-full ") +
-              // Not the avatar, though: the fade reads as "not on screen" on an app's icon and as
-              // unwell on a character.
-              (isDimmed && !isAvatar ? "opacity-70 group-hover:opacity-100" : ""),
+              "justify-center shadow-(--desk-taskbar-entry-shadow) rounded-[32%] [&>svg]:size-full " +
+              (isDimmed ? "opacity-70 group-hover:opacity-100" : ""),
           },
-          image,
+          m.trust(appGlyph(entry.app, ENTRY_GLYPH_MARKUP_SIZE)),
         ),
         m("span", { class: "taskbar-entry-title min-w-0 truncate" }, entry.title),
         // The mark of a window shown in its own desktop window, so the dimmed entry is not read as

@@ -29,6 +29,7 @@ export function connectEmbedderToStore(store: DesktopStore): void {
     });
     store.setOpensLocalFiles(message.opensLocalFiles === true);
     store.setCanImmerse(message.immersive === true);
+    store.setEmbedderPresent(true);
   });
   setEmbedderMessageHandler(IMMERSIVE_CHANGED, (message) => {
     store.onImmersiveChanged({

@@ -32,7 +32,14 @@ def _relay(client: FlaskClient, body: dict[str, Any]) -> Any:
 
 def _delivered(app: str, status: int) -> dict[str, object]:
     """A posted message's delivery as the relay answers it: taken, with no page shown."""
-    return {"app": app, "status": status, "detail": "", "shown": None, "has_no_desktop_window": None, "window_id": None}
+    return {
+        "app": app,
+        "status": status,
+        "detail": "",
+        "shown": None,
+        "has_no_desktop_window": None,
+        "window_id": None,
+    }
 
 
 def test_a_message_is_posted_to_every_app_that_registered_its_type_with_the_client_and_the_payload(

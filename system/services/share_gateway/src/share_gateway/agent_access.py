@@ -16,37 +16,40 @@ from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 
+from share_grants.agent_grants import AGENT_GRANTS_FILE
+from share_grants.agent_grants import AGENT_INVITES_FILE
+from share_grants.agent_grants import AgentGrant
+from share_grants.agent_grants import AgentInvite
+from share_grants.agent_grants import INVITE_LIFETIME
+from share_grants.agent_grants import INVITE_MAX_FAILED_ATTEMPTS
+from share_grants.agent_grants import find_invite_by_code
+from share_grants.agent_grants import hash_admission_token
+from share_grants.agent_grants import hash_invite_code
+from share_grants.agent_grants import load_agent_grants
+from share_grants.agent_grants import load_agent_invites
+from share_grants.agent_grants import locked_agent_access
+from share_grants.agent_grants import mint_admission_token
+from share_grants.agent_grants import mint_agent_id
+from share_grants.agent_grants import mint_invite_code
+from share_grants.agent_grants import prune_expired
+from share_grants.agent_grants import prune_expired_invites
+from share_grants.agent_grants import reconcile_authorized_keys
+from share_grants.agent_grants import render_agent_grants
+from share_grants.agent_grants import render_agent_invites
+from share_grants.agent_grants import sanitize_agent_name
+from share_grants.agent_grants import write_text_atomic
+from share_grants.json_values import is_json_object
+
 from share_gateway.agent_audit import write_agent_access_event
-from share_gateway.agent_grants import AGENT_GRANTS_FILE
-from share_gateway.agent_grants import AGENT_INVITES_FILE
-from share_gateway.agent_grants import AgentGrant
-from share_gateway.agent_grants import AgentInvite
-from share_gateway.agent_grants import AgentKeyError
-from share_gateway.agent_grants import INVITE_LIFETIME
-from share_gateway.agent_grants import INVITE_MAX_FAILED_ATTEMPTS
-from share_gateway.agent_grants import canonical_public_key_line
-from share_gateway.agent_grants import find_invite_by_code
-from share_gateway.agent_grants import hash_admission_token
-from share_gateway.agent_grants import hash_invite_code
-from share_gateway.agent_grants import load_agent_grants
-from share_gateway.agent_grants import load_agent_invites
-from share_gateway.agent_grants import locked_agent_access
-from share_gateway.agent_grants import mint_admission_token
-from share_gateway.agent_grants import mint_agent_id
-from share_gateway.agent_grants import mint_invite_code
-from share_gateway.agent_grants import prune_expired
-from share_gateway.agent_grants import prune_expired_invites
-from share_gateway.agent_grants import reconcile_authorized_keys
-from share_gateway.agent_grants import render_agent_grants
-from share_gateway.agent_grants import render_agent_invites
-from share_gateway.agent_grants import sanitize_agent_name
-from share_gateway.agent_grants import write_text_atomic
-from share_gateway.json_values import is_json_object
+from share_gateway.agent_keys import AgentKeyError
+from share_gateway.agent_keys import canonical_public_key_line
 from share_gateway.log import log
 
 DEFAULT_AUTHORIZED_KEYS_PATH = Path.home() / ".ssh" / "authorized_keys"
 MAX_GRANT_LIFETIME = timedelta(days=3650)
-_LAST_SEEN_THROTTLE_SECONDS = 60.0
+# Ten seconds: the shell reads the file for a visiting agent's presence under the same 70-second window a person's
+# heartbeats are read under, so a working agent never reads as gone between two requests.
+_LAST_SEEN_THROTTLE_SECONDS = 10.0
 
 
 class AgentAccessPaths:
@@ -337,7 +340,7 @@ def revoke(
 
 
 class LastSeenStore:
-    """When each agent last made a request, written at most once a minute per agent."""
+    """When each agent last made a request, written at most once every ten seconds per agent."""
 
     def __init__(self, path: Path) -> None:
         self._path = path

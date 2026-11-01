@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import m from "mithril";
+import { setParticipantsForTesting, type Participant } from "../models/Participants";
 import type { UserMessageEvent } from "../models/Response";
-import { renderUserMessage, StableUserMessage } from "./user-message-display";
+import { authorOfTurn, renderUserMessage, StableUserMessage } from "./user-message-display";
 
 function collectClasses(node: unknown): string[] {
   if (node == null) return [];
@@ -129,6 +130,145 @@ describe("user-message-display prompt bubbles", () => {
 
     expect(allText(inner)).toBe("here you go");
     expect(markdownContents(inner)).toEqual([ATTACHMENT]);
+  });
+});
+
+describe("user-message-display other people's turns", () => {
+  function roster(): Participant[] {
+    const base = {
+      kind: "person" as const,
+      profile_picture_url: null,
+      email: null,
+      color: "#000",
+      is_owner: false,
+      is_connected: true,
+      last_seen: null,
+      last_input_at: null,
+    };
+    return [
+      { ...base, key: "user:owner-1", display_name: "Josh", handle: "Josh", is_owner: true },
+      {
+        ...base,
+        key: "user:bob-2",
+        display_name: "Bob",
+        handle: "Bob",
+        profile_picture_url: "https://p.example/bob.png",
+      },
+    ];
+  }
+
+  function turn(author: { author: string; author_name: string } | null): UserMessageEvent {
+    return {
+      timestamp: "2026-01-01T00:00:00Z",
+      type: "user_message",
+      event_id: "evt-turn",
+      source: "claude",
+      role: "user",
+      content: "hello",
+      ...(author ?? {}),
+    };
+  }
+
+  function mounted(event: UserMessageEvent): HTMLElement {
+    const root = document.createElement("div");
+    m.render(root, renderUserMessage(event));
+    return root;
+  }
+
+  afterEach(() => {
+    setParticipantsForTesting(null, []);
+  });
+
+  it("draws every turn as the viewer's own until the page knows who it is", () => {
+    expect(collectClasses(renderUserMessage(turn({ author: "user:bob-2", author_name: "Bob" })))).toContain(
+      "message message-user flex flex-col items-end mb-5",
+    );
+  });
+
+  it("draws another person's turn on the left, under their name, beside their picture", () => {
+    setParticipantsForTesting("user:owner-1", roster());
+    const root = mounted(turn({ author: "user:bob-2", author_name: "Robert" }));
+
+    expect(root.firstElementChild?.className).toBe(
+      "message message-user message-other flex flex-col items-start mb-5",
+    );
+    expect(root.querySelector(".message-author")?.textContent).toBe("Bob");
+    expect(root.querySelector("[data-participant-picture] img")?.getAttribute("src")).toBe(
+      "https://p.example/bob.png",
+    );
+    expect(root.querySelector("[data-author]")?.getAttribute("data-author")).toBe("user:bob-2");
+  });
+
+  it("draws the viewer's own turn on the right, and an unannotated turn as the owner's", () => {
+    setParticipantsForTesting("user:bob-2", roster());
+
+    expect(mounted(turn({ author: "user:bob-2", author_name: "Bob" })).querySelector(".message-author")).toBeNull();
+    const ownersTurn = mounted(turn(null));
+    expect(ownersTurn.querySelector(".message-author")?.textContent).toBe("Josh");
+    expect(ownersTurn.querySelector("[data-participant-picture]")?.textContent).toBe("J");
+  });
+
+  it("redraws a turn drawn before the page knew who it was, once the roster lands", () => {
+    const root = document.createElement("div");
+    const event = turn({ author: "user:bob-2", author_name: "Bob" });
+    m.render(root, renderUserMessage(event));
+    expect(root.querySelector(".message-author")).toBeNull();
+
+    setParticipantsForTesting("user:owner-1", roster());
+    m.render(root, renderUserMessage(event));
+
+    expect(root.firstElementChild?.className).toContain("message-other");
+    expect(root.querySelector(".message-author")?.textContent).toBe("Bob");
+    expect(root.querySelector("[data-participant-picture] img")?.getAttribute("src")).toBe(
+      "https://p.example/bob.png",
+    );
+  });
+
+  it("folds a turn annotated under the synthetic owner key into the owner, for the owner and for a visitor", () => {
+    // Annotated before the workspace was shared, read after: the owner's key of the moment is their account's.
+    setParticipantsForTesting("user:owner-1", roster());
+    expect(mounted(turn({ author: "owner", author_name: "Owner" })).querySelector(".message-author")).toBeNull();
+
+    setParticipantsForTesting("user:bob-2", roster());
+    const seenByVisitor = mounted(turn({ author: "owner", author_name: "Owner" }));
+    expect(seenByVisitor.querySelector(".message-author")?.textContent).toBe("Josh");
+    expect(seenByVisitor.querySelector("[data-author]")?.getAttribute("data-author")).toBe("user:owner-1");
+  });
+
+  it("names an author the roster no longer lists by the name the turn carried", () => {
+    setParticipantsForTesting("owner", roster());
+    const root = mounted(turn({ author: "name:Someone Else", author_name: "Someone Else" }));
+
+    expect(root.querySelector(".message-author")?.textContent).toBe("Someone Else");
+    expect(root.querySelector("[data-participant-picture]")?.textContent).toBe("S");
+  });
+
+  it("reads the owner's turns as the viewer's own on an owner page that still calls itself owner", () => {
+    // The page loaded before the workspace was shared, so its own key is the synthetic one; the owner's later
+    // turns are annotated under their account key, which the roster marks as the owner's.
+    setParticipantsForTesting("owner", roster());
+
+    expect(authorOfTurn({ author: "user:owner-1", author_name: "Josh" })).toBeNull();
+    expect(authorOfTurn({ author: "owner", author_name: undefined })).toBeNull();
+    expect(authorOfTurn({ author: undefined, author_name: undefined })).toBeNull();
+    expect(authorOfTurn({ author: "user:bob-2", author_name: "Bob" })).toEqual({ key: "user:bob-2", name: "Bob" });
+  });
+
+  it("reads both of the owner's keys as the owner's entry on a visitor's page", () => {
+    setParticipantsForTesting("user:bob-2", roster());
+
+    expect(authorOfTurn({ author: "owner", author_name: undefined })).toEqual({ key: "user:owner-1", name: "Josh" });
+    expect(authorOfTurn({ author: "user:owner-1", author_name: undefined })).toEqual({
+      key: "user:owner-1",
+      name: "Josh",
+    });
+    expect(authorOfTurn({ author: "user:bob-2", author_name: "Bob" })).toBeNull();
+  });
+
+  it("reads every turn as the viewer's own until the page knows who it is", () => {
+    setParticipantsForTesting(null, roster());
+
+    expect(authorOfTurn({ author: "user:bob-2", author_name: "Bob" })).toBeNull();
   });
 });
 
