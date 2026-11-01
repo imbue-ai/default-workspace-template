@@ -75,10 +75,31 @@ describe("InputRelay", () => {
   beforeEach(() => {
     socket = new RecordingSocket();
     stage = document.createElement("div");
+    stage.tabIndex = 0;
     stage.getBoundingClientRect = () => rect(0, 0, 960, 540);
     document.body.append(stage);
     relay = new InputRelay(socket as unknown as NekoSocket, stage);
     relay.screen = SCREEN;
+  });
+
+  it("hands the stage's focus to its hidden key sink, an editable element, and keeps nothing typed into it", () => {
+    stage.focus();
+    expect(document.activeElement).toBe(relay.keySink);
+    expect(relay.keySink.tagName).toBe("INPUT");
+    expect(relay.keySink.type).toBe("text");
+    relay.keySink.value = "n";
+    relay.keySink.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(relay.keySink.value).toBe("");
+  });
+
+  it("releases held keys when focus leaves the stage, not when it moves into the sink", () => {
+    relay.setEnabled(true);
+    relay.keyDown(XK_CONTROL_L);
+    socket.sent.length = 0;
+    stage.dispatchEvent(new FocusEvent("focusout", { relatedTarget: relay.keySink, bubbles: true }));
+    expect(socket.sent).toEqual([]);
+    stage.dispatchEvent(new FocusEvent("focusout", { relatedTarget: null, bubbles: true }));
+    expect(socket.sent).toEqual([{ event: "control/keyup", payload: { keysym: XK_CONTROL_L } }]);
   });
 
   it("sends nothing while disabled", () => {

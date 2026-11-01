@@ -69,12 +69,33 @@ export class InputRelay implements KeySink {
   /** The phone's zoom and pan over the video; identity elsewhere. */
   viewTransform: () => ViewTransform = () => IDENTITY_TRANSFORM;
 
+  /** Where the keys land: a hidden text input inside the stage. A browser extension that binds letters as commands
+   *  (Vimium and its kin) stands down for an editable element and for nothing else, so keys typed at the stage
+   *  itself never reached the Screen; the Guacamole keyboard still listens on the stage, which the input's events
+   *  reach by bubbling. */
+  readonly keySink = document.createElement("input");
+
   constructor(
     private readonly socket: NekoSocket,
     private readonly stage: HTMLElement,
     /** Called once per input event sent; the viewer throttles it into the service's input clock. */
     private readonly onInput: () => void = () => undefined,
   ) {
+    this.keySink.type = "text";
+    this.keySink.className = "screen-key-sink";
+    this.keySink.tabIndex = -1;
+    this.keySink.setAttribute("aria-hidden", "true");
+    this.keySink.autocapitalize = "off";
+    this.keySink.autocomplete = "off";
+    this.keySink.spellcheck = false;
+    this.keySink.inputMode = "none";
+    stage.append(this.keySink);
+    // A key the keyboard left to the browser (a paste chord, a key while not controlling) types into the sink;
+    // nothing is kept there.
+    this.keySink.addEventListener("input", () => {
+      this.keySink.value = "";
+    });
+    stage.addEventListener("focus", () => this.keySink.focus({ preventScroll: true }));
     this.keyboard.onkeydown = (keysym) => {
       if (!this.isEnabled) return true;
       // A paste chord is left to the browser so its ``paste`` event fires with the clipboard's data; the viewer
@@ -97,7 +118,12 @@ export class InputRelay implements KeySink {
       if (this.isEnabled) event.preventDefault();
     });
     stage.addEventListener("wheel", (event) => this.onWheel(event), { passive: false });
-    stage.addEventListener("blur", () => this.releaseHeld());
+    // Focus moving from the stage into its own sink is not focus leaving: only a move elsewhere releases the keys.
+    stage.addEventListener("focusout", (event) => {
+      const target = event.relatedTarget;
+      if (target instanceof Node && stage.contains(target)) return;
+      this.releaseHeld();
+    });
   }
 
   setEnabled(isEnabled: boolean): void {
