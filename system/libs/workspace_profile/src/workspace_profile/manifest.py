@@ -13,8 +13,8 @@ from typing import Final
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from pydantic import Field
+from workspace_layout.identity import RequestIdentity
 
-from workspace_profile.identity import RequestIdentity
 from workspace_profile.keybindings import resolve_app_keybindings
 from workspace_profile.snapshot import WorkspaceProfileSnapshot
 

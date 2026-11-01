@@ -19,7 +19,7 @@ vi.hoisted(() => {
 });
 
 const agentState: { agent: ChatSnapshot | null } = { agent: null };
-vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent }));
+vi.mock("../models/Chats", () => ({ getChatById: () => agentState.agent, getMainChatId: () => null }));
 
 const catalogState: { catalog: unknown } = { catalog: null };
 vi.mock("../models/HarnessCatalog", async (importOriginal) => ({

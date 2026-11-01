@@ -175,11 +175,11 @@ describe("ChatDrawer under a mouse", () => {
 
     expect(panel.className).not.toContain("w-[86%]");
     expect(rail.style.width).toBe("320px");
-    // The rail's head and dense rows: "New chat" spelled out, a rename pencil rather than a kebab.
+    // The rail's head and dense rows: "New chat" spelled out, a rename pencil beside the hover kebab.
     expect(panel.querySelector(".chat-rail-new")?.textContent).toBe("New chat");
     expect(panel.querySelector(".chat-rail-row")?.className).not.toContain("min-h-11");
-    expect(panel.querySelector("[data-chat-row-menu]")).toBeNull();
     expect(panel.querySelector(".chat-rail-rename")).not.toBeNull();
+    expect(panel.querySelector("[data-chat-row-menu]")?.className).toContain("group-hover:opacity-100");
   });
 
   it("picks the chat on screen again when its row is clicked, which is what closes the drawer", () => {

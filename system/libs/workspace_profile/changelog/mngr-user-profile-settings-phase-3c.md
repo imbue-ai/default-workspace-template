@@ -7,3 +7,5 @@ Keybindings become the first account-keyed setting the workspace consumes (user-
 - `overrides.py` gains the atomic writers of the per-user override files and the shell's `unsent.json` (with the same path-shaped-user-id refusal as the loader); errors move to a new `errors.py`.
 
 - `CONSUMED_SETTING_KEYS` gains `"keybindings"`, matching the desktop's updated contract fixture.
+
+- The library's own `identity.py` is gone: the resolution keys on `workspace_layout.identity`'s `RequestIdentity`, the one definition the shell and the apps read, so the library now depends on `workspace-layout`.

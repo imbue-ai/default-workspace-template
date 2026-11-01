@@ -26,6 +26,7 @@ import {
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { initEmbedderRelay, resetEmbedderRelayForTesting } from "../relay";
+import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { resetThemeClientForTests, wearTheme } from "@imbue/workspace-ui/src/themes/themeClient";
 import type { Placement } from "../model/records";
 import { activeFocusedWindowId, activePlacements } from "../reducers/desktopState";
@@ -39,7 +40,7 @@ import {
   themeMetricsRecord,
   windowRecord,
 } from "../testing/records";
-import { LivePagesLayer } from "./livePages";
+import { LivePagesLayer, DESKTOP_ROOT_ATTRIBUTE } from "./livePages";
 
 const METRICS = themeMetricsRecord();
 const CLIENT = "client-1";
@@ -53,6 +54,7 @@ let store: DesktopStore;
 let backdrop: HTMLElement;
 let host: HTMLElement;
 let windows: HTMLElement;
+let overviewTiles: HTMLElement;
 let layer: LivePagesLayer;
 
 /** Stand in for the window chrome the views render: one content box per shown window at a fixed spot. */
@@ -167,7 +169,13 @@ beforeEach(async () => {
   host = document.createElement("div");
   host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 }) as DOMRect;
   windows = document.createElement("div");
-  backdrop.append(host, windows);
+  // As the Backdrop nests them: the pages host and the windows layer inside the desktop's stage, the overview's
+  // tiles beside the stage under the backdrop's root.
+  backdrop.setAttribute(DESKTOP_ROOT_ATTRIBUTE, "home");
+  const stage = document.createElement("div");
+  stage.append(host, windows);
+  overviewTiles = document.createElement("div");
+  backdrop.append(stage, overviewTiles);
   document.body.appendChild(backdrop);
   resetEmbedderRelayForTesting();
   initEmbedderRelay();
@@ -182,6 +190,7 @@ beforeEach(async () => {
 afterEach(() => {
   resetEmbedderRelayForTesting();
   resetThemeClientForTests();
+  resetPresenceForTesting();
   backdrop.remove();
 });
 
@@ -190,6 +199,9 @@ describe("creating and positioning", () => {
     const frame = frameOf("win-1");
     expect(frame.getAttribute("src")).toBe("http://127.0.0.1:7001/?doc=1");
     expect(frame.getAttribute("sandbox")).toContain("allow-same-origin");
+    // The Screen's viewer locks the pointer and the chrome's immersive mode goes fullscreen through this frame.
+    expect(frame.getAttribute("sandbox")).toContain("allow-pointer-lock");
+    expect(frame.getAttribute("allow")).toBe("clipboard-read; clipboard-write; fullscreen");
     const wrapper = wrapperOf("win-1");
     expect(wrapper.style.left).toBe("100px");
     expect(wrapper.style.top).toBe("60px");
@@ -286,6 +298,191 @@ describe("creating and positioning", () => {
     expect(wrapperOf("win-2").style.pointerEvents).toBe("auto");
   });
 
+  it("makes every page inert while this window views somebody else's desktop, the focused one included", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a")],
+      }),
+    ];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-a")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+
+    // The owner's layout focuses win-a, and even the focused page takes no press on a viewed desktop (8.3).
+    await store.switchDesktop("alice");
+    renderChrome("win-a");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-a");
+    expect(wrapperOf("win-a").style.pointerEvents).toBe("none");
+    // The page is told it is viewed, so a terminal attaches to its session as a viewer.
+    const spy = spyOnFrame("win-a");
+    load("win-a");
+    expect(spy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, desktopId: "alice", isViewing: true });
+
+    // Back on an own desktop, the focused page is interactive again.
+    await store.stopViewing();
+    renderChrome();
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.pointerEvents).toBe("auto");
+  });
+
+  it("raises nothing for a viewed page's focus, and greets a page again on its capabilities, viewed or not", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a"), windowRecord("win-b", "docs", "/b")],
+      }),
+    ];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-a"), placementRecord("win-b")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+    await store.switchDesktop("alice");
+    renderChrome("win-a", "win-b");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+
+    // The page under win-a focuses itself (a composer on load): the owner's stack is not this window's to change,
+    // and nothing is said about it.
+    messageFromPage("win-a", { type: SHELL_FOCUSED });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+    expect(store.toasts.current()).toEqual([]);
+
+    // The page's contract module is up before its frame has loaded: it is greeted at once, viewed, so a terminal
+    // attaches as a viewer from its first attach.
+    const spy = spyOnFrame("win-a");
+    messageFromPage("win-a", { type: SHELL_CAPABILITIES, navigation: true });
+    expect(spy.mock.calls.map((call) => call[0])).toMatchObject([
+      { type: SHELL_HANDSHAKE, windowId: "win-a", desktopId: "alice", isViewing: true },
+      { type: SHELL_THEME },
+    ]);
+
+    // Back on an own desktop, a page's focus raises its window again, and its capabilities greet it unviewed.
+    await store.stopViewing();
+    renderChrome();
+    layer.reconcile();
+    store.restoreWindow("win-2");
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-2");
+    messageFromPage("win-1", { type: SHELL_FOCUSED });
+    expect(activeFocusedWindowId(store.getState())).toBe("win-1");
+    const ownSpy = spyOnFrame("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: true });
+    expect(ownSpy.mock.calls[0][0]).toMatchObject({ type: SHELL_HANDSHAKE, desktopId: "home", isViewing: false });
+  });
+
+  it("tells a shown page again when whether its desktop is viewed changes, and only then", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a")],
+      }),
+    ];
+    // This client's own layout of Alice's desktop and her own both place win-a, so the page is the same one
+    // before and after the heartbeat says who the viewer is.
+    api.writeLayout("alice", CLIENT, { updated_at: "2026-10-29T00:00:00Z", placements: [placementRecord("win-a")] });
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:01:00Z",
+      placements: [placementRecord("win-a")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+
+    // Until the first heartbeat has answered, the desktop reads as this window's own: the page is not viewed.
+    await store.switchDesktop("alice");
+    renderChrome("win-a");
+    layer.reconcile();
+    const spy = spyOnFrame("win-a");
+    load("win-a");
+    const handshakes = (): unknown[] =>
+      spy.mock.calls.map((call) => call[0]).filter((message) => message.type === SHELL_HANDSHAKE);
+    expect(handshakes()).toMatchObject([{ desktopId: "alice", isViewing: false }]);
+
+    // The answer lands and the desktop is somebody else's: the page is told once that it is viewed.
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    store.takeViewerIdentityKnown();
+    await settle();
+    renderChrome("win-a");
+    layer.reconcile();
+    expect(handshakes()).toMatchObject([{ isViewing: false }, { desktopId: "alice", isViewing: true }]);
+    layer.reconcile();
+    expect(handshakes()).toHaveLength(2);
+  });
+
+  it("lays a page over its content box in the stage's own pixels while a viewed desktop is drawn scaled down", async () => {
+    api.desktops = [
+      ...api.desktops,
+      desktopRecord("alice", {
+        owner: "user:user-alice-0001",
+        windows: [windowRecord("win-a", "docs", "/a")],
+      }),
+    ];
+    setOwnIdentityForTesting({
+      owner: true,
+      user_id: "user-josh-0001",
+      email: "josh@example.com",
+      participant: "user:user-josh-0001",
+    });
+    api.ownerViewport = { width: 2000, height: 1600 };
+    api.writeLayout("alice", api.ownerLayoutClientId, {
+      updated_at: "2026-10-29T00:00:00Z",
+      placements: [placementRecord("win-a")],
+    });
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    await settle();
+    await store.switchDesktop("alice");
+    expect(store.viewingLetterbox()?.scale).toBe(0.5);
+
+    // The chrome and the host lie under the letterbox's half scale, so the box measures at half its size and
+    // offset on screen; the page's position and size are in the host's unscaled pixels, so both are doubled back.
+    renderChrome("win-a");
+    const content = windows.querySelector('[data-window-id="win-a"] [data-window-content]') as HTMLElement;
+    content.getBoundingClientRect = () => ({ left: 150, top: 80, width: 250, height: 200 }) as DOMRect;
+    host.getBoundingClientRect = () => ({ left: 100, top: 20, width: 1000, height: 800 }) as DOMRect;
+    layer.reconcile();
+    const wrapper = wrapperOf("win-a");
+    expect([wrapper.style.left, wrapper.style.top, wrapper.style.width, wrapper.style.height]).toEqual([
+      "100px",
+      "120px",
+      "500px",
+      "400px",
+    ]);
+    expect(wrapper.style.transform).toBe("");
+
+    // Back on an own desktop, a box measures as it is.
+    host.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1000, height: 800 }) as DOMRect;
+    await store.stopViewing();
+    renderChrome();
+    layer.reconcile();
+    expect([wrapperOf("win-1").style.left, wrapperOf("win-1").style.width]).toEqual(["100px", "500px"]);
+  });
+
   it("hides a page when its window is minimized, keeping the same frame, and destroys it on close", async () => {
     const frame = frameOf("win-1");
     store.minimizeWindow("win-1");
@@ -379,6 +576,7 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         opensLocalFiles: false,
+        isViewing: false,
       },
       // The theme the page wears follows every handshake (workspace-themes plan section 5.3).
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
@@ -398,6 +596,7 @@ describe("the contract", () => {
         app: "docs",
         path: "/?doc=1",
         opensLocalFiles: false,
+        isViewing: false,
       },
       { type: SHELL_THEME, theme: "standard", revision: "", isPreview: false },
       { type: SHELL_HIDDEN },
@@ -934,5 +1133,69 @@ describe("the phone's mount policy", () => {
     layer.reconcile();
     expect(layer.hasPage("win-1")).toBe(false);
     expect(frameOf("win-3")).toBe(keptFrame);
+  });
+});
+
+describe("the overview (the multiplayer spec, section 8.2)", () => {
+  /** Stand in for the overview's tiles: one content box per window of the desktop, minimized ones included. */
+  function renderTiles(): void {
+    // The windows layer is gone while the overview is up; its tiles stand in, outside the stage.
+    windows.innerHTML = "";
+    overviewTiles.innerHTML = "";
+    for (const [windowId, left] of [
+      ["win-1", 40],
+      ["win-2", 340],
+      ["win-3", 640],
+    ] as const) {
+      const tile = document.createElement("div");
+      tile.setAttribute("data-window-id", windowId);
+      const content = document.createElement("div");
+      content.setAttribute("data-window-content", "");
+      content.getBoundingClientRect = () => ({ left, top: 100, width: 250, height: 200 }) as DOMRect;
+      tile.appendChild(content);
+      overviewTiles.appendChild(tile);
+    }
+  }
+
+  it("lays every page of the active desktop over its tile at the tile's scale, inert and above the scrim, the minimized ones too", () => {
+    renderTiles();
+    layer.setOverview({ scaleOf: (windowId) => (windowId === "win-3" ? null : 0.5) });
+    layer.reconcile();
+    // win-2 is minimized and had no page; the overview gives it one.
+    for (const windowId of ["win-1", "win-2"]) {
+      const wrapper = wrapperOf(windowId);
+      expect(wrapper.style.display).toBe("");
+      expect(wrapper.style.width).toBe("500px");
+      expect(wrapper.style.height).toBe("400px");
+      expect(wrapper.style.transform).toBe("scale(0.5)");
+      expect(wrapper.style.transformOrigin).toBe("top left");
+      expect(wrapper.style.pointerEvents).toBe("none");
+      expect(wrapper.style.zIndex).toBe("calc(var(--z-sticky) + 1)");
+    }
+    expect(wrapperOf("win-1").style.left).toBe("40px");
+    expect(wrapperOf("win-2").style.left).toBe("340px");
+    // A window the overview has no tile for stays hidden, and nothing holds the frame focus.
+    expect(host.querySelector('iframe[data-live-page="win-3"]')).toBeNull();
+    expect(document.activeElement).not.toBe(frameOf("win-1"));
+
+    // The overview goes: the pages lie over their windows again, at their own size and stacking.
+    layer.setOverview(null);
+    renderChrome();
+    layer.reconcile();
+    const wrapper = wrapperOf("win-1");
+    expect(wrapper.style.transform).toBe("");
+    expect(wrapper.style.width).toBe("500px");
+    expect(wrapper.style.left).toBe("100px");
+    expect(wrapper.style.pointerEvents).toBe("auto");
+    expect(wrapper.style.zIndex).toBe("5");
+    expect(wrapperOf("win-2").style.display).toBe("none");
+  });
+
+  it("hides a page whose tile scale is not positive rather than sizing it by a zero scale", () => {
+    renderTiles();
+    layer.setOverview({ scaleOf: (windowId) => (windowId === "win-1" ? 0 : 0.5) });
+    layer.reconcile();
+    expect(wrapperOf("win-1").style.display).toBe("none");
+    expect(wrapperOf("win-2").style.display).toBe("");
   });
 });

@@ -14,7 +14,7 @@ from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
 from imbue.system_interface.shell.gateway_access import ENV_GATEWAY
 from imbue.system_interface.shell.gateway_access import ENV_GATEWAY_PASSWORD
-from imbue.system_interface.shell.identity import RequestIdentity
+from workspace_layout.identity import RequestIdentity
 from imbue.system_interface.shell.keybindings_delivery import ENV_AGENT_ID
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import identity_headers

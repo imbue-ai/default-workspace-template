@@ -48,6 +48,11 @@ ROUTINES_DIR = "system/apps/routines"
 
 ROUTINES_FRONTEND_DIR = f"{ROUTINES_DIR}/frontend"
 
+# The Screen, whose viewer its own server serves from inside its package.
+SCREEN_DIR = "system/apps/screen"
+
+SCREEN_FRONTEND_DIR = f"{SCREEN_DIR}/frontend"
+
 # The Style Guide app, whose bundle its own server serves from inside its package.
 STYLE_GUIDE_DIR = "system/apps/style_guide"
 
@@ -71,6 +76,7 @@ NPM_MANIFEST_PATHS = frozenset(
         f"{GETTING_STARTED_FRONTEND_DIR}/package.json",
         f"{FILES_FRONTEND_DIR}/package.json",
         f"{ROUTINES_FRONTEND_DIR}/package.json",
+        f"{SCREEN_FRONTEND_DIR}/package.json",
         f"{STYLE_GUIDE_FRONTEND_DIR}/package.json",
         f"{FRONTEND_LIB_DIR}/package.json",
     }
@@ -92,6 +98,7 @@ FRONTEND_SOURCE_DIRS = (
     GETTING_STARTED_FRONTEND_DIR,
     FILES_FRONTEND_DIR,
     ROUTINES_FRONTEND_DIR,
+    SCREEN_FRONTEND_DIR,
     STYLE_GUIDE_FRONTEND_DIR,
     FRONTEND_LIB_DIR,
 )
@@ -163,6 +170,8 @@ FILES_FRONTEND_BUILD_INDEX = f"{FILES_STATIC_DIR}/index.html"
 ROUTINES_STATIC_DIR = f"{ROUTINES_DIR}/src/routines_app/static"
 ROUTINES_FRONTEND_BUILD_INDEX = f"{ROUTINES_STATIC_DIR}/index.html"
 
+SCREEN_STATIC_DIR = f"{SCREEN_DIR}/src/screen/static"
+SCREEN_FRONTEND_BUILD_INDEX = f"{SCREEN_STATIC_DIR}/index.html"
 STYLE_GUIDE_STATIC_DIR = f"{STYLE_GUIDE_DIR}/src/style_guide_app/static"
 STYLE_GUIDE_FRONTEND_BUILD_INDEX = f"{STYLE_GUIDE_STATIC_DIR}/index.html"
 
@@ -216,6 +225,13 @@ FRONTEND_BUNDLES = (
         ROUTINES_FRONTEND_BUILD_INDEX,
     ),
     FrontendBundle(
+        "screen",
+        "screen_bundle",
+        SCREEN_FRONTEND_DIR,
+        SCREEN_STATIC_DIR,
+        SCREEN_FRONTEND_BUILD_INDEX,
+    ),
+    FrontendBundle(
         "style_guide",
         "style_guide_bundle",
         STYLE_GUIDE_FRONTEND_DIR,
@@ -258,5 +274,8 @@ DEFAULT_WORKSPACE_URL = "http://127.0.0.1:8000"
 
 # The app registry the shell reads and every app registers into (contracts section 3).
 APPS_REGISTRY_PATH = "data/.state/apps.toml"
+
+# The registration script every supervised app's program line runs; ``--remove`` drops a row.
+FORWARD_PORT_SCRIPT = "system/scripts/forward_port.py"
 
 ENV_WORKSPACE_URL = "MINDS_WORKSPACE_SERVER_URL"

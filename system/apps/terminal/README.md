@@ -19,7 +19,12 @@ running one of this package's entry points from the workspace venv
   with a coarse pointer (a phone; never a mouse-driven desktop window), it shows a key strip under the frame (Esc, Tab, a one-shot Ctrl, the arrows) that
   posts `{type: "terminal:key", key, ctrl}` and `{type: "terminal:ctrl", armed}` into
   the frame, followed by a `ttyd-focus`; the pty page posts
-  `{type: "terminal:ctrl", armed: false}` back when a typed key used the Ctrl. The
+  `{type: "terminal:ctrl", armed: false}` back when a typed key used the Ctrl.
+  Typing happens in the pty frame, on its own origin, out of the wrapper's sight,
+  so the pty page posts `{type: "shell:input"}` to the wrapper (a pointer press or
+  a key, at most once per 20 seconds) and the wrapper hands it up to the shell as
+  the app contract's own input report, which is how the presence heartbeat reads a
+  person typing in a terminal as active. The
   page fills `100dvh` and nudges the frame a pixel after it loads and whenever the
   visual viewport resizes, so ttyd refits its grid; `POST /new` (the manifest's
   `new` launch path, posted by the shell with an optional `workdir`) allocates the
@@ -41,8 +46,9 @@ running one of this package's entry points from the workspace venv
   recorded under `data/.state/terminal/sessions/<name>` (falling back to `tmux
   new-session -A` by name, which creates the session when tmux lost it, when there is
   no record, or when the session under that id is a later server's); `workdir.sh` opens a shell in a
-  directory; `agent.sh` attaches to an mngr agent's tmux window for the chat UI's
-  terminal back face. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
+  directory; `agent.sh <name> [view]` attaches to an mngr agent's tmux window for
+  the chat UI's terminal back face, read-only and size-ignored when the chat's
+  window is viewed. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
   `commands/<key>.sh` with the remaining arguments. It decompresses the OSC 52-capable
   ttyd web client the `imbue-mngr-ttyd` package ships, adds the script in `pty_page.py`
   before its closing body tag, and serves it via `ttyd -I`, falling back to
@@ -75,8 +81,19 @@ that holds no id, or a session the dispatch created on attach; a session
 that only carries the old name of a terminal whose own session is live is
 skipped, whichever tmux lists first), and one with no record at all lists under
 its own name. A window of the terminal shows the wrapper page, `/?session=<name>`;
-the wrapper frames `/?arg=_&arg=session&arg=<name>[&arg=<workdir>]` on the pty
-origin, and `session.sh` receives the name and the directory as its arguments.
+the wrapper frames `/?arg=_&arg=session&arg=<name>&arg=<workdir>` on the pty
+origin (the workdir argument always sent, empty for none), with `&arg=view`
+appended while the shell's handshake says the window is viewed on somebody
+else's desktop (the multiplayer spec, section 8.3), and `session.sh` receives
+the name, the directory, and the viewer marker as its arguments: for a viewer
+it attaches read-only and as a client tmux never sizes the window by
+(`tmux attach -r -f ignore-size`), names the session exactly when the record
+does not verify (`-t =<name>`, never tmux's prefix match, so a viewer of a
+lost `terminal-1` is refused rather than shown `terminal-10`), and never
+creates the session. A framed wrapper points the pty frame only once the
+shell's handshake has said whether the window is viewed, so a viewed terminal
+never attaches writable first; when no handshake comes within two seconds it
+attaches plainly, and an unframed wrapper points at once.
 A terminal created through `new` always carries a workdir: the `workdir` param
 when the create gave one, else the directory the app runs from (the workspace
 root under supervisord); a record of a hand-made session holds none, and a

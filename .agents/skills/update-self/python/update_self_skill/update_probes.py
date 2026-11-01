@@ -21,7 +21,10 @@ from update_self_skill.update_layout import (
     APPS_REGISTRY_PATH,
     CHAT_DIR,
     CHAT_EXECUTABLE,
+    FORWARD_PORT_SCRIPT,
     MANIFEST_FILENAME,
+    SUPERVISORD_CONF,
+    SUPERVISORD_DROPIN_DIR,
     SYSTEM_INTERFACE_DIR,
     SYSTEM_INTERFACE_EXECUTABLE,
 )
@@ -296,6 +299,96 @@ def wait_settled(
 def _read_registry_rows(repo_root: Path) -> list:
     """The registry's ``apps`` rows; raises whatever reading or parsing it raised."""
     return tomllib.loads((repo_root / APPS_REGISTRY_PATH).read_text()).get("apps", [])
+
+
+# A supervisord program or event-listener section header, as the daemon's config and its drop-ins declare them.
+_SUPERVISORD_SECTION_PATTERN = re.compile(
+    r"^\[(?:program|eventlistener):([^\]]+)\]", re.MULTILINE
+)
+
+
+def read_supervisord_programs(repo_root: Path) -> frozenset[str] | None:
+    """Every program and event listener the tree's supervisord table declares, or
+    ``None`` for a tree with no readable table at all (nothing can be judged against it)."""
+    paths = [
+        repo_root / SUPERVISORD_CONF,
+        *sorted((repo_root / SUPERVISORD_DROPIN_DIR).glob("*.conf")),
+    ]
+    names: set[str] = set()
+    is_any_read = False
+    for path in paths:
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        is_any_read = True
+        names.update(
+            match.group(1).strip()
+            for match in _SUPERVISORD_SECTION_PATTERN.finditer(text)
+        )
+    return frozenset(names) if is_any_read else None
+
+
+def prune_registry_rows_of_removed_programs(
+    repo_root: Path, runner: Runner
+) -> list[str]:
+    """Remove every registry row whose supervisord program the tree at ``repo_root`` no
+    longer declares, through the registration script's ``--remove``; returns the names
+    removed.
+
+    Nothing else retires a row: an app re-registers on every start, but an app the
+    release removed never starts again, so its row would offer a dead tile in the
+    launcher and a dead origin to the share gateway for the life of the workspace. A
+    row with no program (an unsupervised instance owning its own teardown) is never
+    touched, and a registry or a supervisord table that cannot be read prunes nothing
+    (a registry that is there but unreadable or not TOML is reported, a missing one is
+    the tree that never registered an app). A row removed in error costs one restart:
+    the program registers itself again.
+    """
+    try:
+        rows = _read_registry_rows(repo_root)
+    except FileNotFoundError:
+        return []
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        sys.stderr.write(
+            f"warning: could not read the app registry {APPS_REGISTRY_PATH} ({exc}); "
+            "no registry row is pruned.\n"
+        )
+        return []
+    programs = read_supervisord_programs(repo_root)
+    if programs is None:
+        return []
+    removed: list[str] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("name")
+        program = row.get("program")
+        if (
+            not isinstance(name, str)
+            or not name
+            or not isinstance(program, str)
+            or not program
+        ):
+            continue
+        if program in programs:
+            continue
+        result = runner.run(
+            [sys.executable, FORWARD_PORT_SCRIPT, "--remove", "--name", name],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if getattr(result, "returncode", 0) != 0:
+            stderr = (getattr(result, "stderr", "") or "").strip()
+            sys.stderr.write(
+                f"warning: could not remove the registry row of '{name}', whose program '{program}' the tree "
+                f"no longer declares ({stderr or 'forward_port.py --remove failed'}).\n"
+            )
+            continue
+        removed.append(name)
+    return removed
 
 
 def registry_app_url(repo_root: Path, app_name: str) -> str | None:

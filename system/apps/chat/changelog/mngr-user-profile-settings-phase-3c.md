@@ -1,3 +1,1 @@
 The chat's send shortcut becomes rebindable (user-profile-state spec, phase 3C): new `/api/keybindings/actions` and `/api/keybindings/me` routes declare and resolve the one `send-message` action (default Enter, with Ctrl/Cmd+Enter also sending), and the composer matches the resolved chords instead of a hard-coded Enter, re-fetched when the shell announces a change (`shell:keybindings-changed`, forwarded to the inner chat pages).
-
-The identity-header parsing moves onto the shared `workspace_profile` library (one definition with the shell and the profile resolution); a header spelling the owner flag as a string now carries its claim instead of being ignored, matching the shell's reading.

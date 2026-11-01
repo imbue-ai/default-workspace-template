@@ -94,7 +94,7 @@ libraries:
 
 | Old | New |
 |---|---|
-| `libs/browser/` | `system/apps/browser/` |
+| `libs/browser/` | `system/apps/screen/` (the browser is a launch path of the Screen; the browser app is gone) |
 | `libs/app_watcher/` | `system/services/app_watcher/` |
 | `libs/cloudflare_tunnel/` | `system/services/cloudflare_tunnel/` |
 | `libs/host_backup/` | `system/services/host_backup/` |

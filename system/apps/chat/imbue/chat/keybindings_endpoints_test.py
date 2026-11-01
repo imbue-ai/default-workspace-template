@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from flask.testing import FlaskClient
-from workspace_profile.identity import IDENTITY_HEADER
+from workspace_layout.identity import IDENTITY_HEADER
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
 from imbue.chat.server import create_application

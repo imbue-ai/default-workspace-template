@@ -2,9 +2,9 @@ import json
 from pathlib import Path
 
 import pytest
+from workspace_layout.identity import ANONYMOUS_OWNER, RequestIdentity
 
 from workspace_profile.errors import InvalidChordError, ProfileWriteError
-from workspace_profile.identity import ANONYMOUS_OWNER, RequestIdentity
 from workspace_profile.keybindings import (
     describe_keybindings_value_problem,
     is_canonical_chord,

@@ -20,20 +20,28 @@ from workspace_layout.answers import InventoryOpAnswer
 from workspace_layout.answers import OpenAnswer
 from workspace_layout.answers import ShowAnswer
 from workspace_layout.answers import TransientOpAnswer
+from workspace_layout.feed import BubblePost
+from workspace_layout.feed import ChatsActivityReport
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopView
 from workspace_layout.records import EntryPresentation
+from workspace_layout.records import Viewport
 from workspace_layout.records import WindowView
+from workspace_layout.roster import RosterDocument
+from workspace_layout.shell_url import BUBBLES_ROUTE
+from workspace_layout.shell_url import CHATS_ACTIVITY_ROUTE
 from workspace_layout.shell_url import CLIENTS_ROUTE
 from workspace_layout.shell_url import CLIENT_ACTIVITY_ROUTE
 from workspace_layout.shell_url import DESKTOPS_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
+from workspace_layout.shell_url import ROSTER_ROUTE
 from workspace_profile.manifest import KeybindingsActionsResponse
 from workspace_profile.manifest import KeybindingsMeResponse
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 
+from imbue.system_interface.api_models import HeartbeatRequest
 from imbue.system_interface.api_models import HeartbeatResponse
 from imbue.system_interface.api_models import PresenceListing
 from imbue.system_interface.api_models import ShellHealthResponse
@@ -51,6 +59,7 @@ from imbue.system_interface.shell.api_models import DesktopDeletedResponse
 from imbue.system_interface.shell.api_models import EmbedderMessageRelayResponse
 from imbue.system_interface.shell.api_models import LaunchResponse
 from imbue.system_interface.shell.api_models import LayoutOpRequest
+from imbue.system_interface.shell.api_models import OwnerLayoutView
 from imbue.system_interface.shell.api_models import PendingUpdateResponse
 from imbue.system_interface.shell.api_models import PlacementsSavedResponse
 from imbue.system_interface.shell.api_models import UpdateRollbackStarted
@@ -62,6 +71,7 @@ from imbue.system_interface.shell.data_types import PlacementsSaveRequest
 from imbue.system_interface.shell.data_types import WindowLocationReport
 from imbue.system_interface.shell.data_types import WindowOpenRequest
 from imbue.system_interface.shell.desktop_routes import DesktopMetadataRequest
+from imbue.system_interface.shell.desktop_routes import DesktopOrderRequest
 from imbue.system_interface.shell.desktop_routes import DesktopSettingsRequest
 from imbue.system_interface.shell.desktop_routes import DesktopShortcutRequest
 from imbue.system_interface.shell.desktop_routes import DesktopWallpaperRequest
@@ -124,12 +134,20 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("GET", "/api/ws"): SchemalessRoute(reason="the shell's socket, which every page holds"),
     ("GET", "/api/health"): RouteModels(response_model=ShellHealthResponse),
     ("GET", PRESENCE_PATH): RouteModels(response_model=PresenceListing),
+    # The view reads the body itself: a page from before the body was sent posts none.
     ("POST", PRESENCE_HEARTBEAT_PATH): RouteModels(
+        request_model=HeartbeatRequest,
         response_model=HeartbeatResponse,
         alternate_responses=(AlternateResponse(status=HTTP_NO_CONTENT),),
+        is_body_parsed_by_view=True,
     ),
+    ("GET", ROSTER_ROUTE): RouteModels(response_model=RosterDocument),
+    ("GET", f"{ROSTER_ROUTE}/{{key}}/picture"): _IMAGE,
     # Section 5.1 and 5: the client-activity report, and an app's lifecycle
     ("POST", CLIENT_ACTIVITY_ROUTE): RouteModels(request_model=ClientActivityReport, success_status=HTTP_NO_CONTENT),
+    # The multiplayer spec, sections 6.4 and 6.5: the tray's feed from the chat app
+    ("POST", BUBBLES_ROUTE): RouteModels(request_model=BubblePost, success_status=HTTP_NO_CONTENT),
+    ("POST", CHATS_ACTIVITY_ROUTE): RouteModels(request_model=ChatsActivityReport, success_status=HTTP_NO_CONTENT),
     ("POST", "/api/apps/{name}/stop"): RouteModels(response_model=AppRunningState),
     ("POST", "/api/apps/{name}/start"): RouteModels(response_model=AppRunningState),
     ("POST", "/api/apps/{name}/quit"): RouteModels(response_model=AppRunningState),
@@ -137,6 +155,9 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("GET", DESKTOPS_ROUTE): RouteModels(response_model=DesktopsListing),
     ("POST", DESKTOPS_ROUTE): RouteModels(
         request_model=DesktopMetadataRequest, response_model=DesktopView, success_status=HTTP_CREATED
+    ),
+    ("POST", f"{DESKTOPS_ROUTE}/order"): RouteModels(
+        request_model=DesktopOrderRequest, response_model=DesktopsListing
     ),
     ("POST", "/api/desktops/{desktop_id}/settings"): _edits_desktop(DesktopSettingsRequest),
     ("POST", "/api/desktops/{desktop_id}/wallpaper"): _edits_desktop(DesktopWallpaperRequest),
@@ -160,7 +181,10 @@ SHELL_ROUTE_TABLE: RouteTable = {
         request_model=WindowLocationReport, response_model=WindowView
     ),
     # Section 5.4: placements
-    ("GET", "/api/placements/{desktop_id}"): RouteModels(response_model=DesktopLayoutView),
+    ("GET", "/api/placements/{desktop_id}"): RouteModels(
+        response_model=DesktopLayoutView,
+        alternate_responses=(AlternateResponse(status=200, model=OwnerLayoutView),),
+    ),
     ("POST", "/api/placements/{desktop_id}"): RouteModels(
         request_model=PlacementsSaveRequest, response_model=PlacementsSavedResponse
     ),
@@ -173,6 +197,7 @@ SHELL_ROUTE_TABLE: RouteTable = {
     ("POST", "/api/clients/{client_id}/shown"): RouteModels(
         request_model=ClientShownRequest, response_model=ClientView
     ),
+    ("POST", "/api/clients/{client_id}/viewport"): RouteModels(request_model=Viewport, response_model=ClientView),
     ("POST", "/api/clients/{client_id}/show"): RouteModels(request_model=PageShowRequest, response_model=ShowAnswer),
     ("GET", INVENTORY_ROUTE): RouteModels(response_model=InventoryDocument),
     ("GET", "/api/wallpapers"): RouteModels(response_model=WallpapersListing),

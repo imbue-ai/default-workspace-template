@@ -3,7 +3,6 @@ import { getClientId } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { CLOSE_ACTIVE_TAB } from "@minds/embed-contract";
 import {
   DETACHED_WINDOWS,
-  EMBEDDER_CAPABILITIES,
   HIGHLIGHT_CHROME,
   OPEN_EXTERNAL,
   OPEN_LINK,
@@ -25,13 +24,14 @@ import { permissionResolutionEntries } from "./model/permissionResolutions";
 import * as api from "./model/api";
 import { isDeepLinkEmpty, parseDeepLink, stripDeepLinkParams } from "./model/deepLinks";
 import type { DeepLink } from "./model/deepLinks";
+import { connectEmbedderToStore, immersiveBridge } from "./store/embedderBridge";
 import { parseSoloMode } from "./model/soloMode";
 import { isPreviewShell } from "./model/PreviewShell";
 import type { Frame } from "./model/records";
 import { frameFromViewportFractions } from "./geometry/frames";
 import type { OutsideLinkOpener, PopOutBridge } from "./store/DesktopStore";
 import { PointerGestureSource } from "./gestures/pointerGestures";
-import { getOwnIdentity, startPresenceHeartbeat } from "./model/Presence";
+import { getOwnIdentity, onOwnIdentityChanged, startPresenceHeartbeat } from "./model/Presence";
 import { TOUR_API, TourController, tourStartDelayFromSearch } from "./model/tour";
 import type { TourAction } from "./model/tourCards";
 import { avatarPinnedWindow } from "./reducers/desktopState";
@@ -122,6 +122,7 @@ function bootstrap(): void {
           reloadInterface,
           popOut: popOutBridge,
           outsideLinks,
+          immersive: immersiveBridge,
           soloWindowId: solo?.windowId ?? null,
           isSoloReopened: solo?.isReopened ?? false,
         });
@@ -143,7 +144,10 @@ function bootstrap(): void {
     setIconTheme,
   });
   const gestures = new PointerGestureSource();
-  // Say this window is here (and learn who it is) for as long as it stays visible.
+  // Say this window is here (and learn who it is) for as long as it stays visible. Until the first answer the
+  // active desktop reads as the viewer's own, so a window that landed on somebody else's re-reads the layout as
+  // the owner's once it knows (the multiplayer spec, section 8.3).
+  onOwnIdentityChanged(() => desktopStore.takeViewerIdentityKnown());
   startPresenceHeartbeat();
   // The pointer hides while text is typed into the shell's own fields (the launcher, the settings);
   // each framed page does the same for itself.
@@ -167,15 +171,9 @@ function bootstrap(): void {
   // types through the endpoint's observer, any other (a notification's destination) through the relay.
   setEmbedderMessageObserver((message) => void desktopStore.relayEmbedderMessage(message, null));
   setEmbedderAppMessageHandler((message) => void desktopStore.relayEmbedderMessage(message, null));
-  // The pull-out conversation's two asks from the chrome: what it can do, and a window to bring back.
-  setEmbedderMessageHandler(EMBEDDER_CAPABILITIES, (message) => {
-    desktopStore.setCanPopOut(message.canPopOut === true);
-    desktopStore.setOutsideLinkCapabilities({
-      opensExternalLinks: message.opensExternalLinks === true,
-      opensCustomSchemeLinks: message.opensCustomSchemeLinks === true,
-    });
-    desktopStore.setOpensLocalFiles(message.opensLocalFiles === true);
-  });
+  // What the chrome can do, and its immersive-mode changes; then the pull-out conversation's ask to bring a
+  // window back.
+  connectEmbedderToStore(desktopStore);
   setEmbedderMessageHandler(REATTACH_WINDOW, (message) => {
     const windowId = message.windowId;
     if (typeof windowId !== "string" || windowId === "") return;

@@ -6,7 +6,8 @@
  * Some of those messages are the shell's business and go up unchanged, as the shell's own relay
  * forwards the frames it created (desktop-interface contracts.md section 7): the ``minds:``
  * messages for the minds chrome, ``shell:focused`` (which the root re-posts as its own, since the
- * shell raises the root's window for it), ``shell:open`` of a sub-agent view, ``shell:draft-text``
+ * shell raises the root's window for it), ``shell:input`` (typing in a nested page is this client's
+ * activity, which the shell's heartbeat reports), ``shell:open`` of a sub-agent view, ``shell:draft-text``
  * from a sub-agent view (which has no composer of its own to draft into), ``shell:message`` (for
  * whichever app registered its type), and ``shell:open-link`` (a clicked link or script popup the
  * app contract hands on -- a local URL, another app's address, a ``file:`` URL, an external web,
@@ -38,6 +39,7 @@ import {
   SHELL_DRAFT_TEXT,
   SHELL_FOCUSED,
   SHELL_HANDSHAKE,
+  SHELL_INPUT,
   SHELL_KEYBINDINGS_CHANGED,
   SHELL_MESSAGE,
   SHELL_OPEN,
@@ -50,6 +52,7 @@ import { selectionFromSearch } from "./selection";
 const MINDS_PREFIX = "minds:";
 const FORWARDED_SHELL_TYPES: ReadonlySet<string> = new Set([
   SHELL_FOCUSED,
+  SHELL_INPUT,
   SHELL_OPEN,
   SHELL_DRAFT_TEXT,
   SHELL_MESSAGE,

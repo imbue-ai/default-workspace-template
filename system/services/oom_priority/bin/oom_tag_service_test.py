@@ -109,11 +109,21 @@ def test_every_service_key_in_supervisord_conf_has_a_band() -> None:
         if key is not None
     ]
     assert keys, f"no oom_tag_service.py invocations found in {_SUPERVISORD_CONF}"
-    unbanded = sorted({key for key in keys if key not in bands.SERVICE_BANDS})
+    unbanded = sorted({key for key in keys if bands.tag_key_band(key) is None})
     assert not unbanded, (
-        f"supervisord.conf passes service keys with no SERVICE_BANDS entry: {unbanded}. "
-        "Add each to SERVICE_BANDS (or pass 'user' if it really is user-created)."
+        f"supervisord.conf passes service keys with no band: {unbanded}. "
+        "Add each to SERVICE_BANDS, or to _NON_SERVICE_PROGRAM_BANDS under its program name "
+        "(or pass 'user' if it really is user-created)."
     )
+
+
+def test_a_tag_key_resolves_through_the_service_bands_then_the_program_bands() -> None:
+    assert (
+        bands.tag_key_band("system_interface")
+        == bands.SERVICE_BANDS["system_interface"]
+    )
+    assert bands.tag_key_band("screen-neko") == bands.SCREEN_STACK
+    assert bands.tag_key_band("no-such-program") is None
 
 
 def test_every_built_in_supervisord_program_has_an_explicit_band() -> None:

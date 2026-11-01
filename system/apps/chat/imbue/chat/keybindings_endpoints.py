@@ -15,9 +15,6 @@ from app_schema.api_schema import RouteTable
 from app_schema.routes import model_response
 from flask import Flask
 from flask import Response
-from flask import request
-from workspace_profile.identity import IDENTITY_HEADER
-from workspace_profile.identity import parse_identity_header
 from workspace_profile.manifest import KEYBINDINGS_ACTIONS_SUBPATH
 from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
 from workspace_profile.manifest import KeybindingActionDeclaration
@@ -25,6 +22,8 @@ from workspace_profile.manifest import KeybindingsActionsResponse
 from workspace_profile.manifest import KeybindingsMeResponse
 from workspace_profile.manifest import resolve_keybindings_me_response
 from workspace_profile.snapshot import load_workspace_profile_snapshot
+
+from imbue.chat.identity import request_identity
 
 KEYBINDINGS_ACTIONS_ROUTE: Final[str] = f"/api{KEYBINDINGS_ACTIONS_SUBPATH}"
 KEYBINDINGS_ME_ROUTE: Final[str] = f"/api{KEYBINDINGS_ME_SUBPATH}"
@@ -53,7 +52,7 @@ def keybindings_me_endpoint() -> Response:
         resolve_keybindings_me_response(
             CHAT_KEYBINDINGS_MANIFEST,
             snapshot=load_workspace_profile_snapshot(workspace_root),
-            identity=parse_identity_header(request.headers.get(IDENTITY_HEADER)),
+            identity=request_identity(),
             workspace_root=workspace_root,
         )
     )

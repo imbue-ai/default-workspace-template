@@ -18,7 +18,7 @@ import httpx
 from loguru import logger
 from pydantic import Field
 from pydantic import ValidationError
-from workspace_profile.identity import RequestIdentity
+from workspace_layout.identity import RequestIdentity
 from workspace_profile.keybindings import keybinding_assignment
 from workspace_profile.keybindings import with_keybinding_assignment
 from workspace_profile.keybindings import without_keybinding_assignment

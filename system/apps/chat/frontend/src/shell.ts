@@ -13,13 +13,14 @@ import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats
 import { refreshKeybindings } from "./models/keybindings";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
+import { ensureParticipants } from "./models/Participants";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
-import { focusComposer, prependToComposer } from "./views/MessageInput";
+import { focusComposer, prependToComposer, setComposerHint } from "./views/MessageInput";
 import { mirrorParentTheme, wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 /** The path of a sub-agent view: the chat, the agent whose session it is, and the session. */
@@ -82,6 +83,8 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   const onShown = (): void => {
     isShown = true;
     if (isPresenceReported) reportPresence("visible");
+    // Whoever joined while the page was out of view is drawn right once it is back.
+    void ensureParticipants();
     m.redraw();
   };
   const onHidden = (): void => {
@@ -108,6 +111,7 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
       shown: onShown,
       hidden: onHidden,
       prependDraft: (text) => prependToComposer(chatId, text),
+      hintComposer: (hint) => setComposerHint(chatId, hint),
       setCompact: (isCompact) => {
         setCompactFromRoot(isCompact);
         m.redraw();
@@ -137,7 +141,10 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     window.addEventListener("focus", reportFocusChange);
     window.addEventListener("blur", reportFocusChange);
   }
-  window.addEventListener("focus", () => connection?.focused());
+  window.addEventListener("focus", () => {
+    connection?.focused();
+    void ensureParticipants();
+  });
   reportChatLocation(chatId, options.path);
   return connection;
 }
