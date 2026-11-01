@@ -37,6 +37,7 @@ from bootstrap.manager import (
     _install_runtime_cron_entries,
     _migrate_cron_entries_to_routines,
     _parse_timezone_response,
+    _read_clock_env,
     _read_host_name,
     _read_update_marker_dri_agent,
     _recover_interrupted_update,
@@ -440,7 +441,7 @@ def test_supervisords_programs_resolve_bare_entry_points_in_the_workspace_venv(
     _write_executable(tool_bin / "uv")
 
     environment = _supervisord_environment(
-        {"PATH": str(tool_bin), "MNGR_HOST_DIR": "/home/user/.mngr"}, venv
+        {"PATH": str(tool_bin), "MNGR_HOST_DIR": "/home/user/.mngr"}, venv, {}
     )
 
     path = environment["PATH"]
@@ -449,6 +450,70 @@ def test_supervisords_programs_resolve_bare_entry_points_in_the_workspace_venv(
     assert shutil.which("uv", path=path) == str(tool_bin / "uv")
     assert environment["VIRTUAL_ENV"] == str(venv)
     assert environment["MNGR_HOST_DIR"] == "/home/user/.mngr"
+
+
+def test_supervisord_gets_the_clock_env_files_variables_literally(
+    tmp_path: Path,
+) -> None:
+    clock_env = tmp_path / "clock.env"
+    clock_env.write_text(
+        "# the trial's clock\n"
+        "LD_PRELOAD=/usr/local/lib/faketime/libfaketime.so.1\n"
+        "\n"
+        "FAKETIME_SKIP_CMDS=apt-get,apt,dpkg\n"
+        "QUOTED='a b'=$HOME\n"
+    )
+    environ = {"PATH": "/usr/bin", "MNGR_HOST_DIR": "/home/user/.mngr"}
+
+    environment = _supervisord_environment(
+        environ, tmp_path / ".venv", _read_clock_env(clock_env)
+    )
+
+    assert environment["LD_PRELOAD"] == "/usr/local/lib/faketime/libfaketime.so.1"
+    assert environment["FAKETIME_SKIP_CMDS"] == "apt-get,apt,dpkg"
+    assert environment["QUOTED"] == "'a b'=$HOME"
+    assert environment["MNGR_HOST_DIR"] == "/home/user/.mngr"
+    # Only supervisord's environment carries them, not bootstrap's own.
+    assert "LD_PRELOAD" not in environ
+
+
+def test_supervisord_environment_is_unchanged_without_a_clock_env_file(
+    tmp_path: Path,
+) -> None:
+    environ = {"PATH": "/usr/bin"}
+    venv = tmp_path / ".venv"
+
+    clock_env = _read_clock_env(tmp_path / "clock.env")
+
+    assert clock_env == {}
+    assert _supervisord_environment(environ, venv, clock_env) == (
+        _supervisord_environment(environ, venv, {})
+    )
+
+
+def test_a_clock_env_file_with_a_malformed_line_is_ignored_whole(
+    tmp_path: Path,
+) -> None:
+    clock_env = tmp_path / "clock.env"
+    clock_env.write_text("LD_PRELOAD=/lib/x.so\nexport FAKETIME\n")
+
+    assert _read_clock_env(clock_env) == {}
+
+
+def test_a_clock_env_file_whose_key_is_no_variable_name_is_ignored_whole(
+    tmp_path: Path,
+) -> None:
+    clock_env = tmp_path / "clock.env"
+    clock_env.write_text("FAKETIME_CACHE_DURATION=1\nexport LD_PRELOAD=/lib/x.so\n")
+
+    assert _read_clock_env(clock_env) == {}
+
+
+def test_an_unreadable_clock_env_file_is_ignored(tmp_path: Path) -> None:
+    clock_env = tmp_path / "clock.env"
+    clock_env.write_bytes(b"LD_PRELOAD=\xff\xfe\n")
+
+    assert _read_clock_env(clock_env) == {}
 
 
 # _apply_container_timezone
