@@ -19,7 +19,8 @@ observe`, its own supervised service) writes, and serves:
 
 - `GET /`: the chat root, the built `root.html`: the chat list down the left
   (`frontend/src/root/`, grouped by the chat that started each helper and
-  ordered by recency under the main chat, with rename, make main, stop and restart, and delete) beside an inner
+  ordered by recency under the main chat, each row ending in how long ago the chat was last
+  active ("5m", "3d"), with rename, make main, stop and restart, and delete) beside an inner
   frame of the selected chat's page. The selection is the `chat` query parameter,
   so the root's path is `/?chat=<chat-id>`, which it reports to the shell with the
   chat's title. Loading the page sends and writes nothing. With nothing selected
@@ -87,8 +88,10 @@ observe`, its own supervised service) writes, and serves:
   view of background agents too); the older `/api/agents/<id>/...` spellings of
   the per-chat routes are gone.
 - `/api/ws`: the chat pages' socket, carrying `chats_updated` (a `ChatSnapshot`
-  per chat, the agent-level facts under `active_agent` and the epoch seconds of
-  its last message as `last_messaged_at`, which the chat root's list orders on)
+  per chat, the agent-level facts under `active_agent`, the epoch seconds of
+  its last message from the UI as `last_messaged_at`, and the later of that and
+  its agent's last finished turn as `last_active_at`, which the chat root's list
+  orders on and shows)
   the provisional-chat events (`provisional_chat_created`,
   `provisional_chat_completed`), and `accounts_updated` whenever the account
   index changes, whichever process wrote it.

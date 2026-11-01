@@ -52,9 +52,7 @@ export function TurnDoneMark(): m.Component<{ chatId: string; events: Transcript
       return m(
         "div",
         {
-          class:
-            "turn-done-mark mb-5 flex min-h-5 items-center gap-1.5 px-1 " +
-            "text-(length:--font-size-helper) text-faint",
+          class: "turn-done-mark flex min-h-5 items-center gap-1.5 px-1 text-faint",
           role: "status",
         },
         [

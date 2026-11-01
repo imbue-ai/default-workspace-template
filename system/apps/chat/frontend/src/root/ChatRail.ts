@@ -44,6 +44,7 @@ import {
 } from "./railWidth";
 import type { ChatRow } from "./rows";
 import { LIST_ROW_PART } from "@imbue/workspace-ui/src/themes/parts";
+import { Age, shortAge } from "../views/relativeTime";
 
 export interface ChatRailAttrs {
   /** The rows in display order. */
@@ -509,6 +510,14 @@ function railRow(attrs: ChatRailAttrs, row: ChatRow): m.Vnode {
       m("span", { class: "chat-rail-title min-w-0 flex-1 truncate text-(length:--font-size-row)" }, row.title),
       row.hasMention ? mentionMark() : null,
       participantPhotos(row),
+      row.lastActiveMs === null
+        ? null
+        : m(Age, {
+            atMs: row.lastActiveMs,
+            format: shortAge,
+            tooltipLead: "Last message",
+            class: "chat-rail-age flex-none text-(length:--font-size-helper) font-normal text-faint tabular-nums",
+          }),
       attrs.isTouch && isDeleting ? null : attrs.isTouch ? rowKebab(row) : [renamePencil(row), hoverKebab(row)],
     ],
   );

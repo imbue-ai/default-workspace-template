@@ -697,7 +697,11 @@ class ChatSnapshot(FrozenModel):
     )
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
     last_messaged_at: float | None = Field(
-        description="Epoch seconds of the chat's most recent message, or None when it has never been messaged; the chat list orders on it",
+        description="Epoch seconds of the chat's most recent message from the UI, or None when it has never been messaged",
+    )
+    last_active_at: float | None = Field(
+        description="Epoch seconds of the later of that message and its agent's most recent finished turn, or None when "
+        "neither has happened; the chat list orders on it and shows it",
     )
     awaiting_chat_ids: tuple[ChatId, ...] = Field(
         default=(),

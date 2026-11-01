@@ -152,9 +152,11 @@ export interface ChatSnapshot {
   // Null while the chat is not converging on a new agent.
   handoff: HandoffState | null;
   active_agent: ActiveAgent;
-  // Epoch seconds of the chat's most recent message; null when it has never been messaged.
-  // The chat root's list orders on it.
+  // Epoch seconds of the chat's most recent message from the UI; null when it has never been messaged.
   last_messaged_at: number | null;
+  // Epoch seconds of the later of that message and its agent's most recent finished turn; null when neither has
+  // happened. The chat root's list orders on it and shows it.
+  last_active_at: number | null;
   /** The chats a mention from this room sent to and has not heard back from: the room's row shows a working dot
    *  while one of them works (section 7.4). Empty for an agent chat. */
   awaiting_chat_ids: string[];

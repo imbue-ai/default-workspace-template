@@ -112,6 +112,7 @@ from imbue.chat.main_chat import MAIN_CHAT_INTRODUCTION
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.main_chat import MainChatStore
 from imbue.chat.message_stamps import MessageStampStore
+from imbue.chat.message_stamps import REPLY_STAMPS_KEY
 from imbue.chat.models import AgentCreationError
 from imbue.chat.models import AgentDestroyError
 from imbue.chat.models import AgentNameConflictError
@@ -5462,6 +5463,64 @@ def test_message_stamps_follow_the_chats_they_stamp(broadcaster: WebSocketBroadc
         assert snapshot is not None and snapshot.last_messaged_at == stamps[chat_id]
         manager.remove_agent(str(chat.id))
         assert MessageStampStore(path=stamps_path).read() == {}
+    finally:
+        manager.stop()
+
+
+def test_a_finished_turn_stamps_the_chat_as_last_active_even_when_no_page_watches_it(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A helper chat is messaged by the agent that started it, never from the UI, and often never opened: its turn,
+    read off the ``active`` marker alone, stamps it when it ends, so the list orders and dates it by that reply."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    reply_stamps_path = tmp_path / "last_replied.json"
+    manager = AgentManager.build(
+        broadcaster, reply_stamps=MessageStampStore(path=reply_stamps_path, key=REPLY_STAMPS_KEY)
+    )
+    state_dir = tmp_path / "agents" / "agent-1"
+    state_dir.mkdir(parents=True)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING")
+        manager._ensure_activity_tracking("agent-1")
+        assert [snapshot.last_active_at for snapshot in manager.get_chat_snapshots()] == [None]
+
+        (state_dir / "active").touch()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        assert [snapshot.last_active_at for snapshot in manager.get_chat_snapshots()] == [None]
+
+        before_end = time.time()
+        (state_dir / "active").unlink()
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        stamps = MessageStampStore(path=reply_stamps_path, key=REPLY_STAMPS_KEY).read()
+        assert set(stamps) == {ChatId("agent-1")} and stamps[ChatId("agent-1")] >= before_end
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.last_messaged_at is None
+        assert snapshot.last_active_at == stamps[ChatId("agent-1")]
+
+        manager.record_message_sent(ChatId("agent-1"))
+        (snapshot,) = manager.get_chat_snapshots()
+        assert snapshot.last_active_at == snapshot.last_messaged_at
+        assert snapshot.last_messaged_at is not None and snapshot.last_messaged_at >= stamps[ChatId("agent-1")]
+
+        manager.remove_agent("agent-1")
+        assert MessageStampStore(path=reply_stamps_path, key=REPLY_STAMPS_KEY).read() == {}
+    finally:
+        manager.stop()
+
+
+def test_an_idle_agent_found_at_startup_is_not_stamped_as_just_active(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A restart finds every agent idle; only a turn this process saw end stamps a chat, so a restart never makes
+    every chat read as active just now."""
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    manager = AgentManager.build(broadcaster)
+    (tmp_path / "agents" / "agent-1").mkdir(parents=True)
+    try:
+        seed_agent_state(manager, "agent-1", name="Chat-1", state="WAITING")
+        manager._ensure_activity_tracking("agent-1")
+        manager._recompute_activity_state("agent-1", broadcast_on_change=False)
+        assert [snapshot.last_active_at for snapshot in manager.get_chat_snapshots()] == [None]
     finally:
         manager.stop()
 
