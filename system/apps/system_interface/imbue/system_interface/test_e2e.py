@@ -2902,6 +2902,8 @@ def _css_rgb(hex_color: str) -> str:
     return f"rgb({red}, {green}, {blue})"
 
 
+# Flaky: fails intermittently in CI (on main's own runs too) at the viewed window's visibility check on the owner's
+# view of the visitor's desktop, and passes locally.
 @pytest.mark.flaky
 @pytest.mark.timeout(90, func_only=False)
 def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chrome_on(
