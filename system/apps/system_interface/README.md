@@ -89,6 +89,19 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   own origin (`/_static/themes/<path>`), and the theme gallery page
   (`/theme-gallery`), which shows every part of a theme. A watch on the theme
   folders and the app manifests says `themes_changed` when the catalog does.
+- Keyboard shortcuts (the user-profile-state spec in the mngr repo, sections 9
+  and 10): the shell's own manifest and the requester's resolved chords
+  (`/api/keybindings/actions`, `/api/keybindings/me`, the pair every built-in
+  app serves), the catalog the Keyboard shortcuts dialog lists, every app's
+  manifest resolved for the requester (`/api/keybindings/catalog`), and the
+  save, reset, discard, and retry flows (`POST /api/keybindings`,
+  `.../reset`, `.../discard`, `.../deliver`). A save lands in the profile
+  files under `data/system/profile/` (the requester's override file; for the
+  owner's "everywhere" save also `unsent.json`, delivered to the account
+  through the latchkey gateway's `minds-workspaces-account-settings` verb,
+  whose first use files one permission request). Every save, and a watch on
+  the account's profile snapshot (`data/.state/profile/account.json`, written
+  from outside the workspace), says `keybindings_changed`.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.
@@ -111,8 +124,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
   `presence_updated`, `roster_updated`, `placements_updated`, `active_desktop_changed`,
   `client_entries_changed`, `avatar_status`, `avatar_selection_changed`,
-  `themes_changed`, and `layout_op` (contracts section 6); it accepts each
-  client's `client_state` report.
+  `themes_changed`, `keybindings_changed`, and `layout_op` (contracts section
+  6); it accepts each client's `client_state` report.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, and where it resumes), `offer_tour` (the bootstrap's mark on a new workspace, without which the tour never starts by itself),
 `desktop_themes.json` (the workspace's default theme and each desktop's own),
