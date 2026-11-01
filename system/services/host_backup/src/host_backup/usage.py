@@ -102,19 +102,21 @@ def read_store_usage(
     """Ask the backup store for the account's usage; None when there is none to ask or it does not answer.
 
     Only a `rest:` repository is asked. A 404 is another REST server that knows no
-    quota (a user's own rest-server), and any other failure -- unreachable store, a
-    timeout, a malformed answer -- is logged and treated the same way, so the tick
-    never stalls or aborts on the probe.
+    quota (a user's own rest-server), and any other failure -- a malformed address,
+    an unreachable store, a timeout, a malformed answer -- is logged and treated the
+    same way, so the tick never stalls or aborts on the probe.
     """
     probe_url = usage_probe_url(env.get("RESTIC_REPOSITORY", ""))
     if probe_url is None:
         return None
-    request = urllib.request.Request(_strip_userinfo(probe_url), method="GET")
-    authorization = _basic_auth_header(env, probe_url)
-    if authorization is not None:
-        request.add_header("Authorization", authorization)
-    request.add_header("Accept", "application/json")
     try:
+        # Parsing the URL (urlsplit) is what rejects a malformed address, so it
+        # sits inside the try with the request it builds.
+        request = urllib.request.Request(_strip_userinfo(probe_url), method="GET")
+        authorization = _basic_auth_header(env, probe_url)
+        if authorization is not None:
+            request.add_header("Authorization", authorization)
+        request.add_header("Accept", "application/json")
         body = open_url(request, USAGE_PROBE_TIMEOUT_SECONDS)
     except urllib.error.HTTPError as e:
         if e.code == 404:

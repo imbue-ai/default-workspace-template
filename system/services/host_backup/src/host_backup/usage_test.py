@@ -157,6 +157,16 @@ def test_a_refusal_or_an_unreachable_store_means_no_quota_information() -> None:
     )
 
 
+def test_a_malformed_repository_address_means_no_quota_information() -> None:
+    # urlsplit rejects the unclosed IPv6 bracket; the probe reports no quota
+    # information rather than ending the tick, and restic reports the address.
+    opener = _RecordingOpener(_usage_body())
+    env = {"RESTIC_REPOSITORY": "rest:https://[::1/user1/agent-abc/"}
+
+    assert read_store_usage(env, open_url=opener) is None
+    assert opener.requests == []
+
+
 def test_an_unreadable_answer_means_no_quota_information() -> None:
     assert read_store_usage(_STORE_ENV, open_url=_RecordingOpener(b"not json")) is None
     assert (
