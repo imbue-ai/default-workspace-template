@@ -609,8 +609,8 @@ host_log_dir = "/var/log/mngr"
 # libs/mngr_lima/imbue/mngr_lima/constants.py the library default; bump all of
 # them together, uploading the new release with `minds-admin artifacts upload`
 # before landing the bump here).
-default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-arm64-20260722-2547.qcow2"
-default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20260722-2547/debian-13-genericcloud-amd64-20260722-2547.qcow2"
+default_image_url_aarch64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20261026-2643/debian-13-genericcloud-arm64-20261026-2643.qcow2"
+default_image_url_x86_64 = "https://apt.imbuepackages.com/artifacts/debian-cloud-image/20261026-2643/debian-13-genericcloud-amd64-20261026-2643.qcow2"
 
 # vultr VPS provider (cloud mode). is_enabled=false mirrors the lima/docker blocks:
 # the vps_docker backend plugin is not installed in the agent container, so a parsed
