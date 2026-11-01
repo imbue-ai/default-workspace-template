@@ -14,6 +14,7 @@ import {
   type KeybindingActionView,
   type KeybindingAppView,
   type KeybindingsCatalog,
+  type KeybindingsDeliveryOutcome,
   deliverKeybindings,
   discardKeybinding,
   fetchKeybindingsCatalog,
@@ -86,12 +87,17 @@ export function KeyboardSettingsSection(): m.Component {
     m.redraw();
   }
 
+  /** What a delivery attempt leaves on screen: nothing once it landed, else its own word on why not. */
+  function noticeOfDelivery(delivery: KeybindingsDeliveryOutcome | null): string | null {
+    return delivery === null || delivery.status === "DELIVERED" ? null : delivery.detail;
+  }
+
   async function save(app: string, action: string, scope: "workspace" | "account"): Promise<void> {
     if (recordedChord === null || conflict !== null) return;
     isBusy = true;
     try {
       const saved = await saveKeybinding(app, action, [recordedChord], scope);
-      notice = saved.delivery === null || saved.delivery.status === "DELIVERED" ? null : saved.delivery.detail;
+      notice = noticeOfDelivery(saved.delivery);
       stopRecording();
       await load();
     } catch (error) {
@@ -225,7 +231,14 @@ export function KeyboardSettingsSection(): m.Component {
       ),
       m(
         Button,
-        { sm: true, disabled: isBusy, onclick: () => void act(() => deliverKeybindings([])) },
+        {
+          sm: true,
+          disabled: isBusy,
+          onclick: () =>
+            void act(async () => {
+              notice = noticeOfDelivery(await deliverKeybindings([]));
+            }),
+        },
         "Try saving to your account again",
       ),
     ]);
