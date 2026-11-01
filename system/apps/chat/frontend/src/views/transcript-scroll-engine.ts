@@ -1067,7 +1067,8 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
     // reverts each tiny delta before the next arrives -- pinning the user in
     // place. Bookkeeping is exact, so exact comparison is safe.
     const hasPendingUserScroll = Math.abs(pendingUserDeltaPx) > 0.01 && !isPendingClamp;
-    if (isPendingClamp || (isPatchShift && !hasPendingUserScroll)) {
+    const didAbsorbClamp = isPendingClamp || (isPatchShift && !hasPendingUserScroll);
+    if (didAbsorbClamp) {
       pendingEchoTops.push(element.scrollTop);
       trace?.record("clamp-absorbed", {
         deltaPx: pendingUserDeltaPx,
@@ -1096,7 +1097,13 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
       element.scrollHeight +
       "|" +
       element.clientHeight;
-    if (positionKey === lastPositionedKey) {
+    // A clamp/patch-shift absorbed this frame means the browser moved scrollTop
+    // out from under us (e.g. a frame hidden with display:none resets its scroll
+    // container to 0, so switching back to this chat shows it at the top while the
+    // state machine still reads FOLLOW). The content key is unchanged, so the
+    // short-circuit would skip the re-pin that returns the viewport to the bottom
+    // -- bypass it whenever a clamp was absorbed so positioning runs below.
+    if (positionKey === lastPositionedKey && !didAbsorbClamp) {
       planFill();
       return;
     }
