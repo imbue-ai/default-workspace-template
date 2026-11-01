@@ -448,7 +448,8 @@ left behind by people no longer in the roster, after a thin rule. Escape or a
 click on the bare backdrop closes it. The backdrop's own context menu offers
 "New desktop", "Show all desktops", "Change wallpaper...", which opens the
 wallpaper chooser (`WallpaperChooserDialog.ts`, what the settings dialog
-became: a desktop's colour and glyph are no longer shown or edited), and
+became: a desktop's colour and glyph are no longer shown or edited), "Change
+theme...", which opens the theme chooser (`ThemeChooserDialog.ts`), and
 "Keyboard shortcuts...", which opens the viewer's keyboard shortcuts
 (`KeyboardShortcutsDialog.ts` around `KeyboardSettingsSection.ts`; the
 user-profile-state spec, section 10.3). A person's
