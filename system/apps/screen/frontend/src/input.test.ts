@@ -92,6 +92,14 @@ describe("InputRelay", () => {
     expect(relay.keySink.value).toBe("");
   });
 
+  it("leaves the sink to an IME while it composes and empties it once the composition ends", () => {
+    relay.keySink.value = "に";
+    relay.keySink.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+    expect(relay.keySink.value).toBe("に");
+    relay.keySink.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "に" }));
+    expect(relay.keySink.value).toBe("");
+  });
+
   it("releases held keys when focus leaves the stage, not when it moves into the sink", () => {
     relay.setEnabled(true);
     relay.keyDown(XK_CONTROL_L);

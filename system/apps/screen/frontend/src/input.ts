@@ -91,8 +91,13 @@ export class InputRelay implements KeySink {
     this.keySink.inputMode = "none";
     stage.append(this.keySink);
     // A key the keyboard left to the browser (a paste chord, a key while not controlling) types into the sink;
-    // nothing is kept there.
-    this.keySink.addEventListener("input", () => {
+    // nothing is kept there. An IME composes in the sink and the keyboard types the result on compositionend,
+    // so the field is left to the IME until then.
+    this.keySink.addEventListener("input", (event) => {
+      if (event instanceof InputEvent && event.isComposing) return;
+      this.keySink.value = "";
+    });
+    this.keySink.addEventListener("compositionend", () => {
       this.keySink.value = "";
     });
     stage.addEventListener("focus", () => this.keySink.focus({ preventScroll: true }));
