@@ -32,92 +32,46 @@ def test_provision_from_file_raises_when_env_absent(tmp_path: Path) -> None:
 
 
 class _ScriptedInit:
-    """A ``run_init`` seam returning a scripted sequence of outcomes, then success.
+    """A ``run_init`` seam returning one scripted outcome and recording the call."""
 
-    Each entry is ``(returncode, stderr)``; once the script is exhausted every
-    further call succeeds (returncode 0). Records how many times it was called.
-    """
-
-    def __init__(self, outcomes: list[tuple[int, str]]) -> None:
-        self._outcomes = list(outcomes)
+    def __init__(self, returncode: int, stderr: str) -> None:
+        self._returncode = returncode
+        self._stderr = stderr
         self.call_count = 0
 
-    def __call__(self, env_values: dict[str, str]):  # type: ignore[no-untyped-def]
+    def __call__(self, env_values: dict[str, str]) -> _MODULE._InitAttempt:
         self.call_count += 1
-        if self._outcomes:
-            returncode, stderr = self._outcomes.pop(0)
-            return _MODULE._InitAttempt(returncode, "", stderr)
-        return _MODULE._InitAttempt(0, "created restic repository", "")
+        return _MODULE._InitAttempt(self._returncode, "", self._stderr)
 
 
-def test_initialize_repository_retries_through_credential_propagation() -> None:
-    # A just-minted R2 key is not yet active at the S3 edge: the first inits
-    # fail with a signature/auth error, then it goes live. The web-create path
-    # runs this init immediately, so it must ride out that window rather than
-    # fail the whole create.
+def test_initialize_repository_treats_an_existing_repository_as_success() -> None:
     scripted = _ScriptedInit(
-        [
-            (
-                1,
-                "Fatal: The request signature we calculated does not match the signature you provided",
-            ),
-            (1, "Fatal: InvalidAccessKeyId"),
-        ]
+        1, "Fatal: repository master key and config already initialized"
     )
-    slept: list[float] = []
 
     created = _MODULE.initialize_repository(
-        {"RESTIC_REPOSITORY": "s3:https://x/b", "RESTIC_PASSWORD": "pw"},
+        {"RESTIC_REPOSITORY": "rest:https://x/u/w/", "RESTIC_PASSWORD": "pw"},
         run_init=scripted,
-        sleep=slept.append,
-        monotonic=lambda: 0.0,
     )
 
-    assert created is True
-    assert scripted.call_count == 3
-    assert len(slept) == 2
-
-
-def test_initialize_repository_surfaces_a_persistent_failure_after_the_deadline() -> (
-    None
-):
-    # A transient-looking auth error that never clears must still fail once the
-    # retry window is exhausted (not loop forever). A fake clock jumps past the
-    # deadline after the first wait.
-    scripted = _ScriptedInit([(1, "Fatal: InvalidAccessKeyId")] * 50)
-    clock = {"now": 0.0}
-
-    def _advancing_sleep(seconds: float) -> None:
-        clock["now"] += 1000.0
-
-    with pytest.raises(_MODULE.BackupProvisionError, match="restic init failed"):
-        _MODULE.initialize_repository(
-            {"RESTIC_REPOSITORY": "s3:https://x/b", "RESTIC_PASSWORD": "pw"},
-            run_init=scripted,
-            sleep=_advancing_sleep,
-            monotonic=lambda: clock["now"],
-        )
-    # One failing attempt, one wait, then the deadline check stops it.
-    assert scripted.call_count == 2
-
-
-def test_initialize_repository_does_not_retry_a_non_auth_failure() -> None:
-    # A non-transient error (e.g. a malformed repository) fails immediately --
-    # retrying it would just waste the whole window.
-    scripted = _ScriptedInit(
-        [(1, "Fatal: unable to open config file: bucket does not exist")]
-    )
-    slept: list[float] = []
-
-    with pytest.raises(_MODULE.BackupProvisionError, match="bucket does not exist"):
-        _MODULE.initialize_repository(
-            {"RESTIC_REPOSITORY": "s3:https://x/b", "RESTIC_PASSWORD": "pw"},
-            run_init=scripted,
-            sleep=slept.append,
-            monotonic=lambda: 0.0,
-        )
+    assert created is False
     assert scripted.call_count == 1
-    assert slept == []
+
+
+def test_initialize_repository_surfaces_a_failure_without_retrying() -> None:
+    # The backup store's token is valid the moment it is issued, so a refusal is
+    # a real failure and is reported at once rather than ridden out.
+    scripted = _ScriptedInit(
+        1, "Fatal: unexpected HTTP response (401): 401 Unauthorized"
+    )
+
+    with pytest.raises(_MODULE.BackupProvisionError, match="exit 1"):
+        _MODULE.initialize_repository(
+            {"RESTIC_REPOSITORY": "rest:https://x/u/w/", "RESTIC_PASSWORD": "pw"},
+            run_init=scripted,
+        )
+
+    assert scripted.call_count == 1
 
 
 @pytest.mark.skipif(

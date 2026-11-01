@@ -1,0 +1,1 @@
+The people-card desktop-viewing browser test is marked flaky: it failed once in CI on an unrelated change (the viewed window's locator timed out at 5 s) and passes on rerun, so offload now retries it.

@@ -2902,6 +2902,7 @@ def _css_rgb(hex_color: str) -> str:
     return f"rgb({red}, {green}, {blue})"
 
 
+@pytest.mark.flaky
 @pytest.mark.timeout(90, func_only=False)
 def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chrome_on(
     e2e_server: E2EServer, page: Page
