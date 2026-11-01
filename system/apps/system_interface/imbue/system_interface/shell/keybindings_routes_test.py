@@ -1,7 +1,7 @@
 """The shell's keybindings routes: the manifest, the catalog, and the save / discard / deliver flows."""
 
 import json
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -223,7 +223,7 @@ def _fake_gateway_app(record: dict[str, Any]) -> Flask:
 
 
 @contextmanager
-def _served_fake_gateway(monkeypatch: pytest.MonkeyPatch) -> Iterator[dict[str, Any]]:
+def _served_fake_gateway(monkeypatch: pytest.MonkeyPatch) -> Generator[dict[str, Any], None, None]:
     """Serve the stand-in gateway and point the shell's environment at it; yields the gateway's record."""
     record: dict[str, Any] = {"puts": [], "requests": [], "is_granted": False}
     with serve_app(_fake_gateway_app(record)) as served:
