@@ -248,11 +248,13 @@ def prune(
 ) -> subprocess.CompletedProcess[str]:
     """`restic prune` -- actually delete data referenced by no remaining snapshot.
 
-    `max_repack_bytes` bounds how much restic repacks in this run (its
-    `--max-repack-size`): a prune writes the repacked data before it deletes the old
-    packs, so an account near its hard storage limit prunes in bounded slices.
+    `--pack-size` pins the size of the packs the repack writes, as `backup` does
+    for the packs it uploads. `max_repack_bytes` bounds how much restic repacks in
+    this run (its `--max-repack-size`): a prune writes the repacked data before it
+    deletes the old packs, so an account near its hard storage limit prunes in
+    bounded slices.
     """
-    args: tuple[str, ...] = ("prune",)
+    args: tuple[str, ...] = ("prune", "--pack-size", str(PACK_SIZE_MIB))
     if max_repack_bytes is not None:
         args += ("--max-repack-size", format_restic_size(max_repack_bytes))
     return run_restic(args, env_overrides=env_overrides)

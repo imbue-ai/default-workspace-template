@@ -163,8 +163,8 @@ is rewritten out of history by its path pattern.
   credentials, rustup's `settings.toml`) ride the backup.
 - Restic runs from inside the directory it reads and backs up `.`, so each
   snapshot stores that tree at its root. `--pack-size 16` pins the pack size
-  (restic's default target) so no upload approaches the backup store's request
-  body limit. restic only skips re-reading an
+  (restic's default target) on the backup and on the prune's repack, so no
+  upload approaches the backup store's request body limit. restic only skips re-reading an
   unchanged file when the previous snapshot holds it at the same path inside
   the snapshot, and `outer_trigger` reads every tick from a new timestamped
   path, so an absolute source would never match and every tick would re-read

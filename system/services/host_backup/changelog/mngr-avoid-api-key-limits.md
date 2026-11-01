@@ -2,4 +2,4 @@ Backups now respect the account's Imbue Cloud storage quota before uploading. Wh
 
 A backup the store refuses for lack of storage (restic's "507 Insufficient Storage") fails at once and its `restic_backup_failed` event carries `reason = "quota_exceeded"`.
 
-`restic backup` pins `--pack-size 16`, and `restic prune` accepts a repack bound.
+`restic backup` and `restic prune` pin `--pack-size 16`, and `restic prune` accepts a repack bound.
