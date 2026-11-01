@@ -1,6 +1,7 @@
 /**
- * The Keyboard section of the shell's settings dialog (user-profile-state spec, section 10.3):
- * every app's actions from their manifests, a chord recorder, and the save surfaces. The owner
+ * The body of the Keyboard shortcuts dialog (`KeyboardShortcutsDialog.ts`, opened from the
+ * backdrop's context menu; user-profile-state spec, section 10.3): every app's actions from
+ * their manifests, a chord recorder, and the save surfaces. The owner
  * chooses "only in this workspace" (the override file) or "everywhere" (the account, through the
  * delivery flow); a visitor's save is always their own override here. An "everywhere" save the
  * account has not taken yet shows as waiting, with retry and discard.
