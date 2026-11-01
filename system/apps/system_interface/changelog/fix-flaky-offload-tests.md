@@ -1,0 +1,1 @@
+Stabilized two multiplayer end-to-end tests (viewing another person's desktop, and the independent pinned window shared by two clients): each now waits for a window's restore to be durable server-side before asserting on it, so a concurrent layout refetch can no longer transiently drop the window and fail the check.

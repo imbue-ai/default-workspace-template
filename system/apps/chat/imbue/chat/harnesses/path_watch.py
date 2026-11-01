@@ -32,17 +32,23 @@ from collections.abc import Callable
 from contextlib import suppress
 from pathlib import Path
 from typing import Any
+from typing import Final
 
 from loguru import logger
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 from watchdog.observers.api import ObservedWatch
+from watchdog.utils import BaseThread
 
 from imbue.chat.watcher_common import POLL_INTERVAL_SECONDS
 from imbue.chat.watcher_common import WakeOnChangeHandler
 
 # A watched directory: its path and whether its subdirectories are watched too.
 _WatchKey = tuple[str, bool]
+
+# How long to wait for an orphaned watchdog helper thread to exit when a partially-started
+# schedule is reaped (see SharedWatchObserver.subscribe).
+_ORPHANED_WATCH_THREAD_JOIN_SECONDS: Final[float] = 5.0
 
 
 class SharedWatchObserver:
@@ -81,10 +87,26 @@ class SharedWatchObserver:
                 self._observer.add_handler_for_watch(handler, watch)
                 self._handlers_by_key[key].add(handler)
                 return True
+            watchdog_threads_before = {thread for thread in threading.enumerate() if isinstance(thread, BaseThread)}
             try:
                 watch = self._observer.schedule(handler, key[0], recursive=is_recursive)
             except OSError:
-                # watchdog registers the handler before starting the emitter that just failed.
+                # watchdog registers the handler before starting the emitter that just failed; an inotify
+                # watch-limit error happens before any emitter thread starts, so there is nothing to reap.
+                with suppress(KeyError):
+                    self._observer.remove_handler_for_watch(handler, ObservedWatch(key[0], recursive=is_recursive))
+                raise
+            except RuntimeError:
+                # Under OS thread exhaustion the emitter's helper thread (the InotifyBuffer on Linux) is
+                # started inside on_thread_start, and only then is the emitter thread started -- that start
+                # raises RuntimeError("can't start new thread"). The emitter is then never registered,
+                # orphaning the already-running helper thread with no observer path left to stop it. Reap any
+                # helper thread this failed schedule started, drop the handler, and re-raise.
+                for thread in threading.enumerate():
+                    if isinstance(thread, BaseThread) and thread not in watchdog_threads_before and thread.is_alive():
+                        with suppress(OSError, RuntimeError):
+                            thread.stop()
+                            thread.join(timeout=_ORPHANED_WATCH_THREAD_JOIN_SECONDS)
                 with suppress(KeyError):
                     self._observer.remove_handler_for_watch(handler, ObservedWatch(key[0], recursive=is_recursive))
                 raise
@@ -250,7 +272,9 @@ class PathWatcher:
                     return
                 try:
                     is_subscribed = self._watch_observer.subscribe(target, is_recursive, self._handler)
-                except OSError as e:
+                except (OSError, RuntimeError) as e:
+                    # RuntimeError is the thread-exhaustion partial start (see SharedWatchObserver.subscribe):
+                    # its orphaned helper thread was reaped there, so keep the loop alive to retry next cycle.
                     logger.debug("PathWatcher failed to schedule {}: {}", target, e)
                     continue
                 if not is_subscribed:
