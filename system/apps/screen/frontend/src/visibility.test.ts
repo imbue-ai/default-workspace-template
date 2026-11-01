@@ -2,11 +2,17 @@ import { describe, expect, it } from "vitest";
 import { FakeScheduler } from "./testing/fakeScheduler";
 import { ViewerVisibility } from "./visibility";
 
-function build(hideDelayMs = 5000) {
+function build(hideDelayMs = 5000, isRequestPossible = () => true) {
   const scheduler = new FakeScheduler();
   const events: string[] = [];
   const visibility = new ViewerVisibility(
-    { onRelease: () => events.push("release"), onRequest: () => events.push("request") },
+    {
+      onRelease: () => events.push("release"),
+      onRequest: () => {
+        events.push("request");
+        return isRequestPossible();
+      },
+    },
     scheduler,
     hideDelayMs,
   );
@@ -78,6 +84,35 @@ describe("ViewerVisibility", () => {
     visibility.evaluate();
     scheduler.advance(2000);
     expect(events).toEqual(["request", "release"]);
+  });
+
+  it("a stage the belt finds without a size is hidden, and the belt's next reading of a size shows it again", () => {
+    const { scheduler, events, visibility } = build();
+    visibility.evaluate();
+    visibility.setLaidOut(false);
+    expect(visibility.isVisible).toBe(false);
+    scheduler.advance(5000);
+    expect(events).toEqual(["request", "release"]);
+    // No IntersectionObserver callback: the belt alone restores what it cleared.
+    visibility.setLaidOut(true);
+    expect(visibility.isVisible).toBe(true);
+    expect(events).toEqual(["request", "release", "request"]);
+  });
+
+  it("a request that could not be made is asked again on the next evaluation", () => {
+    let isPossible = false;
+    const { events, visibility } = build(5000, () => isPossible);
+    visibility.evaluate();
+    expect(events).toEqual(["request"]);
+    expect(visibility.wantsMedia).toBe(false);
+    visibility.evaluate();
+    expect(events).toEqual(["request", "request"]);
+    isPossible = true;
+    visibility.evaluate();
+    expect(events).toEqual(["request", "request", "request"]);
+    expect(visibility.wantsMedia).toBe(true);
+    visibility.evaluate();
+    expect(events).toEqual(["request", "request", "request"]);
   });
 
   it("reset forgets the media so the next visible evaluation requests it", () => {

@@ -410,9 +410,9 @@ class Viewer {
     this.visibility.evaluate();
   }
 
-  /** The visibility machine says this viewer should hold media (spec section 8.2). */
-  private requestMedia(): void {
-    if (!this.stream || !this.state || !this.isNekoOpen) return;
+  /** The visibility machine says this viewer should hold media (spec section 8.2): whether it was asked for. */
+  private requestMedia(): boolean {
+    if (!this.stream || !this.state || !this.isNekoOpen) return false;
     const videoId = this.state.video_id;
     // A network that needed a relay last time gets the relay servers up front (spec section 5.3).
     const isRelay = readNeedsRelay(pageStorage());
@@ -421,7 +421,12 @@ class Viewer {
         // A release while the fetch was in flight means a hidden viewer: it asks for nothing until seen again.
         if (this.visibility.wantsMedia) this.stream?.request(videoId, connectInfo, isRelay);
       })
-      .catch((error) => console.error("[screen] connect-info failed", error));
+      .catch((error) => {
+        console.error("[screen] connect-info failed", error);
+        // Forgotten, so the belt's next evaluation asks again rather than waiting for a hide and a show.
+        this.visibility.reset();
+      });
+    return true;
   }
 
   /** Hidden for the delay: the media goes, the socket, the session and the lease stay. */
@@ -450,8 +455,7 @@ class Viewer {
     // The belt: a display:none flip or a frame the observer missed is caught within the interval.
     window.setInterval(() => {
       const rect = this.stage.getBoundingClientRect();
-      const isLaidOut = rect.width > 4 && rect.height > 4;
-      if (!isLaidOut) this.visibility.setIntersecting(false);
+      this.visibility.setLaidOut(rect.width > 4 && rect.height > 4);
       this.visibility.setDocumentHidden(document.hidden);
       this.visibility.evaluate();
       this.render();
