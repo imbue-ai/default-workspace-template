@@ -120,6 +120,9 @@ export interface HandoffState {
   failed_step: "start" | "model" | null;
   // Whether the chat had no user turn to carry over, so the switch only starts it on the target: no handoff to show.
   is_fresh_start: boolean;
+  // A handoff whose successor is already the chat's agent, with only the prompt and the held sends left to
+  // deliver: the page shows that agent as it shows any, and its Stop waits for the delivery on the server.
+  has_landed: boolean;
 }
 
 /** Whether the switch can still be called off: a handoff only until the old agent is stopped (spec 5.6);

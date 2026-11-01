@@ -167,6 +167,7 @@ from imbue.chat.testing import write_recording_mngr_binary
 from imbue.chat.testing import write_summary_for_request
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.subprocess_utils import FinishedProcess
+from imbue.concurrency_group.thread_utils import ObservableThread
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.api.observe import acquire_observe_lock
@@ -6637,7 +6638,7 @@ def test_a_handoff_moves_a_chat_to_a_new_agent_on_another_harness(
         assert archived.labels["chat_seq"] == "1" and archived.labels["chat_id"] == first
 
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs == ["stop", "rename", "create"]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
         assert sent[0][0] == first and sent[0][1].startswith("/handoff-summary ")
         # The prompt reached the successor through the send path, with the message at its end.
         assert sent[1][0] == successor and sent[1][2].startswith("handoff-prompt-")
@@ -6689,7 +6690,8 @@ def test_a_handoff_off_an_agent_with_no_user_turn_is_a_fresh_start(
         assert [entry.is_fresh_start for entry in record.agents] == [False, True]
         assert sent == []
         assert not (tmp_path / "chats" / first / "summaries").exists()
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
         # The snapshot never listed a confirming message, since none was typed.
         assert manager.get_handoff_state(ChatId(first)) is None
     finally:
@@ -6756,21 +6758,23 @@ def test_a_model_pick_the_successor_cannot_take_fails_the_switch_at_the_model_st
         (snapshot,) = manager.get_chat_snapshots()
         assert snapshot.status is ChatStatus.ERROR and snapshot.handoff is not None
         assert snapshot.handoff.failed_step is HandoffFailedStep.MODEL
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
         # Only the summary request went out: the prompt waits for the pick.
         assert [message_id for _agent, _text, message_id in sent] == [f"handoff-summary-{record.handoff.handoff_id}"]
 
         # A retry on the same account adopts the successor: no create, the pick fails again the same way.
         assert manager.retry_handoff(chat_id, record.handoff.target_account_id) is HandoffPhase.SWITCHING
         wait_for(is_failed, timeout=15.0)
-        assert [line.split(" ")[0] for line in argv_log.read_text().splitlines()] == ["stop", "rename", "create"]
+        verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
+        assert verbs[0] == "rename" and sorted(verbs[1:]) == ["create", "stop"]
 
         # A retry on another account of the same harness keeps the pick, destroys the successor, and
         # creates afresh under the same pre-minted id.
         assert manager.retry_handoff(chat_id, _openai_account()) is HandoffPhase.SWITCHING
         wait_for(is_failed, timeout=15.0)
         verbs = [line.split(" ")[0] for line in argv_log.read_text().splitlines()]
-        assert verbs == ["stop", "rename", "create", "destroy", "create"]
+        assert verbs[0] == "rename" and sorted(verbs[1:3]) == ["create", "stop"] and verbs[3:] == ["destroy", "create"]
         assert f"destroy {successor} --force" in argv_log.read_text().splitlines()
         assert argv_log.read_text().splitlines()[-1].split(" ")[3] == successor
         retried = store.read(chat_id)
@@ -6936,6 +6940,61 @@ def _converging_chat(
     store.write(ChatRecord(chat_id=ChatId(first), agents=(entry,), handoff=handoff))
     manager.refresh_chat_records()
     return first, successor
+
+
+def test_a_landed_handoff_reads_as_its_successor_and_a_wait_on_it_ends_with_the_delivery(
+    broadcaster: WebSocketBroadcaster, tmp_path: Path
+) -> None:
+    """Once the successor is the chat's last member, only the deliveries to it remain: the chat's status is the
+    successor's own, and a request waiting on the switch goes ahead the moment the record lets the switch go."""
+    sent: list[tuple[str, str, str]] = []
+    manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent)
+    first, successor = _converging_chat(manager, store, phase=HandoffPhase.SWITCHING, is_retiring_archived=True)
+    chat_id = ChatId(first)
+    seed_agent_state(
+        manager,
+        successor,
+        name="Chat-1",
+        labels={"display_name": "Chat 1", "account": "acct-openai"},
+        harness=HarnessType.CODEX,
+        activity_state=ActivityState.IDLE,
+    )
+    try:
+        before = manager.get_handoff_state(chat_id)
+        assert before is not None and before.has_landed is False
+        # Not landed: nothing to wait for, and the chat still converges.
+        assert manager.wait_for_landed_switch(chat_id, timeout=0.0) is False
+
+        record = store.read(chat_id)
+        assert record is not None and record.handoff is not None
+        landed = record.model_copy_update(
+            to_update(
+                record.field_ref().agents,
+                (*record.agents, make_chat_agent_entry(2, successor, is_archived=False, harness=HarnessType.CODEX)),
+            )
+        )
+        store.write(landed)
+        manager.refresh_chat_records()
+        state = manager.get_handoff_state(chat_id)
+        assert state is not None and state.has_landed is True
+        snapshot = manager.get_chat_snapshot(first)
+        assert snapshot is not None and snapshot.active_agent.agent_id == successor
+        assert snapshot.status is ChatStatus.IDLE
+        assert manager.wait_for_landed_switch(chat_id, timeout=0.05) is False
+
+        outcomes: list[bool] = []
+        waiter = ObservableThread(
+            target=lambda: outcomes.append(manager.wait_for_landed_switch(chat_id, timeout=10.0)), name="waiter"
+        )
+        waiter.start()
+        waiter.join(timeout=0.2)
+        assert waiter.is_alive() and outcomes == []
+        store.write(landed.model_copy_update(to_update(landed.field_ref().handoff, None)))
+        manager.refresh_chat_records()
+        waiter.join(timeout=5.0)
+        assert outcomes == [True]
+    finally:
+        manager.stop()
 
 
 def test_a_converging_chat_holds_sends_refuses_the_verbs_and_can_be_cancelled(

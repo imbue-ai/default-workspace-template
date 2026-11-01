@@ -867,6 +867,7 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
         error=transition.error,
         failed_step=transition.failed_step,
         is_fresh_start=isinstance(transition, ChatHandoffRecord) and transition.is_fresh_start,
+        has_landed=_has_landed(record),
     )
 
 
@@ -874,6 +875,15 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
 def _held_send_snapshot(message_id: str, text: str) -> HeldSendSnapshot:
     """One held send on the wire, carrying the render decision its text would get in the transcript."""
     return _with_display_decision(HeldSendSnapshot(message_id=message_id, text=text), text)
+
+
+@pure
+def _has_landed(record: ChatRecord | None) -> bool:
+    """Whether the chat's handoff has made its successor the chat's agent and only delivers to it now."""
+    handoff = None if record is None else record.handoff
+    if record is None or handoff is None or handoff.phase is not HandoffPhase.SWITCHING:
+        return False
+    return record.agents[-1].agent_id == handoff.next_agent_id
 
 
 @pure
@@ -957,7 +967,7 @@ def chat_snapshot_for_active_agent(
         name=handoff.chat_name if handoff is not None else agent.name,
         project=agent.labels.get("project"),
         status=_converging_status(transition.phase)
-        if transition is not None
+        if transition is not None and not _has_landed(chat.record)
         else chat_status_for_agent(
             agent.state, agent.activity_state, is_permission_pending, is_busy, agent.is_turn_closing
         ),
@@ -1144,6 +1154,8 @@ class AgentManager:
     _broadcaster: WebSocketBroadcaster
     _messenger: MngrMessenger
     _lock: threading.Lock
+    # Notified, under ``_lock``, whenever a chat record is written or dropped: what a wait on a chat's switch waits on.
+    _records_changed: threading.Condition
     # Held across an idle compaction toggle's file write and its ``mngr label``, so two quick
     # toggles cannot finish their relabels out of order and leave the label contradicting the file.
     _autocompact_toggle_lock: threading.Lock
@@ -1439,6 +1451,7 @@ class AgentManager:
         manager._broadcaster = broadcaster
         manager._messenger = messenger
         manager._lock = threading.Lock()
+        manager._records_changed = threading.Condition(manager._lock)
         manager._autocompact_toggle_lock = threading.Lock()
         manager._session_sweep_stop = threading.Event()
         manager._session_sweep_thread = None
@@ -1915,6 +1928,7 @@ class AgentManager:
         record_by_chat_id = self._chat_record_store.read_all()
         with self._lock:
             self._chat_record_by_id = record_by_chat_id
+            self._records_changed.notify_all()
         self._broadcast_chats_updated()
 
     def _record_naming_locked(self, agent_id: str) -> ChatRecord | None:
@@ -2481,6 +2495,18 @@ class AgentManager:
         """The chat's in-progress switch (a handoff or a rebind) as the wire carries it, or None while it is not converging."""
         with self._lock:
             return _transition_state_of(self._chat_record_by_id.get(chat_id))
+
+    def wait_for_landed_switch(self, chat_id: ChatId, timeout: float) -> bool:
+        """Wait out a handoff that has landed (its successor is the chat's agent and only the deliveries to it remain).
+
+        True once the chat is not converging. False when it still is: the handoff had not landed (no wait), had
+        not finished delivering at ``timeout``, or failed meanwhile; the caller then refuses the chat as converging.
+        """
+        with self._records_changed:
+            self._records_changed.wait_for(
+                lambda: not _has_landed(self._chat_record_by_id.get(chat_id)), timeout=timeout
+            )
+            return _transition_state_of(self._chat_record_by_id.get(chat_id)) is None
 
     def begin_switch(
         self,
@@ -3122,11 +3148,13 @@ class AgentManager:
         """Persist a record and make it the one the manager resolves by. Lock held."""
         self._chat_record_store.write(record)
         self._chat_record_by_id[record.chat_id] = record
+        self._records_changed.notify_all()
 
     def _delete_record_locked(self, chat_id: ChatId) -> None:
         """Drop a record from the store and from what the manager resolves by: the chat is its one agent again. Lock held."""
         self._chat_record_store.delete(chat_id)
         self._chat_record_by_id.pop(chat_id, None)
+        self._records_changed.notify_all()
 
     def _name_seeded_member_locked(
         self,

@@ -53,7 +53,6 @@ import { getChatById, getQueuedMessagesForChat } from "../models/Chats";
 import { getOutgoingMessages, sentAtOfArrival } from "../models/OutgoingMessages";
 import { BackgroundTasksLine } from "./BackgroundTasksLine";
 import { connectingLabel, isChatConnecting } from "./ConnectingIndicator";
-import { handoffPhaseText } from "./handoff-phase";
 import { harnessLabel } from "./harness-labels";
 import { resolutionRequestIdOf } from "./message-classification";
 import { hasShellResolutionSince, shellResolutionArrivalFor } from "./permission-card";
@@ -406,24 +405,21 @@ export function ActivityIndicator(): m.Component<ActivityIndicatorAttrs> {
     return renderStrip(null, STARTING_STATE, columnClass, elapsedSince(startedAt, now));
   };
 
-  /** The activity line: the switch's phase, the turn's caption, the wake-up caption, the row of a send
+  /** The activity line: the turn's caption, the wake-up caption, the row of a send
    *  not yet in a turn, or the row of a turn not yet started; null when there is none. */
   const activityStrip = (attrs: ActivityIndicatorAttrs, columnClass: string): m.Vnode | null => {
     cancelTick();
     const { chatId, events } = attrs;
     const chat = getChatById(chatId);
-    // A chat switching harness reports the switch, not the retiring agent's turn: that
-    // agent is busy with the summary it was asked for, which is the switch's own business.
-    // The failed phase has its own notice over the composer and shows nothing here.
-    if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed") {
+    // A chat switching agent or account says so in one place, the switch's own node in the conversation, so the
+    // status row shows nothing until the switch lands: the agent's turn meanwhile is the switch's own business (the
+    // summary it was asked for). A failed switch has its notice over the composer, and once a handoff has landed
+    // the successor is the chat's agent: both go back to the agent's own activity.
+    if (chat !== undefined && chat.handoff !== null && chat.handoff.phase !== "failed" && !chat.handoff.has_landed) {
       cancelRelease();
       cancelWake();
       heldToolCaption = null;
-      return renderStrip(
-        handoffPhaseText(chat.handoff, chat.active_agent.harness),
-        `HANDOFF_${chat.handoff.phase}`,
-        columnClass,
-      );
+      return null;
     }
     const state = chat?.active_agent.activity_state ?? null;
     const label = labelForActivityState(
