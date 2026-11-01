@@ -747,8 +747,13 @@ def _read_clock_env(path: Path) -> dict[str, str]:
     """
     if not path.is_file():
         return {}
+    try:
+        text = path.read_text()
+    except (OSError, UnicodeDecodeError) as e:
+        logger.error("Ignoring {}: cannot read it: {}", path, e)
+        return {}
     variables: dict[str, str] = {}
-    for line in path.read_text().splitlines():
+    for line in text.splitlines():
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue

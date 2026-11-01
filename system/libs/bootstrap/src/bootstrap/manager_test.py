@@ -509,6 +509,13 @@ def test_a_clock_env_file_whose_key_is_no_variable_name_is_ignored_whole(
     assert _read_clock_env(clock_env) == {}
 
 
+def test_an_unreadable_clock_env_file_is_ignored(tmp_path: Path) -> None:
+    clock_env = tmp_path / "clock.env"
+    clock_env.write_bytes(b"LD_PRELOAD=\xff\xfe\n")
+
+    assert _read_clock_env(clock_env) == {}
+
+
 # _apply_container_timezone
 
 
