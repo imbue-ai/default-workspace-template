@@ -27,7 +27,6 @@ import { MobileControls, isPhoneViewer } from "./mobile";
 import { NekoSocket } from "./neko_socket";
 import { Overlays } from "./overlays";
 import { PointerLockControl } from "./pointer_lock";
-import { pageStorage, readNeedsRelay } from "./relay_memory";
 import { RemoteCursor, listenForCursor } from "./remote_cursor";
 import { ResizeReporter } from "./resize_reporter";
 import { windowScheduler } from "./scheduler";
@@ -36,7 +35,6 @@ import { SCREENCAST_FPS } from "./screencast";
 import {
   ServiceEvents,
   ServiceRequestError,
-  fetchConnectInfo,
   fetchState,
   postCancelPendingUrl,
   postInputSeen,
@@ -47,7 +45,7 @@ import {
   postTakeControl,
   type VerbOutcome,
 } from "./service_client";
-import type { ConnectInfo, NekoSessionAnswer, ScreenStateDocument, ServiceEvent } from "./state";
+import type { NekoSessionAnswer, ScreenStateDocument, ServiceEvent } from "./state";
 import { EMPTY_CONNECT_INFO, isOpenToFirstInput, isOwnSessionController } from "./state";
 import { DetailsPanel, describePath, entriesOf, summarizeStats } from "./stream_details";
 import { Strip } from "./strip";
@@ -97,7 +95,6 @@ class Viewer {
   private noticeTimer = 0;
   private isAudioEnabled = false;
   private isNekoOpen = false;
-  private connectInfoFetch: Promise<ConnectInfo> | null = null;
   private lastInputSeenAt = 0;
   private reportLocation: ((title: string) => void) | null = null;
 
@@ -340,7 +337,13 @@ class Viewer {
       }
       this.signInError = null;
       this.session = session;
-      const socket = new NekoSocket(session.token, () => this.onNekoOpen());
+      const socket = new NekoSocket(
+        session.token,
+        () => this.onNekoOpen(),
+        () => {
+          this.isNekoOpen = false;
+        },
+      );
       this.socket = socket;
       this.stream = new NekoStream(
         socket,
@@ -411,28 +414,11 @@ class Viewer {
     this.visibility.evaluate();
   }
 
-  /** The visibility machine says this viewer should hold media (spec section 8.2): whether it was asked for. */
-  private requestMedia(): boolean {
-    if (!this.stream || !this.state || !this.isNekoOpen) return false;
-    const videoId = this.state.video_id;
-    // A network that needed a relay last time gets the relay servers up front (spec section 5.3).
-    const isRelay = readNeedsRelay(pageStorage());
-    const fetching = fetchConnectInfo(isRelay);
-    this.connectInfoFetch = fetching;
-    fetching
-      .then((connectInfo) => {
-        // A later request superseded this fetch, or a release while it was in flight means a hidden viewer: either
-        // way this answer asks for nothing.
-        if (this.connectInfoFetch !== fetching || !this.visibility.wantsMedia) return;
-        this.stream?.request(videoId, connectInfo, isRelay);
-      })
-      .catch((error) => {
-        console.error("[screen] connect-info failed", error);
-        // Forgotten, so the belt's next evaluation asks again; a superseded fetch says nothing about the media a
-        // later one brought.
-        if (this.connectInfoFetch === fetching) this.visibility.reset();
-      });
-    return true;
+  /** The visibility machine says this viewer should hold media (spec section 8.2). Before the socket is open there
+   *  is no stream to ask; its open resets the machine, which asks again. */
+  private requestMedia(): void {
+    if (!this.stream || !this.state || !this.isNekoOpen) return;
+    this.stream.request(this.state.video_id);
   }
 
   /** Hidden for the delay: the media goes, the socket, the session and the lease stay. */

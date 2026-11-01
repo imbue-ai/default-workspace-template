@@ -15,10 +15,8 @@ export const REEVALUATE_INTERVAL_MS = 1500;
 export interface VisibilityCallbacks {
   /** The viewer has been hidden for the delay: close the media. */
   onRelease: () => void;
-  /** The viewer is visible again after a release (or for the first time): request the media. Answers whether it
-   *  was asked for; a request that could not be made (no stream, no state, no socket yet) leaves the viewer wanting
-   *  media, so the next evaluation asks again instead of waiting for another hide and show. */
-  onRequest: () => boolean;
+  /** The viewer is visible again after a release (or for the first time): request the media. */
+  onRequest: () => void;
 }
 
 export class ViewerVisibility {
@@ -73,7 +71,10 @@ export class ViewerVisibility {
         this.scheduler.clearTimeout(this.hideTimer);
         this.hideTimer = null;
       }
-      if (!this.hasMedia) this.hasMedia = this.callbacks.onRequest();
+      if (!this.hasMedia) {
+        this.hasMedia = true;
+        this.callbacks.onRequest();
+      }
     } else if (this.hasMedia && this.hideTimer === null) {
       this.hideTimer = this.scheduler.setTimeout(() => {
         this.hideTimer = null;

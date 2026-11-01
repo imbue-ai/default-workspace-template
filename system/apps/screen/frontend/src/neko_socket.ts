@@ -14,6 +14,8 @@ export class NekoSocket {
   constructor(
     private readonly token: string,
     private readonly onOpen: () => void,
+    /** Every close, a stop's included: the socket reopens by itself after one that was not a stop. */
+    private readonly onClose: () => void = () => undefined,
   ) {}
 
   on(event: string, handler: NekoEventHandler): void {
@@ -63,6 +65,7 @@ export class NekoSocket {
       for (const handler of this.handlers.get(parsed.event) ?? []) handler(payload);
     };
     socket.onclose = () => {
+      this.onClose();
       if (this.isClosed) return;
       this.timer = window.setTimeout(() => this.open(), RECONNECT_MS);
     };
