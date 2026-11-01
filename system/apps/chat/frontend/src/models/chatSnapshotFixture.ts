@@ -9,6 +9,7 @@ export function chatSnapshotFixture(
   const { active_agent: agentOverrides, ...chatOverrides } = overrides;
   return {
     chat_id: chatId,
+    kind: "agent",
     title: chatId,
     name: chatId,
     project: null,
@@ -18,6 +19,7 @@ export function chatSnapshotFixture(
     handoff: null,
     last_messaged_at: null,
     last_active_at: null,
+    awaiting_chat_ids: [],
     ...chatOverrides,
     active_agent: {
       agent_id: chatId,

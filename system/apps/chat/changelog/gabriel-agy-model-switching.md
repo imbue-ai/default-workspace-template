@@ -1,0 +1,5 @@
+Antigravity chats can now change model and reasoning effort from the model picker, just as Claude, Codex and Pi chats can. Previously the picker only showed the model, and choosing a Gemini model left no way to switch to anything else from the chat.
+
+The picker lists Antigravity's current models: Gemini 3.8 Flash (with a low / medium / high effort control), Claude Sonnet 4.6, Claude Opus 4.6, and GPT-OSS 120B. A pick is sent to the agent as `/model <slug>`, which sets the model and effort in one step. It is typed by the same worker that delivers queued messages, and only once no turn is open, so a pick made mid-turn takes effect when that turn ends and never lands in a running turn. The chip shows the pick straight away and settles once the agent reports it. A model newer than the list still shows under its own name and can be switched away from.
+
+The switch dialog now offers an Antigravity account's models too, and a new or rebound Antigravity chat starts on the chosen model. The model picker's read-only mode, which only Antigravity used, is gone.

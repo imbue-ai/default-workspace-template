@@ -18,6 +18,21 @@ _DESKTOP_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9-]{0,
 # A value that names a file on disk is held to one filename-safe alphabet.
 FILENAME_SAFE_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _WINDOW_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^win-[0-9a-f]{16}$")
+# A name known only from a hand-typed author prefix may hold any printable text; its key form holds it to at most
+# this many characters, which is what the chat app truncates such a name to.
+MAX_PARTICIPANT_NAME_LENGTH: Final[int] = 60
+# A participant key (the multiplayer spec, section 4.1): the owner of an unshared workspace, the workspace's own
+# agent, a signed-in person, an invited email, a visiting agent, or a name known only from a hand-typed prefix.
+# Every form is filename-safe and URL-path-safe, since a key names a mentions file and sits in a picture path: no
+# slash anywhere, no control character, and no "#", "?", or "%" in an address.
+_PARTICIPANT_KEY_PATTERN: Final[re.Pattern[str]] = re.compile(
+    r"^(?:owner|workspace-agent|user:[A-Za-z0-9][A-Za-z0-9._-]{0,127}|email:[^\s/#?%:@]+@[^\s/#?%@]+"
+    r"|agent:[A-Za-z0-9][A-Za-z0-9._-]{0,127}"
+    rf"|name:[^\n/\x00-\x1f]{{1,{MAX_PARTICIPANT_NAME_LENGTH}}})$"
+)
+# The keys that name a presence file (``data/.state/presence/users/<id>.json``), by their id part.
+OWNER_PARTICIPANT_KEY_VALUE: Final[str] = "owner"
+WORKSPACE_AGENT_PARTICIPANT_KEY_VALUE: Final[str] = "workspace-agent"
 # A window's path and title (desktop contracts.md section 1).
 MAX_WINDOW_PATH_LENGTH: Final[int] = 2048
 MAX_WINDOW_TITLE_LENGTH: Final[int] = 256
@@ -79,6 +94,35 @@ class UserId(NonEmptyStr):
     @classmethod
     def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
         return _string_schema(cls)
+
+
+class ParticipantKey(NonEmptyStr):
+    """Who a message, a desktop, a client, or a roster entry belongs to (the multiplayer spec, section 4.1):
+    ``owner``, ``workspace-agent``, ``user:<user_id>``, ``email:<address>``, ``agent:<agent_id>``, or ``name:<name>``,
+    each filename-safe (no slash, no control character)."""
+
+    def __new__(cls, value: str) -> Self:
+        if not _PARTICIPANT_KEY_PATTERN.fullmatch(value):
+            raise InvalidLayoutValueError(f"invalid participant key {value!r}")
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return _string_schema(cls)
+
+
+OWNER_PARTICIPANT_KEY: Final[ParticipantKey] = ParticipantKey(OWNER_PARTICIPANT_KEY_VALUE)
+WORKSPACE_AGENT_PARTICIPANT_KEY: Final[ParticipantKey] = ParticipantKey(WORKSPACE_AGENT_PARTICIPANT_KEY_VALUE)
+
+
+class ParticipantKind(LowerCaseStrEnum):
+    """What a roster entry is (a wire value): a person with an account, an invited email, a visiting agent, or the
+    workspace's own agent."""
+
+    PERSON = auto()
+    INVITED = auto()
+    VISITING_AGENT = auto()
+    WORKSPACE_AGENT = auto()
 
 
 class WindowPath(str):
@@ -156,6 +200,26 @@ class ClientActivityKind(LowerCaseStrEnum):
     MESSAGE = auto()
 
 
+class ChatActivityStatus(LowerCaseStrEnum):
+    """What a chat is doing, as the chat app reports it to the shell for the tray's agent card (a wire value): a turn
+    in flight, a background task about to start one, nothing, a permission waiting on the user, the agent dead, or
+    a failed switch."""
+
+    WORKING = auto()
+    BACKGROUND = auto()
+    IDLE = auto()
+    ATTENTION = auto()
+    STOPPED = auto()
+    ERROR = auto()
+
+
+class ChatActivityKind(LowerCaseStrEnum):
+    """What a reported chat is (a wire value): a conversation with an agent, or a room among the people here."""
+
+    AGENT = auto()
+    ROOM = auto()
+
+
 class IfPresent(LowerCaseStrEnum):
     """What an open does about a window of the app already at the path: focus it, or open another (a wire value)."""
 
@@ -164,12 +228,14 @@ class IfPresent(LowerCaseStrEnum):
 
 
 class WindowState(UpperCaseStrEnum):
-    """How one client shows a window: at its frame, snapped to a half, or maximized (a wire value)."""
+    """How one client shows a window: at its frame, snapped to a half, maximized over the backdrop, or fullscreen over
+    the whole viewport, taskbar included (a wire value)."""
 
     NORMAL = auto()
     SNAPPED_LEFT = auto()
     SNAPPED_RIGHT = auto()
     MAXIMIZED = auto()
+    FULLSCREEN = auto()
 
 
 class ShowOutcome(LowerCaseStrEnum):

@@ -1,0 +1,1 @@
+The routines spec (section 12) says how the cron migration converts a command with shell syntax, what it does with `%`, and that it also reads job state from `system/data/.state/jobs/`, where releases before minds-v0.8.7 kept it.

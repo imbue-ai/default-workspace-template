@@ -1,0 +1,3 @@
+`WindowState` gains `FULLSCREEN` (the Screen spec's L2 layer: the window fills the whole viewport, taskbar and title bar gone), `PLACEABLE_STATES` includes it, and `workspace-layout place <window> --state fullscreen` sets it; `restore` brings a fullscreen window back to its kept frame like a maximized one.
+
+`workspace-layout open https://...` opens the page through the Screen app's `browser` launch path (`{"app": "screen", "launch": "browser", "params": {"url": ...}}`), since the browser is a launch path of the Screen now and the browser app is gone; the command's help, hints and retired-verb replacements say "the browser on the Screen" and name the Screen service's `POST /browsers/<name>/stop` and `.../start`.

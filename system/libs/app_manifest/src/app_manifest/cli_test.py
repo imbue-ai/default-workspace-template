@@ -55,14 +55,11 @@ def test_validate_manifest_checks_the_references_only_when_given_a_repo_root(
     (loose_directory / "icon.svg").write_text(APP_ICON_MARKUP)
     manifest_path = loose_directory / "app.toml"
     manifest_path.write_text(
-        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n'
-        '[[references]]\npath = "docs/system/news.md"\n'
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n[[references]]\npath = "docs/system/news.md"\n'
     )
 
     without_root = _run_cli(["validate-manifest", str(manifest_path)])
-    with_root = _run_cli(
-        ["validate-manifest", str(manifest_path), "--repo-root", str(tmp_path)]
-    )
+    with_root = _run_cli(["validate-manifest", str(manifest_path), "--repo-root", str(tmp_path)])
 
     assert without_root.exit_code == 0, without_root.output
     assert with_root.exit_code != 0
@@ -72,9 +69,7 @@ def test_validate_manifest_checks_the_references_only_when_given_a_repo_root(
 def test_footprint_writes_the_scope_file_for_an_app_to_stdout(tmp_path: Path) -> None:
     build_news_workspace(tmp_path)
 
-    result = _run_cli(
-        ["footprint", "system/apps/news/app.toml", "--repo-root", str(tmp_path)]
-    )
+    result = _run_cli(["footprint", "system/apps/news/app.toml", "--repo-root", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
     scope = json.loads(result.output)
@@ -185,9 +180,7 @@ def test_footprint_refuses_neither_a_manifest_nor_a_path(tmp_path: Path) -> None
 def test_footprint_reports_a_manifest_it_cannot_load(tmp_path: Path) -> None:
     write_app_manifest(tmp_path, "news", 'name = "news"\ndisplay_name = "News"\n', is_icon_written=False)
 
-    result = _run_cli(
-        ["footprint", "system/apps/news/app.toml", "--repo-root", str(tmp_path)]
-    )
+    result = _run_cli(["footprint", "system/apps/news/app.toml", "--repo-root", str(tmp_path)])
 
     assert result.exit_code != 0
     assert "icon is required" in result.output
@@ -322,9 +315,7 @@ def test_references_prints_nothing_and_exits_zero_when_no_app_owns_the_path(
 ) -> None:
     build_news_workspace(tmp_path)
 
-    result = _run_cli(
-        ["references", "--for-path", ".agents/skills/unowned", "--repo-root", str(tmp_path)]
-    )
+    result = _run_cli(["references", "--for-path", ".agents/skills/unowned", "--repo-root", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
     assert result.output == ""
@@ -345,9 +336,7 @@ def test_references_still_answers_when_another_apps_manifest_cannot_load(tmp_pat
     )
 
     assert result.exit_code == 0, result.output
-    assert [json.loads(line)["app"] for line in result.output.splitlines() if line.strip()] == [
-        "news"
-    ]
+    assert [json.loads(line)["app"] for line in result.output.splitlines() if line.strip()] == ["news"]
 
 
 def _branch_with_changes(repo_root: Path, changes: dict[str, str]) -> None:
@@ -373,15 +362,13 @@ def test_select_tests_over_explicit_paths_matches_the_same_set_read_from_a_diff(
 
     from_diff = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main"])
     path_arguments = [argument for path in changes for argument in ("--path", path)]
-    from_paths = _run_cli(
-        ["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main", *path_arguments]
-    )
+    from_paths = _run_cli(["select-tests", "--repo-root", str(tmp_path), "--diff-base", "main", *path_arguments])
 
     assert from_diff.exit_code == 0, from_diff.output
     assert from_paths.exit_code == 0, from_paths.output
     assert from_paths.output == from_diff.output
     # The upgraded lock entry reached corelib's dependents through the lockfile, not a guess.
-    assert "uv run pytest system/libs/corelib" in from_diff.output.splitlines()
+    assert "uv run --no-sync pytest system/libs/corelib" in from_diff.output.splitlines()
 
 
 def test_select_tests_over_a_diff_runs_what_depended_on_a_moved_files_old_place(
@@ -400,9 +387,9 @@ def test_select_tests_over_a_diff_runs_what_depended_on_a_moved_files_old_place(
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     # corelib lost the module its consumers import, so it and they run, not only midlib's side.
-    assert "uv run pytest system/libs/corelib" in lines
+    assert "uv run --no-sync pytest system/libs/corelib" in lines
     assert (
-        "(cd system/apps/chat && uv run pytest --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
+        "(cd system/apps/chat && uv run --no-sync pytest --deselect imbue/chat/test_ratchets.py::test_no_type_errors)"
         in lines
     )
 
@@ -426,7 +413,7 @@ def test_select_tests_in_a_fresh_worktree_builds_the_frontends_before_an_apps_te
     # git leaves the ignored built modules out of the worktree, so the notes run there builds them.
     worktree_commands = [line for line in in_worktree.output.splitlines() if not line.startswith("#")]
     assert worktree_commands[:2] == build
-    assert "uv run pytest system/apps/notes" in worktree_commands
+    assert "uv run --no-sync pytest system/apps/notes" in worktree_commands
     assert not set(build) & set(in_built_tree.output.splitlines())
 
 
@@ -449,7 +436,7 @@ def test_select_tests_over_a_diff_refuses_a_working_tree_with_uncommitted_change
     assert "system/libs/midlib/src/midlib/extra.py" in dirty.output
     assert "run.log" not in dirty.output
     assert committed.exit_code == 0, committed.output
-    assert "uv run pytest system/libs/midlib" in committed.output.splitlines()
+    assert "uv run --no-sync pytest system/libs/midlib" in committed.output.splitlines()
 
 
 def test_select_tests_over_a_diff_to_an_earlier_commit_ignores_the_working_tree(
@@ -476,8 +463,8 @@ def test_select_tests_over_a_diff_to_an_earlier_commit_ignores_the_working_tree(
 
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
-    assert lines[-1] == "uv run pytest"
-    assert "uv run pytest system/libs/midlib" not in lines
+    assert lines[-1] == "uv run --no-sync pytest"
+    assert "uv run --no-sync pytest system/libs/midlib" not in lines
 
 
 def test_select_tests_prints_json_with_every_path_classified(tmp_path: Path) -> None:
@@ -500,7 +487,7 @@ def test_select_tests_prints_json_with_every_path_classified(tmp_path: Path) -> 
     assert result.exit_code == 0, result.output
     selection = json.loads(result.output)
     assert selection["is_full_root"] is True
-    assert [command["argv"] for command in selection["commands"]] == [["uv", "run", "pytest"]]
+    assert [command["argv"] for command in selection["commands"]] == [["uv", "run", "--no-sync", "pytest"]]
     assert {entry["path"]: entry["classes"] for entry in selection["paths"]} == {
         "system/scripts/forward_port.py": ["unowned"],
         "unknown.bin": ["unowned"],
@@ -575,11 +562,11 @@ def test_a_pass_gate_runs_what_the_pass_changed_and_not_the_other_work_in_its_wi
     ]
     assert scope["diff"]["outside_footprint"] == ["system/libs/midlib/src/midlib/core.py"]
     assert scope["diff"]["others"] == ["system/apps/chat/imbue/chat/server.py", "system/scripts/forward_port.py"]
-    assert commands[0].startswith("uv run pytest ")
+    assert commands[0].startswith("uv run --no-sync pytest ")
     assert commands[1:] == [
-        "uv run pytest .agents/skills/refresh",
-        "uv run pytest system/apps/notes",
-        "uv run pytest system/libs/midlib",
+        "uv run --no-sync pytest .agents/skills/refresh",
+        "uv run --no-sync pytest system/apps/notes",
+        "uv run --no-sync pytest system/libs/midlib",
     ]
 
 
@@ -597,8 +584,8 @@ def test_a_pass_gate_runs_the_full_root_suite_for_an_unowned_path_the_worker_cha
     _write_pass_scope(repo_root, scope_path, ["skill:refresh"], diff_base, "main")
     commands = _selected_commands(repo_root, scope_path)
 
-    assert "uv run pytest" in commands
-    assert "uv run pytest .agents/skills/refresh" not in commands
+    assert "uv run --no-sync pytest" in commands
+    assert "uv run --no-sync pytest .agents/skills/refresh" not in commands
 
 
 def test_a_pass_gate_reads_its_lock_change_from_the_fork_point_not_the_diff_base(tmp_path: Path) -> None:
@@ -610,7 +597,9 @@ def test_a_pass_gate_reads_its_lock_change_from_the_fork_point_not_the_diff_base
     upgraded_lock = selection_lock("2.1")
     commit_changes(repo_root, {"uv.lock": upgraded_lock}, "another chat upgrades requests")
     run_git(repo_root, ("checkout", "-q", "-b", "worker"))
-    added_package = '\n[[package]]\nname = "newdep"\nversion = "1.0"\nsource = { registry = "https://pypi.org/simple" }\n'
+    added_package = (
+        '\n[[package]]\nname = "newdep"\nversion = "1.0"\nsource = { registry = "https://pypi.org/simple" }\n'
+    )
     commit_changes(repo_root, {"uv.lock": upgraded_lock + added_package}, "the pass adds a package")
     scope_path = tmp_path / "scope.json"
 
@@ -618,8 +607,8 @@ def test_a_pass_gate_reads_its_lock_change_from_the_fork_point_not_the_diff_base
     commands = _selected_commands(repo_root, scope_path)
 
     assert scope["diff"]["outside_footprint"] == ["uv.lock"]
-    assert "uv run pytest system/libs/corelib" not in commands
-    assert "uv run pytest system/libs/midlib" not in commands
+    assert "uv run --no-sync pytest system/libs/corelib" not in commands
+    assert "uv run --no-sync pytest system/libs/midlib" not in commands
 
 
 def test_a_pass_gate_runs_what_the_hardened_changes_own_lock_upgrade_reaches(tmp_path: Path) -> None:
@@ -645,8 +634,8 @@ def test_a_pass_gate_runs_what_the_hardened_changes_own_lock_upgrade_reaches(tmp
     commands = _selected_commands(repo_root, scope_path)
 
     assert scope["diff"]["outside_footprint"] == ["uv.lock"]
-    assert "uv run pytest system/libs/corelib" in commands
-    assert "uv run pytest system/libs/midlib" in commands
+    assert "uv run --no-sync pytest system/libs/corelib" in commands
+    assert "uv run --no-sync pytest system/libs/midlib" in commands
 
 
 @pytest.mark.parametrize(
@@ -656,22 +645,22 @@ def test_a_pass_gate_runs_what_the_hardened_changes_own_lock_upgrade_reaches(tmp
             "app:notes",
             "system/apps/notes/src/notes/core.py",
             {"system/libs/midlib/src/midlib/core.py": "VALUE = 2\n"},
-            ["uv run pytest system/apps/notes"],
-            "uv run pytest system/libs/midlib",
+            ["uv run --no-sync pytest system/apps/notes"],
+            "uv run --no-sync pytest system/libs/midlib",
         ),
         (
             "app:notes",
             "system/apps/notes/src/notes/core.py",
             {"uv.lock": selection_lock("2.1")},
-            ["uv run pytest system/apps/notes"],
-            "uv run pytest system/libs/corelib",
+            ["uv run --no-sync pytest system/apps/notes"],
+            "uv run --no-sync pytest system/libs/corelib",
         ),
         (
             "app:notes",
             "system/apps/notes/src/notes/core.py",
             {"conftest.py": "import os\n"},
-            ["uv run pytest system/apps/notes"],
-            "uv run pytest system/libs",
+            ["uv run --no-sync pytest system/apps/notes"],
+            "uv run --no-sync pytest system/libs",
         ),
         (
             "app:chat",
@@ -679,7 +668,7 @@ def test_a_pass_gate_runs_what_the_hardened_changes_own_lock_upgrade_reaches(tmp
             {"system/libs/ui/src/index.ts": "export const x = 2;\n"},
             [
                 "(cd system && npm test --workspace=apps/chat/frontend)",
-                "(cd system/apps/chat && uv run pytest --no-cov -m 'browser or frontend')",
+                "(cd system/apps/chat && uv run --no-sync pytest --no-cov -m 'browser or frontend')",
             ],
             "--workspace=libs/ui",
         ),
@@ -687,22 +676,22 @@ def test_a_pass_gate_runs_what_the_hardened_changes_own_lock_upgrade_reaches(tmp
             "skill:refresh",
             ".agents/skills/refresh/scripts/refresh.py",
             {"system/libs/midlib/src/midlib/core.py": "VALUE = 2\n"},
-            ["uv run pytest .agents/skills/refresh"],
-            "uv run pytest system/",
+            ["uv run --no-sync pytest .agents/skills/refresh"],
+            "uv run --no-sync pytest system/",
         ),
         (
             "skill:refresh",
             ".agents/skills/refresh/scripts/refresh.py",
             {"uv.lock": selection_lock("2.1")},
-            ["uv run pytest .agents/skills/refresh"],
-            "uv run pytest system/",
+            ["uv run --no-sync pytest .agents/skills/refresh"],
+            "uv run --no-sync pytest system/",
         ),
         (
             "skill:refresh",
             ".agents/skills/refresh/scripts/refresh.py",
             {"conftest.py": "import os\n"},
-            ["uv run pytest .agents/skills/refresh"],
-            "uv run pytest system/",
+            ["uv run --no-sync pytest .agents/skills/refresh"],
+            "uv run --no-sync pytest system/",
         ),
     ],
 )
@@ -741,7 +730,7 @@ def test_a_catch_up_gate_runs_a_creations_own_suite_when_what_came_in_reaches_it
     assert sorted(scope["diff"]["incoming"]) == sorted([*lead_change, "system/scripts/forward_port.py"])
     assert set(reached) <= set(commands)
     assert not any(not_reached in command for command in commands)
-    assert "uv run pytest" not in commands
+    assert "uv run --no-sync pytest" not in commands
     assert whole_pass["diff"]["incoming_base"] == diff_base
 
 
@@ -787,7 +776,7 @@ def test_a_catch_up_gate_runs_the_full_root_suite_for_a_shared_script_what_came_
     _write_pass_scope(repo_root, scope_path, ["shared:scripts/tool.py"], pre, "main")
     commands = _selected_commands(repo_root, scope_path)
 
-    assert ("uv run pytest" in commands) == runs_full_root
+    assert ("uv run --no-sync pytest" in commands) == runs_full_root
     assert not any("system/apps/notes" in command for command in commands)
 
 
@@ -814,8 +803,10 @@ def test_a_catch_up_gate_runs_every_creations_own_suite_when_an_incoming_lock_ca
     assert result.exit_code == 0, result.output
     lines = result.output.splitlines()
     commands = [line for line in lines if not line.startswith("#")]
-    assert {"uv run pytest system/apps/notes", "uv run pytest .agents/skills/refresh"} <= set(commands)
-    assert "uv run pytest" not in commands
+    assert {"uv run --no-sync pytest system/apps/notes", "uv run --no-sync pytest .agents/skills/refresh"} <= set(
+        commands
+    )
+    assert "uv run --no-sync pytest" not in commands
     assert not any("system/libs" in command for command in commands)
     assert any(line.startswith("# note: ") and "every creation's own suite runs" in line for line in lines)
 
@@ -843,7 +834,7 @@ def test_a_pass_gate_runs_nothing_for_what_reached_its_creation_before_the_branc
 
     assert scope["diff"]["incoming_base"] is None
     assert scope["diff"]["incoming"] == []
-    assert "uv run pytest system/apps/notes" not in commands
+    assert "uv run --no-sync pytest system/apps/notes" not in commands
 
 
 def test_a_pass_gate_refuses_a_scope_file_that_no_longer_describes_the_tree(tmp_path: Path) -> None:
@@ -866,7 +857,7 @@ def test_a_pass_gate_refuses_a_scope_file_that_no_longer_describes_the_tree(tmp_
     assert "system/libs/midlib/src/midlib/core.py" in uncommitted.output
     assert stale.exit_code != 0
     assert head in stale.output
-    assert "uv run pytest system/libs/midlib" in regenerated
+    assert "uv run --no-sync pytest system/libs/midlib" in regenerated
 
 
 def test_a_pass_gate_refuses_a_scope_file_written_without_the_leads_branch(tmp_path: Path) -> None:
@@ -924,9 +915,7 @@ def test_select_tests_needs_a_diff_or_paths(tmp_path: Path) -> None:
 def test_pass_scope_needs_a_diff_base_for_a_lead_ref(tmp_path: Path) -> None:
     build_news_workspace(tmp_path)
 
-    result = _run_cli(
-        ["pass-scope", "--creation", "app:news", "--repo-root", str(tmp_path), "--lead-ref", "HEAD"]
-    )
+    result = _run_cli(["pass-scope", "--creation", "app:news", "--repo-root", str(tmp_path), "--lead-ref", "HEAD"])
 
     assert result.exit_code != 0
     assert "--lead-ref" in result.output

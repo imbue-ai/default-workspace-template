@@ -8,11 +8,14 @@
  * fields (and a tool call's `display`). This module only MAPS those fields onto
  * the frontend's `UserMessageKind` catalogue (see message-kinds.ts for how each
  * kind renders) -- it never sniffs message text or tool input, and adding a new
- * specially-rendered message is a backend rule, not a frontend regex.
+ * specially-rendered message is a backend rule, not a frontend regex. The one
+ * exception is the slash commands sent to an agent (`/handoff-summary`, `/compact`),
+ * recognised by their text: what each means depends on where it sits in the
+ * transcript, which only the transcript walk can see.
  */
 
 import type { DisplayDecision } from "../models/Chats";
-import type { ToolCall, UserMessageEvent } from "../models/Response";
+import type { CompactionCause, ToolCall, TranscriptEvent, UserMessageEvent } from "../models/Response";
 import { KIND_SPEC, Rail, UserMessageKind } from "./message-kinds";
 
 /** The slice of a user_message the classification reads. */
@@ -150,10 +153,91 @@ export function isHiddenUserMessage(event: ClassifiableUserMessage): boolean {
  *  ``HANDOFF_SUMMARY_COMMAND``); the transcript walk opens the handoff node on it. */
 const HANDOFF_SUMMARY_COMMAND = "/handoff-summary";
 
+/** True when the message invokes `command`, with or without arguments. */
+function isSlashCommand(event: ClassifiableUserMessage, command: string): boolean {
+  const content = event.content.trim();
+  return content === command || content.startsWith(`${command} `);
+}
+
 /** True for the chat app's own summary request: the user message that starts a handoff's summary turn. */
 export function isHandoffSummaryRequest(event: ClassifiableUserMessage): boolean {
-  const content = event.content.trim();
-  return content === HANDOFF_SUMMARY_COMMAND || content.startsWith(`${HANDOFF_SUMMARY_COMMAND} `);
+  return isSlashCommand(event, HANDOFF_SUMMARY_COMMAND);
+}
+
+/** The slash command that compacts a Claude agent's context, typed by the user or sent by the idle sweep. */
+const COMPACT_COMMAND = "/compact";
+
+/** True for either record Claude Code makes of a `/compact`: the one submitted and its expansion. */
+function isCompactCommand(event: ClassifiableUserMessage): boolean {
+  return isSlashCommand(event, COMPACT_COMMAND);
+}
+
+/** The `/compact`s the idle sweep sent a Claude agent, each paired with the compaction it started. */
+export interface SweepCompactCommands {
+  /** By the landed compaction's event id. */
+  byCompactionId: Map<string, UserMessageEvent>;
+  /** The one that started the compaction running now, if any. */
+  running: UserMessageEvent | null;
+}
+
+/** The `/compact` at `index` when it is one the timeline shows (not its hidden expansion), else null. */
+function shownCompactCommandAt(events: readonly TranscriptEvent[], index: number): UserMessageEvent | null {
+  const e = events[index];
+  return e.type === "user_message" && !isNonBoundaryUserMessage(e) && isCompactCommand(e) ? e : null;
+}
+
+/** The compaction the message at `index` directly precedes, past only messages that render nowhere:
+ *  its status event, null when anything else comes first, or undefined when nothing has followed yet. */
+function compactionAfter(events: readonly TranscriptEvent[], index: number): UserMessageEvent | null | undefined {
+  for (let i = index + 1; i < events.length; i++) {
+    const e = events[i];
+    if (e.type !== "user_message") return null;
+    if (isStatusUserMessage(e)) return e;
+    if (!isNonBoundaryUserMessage(e)) return null;
+  }
+  return undefined;
+}
+
+/** Find the idle sweep's `/compact`s: Claude Code records one as a user message the user never typed,
+ *  so it is no turn of the conversation. A `/compact` is the sweep's when the compaction it directly
+ *  precedes is idle; one the user typed stays theirs. `liveCause` is the cause of the compaction
+ *  running now, or null when none is running or its cause is unknown. */
+export function sweepCompactCommands(
+  events: readonly TranscriptEvent[],
+  liveCause: CompactionCause | null,
+): SweepCompactCommands {
+  const byCompactionId = new Map<string, UserMessageEvent>();
+  let running: UserMessageEvent | null = null;
+  for (let i = 0; i < events.length; i++) {
+    const command = shownCompactCommandAt(events, i);
+    if (command === null) continue;
+    const compaction = compactionAfter(events, i);
+    if (compaction === undefined) {
+      if (liveCause === "idle") running = command;
+    } else if (compaction?.compaction_cause === "idle") {
+      byCompactionId.set(compaction.event_id, command);
+    }
+  }
+  return { byCompactionId, running };
+}
+
+/** True when the message at `index` is the idle sweep's `/compact` for a compaction that has landed
+ *  (see `sweepCompactCommands`), read forward from that message alone. */
+export function isLandedSweepCompactCommand(events: readonly TranscriptEvent[], index: number): boolean {
+  return shownCompactCommandAt(events, index) !== null && compactionAfter(events, index)?.compaction_cause === "idle";
+}
+
+/** True when the message at `index` is a `/compact` nothing has followed yet, so it is not known
+ *  whether the idle sweep sent it. */
+export function isUnresolvedCompactCommand(events: readonly TranscriptEvent[], index: number): boolean {
+  return shownCompactCommandAt(events, index) !== null && compactionAfter(events, index) === undefined;
+}
+
+/** The event ids of the idle sweep's `/compact`s (see `sweepCompactCommands`). */
+export function sweepCompactCommandIds(commands: SweepCompactCommands): Set<string> {
+  const ids = new Set([...commands.byCompactionId.values()].map((command) => command.event_id));
+  if (commands.running !== null) ids.add(commands.running.event_id);
+  return ids;
 }
 
 // Permission REQUEST (a tool call)

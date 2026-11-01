@@ -11,12 +11,10 @@
    with `@source inline("...")`. */
 @source "./**/*.ts";
 
-/* The color swatches, the squiggle cells, and the wallpaper thumbnails of the desktop settings
-   dialog. They are the only toggles a modal carries, so ``aria-pressed`` is what tells them apart
-   from its Cancel/Save row.
-   Their size and selection ring are utilities; a swatch's fill and a thumbnail's image are inline
-   (so is a selected squiggle cell's ring, in the desktop's own color), leaving the grids' shared
-   feedback here. */
+/* The wallpaper chooser's swatches, and the avatar chooser's design cells. They are the only
+   toggles a modal carries, so ``aria-pressed`` is what tells them apart from its Cancel/Save row.
+   Their size and selection ring are utilities and a swatch's image is inline, leaving the grids'
+   shared feedback here. */
 .modal-card button[aria-pressed] {
   transition: transform var(--dur-fast) ease-out;
 }
@@ -25,9 +23,9 @@
   transform: scale(1.08);
 }
 
-/* Both a ring and an outline, because an inline style always wins: a swatch carries its
-   selection ring as ``outline`` and a squiggle cell carries its own as ``box-shadow``, so
-   whichever property is spoken for on a given cell, the other one still shows the focus. */
+/* Both a ring and an outline: a selected swatch's own ring is a ``box-shadow`` utility this rule
+   stands in for, and a selected design cell's is a border, so on either the outline still shows
+   the focus beside the selection. */
 .modal-card button[aria-pressed]:focus-visible {
   outline: 2px solid var(--c-accent);
   outline-offset: 2px;
@@ -44,6 +42,18 @@
 
 .taskbar-entries::-webkit-scrollbar {
   display: none;
+}
+
+/* A fullscreen window takes the whole viewport, the taskbar's band included (contracts.md section 10):
+   while one is on screen the backdrop and its area stop clipping, and the area paints over the
+   taskbar, which is covered rather than taken out so nothing else on the desktop moves. */
+[data-fullscreen-window] .backdrop-area,
+[data-fullscreen-window] .backdrop {
+  overflow: visible;
+}
+
+[data-fullscreen-window] .backdrop-area {
+  z-index: 1;
 }
 
 /* The closed hand for as long as a window is being dragged by its title bar. The window follows
@@ -99,4 +109,38 @@
   from {
     opacity: 0;
   }
+}
+
+/* An entry of the tray's people and agent (the multiplayer spec, section 6) hops once when it arrives or when a
+   bubble of its appears. */
+@keyframes tray-hop {
+  0% {
+    transform: translateY(0);
+  }
+  30% {
+    transform: translateY(-7px) scaleX(0.96) scaleY(1.06);
+  }
+  60% {
+    transform: translateY(0) scaleX(1.04) scaleY(0.94);
+  }
+  100% {
+    transform: translateY(0);
+  }
+}
+
+.tray-hop {
+  animation: tray-hop 420ms cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tray-hop {
+    animation: none;
+  }
+}
+
+/* A viewed desktop is read-only (the multiplayer spec, section 8.3): the stage the windows sit on is inert, and
+   the windows layer's parts that usually take a press (title bars, resize edges, shields) lose their pointer
+   cursors along with everything else, so the owner's windows read as looked at, never arranged from here. */
+.windows-viewing * {
+  pointer-events: none !important;
 }

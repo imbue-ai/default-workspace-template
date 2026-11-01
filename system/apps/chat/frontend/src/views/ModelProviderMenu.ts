@@ -8,7 +8,7 @@
  * chat's live `model_choice` pushed onto the chats store, and its account id resolved
  * against the account list. Which rows show is decided by the matched catalog option (effort
  * iff the model declares more than one; fast iff it supports it); the switch mode decides
- * whether they are interactive.
+ * whether a pick shows before the harness confirms it.
  *
  * The provider row is the one that always renders. A provider is a property of the ACCOUNT,
  * not of the model, so it survives all three of the states in which there is no model to show.
@@ -85,8 +85,15 @@ import {
   isAccountSignedOut,
   openProviderChooser,
 } from "../models/Providers";
-import { beginSwitchTo, beginSwitchToAccountId, openSwitchDialog, takeBackSwitch } from "./SwitchDialog";
-import type { ProviderAccount } from "../models/Providers";
+import {
+  beginSwitchTo,
+  beginSwitchToAccountId,
+  launchAwaitingChatAsRoom,
+  openSwitchDialog,
+  switchToRoom,
+  takeBackSwitch,
+} from "./SwitchDialog";
+import type { ProviderAccount, ProviderChooserIntent } from "../models/Providers";
 import { hoverTooltipAttrs } from "@imbue/workspace-ui/src/components/hoverTooltip";
 import { icon } from "@imbue/workspace-ui/src/components/icons";
 import { inputClass } from "@imbue/workspace-ui/src/components/Input";
@@ -103,10 +110,6 @@ import { capitalizeEffort, modelPickLabel } from "./model-pick-label";
 import * as css from "./modelProviderMenuStyles";
 import { createSlidingMenuTrack } from "./slidingMenuTrack";
 import { FIELD_PART, MENU_ITEM_PART, MENU_SEPARATOR_PART } from "@imbue/workspace-ui/src/themes/parts";
-
-/** Shown on a read-only harness's rows. agy's `/model` is an interactive TUI with no
- *  scriptable form, so the menu cannot drive it -- and says where the user can. */
-const READ_ONLY_TOOLTIP = "To change the model or effort, run /model or /effort in the agent terminal.";
 
 /** The effort to carry when switching to `option`: keep the current one if the new model declares
  *  it, else the effort the model starts at. */
@@ -143,15 +146,15 @@ function effortFillColor(fraction: number): string {
   return `hsl(152 39% ${Math.round(70 - 30 * fraction)}%)`;
 }
 
-/** The chip with no provider signed in: it says so, and a press opens the provider chooser. */
-function notConnectedChip(onSignedIn?: (accountId: string) => void): m.Vnode {
+/** The chip with no provider signed in: it says so, and a press opens the provider chooser with ``intent``. */
+function notConnectedChip(intent: ProviderChooserIntent = {}): m.Vnode {
   return m(
     "button",
     {
       type: "button",
       class: `model-selector-not-connected ${css.TRIGGER}`,
       ...hoverTooltipAttrs("Connect a model provider", "above"),
-      onclick: () => openProviderChooser(onSignedIn === undefined ? {} : { onSignedIn }),
+      onclick: () => openProviderChooser(intent),
     },
     "Not connected",
   );
@@ -162,17 +165,22 @@ function loadingChip(): m.Vnode {
   return m("span", { class: `model-selector-loading ${css.PROVISIONAL_CHIP}` }, "Loading…");
 }
 
-/** The chip for a chat with no agent yet that cannot take a choice: the account it starts on. */
+/** The chip for a chat with no agent yet that cannot take a launch choice (a failed create, or no account to run
+ *  on): the account it starts on; a press opens the provider chooser, whose room row makes the chat a room instead
+ *  (the multiplayer spec, section 7.3). */
 function provisionalChip(chatId: string): m.Vnode {
   const provisional = getProvisionalChat(chatId);
   if (provisional === undefined || !areAccountsLoaded()) return loadingChip();
+  const intent: ProviderChooserIntent = { onRoomChosen: () => void launchAwaitingChatAsRoom(chatId) };
   const account = accountForFirstSend(provisional.account_id);
-  if (account === null) return notConnectedChip();
+  if (account === null) return notConnectedChip(intent);
   return m(
-    "span",
+    "button",
     {
-      class: `model-selector-provisional ${css.PROVISIONAL_CHIP}`,
-      ...hoverTooltipAttrs(`This chat starts on ${account.label}`, "above"),
+      type: "button",
+      class: `model-selector-provisional ${css.TRIGGER}`,
+      ...hoverTooltipAttrs(`This chat starts on ${account.label}; press for a chat room instead`, "above"),
+      onclick: () => openProviderChooser(intent),
     },
     account.provider,
   );
@@ -195,8 +203,6 @@ export interface ModelProviderMenuAttrs {
 interface EffortControlOptions {
   efforts: readonly { level: string; in_picker: boolean }[];
   current: string | null;
-  interactive: boolean;
-  tooltip: string | null;
   onPick: (level: string) => void;
 }
 
@@ -367,7 +373,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
     // -- see 2 above); mid-drag from the position, which indexes `shown` by construction
     // because the input's own min/max are its bounds.
     const level = draggingEffortIndex === null ? (opts.current ?? shown[committed].level) : shown[position].level;
-    return m("div", { class: css.ROW_STATIC, ...hoverTooltipAttrs(opts.tooltip, "above") }, [
+    return m("div", { class: css.ROW_STATIC }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m("span", { class: css.ROW_VALUE_STATIC }, [
         m("span", { class: css.EFFORT_VALUE }, capitalizeEffort(level)),
@@ -399,7 +405,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
             min: 0,
             max: shown.length - 1,
             step: 1,
-            disabled: !opts.interactive,
             value: position,
             style:
               `background: linear-gradient(to right, ${effortFillColor(pct / 100)} ${pct}%, ` +
@@ -424,7 +429,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
   function effortSegments(opts: EffortControlOptions): m.Children {
     const shown = opts.efforts.filter((effort) => effort.in_picker);
     if (shown.length < 2) return null;
-    return m("div", { class: css.EFFORT_SEGMENTS_ROW, ...hoverTooltipAttrs(opts.tooltip, "above") }, [
+    return m("div", { class: css.EFFORT_SEGMENTS_ROW }, [
       m("span", { class: css.ROW_LABEL }, "Effort"),
       m(
         "div",
@@ -440,7 +445,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               "aria-checked": isCurrent ? "true" : "false",
               "data-effort-level": effort.level,
               class: isCurrent ? css.EFFORT_SEGMENT_ON : css.EFFORT_SEGMENT,
-              disabled: !opts.interactive,
               onclick: () => {
                 if (!isCurrent) opts.onPick(effort.level);
               },
@@ -821,6 +825,22 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               });
             }),
       ),
+      // A chat among the people here instead (the multiplayer spec, section 7.6); a room is one already.
+      chat !== undefined && chat.kind !== "room"
+        ? m(
+            "button",
+            {
+              type: "button",
+              class: `model-provider-menu-room ${css.SUBMENU_ADD}`,
+              ...hoverTooltipAttrs("Make this a chat among the people here, with no AI agent", "above"),
+              onclick: () => {
+                menu.close();
+                void switchToRoom(chatId);
+              },
+            },
+            "Chat room",
+          )
+        : null,
       m(
         "button",
         {
@@ -908,6 +928,22 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
             onSelect: () => choose(account.id, { model_id: option.id, effort: startingEffort(option), fast: false }),
           })),
       },
+      // An awaiting chat can start as a room instead (the multiplayer spec, section 7.3); one already being
+      // created is past choosing.
+      ...(provisional.phase !== "awaiting_first_send"
+        ? []
+        : [
+            { kind: "divider" } as MenuRow,
+            {
+              kind: "action",
+              key: "room",
+              label: "Chat room (no provider)",
+              onSelect: () => {
+                menu.close();
+                void launchAwaitingChatAsRoom(chatId);
+              },
+            } as MenuRow,
+          ]),
     ];
     return [trigger, menu.view(rows)];
   }
@@ -1035,21 +1071,20 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       // No account to name and no model to show. With no provider signed in, say so; otherwise
       // the chip below stands in (its Provider row reads "No account") until the model arrives,
       // which for a chat whose agent is still connecting takes a while. A phone keeps its settings
-      // button, which is also its way to Source view and Stop agent.
-      if (account === null && matched === null && !isCompact) {
+      // button, which is also its way to Source view and Stop agent. A room runs on no account by
+      // design, so its chip names the room instead.
+      if (account === null && matched === null && !isCompact && chat.kind !== "room") {
         if (!areAccountsLoaded()) return loadingChip();
         if (getAccounts().length === 0) {
-          return notConnectedChip((accountId) => {
-            beginSwitchToAccountId(chatId, accountId);
-            m.redraw();
+          return notConnectedChip({
+            onSignedIn: (accountId) => {
+              beginSwitchToAccountId(chatId, accountId);
+              m.redraw();
+            },
           });
         }
       }
 
-      // opencode ships an empty catalog and a resolver that fails, so its every pick would
-      // 500. Read-only is the honest render -- a picker there offers a switch that cannot work.
-      const readOnly = catalog === null || catalog.switch_mode === "read_only";
-      const interactive = !readOnly && matched !== null;
       const optimistic = catalog?.switch_mode === "eager_then_reconcile";
       // What the agent recorded, which a switch diffs against; null while it runs at the default.
       const recordedEffort = choice?.identity.effort ?? null;
@@ -1057,7 +1092,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
       const currentEffort = effortInEffect(recordedEffort, matched);
       const currentFast = choice?.identity.fast ?? false;
       const shownEfforts = (matched?.efforts ?? []).filter((effort) => effort.in_picker);
-      const readOnlyTooltip = interactive ? null : READ_ONLY_TOOLTIP;
       const searchable = catalog?.picker_mode === "search";
       const dynamic = catalog?.picker_mode === "dynamic";
       viewedChatId = chatId;
@@ -1102,7 +1136,7 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
           : [
               // A dot joins the text parts; the bolt stands on the row's gap alone, since a glyph
               // is already read apart from the words.
-              m("span", matched?.label ?? account?.provider ?? "Model"),
+              m("span", matched?.label ?? account?.provider ?? (chat.kind === "room" ? "Chat room" : "Model")),
               shownEfforts.length > 1 && currentEffort !== null
                 ? [m("span", { class: css.TRIGGER_DOT }, "·"), m("span", capitalizeEffort(currentEffort))]
                 : null,
@@ -1189,32 +1223,19 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
         });
         rows.push({ kind: "divider" });
         if (matched !== null) {
-          // A read-only harness gets a row that states the model and nothing more: no chevron,
-          // no list.
-          rows.push(
-            interactive
-              ? {
-                  kind: "submenu",
-                  key: "model",
-                  label: "Model",
-                  value: matched.label,
-                  truncateValue: "start",
-                  maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
-                  onOpen: () => {
-                    if (searchable || dynamic) warmOfferedModels(chatId);
-                  },
-                  content: () =>
-                    modelSubmenu(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),
-                }
-              : {
-                  kind: "value",
-                  key: "model",
-                  label: "Model",
-                  value: matched.label,
-                  truncateValue: "start",
-                  tooltip: readOnlyTooltip ?? undefined,
-                },
-          );
+          rows.push({
+            kind: "submenu",
+            key: "model",
+            label: "Model",
+            value: matched.label,
+            truncateValue: "start",
+            maxHeight: css.MODEL_SUBMENU_MAX_HEIGHT,
+            onOpen: () => {
+              if (searchable || dynamic) warmOfferedModels(chatId);
+            },
+            content: () =>
+              modelSubmenu(chatId, sourceOptions, matched, currentIdentity, optimistic, searchable, dynamic),
+          });
           rows.push({
             kind: "custom",
             key: "effort",
@@ -1222,8 +1243,6 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               (isCompact ? effortSegments : effortRow)({
                 efforts: matched.efforts,
                 current: currentEffort,
-                interactive,
-                tooltip: readOnlyTooltip,
                 onPick: (level) => {
                   const next: ModelIdentity = { model_id: matched.id, effort: level, fast: currentFast };
                   setModelChoice(chatId, next, matched, changedAxes(currentIdentity, next), optimistic);
@@ -1231,38 +1250,24 @@ export function ModelProviderMenu(): m.Component<ModelProviderMenuAttrs> {
               }),
           });
           if (matched.supports_fast) {
-            rows.push(
-              interactive
-                ? {
-                    kind: "submenu",
-                    key: "fast",
-                    label: "Fast mode",
-                    value: fastModeValue(chatId),
-                    tooltip: FAST_MODE_EXPLANATION,
-                    content: () => fastModeSubmenu(chatId),
-                  }
-                : {
-                    kind: "value",
-                    key: "fast",
-                    label: "Fast mode",
-                    value: fastModeValue(chatId),
-                    tooltip: readOnlyTooltip ?? FAST_MODE_EXPLANATION,
-                  },
-            );
+            rows.push({
+              kind: "submenu",
+              key: "fast",
+              label: "Fast mode",
+              value: fastModeValue(chatId),
+              tooltip: FAST_MODE_EXPLANATION,
+              content: () => fastModeSubmenu(chatId),
+            });
           }
         }
         if (catalog?.supports_compaction === true) {
-          rows.push(
-            readOnly
-              ? { kind: "value", key: "autocompact", label: "Auto-compact", value: autocompactValue(chatId) }
-              : {
-                  kind: "submenu",
-                  key: "autocompact",
-                  label: "Auto-compact",
-                  value: autocompactValue(chatId),
-                  content: () => autocompactSubmenu(chatId),
-                },
-          );
+          rows.push({
+            kind: "submenu",
+            key: "autocompact",
+            label: "Auto-compact",
+            value: autocompactValue(chatId),
+            content: () => autocompactSubmenu(chatId),
+          });
         }
       }
       if (isCompact && sourceView !== null) {
