@@ -7,7 +7,7 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
@@ -1052,6 +1052,28 @@ def test_a_cron_migration_that_fails_is_a_warning_in_its_own_words(
     )
 
 
+def test_main_launches_supervisord_with_the_gateway_env_the_step_returned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Supervised services only see the gateway through supervisord's environment, so what
+    # the latchkey_gateway_env step returns is exactly what the hand-off must add.
+    _prepare_boot(monkeypatch, tmp_path)
+    gateway_env = {
+        LATCHKEY_GATEWAY_ENV_VAR: LATCHKEY_GATEWAY_URL,
+        LATCHKEY_GATEWAY_PASSWORD_ENV_VAR: "pw",
+        LATCHKEY_DISABLE_COUNTING_ENV_VAR: "1",
+    }
+    monkeypatch.setattr(
+        "bootstrap.manager._configure_latchkey_gateway_env", lambda: gateway_env
+    )
+    handed_off: list[Mapping[str, str]] = []
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", handed_off.append)
+
+    main()
+
+    assert handed_off == [gateway_env]
+
+
 def test_main_boots_without_an_agent_state_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -1141,7 +1163,7 @@ def test_routines_tick_cron_entry_tolerates_an_unwritable_target(
 # _ensure_latchkey_gateway_env
 
 
-def test_latchkey_gateway_env_is_appended_and_exported_when_the_file_names_no_gateway(
+def test_latchkey_gateway_env_is_appended_and_returned_when_the_file_names_no_gateway(
     tmp_path: Path,
 ) -> None:
     # A web-created workspace's host env file carries mngr's own variables and no gateway: the

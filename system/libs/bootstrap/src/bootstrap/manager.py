@@ -1139,7 +1139,8 @@ def main() -> None:
 
     # A workspace whose creator named no latchkey gateway (a web-created one)
     # gets the VM gateway's address and a fresh password before supervisord
-    # starts, so every service and every later chat agent inherits them. After
+    # starts: supervised services inherit them from supervisord's environment,
+    # and later chat agents read them from the host env file. After
     # the timezone step on purpose: that step asks the desktop through whatever
     # gateway the environment names, and a web workspace's VM gateway is not
     # provisioned until the chrome gets to it.
