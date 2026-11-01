@@ -13,6 +13,10 @@
 # stat as through node's statx, which libfaketime does not intercept; the grep
 # fails the install if the Makefile stops naming the flag where the sed looks.
 #
+# The minds evals box image builds the same library for its fake services
+# (mngr's apps/minds_evals/imbue/minds_evals/templates/environment/Dockerfile);
+# move the commit and the FAKE_STAT strip in both places together.
+#
 # tmux links jemalloc, whose initialisation deadlocks under libfaketime, in the
 # client as well as the server, and FAKETIME_SKIP_CMDS takes effect too late to
 # help. So the `tmux` in /usr/local/bin (ahead of /usr/bin on PATH) drops a
