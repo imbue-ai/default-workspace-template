@@ -82,15 +82,11 @@ def _basic_auth_header(env: Mapping[str, str], probe_url: str) -> str | None:
 
 
 def _strip_userinfo(url: str) -> str:
+    """The URL without its `user:password@`, the host kept exactly as written (brackets, case, port)."""
     parts = urllib.parse.urlsplit(url)
-    if parts.username is None and parts.password is None:
+    if "@" not in parts.netloc:
         return url
-    host = parts.hostname or ""
-    if parts.port is not None:
-        host = f"{host}:{parts.port}"
-    return urllib.parse.urlunsplit(
-        (parts.scheme, host, parts.path, parts.query, parts.fragment)
-    )
+    return urllib.parse.urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[-1]))
 
 
 def _open_url(request: urllib.request.Request, timeout_seconds: float) -> bytes:

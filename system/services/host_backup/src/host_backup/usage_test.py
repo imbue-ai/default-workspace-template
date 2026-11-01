@@ -110,6 +110,16 @@ def test_credentials_in_the_repository_url_are_moved_into_the_header() -> None:
     assert request.get_header("Authorization") == "Basic YWdlbnQtYWJjOnRvaw=="
 
 
+def test_credentials_in_the_repository_url_leave_an_ipv6_host_intact() -> None:
+    opener = _RecordingOpener(_usage_body())
+    env = {"RESTIC_REPOSITORY": "rest:http://agent-abc:tok@[::1]:8787/user1/agent-abc/"}
+
+    assert read_store_usage(env, open_url=opener) is not None
+    (request,) = opener.requests
+    assert request.full_url == "http://[::1]:8787/user1/agent-abc/_usage"
+    assert request.get_header("Authorization") == "Basic YWdlbnQtYWJjOnRvaw=="
+
+
 def test_a_non_rest_repository_is_never_asked() -> None:
     opener = _RecordingOpener(_usage_body())
 
