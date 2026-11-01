@@ -35,11 +35,13 @@ from playwright.sync_api import Locator
 from playwright.sync_api import Page
 from playwright.sync_api import ViewportSize
 from playwright.sync_api import expect
+from workspace_layout.primitives import ParticipantKey
 
 from imbue.chat.accounts import account_dir
 from imbue.chat.accounts import delete_account
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
+from imbue.chat.authors import new_author_annotation
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.chat_seed import SeedRole
 from imbue.chat.chat_seed import SeedTurn
@@ -275,17 +277,24 @@ def _post_op(server: RunningWorkspace, body: dict[str, Any]) -> int:
         return 0
 
 
-def _post_intake(server: RunningWorkspace, body: dict[str, Any]) -> str:
-    """Post one intake to the chat app, as the shell's launch does for a POST launch path; the path it answers."""
+def _post_chat_json(server: RunningWorkspace, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    """POST ``body`` as JSON to the chat app's ``path``; the parsed answer, which must come under 200."""
     request = urllib.request.Request(
-        f"{server.chat_url}/api/chats/intake",
+        f"{server.chat_url}{path}",
         data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json"},
         method="POST",
     )
     with urllib.request.urlopen(request, timeout=10) as response:
-        assert response.status == 200
-        return str(json.loads(response.read())["path"])
+        assert response.status == 200, f"{path} answered {response.status}"
+        answer = json.loads(response.read())
+    assert isinstance(answer, dict)
+    return answer
+
+
+def _post_intake(server: RunningWorkspace, body: dict[str, Any]) -> str:
+    """Post one intake to the chat app, as the shell's launch does for a POST launch path; the path it answers."""
+    return str(_post_chat_json(server, "/api/chats/intake", body)["path"])
 
 
 def _navigate_chat_window(server: RunningWorkspace, client_id: str, path: str) -> None:
@@ -574,6 +583,38 @@ def test_live_stream_delivers_new_events(e2e_server: RunningWorkspace, page: Pag
     expect(_chat(page).locator(".message-user", has_text="This is a new streamed message!")).to_be_visible(
         timeout=10000
     )
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_another_persons_turn_is_drawn_under_their_name_without_the_prefix(
+    e2e_server: RunningWorkspace, page: Page
+) -> None:
+    """A turn a visitor sent (delivered prefixed, and annotated as theirs) is drawn on the owner's page as another
+    person's: their name over the bubble, their monogram beside it, and never the prefix."""
+    _open_fixture_chat(page, e2e_server)
+    expect(_chat(page).locator(".message-user").first).to_be_visible(timeout=15000)
+
+    delivered = "[from: Bob] Could you check the deploy?"
+    e2e_server.chat_state.authors.record(
+        ChatId(FIXTURE_AGENT_ID),
+        new_author_annotation("msg-bob-1", ParticipantKey("user:user-bob-4471"), "Bob", delivered),
+    )
+    new_event = {
+        "type": "user",
+        "uuid": "uuid-bob-1",
+        "timestamp": "2026-01-01T00:01:00Z",
+        "message": {"role": "user", "content": delivered},
+    }
+    with open(e2e_server.session_file, "a") as f:
+        f.write(json.dumps(new_event) + "\n")
+
+    row = _chat(page).locator(".message-other", has_text="Could you check the deploy?")
+    expect(row).to_be_visible(timeout=10000)
+    expect(row.locator(".message-author")).to_have_text("Bob")
+    expect(row.locator("[data-participant-picture]")).to_have_text("B")
+    expect(row).not_to_contain_text("[from:")
+    # The owner's own turns keep their side.
+    expect(_chat(page).locator(".message-user").first).not_to_have_class(re.compile(r"message-other"))
 
 
 # A conversation whose transcript ends with an unresolved enqueue, so the Claude queue
@@ -1055,9 +1096,9 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         home_window = _the_chat_window(server)["id"]
 
-        page.locator("[data-desktops-menu]").click()
-        expect(page.locator(".desktops-menu")).to_be_visible(timeout=5000)
-        page.locator('[data-menu-row="new-desktop"]').click()
+        page.locator('[data-tray-widget="overview"]').click()
+        expect(page.locator("[data-overview]")).to_be_visible(timeout=5000)
+        page.locator("[data-overview-new-desktop]").click()
         wait_for(lambda: len(_desktops(server)) == 2, timeout=10.0, poll_interval=0.1)
         (created,) = [desktop["id"] for desktop in _desktops(server) if desktop["id"] != _HOME_DESKTOP_ID]
         expect(page.locator(f'[data-desktop-id="{created}"]')).to_be_visible(timeout=15000)
@@ -1071,7 +1112,9 @@ def test_switching_desktops_preserves_chat_transcript(tmp_path: Path, page: Page
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         assert [window["id"] for window in _chat_windows(server)] == [home_window]
 
-        page.locator(f'[data-desktop-switch="{_HOME_DESKTOP_ID}"]').click()
+        page.locator('[data-tray-widget="overview"]').click()
+        expect(page.locator("[data-overview]")).to_be_visible(timeout=5000)
+        page.locator(f'[data-overview-desktop="{_HOME_DESKTOP_ID}"]').click()
         expect(_taskbar_entry(page, home_window)).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-user", has_text="Hello agent!").first).to_be_visible(timeout=15000)
         expect(_chat(page).locator(".message-list-empty")).to_have_count(0)
@@ -2388,6 +2431,12 @@ def test_the_phone_layout_keeps_the_chat_list_in_a_drawer_over_the_chat(
     row = drawer.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]')
     row_box = row.bounding_box()
     assert row_box is not None and row_box["height"] >= 44, row_box
+    # Hovered first: Fortress replays a recorded human cursor trajectory for a pointer move, and
+    # a click that moves the pointer from the list button to the row can land that glide's
+    # points between the press and its release; its first point is back at the list button,
+    # far left of the row, which the drawer reads as a drag that dismisses it and swallows the
+    # tap. A hover plays the glide out before returning, so the click that follows moves nothing.
+    row.hover()
     row.click()
     expect(drawer).to_have_count(0)
     expect(page.locator(".chat-header-title")).to_have_text("test-agent")
@@ -2429,7 +2478,8 @@ def test_a_narrow_window_under_a_mouse_opens_the_rail_in_the_drawer_at_its_dragg
     drawer = page.locator("[data-chat-drawer]")
     expect(drawer).to_be_visible()
     expect(drawer.locator(".chat-rail-new")).to_have_text("New chat")
-    expect(drawer.locator("[data-chat-row-menu]")).to_have_count(0)
+    # Under a mouse the rows keep the hover kebab (hidden until hover), never the touch layout's always-shown one.
+    expect(drawer.locator("[data-chat-row-menu]:visible")).to_have_count(0)
     panel = page.locator(".chat-drawer-panel").bounding_box()
     row = drawer.locator(f'.chat-rail-row[data-chat-id="{FIXTURE_AGENT_ID}"]').bounding_box()
     # The panel's box is measured in fractional pixels.

@@ -117,6 +117,7 @@ PLACEABLE_STATES: Final[tuple[WindowState, ...]] = (
     WindowState.SNAPPED_LEFT,
     WindowState.SNAPPED_RIGHT,
     WindowState.MAXIMIZED,
+    WindowState.FULLSCREEN,
 )
 
 _FORCE_DESCRIPTION: Final[str] = (

@@ -101,7 +101,9 @@ def run_provisioner(runner: Runner, repo_root: Path) -> str | None:
 
 
 def snapshot_targets(
-    plan: ApplyPlan, repo_root: Path, destinations: Mapping[str, ToolDestination]
+    plan: ApplyPlan,
+    repo_root: Path,
+    destinations: Mapping[str, ToolDestination],
 ) -> list[tuple[str, Path]]:
     """The state the apply's destructive steps can destroy, by plan.
 
@@ -397,6 +399,16 @@ def _pinned_tool_location() -> tuple[Path, Path]:
     """
     home = tool_env.tool_home()
     return tool_env.tools_dir(home), tool_env.bin_dir(home)
+
+
+def _uv_tool_env(tool_dir: Path, bin_dir: Path) -> dict[str, str]:
+    """This process's environment with uv pointed at one installation: ``UV_TOOL_DIR``
+    and ``UV_TOOL_BIN_DIR``, the pair every ``uv tool`` command the apply runs is
+    addressed by."""
+    env = dict(os.environ)
+    env["UV_TOOL_DIR"] = str(tool_dir)
+    env["UV_TOOL_BIN_DIR"] = str(bin_dir)
+    return env
 
 
 class ToolDestination(NamedTuple):
@@ -745,9 +757,7 @@ def _reinstall_tool(
             f"refresh: removed {stale}, an entrypoint into '{tool_name}' its receipt "
             "does not list (left by an earlier rollback).\n"
         )
-    env = dict(os.environ)
-    env["UV_TOOL_DIR"] = str(destination.tool_dir)
-    env["UV_TOOL_BIN_DIR"] = str(destination.bin_dir)
+    env = _uv_tool_env(destination.tool_dir, destination.bin_dir)
     argv = [
         "uv",
         "tool",

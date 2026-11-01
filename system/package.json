@@ -8,6 +8,7 @@
     "apps/system_interface/frontend",
     "apps/chat/frontend",
     "apps/getting_started/frontend",
+    "apps/screen/frontend",
     "apps/files/frontend",
     "apps/routines/frontend",
     "apps/style_guide/frontend"

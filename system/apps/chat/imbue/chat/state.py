@@ -9,12 +9,18 @@ from flask import current_app
 from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
+from workspace_layout.errors import InvalidLayoutValueError
 from workspace_layout.interfaces import ShellLayoutInterface
+from workspace_layout.primitives import ParticipantKey
+from workspace_layout.primitives import WORKSPACE_AGENT_PARTICIPANT_KEY
 
 from imbue.chat.agent_discovery import AgentInfo
 from imbue.chat.agent_discovery import SendDelivery
 from imbue.chat.agent_discovery import agent_tmux_session_name
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.authors import AUTHOR_FIELD
+from imbue.chat.authors import AUTHOR_NAME_FIELD
+from imbue.chat.authors import AuthorStore
 from imbue.chat.chat_intakes import PendingIntakeStore
 from imbue.chat.chat_naming import ChatNamer
 from imbue.chat.chat_settings import ChatSettingsStore
@@ -27,14 +33,21 @@ from imbue.chat.harnesses.interrupt import RestartProcess
 from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
+from imbue.chat.harnesses.room.transcript import is_workspace_agent_turn
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.chat.lounge import LoungeKeeper
+from imbue.chat.mentions import MentionHandler
+from imbue.chat.mentions import MentionStore
 from imbue.chat.primitives import ChatId
 from imbue.chat.reply_drafts import ReplyDraftPublisher
 from imbue.chat.reply_drafts import ReplyDraftReader
 from imbue.chat.reply_drafts import capture_tmux_session_pane
+from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
+from imbue.chat.tray_feed import TrayFeed
+from imbue.chat.tray_feed import first_paragraph
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.mngr.primitives import AgentId
@@ -112,10 +125,26 @@ class ChatAppState(MutableModel):
         description="The shell's layout, for the routes that put a window on a client's screen and the sends that "
         "report a client's activity; the auto-open reactor is handed the same one"
     )
+    authors: AuthorStore = Field(description="Who wrote each message a visitor or a visiting agent sent, per chat")
+    roster: RosterClient = Field(description="The shell's roster: names, keys, and handles, cached briefly")
+    mentions: MentionStore = Field(description="The mentions each person has not looked at yet (section 7.4)")
     # The secret requests agents file and the env files their answers are written to, and
     # the router's bridge the routes reach the chats through (attached by ``create_application``).
     secret_requests: SecretRequestStore
     secret_request_bridge: SecretRequestChatBridge | None = None
+    mention_handler: MentionHandler | None = Field(
+        default=None,
+        description="What a room send's mentions do; attached by ``create_application`` beside the routes",
+    )
+    tray_feed: TrayFeed | None = Field(
+        default=None,
+        description="The bubbles and the chats' activity this app tells the shell's tray; None for a secondary chat, "
+        "whose sends and chats are a preview's",
+    )
+    lounge: LoungeKeeper | None = Field(
+        default=None,
+        description="Makes the Lounge when it is needed; None for a secondary chat, which creates nothing",
+    )
     watchers: dict[str, AgentSessionWatcher] = {}
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``, or
@@ -164,11 +193,19 @@ class ChatAppState(MutableModel):
 
             def on_events(agent_id: str, events: list[dict[str, Any]]) -> None:
                 self.agent_manager.stamp_compaction_events(agent_info, events)
+                chat_id = self.agent_manager.chat_id_of_agent(agent_id)
+                # The stored events are the same dicts, so the author stamps outlive this broadcast.
+                self.authors.stamp_events(chat_id, events)
+                self.name_authors(events)
+                # The workspace agent posting into a room answers whatever the room asked (section 7.4).
+                if any(is_workspace_agent_turn(event) for event in events):
+                    self.agent_manager.clear_chat_awaiting(chat_id)
+                self.bubble_agent_turns(chat_id, agent_id, events)
                 # Deliver-live-only: session events are persisted in JSONL and recoverable
                 # via the REST /events endpoint, so nothing is buffered for replay. The
                 # fan-out is keyed by chat, so a page's stream follows the chat across a
                 # handoff rather than the agent it happened to open on.
-                self.event_queues.broadcast_batch(str(self.agent_manager.chat_id_of_agent(agent_id)), events)
+                self.event_queues.broadcast_batch(str(chat_id), events)
                 # Fold the delta into the per-agent activity signals. The tracker is
                 # incremental (seeded with the full backlog below), so it only ever
                 # needs the newly parsed events.
@@ -222,6 +259,13 @@ class ChatAppState(MutableModel):
             backlog = watcher.get_all_events()
             # A compaction that finished while no watcher ran (a chat nobody had open) ends here.
             self.agent_manager.stamp_compaction_events(agent_info, backlog)
+            backlog_chat_id = self.agent_manager.chat_id_of_agent(agent_info.id)
+            self.authors.stamp_events(backlog_chat_id, backlog)
+            self.name_authors(backlog)
+            # The workspace agent's post into a room nobody had open answers whatever the room asked, as a live
+            # post does (section 7.4).
+            if any(is_workspace_agent_turn(event) for event in backlog):
+                self.agent_manager.clear_chat_awaiting(backlog_chat_id)
             self.agent_manager.update_session_events(agent_info.id, backlog)
             watcher.start()
         finally:
@@ -231,6 +275,52 @@ class ChatAppState(MutableModel):
             if is_evicted:
                 watcher.stop()
         return watcher
+
+    def bubble_agent_turns(self, chat_id: ChatId, agent_id: str, events: list[dict[str, Any]]) -> None:
+        """Raise a speech bubble over the agent's tray entry for every turn it closed with text (the multiplayer
+        spec, section 6.5): an assistant turn of the chat's live agent's own session, or the agent's post into a
+        room; a retired agent's late words and a subagent's raise none."""
+        if self.tray_feed is None:
+            return
+        spoken: list[tuple[str, str]] = []
+        for event in events:
+            words, event_id = self._agents_words_in(event)
+            paragraph = first_paragraph(words)
+            if paragraph:
+                spoken.append((paragraph, event_id))
+        if not spoken:
+            return
+        snapshot = self.agent_manager.get_chat_snapshot(str(chat_id))
+        if snapshot is None or snapshot.active_agent.agent_id != agent_id:
+            return
+        for text, event_id in spoken:
+            self.tray_feed.post_bubble(WORKSPACE_AGENT_PARTICIPANT_KEY, chat_id, snapshot.title, text, event_id, ())
+
+    def _agents_words_in(self, event: dict[str, Any]) -> tuple[str, str]:
+        """What the workspace agent said in one event and the event's id: its post into a room, or an assistant turn
+        of its own session; nothing for any other event (a subagent's turn, a person's message)."""
+        event_id = str(event.get("event_id", ""))
+        if is_workspace_agent_turn(event):
+            return str(event.get("content", "")), event_id
+        if event.get("type") == "assistant_message" and self.is_main_session_event(event):
+            return str(event.get("text", "")), event_id
+        return "", event_id
+
+    def name_authors(self, events: list[dict[str, Any]]) -> None:
+        """Name, from the roster, the author of every turn whose transcript names its author's key but not what
+        they are called (a room's reader records the key alone), in place; a key the roster lacks keeps the key."""
+        for event in events:
+            author = event.get(AUTHOR_FIELD)
+            if not isinstance(author, str) or not author or AUTHOR_NAME_FIELD in event:
+                continue
+            try:
+                key = ParticipantKey(author)
+            except InvalidLayoutValueError as e:
+                logger.warning("A transcript names an author that is not a participant key; kept as written: {}", e)
+                event[AUTHOR_NAME_FIELD] = author
+                continue
+            entry = self.roster.participant(key)
+            event[AUTHOR_NAME_FIELD] = entry.display_name if entry is not None else author
 
     def has_watcher(self, agent_id: str) -> bool:
         """Whether a session watcher is resident for the agent.
@@ -424,6 +514,10 @@ class ChatAppState(MutableModel):
             self.chat_namer.stop()
         if self._reply_draft_publisher is not None:
             self._reply_draft_publisher.stop()
+        if self.lounge is not None:
+            self.lounge.stop()
+        if self.tray_feed is not None:
+            self.tray_feed.shutdown()
         self.event_queues.shutdown()
         self.broadcaster.shutdown()
         self.agent_manager.stop()

@@ -18,7 +18,9 @@ a checkout of this template is gated exactly like one inside the workspace, and 
 with no account store nothing there will ever satisfy it, so work on this repo from the
 monorepo. A create that names its own `--type` cannot be told apart here and is refused too
 while nothing is signed in, which is the state every agent in the workspace is unusable in
-anyway.
+anyway. The one create that needs no account is a chat room's (the `room` agent type, a chat
+among people with no AI agent): the chat app runs it with `MINDS_CREATE_WITHOUT_ACCOUNT=1` in
+the environment, which this honors.
 
 Standard library only: it runs before any venv exists. `MNGR_AGENT_ID` is set for any mngr
 agent, on the user's machine as much as in the container, so the settings entry's shell test
@@ -70,8 +72,13 @@ def _names_default_type(path: Path) -> bool:
     return isinstance(agent_type, str) and bool(agent_type)
 
 
+CREATE_WITHOUT_ACCOUNT_ENV = "MINDS_CREATE_WITHOUT_ACCOUNT"
+
+
 def main(environ: dict[str, str], cwd: Path) -> int:
     if not _is_inside_workspace(environ, cwd):
+        return 0
+    if environ.get(CREATE_WITHOUT_ACCOUNT_ENV, "").strip() == "1":
         return 0
     if _names_default_type(_local_settings_path(environ)):
         return 0
