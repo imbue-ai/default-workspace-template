@@ -45,6 +45,7 @@ WORKSPACE_VENV = Path(".venv")
 # relative to the repo root like the config above. Not under data/: it belongs to
 # whatever created the workspace and is never backed up.
 CLOCK_ENV_FILE = Path("system/clock.env")
+_ENV_VARIABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # Container-local directory for supervisord's own log + the per-service logs. Not
 # under data/, so these are never backed up.
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
@@ -752,7 +753,7 @@ def _read_clock_env(path: Path) -> dict[str, str]:
         if not stripped or stripped.startswith("#"):
             continue
         key, separator, value = stripped.partition("=")
-        if not separator or not key:
+        if not separator or not _ENV_VARIABLE_NAME.fullmatch(key):
             logger.error("Ignoring {}: {!r} is not a KEY=VALUE line", path, line)
             return {}
         variables[key] = value

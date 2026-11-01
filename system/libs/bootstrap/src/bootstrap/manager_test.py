@@ -500,6 +500,15 @@ def test_a_clock_env_file_with_a_malformed_line_is_ignored_whole(
     assert _read_clock_env(clock_env) == {}
 
 
+def test_a_clock_env_file_whose_key_is_no_variable_name_is_ignored_whole(
+    tmp_path: Path,
+) -> None:
+    clock_env = tmp_path / "clock.env"
+    clock_env.write_text("FAKETIME_CACHE_DURATION=1\nexport LD_PRELOAD=/lib/x.so\n")
+
+    assert _read_clock_env(clock_env) == {}
+
+
 # _apply_container_timezone
 
 
