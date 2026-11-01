@@ -75,10 +75,51 @@ describe("InputRelay", () => {
   beforeEach(() => {
     socket = new RecordingSocket();
     stage = document.createElement("div");
+    stage.tabIndex = 0;
     stage.getBoundingClientRect = () => rect(0, 0, 960, 540);
     document.body.append(stage);
     relay = new InputRelay(socket as unknown as NekoSocket, stage);
     relay.screen = SCREEN;
+  });
+
+  it("hands the stage's focus to its hidden key sink, an editable element, and keeps nothing typed into it", () => {
+    stage.focus();
+    expect(document.activeElement).toBe(relay.keySink);
+    expect(relay.keySink.tagName).toBe("INPUT");
+    expect(relay.keySink.type).toBe("text");
+    relay.keySink.value = "n";
+    relay.keySink.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(relay.keySink.value).toBe("");
+  });
+
+  it("leaves the sink to an IME while it composes and empties it once the composition ends", () => {
+    relay.keySink.value = "に";
+    relay.keySink.dispatchEvent(new InputEvent("input", { bubbles: true, isComposing: true }));
+    expect(relay.keySink.value).toBe("に");
+    relay.keySink.dispatchEvent(new CompositionEvent("compositionend", { bubbles: true, data: "に" }));
+    expect(relay.keySink.value).toBe("");
+  });
+
+  it("disposed, it takes its sink out of the stage, releases what it held and sends nothing more", () => {
+    relay.setEnabled(true);
+    relay.keyDown(XK_CONTROL_L);
+    socket.sent.length = 0;
+    relay.dispose();
+    expect(stage.contains(relay.keySink)).toBe(false);
+    expect(socket.sent).toEqual([{ event: "control/keyup", payload: { keysym: XK_CONTROL_L } }]);
+    socket.sent.length = 0;
+    relay.keyDown(XK_CONTROL_L);
+    expect(socket.sent).toEqual([]);
+  });
+
+  it("releases held keys when focus leaves the stage, not when it moves into the sink", () => {
+    relay.setEnabled(true);
+    relay.keyDown(XK_CONTROL_L);
+    socket.sent.length = 0;
+    stage.dispatchEvent(new FocusEvent("focusout", { relatedTarget: relay.keySink, bubbles: true }));
+    expect(socket.sent).toEqual([]);
+    stage.dispatchEvent(new FocusEvent("focusout", { relatedTarget: null, bubbles: true }));
+    expect(socket.sent).toEqual([{ event: "control/keyup", payload: { keysym: XK_CONTROL_L } }]);
   });
 
   it("sends nothing while disabled", () => {
