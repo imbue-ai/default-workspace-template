@@ -527,6 +527,7 @@ class Viewer {
     this.screencast = null;
     this.stream?.close();
     this.socket?.stop();
+    this.input?.dispose();
     this.stream = null;
     this.socket = null;
     this.input = null;

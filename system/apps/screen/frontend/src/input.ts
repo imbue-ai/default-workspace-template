@@ -139,6 +139,13 @@ export class InputRelay implements KeySink {
     this.isEnabled = isEnabled;
   }
 
+  /** The session is over: the sink leaves the stage, and nothing is sent again (the viewer builds a new relay
+   *  for its next session). */
+  dispose(): void {
+    this.setEnabled(false);
+    this.keySink.remove();
+  }
+
   private isPasteChord(keysym: number): boolean {
     const isPasteKey = keysym === XK_V || keysym === XK_V_UPPER;
     return isPasteKey && (this.isControlHeld || this.isCommandHeld);

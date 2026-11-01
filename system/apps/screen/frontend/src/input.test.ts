@@ -100,6 +100,18 @@ describe("InputRelay", () => {
     expect(relay.keySink.value).toBe("");
   });
 
+  it("disposed, it takes its sink out of the stage, releases what it held and sends nothing more", () => {
+    relay.setEnabled(true);
+    relay.keyDown(XK_CONTROL_L);
+    socket.sent.length = 0;
+    relay.dispose();
+    expect(stage.contains(relay.keySink)).toBe(false);
+    expect(socket.sent).toEqual([{ event: "control/keyup", payload: { keysym: XK_CONTROL_L } }]);
+    socket.sent.length = 0;
+    relay.keyDown(XK_CONTROL_L);
+    expect(socket.sent).toEqual([]);
+  });
+
   it("releases held keys when focus leaves the stage, not when it moves into the sink", () => {
     relay.setEnabled(true);
     relay.keyDown(XK_CONTROL_L);
