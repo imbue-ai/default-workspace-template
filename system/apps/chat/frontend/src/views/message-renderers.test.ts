@@ -69,12 +69,7 @@ const { mockDetailState, mockRequestDetail, transcript } = vi.hoisted(() => ({
   transcript: {
     events: [] as unknown[],
     sendMessage: vi.fn(async () => "ok"),
-    noteResentSend: vi.fn((_chatId: string, _text: string, _priorTurnIds: ReadonlySet<string>) => {}),
   },
-}));
-vi.mock("../models/ResentSends", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../models/ResentSends")>()),
-  noteResentSend: transcript.noteResentSend,
 }));
 vi.mock("../models/Response", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../models/Response")>()),
@@ -911,22 +906,16 @@ describe("the auth-error note's switch link", () => {
       expect(findButton(children, "Try again")).not.toBeNull();
     });
 
-    it("takes a resend the chat app had to send twice as sent, and says so under the message", async () => {
+    it("takes a resend the chat app had to send twice as sent", async () => {
       transcript.events = [PROMPT, authErrorEvent()];
       transcript.sendMessage.mockResolvedValueOnce("resent");
-      transcript.noteResentSend.mockClear();
+      transcript.sendMessage.mockClear();
 
       findButton(
         renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1"),
         "Send your message again",
       )!.attrs.onclick();
-      await vi.waitFor(() =>
-        expect(transcript.noteResentSend).toHaveBeenCalledExactlyOnceWith(
-          "chat-1",
-          "Summarize the deploy thread",
-          expect.any(Set),
-        ),
-      );
+      await vi.waitFor(() => expect(transcript.sendMessage).toHaveBeenCalledTimes(1));
 
       const children = renderAssistantMessageChildren(authErrorEvent(), new Map(), "chat-1");
       expect(allText(children)).not.toContain("That didn't send.");
