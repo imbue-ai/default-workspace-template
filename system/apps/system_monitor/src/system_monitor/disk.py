@@ -59,9 +59,9 @@ HOME_FOLDER_HINTS: Final[dict[str, str]] = {
 # How many folders the workspace and home rows list, and the least a listed item holds.
 FOLDER_ITEM_COUNT: Final[int] = 8
 MIN_ITEM_BYTES: Final[int] = 1024 * 1024
-# What is not the machine's system software: the home tree and the off-volume cache (the rows
-# above), kernel and memory filesystems, and the container engines' own stores where a machine
-# keeps them on this disk.
+# What the system walk leaves out: the home tree and the off-volume cache (the rows above, though
+# the venvs in the cache are system software, measured with the caches), kernel and memory
+# filesystems, and the container engines' own stores where a machine keeps them on this disk.
 SYSTEM_EXCLUDES: Final[tuple[Path, ...]] = (
     Path("/proc"),
     Path("/sys"),
