@@ -80,6 +80,19 @@ describe("ViewerVisibility", () => {
     expect(events).toEqual(["request", "release"]);
   });
 
+  it("a stage the belt finds without a size is hidden, and the belt's next reading of a size shows it again", () => {
+    const { scheduler, events, visibility } = build();
+    visibility.evaluate();
+    visibility.setLaidOut(false);
+    expect(visibility.isVisible).toBe(false);
+    scheduler.advance(5000);
+    expect(events).toEqual(["request", "release"]);
+    // No IntersectionObserver callback: the belt alone restores what it cleared.
+    visibility.setLaidOut(true);
+    expect(visibility.isVisible).toBe(true);
+    expect(events).toEqual(["request", "release", "request"]);
+  });
+
   it("reset forgets the media so the next visible evaluation requests it", () => {
     const { events, visibility } = build();
     visibility.evaluate();

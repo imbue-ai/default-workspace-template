@@ -23,6 +23,7 @@ from pydantic import Field
 from pydantic import ValidationError
 
 from workspace_layout.errors import ShellAnswerMalformedError
+from workspace_layout.primitives import AppTheming
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import LayoutOp
@@ -101,7 +102,10 @@ class InventoryClient(ClientView):
     """A client of the inventory document: the client, the windows of its active desktop it shows, and the windows
     it popped out of any desktop."""
 
-    shown: tuple[WindowId, ...] = Field(description="The windows of its active desktop its layout does not minimize")
+    shown: tuple[WindowId, ...] = Field(
+        default=(),
+        description="The windows of its active desktop its layout does not minimize; none from an older shell",
+    )
     popped_out: tuple[PoppedOutWindow, ...] = Field(
         default=(), description="The windows its layouts of every desktop say are popped out; none from an older shell"
     )
@@ -128,6 +132,11 @@ class InventoryApp(FrozenModel):
     share_url: str | None = Field(
         description="The app's address on the domain the workspace was last shared under; None when it never was"
     )
+    theming: AppTheming | None = Field(
+        default=None,
+        description="Where the app's Theming submenu stands: on or off for a themeable app, unthemed for an app that "
+        "can be made themeable; None for an app that wears the workspace's theme itself or is not themed",
+    )
 
 
 class InventoryDocument(FrozenModel):
@@ -149,13 +158,16 @@ class InventoryOpAnswer(InventoryDocument):
 class DesktopsListing(FrozenModel):
     """``GET /api/desktops`` (desktop contracts.md section 5.2): every desktop, the first being the fallback."""
 
-    desktops: tuple[DesktopView, ...] = Field(description="Every desktop, in creation order")
+    desktops: tuple[DesktopView, ...] = Field(
+        description="Every desktop, in display order (creation order, as the order route rearranged it)"
+    )
 
 
 class ClientsListing(FrozenModel):
-    """``GET /api/clients``: every known client, its desktop settled."""
+    """``GET /api/clients``: every known client, its desktop settled, with the windows it shows (the same client
+    objects the inventory carries, so a reader of either route sees what each client is looking at)."""
 
-    clients: tuple[ClientView, ...] = Field(description="Every known client")
+    clients: tuple[InventoryClient, ...] = Field(description="Every known client")
 
 
 class RecentClientMessage(FrozenModel):

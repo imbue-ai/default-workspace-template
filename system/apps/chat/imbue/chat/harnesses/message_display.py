@@ -15,7 +15,7 @@ ITS detectors here; a detector only some harnesses emit simply never fires for t
 Order of decision (:func:`classify_user_message`):
 
 1. An explicit detector matches (stop hook, fleet, task-notification, background-task report,
-   skill, /welcome, a seeded chat's context block, model-bar traffic, a latchkey resolution,
+   workspace-update note, skill, /welcome, a seeded chat's context block, model-bar traffic, a latchkey resolution,
    a secret-card resolution, reports merged into a turn with the user's words)
    -> that decision. Explicit detectors WIN over ``is_meta`` -- Stop-hook feedback is
    ``is_meta`` yet deliberately surfaces as a chip.
@@ -32,6 +32,8 @@ from typing import assert_never
 
 from pydantic import Field
 
+from imbue.chat.authors import AUTHOR_NAME_FIELD
+from imbue.chat.authors import split_author_prefix
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -44,10 +46,19 @@ from imbue.imbue_common.pure import pure
 # this app's send route; keep the two in sync (``message_display_test.py`` pins them equal).
 BROWSER_FLEET_TAG = "agentic-browser-fleet"
 
-# Cross-layer contract: the wrapper ``system/scripts/run_in_background.py`` puts around the
+# Cross-layer contract: the wrapper ``system/scripts/workspace_bare_scripts/run_in_background.py`` puts around the
 # report it sends an agent's own chat when a command it ran for that agent exits. Only its
 # ``<summary>`` line is for the user; ``message_display_test.py`` pins the two tags equal.
 BACKGROUND_TASK_REPORT_TAG = "background-task-report"
+
+# Cross-layer contract: the wrapper the update-self skill puts around the note it sends each chat
+# it paused for an update's apply (``.agents/skills/update-self/python/update_self_skill/update_resume_note.py``,
+# sent by ``run-status resume-chats``). The opening tag says whether the update landed, which
+# picks the notice's label; only the ``<summary>`` line is for the user. ``message_display_test.py``
+# pins the tag and both outcomes equal.
+WORKSPACE_UPDATE_NOTE_TAG = "workspace-update-note"
+WORKSPACE_UPDATE_OUTCOME_LANDED = "landed"
+WORKSPACE_UPDATE_OUTCOME_NOT_LANDED = "not-landed"
 
 # Cross-layer contract: the tag the chat app wraps a seeded chat's context in when it launches
 # that chat's first agent (``chat_seed.seed_context_message``). The agent reads the whole
@@ -68,6 +79,14 @@ _BROWSER_FLEET_RE = re.compile(rf"^\s*<{BROWSER_FLEET_TAG}>([\s\S]*)</{BROWSER_F
 _BACKGROUND_TASK_REPORT_RE = re.compile(
     rf"^\s*<{BACKGROUND_TASK_REPORT_TAG}>\s*<summary>([^\n]*?)</summary>[\s\S]*</{BACKGROUND_TASK_REPORT_TAG}>\s*$"
 )
+_WORKSPACE_UPDATE_NOTE_RE = re.compile(
+    rf'^\s*<{WORKSPACE_UPDATE_NOTE_TAG} outcome="({WORKSPACE_UPDATE_OUTCOME_LANDED}|{WORKSPACE_UPDATE_OUTCOME_NOT_LANDED})">'
+    rf"\s*<summary>([^\n]*?)</summary>[\s\S]*</{WORKSPACE_UPDATE_NOTE_TAG}>\s*$"
+)
+_WORKSPACE_UPDATE_LABELS = {
+    WORKSPACE_UPDATE_OUTCOME_LANDED: "Workspace updated",
+    WORKSPACE_UPDATE_OUTCOME_NOT_LANDED: "Workspace update not applied",
+}
 # One report in a text that newline-joins several messages (a queue handed back on Stop). A
 # report is a whole message, so its tags sit on lines of their own; its output is the command's
 # raw text and may carry the tag mid-line.
@@ -321,6 +340,19 @@ def _match_background_task_report(content: str) -> MessageDisplay | None:
     )
 
 
+def _match_workspace_update_note(content: str) -> MessageDisplay | None:
+    """The note a chat paused for a workspace update gets when it resumes; a NOTICE showing only its
+    summary line, labelled by whether the update landed."""
+    match = _WORKSPACE_UPDATE_NOTE_RE.match(content)
+    if match is None:
+        return None
+    return MessageDisplay(
+        display=DisplayKind.NOTICE,
+        display_label=_WORKSPACE_UPDATE_LABELS[match.group(1)],
+        display_body=match.group(2).strip(),
+    )
+
+
 def _match_merged_background_task_reports(content: str) -> MessageDisplay | None:
     """The user's words merged into one turn with reports that were queued beside them (a harness
     that flushes its queue as one message); the page shows only the words."""
@@ -441,6 +473,7 @@ _DETECTORS = (
     _match_stop_hook,
     _match_task_notification,
     _match_background_task_report,
+    _match_workspace_update_note,
     _match_browser_fleet,
     _match_composer_command,
     _match_handoff_summary_request,
@@ -493,11 +526,21 @@ def stamp_user_message_display(event: dict[str, Any], content: str, *, is_meta: 
     The ONE call every user-message emit site makes (each harness's normal path AND
     claude's queued-command attachment path), so a new wire field or a precedence change
     lands everywhere at once instead of in per-parser copies.
+
+    A ``[from: <name>] `` prefix (the multiplayer spec, section 5.3) is read here too: the name
+    is stamped as ``author_name`` (the key is joined later, from the chat's annotations), the
+    detectors run on the words behind it, and the page is handed those words as the body, so
+    the prefix the agent reads is never shown.
     """
-    decision = classify_user_message(content, is_meta=is_meta)
+    author_name, spoken = split_author_prefix(content)
+    if author_name is not None:
+        event[AUTHOR_NAME_FIELD] = author_name
+    decision = classify_user_message(spoken, is_meta=is_meta)
+    if decision is None and author_name is not None:
+        decision = MessageDisplay(display=DisplayKind.PROMPT_WITH_CONTEXT, display_body=spoken)
     if decision is not None:
         decision.apply_to(event)
-    if is_non_turn_tail(content, is_meta=is_meta):
+    if is_non_turn_tail(spoken, is_meta=is_meta):
         event["non_turn_tail"] = True
 
 

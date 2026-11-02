@@ -11,7 +11,7 @@ Your worker SKILL.md lists any additional inputs the calling flow stages
 alongside it. At the start of your run, extract the lead's address with:
 
 ```bash
-eval "$(uv run .agents/shared/scripts/parse_task_frontmatter.py <TASK_FILE>)"
+eval "$(uv run --no-sync .agents/shared/scripts/agents_shared/parse_task_frontmatter.py <TASK_FILE>)"
 ```
 
 `<TASK_FILE>` is the `task_file` value in the frontmatter you were sent -- the
@@ -47,7 +47,7 @@ At each gate or terminal status:
    prints where it landed:
 
    ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py report \
+   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py report \
        --task-file "$TASK_FILE" \
        --type gate \
        --name question \
@@ -70,7 +70,10 @@ At each gate or terminal status:
 
 3. Stop your turn. For gate reports, the lead's reply arrives as a message in
    your chat and you resume; for terminal reports, the lead acts on the report
-   and the run ends. Only gates and terminal statuses stop your turn: the
+   and the run ends -- unless its base moved before it could merge you, in
+   which case it asks you to catch up and report again (your flow's catch-up
+   section; for a harden pass, `harden-creation.md`'s "Catching up to a moved
+   base"). Only gates and terminal statuses stop your turn: the
    milestone reports below are non-blocking, and you keep working straight
    through one.
 
@@ -172,6 +175,31 @@ name is always yours to pick.
    still hands over the whole branch. Every later push re-delivers the file
    (you keep your copy); the lead's `await` recognises one it has already
    returned by its name, so that is harmless.
+
+### A milestone the lead reverted
+
+When the user rejects a milestone the lead merged, the lead reverts it and
+its reply names the revert commit and says why. The milestone's commits are
+still ancestors of the lead's `HEAD`, so a later merge of your branch would
+leave them out: bring them back on your branch, as a revert of that revert,
+and fix them there. Make that revert on top of the lead's, then merge it, so
+the merge sees the milestone unchanged and keeps what you built on it since
+(merging the lead's revert first conflicts with each later edit of yours to
+the milestone, and taking its side loses that edit). Commit anything
+outstanding, then run the block below, resolving any conflict the merge
+raises on your branch:
+
+```bash
+git checkout --detach <the revert commit>
+git revert --no-edit HEAD
+RESTORED=$(git rev-parse HEAD)
+git checkout -
+git merge --no-ff "$RESTORED" -m "Catch up to <the revert commit's short sha>"
+```
+
+The work reaches the lead again only with the next report of yours it
+merges. A harden pass does this as `harden-creation.md`'s "A reverted
+milestone" says, which adds what its test gate then covers.
 
 ## Terminal status report bodies
 

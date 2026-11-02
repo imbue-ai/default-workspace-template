@@ -8,6 +8,7 @@ import { MarkdownContent } from "../markdown";
 import type { TranscriptEvent, AssistantMessageEvent, ToolResultEvent, ToolCall } from "../models/Response";
 import { getEventDetailState, getEventDetailVersion, requestEventDetail } from "../models/Response";
 import { getChatById } from "../models/Chats";
+import { workspaceAgentSignature } from "../models/Participants";
 import { accountForAgent, areAccountsLoaded, openProviderChooser } from "../models/Providers";
 import { openSubagentView } from "../shell";
 import { beginSwitchToAccountId } from "./SwitchDialog";
@@ -21,7 +22,9 @@ import { SecretCard, isFiledSecretRequest, parseSecretRequest } from "./secret-c
 import { ToolChipGroup, type ChipEntry } from "./ToolChipGroup";
 import { AutocompactNotice } from "./AutocompactNotice";
 import { compactionChips, type CompactionPart } from "./compaction-chips";
+import { machineBubbles } from "./machine-bubbles";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
+import { BADGE_PART } from "@imbue/workspace-ui/src/themes/parts";
 
 /** A permission-request tool call's own verdict: its own request id's entry in
  *  `resolutionsByRequestId`, or null while the request awaits a decision (or
@@ -213,6 +216,9 @@ export function StableAssistantMessage(): m.Component<{
   let renderedSubagentCardCount = 0;
   let renderedResultSignature = "";
   let renderedReauthSignature = "";
+  // The header over the run's first bubbles reads the roster, which lands beside the
+  // transcript (ensureParticipants); a row painted before then wears the fallback.
+  let renderedAgentSignature = "";
   let renderedDetailVersion = -1;
   let renderedExpansionVersion = -1;
   return {
@@ -236,6 +242,7 @@ export function StableAssistantMessage(): m.Component<{
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
         reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
+        workspaceAgentSignature() !== renderedAgentSignature ||
         getEventDetailVersion(chatId) !== renderedDetailVersion ||
         // Opening a tool chip swaps WHICH detail panel exists, so it needs a
         // real re-render to build one.
@@ -251,6 +258,7 @@ export function StableAssistantMessage(): m.Component<{
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
       renderedReauthSignature = reauthNoteSignature(event, chatId);
+      renderedAgentSignature = workspaceAgentSignature();
       renderedDetailVersion = getEventDetailVersion(chatId);
       renderedExpansionVersion = getExpansionVersion();
 
@@ -392,7 +400,9 @@ export function renderSubagentCard(toolCall: ToolCall, chatId: string, isRunning
           { class: "subagent-card-description truncate text-(length:--font-size-body) font-medium text-primary" },
           description,
         ),
-        agentType ? m("span", { class: badgeClass("accent", { mono: true, extra: "shrink-0" }) }, agentType) : null,
+        agentType
+          ? m("span", { class: badgeClass("accent", { mono: true, extra: "shrink-0" }), ...BADGE_PART }, agentType)
+          : null,
       ]),
       // The click-through needs the subagent session_id, which only arrives once the call is
       // linked. The label stays "View conversation" throughout so it doesn't flip-flop; before
@@ -572,6 +582,8 @@ export function renderAssistantRun(
   // fresh array here would leave it pushing into the flushed one.
   const pendingChips: ChipEntry[] = [];
   let isNoticeUnderRow = false;
+  // The run's first prose wears the agent's face and name; the rest of its bubbles follow under them.
+  const header = { isDrawn: false };
 
   // Anything that is not a tool chip ends the run in progress: the row has to
   // land above whatever interrupted it, in transcript order.
@@ -599,6 +611,7 @@ export function renderAssistantRun(
       children,
       pendingChips,
       flushChips,
+      header,
     );
   }
   flushChips();
@@ -638,6 +651,7 @@ function appendEventParts(
   children: m.Children[],
   pendingChips: ChipEntry[],
   flushChips: () => void,
+  header: { isDrawn: boolean },
 ): void {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
@@ -674,9 +688,17 @@ function appendEventParts(
         ]),
       );
     } else {
-      children.push(
-        m(MarkdownContent, { content: textContent, requestedAt: event.timestamp, expansionKeyPrefix: event.event_id }),
-      );
+      // The agent speaking: the reply as one bubble, the run's first group headed by its face and name.
+      const bubbles = machineBubbles({
+        text: textContent,
+        timestamp: event.timestamp,
+        expansionKeyPrefix: event.event_id,
+        isHeaded: !header.isDrawn,
+      });
+      if (bubbles !== null) {
+        children.push(bubbles);
+        header.isDrawn = true;
+      }
     }
   }
   for (const toolCall of toolCalls) {

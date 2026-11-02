@@ -2,6 +2,7 @@ import argparse
 import atexit
 import os
 import signal
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
@@ -18,6 +19,7 @@ from imbue.chat.accounts import AccountError
 from imbue.chat.accounts import reconcile
 from imbue.chat.accounts import regenerate_create_defaults
 from imbue.chat.agent_manager import AgentManager
+from imbue.chat.authors import AuthorStore
 from imbue.chat.auto_open import AutoOpenLedger
 from imbue.chat.auto_open import AutoOpenReactor
 from imbue.chat.auto_open import LEDGER_FILENAME
@@ -36,10 +38,14 @@ from imbue.chat.harnesses.auth_flows import reap_orphaned_auth_processes
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.registry import build_one_shot_completion
 from imbue.chat.latchkey_gateway import GatewayAccess
+from imbue.chat.lounge import LoungeKeeper
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME
 from imbue.chat.main_chat import MainChatStore
+from imbue.chat.mentions import MENTIONS_DIRNAME
+from imbue.chat.mentions import MentionStore
 from imbue.chat.message_stamps import MessageStampStore
 from imbue.chat.message_stamps import STAMPS_FILENAME
+from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import DEFAULT_SECRETS_DIRECTORY
 from imbue.chat.secret_requests import SECRET_REQUESTS_DIRNAME
 from imbue.chat.secret_requests import SecretRequestStore
@@ -47,6 +53,7 @@ from imbue.chat.server import create_application
 from imbue.chat.shell_client import build_live_chat_shell_client
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import state_of
+from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.chat.wsgi import make_threaded_server
 
@@ -158,6 +165,14 @@ def build_production_state(
     # because the manager is constructed before its event-queue collaborator.
     event_queues = AgentEventQueues()
     agent_manager.set_transcript_broadcaster(event_queues.broadcast_batch)
+    # The shell's tray hears every message and every chat-list change from here; a secondary's are a preview's.
+    tray_feed = None if is_secondary else TrayFeed(shell=shell)
+    if tray_feed is not None:
+        agent_manager.set_chats_updated_listener(tray_feed.report_chats)
+    # The snapshots name who has written in each chat, read off the author annotations.
+    authors = AuthorStore(root=chat_records_root)
+    agent_manager.set_participants_reader(authors.participant_keys)
+    lounge = None if is_secondary else LoungeKeeper(agent_manager=agent_manager)
     state = ChatAppState(
         config=config,
         provider_names=provider_names,
@@ -194,6 +209,11 @@ def build_production_state(
         secret_requests=SecretRequestStore(
             requests_directory=data_dir / SECRET_REQUESTS_DIRNAME, secrets_directory=DEFAULT_SECRETS_DIRECTORY
         ),
+        authors=authors,
+        roster=RosterClient(shell=shell),
+        mentions=MentionStore(root=data_dir / MENTIONS_DIRNAME),
+        tray_feed=tray_feed,
+        lounge=lounge,
     )
     # Eviction wiring: the state drops what an agent holds resident -- the transcript,
     # watch thread, and inotify watches -- when the manager sees it destroyed (the whole
@@ -287,16 +307,10 @@ def main() -> None:
     application = build_application(config, args)
     state = state_of(application)
 
-    if not args.preflight:
-        # Follow the agent observer's event stream now that the app is assembled. This is
-        # the one place the follower is started; ``build_application`` only constructs, so
-        # tests that build an app never follow anything.
-        state.agent_manager.start()
-
     # Tear down the broadcaster, watchers, agent manager, and http clients on
     # exit. ``atexit`` covers a normal return; the signal handlers cover
-    # supervisord's SIGTERM and an interactive SIGINT (Ctrl-C), which
-    # ``serve_forever`` would otherwise turn into an abrupt exit.
+    # supervisord's SIGTERM and an interactive SIGINT (Ctrl-C), which would
+    # otherwise end the process abruptly.
     atexit.register(state.shutdown)
     signal.signal(signal.SIGTERM, _exit_on_signal)
     signal.signal(signal.SIGINT, _exit_on_signal)
@@ -307,11 +321,33 @@ def main() -> None:
     # SSE streaming.
     server = make_threaded_server(config.chat_host, config.chat_port, application)
 
-    # Registered once the socket is bound and just before serving, so a window the shell opens
-    # on the chat right after the registration finds the app answering.
+    # Served before the agent manager starts, whose first read of the agent list asks mngr about
+    # every agent: a page that connects first is told the list is not known yet rather than
+    # refused. The start stays on the main thread so a failure in it still ends the process for
+    # supervisord.
+    serving = threading.Thread(target=server.serve_forever, name="chat-server", daemon=True)
+    serving.start()
+
+    # Registered once the server answers, so a window the shell opens on the chat right after the
+    # registration finds the app answering.
     if not (args.no_register or args.preflight or args.secondary):
         register_app(args.manifest, AppUrl(f"http://localhost:{config.chat_port}"))
-    server.serve_forever()
+
+    if not args.preflight:
+        # Follow the agent observer's event stream now that the app is assembled. This is
+        # the one place the follower is started; ``build_application`` only constructs, so
+        # tests that build an app never follow anything.
+        state.agent_manager.start()
+        state.start_reply_draft_publisher()
+        if state.lounge is not None:
+            state.lounge.start(state.roster)
+        if state.tray_feed is not None:
+            state.tray_feed.start()
+
+    # Nothing shuts the server down, so serving ends only if the server itself failed.
+    serving.join()
+    logger.error("The chat server stopped serving")
+    raise SystemExit(1)
 
 
 if __name__ == "__main__":

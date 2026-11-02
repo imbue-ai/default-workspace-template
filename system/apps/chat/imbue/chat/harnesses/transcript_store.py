@@ -37,10 +37,13 @@ from typing import Callable
 from typing import Final
 
 from loguru import logger as _loguru_logger
+from pydantic import Field
 
 from imbue.chat.harnesses.path_watch import PathWatcher
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.chat.harnesses.session_watcher import AgentSessionWatcher
 from imbue.chat.harnesses.session_watcher import TranscriptLoader
+from imbue.imbue_common.frozen_model import FrozenModel
 
 logger = _loguru_logger
 
@@ -52,6 +55,11 @@ EventSource = tuple[Path, int, int]
 # tree), so writes arrive in bursts from every chat at once; each burst becomes one refresh
 # per this interval, at the cost of up to this much latency on a new event.
 _MIN_EMIT_CYCLE_INTERVAL_SECONDS: Final[float] = 0.25
+
+# How far back a reply draft is compared with the replies that landed: the latest few, so the
+# last reply of the previous turn, and the reply that landed just before a tool call, both count.
+_LANDED_REPLIES_COMPARED: Final[int] = 3
+_LANDED_REPLY_LOOKBACK_EVENTS: Final[int] = 60
 
 
 def is_complete_json_object(fragment: bytes) -> bool:
@@ -527,6 +535,15 @@ class StoreBackedTranscriptLoader(TranscriptLoader, ABC):
         return self._parse_detail(event, fallback_line, thinking_line)
 
 
+class ReplyDraftBaseline(FrozenModel):
+    """The transcript a reply draft is read against."""
+
+    after_event_id: str = Field(description="The id of the last main-session event ('' for none)")
+    landed_reply_texts: tuple[str, ...] = Field(
+        description="The latest replies the transcript holds, oldest first: a draft matching one has landed"
+    )
+
+
 class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
     """The live half over a :class:`StoreBackedTranscriptLoader`: the :class:`PathWatcher`
     watch loop and the emit cycle that hands newly parsed events to ``on_events``.
@@ -538,11 +555,16 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
 
     _on_events: Callable[[str, list[dict[str, Any]]], None]
     _path_watcher: PathWatcher | None
+    _watch_observer: SharedWatchObserver | None
 
     def _init_store_watcher(self, agent_id: str, on_events: Callable[[str, list[dict[str, Any]]], None]) -> None:
         self._init_loader(agent_id)
         self._on_events = on_events
         self._path_watcher = None
+        self._watch_observer = None
+
+    def set_watch_observer(self, watch_observer: SharedWatchObserver) -> None:
+        self._watch_observer = watch_observer
 
     # -- per-harness hooks ----------------------------------------------------------------
 
@@ -570,7 +592,10 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
             return
         self._prime()
         self._path_watcher = PathWatcher.build(
-            self._watch_paths(), self._emit_cycle, min_cycle_interval_seconds=_MIN_EMIT_CYCLE_INTERVAL_SECONDS
+            self._watch_paths(),
+            self._emit_cycle,
+            min_cycle_interval_seconds=_MIN_EMIT_CYCLE_INTERVAL_SECONDS,
+            watch_observer=self._watch_observer,
         )
         self._path_watcher.start()
 
@@ -605,6 +630,21 @@ class StoreBackedWatcher(StoreBackedTranscriptLoader, AgentSessionWatcher, ABC):
         if to_send:
             self._on_events(self._agent_id, to_send)
         self._after_broadcast()
+
+    def _reply_draft_baseline(self) -> ReplyDraftBaseline:
+        """What a reply draft is read against: the transcript's last main-session event and latest replies.
+
+        Reads only what the store holds: the emit cycle keeps it current, and a draft read a few
+        times a second must not re-walk the transcript files.
+        """
+        with self._lock:
+            recent_events = self._store.tail(self._selected_lane_ids_locked(None), _LANDED_REPLY_LOOKBACK_EVENTS)
+        return ReplyDraftBaseline(
+            after_event_id=recent_events[-1]["event_id"] if recent_events else "",
+            landed_reply_texts=tuple(
+                event["text"] for event in recent_events if event["type"] == "assistant_message" and event.get("text")
+            )[-_LANDED_REPLIES_COMPARED:],
+        )
 
     def is_main_session_event(self, event: dict[str, Any]) -> bool:
         return True

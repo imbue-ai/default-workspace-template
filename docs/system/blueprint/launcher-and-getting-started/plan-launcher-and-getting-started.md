@@ -66,7 +66,7 @@ A launch path without it never receives typed text, whatever its params are call
 
 The free-text rows of a machine are every launch path with a `text_param` or a `draft_param` of every registered, non-internal app, in the launcher's app order (`launcher_rank`, lowest first, then registry order) and within an app in manifest order.
 The first is the primary text action, the second the secondary; any further ones are rows with no key binding.
-On a stock machine the chat declares three: `new` ("New Chat", primary), `send` ("Send to chat...", secondary; section 9), and `draft` (a row with no key binding, the avatar dialog's draft).
+On a stock machine the chat declares four: `main` ("Send to main chat", primary), `new` ("New Chat", secondary), `send` ("Send to chat...", a row with no key binding; section 9), and `draft` (another, the avatar dialog's draft).
 
 ### 3.2 Running a free-text row
 
@@ -98,7 +98,9 @@ On a stock machine "Chat" raises the pinned chat window, "Screen" and "Browser" 
 
 ### 3.4 The first-visit window
 
-Getting Started opens its own window once per workspace, the way the chat app surfaces the welcome chat (`imbue/chat/auto_open.py`): from the app, through the loopback op route, for the first client that connects.
+**Removed in the new onboarding (October 2026):** a new workspace now opens on the welcome chat alone, drawn at most of the backdrop, and the desktop's show-around tour (the new-onboarding spec) introduces the apps once the chat is snapped aside. The opener, its ledger, and the placement below are gone from the app; the rest of this section records the design as it was.
+
+Getting Started opened its own window once per workspace, the way the chat app surfaces the welcome chat (`imbue/chat/auto_open.py`): from the app, through the loopback op route, for the first client that connects.
 The shell learns nothing new; no manifest field, no shell state, and no placement rule are added for this.
 
 On startup the app starts one background thread that, while the window has not yet been delivered, polls the shell's client list (`GET /api/clients`) and, once a connected client is listed, posts two ops targeting that client on the first desktop (the first entry of `GET /api/desktops`):
@@ -133,7 +135,7 @@ Running any row closes the menu and clears the field.
 
 ### 3.6 The Getting Started app
 
-An ordinary app under `system/apps/getting_started`, registered as `getting-started` ("Getting Started"), declaring no launch paths (so the shell synthesizes its one, `open` at `/`, labelled "Open Getting Started"; contracts section 2), a `default_shortcut` of `{launch = "open", mode = "focus"}` (one window is what it is for, as for the browser), `launcher_rank = 5`, `critical = false`, and the first-visit opener of section 3.4.
+An ordinary app under `system/apps/getting_started`, registered as `getting-started` ("Getting Started"), declaring no launch paths (so the shell synthesizes its one, `open` at `/`, labelled "Open Getting Started"; contracts section 2), a `default_shortcut` of `{launch = "open", mode = "focus"}` (one window is what it is for, as for the browser), `launcher_rank = 5`, and `critical = false` (the first-visit opener of section 3.4 has since been removed).
 Its page holds, top to bottom: a search field over its own content; "Start something", the eight intent tiles of today's `startSomething.ts`, two to a row with four shown at first and the rest behind "See more"; "Start from a template", the catalog shelves of today's `TemplateShelves.ts`.
 The page is its own scroller (the shared base styles pin the body to the viewport), so a window shorter than its content scrolls.
 Picking a template shows the template's detail as a page inside the app (today's `TemplateDetailModal`, with a back control instead of a close), whose two actions are "Make it mine" and "Create a new machine from it".
@@ -158,8 +160,8 @@ When the machine has no free-text row the shell tells the user through its notif
 |---|---|
 | Which launch paths take typed text, and which param | The app's manifest, through the registry |
 | The order of the free-text rows | Derived: launcher app order, then manifest order |
-| Whether the first-visit window has been opened; opening and placing it | The Getting Started app, in its ledger and through the op route |
-| The first-visit window itself | Shell, shared, an ordinary window once opened |
+| Whether the first-visit window has been opened; opening and placing it (removed in the new onboarding, section 3.4) | Was the Getting Started app, in its ledger and through the op route |
+| The first-visit window itself (removed in the new onboarding, section 3.4) | Was the shell, shared, an ordinary window once opened |
 | The launcher's rows, highlight, and query | Derived in the browser, transient |
 | The intents, the template catalog, the detail page | The Getting Started app |
 | Which chat a sent text goes to | The chat app, in its picker |
@@ -169,8 +171,8 @@ When the machine has no free-text row the shell tells the user through its notif
 - While the menu is open and has an enabled row, exactly one row is highlighted.
 - Enter never starts a chat while a launch-path or window row is highlighted; it never does nothing while a free-text row is enabled.
 - A free-text row never opens a second window of an app that has a pinned window on the active desktop.
-- The shell package and its frontend name no app; the free-text rows and the pinned-first rule are read from manifests and windows.
-- Getting Started opens its first-visit window at most once per workspace, and only onto the first desktop.
+- The shell package and its frontend name no app: the show-around tour's chat card snaps aside the pinned window whose pin declares the avatar style (`reducers/desktopState.ts` `avatarPinnedWindow`), and the free-text rows and the pinned-first rule are read from manifests and windows.
+- Getting Started opened its first-visit window at most once per workspace, and only onto the first desktop (removed in the new onboarding, section 3.4: it opens no window of its own now).
 - The shell serves nothing about templates or intents.
 
 ## 4. Behaviour
@@ -198,7 +200,7 @@ While typing with no launch-path or window match, one faint line above the free-
 A launch-path row reads its launch path's label ("Terminal") with the app's display name as the caption when the two differ.
 A window row reads the window's effective title with the app's display name as the caption, and the desktop's name after it for a window on another desktop; a minimized window's row is dimmed.
 The highlighted row, whatever its kind, carries `Enter` as its last caption: the caption says what Enter does, and moves with the highlight.
-The primary text action reads its launch path's label ("New Chat"); the secondary reads its label ("Send to chat...") with the platform's key (`Ctrl+Enter`, or `Cmd+Enter` on macOS) as a caption whatever is highlighted, since the chord runs it regardless; with text in the field the caption of either also carries the text's first words, faint, so the row says what it will do with what was typed.
+The primary text action reads its launch path's label ("Send to main chat"); the secondary reads its label ("New Chat") with the platform's key (`Ctrl+Enter`, or `Cmd+Enter` on macOS) as a caption whatever is highlighted, since the chord runs it regardless; with text in the field the caption of either also carries the text's first words, faint, so the row says what it will do with what was typed.
 A disabled free-text row is drawn faint with its reason as the tooltip.
 
 The highlighted row wears the active fill and `data-highlighted="true"`.
@@ -227,12 +229,12 @@ A refusal from the shell is reported through the store's notification, as every 
 ### 4.4 Starting a chat from Getting Started
 
 A tile or a detail action posts `shell:start-with-text` with its seeded text.
-The shell runs the primary text action with it (section 3.2): on a stock machine, the shell posts the chat's `new` launch path the text, the chat creates the chat and answers `/?chat=<id>`, this client's view of the pinned chat window goes there, and the window is restored and raised over Getting Started, whose own window is neither moved nor minimized.
+The shell runs the primary text action with it (section 3.2): on a stock machine, the shell posts the chat's `main` launch path the text, the chat sends it to the main chat (else the most recently messaged chat, else a new one) and answers `/?chat=<id>`, this client's view of the pinned chat window goes there, and the window is restored and raised over Getting Started, whose own window is neither moved nor minimized.
 The user reads the chat's first turn beside the tiles they came from.
 
 ### 4.5 Sending a text to an existing chat
 
-Ctrl+Enter, or the "Send to chat..." row, runs the chat's `send` launch path with the text (section 8): the shell posts it to the chat's intake route, and the pinned chat window is pointed at the page it answers and restored.
+The "Send to chat..." row runs the chat's `send` launch path with the text (section 8; Ctrl+Enter runs `new`, which starts a chat with the text as its first message): the shell posts it to the chat's intake route, and the pinned chat window is pointed at the page it answers and restored.
 With one chat to send to, the chat sends the text there at once and answers `/?chat=<id>`; with none it starts a new chat with the text, as `new` would.
 Otherwise the chat holds the text as a pending intake and answers `/?intake=<token>`: the root shows a picker over its list, a typeahead over every chat's title; Enter or a click applies the intake to that chat (the chat sends the text and the root selects it, reporting `/?chat=<id>`); Escape dismisses the picker, discards the intake, and reports the selection alone, so the text is dropped.
 Sending is the chat app's ordinary send, so a stopped chat is started by it as any send starts one.
@@ -273,7 +275,7 @@ Long press replaces nothing here, since the menu has no context menus.
 
 ### 5.2 State
 
-- Nothing changes in the shell's state files or its placement rules: the first-visit window is an ordinary window the Getting Started app opens through the op route (section 3.4).
+- Nothing changes in the shell's state files or its placement rules: the first-visit window was an ordinary window the Getting Started app opened through the op route (section 3.4; removed in the new onboarding).
 - `template_catalog.py`, its route, its config field, and its tests leave the shell.
 
 ### 5.3 Routes and messages
@@ -354,7 +356,7 @@ As amended by the post-launch-paths plan, the chat's free-text launch paths are 
 ## 9. mngr-side changes
 
 In the mngr repository, on the branch of the same name: the Electron e2e runner (`apps/minds/imbue/minds/desktop_client/e2e_workspace_runner.py`) finds the new-chat and new-terminal tiles by `.launcher-tile[data-launch=...]` and waits for a new chat frame after pressing the chat tile.
-It changes to `[data-launch="chat:new"]` and `[data-launch="terminal:new"]` rows, expects the new chat inside the pinned window's root frame rather than in a new window, and waits for a Getting Started window on a fresh workspace's first visit beside the welcome chat.
+It changes to `[data-launch="chat:new"]` and `[data-launch="terminal:new"]` rows, expects the new chat inside the pinned window's root frame rather than in a new window, and waited for a Getting Started window on a fresh workspace's first visit beside the welcome chat (that wait went with the window in the new onboarding, section 3.4: a fresh workspace's first visit shows the welcome chat alone).
 `apps/minds/docs/design.md`'s "further chats start from the desktop's launcher" stays true; the workspace glossary gains Getting Started among the built-in apps.
 
 ## 10. Testing

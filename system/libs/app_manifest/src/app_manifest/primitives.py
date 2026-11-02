@@ -1,15 +1,20 @@
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Final, Self
+from typing import Any
+from typing import Final
+from typing import Self
 from urllib.parse import quote
 
+from pydantic import GetCoreSchemaHandler
+from pydantic_core import CoreSchema
+from pydantic_core import core_schema
+
+from app_manifest.errors import InvalidManifestValueError
+from app_manifest.errors import PageTemplateFieldError
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
-from pydantic import GetCoreSchemaHandler
-from pydantic_core import CoreSchema, core_schema
-
-from app_manifest.errors import InvalidManifestValueError, PageTemplateFieldError
 
 # The app-name rule is the registration script's rule (system/scripts/forward_port.py,
 # ``validate_service_name``): the name becomes the leading label of the app's origin
@@ -42,9 +47,7 @@ MAX_LAUNCH_PATH_LENGTH: Final[int] = 2048
 _LAUNCH_PATH_FORBIDDEN_CHARACTERS: Final[frozenset[str]] = frozenset({"?", "#"})
 _LAUNCH_PATH_SAFE_CHARACTERS: Final[str] = "/-._~!$&'()*+,;=:@"
 
-PRIORITY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(
-    r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$"
-)
+PRIORITY_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9_]+(?:-[a-z0-9_]+)*$")
 
 ICON_SUFFIX: Final[str] = ".svg"
 
@@ -80,10 +83,7 @@ def is_name_conflict(candidate_title: str, taken_names: Iterable[str]) -> bool:
     near-duplicates ("build" beside "Build") that would only confuse.
     """
     candidate_key = canonical_name_from_title(candidate_title).casefold()
-    return any(
-        canonical_name_from_title(name).casefold() == candidate_key
-        for name in taken_names
-    )
+    return any(canonical_name_from_title(name).casefold() == candidate_key for name in taken_names)
 
 
 @pure
@@ -114,12 +114,28 @@ class AppName(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
+
+# An app part's name, as a theme selects it: ``data-part="<app>.<part>"`` (the workspace-themes plan, section 7).
+APP_PART_NAME_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9-]{0,47}$")
+
+
+class AppPartName(str):
+    """The name of an element an app lets themes style, unique within the app."""
+
+    def __new__(cls, value: str) -> Self:
+        if APP_PART_NAME_PATTERN.fullmatch(value) is None:
+            raise InvalidManifestValueError(
+                f"app part name {value!r} must be lowercase letters, digits, and dashes, starting with a letter, "
+                "at most 48 characters"
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class DisplayName(str):
@@ -135,12 +151,8 @@ class DisplayName(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class SecretFileName(str):
@@ -154,12 +166,8 @@ class SecretFileName(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class EnvVarName(str):
@@ -173,12 +181,8 @@ class EnvVarName(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class LaunchPathId(str):
@@ -192,12 +196,8 @@ class LaunchPathId(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 @pure
@@ -236,12 +236,8 @@ class AppDescription(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class LaunchPathValue(str):
@@ -254,12 +250,8 @@ class LaunchPathValue(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 # A message type an app may handle (desktop-interface contracts.md section 2): a lowercase prefix, a colon, and a
@@ -286,12 +278,8 @@ class MessageType(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 # A page template (a ``show`` message handler's page and each of its ``showing`` pages; desktop-interface
@@ -338,12 +326,8 @@ class PageTemplate(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 @pure
@@ -382,18 +366,12 @@ class PriorityName(str):
 
     def __new__(cls, value: str) -> Self:
         if not PRIORITY_NAME_PATTERN.fullmatch(value):
-            raise InvalidManifestValueError(
-                f"invalid priority {value!r}: expected a band name such as 'user'"
-            )
+            raise InvalidManifestValueError(f"invalid priority {value!r}: expected a band name such as 'user'")
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class LaunchParamName(NonEmptyStr):
@@ -406,18 +384,12 @@ class ProgramName(NonEmptyStr):
 
     def __new__(cls, value: str) -> Self:
         if not value or any(character.isspace() for character in value):
-            raise InvalidManifestValueError(
-                f"invalid program {value!r}: must be a non-empty name without whitespace"
-            )
+            raise InvalidManifestValueError(f"invalid program {value!r}: must be a non-empty name without whitespace")
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class PreviewName(str):
@@ -425,18 +397,12 @@ class PreviewName(str):
 
     def __new__(cls, value: str) -> Self:
         if not PREVIEW_NAME_PATTERN.fullmatch(value):
-            raise InvalidManifestValueError(
-                f"invalid preview name {value!r}: names match ^[a-z][a-z0-9_-]{{0,31}}$"
-            )
+            raise InvalidManifestValueError(f"invalid preview name {value!r}: names match ^[a-z][a-z0-9_-]{{0,31}}$")
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class AppUrl(NonEmptyStr):
@@ -449,22 +415,14 @@ class IconPath(str):
     def __new__(cls, value: str) -> Self:
         path = Path(value)
         if not value or path.is_absolute():
-            raise InvalidManifestValueError(
-                f"invalid icon {value!r}: must be a path relative to the manifest"
-            )
+            raise InvalidManifestValueError(f"invalid icon {value!r}: must be a path relative to the manifest")
         if path.suffix.lower() != ICON_SUFFIX:
-            raise InvalidManifestValueError(
-                f"invalid icon {value!r}: must be an {ICON_SUFFIX} file"
-            )
+            raise InvalidManifestValueError(f"invalid icon {value!r}: must be an {ICON_SUFFIX} file")
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 # A reference names one literal artifact, so a path that could match many is refused
@@ -533,12 +491,8 @@ class RepoRelativePath(str):
         return _describe_repo_relative_path_problem(value, "path")
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
 class ReferencePath(RepoRelativePath):
@@ -589,9 +543,5 @@ class ReferenceNote(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(
-        cls, source_type: Any, handler: GetCoreSchemaHandler
-    ) -> CoreSchema:
-        return core_schema.no_info_after_validator_function(
-            cls, core_schema.str_schema()
-        )
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())

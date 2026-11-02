@@ -15,12 +15,14 @@ import type {
   Layout,
   Placement,
   PresentUser,
+  RosterParticipant,
   UpdateNoticeWire,
   WindowRecord,
 } from "../model/records";
 import { cascadeFrame } from "../geometry/frames";
 import type { ThemeMetrics } from "../theme/metrics";
 import type { AvatarState } from "../reducers/desktopState";
+import { STANDARD_CHROME, type ThemeCatalog, type ThemeRecord } from "../model/themes";
 
 function capitalized(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
@@ -48,6 +50,8 @@ export function launchPathRecord(overrides: Partial<LaunchPath> = {}): LaunchPat
     presets: {},
     text_param: null,
     draft_param: null,
+    mention_param: null,
+    app_params: null,
     ...overrides,
   };
 }
@@ -71,6 +75,7 @@ export function appRecord(name: string, overrides: Partial<AppRecord> = {}): App
     message_handlers: [],
     is_running: true,
     share_url: null,
+    theming: null,
     ...overrides,
   };
 }
@@ -136,7 +141,7 @@ export function windowRecord(
   };
 }
 
-/** A desktop named after its id, with no wallpaper, shortcuts, or windows. */
+/** The workspace owner's desktop named after its id, with no wallpaper, shortcuts, or windows. */
 export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Desktop {
   return {
     id,
@@ -144,10 +149,47 @@ export function desktopRecord(id: string, overrides: Partial<Desktop> = {}): Des
     color: "#2f6b4f",
     glyph: 0,
     wallpaper: null,
+    theme: null,
     shortcuts: [],
     windows: [],
+    owner: null,
     ...overrides,
   };
+}
+
+/** An available theme with the standard chrome and pixel icons for `files`, unless the overrides say otherwise. */
+export function themeRecord(id: string, overrides: Partial<ThemeRecord> = {}): ThemeRecord {
+  return {
+    id,
+    name: capitalized(id),
+    description: `The ${id} theme.`,
+    base: id === "standard" ? null : "standard",
+    source: "builtin",
+    available: true,
+    problems: [],
+    revision: `rev-${id}`,
+    chrome: STANDARD_CHROME,
+    icons:
+      id === "standard"
+        ? null
+        : {
+            format: "png",
+            size: 32,
+            rendering: "pixelated",
+            background: "transparent",
+            palette: [],
+            max_colors: null,
+            derive: "none",
+            fallback_url: `/api/themes/${id}/icons/app.png?v=rev-${id}`,
+            apps: { files: `/api/themes/${id}/icons/files.png?v=rev-${id}` },
+          },
+    ...overrides,
+  };
+}
+
+/** A catalog of the standard theme and the named ones, with no workspace default. */
+export function themeCatalog(...records: ThemeRecord[]): ThemeCatalog {
+  return { default: null, themes: [themeRecord("standard"), ...records] };
 }
 
 /** A focus-mode shortcut for an app's ``new`` launch path, in the cell given. */
@@ -165,6 +207,9 @@ export function clientRecord(id: string, overrides: Partial<ClientRecord> = {}):
     entries: {},
     shown_history: [],
     desktop_revision: 0,
+    participant: null,
+    shown: [],
+    viewport: null,
     ...overrides,
   };
 }
@@ -243,6 +288,28 @@ export function themeMetricsRecord(overrides: Partial<ThemeMetrics> = {}): Theme
     floatingEntrySize: 56,
     floatingEntryInsetX: 16,
     floatingEntryInsetY: 12,
+    overviewGap: 28,
+    overviewTileTitle: 28,
+    overviewThumbnailWidth: 200,
+    ...overrides,
+  };
+}
+
+/** A connected person with a name made from the key, no picture, a handle of the name, and a fixed colour. */
+export function rosterParticipantRecord(key: string, overrides: Partial<RosterParticipant> = {}): RosterParticipant {
+  const name = overrides.display_name ?? capitalized(key.split(":").pop() ?? key);
+  return {
+    key,
+    kind: "person",
+    display_name: name,
+    profile_picture_url: null,
+    email: null,
+    handle: name.replace(/\s+/g, "-"),
+    color: "#3b5ba9",
+    is_owner: false,
+    is_connected: true,
+    last_seen: null,
+    last_input_at: null,
     ...overrides,
   };
 }

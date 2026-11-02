@@ -13,9 +13,11 @@ import {
   parseClientRecord,
   parseClientRecords,
   parseDesktop,
+  parseDesktops,
   parseInventory,
   parseLayout,
   parseMessageRelay,
+  parseOwnerLayout,
   parseWallpaperListings,
   parseWindow,
 } from "./records";
@@ -32,11 +34,14 @@ import type {
   Inventory,
   Layout,
   MessageRelay,
+  OwnerLayout,
   Placement,
+  Viewport,
   Wallpaper,
   WallpaperListing,
   WindowRecord,
 } from "./records";
+import { parseThemeCatalog, type ThemeCatalog } from "./themes";
 
 const HTTP_CONFLICT = 409;
 
@@ -53,21 +58,47 @@ function desktopUrl(desktopId: string, suffix: string = ""): string {
   return apiUrl(`/api/desktops/${encodeURIComponent(desktopId)}${suffix}`);
 }
 
-export async function createDesktop(name: string, color: string, glyph: number): Promise<Desktop> {
-  return parseDesktop(await postJson<unknown>(apiUrl("/api/desktops"), { name, color, glyph }));
+/** Create a desktop named ``name``, owned by this client's participant (the multiplayer spec, section 8.1); the
+ *  shell picks its colour and glyph, which nothing draws any more. */
+export async function createDesktop(name: string): Promise<Desktop> {
+  return parseDesktop(await postJson<unknown>(apiUrl("/api/desktops"), { name }));
 }
 
-export async function updateDesktopSettings(
-  desktopId: string,
-  name: string,
-  color: string,
-  glyph: number,
-): Promise<Desktop> {
-  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/settings"), { name, color, glyph }));
+export async function renameDesktop(desktopId: string, name: string): Promise<Desktop> {
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/settings"), { name }));
+}
+
+/** Put this client's participant's own desktops in ``desktopIds``' order (every one of theirs, once each); the
+ *  others keep their places. Answers every desktop in the new order. */
+export async function reorderDesktops(desktopIds: readonly string[]): Promise<Desktop[]> {
+  const data = (await postJson<unknown>(apiUrl("/api/desktops/order"), { desktop_ids: desktopIds })) as {
+    desktops?: unknown;
+  };
+  return parseDesktops(data.desktops);
 }
 
 export async function setDesktopWallpaper(desktopId: string, wallpaper: Wallpaper | null): Promise<Desktop> {
   return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/wallpaper"), { wallpaper }));
+}
+
+/** The theme a desktop wears by its own choice; null wears the workspace's default. */
+export async function setDesktopTheme(desktopId: string, theme: string | null): Promise<Desktop> {
+  return parseDesktop(await postJson<unknown>(desktopUrl(desktopId, "/theme"), { theme }));
+}
+
+/** The workspace's themes and its default (docs/system/blueprint/workspace-themes/, section 5.2). */
+export async function fetchThemes(): Promise<ThemeCatalog> {
+  return parseThemeCatalog(await getJson(apiUrl("/api/themes")));
+}
+
+/** Turn a themeable app's theming on or off. */
+export async function setAppTheming(app: string, isOn: boolean): Promise<void> {
+  await postJson<unknown>(apiUrl(`/api/apps/${encodeURIComponent(app)}/theming`), { is_on: isOn });
+}
+
+/** The workspace's default theme; null wears the standard one. */
+export async function setDefaultTheme(theme: string | null): Promise<void> {
+  await postJson<unknown>(apiUrl("/api/themes/default"), { theme });
 }
 
 /** Delete a desktop; answers the desktop its clients fall back to. The last desktop is refused. */
@@ -129,6 +160,29 @@ export async function openWindow(desktopId: string, request: WindowOpenRequest):
   };
 }
 
+export interface PageShowRequest {
+  readonly app: string;
+  readonly path: string;
+  /** The app's pages whose on-screen window the shell may point at ``path`` (contracts.md section 8, ``show``). */
+  readonly repoint: readonly string[];
+}
+
+export interface PageShowOutcome {
+  /** The client has only pop-outs open, so the page waits on its desktop for a desktop window. */
+  readonly hasNoDesktopWindow: boolean;
+}
+
+/** Put a page of an app on this client's screen through the shell's ``show`` (contracts.md section 5.3): a window
+ *  already there is raised, else the app's window on a ``repoint`` page or its pinned window is pointed at it, else
+ *  one is opened. */
+export async function showPage(clientId: string, request: PageShowRequest): Promise<PageShowOutcome> {
+  const data = await postJson<{ has_no_desktop_window?: boolean }>(
+    apiUrl(`/api/clients/${encodeURIComponent(clientId)}/show`),
+    { app: request.app, path: request.path, repoint: request.repoint },
+  );
+  return { hasNoDesktopWindow: data.has_no_desktop_window === true };
+}
+
 /** Where a launch's page goes (post-launch-paths plan section 3.3): a new window, a window already at the path (else
  *  a new one), or a named window this client points at it. */
 export type LaunchTarget =
@@ -139,6 +193,13 @@ export type LaunchTarget =
       readonly windowId: string;
       /** False for a text that is not about the window's page: the app is not told which page it shows. */
       readonly sendsWindowPath?: boolean;
+    }
+  | {
+      /** Wherever the ``show`` op's rule puts the page: a window already there raised, else the app's pinned window
+       *  navigated, else a new window; laid out beside ``besideWindowId`` when one is named (the multiplayer spec,
+       *  section 9.2). */
+      readonly kind: "show";
+      readonly besideWindowId?: string;
     };
 
 export interface LaunchRequest {
@@ -167,6 +228,9 @@ export async function launch(desktopId: string, request: LaunchRequest): Promise
   if (request.target.kind === "window") {
     target.window_id = request.target.windowId;
     if (request.target.sendsWindowPath === false) target.sends_window_path = false;
+  }
+  if (request.target.kind === "show" && request.target.besideWindowId !== undefined) {
+    target.beside = request.target.besideWindowId;
   }
   const data = await postJson<{ window: unknown; path: string; is_new: boolean }>(desktopUrl(desktopId, "/launch"), {
     app: request.app,
@@ -204,6 +268,12 @@ export async function reportWindowLocation(
 export async function fetchPlacements(desktopId: string, clientId: string): Promise<Layout> {
   const query = `client=${encodeURIComponent(clientId)}`;
   return parseLayout(await getJson(apiUrl(`/api/placements/${encodeURIComponent(desktopId)}?${query}`)));
+}
+
+/** The desktop as its owner last arranged it (the multiplayer spec, section 8.3): what a window viewing a desktop
+ *  that is not the viewer's own shows in place of its own layout, with the backdrop size it was arranged at. */
+export async function fetchOwnerPlacements(desktopId: string): Promise<OwnerLayout> {
+  return parseOwnerLayout(await getJson(apiUrl(`/api/placements/${encodeURIComponent(desktopId)}?of=owner`)));
 }
 
 export interface PlacementsSaveRequest {
@@ -247,6 +317,17 @@ export async function fetchInventory(): Promise<Inventory> {
 export async function recordShown(clientId: string, windowId: string | null): Promise<ClientRecord> {
   return parseClientRecord(
     await postJson<unknown>(apiUrl(`/api/clients/${encodeURIComponent(clientId)}/shown`), { window_id: windowId }),
+  );
+}
+
+/** Tell the shell the backdrop size this client's desktop layout draws its frames in, so a window viewing one of
+ *  its desktops can draw the layout at that size; answers the client record. */
+export async function reportViewport(clientId: string, viewport: Viewport): Promise<ClientRecord> {
+  return parseClientRecord(
+    await postJson<unknown>(apiUrl(`/api/clients/${encodeURIComponent(clientId)}/viewport`), {
+      width: viewport.width,
+      height: viewport.height,
+    }),
   );
 }
 

@@ -1,1 +1,1 @@
-`embed.ts` carries the embed contract's v9 immersive-mode pair (`IMMERSIVE_REQUEST`, `IMMERSIVE_CHANGED`, probed from the vendored module like the rest) and dispatches `minds:immersive-changed` to its handler; `embed-contract.d.ts` declares both and `MAX_IMMERSIVE_ERROR_LENGTH`.
+`embed.ts` carries the embed contract's v12 immersive-mode pair (`IMMERSIVE_REQUEST`, `IMMERSIVE_CHANGED`, probed from the vendored module like the rest) and dispatches `minds:immersive-changed` to its handler; `embed-contract.d.ts` declares both and `MAX_IMMERSIVE_ERROR_LENGTH`.

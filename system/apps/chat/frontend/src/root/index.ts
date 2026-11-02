@@ -6,7 +6,9 @@
  * The root owns the shell connection: it reports ``/?chat=<id>`` and the selected chat's
  * title as its location, handles ``shell:navigate`` by changing the selection, applies the
  * pending intake an ``intake=<token>`` in its URL names (a draft into a composer, a choice of
- * chat through the picker, or a first message that launches a chat) exactly once and then reports the selection alone, and drives its inner pages
+ * chat through the picker, or a first message that launches a chat) exactly once and then
+ * reports the selection alone, opens the provider chooser once when its URL carries
+ * ``open=providers`` (the Imbue Studio app's sign-in button), and drives its inner pages
  * directly (they share an origin) with its shown and hidden states, so each page's presence
  * reports key on the chat it shows. The shell's handshake goes down to the inner pages, and their
  * messages for the shell and the minds chrome go up, through ``relay.ts``, which says which
@@ -28,6 +30,7 @@ import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import {
   PendingIntakeGoneError,
   addChatsUpdatedListener,
+  addMentionsUpdatedListener,
   applyPendingIntake,
   awaitingChatForEmptyList,
   discardPendingIntake,
@@ -42,7 +45,15 @@ import {
   removeChatsUpdatedListener,
 } from "../models/Chats";
 import type { AppliedIntake, PendingIntake } from "../models/Chats";
-import { accountForFirstSend, loadAccountsWithRetry, whenAccountsReadyToChoose } from "../models/Providers";
+import {
+  accountForFirstSend,
+  closeProviderChooser,
+  isProviderChooserOpen,
+  loadAccountsWithRetry,
+  openProviderChooser,
+  whenAccountsReadyToChoose,
+} from "../models/Providers";
+import { ProviderChooserModal } from "../views/ProviderChooserModal";
 import { TOUCH_MEDIA_QUERY } from "@imbue/workspace-ui/src/device_queries";
 import { COMPACT_MEDIA_QUERY } from "../compactLayout";
 import { ChatDrawer } from "./ChatDrawer";
@@ -55,11 +66,21 @@ import { initRailWidth } from "./railWidth";
 import { startNewChat } from "./newChat";
 import { InnerFramePool } from "./framePool";
 import { startInnerFrameRelay } from "./relay";
+import { getMentionedChatIds, watchPendingMentions } from "../models/Mentions";
+import { ensureParticipants } from "../models/Participants";
+import { settleAcceptedRenames, titleWithPendingRename, withPendingTitles } from "./pendingRenames";
 import { groupedRows, rowsFromSnapshots } from "./rows";
 import type { ChatRow } from "./rows";
-import { intakeTokenFromSearch, rootPathFor, selectionFromSearch, slotFill } from "./selection";
+import {
+  intakeTokenFromSearch,
+  isProviderChooserRequested,
+  rootPathFor,
+  selectionFromSearch,
+  slotFill,
+} from "./selection";
 import type { SlotFill } from "./selection";
-import { prependToComposer } from "../views/MessageInput";
+import { prependToComposer, setComposerHint } from "../views/MessageInput";
+import { wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 const ROOT_TITLE = "Chats";
 
@@ -88,7 +109,8 @@ let isDrawerOpen = false;
 
 function selectedTitle(): string {
   if (selectedChatId === null) return "";
-  return getChatById(selectedChatId)?.title ?? "";
+  const title = getChatById(selectedChatId)?.title;
+  return title === undefined ? "" : titleWithPendingRename(selectedChatId, title);
 }
 
 interface ReportedLocation {
@@ -115,9 +137,17 @@ let isOpeningChatForEmptyList = false;
 // empty after that brings no push to ask again on (an unchanged list is not passed on).
 const emptyListChatBackoff = new ReconnectBackoff();
 
+/** Every row's source: the chats (rooms among them), the chats not yet agents, the main chat, and the viewer's
+ *  mentions, each row carrying a rename's pending title. */
+function allRows(): ChatRow[] {
+  return withPendingTitles(
+    rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId(), getMentionedChatIds()),
+  );
+}
+
 /** The rail's rows in display order: the main chat first, then the most recent. */
 function railRows(): ChatRow[] {
-  return groupedRows(rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId()), startedHere);
+  return groupedRows(allRows(), startedHere);
 }
 
 function slotFillFor(chatId: string | null): SlotFill {
@@ -241,13 +271,22 @@ function isReferenceDraftAvailable(): boolean {
   return selectedChatId !== null || (connection?.hasShell() ?? false);
 }
 
+/** Put ``hint`` on a chat's composer as its placeholder, focused: the live page's when it is loaded, else where the
+ *  composer reads it on mount. */
+function hintInto(chatId: string, hint: string): void {
+  if (pool?.hintComposer(chatId, hint) === true) return;
+  setComposerHint(chatId, hint);
+}
+
 /** What an applied intake asks of the root (post-launch-paths plan section 3.6.1): the chat is selected, a draft
- *  goes into its composer, a first message launches it. */
+ *  goes into its composer, a first message launches it, a hint becomes its composer's placeholder (the multiplayer
+ *  spec, section 9.2). */
 function takeApplied(applied: AppliedIntake): void {
   startedHere.add(applied.chatId);
   settleIntake(applied.chatId);
   if (applied.composerText !== null) draftInto(applied.chatId, applied.composerText);
   if (applied.firstMessage !== null) void launchWithFirstMessage(applied.chatId, applied.firstMessage);
+  if (applied.hint !== null) hintInto(applied.chatId, applied.hint);
 }
 
 /** Apply a held intake on the chat it resolved to, or on ``pickedChatId``; a token already gone (another client
@@ -283,6 +322,17 @@ async function takeIntake(token: string): Promise<void> {
   await applyIntake(token, null);
 }
 
+/** Open the provider chooser a URL asked for, once the accounts have loaded (the chooser lists them). The
+ *  root's own URL drops the request first, and so does the location the shell holds for this window (reported
+ *  even when the selection is the one reported before), so neither a reload nor the next layout load opens it
+ *  again. */
+function openRequestedProviderChooser(accountsLoaded: Promise<void>): void {
+  if (pendingToken === null) history.replaceState(null, "", `${getBasePath()}${rootPathFor(selectedChatId)}`);
+  reportedLocation = null;
+  reportLocation();
+  void accountsLoaded.then(() => openProviderChooser());
+}
+
 function pickFor(chatId: string): void {
   const pick = pendingPick;
   pendingPick = null;
@@ -298,7 +348,8 @@ function dismissPick(): void {
 }
 
 function onChatsUpdated(): void {
-  const rows = rowsFromSnapshots(getChats(), getProvisionalChats(), getMainChatId());
+  settleAcceptedRenames();
+  const rows = allRows();
   noteStatuses(new Map(rows.map((row) => [row.chatId, row.status])), isRootShown ? selectedChatId : null);
   // A chat that has messaged is no longer new; a deleted chat's frame goes with it.
   for (const chatId of startedHere) {
@@ -401,6 +452,8 @@ const ChatRoot: m.Component = {
               onPick: pickFor,
               onDismiss: dismissPick,
             }),
+        // Opened over the whole root when its URL asks for it; a chat page opens its own from its composer.
+        isProviderChooserOpen() ? m(ProviderChooserModal, { onDismiss: closeProviderChooser }) : null,
       ],
     );
   },
@@ -433,6 +486,7 @@ function onceListedAndAccountsLoaded(accountsLoaded: Promise<void>, take: () => 
 function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
   const shell = connectToShell({
     capabilities: { navigation: true, closeChord: false },
+    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
     onHandshake: (received) => {
       handshake = received;
       adoptClientIdentity({ clientId: received.clientId, desktopId: received.desktopId });
@@ -458,6 +512,7 @@ function connectRootToShell(accountsLoaded: Promise<void>): ShellConnection {
       const target = new URL(path, window.location.origin);
       const token = intakeTokenFromSearch(target.search);
       const requested = selectionFromSearch(target.search);
+      if (isProviderChooserRequested(target.search)) openRequestedProviderChooser(accountsLoaded);
       if (token !== null) {
         // The window is at the chat's path already; a picker path names none and leaves the shown chat standing.
         pendingToken = token;
@@ -481,6 +536,13 @@ function bootstrap(): void {
   initChats();
   const accountsLoaded = loadAccountsWithRetry();
   addChatsUpdatedListener(onChatsUpdated);
+  // The rows' ``@`` marks: the viewer's unseen mentions, re-read on every push that changes them.
+  void watchPendingMentions().then(() => m.redraw());
+  // The rows' participant pictures name and draw their authors off the roster, which this entry loads for itself:
+  // the models are singletons per entry, so the chat page's load does nothing for the root. Read again when
+  // someone's mentions change, which is the one push that follows a sender joining.
+  void ensureParticipants();
+  addMentionsUpdatedListener(() => void ensureParticipants());
   compactQuery.addEventListener("change", () => {
     pool?.setCompact(compactQuery.matches);
     fillSlot();
@@ -514,6 +576,7 @@ function bootstrap(): void {
   reportLocation();
   const token = pendingToken;
   if (token !== null) onceListedAndAccountsLoaded(accountsLoaded, () => void takeIntake(token));
+  if (isProviderChooserRequested(window.location.search)) openRequestedProviderChooser(accountsLoaded);
 }
 
 window.addEventListener("load", bootstrap);

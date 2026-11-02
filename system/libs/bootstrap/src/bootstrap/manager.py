@@ -1,6 +1,6 @@
 """Bootstrap: first-boot setup, then launch supervisord.
 
-`uv run bootstrap` runs once per container boot (from the `bootstrap`
+`bootstrap` runs once per container boot (from the `bootstrap`
 extra_window). It performs first-boot setup -- global git config and creating
 the initial chat agent -- and then `exec`s the system supervisord in the
 foreground. supervisord (configured by system/supervisord.conf) owns every
@@ -41,6 +41,8 @@ from bootstrap.claude_state_migration import (
 # Path (relative to the repo root, which is bootstrap's cwd) of the supervisord
 # config that defines every background service.
 SUPERVISORD_CONF = Path("system/supervisord.conf")
+# The workspace venv, relative to the repo root like the config above.
+WORKSPACE_VENV = Path(".venv")
 # Container-local directory for supervisord's own log + the per-service logs. Not
 # under data/, so these are never backed up.
 SUPERVISOR_LOG_DIR = Path("/var/log/supervisor")
@@ -108,6 +110,11 @@ MAIN_BRANCH_SIGNAL = STATE_DIR / "workspace_main_branch_initialized"
 # still counts as done. Kept as a bare path rather than a re-exported constant because nothing
 # writes it any more; it exists only to be recognised.
 _LEGACY_MAIN_BRANCH_SIGNAL = STATE_DIR / "initial_chat_created"
+# Tells the system interface this workspace is new, so its show-around tour may start by itself. A
+# workspace that already existed when an update brought the tour in never gets it. The directory is
+# system_interface's ``DEFAULT_STATE_DIRECTORY``, spelled out rather than imported to keep this
+# first-boot program's dependencies minimal.
+OFFER_TOUR_SIGNAL = STATE_DIR / "system_interface" / "offer_tour"
 # The view the first chat is filed in: the starter project the workspace seeds.
 # Duplicated from system_interface's ``projects.DEFAULT_PROJECT_ID`` rather than
 # imported, to keep this one-shot first-boot program's dependencies minimal (the
@@ -231,6 +238,20 @@ def _ensure_git_identity() -> None:
         _git("config", "user.name", "minds-bootstrap")
 
 
+def _is_main_branch_initialized() -> bool:
+    return MAIN_BRANCH_SIGNAL.exists() or _LEGACY_MAIN_BRANCH_SIGNAL.exists()
+
+
+def _offer_tour_on_first_boot() -> None:
+    """Mark a workspace booting for the first time as new, for the system interface's tour.
+
+    Must run before ``_initialize_workspace_main_branch``, whose signal is what tells a first boot apart.
+    """
+    if _is_main_branch_initialized():
+        return
+    _touch(OFFER_TOUR_SIGNAL)
+
+
 def _initialize_workspace_main_branch() -> None:
     """Commit any rsync-staged content and rename the work_dir branch to `main`.
 
@@ -261,7 +282,7 @@ def _initialize_workspace_main_branch() -> None:
     workspace yet and a misbehaving pre-commit hook on the rsynced
     template shouldn't gate boot.
     """
-    if MAIN_BRANCH_SIGNAL.exists() or _LEGACY_MAIN_BRANCH_SIGNAL.exists():
+    if _is_main_branch_initialized():
         logger.debug(
             "Signal file {} present; work_dir is already on main", MAIN_BRANCH_SIGNAL
         )
@@ -672,24 +693,17 @@ _UV_SYNC_TIMEOUT_SECONDS = 600.0
 
 
 def _sync_workspace_venv() -> None:
-    """Converge the workspace .venv to the landed lockfile before any agent runs.
+    """Converge the workspace .venv to the lockfile of the tree boot will run.
 
-    The venv is a bake-time artifact (build_workspace.sh at image build / host
-    provisioning) while the working tree is a landing-time artifact (the
-    create's git-mirror checkout) -- and on docker and pool-lease hosts nothing
-    re-runs the sync at create, so the two can disagree whenever the baked
-    image lags the landed branch. Left alone, the FIRST implicit ``uv run``
-    sync reconciles them lazily: mid-boot, concurrent with the services and
-    the initial chat agent, and with root-closure scope rather than
-    --all-packages. Whatever imports from the venv during that rewrite window
-    fails intermittently (ModuleNotFoundError for imbue_common and friends).
-
-    Converging here -- once, up front, before the chat agent exists and before
-    supervisord starts anything -- removes both the race window and the scope
-    gap; every later implicit sync then no-ops. ``--frozen`` asserts the
-    committed lockfile is canonical, matching build_workspace.sh. Best-effort:
-    a failure is logged loudly but never blocks boot (the per-``uv run``
-    implicit syncs remain the fallback).
+    The bootstrap window syncs ``--frozen`` before this program starts, but
+    against the tree as the container came up. ``_recover_interrupted_update``
+    can then roll a half-applied update back, restoring an older ``uv.lock``,
+    and supervisord's programs and every agent's one-offs
+    (``uv run --no-sync``) run from the venv as it is, without a sync of their own.
+    Converging here, before supervisord starts anything and before the chat
+    agent exists, is what puts the venv on the restored lock. ``--frozen``
+    takes the committed lockfile as canonical, matching build_workspace.sh.
+    Best-effort: a failure is logged loudly but never blocks boot.
     """
     try:
         result = subprocess.run(
@@ -804,6 +818,23 @@ def _configure_latchkey_gateway_env() -> dict[str, str]:
     )
 
 
+def _supervisord_environment(environ: Mapping[str, str], venv: Path) -> dict[str, str]:
+    """``environ`` with ``venv`` activated the way ``uv run`` activates it.
+
+    supervisord's programs inherit this environment, so a command a program runs by
+    bare name (the agent observer's ``mngr``, a ``python`` a service shells out to)
+    resolves to the venv's copy first, as it would under ``uv run``. The built-in
+    apps' and services' lines name their entry points by path (``.venv/bin/<name>``),
+    and a user package's line execs its own project's ``.venv/bin``, so neither
+    depends on this. The bootstrap window starts this program from ``.venv/bin``
+    rather than under ``uv run``, so nothing else has put the venv there.
+    """
+    path = os.pathsep.join(
+        entry for entry in (str(venv / "bin"), environ.get("PATH", "")) if entry
+    )
+    return {**environ, "VIRTUAL_ENV": str(venv), "PATH": path}
+
+
 def _exec_supervisord(added_environment: Mapping[str, str]) -> None:
     """Replace this process with supervisord running in the foreground.
 
@@ -817,7 +848,9 @@ def _exec_supervisord(added_environment: Mapping[str, str]) -> None:
     os.execvpe(
         "supervisord",
         ["supervisord", "-n", "-c", str(SUPERVISORD_CONF)],
-        {**os.environ, **added_environment},
+        _supervisord_environment(
+            {**os.environ, **added_environment}, WORKSPACE_VENV.resolve()
+        ),
     )
 
 
@@ -831,7 +864,7 @@ def _run_env_converge_fast_phase() -> None:
     one-shot logs the environment's real problems).
     """
     result = subprocess.run(
-        ["uv", "run", "env-converge", "run", "--phase", "fast"],
+        ["uv", "run", "--no-sync", "env-converge", "run", "--phase", "fast"],
         capture_output=True,
         text=True,
         check=False,
@@ -1116,6 +1149,7 @@ def main() -> None:
 
     # Every boot, not once: `pool_bake` unsets the repo identity on finalize and expects the
     # adopted workspace to supply it again. Only-if-unset, so it never overwrites the user's.
+    # Then, on a first boot only, mark the workspace new so the shell offers its tour.
     # Then commit the rsynced template and put the work_dir on `main`. Its OWN one-shot
     # signal: "does this workspace have a main branch" and "does it have a chat" are
     # different questions with different answers, so they cannot share one.
@@ -1123,10 +1157,11 @@ def main() -> None:
         "initialize_main_branch", "Setting up the workspace's main branch"
     ):
         _ensure_git_identity()
+        _offer_tour_on_first_boot()
         _initialize_workspace_main_branch()
 
     # Converge the workspace venv BEFORE the initial chat agent is created
-    # (below) and before supervisord's `uv run` services start, so nothing
+    # (below) and before supervisord's services start, so nothing
     # races the reconcile or runs against a bake-stale venv.
     with _bootstrap_step("sync_venv", "Installing the workspace's Python packages"):
         _sync_workspace_venv()

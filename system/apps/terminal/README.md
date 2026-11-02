@@ -1,20 +1,30 @@
 # terminal
 
 The terminal app: a web terminal served by [ttyd](https://github.com/tsl0922/ttyd),
-run as two supervisord programs declared in `system/supervisord.conf.d/` and both
-installed as entry points of this package's uv tool (`system/scripts/build_workspace.sh`,
-like every Python app with a manifest):
+run as two supervisord programs declared in `system/supervisord.conf.d/`, each
+running one of this package's entry points from the workspace venv
+(`.venv/bin/terminal-app`, `.venv/bin/terminal-pty`), like every Python app:
 
 - `terminal` (`terminal-app`) is the terminal origin. It serves the **wrapper pages**
   on 7681 (`pages.py`): `/?session=<name>` frames the session's ttyd page from the
   pty origin, reports its path and the session's title to the shell through the app
   contract (the shell's built module, served from this origin at
   `/_static/app_contract.js`), re-points the frame on `shell:navigate`,
-  and passes the shell's `ttyd-focus` grant on to ttyd. On a phone-sized page (the shell's rule: at most 500px one way and 1000px the other),
+  and passes the shell's `ttyd-focus` grant on to ttyd. On `shell:theme` it loads that theme's
+  bundle (served from this origin at `/_static/themes/<path>`, `workspace_themes.flask_routes`) into an unseen frame,
+  reads the theme's `--term-*` tokens there, and posts `{type: "terminal:theme", theme}` (xterm's color keys) into
+  the pty frame, again on every load of that frame; `theme` is null under the standard theme, for a bundle that
+  fails to load, or for a theme that sets no terminal tokens, which leaves xterm its own colors (the terminal is
+  `[theming] mode = "none"`, so nothing else of it is themed). On a phone-sized page (the shell's rule: at most 500px one way and 1000px the other),
   with a coarse pointer (a phone; never a mouse-driven desktop window), it shows a key strip under the frame (Esc, Tab, a one-shot Ctrl, the arrows) that
   posts `{type: "terminal:key", key, ctrl}` and `{type: "terminal:ctrl", armed}` into
   the frame, followed by a `ttyd-focus`; the pty page posts
-  `{type: "terminal:ctrl", armed: false}` back when a typed key used the Ctrl. The
+  `{type: "terminal:ctrl", armed: false}` back when a typed key used the Ctrl.
+  Typing happens in the pty frame, on its own origin, out of the wrapper's sight,
+  so the pty page posts `{type: "shell:input"}` to the wrapper (a pointer press or
+  a key, at most once per 20 seconds) and the wrapper hands it up to the shell as
+  the app contract's own input report, which is how the presence heartbeat reads a
+  person typing in a terminal as active. The
   page fills `100dvh` and nudges the frame a pixel after it loads and whenever the
   visual viewport resizes, so ttyd refits its grid; `POST /new` (the manifest's
   `new` launch path, posted by the shell with an optional `workdir`) allocates the
@@ -36,8 +46,9 @@ like every Python app with a manifest):
   recorded under `data/.state/terminal/sessions/<name>` (falling back to `tmux
   new-session -A` by name, which creates the session when tmux lost it, when there is
   no record, or when the session under that id is a later server's); `workdir.sh` opens a shell in a
-  directory; `agent.sh` attaches to an mngr agent's tmux window for the chat UI's
-  terminal back face. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
+  directory; `agent.sh <name> [view]` attaches to an mngr agent's tmux window for
+  the chat UI's terminal back face, read-only and size-ignored when the chat's
+  window is viewed. The ttyd URL `?arg=_&arg=<key>&arg=...` runs
   `commands/<key>.sh` with the remaining arguments. It decompresses the OSC 52-capable
   ttyd web client the `imbue-mngr-ttyd` package ships, adds the script in `pty_page.py`
   before its closing body tag, and serves it via `ttyd -I`, falling back to
@@ -46,7 +57,8 @@ like every Python app with a manifest):
   body tag; then it registers its manifest and port, and execs
   `ttyd -p 7683 -a -t disableLeaveAlert=true [-I index.html] -W bash -c <dispatch>`.
   The script feeds the wrapper's strip keys to xterm (`window.term`, which the
-  patched client exposes) with the sequences xterm sends for them, applies an armed
+  patched client exposes) with the sequences xterm sends for them, sets the wrapper's
+  `terminal:theme` palette on xterm once `window.term` exists (null puts xterm's own colors back), applies an armed
   Ctrl to the next typed key by wrapping xterm's internal `triggerDataEvent`, and
   focuses xterm when the terminal is tapped (iOS raises the soft keyboard only for a
   focus made in a tap on the focused frame itself).
@@ -69,8 +81,19 @@ that holds no id, or a session the dispatch created on attach; a session
 that only carries the old name of a terminal whose own session is live is
 skipped, whichever tmux lists first), and one with no record at all lists under
 its own name. A window of the terminal shows the wrapper page, `/?session=<name>`;
-the wrapper frames `/?arg=_&arg=session&arg=<name>[&arg=<workdir>]` on the pty
-origin, and `session.sh` receives the name and the directory as its arguments.
+the wrapper frames `/?arg=_&arg=session&arg=<name>&arg=<workdir>` on the pty
+origin (the workdir argument always sent, empty for none), with `&arg=view`
+appended while the shell's handshake says the window is viewed on somebody
+else's desktop (the multiplayer spec, section 8.3), and `session.sh` receives
+the name, the directory, and the viewer marker as its arguments: for a viewer
+it attaches read-only and as a client tmux never sizes the window by
+(`tmux attach -r -f ignore-size`), names the session exactly when the record
+does not verify (`-t =<name>`, never tmux's prefix match, so a viewer of a
+lost `terminal-1` is refused rather than shown `terminal-10`), and never
+creates the session. A framed wrapper points the pty frame only once the
+shell's handshake has said whether the window is viewed, so a viewed terminal
+never attaches writable first; when no handshake comes within two seconds it
+attaches plainly, and an unframed wrapper points at once.
 A terminal created through `new` always carries a workdir: the `workdir` param
 when the create gave one, else the directory the app runs from (the workspace
 root under supervisord); a record of a hand-made session holds none, and a
@@ -136,9 +159,10 @@ main create template writes.
 
 ## Tests
 
-`uv run pytest system/apps/terminal` from the repo root. The unit tests drive
+`uv run --no-sync pytest system/apps/terminal` from the repo root. The unit tests drive
 the real source and tmux client over a fake `tmux` on `PATH`
 (`testing.py`); `test_terminal_app.py` runs `terminal-app` and `terminal-pty`
 as processes, the latter around a fake `ttyd`; `test_phone_keys.py` (marked
 `browser`) drives the wrapper page's key strip in Chromium against a recording
-frame, a stub `window.term`, and the real patched ttyd client with the script added.
+frame, a stub `window.term`, and the real patched ttyd client with the script added;
+`test_terminal_theme.py` (also `browser`) checks that a theme the shell sends reaches xterm as its palette.

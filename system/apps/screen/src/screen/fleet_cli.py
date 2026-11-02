@@ -56,7 +56,7 @@ def agent_headers() -> dict[str, str]:
     """The identity headers; a hard failure with no chat id to send (no null owner)."""
     chat_id = own_chat_id()
     if not chat_id:
-        _err("MNGR_AGENT_ID is not set -- run agentic-browser-fleet from inside an agent.")
+        _err("MNGR_AGENT_ID is not set -- run `uv run --no-sync agentic-browser-fleet` from inside an agent.")
         raise SystemExit(EXIT_USAGE)
     headers = {AGENT_ID_HEADER: chat_id, "Content-Type": "application/json"}
     name = os.environ.get("MNGR_AGENT_NAME")

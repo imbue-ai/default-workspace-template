@@ -5,12 +5,14 @@ backend-side, and these cases pin the exact same precedence (explicit detectors 
 ``is_meta``; the compaction chip is keyed off its flag, not its text).
 """
 
-import importlib.util
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
 import pytest
+from update_self_skill import update_resume_note
+from workspace_bare_scripts import message_chat
+from workspace_bare_scripts import run_in_background
 
 from imbue.chat.harnesses.events import DisplayKind
 from imbue.chat.harnesses.message_display import BACKGROUND_TASK_REPORT_TAG
@@ -18,10 +20,14 @@ from imbue.chat.harnesses.message_display import BROWSER_FLEET_TAG
 from imbue.chat.harnesses.message_display import HANDOFF_SUMMARY_COMMAND
 from imbue.chat.harnesses.message_display import SEED_CONTEXT_TAG
 from imbue.chat.harnesses.message_display import SecretResolutionVerdict
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_NOTE_TAG
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_LANDED
+from imbue.chat.harnesses.message_display import WORKSPACE_UPDATE_OUTCOME_NOT_LANDED
 from imbue.chat.harnesses.message_display import classify_user_message
 from imbue.chat.harnesses.message_display import format_secret_resolution_notice
 from imbue.chat.harnesses.message_display import is_non_turn_tail
 from imbue.chat.harnesses.message_display import split_background_task_reports
+from imbue.chat.harnesses.message_display import stamp_user_message_display
 
 _SEED_BLOCK = f"<{SEED_CONTEXT_TAG}>\nthe conversation so far\n</{SEED_CONTEXT_TAG}>"
 
@@ -337,32 +343,19 @@ def test_permission_resolution_reads_the_machine_tag_first() -> None:
     assert display.request_id == "evt-9"
 
 
-def _load_system_script(filename: str) -> Any:
-    """A standard-library-only script from ``system/scripts/``, which this package cannot import."""
-    script = Path(__file__).resolve().parents[5] / "scripts" / filename
-    spec = importlib.util.spec_from_file_location(f"{script.stem}_for_tag_pin", script)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def test_the_messaging_scripts_browser_fleet_tag_is_the_one_this_classifier_strips() -> None:
     """``system/scripts/message_chat.py --browser-fleet`` wraps a nudge in the tag this module recognises; the script
     is standard-library only and cannot import this package, so its copy of the tag is pinned here."""
-    module = _load_system_script("message_chat.py")
-
-    assert module.BROWSER_FLEET_TAG == BROWSER_FLEET_TAG
-    decision = classify_user_message(module.wrap_browser_fleet_nudge("Browser b1 was handed back to you."))
+    assert message_chat.BROWSER_FLEET_TAG == BROWSER_FLEET_TAG
+    decision = classify_user_message(message_chat.wrap_browser_fleet_nudge("Browser b1 was handed back to you."))
     assert decision is not None
     assert decision.display is DisplayKind.CHIP
 
 
 def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None:
-    """``system/scripts/run_in_background.py`` is standard-library only and cannot import this package,
+    """``system/scripts/workspace_bare_scripts/run_in_background.py`` is standard-library only and cannot import this package,
     so its copy of the tag is pinned here by classifying a report it composed."""
-    module = _load_system_script("run_in_background.py")
-    report = module.compose_report(
+    report = run_in_background.compose_report(
         description="Wait for the background agent",
         command=["uv", "run", "create_worker.py", "await", "--name", "fix-login"],
         returncode=0,
@@ -370,7 +363,7 @@ def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None
         output_path=Path("data/.tasks/run-in-background/x/output.log"),
     )
 
-    assert module.BACKGROUND_TASK_REPORT_TAG == BACKGROUND_TASK_REPORT_TAG
+    assert run_in_background.BACKGROUND_TASK_REPORT_TAG == BACKGROUND_TASK_REPORT_TAG
     decision = classify_user_message(report)
     assert decision is not None
     assert decision.display is DisplayKind.NOTICE
@@ -379,9 +372,56 @@ def test_a_background_task_report_is_a_notice_showing_only_its_summary() -> None
     assert is_non_turn_tail(report) is False
 
 
+@pytest.mark.parametrize(
+    ("landed_ref", "label", "summary"),
+    [
+        (
+            "minds-v0.9.0",
+            "Workspace updated",
+            "This chat was paused while the workspace updated to v0.9.0, and is carrying on now.",
+        ),
+        (
+            None,
+            "Workspace update not applied",
+            "This chat was paused for a workspace update that did not go through, and is carrying on now.",
+        ),
+    ],
+)
+def test_a_resumed_chats_workspace_update_note_is_a_notice_showing_only_its_summary(
+    landed_ref: str | None, label: str, summary: str
+) -> None:
+    """``run-status resume-chats`` sends a paused chat a note composed by the update-self skill, which is
+    standard-library only and cannot import this package, so its copy of the tag is pinned here by classifying
+    a note it composed."""
+    note = update_resume_note.compose_resume_note(
+        landed_ref=landed_ref,
+        is_chat_paused=True,
+        wip_commit="0123abc",
+        interrupted_tasks=["Run the test suite"],
+        restarted_workers=["fix-login"],
+    )
+
+    assert update_resume_note.WORKSPACE_UPDATE_NOTE_TAG == WORKSPACE_UPDATE_NOTE_TAG
+    assert (update_resume_note.OUTCOME_LANDED, update_resume_note.OUTCOME_NOT_LANDED) == (
+        WORKSPACE_UPDATE_OUTCOME_LANDED,
+        WORKSPACE_UPDATE_OUTCOME_NOT_LANDED,
+    )
+    decision = classify_user_message(note)
+    assert decision is not None
+    assert decision.display is DisplayKind.NOTICE
+    assert decision.display_label == label
+    assert decision.display_body == summary
+    assert is_non_turn_tail(note) is False
+
+
+def test_text_that_merely_quotes_the_workspace_update_note_is_a_human_turn() -> None:
+    quoting = f'why did the <{WORKSPACE_UPDATE_NOTE_TAG} outcome="landed"><summary>x</summary> note show up?'
+    assert classify_user_message(quoting) is None
+
+
 def _compose_report(description: str, command: Sequence[str] = ("make",), output: str = "built\n") -> str:
     """A report composed by the real ``run_in_background.py``, for a command that finished."""
-    return _load_system_script("run_in_background.py").compose_report(
+    return run_in_background.compose_report(
         description=description,
         command=command,
         returncode=0,
@@ -533,3 +573,35 @@ def test_a_permission_notice_flushed_with_reports_still_resolves_its_card(is_bet
     assert decision.display is DisplayKind.PERMISSION_RESOLUTION
     assert decision.resolution == "denied"
     assert decision.request_id == "r1"
+
+
+def test_an_author_prefix_names_the_author_and_the_page_is_handed_the_words_behind_it() -> None:
+    event: dict[str, Any] = {}
+    stamp_user_message_display(event, "[from: Bob] please rebase onto main")
+    assert event["author_name"] == "Bob"
+    assert event["display"] == DisplayKind.PROMPT_WITH_CONTEXT.value
+    assert event["display_body"] == "please rebase onto main"
+    assert "non_turn_tail" not in event
+
+
+def test_an_author_prefix_on_a_merged_turn_strips_the_prefixed_line_alone() -> None:
+    event: dict[str, Any] = {}
+    stamp_user_message_display(event, "first\n[from: Bob] second")
+    assert event["author_name"] == "Bob"
+    assert event["display_body"] == "first\nsecond"
+
+
+def test_the_detectors_run_on_the_words_behind_an_author_prefix() -> None:
+    event: dict[str, Any] = {}
+    stamp_user_message_display(event, f"[from: Bob] <{BROWSER_FLEET_TAG}>your browser is free</{BROWSER_FLEET_TAG}>")
+    assert event["author_name"] == "Bob"
+    assert event["display"] == DisplayKind.CHIP.value
+    assert event["display_body"] == "your browser is free"
+
+
+def test_a_message_without_a_prefix_is_stamped_as_before() -> None:
+    event: dict[str, Any] = {}
+    stamp_user_message_display(event, "/model opus")
+    assert "author_name" not in event
+    assert event["display"] == DisplayKind.HIDDEN.value
+    assert event["non_turn_tail"] is True

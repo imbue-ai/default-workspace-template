@@ -6,6 +6,7 @@ import os
 import re
 import subprocess
 from collections.abc import Callable
+from datetime import datetime
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -13,30 +14,38 @@ from unittest.mock import patch
 
 import httpx
 import pytest
-from app_schema.testing import assert_api_schema_describes_app
 from app_manifest.testing import assert_document_policy_admits_page
+from app_schema.testing import assert_api_schema_describes_app
 from flask import Flask
 from flask.testing import FlaskClient
+from workspace_layout.identity import ANONYMOUS_OWNER
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 
+from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import state_of
 from imbue.system_interface.avatar.primitives import DesignId
 from imbue.system_interface.avatar.testing import png_size
 from imbue.system_interface.config import Config
+from imbue.system_interface.documents import BASE_PATH_META_NAME
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
+from imbue.system_interface.documents import THEME_GALLERY_ROUTE
 from imbue.system_interface.presence import PRESENCE_CONNECTED_WINDOW
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.profiles import ProfileResolver
+from imbue.system_interface.server import THEME_GALLERY_FILENAME
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_ARGV
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_COMMAND
 from imbue.system_interface.server import _NOT_BUILT_REPAIR_MNGR_COMMAND
 from imbue.system_interface.server import _handle_client_state_message
 from imbue.system_interface.server import create_application
 from imbue.system_interface.server import render_frontend_not_built_page
-from imbue.system_interface.shell.identity import RequestIdentity
+from imbue.system_interface.shell.clients import CLIENT_RETENTION
 from imbue.system_interface.shell.testing import TEST_PAGE_ID
+from imbue.system_interface.shell.testing import client_report
 from imbue.system_interface.shell.testing import drain_messages
 from imbue.system_interface.shell.testing import identity_headers
+from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
 from imbue.system_interface.testing import build_test_state
 from imbue.system_interface.testing import close_ws
 from imbue.system_interface.testing import open_ws
@@ -134,7 +143,10 @@ def test_the_page_carries_the_workspaces_name_and_what_a_phone_saves_to_its_home
     assert page.count("<title>") == 1
     assert f'<meta name="apple-mobile-web-app-title" content="{escaped}">' in page
     assert '<meta name="theme-color" content="#fafaf8">' in page
-    assert '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">' in page
+    assert (
+        '<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1">'
+        in page
+    )
     assert page.count('name="viewport"') == 1
     assert '<link rel="apple-touch-icon" href="/apple-touch-icon.png">' in page
     assert '<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">' in page
@@ -146,7 +158,7 @@ def test_the_page_carries_the_workspaces_name_and_what_a_phone_saves_to_its_home
 def test_tags_the_build_already_carries_are_replaced_rather_than_repeated(tmp_path: Path) -> None:
     built = (
         "<html><head>"
-        '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">'
+        '<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=5">'
         '<meta name="theme-color" content="#000000">'
         '<link rel="manifest" href="/stale.webmanifest">'
         "</head><body></body></html>"
@@ -154,7 +166,7 @@ def test_tags_the_build_already_carries_are_replaced_rather_than_repeated(tmp_pa
     page = _named_workspace_app(tmp_path, built, "Lab").test_client().get("/").text
 
     assert page.count('name="viewport"') == 1
-    assert "width=device-width, initial-scale=1, viewport-fit=cover" in page
+    assert 'content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1"' in page
     assert page.count('name="theme-color"') == 1 and "#000000" not in page
     assert page.count('rel="manifest"') == 1 and "stale" not in page
     assert page.count("<title>") == 1 and "<title>Lab</title>" in page
@@ -288,6 +300,8 @@ def test_the_built_page_and_the_placeholder_are_served_under_the_document_policy
         assert_document_policy_admits_page(page)
         policy = page.headers["Content-Security-Policy"]
         assert "frame-src http: https:" in policy
+        # The tour's pictures are hosted, so the page admits images from their origin.
+        assert "img-src 'self' data: blob: https://onboarding-media.imbueminds.com" in policy
         assert "connect-src" not in policy
         assert "frame-ancestors" not in policy
     assert "Content-Security-Policy" not in test_client.get("/api/health").headers
@@ -314,6 +328,22 @@ def test_index_marks_the_not_built_placeholder_as_not_the_app(tmp_path: Path) ->
     # that returns an open tab to the interface once something else restores it
     # -- nothing on the page can produce one, and nothing notifies it.
     assert FRONTEND_BUILT_HEADER in response.text
+
+
+def test_the_theme_gallery_serves_its_own_page_and_the_placeholder_until_it_is_built(tmp_path: Path) -> None:
+    static_dir = tmp_path / "static"
+    static_dir.mkdir()
+    (static_dir / "index.html").write_text(_BUILT_INDEX)
+    client = create_application(build_test_state(static_directory=static_dir)).test_client()
+
+    unbuilt = client.get(THEME_GALLERY_ROUTE)
+    (static_dir / THEME_GALLERY_FILENAME).write_text("<html><head><title>Theme gallery</title></head></html>")
+    built = client.get(THEME_GALLERY_ROUTE, base_url="http://localhost/shell")
+
+    assert unbuilt.headers[FRONTEND_BUILT_HEADER] == "false"
+    assert built.headers[FRONTEND_BUILT_HEADER] == "true"
+    assert "<title>Theme gallery</title>" in built.text
+    assert f'<meta name="{BASE_PATH_META_NAME}" content="/shell">' in built.text
 
 
 def test_not_built_placeholder_polls_rather_than_refreshing_the_whole_page(tmp_path: Path) -> None:
@@ -602,13 +632,37 @@ def test_websocket_endpoint_sends_initial_snapshot(app: Flask) -> None:
     assert messages[3]["notice"] is None
 
 
+@pytest.mark.flaky
+@pytest.mark.timeout(15)
+def test_websocket_connect_sends_the_chats_activity_once_the_chat_app_has_reported_it(app: Flask) -> None:
+    """A window that connects after the chat app's report paints the agent's card from it, after the roster."""
+    report = {"chats": [{"chat_id": "agent-1", "title": "Main chat", "status": "idle", "kind": "agent"}]}
+    assert app.test_client().post("/api/chats-activity", json=report).status_code == 204
+    with serve_app(app) as served:
+        ws = open_ws(served, "/api/ws")
+        try:
+            messages = [json.loads(ws.receive(timeout=_WS_RECEIVE_TIMEOUT)) for _ in range(7)]
+        finally:
+            close_ws(ws)
+
+    assert [message["type"] for message in messages[4:]] == ["presence_updated", "roster_updated", "chats_activity"]
+    assert messages[6] == {"type": "chats_activity", **report}
+
+
 _VISITOR_IDENTITY = RequestIdentity(owner=False, user_id="user-bob-4471", email="bob@example.com")
 _OWNER_IDENTITY = RequestIdentity(owner=True, user_id="user-owner-9c21", email="owner@example.com")
 
 
-def _heartbeat(client: FlaskClient, identity: RequestIdentity | None) -> Any:
+def _heartbeat(client: FlaskClient, identity: RequestIdentity | None, body: dict[str, Any] | None = None) -> Any:
     headers = {} if identity is None else identity_headers(identity)
-    return client.post("/api/presence/heartbeat", headers=headers)
+    return client.post("/api/presence/heartbeat", json=body if body is not None else {}, headers=headers)
+
+
+def _presence_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The ``presence_updated`` messages among ``messages``: the only other thing pushed beside them is the roster
+    they changed (a connected set that changed and left the roster as it was pushes no roster)."""
+    assert {message["type"] for message in messages} <= {"presence_updated", "roster_updated"}
+    return [message for message in messages if message["type"] == "presence_updated"]
 
 
 def _profile_aware_app(
@@ -632,12 +686,73 @@ def _profile_aware_app(
     )
 
 
+def test_a_persons_picture_is_served_from_the_shells_origin_and_cached_by_version(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    """``GET /api/roster/<key>/picture`` (the multiplayer spec, section 4.2) relays the bytes the profile's URL
+    serves, immutably cacheable under its current version alone (a stale page asking under an older version, or
+    none, gets the same bytes uncached); a key that is not a listed person's (an account the roster does
+    not name, a key with no id, the agent's), or a person with no picture, is a 404, and nothing is fetched for it."""
+    pictures_fetched: list[str] = []
+
+    def connector(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/users/user-owner-9c21/profile":
+            return httpx.Response(
+                200, json={"user_id": "user-owner-9c21", "display_name": "Josh", "profile_picture_url": "https://a/b"}
+            )
+        if request.url.path == "/users/user-bob-4471/profile":
+            return httpx.Response(200, json={"user_id": "user-bob-4471", "display_name": "Bob"})
+        if request.url.path == "/users/user-carol-1138/profile":
+            return httpx.Response(
+                200, json={"user_id": "user-carol-1138", "display_name": "Carol", "profile_picture_url": "https://a/c"}
+            )
+        if request.url.host == "a":
+            pictures_fetched.append(str(request.url))
+            return httpx.Response(200, content=b"\x89PNG...", headers={"Content-Type": "image/png"})
+        return httpx.Response(404, json={"detail": "no such user"})
+
+    client = _profile_aware_app(tmp_path, broadcaster, connector).test_client()
+    _heartbeat(client, _OWNER_IDENTITY)
+    owner = next(
+        entry
+        for entry in client.get("/api/roster").get_json()["participants"]
+        if entry["key"] == "user:user-owner-9c21"
+    )
+    assert owner["profile_picture_url"].startswith("/api/roster/user:user-owner-9c21/picture?v=")
+
+    served = client.get(owner["profile_picture_url"])
+    assert (served.status_code, served.mimetype, served.data) == (200, "image/png", b"\x89PNG...")
+    assert served.headers["Cache-Control"] == "public, max-age=31536000, immutable"
+    # Outside bytes under the shell's origin are sent as its own images are.
+    assert served.headers["X-Content-Type-Options"] == "nosniff"
+    assert served.headers["Content-Security-Policy"] == "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+    unversioned = client.get("/api/roster/user:user-owner-9c21/picture")
+    assert (unversioned.status_code, unversioned.headers["Cache-Control"]) == (200, "no-cache")
+    stale = client.get("/api/roster/user:user-owner-9c21/picture?v=0123456789abcdef")
+    assert (stale.status_code, stale.data, stale.headers["Cache-Control"]) == (200, b"\x89PNG...", "no-cache")
+    assert client.get("/api/roster/user:user-bob-4471/picture").status_code == 404
+    assert client.get("/api/roster/user:user-carol-1138/picture").status_code == 404
+    assert client.get("/api/roster/user:/picture").status_code == 404
+    assert client.get("/api/roster/workspace-agent/picture").status_code == 404
+    assert pictures_fetched == ["https://a/b"]
+    assert not (tmp_path / "profiles" / "user-carol-1138.picture.json").exists()
+
+
 def test_presence_heartbeat_records_the_requester_and_answers_their_identity(client: FlaskClient) -> None:
     response = _heartbeat(client, _VISITOR_IDENTITY)
 
     assert response.status_code == 200
     assert response.get_json() == {
-        "identity": {"owner": False, "user_id": "user-bob-4471", "email": "bob@example.com"}
+        "identity": {
+            "owner": False,
+            "user_id": "user-bob-4471",
+            "email": "bob@example.com",
+            "agent_id": None,
+            "agent_name": None,
+            "granter": None,
+            "is_header_present": True,
+        },
+        "participant": "user:user-bob-4471",
     }
     listed = client.get("/api/presence").get_json()
     (user,) = listed["users"]
@@ -645,7 +760,16 @@ def test_presence_heartbeat_records_the_requester_and_answers_their_identity(cli
     assert user["owner"] is False
     # No connector to ask, so no profile; the record itself is complete without one.
     assert user["display_name"] is None and user["profile_picture_url"] is None
-    assert set(user) == {"user_id", "email", "display_name", "profile_picture_url", "owner", "first_seen", "last_seen"}
+    assert set(user) == {
+        "user_id",
+        "email",
+        "display_name",
+        "profile_picture_url",
+        "owner",
+        "first_seen",
+        "last_seen",
+        "last_input_at",
+    }
 
 
 def test_presence_heartbeat_ignores_whatever_body_an_older_page_still_sends(client: FlaskClient) -> None:
@@ -653,12 +777,93 @@ def test_presence_heartbeat_ignores_whatever_body_an_older_page_still_sends(clie
         "/api/presence/heartbeat", json={"session_id": "tab-0001-aaaa"}, headers=identity_headers(_VISITOR_IDENTITY)
     )
     assert response.status_code == 200
+    # A page from before the body was sent posts none at all.
+    bodiless = client.post("/api/presence/heartbeat", headers=identity_headers(_VISITOR_IDENTITY))
+    assert bodiless.status_code == 200
+    assert bodiless.get_json()["participant"] == "user:user-bob-4471"
 
 
-def test_presence_heartbeat_records_nothing_for_an_identity_without_a_user_id(client: FlaskClient) -> None:
-    assert _heartbeat(client, None).status_code == 204
-    assert _heartbeat(client, RequestIdentity(owner=True)).status_code == 204
+def test_presence_heartbeat_records_the_owner_of_an_unshared_workspace_under_the_owner_key(
+    client: FlaskClient,
+) -> None:
+    assert _heartbeat(client, None).get_json()["participant"] == "owner"
+    assert _heartbeat(client, RequestIdentity(owner=True)).get_json()["participant"] == "owner"
+    # The owner has no account to list among the connected accounts; the roster carries them instead.
     assert client.get("/api/presence").get_json() == {"users": []}
+    roster = client.get("/api/roster").get_json()["participants"]
+    assert [(entry["key"], entry["is_connected"], entry["is_owner"]) for entry in roster] == [
+        ("owner", True, True),
+        ("workspace-agent", True, False),
+    ]
+
+
+def test_a_present_identity_header_that_does_not_parse_is_refused_by_every_route(client: FlaskClient) -> None:
+    """A header no proxy could have stamped is nobody's: the request is refused rather than read as the owner's
+    (the multiplayer spec, D10), on the shell's own routes and the layout routes alike."""
+    unreadable = {"X-Imbue-Identity": '{"owner": "false"}'}
+    heartbeat = client.post("/api/presence/heartbeat", json={}, headers=unreadable)
+    assert heartbeat.status_code == 400
+    assert "X-Imbue-Identity" in heartbeat.get_json()["detail"]
+    assert client.get("/api/presence").get_json() == {"users": []}
+    assert client.post("/api/desktops", json={"name": "Mine"}, headers=unreadable).status_code == 400
+    # A blank header is a missing one: the anonymous owner.
+    assert _heartbeat(client, None).get_json()["participant"] == "owner"
+
+
+def test_presence_heartbeat_records_nothing_for_a_visiting_agent(client: FlaskClient) -> None:
+    agent = RequestIdentity(owner=False, agent_id="va-0123", agent_name="Visitor", granter="user:8c0f")
+    assert _heartbeat(client, agent).status_code == 204
+    assert client.get("/api/presence").get_json() == {"users": []}
+
+
+def test_presence_heartbeat_keeps_the_pages_newest_input_time(client: FlaskClient) -> None:
+    _heartbeat(client, _VISITOR_IDENTITY, {"last_input_at": "2026-09-19T10:00:20Z"})
+    _heartbeat(client, _VISITOR_IDENTITY, {"last_input_at": "2026-09-19T10:00:05+00:00"})
+
+    (user,) = client.get("/api/presence").get_json()["users"]
+    assert user["last_input_at"] == "2026-09-19T10:00:20.000000000Z"
+    assert _heartbeat(client, _VISITOR_IDENTITY, {"last_input_at": "yesterday"}).status_code == 400
+    assert _heartbeat(client, _VISITOR_IDENTITY, {"input_age_seconds": -1}).status_code == 400
+    # An age the shell could not stamp (the request's JSON parser admits Infinity) is refused, never a 500.
+    for unstampable in (1e300, float("inf")):
+        refused = _heartbeat(client, _VISITOR_IDENTITY, {"input_age_seconds": unstampable})
+        assert refused.status_code == 400
+        assert "input_age_seconds" in refused.get_json()["detail"]
+
+
+def test_presence_heartbeat_stamps_an_input_age_on_the_shells_clock(client: FlaskClient) -> None:
+    before = utc_now()
+    _heartbeat(client, _VISITOR_IDENTITY, {"input_age_seconds": 90})
+    after = utc_now()
+
+    (user,) = client.get("/api/presence").get_json()["users"]
+    stamped = datetime.fromisoformat(user["last_input_at"][:26] + "+00:00")
+    assert before - timedelta(seconds=90) <= stamped <= after - timedelta(seconds=90)
+
+
+def test_a_heartbeat_that_moves_the_input_time_announces_the_roster_and_one_that_does_not_is_silent(
+    app: Flask,
+) -> None:
+    client = app.test_client()
+    broadcaster = state_of(app).shell.broadcaster
+    client_queue = broadcaster.register()
+    try:
+        _heartbeat(client, _OWNER_IDENTITY, {"input_age_seconds": 60})
+        drain_messages(client_queue)
+
+        _heartbeat(client, _OWNER_IDENTITY, {"input_age_seconds": 5})
+        (announced,) = drain_messages(client_queue)
+        assert announced["type"] == "roster_updated"
+        (owner,) = [entry for entry in announced["participants"] if entry["key"] == "user:user-owner-9c21"]
+        (listed,) = client.get("/api/presence").get_json()["users"]
+        assert owner["last_input_at"] == listed["last_input_at"]
+
+        # An older age, and no input at all: the stored time stands, and nothing is pushed.
+        _heartbeat(client, _OWNER_IDENTITY, {"input_age_seconds": 120})
+        _heartbeat(client, _OWNER_IDENTITY)
+        assert drain_messages(client_queue) == []
+    finally:
+        broadcaster.unregister(client_queue)
 
 
 def test_the_leave_route_is_gone(client: FlaskClient) -> None:
@@ -682,8 +887,7 @@ def test_presence_carries_each_users_profile_from_the_connector(
     try:
         _heartbeat(client, _VISITOR_IDENTITY)
         _heartbeat(client, _OWNER_IDENTITY)
-        (joined_bob, joined_owner) = drain_messages(client_queue)
-        assert joined_bob["type"] == joined_owner["type"] == "presence_updated"
+        (joined_bob, joined_owner) = _presence_messages(drain_messages(client_queue))
         assert [
             (user["user_id"], user["display_name"], user["profile_picture_url"]) for user in joined_owner["users"]
         ] == [
@@ -706,8 +910,8 @@ def test_the_sweep_broadcasts_a_silent_departure_and_a_heartbeat_that_changes_no
     try:
         _heartbeat(client, _VISITOR_IDENTITY)
         _heartbeat(client, _OWNER_IDENTITY)
-        joined = drain_messages(client_queue)
-        assert [message["type"] for message in joined] == ["presence_updated", "presence_updated"]
+        joined = _presence_messages(drain_messages(client_queue))
+        assert len(joined) == 2
         assert [user["user_id"] for user in joined[1]["users"]] == ["user-bob-4471", "user-owner-9c21"]
         # A heartbeat that changes nothing about who is here broadcasts nothing.
         _heartbeat(client, _OWNER_IDENTITY)
@@ -719,8 +923,7 @@ def test_the_sweep_broadcasts_a_silent_departure_and_a_heartbeat_that_changes_no
         os.utime(bob_path, (stale_at.timestamp(), stale_at.timestamp()))
         assert state.presence_sweep.sweep_once(utc_now()) is True
 
-        (departed,) = drain_messages(client_queue)
-        assert departed["type"] == "presence_updated"
+        (departed,) = _presence_messages(drain_messages(client_queue))
         assert [user["user_id"] for user in departed["users"]] == ["user-owner-9c21"]
         assert bob_path.exists()
         assert state.presence_sweep.sweep_once(utc_now()) is False
@@ -743,6 +946,64 @@ def test_websocket_connect_sends_the_connected_users(app: Flask) -> None:
     # The connected users follow the apps, desktops, avatar status, and update notice.
     assert messages[4]["type"] == "presence_updated"
     assert [user["user_id"] for user in messages[4]["users"]] == ["user-bob-4471"]
+
+
+@pytest.mark.flaky
+@pytest.mark.timeout(15)
+def test_a_windows_registration_and_its_disconnect_each_broadcast_clients_updated_and_an_unregistered_close_does_not(
+    app: Flask,
+) -> None:
+    broadcaster = state_of(app).shell.broadcaster
+    observer_queue = broadcaster.register()
+    try:
+        with serve_app(app) as served:
+            unregistered = open_ws(served, "/api/ws")
+            close_ws(unregistered)
+            registered = open_ws(served, "/api/ws")
+            registered.send(json.dumps(_moving_report("c-leaving", "home")))
+            wait_for(
+                lambda: "c-leaving" in broadcaster.connected_client_ids(),
+                timeout=5.0,
+                poll_interval=0.05,
+                error_message="the window never registered",
+            )
+            wait_for(
+                lambda: not observer_queue.empty(),
+                timeout=5.0,
+                poll_interval=0.05,
+                error_message="the window's registration was never announced",
+            )
+            # The registration is announced once (beside the move its first report made); the unregistered
+            # socket's close, handled by now, announced nothing.
+            assert [message["type"] for message in drain_messages(observer_queue)] == [
+                "active_desktop_changed",
+                "clients_updated",
+            ]
+            close_ws(registered)
+            # The broadcast follows the unregister, so the message is what is waited for, not the client's leaving.
+            wait_for(
+                lambda: not observer_queue.empty(),
+                timeout=5.0,
+                poll_interval=0.05,
+                error_message="the window's disconnect was never announced",
+            )
+        assert [message["type"] for message in drain_messages(observer_queue)] == ["clients_updated"]
+    finally:
+        broadcaster.unregister(observer_queue)
+
+
+def test_pruning_a_stale_client_broadcasts_clients_updated_and_pruning_none_is_silent(app: Flask) -> None:
+    shell = state_of(app).shell
+    long_ago = utc_now() - CLIENT_RETENTION - timedelta(days=1)
+    shell.clients.record_report(client_report("c-stale", "home"), long_ago, is_redirected=False)
+    client_queue = shell.broadcaster.register()
+    try:
+        shell.prune_unseen_clients()
+        assert [message["type"] for message in drain_messages(client_queue)] == ["clients_updated"]
+        shell.prune_unseen_clients()
+        assert drain_messages(client_queue) == []
+    finally:
+        shell.broadcaster.unregister(client_queue)
 
 
 def test_a_client_state_report_survives_an_unwritable_state_file(app: Flask) -> None:
@@ -856,6 +1117,24 @@ def test_not_built_page_coordinate_regex_matches_the_canonical_one() -> None:
     )
 
 
+@pytest.mark.frontend
+def test_the_tours_pictures_are_hosted_at_the_origin_the_page_policy_admits() -> None:
+    """The shell page admits images from ``ONBOARDING_MEDIA_ORIGIN`` alone beyond its own origin, and the tour's
+    cards hold their pictures' origin as a constant of their own, since the bundle cannot read ``tour.py``; a
+    change to one and not the other would block the pictures with nothing but a blank card to show for it."""
+    tour_cards_ts = Path(__file__).parents[2] / "frontend" / "src" / "model" / "tourCards.ts"
+    source = tour_cards_ts.read_text()
+    declared = re.search(r'const ONBOARDING_MEDIA_BASE_URL = "([^"]+)";', source)
+    assert declared is not None, f"the pictures' origin is no longer declared in {tour_cards_ts}"
+    assert declared.group(1) == ONBOARDING_MEDIA_ORIGIN, (
+        f"the tour's picture origin in {tour_cards_ts} has drifted from tour.py: "
+        f"{declared.group(1)!r} against {ONBOARDING_MEDIA_ORIGIN!r}"
+    )
+    picture_urls = re.findall(r"url: `([^`]+)`", source)
+    assert picture_urls, f"no picture URLs found in {tour_cards_ts}"
+    assert all(url.startswith("${ONBOARDING_MEDIA_BASE_URL}/") for url in picture_urls), picture_urls
+
+
 def test_not_built_placeholder_answers_its_own_poll_cheaply(tmp_path: Path) -> None:
     """The poll reads a header, so HEAD must still carry it -- and nothing else.
 
@@ -920,7 +1199,7 @@ def test_a_move_is_echoed_with_its_report_and_revision_and_a_following_report_mo
     shell = state_of(app).shell
     shell.inventory.reload_registry()
     shell.list_desktops()
-    work = shell.create_desktop("Work", "#123456", 1)
+    work = shell.create_desktop("Work", "#123456", 1, ANONYMOUS_OWNER)
     client_queue = shell.broadcaster.register()
     try:
         first = json.dumps(_moving_report("c1", "home"))
@@ -999,7 +1278,7 @@ def test_a_move_reported_before_its_page_heard_an_ops_move_is_not_recorded_and_i
     shell = state_of(app).shell
     shell.inventory.reload_registry()
     shell.list_desktops()
-    work = shell.create_desktop("Work", "#123456", 1)
+    work = shell.create_desktop("Work", "#123456", 1, ANONYMOUS_OWNER)
     client_queue = shell.broadcaster.register()
     other_queue = shell.broadcaster.register()
     shell.broadcaster.set_client_info(other_queue, "c1", "home")

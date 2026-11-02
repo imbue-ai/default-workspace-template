@@ -4,16 +4,19 @@ import queue
 import re
 import shlex
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 from typing import Final
 
 from app_manifest.content_security_policy import attach_document_policy
+from app_manifest.manifest import describe_validation_error
 from app_manifest.registry import APP_CONTRACT_ROUTE
 from app_manifest.registry import CONTEXT_MENU_ROUTE
 from app_manifest.registry import SHELL_APP_CONTRACT_PATH
 from app_manifest.registry import SHELL_CONTEXT_MENU_PATH
 from app_schema.api_schema import DEFAULT_API_SCHEMA_PATH
 from app_schema.api_schema import register_api_schema_route
+from app_schema.errors import InvalidRequestBodyError
 from app_schema.routes import error_response
 from app_schema.routes import model_response
 from flask import Flask
@@ -27,7 +30,11 @@ from pydantic import ValidationError
 from simple_websocket import ConnectionClosed
 from werkzeug.exceptions import NotFound
 from workspace_layout.errors import InvalidLayoutValueError
+from workspace_layout.identity import participant_key_of
+from workspace_layout.primitives import ParticipantKind
+from workspace_layout.primitives import UserId
 
+from imbue.system_interface.api_models import HeartbeatRequest
 from imbue.system_interface.api_models import HeartbeatResponse
 from imbue.system_interface.api_models import PresenceListing
 from imbue.system_interface.api_models import PresentUserView
@@ -43,6 +50,7 @@ from imbue.system_interface.avatar.status import avatar_status_wire_json
 from imbue.system_interface.documents import FRONTEND_BUILT_HEADER
 from imbue.system_interface.documents import MANIFEST_PATH
 from imbue.system_interface.documents import SHELL_BACKGROUND_COLOR
+from imbue.system_interface.documents import THEME_GALLERY_ROUTE
 from imbue.system_interface.documents import TOUCH_ICON_PATH
 from imbue.system_interface.documents import document_response
 from imbue.system_interface.documents import inject_base_path_meta_tag
@@ -51,10 +59,12 @@ from imbue.system_interface.documents import inject_meta_tag
 from imbue.system_interface.presence import PresenceOutcome
 from imbue.system_interface.presence import PresentUser
 from imbue.system_interface.presence import present_users_wire_json
+from imbue.system_interface.presence import reported_input_moment
 from imbue.system_interface.presence import utc_now
 from imbue.system_interface.request_helpers import handle_unhandled_exception
 from imbue.system_interface.route_table import PRESENCE_HEARTBEAT_PATH
 from imbue.system_interface.route_table import PRESENCE_PATH
+from imbue.system_interface.route_table import ROSTER_ROUTE
 from imbue.system_interface.route_table import SHELL_ROUTE_TABLE
 from imbue.system_interface.shell.data_types import ClientStateReport
 from imbue.system_interface.shell.data_types import PopOutStateReport
@@ -62,9 +72,11 @@ from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
+from imbue.system_interface.shell.route_helpers import IMAGE_CONTENT_SECURITY_POLICY
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.routes import register_shell_routes
 from imbue.system_interface.shell.state import ShellState
+from imbue.system_interface.shell.tour import ONBOARDING_MEDIA_ORIGIN
 from imbue.system_interface.update_staleness import PREVIEW_META_CONTENT
 from imbue.system_interface.update_staleness import PREVIEW_META_TAG
 from imbue.system_interface.update_staleness import UPDATE_STALENESS_META_TAG
@@ -388,7 +400,7 @@ def _index() -> Response:
         html_content = _inject_update_staleness_meta_tag(html_content, staleness)
         html_content = _inject_preview_meta_tag(html_content, state.is_preview)
         return document_response(html_content, is_frontend_built=True)
-    return _frontend_not_built_response()
+    return _frontend_not_built_response(index_path)
 
 
 def render_frontend_not_built_page(terminal_label: str | None) -> str:
@@ -420,8 +432,9 @@ def render_frontend_not_built_page(terminal_label: str | None) -> str:
     )
 
 
-def _frontend_not_built_response() -> Response:
-    """Render the placeholder shown when there is no compiled bundle to serve.
+def _frontend_not_built_response(missing_page: Path) -> Response:
+    """Render the placeholder shown when there is no compiled bundle to serve; ``missing_page`` is the built page
+    the request wanted.
 
     A ``HEAD`` gets the header and nothing else. That is the placeholder's own
     poll asking whether the bundle is back yet -- every ten seconds, for every
@@ -435,10 +448,17 @@ def _frontend_not_built_response() -> Response:
     # Logged with the resolved directory because the usual cause is that the
     # served tree was replaced under a running service, which is otherwise
     # invisible from the supervisor logs.
-    _loguru_logger.warning(
-        "Served the not-built placeholder: no frontend bundle at {}", get_state().static_directory / "index.html"
-    )
+    _loguru_logger.warning("Served the not-built placeholder: no frontend bundle at {}", missing_page)
     return document_response(render_frontend_not_built_page(_terminal_origin_label()), is_frontend_built=False)
+
+
+def _theme_gallery() -> Response:
+    """The theme gallery page (workspace-themes plan section 8.2), a second page of the shell's build."""
+    gallery_path = get_state().static_directory / THEME_GALLERY_FILENAME
+    if not gallery_path.exists():
+        return _frontend_not_built_response(gallery_path)
+    html_content = inject_base_path_meta_tag(gallery_path.read_text(), _root_path())
+    return document_response(html_content, is_frontend_built=True)
 
 
 def _index_catch_all(path: str) -> Response:
@@ -456,6 +476,8 @@ def _health_endpoint() -> Response:
     return model_response(ShellHealthResponse(status="ok", is_frontend_built=is_frontend_built))
 
 
+THEME_GALLERY_FILENAME: Final[str] = "theme-gallery.html"
+
 # Every route the shell answers as JSON lives under it; an unknown path under it is a JSON 404.
 API_PREFIX: Final[str] = "api/"
 
@@ -472,27 +494,90 @@ def _presence_endpoint() -> Response:
     )
 
 
+def _roster_wire_json() -> dict[str, Any]:
+    return get_state().roster.document(utc_now()).model_dump(mode="json")
+
+
 def _broadcast_presence_if_changed(outcome: PresenceOutcome) -> None:
+    """Announce what a heartbeat or a sweep changed: the connected set and the roster when someone came or went,
+    the roster alone when a person's newest input time moved (the multiplayer spec, section 4.3), since every other
+    window reads "Active" or "Idle" off the roster it was last pushed."""
     if outcome.is_membership_changed:
         _shell().broadcaster.broadcast_presence_updated(_present_users_wire_json(outcome.users))
+    if outcome.is_membership_changed or outcome.is_input_changed:
+        get_state().roster_announcer.announce()
+
+
+def _roster_endpoint() -> Response:
+    """Everyone who may be here, in roster order (the multiplayer spec, section 4.2)."""
+    return model_response(get_state().roster.document(utc_now()))
+
+
+# A picture a page's cache may keep for good: its URL carries the version, so a newer picture is a newer URL. Only
+# an answer under the current version is kept so, since a stale page asking under an older one gets these bytes too.
+_VERSIONED_PICTURE_CACHE_CONTROL: Final[str] = "public, max-age=31536000, immutable"
+# The participant keys that name a person, whose id part the profile is kept under.
+_USER_KEY_PREFIX: Final[str] = "user:"
+
+
+def _participant_picture_endpoint(key: str) -> ResponseReturnValue:
+    """A person's profile picture from the shell's own origin (the multiplayer spec, section 4.2): fetched from the
+    profile's URL once and kept, so the pages, whose policy admits no outside image, can show it. 404 for a key that
+    is not a person's the roster lists, or a person with no picture."""
+    now = utc_now()
+    roster = get_state().roster
+    # Only a person the roster lists by account has a picture here: no id a page names is parsed, fetched, or
+    # cached unless the roster built the key from a valid one.
+    is_listed_person = key.startswith(_USER_KEY_PREFIX) and any(
+        str(entry.key) == key and entry.kind == ParticipantKind.PERSON for entry in roster.document(now).participants
+    )
+    if not is_listed_person:
+        return error_response("Only a person listed in the roster has a profile picture here", HTTP_NOT_FOUND)
+    picture = roster.profiles.resolve_picture(UserId(key.removeprefix(_USER_KEY_PREFIX)), now)
+    if picture is None:
+        return error_response("No profile picture", HTTP_NOT_FOUND)
+    response = Response(picture.content, mimetype=picture.media_type)
+    # The bytes are an outside host's, under whatever image type it declared: sent as the shell's own images are.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Content-Security-Policy"] = IMAGE_CONTENT_SECURITY_POLICY
+    is_current_version = request.args.get("v") == picture.version
+    response.headers["Cache-Control"] = _VERSIONED_PICTURE_CACHE_CONTROL if is_current_version else "no-cache"
+    return response
+
+
+def _parse_heartbeat() -> HeartbeatRequest:
+    """The heartbeat's body, read here rather than by ``parse_request_body`` because a page from before the body was
+    sent posts none at all, which is a heartbeat carrying nothing; anything else is refused as the helper refuses it."""
+    if not request.get_data():
+        return HeartbeatRequest()
+    body = request.get_json(force=True, silent=True)
+    if not isinstance(body, dict):
+        raise InvalidRequestBodyError("the request body must be a JSON object")
+    try:
+        return HeartbeatRequest.model_validate(body)
+    except ValidationError as e:
+        raise InvalidRequestBodyError(describe_validation_error(e)) from e
 
 
 def _presence_heartbeat_endpoint() -> Response:
-    """One shell page's heartbeat (no body): record the requester's presence and answer their own identity record.
+    """One shell page's heartbeat: record the requester's presence (the owner of an unshared workspace under the
+    ``owner`` key) and the page's newest input time, and answer their own identity record and participant key.
 
-    Answers 204 and records nothing when the identity carries no user id (an unshared
-    workspace's owner, or a request that came through no current proxy): there is nobody
-    to name, and the page then shows no account.
+    Answers 204 and records nothing for a visiting agent, which never heartbeats: there is no file for one here.
     """
     identity = request_identity()
-    if identity.user_id is None:
+    heartbeat = _parse_heartbeat()
+    if identity.agent_id is not None:
         return Response(status=204)
+    now = utc_now()
     try:
-        outcome = get_state().presence.heartbeat(identity, utc_now())
+        outcome = get_state().presence.heartbeat(
+            identity, now, reported_input_moment(now, heartbeat.input_age_seconds, heartbeat.last_input_at)
+        )
     except (InvalidShellValueError, InvalidLayoutValueError) as e:
         return error_response(str(e), 400)
     _broadcast_presence_if_changed(outcome)
-    return model_response(HeartbeatResponse(identity=identity))
+    return model_response(HeartbeatResponse(identity=identity, participant=participant_key_of(identity)))
 
 
 # The icon sizes the manifest offers: the touch icon's, and the two an installing browser asks a manifest for.
@@ -588,6 +673,7 @@ def _ws_endpoint(websocket: Any) -> None:
         websocket=websocket,
         shell=state.shell,
         initial_presence=_present_users_wire_json(state.presence.connected_users(utc_now())),
+        initial_roster=_roster_wire_json(),
     )
 
 
@@ -721,7 +807,9 @@ def _log_client_switches(
             _loguru_logger.opt(exception=e).warning("Could not log the desktop switch for {}", report.client_id)
 
 
-def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: list[dict[str, Any]]) -> None:
+def _run_ws_broadcast_loop(
+    websocket: Any, shell: ShellState, initial_presence: list[dict[str, Any]], initial_roster: dict[str, Any]
+) -> None:
     """Stream the shell broadcaster's messages to ``websocket`` until the client disconnects.
 
     Each WebSocket connection owns its own thread (flask-sock + the threaded WSGI server), so
@@ -729,9 +817,9 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: 
     closes a half-dead peer, surfacing as ``ConnectionClosed`` from ``send``; the broadcaster
     can also evict a hopelessly-behind client by pushing the shutdown sentinel (``None``).
 
-    The connect sends the inventory, the desktops, and the connected users
-    (``initial_presence``, read by the caller before the loop starts) so a window paints from
-    one snapshot; later changes arrive as broadcasts.
+    The connect sends the inventory, the desktops, the connected users, and the roster
+    (``initial_presence`` and ``initial_roster``, read by the caller before the loop starts) so a window paints
+    from one snapshot; later changes arrive as broadcasts.
 
     Incoming ``client_state`` registrations are drained non-blockingly on each loop iteration.
     """
@@ -763,16 +851,27 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: 
             json.dumps({"type": "update_notice_changed", "notice": notice.wire_json() if notice is not None else None})
         )
         websocket.send(json.dumps({"type": "presence_updated", "users": initial_presence}))
+        websocket.send(json.dumps({"type": "roster_updated", **initial_roster}))
+        # The chats' activity too, when the chat app has reported it: the agent's card lists it from the connect.
+        chats_activity = shell.chats_activity.current()
+        if chats_activity is not None:
+            websocket.send(json.dumps({"type": "chats_activity", **chats_activity.model_dump(mode="json")}))
 
         is_client_registered = False
         shutdown = False
         while not shutdown:
             incoming = websocket.receive(timeout=0)
             while incoming is not None:
-                if _handle_client_state_message(
-                    str(incoming), client_queue, shell, is_first_report=not is_client_registered
+                if (
+                    _handle_client_state_message(
+                        str(incoming), client_queue, shell, is_first_report=not is_client_registered
+                    )
+                    and not is_client_registered
                 ):
                     is_client_registered = True
+                    # A window registering changes which clients are connected (a socket that dropped and came
+                    # back among them), which the tray's viewing ring reads off the clients listing.
+                    ws_broadcaster.broadcast_clients_updated()
                 incoming = websocket.receive(timeout=0)
             try:
                 message = client_queue.get(timeout=1.0)
@@ -794,6 +893,10 @@ def _run_ws_broadcast_loop(websocket: Any, shell: ShellState, initial_presence: 
             disconnect_reason,
         )
         ws_broadcaster.unregister(client_queue)
+        # A registered window going away changes which clients are connected and where, which the tray's
+        # viewing ring reads off the clients listing; a window that never registered was never listed.
+        if client_info is not None:
+            ws_broadcaster.broadcast_clients_updated()
 
 
 APP_DISPLAY_NAME: Final[str] = "Workspace"
@@ -812,7 +915,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     # static assets explicitly below.
     application = Flask(__name__, static_folder=None)
     attach_state(application, state)
-    attach_document_policy(application)
+    attach_document_policy(application, {"img-src": f"'self' data: blob: {ONBOARDING_MEDIA_ORIGIN}"})
     application.register_error_handler(Exception, handle_unhandled_exception)
     sock = build_sock(application)
 
@@ -821,6 +924,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(TOUCH_ICON_PATH, view_func=_touch_icon, methods=["GET"])
     application.add_url_rule(MANIFEST_PATH, view_func=_web_manifest, methods=["GET"])
     application.add_url_rule("/api/health", view_func=_health_endpoint, methods=["GET"])
+    application.add_url_rule(THEME_GALLERY_ROUTE, view_func=_theme_gallery, methods=["GET"])
     register_api_schema_route(
         application,
         DEFAULT_API_SCHEMA_PATH,
@@ -832,6 +936,8 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(CONTEXT_MENU_ROUTE, view_func=_serve_context_menu, methods=["GET"])
     application.add_url_rule(PRESENCE_PATH, view_func=_presence_endpoint, methods=["GET"])
     application.add_url_rule(PRESENCE_HEARTBEAT_PATH, view_func=_presence_heartbeat_endpoint, methods=["POST"])
+    application.add_url_rule(ROSTER_ROUTE, view_func=_roster_endpoint, methods=["GET"])
+    application.add_url_rule(f"{ROSTER_ROUTE}/<key>/picture", view_func=_participant_picture_endpoint, methods=["GET"])
     register_shell_routes(application)
     register_avatar_routes(application)
     sock.route("/api/ws")(_ws_endpoint)

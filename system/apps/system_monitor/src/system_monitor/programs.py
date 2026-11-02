@@ -4,12 +4,12 @@ user built, and the programs supervisord runs."""
 import json
 import re
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
 from oom_priority.meminfo import KIB, PROC, parse_kib_fields
-from oom_priority.registry import is_process_alive, live_pids_by_agent_id
+from oom_priority.registry import live_pids_by_agent_id
 
 MNGR_AGENTS_DIR = Path("/home/user/.mngr/agents")
 APPS_REGISTRY = Path("data/.state/apps.toml")
@@ -220,19 +220,17 @@ def program_names(
     }
 
 
-def agents_by_pid(
-    is_alive: Callable[[int], bool] = is_process_alive,
-) -> dict[int, str]:
+def agents_by_pid(proc: Path = PROC) -> dict[int, str]:
     """pid -> agent id, for every live agent's main process, whatever its harness.
 
     Each agent records its own main-process pid at launch in oom_priority's agent-pid registry
     (codex records both its TUI and its app-server). This is how a chat on claude, codex, or pi
-    is recognised alike. A registered pid that a later, unrelated process has reused counts as
-    that agent's until the next agent launch prunes the registry.
+    is recognised alike. A registered pid counts only while it still names the process that
+    registered it, so a pid a later, unrelated process reused is left out.
     """
     return {
         pid: agent_id
-        for agent_id, pids in live_pids_by_agent_id(is_alive).items()
+        for agent_id, pids in live_pids_by_agent_id(proc).items()
         for pid in pids
     }
 

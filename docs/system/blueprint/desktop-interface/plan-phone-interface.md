@@ -10,7 +10,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 - The phone's own notion of "the window I am looking at" is per client and stored on the server as a short history, so a reload lands where you left off, the windows sheet can order by recency, and agent ops that target the phone know what it shows.
 - The pinned chat window keeps its rules: exactly one, never closed, its avatar in the pill, chats switched inside it from a drawer. Every other window is a full-page view of the app's page with only that page mounted, plus the chat page, which stays mounted because it is the landing page.
 - The desktop layout keeps a single new capability from this work: toasts, which replace every `alert()` the shell shows for a failed operation.
-- Out of the phone: the presence strip, the element-reference menu, pop-out and solo view, the avatar chooser, desktop settings, minimize, and per-window status dots. Agent notifications stay a studio-app feature, and how a phone reaches the workspace is not this plan's concern.
+- Out of the phone: the tray's people, cards, and bubbles, the element-reference menu, pop-out and solo view, the avatar chooser, desktop settings, minimize, and per-window status dots. Agent notifications stay a studio-app feature, and how a phone reaches the workspace is not this plan's concern.
 - In scope beyond the shell: the chat app's phone layout (header, drawer, composer settings button, kebab verbs), a row layout for the file viewer as further patches to the vendored dufs frontend, a key strip and tap-to-raise for the terminal, and correct stream sizing for the browser. Everything lands in one merge; the phases below are for implementation order only.
 
 ## Expected behavior
@@ -23,7 +23,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 ### The bar
 
-- A bottom bar of three controls: home, the pill, plus. It sits above the safe-area inset and stays visible while the soft keyboard is up. Geometry: 64px by 42px controls with a circular press highlight, a 48px pill that flexes between them, 12px of padding above the controls and only the safe-area inset below them (none in a browser tab, where the browser's toolbar sits under the bar).
+- A bottom bar of three controls: home, the pill, plus. It sits above the safe-area inset and steps aside while the soft keyboard is up, so the shown page reaches down to the keyboard. Geometry: 64px by 42px controls with a circular press highlight, a 48px pill that flexes between them, 12px of padding above the controls and only the safe-area inset below them (none in a browser tab, where the browser's toolbar sits under the bar).
 - Home is disabled on the home grid. Tapping it shows the home grid and records "home" as the phone's shown state.
 - The pill shows the shown window's app icon and title, or the avatar and "Chat" for the pinned chat window; on the home grid it shows the workspace name. It carries a count of open windows excluding the pinned chat, and shows none when that is zero. Tapping it opens the windows sheet; long-pressing it opens the shown window's menu.
 - Plus opens the start sheet.
@@ -74,7 +74,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 
 - The update staleness and update notice banners render above the page host as they do above the desktop, with the same buttons. The replaced-desktop notice is not shown on the phone.
 - Toasts are a shell component on both layouts. Every `alert()` the shell shows today becomes a toast; `confirm()` dialogs stay. On the phone a toast sits above the bar.
-- The page carries `viewport-fit=cover`, sizes itself with `100dvh`, respects `env(safe-area-inset-*)`, sets `theme-color`, titles itself with the workspace name, and serves a PNG touch icon rendered from the selected avatar design plus a web manifest, so the home-screen tile is the workspace rather than a screenshot. iOS 26 opens any saved site standalone; the top scroll-edge blur it draws over the status bar cannot be disabled from the page and is accepted.
+- The page carries `viewport-fit=cover` and `maximum-scale=1` (iOS Safari otherwise zooms into any focused field set under 16px, in any app's frame, and stays zoomed; a Safari tab still allows pinch-zoom past the cap, while a home-screen app and Android Chrome do not, which a shell can do without), sizes itself with `100dvh`, respects `env(safe-area-inset-*)`, sets `theme-color`, titles itself with the workspace name, and serves a PNG touch icon rendered from the selected avatar design plus a web manifest, so the home-screen tile is the workspace rather than a screenshot. iOS 26 opens any saved site standalone; the top scroll-edge blur it draws over the status bar cannot be disabled from the page and is accepted.
 
 ### The chat app
 
@@ -111,7 +111,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 - `shell/clients.py`: `_StoredClient.shown_history` (default empty; a version-2 file without it reads as empty, no version bump). `ClientStore.record_shown(client_id, window_id, now)` appends the window, or `"home"` for None, and trims; `client_wire_json` adds `shown_history`. `ClientStore.drop_windows(window_ids)` prunes closed windows from every history, called from the close paths in `shell/state.py` alongside the layout-file drop.
 - `shell/routes.py`: `POST /api/clients/<client_id>/shown` with `{"window_id": "<id>" | null}` (null records `"home"`); `200` the client record; `404` for a window no desktop holds. Loopback is not required: the phone calls it.
 - `shell/desktop_routes.py`: the windows route reads `minimized` from the body into the `WindowOpenRequest` that `ShellState.open_window` places from; the launch route already does. The inventory adds `"workspace_name"` and each client's `shown_history`.
-- `config.py`: `SYSTEM_INTERFACE_WORKSPACE_NAME` (see Decisions for its source); `server.py` `_index` writes it into `<title>` and `apple-mobile-web-app-title`, adds `theme-color`, `viewport-fit=cover`, a `<link rel="apple-touch-icon">` and `<link rel="manifest">`.
+- `config.py`: `SYSTEM_INTERFACE_WORKSPACE_NAME` (see Decisions for its source); `server.py` `_index` writes it into `<title>` and `apple-mobile-web-app-title`, adds `theme-color`, `viewport-fit=cover` and `maximum-scale=1`, a `<link rel="apple-touch-icon">` and `<link rel="manifest">`.
 - `avatar/routes.py`: `GET /api/avatars/<id>/icon.png?size=180` rendering the design's SVG to PNG (library per Decisions); `GET /apple-touch-icon.png` and `GET /manifest.webmanifest` on `server.py` resolving the selected design.
 - Tests beside each module (`clients_test.py`, `routes_test.py`, which holds the desktop routes' tests too): history bounded and pruned on close; `404` for an unknown window; `minimized` on the windows route leaves other clients' layouts without a placement; inventory fields present.
 
@@ -124,7 +124,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 - `pages/livePages.ts`: `LivePagesLayer.setMountPolicy({kind: "all"} | {kind: "shown", windowId, alsoKeep: [pinnedId]})`; hidden pages under the shown policy are destroyed rather than `display: none`.
 - New `views/phone/`: `PhoneLayout.ts` (banners, page host, bar, sheets, menus, toasts), `PhoneBar.ts`, `HomeGrid.ts` (the first desktop's wallpaper, and each app's `appGlyph`), `WindowsSheet.ts`, `StartSheet.ts` (reuses `reducers/launcherRows.ts` and the `LauncherMenu` row rendering, with tap handlers for the text rows), `Sheet.ts` (scrim, grab handle, drag-to-dismiss on its own pointer handlers), `longPress.ts` (a tap that can be held); the window menu is `phoneWindowMenuRows` in `WindowMenu.ts` (Refresh, Share, Quit), and a tile's long-press menu of launch rows is `PhoneLayout.ts`'s. New shared `views/Toast.ts` and a `toasts` field on the store.
 - `views/App.ts`: at the root, `state.modes.isPhone ? m(PhoneLayout, ...) : <desktop tree>`; `SoloView` unchanged. Remove the compact branches: drag and pop-out gating (`App.ts` around lines 393 and 565), title-bar control hiding (`TitleBar.ts` 148 to 152), launcher collapse (`LauncherField.ts` 86 to 98), floating-entry forcing (`desktopState.ts` around 495), `renderedState`'s maximize override.
-- `index.html` (frontend): `viewport-fit=cover`, `100dvh` on the root.
+- `index.html` (frontend): `viewport-fit=cover`, `maximum-scale=1`, `100dvh` on the root.
 - `contracts.md` section 12 gains the phone selectors: `data-phone-bar`, `data-phone-home`, `data-phone-pill`, `data-phone-new`, `data-phone-sheet="windows" | "start"`, `data-phone-window-row="<id>"`, `data-phone-window-close="<id>"`, `data-phone-window-menu="<id>"`, `data-phone-close-all`, `data-phone-app="<app>"`, `data-phone-page-host`, `data-toast`.
 
 ### Chat app (`system/apps/chat/frontend/src/`)

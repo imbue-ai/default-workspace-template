@@ -10,17 +10,24 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GestureListener, GestureSource } from "../gestures/pointerGestures";
 import type { Desktop, DesktopShortcut } from "../model/records";
 import { DesktopStore } from "../store/DesktopStore";
+import { TourController } from "../model/tour";
+import { resetPresenceForTesting, setOwnIdentityForTesting } from "../model/Presence";
 import { FakeDesktopApi, FakeDesktopSocket, offerApps, settle } from "../testing/fakeShell";
+import { FakeTourApi } from "../testing/fakeTour";
 import {
   appRecord,
   desktopRecord,
   launchPathRecord,
   placementRecord,
+  themeCatalog,
   themeMetricsRecord,
+  themeRecord,
   windowRecord,
 } from "../testing/records";
 import { AVATAR_DESIGN_PROMPT } from "./AvatarChooserDialog";
+import { THEME_DESIGN_PROMPT } from "./ThemeChooserDialog";
 import { App } from "./App";
+import { enableThemingPrompt } from "./WindowMenu";
 
 const CLIENT = "client-1";
 const NO_LINK = { desktopId: null, open: null, launch: null };
@@ -35,6 +42,7 @@ const gestures: GestureSource = {
 let api: FakeDesktopApi;
 let socket: FakeDesktopSocket;
 let store: DesktopStore;
+let tour: TourController;
 /** Every link the store opened outside the workspace, by where it went. */
 let openedOutside: string[];
 
@@ -66,11 +74,18 @@ async function mountApp(options: { isDetached?: boolean; soloWindowId?: string }
     outsideLinks: {
       openInEmbedder: (url) => openedOutside.push(`embedder:${url}`),
       openInBrowser: (url) => openedOutside.push(`browser:${url}`),
+      launchInSystemApp: (url) => openedOutside.push(`app:${url}`),
     },
   });
   await store.start(NO_LINK);
   socket.deliver().onAppsUpdated([appRecord("docs")]);
-  mountView(() => m(App, { store, gestures, host: "127.0.0.1:8000", protocol: "http:" }));
+  tour = new TourController({
+    api: new FakeTourApi({ isSeen: true }),
+    highlightChrome: () => undefined,
+    isAutoStartAllowed: () => false,
+    redraw: () => m.redraw(),
+  });
+  mountView(() => m(App, { store, gestures, tour, host: "127.0.0.1:8000", protocol: "http:" }));
 }
 
 beforeEach(async () => {
@@ -79,6 +94,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   unmountViews();
+  resetPresenceForTesting();
   gestureListener = null;
 });
 
@@ -384,17 +400,83 @@ describe("Escape", () => {
     expect(document.querySelector("[data-launcher-overlay]")).toBeNull();
   });
 
-  it("closes a menu opened over the launcher (by keyboard, so the launcher stayed) before the launcher", () => {
+  it("closes a menu opened over the launcher (the backdrop's, by a right-click that leaves the launcher) before the launcher", () => {
     store.openLauncher();
     m.redraw.sync();
-    (document.querySelector("[data-desktops-menu]") as HTMLElement).click();
+    // Cancelable, as a browser's is: the backdrop's handler takes it, so the element menu's document listener
+    // (which yields to a handled event) does not open the element menu over it.
+    (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
+    );
     m.redraw.sync();
-    expect(document.querySelector(".desktops-menu")).not.toBeNull();
+    expect(document.querySelector(".backdrop-menu")).not.toBeNull();
     pressEscape();
-    expect(document.querySelector(".desktops-menu")).toBeNull();
+    expect(document.querySelector(".backdrop-menu")).toBeNull();
     expect(store.isLauncherOpen()).toBe(true);
     pressEscape();
     expect(store.isLauncherOpen()).toBe(false);
+  });
+
+  it("offers the overview on the backdrop's menu except while viewing somebody else's desktop", async () => {
+    setOwnIdentityForTesting({ owner: true, user_id: null, email: null, participant: "owner" });
+    socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("alice", { owner: "user:user-alice-0001" })]);
+    const openBackdropMenu = (): Element | null => {
+      (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
+        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
+      );
+      m.redraw.sync();
+      return document.querySelector('.backdrop-menu [data-menu-row="show-all-desktops"]');
+    };
+    expect(openBackdropMenu()?.getAttribute("aria-disabled")).toBeNull();
+    pressEscape();
+    await store.switchDesktop("alice");
+    m.redraw.sync();
+    expect(openBackdropMenu()?.getAttribute("aria-disabled")).toBe("true");
+    pressEscape();
+  });
+
+  it("draws a viewed desktop on a stage at its owner's size, scaled and centred, in a band of their colour", async () => {
+    setOwnIdentityForTesting({ owner: true, user_id: null, email: null, participant: "owner" });
+    socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("alice", { owner: "user:user-alice-0001" })]);
+    store.setBackdropSize({ width: 1000, height: 800 });
+    m.redraw.sync();
+    const stage = (): HTMLElement => document.querySelector(".desktop-stage") as HTMLElement;
+    const host = document.querySelector(".live-pages") as HTMLElement;
+    expect(stage().hasAttribute("data-viewing-letterbox")).toBe(false);
+    expect([stage().style.width, stage().style.transform]).toEqual(["100%", ""]);
+
+    // Alice's client arranged her desktop on 2000x1000: here it is drawn at half size, centred top to bottom.
+    api.ownerViewport = { width: 2000, height: 1000 };
+    await store.switchDesktop("alice");
+    m.redraw.sync();
+    expect(stage().getAttribute("data-viewing-letterbox")).toBe("0.5");
+    expect([stage().style.width, stage().style.height]).toEqual(["2000px", "1000px"]);
+    expect(stage().style.transform).toBe("translate(0px, 150px) scale(0.5)");
+    expect(stage().style.transformOrigin).toBe("top left");
+    // The pages' host is the same element, on the stage: no page was reloaded by the letterbox.
+    expect(document.querySelector(".live-pages")).toBe(host);
+    expect(stage().contains(host)).toBe(true);
+    // The band around the stage is the backdrop's own ground; the floating entries stay outside the stage.
+    const backdrop = document.querySelector(".backdrop") as HTMLElement;
+    expect(backdrop.getAttribute("style") ?? "").toMatch(/color-mix\(in srgb, \S+ 12%, var\(--c-bg\)\)/);
+    expect(stage().querySelector(".floating-entries, [data-pinned-entry]")).toBeNull();
+
+    // Stop viewing: the stage is the whole backdrop again.
+    await store.stopViewing();
+    m.redraw.sync();
+    expect(stage().hasAttribute("data-viewing-letterbox")).toBe(false);
+    expect([stage().style.width, stage().style.transform]).toEqual(["100%", ""]);
+    expect(document.querySelector(".live-pages")).toBe(host);
+  });
+
+  it("closes the overview before the launcher", () => {
+    store.openLauncher();
+    store.openOverview();
+    m.redraw.sync();
+    expect(document.querySelector("[data-overview]")).not.toBeNull();
+    pressEscape();
+    expect(store.isOverviewOpen()).toBe(false);
+    expect(store.isLauncherOpen()).toBe(true);
   });
 });
 
@@ -446,7 +528,7 @@ describe("the avatar chooser", () => {
     m.redraw.sync();
   }
 
-  it("routes the entry menu's style row and the chooser's Design your own... to the store", async () => {
+  it("routes the entry menu's float row and the chooser's Design your own... to the store", async () => {
     const entry = pinnedEntry();
     openEntryMenuRow(entry, "change-avatar");
     await settle();
@@ -461,9 +543,9 @@ describe("the avatar chooser", () => {
     expect(api.calls).toContain(`reportWindowLocation:home:win-9:${CLIENT}:/?chat=agent-1:`);
     expect(api.calls.some((call) => call.startsWith("openWindow:"))).toBe(false);
 
-    openEntryMenuRow(entry, "style-plain");
+    openEntryMenuRow(entry, "float");
     await settle();
-    expect(api.calls).toContain("setEntryPresentation:client-1:buddy:bar:plain:-");
+    expect(api.calls).toContain("setEntryPresentation:client-1:buddy:floating:avatar:-");
   });
 
   it("opens from the pinned entry's menu, and stays closed when dismissed before the catalog answered", async () => {
@@ -480,6 +562,33 @@ describe("the avatar chooser", () => {
     await settle();
     m.redraw.sync();
     expect(document.querySelector("[data-avatar-chooser]")).toBeNull();
+  });
+});
+
+describe("the window menu's Theming submenu", () => {
+  it("drafts Enable theming into the main chat, not the chat on screen", async () => {
+    offerApps(api, socket, [appRecord("docs", { theming: "unthemed" }), buddy]);
+    api.postLaunchAnswer = "/?chat=agent-1";
+    api.desktops = [
+      desktopRecord("home", {
+        windows: [windowRecord("win-1", "docs", "/a"), windowRecord("win-9", "buddy", "/", { is_pinned: true })],
+      }),
+    ];
+    socket.deliver().onDesktopsUpdated(api.desktops);
+    m.redraw.sync();
+
+    (document.querySelector('[data-window-control="menu"]') as HTMLElement).click();
+    m.redraw.sync();
+    (document.querySelector('[data-menu-row="theme"]') as HTMLElement).click();
+    m.redraw.sync();
+    const enable = document.querySelector('[data-menu-row="theme-enable"]') as HTMLElement;
+    enable.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    enable.click();
+    await settle();
+
+    expect(api.calls).toContain(
+      `launch:home:buddy:draft:${JSON.stringify({ message: enableThemingPrompt("Docs") })}:window:win-9:without-page`,
+    );
   });
 });
 
@@ -542,6 +651,21 @@ describe("the element menu", () => {
     expect(document.body.querySelector(".element-menu")).toBeNull();
   });
 
+  it("ends an overview thumbnail's menu with the reference rows, after its own rename and delete rows", () => {
+    store.openOverview();
+    m.redraw.sync();
+    const thumbnail = document.querySelector('[data-overview-desktop="home"]') as HTMLElement;
+    thumbnail.dispatchEvent(
+      new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 30, clientY: 40 }),
+    );
+    m.redraw.sync();
+    const keys = menuRowKeys();
+    expect(keys.slice(0, 2)).toEqual(["rename", "delete"]);
+    expect(keys.slice(-3)).toEqual(["copy-reference", "explain-element", "modify-element"]);
+    pressEscape();
+    expect(document.body.querySelector('[data-menu-part="menu"]')).toBeNull();
+  });
+
   it("ends a taskbar entry's menu with the reference rows, and drafts the reference through the store", async () => {
     pinnedEntry();
     const entry = document.querySelector('[data-taskbar-entry="win-1"]') as HTMLElement;
@@ -558,6 +682,67 @@ describe("the element menu", () => {
     expect(launch).toContain('\\"data-taskbar-entry\\":\\"win-1\\"');
     expect(launch).toContain('\\"app\\":\\"system_interface\\"');
     expect(launch.endsWith(":window:win-9")).toBe(true);
+  });
+});
+
+/** Open the theme chooser from the backdrop's context menu. */
+function openThemeChooser(): void {
+  (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
+  );
+  m.redraw.sync();
+  const row = document.querySelector('.backdrop-menu [data-menu-row="change-theme"]') as HTMLElement;
+  row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+  row.click();
+  m.redraw.sync();
+}
+
+describe("the theme chooser's Make your own...", () => {
+  it("closes the dialog and drafts the theme prompt into the pinned window's chat", async () => {
+    pinnedEntry();
+    openThemeChooser();
+    (document.querySelector("[data-make-theme]") as HTMLElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-theme-chooser]")).toBeNull();
+    await settle();
+    expect(api.calls).toContain(
+      `launch:home:buddy:draft:${JSON.stringify({ message: THEME_DESIGN_PROMPT })}:window:win-9`,
+    );
+  });
+});
+
+describe("the theme chooser", () => {
+  beforeEach(() => {
+    api.themeCatalog = themeCatalog(themeRecord("paper"), themeRecord("ink"));
+    socket.deliver().onThemesChanged(api.themeCatalog);
+  });
+
+  async function saveTheme(theme: string | null, isWorkspaceDefault: boolean): Promise<void> {
+    openThemeChooser();
+    if (theme !== null) {
+      (document.querySelector(`[data-theme="${theme}"]`) as HTMLButtonElement).click();
+      m.redraw.sync();
+    }
+    if (isWorkspaceDefault) {
+      const asDefault = document.querySelector("[data-theme-as-workspace-default]") as HTMLInputElement;
+      asDefault.checked = true;
+      asDefault.dispatchEvent(new Event("change", { bubbles: true }));
+    }
+    (document.querySelector(".theme-chooser-save") as HTMLButtonElement).click();
+    await settle();
+  }
+
+  const themeCalls = (): string[] => api.calls.filter((call) => /^set(Desktop|Default)Theme/.test(call));
+
+  it("saves a desktop's own theme, a workspace default in its place, and nothing when unchanged", async () => {
+    await saveTheme("paper", false);
+    expect(themeCalls()).toEqual(["setDesktopTheme:home:paper"]);
+
+    await saveTheme("ink", true);
+    expect(themeCalls()).toEqual(["setDesktopTheme:home:paper", "setDefaultTheme:ink", "setDesktopTheme:home:null"]);
+
+    await saveTheme(null, false);
+    expect(themeCalls()).toHaveLength(3);
   });
 });
 

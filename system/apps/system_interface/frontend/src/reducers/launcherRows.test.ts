@@ -7,12 +7,14 @@ import {
   launchPathRecord,
   layoutRecord,
   placementRecord,
+  rosterParticipantRecord,
   windowRecord,
 } from "../testing/records";
 import { desktopStateWithApps } from "../testing/states";
 import { initialDesktopState, reduceDesktopState } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 import {
+  VIEWING_ROW_DISABLED_REASON,
   defaultHighlightIndex,
   isMessageText,
   isRowEnabled,
@@ -63,7 +65,7 @@ function keys(rows: readonly { key: string }[]): string[] {
 describe("the launcher's rows", () => {
   it("with no query lists the launch-path rows (less the free-text ones) and the primary text row, no windows", () => {
     const menu = launcherRowsOf(state(), "");
-    expect(keys(menu.rows)).toEqual(["launch:chatty:root", "launch:terminal:new", "text:chatty:new"]);
+    expect(keys(menu.rows)).toEqual(["launch:chatty:root", "launch:terminal:new", "tour", "text:chatty:new"]);
     expect(menu.launchRows[1].caption).toBe("Terminal");
     expect(menu.launchRows[0].caption).toBeNull();
     // Nothing typed: the primary runs the bare launch path; the secondary has nothing to send, so it is not offered.
@@ -88,6 +90,64 @@ describe("the launcher's rows", () => {
     expect(justBroken.textRows[0].text).toBe("term");
   });
 
+  it("stands every row that opens something down while the window views somebody else's desktop (section 8.3)", () => {
+    const menu = launcherRowsOf(state(), "", { isViewing: true });
+    expect(keys(menu.rows)).toEqual(["launch:chatty:root", "launch:terminal:new", "tour", "text:chatty:new"]);
+    expect(menu.launchRows.map((row) => row.disabledReason)).toEqual([
+      VIEWING_ROW_DISABLED_REASON,
+      VIEWING_ROW_DISABLED_REASON,
+    ]);
+    expect(menu.textRows[0].disabledReason).toBe(VIEWING_ROW_DISABLED_REASON);
+    expect(menu.rows.map(isRowEnabled)).toEqual([false, false, true, false]);
+    // Enter runs nothing that opens: the tour, which opens nothing, is the only row left to it.
+    expect(defaultHighlightIndex(menu.rows)).toBe(2);
+    expect(secondaryTextRow(launcherRowsOf(state(), "hello", { isViewing: true }).rows)).toBeNull();
+    const typed = launcherRowsOf(state(), "term", { isViewing: true });
+    expect(typed.windowRows.map((row) => row.disabledReason)).toEqual([
+      VIEWING_ROW_DISABLED_REASON,
+      VIEWING_ROW_DISABLED_REASON,
+    ]);
+    expect(defaultHighlightIndex(typed.rows)).toBe(-1);
+    // Not viewing, the same rows run as before.
+    const own = launcherRowsOf(state(), "term", { isViewing: false });
+    expect(own.rows.every(isRowEnabled)).toBe(true);
+  });
+
+  it("names the owner of a desktop that is not the viewer's on its window rows (the multiplayer spec, section 8.2)", () => {
+    const viewer = { owner: true, user_id: "user-josh", email: "josh@example.com", participant: "user:user-josh" };
+    const alice = rosterParticipantRecord("user:user-alice", { display_name: "Alice" });
+    const josh = rosterParticipantRecord("user:user-josh", { display_name: "Josh", is_owner: true });
+    const withAlices = reduceDesktopState(state(), {
+      type: "desktops_updated",
+      desktops: [
+        ...state().desktops,
+        desktopRecord("alice", {
+          name: "Alice's desk",
+          owner: alice.key,
+          windows: [windowRecord("win-4", "terminal", "/?session=alice", { title: "alice" })],
+        }),
+        desktopRecord("gone", {
+          owner: "user:user-gone",
+          windows: [windowRecord("win-5", "terminal", "/?session=gone", { title: "gone" })],
+        }),
+      ],
+    });
+    const menu = launcherRowsOf(withAlices, "terminal", { ownership: { roster: [josh, alice], identity: viewer } });
+    expect(menu.windowRows.map((row) => [row.key, row.ownerName])).toEqual([
+      ["window:win-2", null],
+      ["window:win-3", null],
+      ["window:win-4", "Alice"],
+      ["window:win-5", null],
+    ]);
+    // To Alice, the owner's desktops are somebody else's.
+    const toAlice = { owner: false, user_id: "user-alice", email: "alice@example.com", participant: alice.key };
+    expect(
+      launcherRowsOf(withAlices, "terminal", {
+        ownership: { roster: [josh, alice], identity: toAlice },
+      }).windowRows.map((row) => row.ownerName),
+    ).toEqual(["Josh", "Josh", null, null]);
+  });
+
   it("with a query keeps matching launch paths and windows across desktops, and the free-text rows always", () => {
     const menu = launcherRowsOf(state(), "term");
     expect(keys(menu.rows)).toEqual([
@@ -102,6 +162,7 @@ describe("the launcher's rows", () => {
     expect(menu.windowRows[0].isOnActiveDesktop).toBe(true);
     expect(menu.windowRows[1].desktopName).toBe("Work");
     expect(menu.windowRows[1].isOnActiveDesktop).toBe(false);
+    expect(menu.windowRows.map((row) => row.ownerName)).toEqual([null, null]);
     // A desktop's name finds its windows too.
     expect(keys(launcherRowsOf(state(), "work").windowRows)).toEqual(["window:win-3"]);
     expect(menu.textRows.every((row) => row.text === "term" && row.disabledReason === null)).toBe(true);
@@ -135,11 +196,11 @@ describe("the launcher's rows", () => {
 
   it("moves the highlight through the enabled rows, wrapping, from the default when nothing was moved", () => {
     const { rows } = launcherRowsOf(state(), "");
-    expect(rows.map(isRowEnabled)).toEqual([true, true, true]);
+    expect(rows.map(isRowEnabled)).toEqual([true, true, true, true]);
     expect(moveHighlight(rows, -1, 1)).toBe(1);
     expect(moveHighlight(rows, 1, 1)).toBe(2);
-    expect(moveHighlight(rows, 2, 1)).toBe(0);
-    expect(moveHighlight(rows, 0, -1)).toBe(2);
+    expect(moveHighlight(rows, 3, 1)).toBe(0);
+    expect(moveHighlight(rows, 0, -1)).toBe(3);
   });
 
   it("lists nothing but a note when no app is registered", () => {
@@ -147,5 +208,26 @@ describe("the launcher's rows", () => {
     const menu = launcherRowsOf(empty, "");
     expect(menu.rows).toEqual([]);
     expect(defaultHighlightIndex(menu.rows)).toBe(-1);
+  });
+});
+
+describe("the tour row", () => {
+  it("closes the launch-path rows with Show me around, with no query and for its words, and never for a message", () => {
+    const withNoQuery = launcherRowsOf(state(), "");
+    expect(withNoQuery.tourRows).toEqual([{ kind: "tour", key: "tour", label: "Show me around" }]);
+    expect(keys(withNoQuery.rows).indexOf("tour")).toBe(withNoQuery.launchRows.length);
+    expect(keys(launcherRowsOf(state(), "tour").rows)).toContain("tour");
+    expect(launcherRowsOf(state(), "tour").isNoMatch).toBe(false);
+    expect(keys(launcherRowsOf(state(), "show me").tourRows)).toEqual(["tour"]);
+    expect(launcherRowsOf(state(), "terminal").tourRows).toEqual([]);
+    expect(launcherRowsOf(state(), "tour\n").tourRows).toEqual([]);
+    expect(isRowEnabled(withNoQuery.tourRows[0])).toBe(true);
+  });
+
+  it("is left out where the tour is not offered, and its words then match nothing", () => {
+    const withoutTour = launcherRowsOf(state(), "", { isTourOffered: false });
+    expect(withoutTour.tourRows).toEqual([]);
+    expect(keys(withoutTour.rows)).toEqual(["launch:chatty:root", "launch:terminal:new", "text:chatty:new"]);
+    expect(launcherRowsOf(state(), "tour", { isTourOffered: false }).isNoMatch).toBe(true);
   });
 });

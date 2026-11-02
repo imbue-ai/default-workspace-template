@@ -20,6 +20,9 @@
   /* The cast an entry's icon makes, quieter than the one a shortcut makes on the wallpaper: a row of
      these sits an inch apart on a plain surface, where the desktop's is one tile on a photograph. */
   --desk-taskbar-entry-shadow: 0 1px 4px 0 #00000026, 0 1px 1px 0 #00000014;
+  /* The workspace character's body, and the ink of the pool it casts (the avatar part). */
+  --desk-avatar-color: #f50d00;
+  --desk-avatar-shadow-color: #20100a;
   --desk-cell-width: 96px;
   --desk-cell-height: 112px;
   --desk-grid-inset: 16px;
@@ -77,6 +80,23 @@
   /* The menu hangs off the field and lines up with its left edge, so it takes the field's width too:
      a card wider than the thing it belongs to reads as a second thing. */
   --desk-launcher-menu-width: var(--desk-launcher-field-width);
+
+  /* The tray (the multiplayer spec, section 6): how far a stacked picture tucks under the one before it, and the
+     speech bubbles' box. */
+  --desk-tray-stack-overlap: 10px;
+  --desk-bubble-width: 240px;
+  --desk-bubble-radius: 14px;
+
+  /* Desktops (the multiplayer spec, section 8): the overview's tile gap, the strip a tile's title takes above
+     its page, the widest a desktop thumbnail is drawn, and the weight of the outline around a desktop being
+     viewed (the viewed owner's ring in the tray matches it). */
+  --desk-overview-gap: 28px;
+  --desk-overview-tile-title: 28px;
+  --desk-overview-thumbnail-width: 200px;
+  --desk-overview-thumbnail-radius: 8px;
+  --desk-viewing-outline: 5px;
+  /* The gap of the bar's colour between a ringed tray picture and its ring. */
+  --desk-viewing-ring-gap: 2px;
 
   /* The phone layout (plan-phone-interface.md): a bar of home, the pill, and plus above the
      safe-area inset, sheets rising over the page, and the home grid on the wallpaper. */

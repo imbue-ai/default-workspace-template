@@ -1,14 +1,17 @@
 /**
  * The shell's WebSocket (desktop-interface contracts.md section 6), the one socket this window
  * holds. On connect the server sends ``apps_updated``, ``desktops_updated``, ``avatar_status``,
- * ``update_notice_changed``, and ``presence_updated``; the window answers with its ``client_state``
+ * ``update_notice_changed``, ``presence_updated``, and ``roster_updated``; the window answers with its ``client_state``
  * (which client it is, on which desktop) and re-sends it on every switch, as a move of the client or, when
  * it only followed the client's stored desktop, as a following report that moves nothing; a pulled-out window's
  * page answers with a pop-out's ``client_state`` instead, naming its client and no desktop. ``placements_updated``,
  * ``active_desktop_changed``, ``client_entries_changed``, and the transient ``layout_op`` are how this
  * client's other windows, the shell's own edits, and an agent's ops reach this one; ``avatar_status`` and
  * ``avatar_selection_changed`` are how the workspace's avatar reaches every window, ``update_notice_changed``
- * how the update notice does, and ``presence_updated`` is who is connected to the workspace.
+ * how the update notice does, ``presence_updated`` is who is connected to the workspace, ``roster_updated`` everyone
+ * who may be, ``clients_updated`` that a client left (its socket closed or its record was pruned), ``chats_activity``
+ * what every chat is doing, and ``bubble`` what somebody just said (the multiplayer spec, sections 4.2, 6.4, 6.5,
+ * and 8.3).
  */
 
 import { wsUrl } from "@imbue/workspace-ui/src/base-path";
@@ -18,19 +21,26 @@ import {
   parseAppRecords,
   parseAvatarSelectionChanged,
   parseAvatarStatus,
+  parseBubble,
+  parseChatsActivity,
   parseDesktops,
   parseEntries,
   parsePresentUsers,
+  parseRoster,
   parseUpdateNoticeChanged,
 } from "../model/records";
 import type {
   AppRecord,
   AvatarStatus,
+  BubbleWire,
+  ChatActivity,
   Desktop,
   EntryPresentation,
   PresentUser,
+  RosterParticipant,
   UpdateNoticeWire,
 } from "../model/records";
+import { parseThemeCatalog, type ThemeCatalog } from "../model/themes";
 
 /** The ops that reach the browser as messages: the transient ones, and those that put a window on this client's
  *  screen (applied to the files too; a phone shows the window, and a desktop acts only on a ``show`` of a
@@ -91,9 +101,20 @@ export interface SocketHandlers {
   onAvatarSelectionChanged(design: string): void;
   /** The update notice as the shell now holds it, null once the record is cleared. */
   onUpdateNoticeChanged(notice: UpdateNoticeWire | null): void;
+  /** The workspace's themes or its default theme changed (workspace-themes plan section 5.2). */
+  onThemesChanged(catalog: ThemeCatalog): void;
   onLayoutOp(event: LayoutOpEvent): void;
   /** The connected users, one entry per user, on connect and whenever someone joins or leaves. */
   onPresenceUpdated(users: PresentUser[]): void;
+  /** The roster (the multiplayer spec, section 4.2), on connect and whenever presence or a grants file changed. */
+  onRosterUpdated(participants: RosterParticipant[]): void;
+  /** A client's socket closed or its record was pruned (the multiplayer spec, section 8.3): the clients listing
+   *  has changed and is worth reading again. */
+  onClientsUpdated(): void;
+  /** What every chat is doing, as the chat app last reported it (the multiplayer spec, section 6.4). */
+  onChatsActivity(chats: ChatActivity[]): void;
+  /** Somebody just said something (the multiplayer spec, section 6.5). */
+  onBubble(bubble: BubbleWire): void;
   /** The socket (re)opened: the client state is re-reported through ``reportClientState``. */
   onConnected(): void;
 }
@@ -113,6 +134,8 @@ interface RawSocketEvent {
   apps?: unknown;
   desktops?: unknown;
   users?: unknown;
+  participants?: unknown;
+  chats?: unknown;
   op?: unknown;
   args?: unknown;
   requester?: unknown;
@@ -121,6 +144,7 @@ interface RawSocketEvent {
   client_id?: unknown;
   save_id?: unknown;
   entries?: unknown;
+  catalog?: unknown;
   revision?: unknown;
   report_id?: unknown;
 }
@@ -212,6 +236,18 @@ export class ShellSocket implements DesktopSocket {
       case "presence_updated":
         handlers.onPresenceUpdated(parsePresentUsers(event.users));
         return;
+      case "roster_updated":
+        handlers.onRosterUpdated(parseRoster(event.participants));
+        return;
+      case "clients_updated":
+        handlers.onClientsUpdated();
+        return;
+      case "chats_activity":
+        handlers.onChatsActivity(parseChatsActivity(event.chats));
+        return;
+      case "bubble":
+        handlers.onBubble(parseBubble(event));
+        return;
       case "placements_updated":
         handlers.onPlacementsUpdated({
           desktopId: String(event.desktop_id ?? ""),
@@ -241,6 +277,9 @@ export class ShellSocket implements DesktopSocket {
         return;
       case "update_notice_changed":
         handlers.onUpdateNoticeChanged(parseUpdateNoticeChanged(event));
+        return;
+      case "themes_changed":
+        handlers.onThemesChanged(parseThemeCatalog(event.catalog));
         return;
       case "layout_op": {
         // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app,

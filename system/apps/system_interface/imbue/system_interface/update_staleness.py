@@ -46,7 +46,7 @@ logger = _loguru_logger
 WORKSPACE_ROOT_DIRECTORY = Path(__file__).resolve().parents[5]
 
 # The update apply's in-flight marker (see
-# ``.agents/skills/update-self/scripts/update_apply_contract.py``): present exactly while
+# ``.agents/skills/update-self/python/update_self_skill/update_apply_contract.py``): present exactly while
 # an apply is mid-motion or was interrupted before recovery.
 UPDATE_APPLY_MARKER_REL = "data/.state/update-apply/marker.json"
 # The apply's emergency record: written when a rollback could not put a healthy
@@ -100,27 +100,31 @@ _IMPORTED_SOURCE_PREFIXES = (
     "system/libs/app_manifest/",
     "system/libs/app_schema/",
     "system/libs/chat_background_tasks/",
+    "system/libs/share_grants/",
     "system/libs/workspace_layout/",
+    "system/libs/workspace_themes/",
 )
 # The manifests this environment was resolved from. The root ``uv.lock`` is
-# deliberately absent: scaffolding an app relocks it (``uv sync
-# --all-packages``, so the root lockfile learns the new workspace member),
-# which moves nothing this process resolved but would raise the banner on every
-# app a user builds. The root ``pyproject.toml`` stays -- the scaffold no
-# longer edits it, since the ``system/apps/*`` member glob picks a new package
-# up, so it still catches a ``[tool.uv.sources]`` re-point or a
-# ``[tool.uv.workspace]`` members/exclude edit. That leaves this list a
-# deliberate narrowing away from the apply's ``_is_backend_manifest`` in
-# ``.agents/skills/update-self/scripts/update_classification.py``, which it
-# otherwise mirrors: over-counting costs the apply one extra reinstall, and
-# costs this banner the trust it only gets to spend once.
+# deliberately absent: a user skill's dependency change relocks it (skills share
+# the root workspace), which would raise the banner on every such edit though it
+# rarely moves what this process resolved. The root ``pyproject.toml`` stays --
+# nothing the user builds edits it (a user app, service or lib is a standalone
+# project, never a root member), so it still catches a ``[tool.uv.sources]``
+# re-point or a ``[tool.uv.workspace]`` members edit. That leaves this list a
+# deliberate narrowing away from the apply's ``_is_backend_manifest`` and
+# ``_is_app_pyproject`` in
+# ``.agents/skills/update-self/python/update_self_skill/update_classification.py``, which it
+# otherwise mirrors: over-counting costs the apply one extra environment
+# refresh, and costs this banner the trust it only gets to spend once.
 _BACKEND_MANIFESTS = frozenset(
     {
         "system/apps/system_interface/pyproject.toml",
         "system/libs/app_manifest/pyproject.toml",
         "system/libs/app_schema/pyproject.toml",
         "system/libs/chat_background_tasks/pyproject.toml",
+        "system/libs/share_grants/pyproject.toml",
         "system/libs/workspace_layout/pyproject.toml",
+        "system/libs/workspace_themes/pyproject.toml",
         "pyproject.toml",
     }
 )

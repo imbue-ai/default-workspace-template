@@ -45,7 +45,14 @@
      Warmth comes from the surface underneath, not the tint. */
   --c-fill-hover: rgb(0 0 0 / 0.07);
   --c-fill-active: rgb(0 0 0 / 0.11);
-  --c-bg-user-bubble: #ededed;
+  /* One step fainter than hover, for a hover that has to read lighter than a selection drawn with
+     --c-bubble-other (the chat list's rows). */
+  --c-fill-faint: rgb(0 0 0 / 0.03);
+  /* The viewer's own chat bubble: a green tint, so your own words read apart from everyone else's. */
+  --c-bg-user-bubble: rgb(20 174 92 / 0.11);
+  /* A bubble that is not yours (another person's or the agent's), and the chat list's selected row:
+     one grey for everything said by someone else and for where you are. */
+  --c-bubble-other: rgb(0 0 0 / 0.05);
   --c-bg-composer: #ffffff;
   --c-bg-chat: #ffffff;
   --c-bg-code: #f0f0f0;
@@ -126,6 +133,9 @@
      full width, which read as a wall rather than as the other side of a
      conversation. */
   --width-agent-gutter: 60px;
+  /* Elevation values, behind --shadow-raised / --shadow-overlay (see @theme below). */
+  --c-shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
+  --c-shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);
 }
 
 /* The colour-utility layer: clean semantic names over the --c-* values,
@@ -149,13 +159,15 @@
   --color-composer: var(--c-bg-composer);
   --color-code: var(--c-bg-code);
   --color-user-bubble: var(--c-bg-user-bubble);
+  --color-bubble-other: var(--c-bubble-other);
   --color-surface: var(--c-surface);
   --color-surface-secondary: var(--c-surface-secondary);
   --color-inverse: var(--c-inverse-surface);
   --color-inverse-hover: var(--c-inverse-surface-hover);
-  /* fills: bg-fill-hover / bg-fill-active (control state tints) */
+  /* fills: bg-fill-hover / bg-fill-active / bg-fill-faint (control state tints) */
   --color-fill-hover: var(--c-fill-hover);
   --color-fill-active: var(--c-fill-active);
+  --color-fill-faint: var(--c-fill-faint);
   /* progress-timeline bullets: text-step-done / text-step-pending */
   --color-step-done: var(--c-step-done);
   --color-step-pending: var(--c-step-pending);
@@ -183,6 +195,9 @@
      --font-mono re-bases the font-mono utility onto the workspace's mono stack. */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   --font-mono: "SF Mono", "Cascadia Code", ui-monospace, monospace;
+  /* The display face: headings, section labels, and the type a theme gives its titles, buttons, and
+     menus (a theme's token, docs/system/blueprint/workspace-themes/). The standard look sets it in the body face. */
+  --font-display: var(--font-sans);
   /* Spacing — one knob: Tailwind's stock 0.25rem `--spacing` base. The
      `p-N`/`m-N`/`gap-N`/`w-N` utilities generate from it, and hand-written CSS
      references the same scale via the `--spacing(N)` function (e.g.
@@ -204,9 +219,11 @@
   /* Elevation -- two box-shadow steps. --shadow-raised is the subtle resting
      lift on interactive cards; --shadow-overlay is the one soft floating
      shadow shared by everything above the page -- menus, pickers, modals,
-     tooltips, the lightbox. */
-  --shadow-raised: 0 1px 3px 0 rgba(0, 0, 0, 0.1), 0 1px 2px -1px rgba(0, 0, 0, 0.1);
-  --shadow-overlay: 0 0 2px 0 rgba(0, 0, 0, 0.08), 0 3px 8px 2px rgba(0, 0, 0, 0.08);
+     tooltips, the lightbox. Tailwind copies a shadow token's value into its
+     utility, so the values live in --c-shadow-* (the value layer) and these
+     point at them, which lets a workspace theme (docs/system/blueprint/workspace-themes/) redeclare them at runtime. */
+  --shadow-raised: var(--c-shadow-raised);
+  --shadow-overlay: var(--c-shadow-overlay);
 }
 
 /* Font family comes from the preflight default (re-based onto --font-sans above). */
@@ -230,11 +247,13 @@ body {
  * used on interactive controls (buttons/tabs) — that treatment comes with the
  * Button/Tab primitive. */
 @utility type-heading-lg {
+  font-family: var(--font-display);
   font-size: var(--font-size-heading-lg);
   font-weight: var(--weight-bold);
   line-height: 1.25;
 }
 @utility type-heading {
+  font-family: var(--font-display);
   font-size: var(--font-size-heading);
   font-weight: var(--weight-semibold);
   line-height: 1.3;
@@ -260,6 +279,7 @@ body {
   line-height: 1;
 }
 @utility type-section {
+  font-family: var(--font-display);
   font-size: var(--font-size-helper);
   font-weight: var(--weight-semibold);
   line-height: 1.3;

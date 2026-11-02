@@ -164,8 +164,11 @@ path). A window of the app already at that path is focused rather than
 duplicated; pass `--if-present new` to open another. The window lands on the
 target client's active desktop (or `--desktop`), on top of that client's stack.
 
-Some paths worth knowing: your own chat is `open chat --path
-"/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}"`; a folder is `open files --path
+Some paths worth knowing: your own chat is `show chat --path
+"/?chat=${MINDS_CHAT_ID:-$MNGR_AGENT_ID}" --showing
+"/${MINDS_CHAT_ID:-$MNGR_AGENT_ID}" --repoint /`, which shows it in the chat's
+pinned window (an `open` at that path would open a second chat window, since the
+pinned window stays at `/`); a folder is `open files --path
 /home/user/workspace/data/notes/` (the Files app serves the filesystem root
 and opens at the workspace folder, so the path is absolute; the `path` launch
 parameter, `open files --param path=/home/user/workspace/data/notes/`, lands in
@@ -243,10 +246,13 @@ included, so to look at another desktop's shortcuts without moving anyone, read 
 off `desktops`, which lists every desktop's shortcuts.
 
 `shortcut set` refuses an app or launch path the registry does not declare.
-Creating, renaming, or deleting a *desktop itself* has no `workspace-layout`
-subcommand: it is the taskbar's desktop menu, or the shell's REST routes
-(`POST /api/desktops`, `POST /api/desktops/<id>/settings`, `POST
-/api/desktops/<id>/delete`), which the `system_interface` README documents.
+Creating, renaming, reordering, or deleting a *desktop itself* has no
+`workspace-layout` subcommand: it is the taskbar's overview (the four-squares
+button) or the backdrop's context menu, or the shell's REST routes
+(`POST /api/desktops` with `{"name"}`, `POST /api/desktops/<id>/settings` with
+`{"name"}`, `POST /api/desktops/order`, `POST /api/desktops/<id>/delete`), which
+the `system_interface` README documents. A desktop created through the route
+by a visitor is theirs (its `owner`); the owner's carry none.
 
 ## Inspecting state
 
@@ -281,7 +287,7 @@ the app's own to name, stop, or end:
 | End a chat | the chat's own destroy route; closing a chat window ends nothing |
 | End a terminal | `close` its last window: the terminal deletes a session no window shows |
 | End the browser | it runs on the Screen until the user quits it from inside, `POST /browsers/<name>/stop` ends it (profile and tabs kept), or the Screen is quit; closing the Screen's window ends nothing |
-| Open another chat | the chat root page (`open chat`), or `open chat --path "/?chat=<id>"` |
+| Open another chat | the chat root page (`open chat`), or `show chat --path "/?chat=<id>" --showing "/<id>" --repoint /` to show it in the pinned chat window |
 | Drive the Screen (the workspace's one streamed Linux desktop, the `screen` app) | the `screen` command (`uv run --no-sync screen run|windows|activate|shot|control ...`), never the layout ops: its window shows the desktop, and `open screen` is one window of it; the stack never stops when its window closes |
 
 `workspace-layout` refuses the old tabbed-shell verbs (`split`, `move`, `rename`,

@@ -222,7 +222,8 @@ It announces the choice on its own WebSocket (section 10.2), and every viewer se
 
 ### 8.2 Visibility
 
-A viewer is visible when its document is not hidden, the shell said `shown` (or never said `hidden`), and its stage intersects the viewport (an IntersectionObserver); it re-evaluates on `visibilitychange`, on the shell's messages, on intersection changes, and every 1.5 seconds.
+A viewer is visible when its document is not hidden, the shell said `shown` (or never said `hidden`), its stage intersects the viewport (an IntersectionObserver), and its stage has a size (read every 1.5 seconds by a belt that both clears and restores that one input, so a frame the observer missed never leaves the viewer hidden for good); it re-evaluates on `visibilitychange`, on the shell's messages, on intersection changes, and on every belt reading.
+Asking is the stream's to finish: it fetches `connect-info` itself, ignores the answer of a fetch a later request or a release superseded, and tries a failed fetch again after a moment, so a viewer that asked once is served or released, never left waiting.
 Hidden for 5 seconds: `signal/close` (the WebSocket stays, the lease is untouched).
 Visible again: `signal/request`.
 Neko stops the encoder when the last session has closed its media, which is D10's zero-cost state.
@@ -321,6 +322,7 @@ A page in the `workspace_ui` npm workspace, built into the service's static outp
 It imports the app contract and connects with `capabilities: {navigation: false, closeChord: true}`; its location report is `/` with the title from `state`; `onCloseRequest` sends Ctrl+W to the remote as a key chord rather than closing the window.
 It speaks neko's events directly (section 2.3) for signaling, input, cursors, clipboard and screen updates, and the service's `/api/ws` for everything else.
 Keys are mapped from `KeyboardEvent.code` to X keysyms with neko's own table, copied under its Apache-2.0 notice into `system/libs/workspace_ui`.
+They are read from a hidden text input inside the stage, which takes the focus the stage is given: a browser extension that binds letters as commands (Vimium and its kin) stands down for an editable element and for nothing else, so keys typed at the stage itself never reached the Screen.
 Input is sent only while this viewer's session is the controller and the viewer is visible.
 Neko's constrained-baseline H.264 decodes natively over WebRTC in every browser Studio supports, so the viewer needs no WebCodecs and nothing of the browser app's decoding path.
 

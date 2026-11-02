@@ -16,6 +16,8 @@ import pytest
 from app_manifest.primitives import AppName
 from app_manifest.primitives import LaunchPathId
 from pydantic import ValidationError
+from workspace_layout.identity import ANONYMOUS_OWNER
+from workspace_layout.identity import RequestIdentity
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
 from workspace_layout.primitives import UserId
@@ -26,6 +28,9 @@ from workspace_layout.records import Desktop
 from workspace_layout.records import DesktopShortcut
 from workspace_layout.records import StoredWindowPath
 from workspace_layout.windows import WindowClosedHint
+from workspace_themes.contract import WORKSPACE_THEMES_DIRECTORY
+from workspace_themes.testing import write_standard_theme
+from workspace_themes.testing import write_test_theme
 
 from imbue.imbue_common.model_update import to_update
 from imbue.mngr.utils.polling import wait_for
@@ -39,7 +44,6 @@ from imbue.system_interface.shell.desktop_document import seed_desktop_shortcuts
 from imbue.system_interface.shell.desktops import DEFAULT_SHORTCUTS_OFFERED_FILENAME
 from imbue.system_interface.shell.desktops import default_desktop
 from imbue.system_interface.shell.errors import LaunchUnavailableError
-from imbue.system_interface.shell.identity import RequestIdentity
 from imbue.system_interface.shell.inventory import AppInventory
 from imbue.system_interface.shell.launches import LaunchPost
 from imbue.system_interface.shell.launches import LaunchPostOutcome
@@ -112,6 +116,37 @@ def test_start_prunes_stale_clients_and_their_layouts_now_and_on_the_interval(
             poll_interval=0.02,
             error_message="the periodic prune never took the stale client",
         )
+    finally:
+        shell.stop()
+
+
+@pytest.mark.timeout(30)
+def test_a_theme_made_while_the_shell_runs_reaches_every_window(
+    tmp_path: Path, broadcaster: WebSocketBroadcaster
+) -> None:
+    registry_path = write_two_app_registry(tmp_path)
+    repo_root = tmp_path / "repo"
+    write_standard_theme(repo_root)
+    shell = build_shell_state(
+        tmp_path / "state",
+        registry_path,
+        broadcaster,
+        inventory=build_inventory(registry_path, broadcaster),
+        repo_root=repo_root,
+    )
+    window = broadcaster.register()
+    heard: list[str] = []
+
+    def has_heard_of_paper() -> bool:
+        for message in drain_messages(window):
+            if message["type"] == "themes_changed":
+                heard.extend(theme["id"] for theme in message["catalog"]["themes"])
+        return "paper" in heard
+
+    shell.start()
+    try:
+        write_test_theme(repo_root / WORKSPACE_THEMES_DIRECTORY, "paper", "")
+        wait_for(has_heard_of_paper, timeout=10.0, poll_interval=0.05, error_message="no window heard of the theme")
     finally:
         shell.stop()
 
@@ -316,7 +351,7 @@ def test_deleting_a_desktop_tells_the_apps_of_every_window_it_held(
     hints: list[WindowClosedHintPost] = []
     shell = _shell_recording_hints(tmp_path, broadcaster, hints)
     shell.list_desktops()
-    work = shell.desktops.create_desktop("Work", "#123456", 1, (), ())
+    work = shell.desktops.create_desktop("Work", "#123456", 1, (), (), None)
     first = _open(shell, work.id, "terminal", "/?session=terminal-1")
     second = _open(shell, work.id, "terminal", "/?session=terminal-2")
     _open(shell, work.id, "files", "/")
@@ -566,7 +601,7 @@ def test_a_desktop_created_before_a_late_app_was_reconciled_leaves_it_offered_on
     desktops: creating a desktop, which records the chat as offered, first adds it to the desktops already there."""
     reading = _shell_restarted_after_the_chat_registered(tmp_path, broadcaster)
 
-    work = reading.create_desktop("Work", "#123456", 1)
+    work = reading.create_desktop("Work", "#123456", 1, ANONYMOUS_OWNER)
 
     stored_home, stored_work = reading.desktops.list_desktops()
     assert shortcut_apps_on(stored_home) == BUILTIN_SHORTCUT_APPS_WITH_CHAT

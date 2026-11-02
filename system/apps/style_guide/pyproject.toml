@@ -1,0 +1,59 @@
+[project]
+name = "style-guide-app"
+version = "0.1.0"
+description = "The Style Guide app: every color, type role and shared control of the workspace's design system, drawn live from the shared library"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "app-manifest",
+    "app-schema",
+    "flask>=3.0",
+    "imbue-common",
+    "loguru>=0.7",
+    "pydantic>=2.0",
+    "werkzeug>=3.0",
+    # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
+    "workspace-themes",
+]
+
+[dependency-groups]
+dev = [
+    "app-schema[testing]",
+    "pytest>=9.0",
+    "pytest-timeout>=2.3.0",
+    "inline-snapshot>=0.13",
+    "ruff~=0.12.8",
+    # Used by test_no_type_errors in the ratchets, pinned to the version the shell and chat use.
+    "ty==0.0.85",
+]
+
+[project.scripts]
+style-guide-app = "style_guide_app.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build]
+artifacts = [
+    "src/style_guide_app/static/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/style_guide_app"]
+
+[tool.ruff]
+line-length = 119
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I", "UP006", "UP007"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+force-single-line = true
+case-sensitive = true
+order-by-type = false
+known-first-party = ["style_guide_app", "workspace_themes", "imbue", "app_manifest", "app_schema"]
+
+# Makes this directory ty's project; without a [tool.ty] table ty keeps searching upward.
+[tool.ty]

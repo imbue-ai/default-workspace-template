@@ -10,6 +10,8 @@
 
 import { appIconMarkupForApp } from "./components/appIcon";
 import type { AppRecord, Frame } from "../model/records";
+import { partAttrs, partAttrsMarkup } from "@imbue/workspace-ui/src/themes/parts";
+import { themedIconFor, type IconSource, type ThemedIcon } from "./themeIcons";
 
 const XMLNS = "http://www.w3.org/2000/svg";
 
@@ -33,6 +35,8 @@ const GLYPH_PATHS = {
     '<circle cx="12" cy="19" r="2" fill="currentColor" stroke="none"/>',
   plus: '<path d="M12 5v14"/><path d="M5 12h14"/>',
   home: '<path d="M3 11l9-8 9 8"/><path d="M5 10v10h14V10"/>',
+  // Lucide's message-circle: the speech balloon of the title bar's "Chat about this app".
+  balloon: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22Z"/>',
   app: '<rect x="3" y="4" width="18" height="16" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/>',
 } as const;
 
@@ -66,7 +70,32 @@ export function zoneGlyph(frame: Frame, size: number): string {
   );
 }
 
-/** The glyph an app wears everywhere: its own icon, its monogram, or the generic app glyph. */
+/** The glyph an app wears everywhere: its own icon (or its monogram, or the generic app glyph), or under a theme
+ *  the icon the theme draws for it (`themeIcons.ts`). Either way it is the contract's `app-icon` part, saying which
+ *  kind of icon it is. */
 export function appGlyph(app: Pick<AppRecord, "name" | "icon"> | undefined, size: number): string {
-  return appIconMarkupForApp(app, size, glyph("app", size));
+  const standardAt = (pixels: number): string => appIconMarkupForApp(app, pixels, glyph("app", pixels));
+  const themed = themedIconFor(app?.name ?? "app", standardAt);
+  if (themed === null) return standardAt(size).replace(/^<svg\b/, `<svg ${iconPartMarkup("standard")}`);
+  return themedIconMarkup(themed, size);
+}
+
+/** The `app-icon` part's attributes, saying where the icon came from, as markup. */
+function iconPartMarkup(source: IconSource): string {
+  return partAttrsMarkup({ ...partAttrs("app-icon"), "data-icon-source": source });
+}
+
+/** Text written into a double-quoted attribute of markup the page trusts. */
+function attributeText(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/** A theme's icon (served by the shell itself, or derived in this page) as the svg every icon slot sizes. */
+function themedIconMarkup(icon: ThemedIcon, size: number): string {
+  const rendering = icon.isPixelated ? ' style="image-rendering: pixelated"' : "";
+  return (
+    `<svg xmlns="${XMLNS}" ${iconPartMarkup(icon.source)} width="${size}" ` +
+    `height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">` +
+    `<image href="${attributeText(icon.url)}" width="${size}" height="${size}"${rendering}/></svg>`
+  );
 }

@@ -7,14 +7,16 @@
  * empty transcript (a message typed now is held until the agent lands); failed, it shows the
  * reason and a way to try again over the composer, so a message held through the failure is
  * back in it where it can be seen. The transcript takes over when creation completes. A
- * seeded chat (the Imbue Studio app's onboarding conversation, continued here) has a transcript from
+ * seeded chat (one opened on turns written before any agent joined it) has a transcript from
  * the start, so it renders as one through its wait for the first send and its create; only a
  * failed create shows the provisional screen.
  *
  * In the phone layout (``isCompact``) the model menu opens from a settings button at the
  * composer's left rather than the chip in the under-bar, and carries the Source view switch as
- * one of its rows; the under-bar keeps the connecting and fast-mode notices, and the switch while
- * the terminal face is up, since the composer and its button turn over with the chat face.
+ * one of its rows; the under-bar keeps the fast-mode notice, and the switch while the terminal
+ * face is up, since the composer and its button turn over with the chat face. What the agent is
+ * doing -- a send on its way or connecting, a turn running, closing or done -- is one status row
+ * at the end of the transcript, where the reply appears.
  */
 
 import m from "mithril";
@@ -30,21 +32,27 @@ import {
   getEventsForChat,
   getEventCount,
   getFirstOffset,
+  getLastEventId,
   getRenderVersion,
   getTotalEventCount,
+  hasMoreAfter,
   isConversationNotFound,
   noteLoadedArrivals,
   removeMessageSentListener,
+  type ToolResultEvent,
 } from "../models/Response";
 import type { FillAction } from "../models/transcriptScroll/fillPlanner";
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
 import { TranscriptScrollbar } from "./TranscriptScrollbar";
 import { connectToStream, disconnectFromStream, loadSnapshotWithStream } from "../models/StreamingMessage";
+import { shownReplyDraft } from "../models/ReplyDrafts";
+import { renderAssistantMessage } from "./message-renderers";
 import {
   addChatsUpdatedListener,
   getChatById,
   getProvisionalChat,
   hasReceivedChatList,
+  isRoomChat,
   launchChat,
   removeChatsUpdatedListener,
 } from "../models/Chats";
@@ -58,22 +66,25 @@ import { EmptySlot } from "./EmptySlot";
 import { uploadFilesToComposer } from "../models/ComposerAttachments";
 import { MessageInput } from "./MessageInput";
 import { ModelProviderMenu } from "./ModelProviderMenu";
-import { ConnectingIndicator } from "./ConnectingIndicator";
 import { AgentTerminalPanel } from "./AgentTerminalPanel";
 import { chatFlipCard } from "./chat-flip";
 import { TerminalViewToggle } from "./TerminalViewToggle";
-import { buildAgentTerminalUrl, getTerminalUrl } from "../models/Chats";
+import { buildAgentTerminalUrl } from "../models/Chats";
+import { getShellHandshake } from "../shell";
 import {
   buildConversationRows,
   MESSAGE_LIST_CLASS,
   renderTranscriptSegments,
   type RowDescriptor,
 } from "./conversation-rows";
-import { ActivityIndicator } from "./ActivityIndicator";
+import { ActivityIndicator, turnStatusPlacement } from "./ActivityIndicator";
+import { TurnDoneMark } from "./TurnDoneMark";
+import type { TranscriptEvent } from "../models/Response";
+import { getResentSendsVersion, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
 import { renderOutgoingMessages } from "./OutgoingMessageView";
-import { renderHeldSends } from "./HeldSendView";
+import { renderHeldSends, renderProvisionalHeldSends } from "./HeldSendView";
 import { HandoffFailedNotice } from "./HandoffFailedNotice";
 import { renderHandoffTailNode } from "./handoff-node";
 import { SwitchDialog } from "./SwitchDialog";
@@ -83,6 +94,12 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 
 // The terminal output a page shows in place of a transcript: what mngr printed when a create
 // failed, or the tmux screen of an agent with no session. Shared so the two read the same.
+// The one quiet line an empty conversation shows while its chat starts, and once it is up.
+const STARTING_STATUS = "Starting your chat…";
+const READY_STATUS = "Your chat is ready.";
+const EMPTY_CONVERSATION_STATUS_CLASS =
+  "message-list-status pointer-events-none absolute inset-x-0 top-1/3 text-center text-sm text-secondary";
+
 const TERMINAL_OUTPUT_CLASS =
   "text-sm bg-gray-900 text-gray-100 p-4 rounded-lg overflow-auto w-full max-h-96 font-mono";
 
@@ -91,15 +108,11 @@ function getChatTerminalUrl(chatId: string): string {
   // the first trailing arg becomes $0 (not $1). ``buildAgentTerminalUrl``
   // emits ``arg=_&arg=agent&arg=<name>`` so the dispatch lands ``agent`` in
   // ``$1`` and the name in ``$2``, mirroring the workdir deep-link pattern.
-  // When the agent isn't in the local cache yet, fall back to the bare
-  // base URL and let agent.sh attach to the ambient session.
+  // When the agent isn't in the local cache yet, the name is empty and
+  // agent.sh attaches to the ambient session. A window viewed on somebody
+  // else's desktop attaches as a viewer, as the terminal app's own wrapper does.
   const agentName = getChatById(chatId)?.active_agent.name;
-  if (!agentName) {
-    const baseUrl = getTerminalUrl();
-    const separator = baseUrl.includes("?") ? "&" : "?";
-    return `${baseUrl}${separator}arg=_&arg=agent`;
-  }
-  return buildAgentTerminalUrl(agentName);
+  return buildAgentTerminalUrl(agentName || null, getShellHandshake()?.isViewing === true);
 }
 
 /** The provisional record of a chat that is not an agent yet, or null once the app lists it
@@ -116,6 +129,14 @@ function provisionalRecord(chatId: string): ProvisionalChat | null {
  *  shows its reason instead, like any other. */
 export function isSeededTranscriptShown(provisional: ProvisionalChat | null): boolean {
   return provisional !== null && provisional.is_seeded && provisional.phase !== "failed";
+}
+
+const NO_TOOL_RESULTS: Map<string, ToolResultEvent> = new Map();
+
+/** The chat's reply draft as a reply node, or nothing when there is none to show. */
+function renderReplyDraft(chatId: string): m.Vnode[] {
+  const draft = hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
+  return draft === null ? [] : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId)];
 }
 
 export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; isCompact?: boolean }> {
@@ -329,18 +350,93 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   }
 
   /** A conversation with nothing in it yet -- being created, loading, or empty -- drawn as the
-   *  transcript's own empty list with no placeholder text, so a new chat is ready to type into
-   *  at once and moving between these states never changes the page. ``stateClass`` names the
-   *  state for tests and styles; ``nodes`` are messages already on their way (a send typed while
-   *  the chat is created), laid out where the transcript will put them. */
-  function renderEmptyConversation(stateClass: string, nodes: m.Children[]): m.Vnode {
-    return m("div", { class: `message-list-wrapper ${stateClass}` }, [m("div", { class: MESSAGE_LIST_CLASS }, nodes)]);
+   *  transcript's own empty list, so a new chat is ready to type into at once. ``stateClass`` names
+   *  the state for tests and styles; ``nodes`` are messages already on their way (a send typed while
+   *  the chat is created), laid out where the transcript will put them. ``status`` is one quiet line
+   *  over an empty list saying where the chat stands; it gives way to the first message. */
+  function renderEmptyConversation(stateClass: string, nodes: m.Children[], status: string | null = null): m.Vnode {
+    const isStatusShown = status !== null && nodes.length === 0;
+    return m("div", { class: `message-list-wrapper ${stateClass}` }, [
+      isStatusShown ? m("p", { class: EMPTY_CONVERSATION_STATUS_CLASS }, status) : null,
+      m("div", { class: MESSAGE_LIST_CLASS }, nodes),
+    ]);
   }
 
-  /** The page of a chat whose create is running. A message typed now waits for the agent to
-   *  land (see MessageInput). */
+  /** A conversation whose transcript is on its way: the shape of a few turns, faded in only once the
+   *  load has taken long enough to notice, so a quick switch shows nothing at all. */
+  function renderLoadingConversation(): m.Vnode {
+    return renderEmptyConversation("message-list-loading", [
+      m("div", { class: "message-list-skeleton", "aria-hidden": "true" }, [
+        m("div", { class: "message-list-skeleton-bar message-list-skeleton-bar--user" }),
+        m("div", { class: "message-list-skeleton-bar" }),
+        m("div", { class: "message-list-skeleton-bar message-list-skeleton-bar--short" }),
+      ]),
+    ]);
+  }
+
+  /** The page of a chat whose transcript is still loading: the starting line for the chat this page just
+   *  watched being created (its first load follows the create), the loading shape otherwise. */
+  function renderWhileLoading(chatId: string): m.Vnode {
+    if (chatId === lastStartingChatId) {
+      return renderEmptyConversation(
+        "message-list-loading",
+        withTurnStatus(chatId, renderOutgoingMessages(chatId)),
+        STARTING_STATUS,
+      );
+    }
+    return renderLoadingConversation();
+  }
+
+  /** The status row at the live end of the transcript (see ActivityIndicator), keyed like the rows beside it. */
+  /** Whether the backend reports the chat doing something the status row shows: an activity, a switch,
+   *  or a background task it waits on. */
+  function isAgentBusy(chatId: string): boolean {
+    const chat = getChatById(chatId);
+    if (chat === undefined) return false;
+    const agent = chat.active_agent;
+    return (
+      chat.handoff !== null ||
+      (agent.activity_state !== null && agent.activity_state !== "IDLE") ||
+      agent.background_tasks.length > 0
+    );
+  }
+
+  function renderTurnStatus(chatId: string, events: TranscriptEvent[]): m.Children {
+    return m(ActivityIndicator, { key: "turn-status", chatId, events });
+  }
+
+  /** The status row as list items, so a room contributes no hole to the keyed list: a room has no agent of its
+   *  own taking turns (the multiplayer spec, section 7.3). */
+  function turnStatusNodes(chatId: string, events: TranscriptEvent[]): m.Children[] {
+    return isRoomChat(chatId) ? [] : [renderTurnStatus(chatId, events)];
+  }
+
+  /** Messages already on their way to a chat with no transcript yet, with the row saying where they are. */
+  function withTurnStatus(chatId: string, nodes: m.Children[]): m.Children[] {
+    return nodes.length === 0 ? nodes : [...nodes, ...turnStatusNodes(chatId, [])];
+  }
+
+  // The chat this page last showed as being created: the transcript load that follows its create keeps the
+  // starting line up rather than flashing the loading shape between "starting" and "ready".
+  let lastStartingChatId: string | null = null;
+
+  /** The page of a chat whose create is running. A message typed now is held by the chat app until the
+   *  agent lands (see MessageInput), and shows from its record on any page. */
   function renderStarting(chatId: string): m.Vnode {
-    return renderEmptyConversation("message-list-creating", renderOutgoingMessages(chatId));
+    lastStartingChatId = chatId;
+    return renderEmptyConversation(
+      "message-list-creating",
+      withTurnStatus(chatId, [...renderProvisionalHeldSends(chatId), ...renderOutgoingMessages(chatId)]),
+      STARTING_STATUS,
+    );
+  }
+
+  /** The messages a failed create kept, above its reason: Try again sends them once the chat starts. */
+  function renderFailedCreateHeldSends(chatId: string): m.Vnode[] {
+    const held = renderProvisionalHeldSends(chatId);
+    return held.length === 0
+      ? []
+      : [m("div", { class: `${MESSAGE_LIST_CLASS} message-list-held-through-failure` }, held)];
   }
 
   /** The page of a chat that is not an agent yet, by its phase. */
@@ -361,6 +457,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       "div",
       { class: "message-list-create-failed flex flex-col items-center justify-center h-full gap-4 p-8" },
       [
+        ...renderFailedCreateHeldSends(chatId),
         m("p", { class: "type-heading text-primary" }, "This chat could not be started"),
         m("pre", { class: `${TERMINAL_OUTPUT_CLASS} whitespace-pre-wrap` }, provisional.error ?? "mngr create failed"),
         launchError !== null ? m("p", { class: "text-danger text-sm" }, launchError) : null,
@@ -436,6 +533,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
   }
 
+  /** Load the chat once. */
   function ensureChatLoaded(chatId: string, isStreamed: boolean): void {
     if (chatId === currentChatId) {
       return;
@@ -530,7 +628,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     }
 
     if (isConversationNotFound(chatId) && !isNotFoundSettled(chatId)) {
-      return renderEmptyConversation("message-list-loading", []);
+      return renderWhileLoading(chatId);
     }
     if (isConversationNotFound(chatId)) {
       fetchScreenCapture(chatId);
@@ -571,7 +669,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // fall through to the empty state, which claims an answer it does not have.
     const load = getConversationLoadState(chatId);
     if (hasNothingToShow && load.phase === "loading") {
-      return renderEmptyConversation("message-list-loading", []);
+      return renderWhileLoading(chatId);
     }
 
     if (hasNothingToShow && load.error !== null) {
@@ -607,11 +705,14 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
 
     if (events.length === 0) {
       if (tailNodes.length === 0) {
-        return renderEmptyConversation("message-list-empty", []);
+        // An empty chat can still be busy (a compaction, a switch, a background task): the status row
+        // says so in place of the ready line.
+        const nodes = isAgentBusy(chatId) ? turnStatusNodes(chatId, events) : [];
+        return renderEmptyConversation("message-list-empty", nodes, READY_STATUS);
       }
       return m("div", { class: "message-list-wrapper" }, [
         failedReloadNotice,
-        m("div", { class: MESSAGE_LIST_CLASS }, tailNodes),
+        m("div", { class: MESSAGE_LIST_CLASS }, [...tailNodes, ...turnStatusNodes(chatId, events)]),
       ]);
     }
 
@@ -633,14 +734,20 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // render version (bumped on any data mutation) plus those two -- so a
     // scroll-only redraw reuses the cached rows.
     const renderKey =
-      `${chatId}|${getRenderVersion(chatId)}|${tailTurnSettled ? 1 : 0}|` +
+      `${chatId}|${getRenderVersion(chatId)}|${getResentSendsVersion(chatId)}|${tailTurnSettled ? 1 : 0}|` +
       `${liveCompaction === null ? "-" : (liveCompaction.cause ?? "unknown")}`;
     if (renderKey !== rowsCacheKey) {
       // Both structure and decoration come from the transcript walk; there is no
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
       if (liveCompaction === null) closeRunningCompactionChips();
-      cachedRows = buildConversationRows(chatId, events, tailTurnSettled, liveCompaction);
+      cachedRows = buildConversationRows(
+        chatId,
+        events,
+        tailTurnSettled,
+        liveCompaction,
+        resentTurnsIn(chatId, events),
+      );
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
@@ -650,6 +757,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     // live), and -- in afterRender -- where the viewport sits. Rendered as
     // spacer / row-run / spacer via the shared segment renderer.
     const plan = engine.computeRenderPlan();
+    const isTurnStatusAfterSends = turnStatusPlacement(chatId) === "after-sends";
     return m("div", { class: "message-list-wrapper" }, [
       failedReloadNotice,
       // The queued-message group renders after the virtualized rows so it sits at
@@ -667,11 +775,21 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         ...[renderHandoffTailNode(chatId, hasOpenHandoffRequest(events, chat?.handoff ?? null))].filter(
           (node) => node !== null,
         ),
+        // The reply the agent is still writing, which its transcript does not hold yet, while the
+        // window reaches the live end. A node of its own rather than a row: a draft changes a few
+        // times a second, and a row would re-walk the whole held transcript on every change.
+        ...renderReplyDraft(chatId),
+        // The status row under the latest turn while the agent works on it, or that turn's done
+        // mark once it has finished; anything queued behind it follows.
+        ...(isTurnStatusAfterSends ? [] : turnStatusNodes(chatId, events)),
+        m(TurnDoneMark, { key: "turn-done", chatId, events }),
         ...renderQueuedMessages(chatId),
         // The messages the chat app holds while the chat switches harness, then this page's
         // own not-yet-delivered sends.
         ...renderHeldSends(chatId),
         ...renderOutgoingMessages(chatId),
+        // The status row under the user's own send while it waits on the agent.
+        ...(isTurnStatusAfterSends ? turnStatusNodes(chatId, events) : []),
       ]),
     ]);
   }
@@ -708,6 +826,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // The terminal back face attaches to the agent's own tmux session, which a chat still being
       // created does not have: without a name the terminal dispatch attaches to whatever session
       // it finds, so the flip waits for the agent to register.
+      const isRoom = isRoomChat(chatId);
       const isListed = getChatById(chatId) !== undefined;
       // The shell's live visibility for this frame, fed in by the page. Read
       // it before building content / running lifecycle hooks so the scroll hooks
@@ -815,12 +934,6 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
                 // failed, with a retry on any account (spec 5.10).
                 m(SwitchDialog, { chatId }),
                 m(HandoffFailedNotice, { chatId }),
-                isConversationNotFound(chatId)
-                  ? null
-                  : m(ActivityIndicator, {
-                      chatId,
-                      events: getEventsForChat(chatId),
-                    }),
                 m(MessageInput, {
                   chatId,
                   leading:
@@ -860,9 +973,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
               [
                 // On a phone a chat with no agent yet still names its account here: it has no menu to open.
                 isCompact && isListed ? null : m(ModelProviderMenu, { chatId }),
-                m(ConnectingIndicator, { chatId }),
                 m(FastModeNotice, { chatId }),
-                !isListed || (isCompact && !isFlipped)
+                !isListed || isRoom || (isCompact && !isFlipped)
                   ? null
                   : m("div", { class: "composer-under-bar-actions ml-auto flex items-center gap-0.5" }, [
                       m(TerminalViewToggle, { on: isFlipped, onToggle: toggleSourceView }),

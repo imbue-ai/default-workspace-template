@@ -51,7 +51,17 @@ function open(): void {
 const chat = chatSnapshotFixture;
 
 function proto(chatId: string, phase: ProvisionalChat["phase"], error: string | null = null): ProvisionalChat {
-  return { chat_id: chatId, name: "Chat 1", account_id: "acct-1", phase, error, is_seeded: false };
+  return {
+    chat_id: chatId,
+    name: "Chat 1",
+    account_id: "acct-1",
+    kind: "agent",
+    phase,
+    error,
+    is_seeded: false,
+    held_sends: [],
+    model_pick: null,
+  };
 }
 
 /** Whether a promise has settled yet, without waiting on it: the hold must be observable. A
@@ -271,5 +281,17 @@ describe("the account list over the socket", () => {
     open();
 
     expect(providers.loadAccounts).toHaveBeenCalledOnce();
+  });
+
+  it("tells the mentions listeners of a reconnect as of a push, since a push while it was down reached no one", () => {
+    const listener = vi.fn();
+    manager.addMentionsUpdatedListener(listener);
+    open();
+    expect(listener).not.toHaveBeenCalled();
+
+    push({ type: "mentions_updated" });
+    open();
+
+    expect(listener).toHaveBeenCalledTimes(2);
   });
 });

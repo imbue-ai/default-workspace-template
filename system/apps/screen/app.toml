@@ -31,6 +31,10 @@ path = "/launch/browser"
 method = "POST"
 params = [{name = "url", label = "Start page", required = false}]
 
+# No [preview] table, on purpose: the Screen owns the workspace's one X display (:99), its PulseAudio
+# sink and its neko stream, so a second instance cannot run beside the live one; a change to the Screen
+# is verified live (the update-app skill's refresh), never on a throwaway copy.
+
 # The four programs of the stack the service starts on demand, and the listener that ends them
 # together; each lives in its own drop-in beside system/supervisord.conf.d/screen.conf.
 [wiring]
@@ -39,3 +43,7 @@ programs = ["screen-xorg", "screen-session", "screen-pulse", "screen-neko", "scr
 [[message_handlers]]
 type = "open:url"
 path = "/api/open-url"
+
+# The Screen shows a desktop and other sites; the window around it is themed.
+[theming]
+mode = "none"

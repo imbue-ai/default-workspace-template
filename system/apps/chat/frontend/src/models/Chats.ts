@@ -5,8 +5,9 @@
  */
 
 import m from "mithril";
+import { postJson } from "@imbue/workspace-ui/src/models/http";
 import { apiUrl, wsUrl } from "@imbue/workspace-ui/src/base-path";
-import { getTerminalOriginLabel } from "../document-meta";
+import { getChatKind, getTerminalOriginLabel } from "../document-meta";
 import { deriveAppOrigin } from "@imbue/workspace-ui/src/origin";
 import { ReconnectBackoff } from "@imbue/workspace-ui/src/models/backoff";
 import type { ModelChoice, ModelIdentity } from "./ModelSettings";
@@ -42,7 +43,7 @@ export interface ActiveAgent {
   // flight.
   shoulder_tap_available: boolean;
   // A send is in flight and waiting for the agent to come up: the Connecting sub-state of
-  // Sending, shown beside the model bar.
+  // Sending, shown on the status row at the end of the transcript.
   is_connecting: boolean;
   // The agent will resume on its own: a turn is in flight, or a background task is pending.
   is_busy: boolean;
@@ -76,9 +77,19 @@ export type HandoffPhase = "draining" | "summarizing" | "switching" | "restartin
 /** What a converging chat is doing: moving to another harness on a new agent, or changing account in place. */
 export type TransitionKind = "handoff" | "rebind";
 
-/** One message the chat app holds while the chat switches (the backend's ``HeldSendSnapshot``).
- *  Rendered from the snapshot until it lands in the transcript. */
-export interface HeldSend {
+/** The render decision a not-yet-delivered message's text would get in the transcript (a
+ *  user_message's fields of the same names; the backend's ``DisplayDecisionFields``); null for a
+ *  plain message. */
+export interface DisplayDecision {
+  display?: UserMessageEvent["display"] | null;
+  display_label?: string | null;
+  display_body?: string | null;
+}
+
+/** One message the chat app holds while the chat switches or is still being created (the backend's
+ *  ``HeldSendSnapshot``, or a provisional chat's ``HeldSend``). Rendered from the backend's record until it
+ *  lands in the transcript. */
+export interface HeldSend extends DisplayDecision {
   // The send-time message_id (contract A4); the page's own bubble for the same send carries it too.
   message_id: string;
   text: string;
@@ -117,9 +128,14 @@ export function isHandoffCancellable(handoff: HandoffState): boolean {
   return handoff.kind === "handoff" && (handoff.phase === "draining" || handoff.phase === "summarizing");
 }
 
+/** What a chat is (the backend's ``ChatKind``): a conversation with an agent, or a room, a message log among the
+ *  workspace's people whose agent is the room's reader (the multiplayer spec, section 7.3). */
+export type ChatKind = "agent" | "room";
+
 /** One chat as the pages see it (the backend's ``ChatSnapshot``, one entry of ``chats_updated``). */
 export interface ChatSnapshot {
   chat_id: string;
+  kind: ChatKind;
   // The name the user sees: the ``display_name`` label, else the mngr name.
   title: string;
   // The chat's canonical mngr name, the only way to address it by name.
@@ -139,12 +155,19 @@ export interface ChatSnapshot {
   // Epoch seconds of the chat's most recent message; null when it has never been messaged.
   // The chat root's list orders on it.
   last_messaged_at: number | null;
+  /** The chats a mention from this room sent to and has not heard back from: the room's row shows a working dot
+   *  while one of them works (section 7.4). Empty for an agent chat. */
+  awaiting_chat_ids: string[];
+  /** Who has written in the chat (people and visiting agents, never the workspace agent), each once, in order of
+   *  first message: the row shows their pictures when there are two or more (section 5.4). Absent from an older
+   *  backend's snapshot. */
+  participants?: string[];
 }
 
 /** One message currently parked in an agent's harness queue (the wire shape of the backend
  *  ``QueuedMessageState``). The frontend keys the bubble on ``queued_id`` and never derives or
  *  reconciles these. */
-export interface QueuedMessage {
+export interface QueuedMessage extends DisplayDecision {
   queued_id: string;
   content: string;
   timestamp: string;
@@ -152,11 +175,6 @@ export interface QueuedMessage {
   // interrupt+resend, or a Claude message still queued when the reply landed): it renders as an
   // ordinary send's bubble rather than as a plain queued chip.
   is_sending?: boolean;
-  // The render decision the content would get in the transcript (a user_message's fields of
-  // the same names); null for a plain message.
-  display?: UserMessageEvent["display"] | null;
-  display_label?: string | null;
-  display_body?: string | null;
 }
 
 /** Where a chat that is not an agent yet stands (the backend's ``ProvisionalChatPhase``). */
@@ -168,17 +186,25 @@ export interface ProvisionalChat {
   name: string;
   // The account it launches on; empty while it waits for one.
   account_id: string;
+  // What it launches as: an agent chat, or a room.
+  kind: ChatKind;
   phase: ProvisionalChatPhase;
   // Why the create failed, in the failed phase.
   error: string | null;
-  // Whether the chat has a seed segment to show while it is created: the conversation the
-  // Imbue Studio app had before the workspace existed. Its page keeps the transcript and the composer up
-  // through the create rather than the provisional screens.
+  // Whether the chat has a seed segment to show while it is created: turns written before any agent
+  // joined it (the Imbue Studio app's onboarding, or the main chat the app opens on an update). Its page
+  // keeps the transcript and the composer up through the create rather than the provisional screens.
   is_seeded: boolean;
+  // The messages sent while it is created, in order, which the chat app delivers once the agent lands
+  // (and a failed create's retry delivers then).
+  held_sends: HeldSend[];
+  // The model chosen for it; null for its harness's default.
+  model_pick: ModelIdentity | null;
 }
 
 type WsEvent =
   | { type: "chats_updated"; chats: ChatSnapshot[]; main_chat_id: string | null }
+  | { type: "mentions_updated" }
   | ({ type: "provisional_chat_created" } & ProvisionalChat)
   | { type: "provisional_chat_completed"; chat_id: string; success: boolean; error: string | null }
   | { type: "accounts_updated" };
@@ -212,7 +238,12 @@ let replayedProvisionalIds: Set<string> | null = null;
 // Who is waiting for a provisional chat to become an agent (a send typed while it was being
 // created), settled by the push that registers it or the one that fails it.
 const registrationWaiters = new Map<string, { resolve: () => void; reject: (error: Error) => void }[]>();
+// The chats whose launch this page posted and has not yet seen move past awaiting its first send: the backend
+// refuses a second launch of a chat it is already creating, so a send typed in the meantime waits for the chat
+// to land and goes to it then, as a send into any creating chat does.
+const launchesInFlight = new Set<string>();
 let chatsUpdatedListeners: ChatsUpdatedListener[] = [];
+let mentionsUpdatedListeners: (() => void)[] = [];
 let chatActivityListeners: ChatActivityListener[] = [];
 let chatActiveAgentListeners: ChatActiveAgentListener[] = [];
 let ws: WebSocket | null = null;
@@ -233,8 +264,11 @@ function connect(): void {
     connected = true;
     console.info("[chat-ws] connected");
     reconnectBackoff.reset();
-    // A change to the account list while the socket was down was pushed to no one.
-    if (hasConnectedBefore) rereadAccounts();
+    // A change to the account list, or to someone's pending mentions, while the socket was down was pushed to no one.
+    if (hasConnectedBefore) {
+      rereadAccounts();
+      notifyMentionsUpdated();
+    }
     hasConnectedBefore = true;
     // The app replays what it holds (its provisional chats, then its chat list) on every
     // connection; the list ends the replay and must be handled even when nothing changed.
@@ -276,6 +310,13 @@ function scheduleReconnect(): void {
   }, delayMs);
 }
 
+/** Tell the pages someone's pending mentions changed, so each reads its own again. */
+function notifyMentionsUpdated(): void {
+  for (const listener of mentionsUpdatedListeners) {
+    listener();
+  }
+}
+
 /** Read the account list again because it changed outside this page (a sign-in or a removal in another chat or
  *  window), so a chat whose account was removed shows it at once; a failed read keeps the list read before. */
 function rereadAccounts(): void {
@@ -289,6 +330,9 @@ function handleEvent(event: WsEvent): void {
   switch (event.type) {
     case "accounts_updated":
       rereadAccounts();
+      break;
+    case "mentions_updated":
+      notifyMentionsUpdated();
       break;
     case "chats_updated": {
       isChatListReceived = true;
@@ -346,12 +390,14 @@ function handleEvent(event: WsEvent): void {
       const { type: _type, ...provisional } = event;
       provisionalChats = [...provisionalChats.filter((p) => p.chat_id !== provisional.chat_id), provisional];
       replayedProvisionalIds?.add(provisional.chat_id);
+      if (provisional.phase !== "awaiting_first_send") launchesInFlight.delete(provisional.chat_id);
       if (provisional.phase === "failed") {
         settleRegistration(provisional.chat_id, new Error(provisional.error ?? "The chat could not be started"));
       }
       break;
     }
     case "provisional_chat_completed":
+      launchesInFlight.delete(event.chat_id);
       if (event.success) {
         // The chat itself arrives on the chats_updated push, which is what settles waiters.
         provisionalChats = provisionalChats.filter((p) => p.chat_id !== event.chat_id);
@@ -392,6 +438,18 @@ function settleRegistration(chatId: string, error: Error | null): void {
  * send itself reports the backend's refusal. A held send is released the same way when a
  * reconnect's replay turns out not to carry the chat's record any more.
  */
+/**
+ * Refuse a send to a chat whose create has failed, with the reason its page shows: it takes no sends until
+ * its Try again starts it again. Any other chat's send goes to the send route, which holds one for a chat
+ * still being created until the agent lands, so the message is the chat app's to keep from then on.
+ */
+export function refuseSendToFailedChat(chatId: string): void {
+  const provisional = getProvisionalChat(chatId);
+  if (getChatById(chatId) === undefined && provisional?.phase === "failed") {
+    throw new Error(provisional.error ?? "The chat could not be started");
+  }
+}
+
 export function whenChatRegistered(chatId: string): Promise<void> {
   const provisional = getProvisionalChat(chatId);
   if (getChatById(chatId) !== undefined || provisional === undefined) return Promise.resolve();
@@ -442,6 +500,22 @@ export function getShoulderTapAvailableForChat(chatId: string): boolean {
   return getChatById(chatId)?.active_agent.shoulder_tap_available === true;
 }
 
+/** Whether ``chatId`` is a room: the list says so, or, before the list has arrived, the page's own document does. */
+export function isRoomChat(chatId: string): boolean {
+  const listed = getChatById(chatId);
+  if (listed !== undefined) return listed.kind === "room";
+  return getChatKind() === "room";
+}
+
+/** Notified when someone's pending mentions changed, so a page reads its own again. */
+export function addMentionsUpdatedListener(listener: () => void): void {
+  mentionsUpdatedListeners.push(listener);
+}
+
+export function removeMentionsUpdatedListener(listener: () => void): void {
+  mentionsUpdatedListeners = mentionsUpdatedListeners.filter((entry) => entry !== listener);
+}
+
 /** Every chat the app has minted that is not an agent yet, for the root's list. */
 export function getProvisionalChats(): ProvisionalChat[] {
   return provisionalChats;
@@ -482,16 +556,23 @@ export function getTerminalUrl(): string {
   return deriveAppOrigin(getTerminalOriginLabel() || "terminal");
 }
 
-/** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session. The terminal
- *  app's dispatch takes the URL's ``arg`` values in order: a placeholder ("_", which lands in
- *  ``$0``), the dispatch key ("agent"), then the agent name.
+/** The argument the terminal app's dispatch reads as "attach as a viewer" (its ``VIEWER_ARGUMENT``, pinned here):
+ *  read-only, and never the client tmux sizes the window by (the multiplayer spec, section 8.3). */
+const TERMINAL_VIEWER_ARGUMENT = "view";
+
+/** Build the iframe URL that attaches a terminal to ``agentName``'s tmux session (the ambient one when the chat
+ *  has no agent in the list yet). The terminal app's dispatch takes the URL's ``arg`` values in order: a placeholder
+ *  ("_", which lands in ``$0``), the dispatch key ("agent"), the agent name (empty for the ambient session, so the
+ *  next argument keeps its place), then the viewer argument while the shell says the chat's window is being looked
+ *  at on somebody else's desktop.
  *
  *  Only the back face of that agent's chat attaches one: two live ttyd clients on one tmux
  *  window keep resizing it out from under each other. */
-export function buildAgentTerminalUrl(agentName: string): string {
+export function buildAgentTerminalUrl(agentName: string | null, isViewing: boolean): string {
   const baseUrl = getTerminalUrl();
   const separator = baseUrl.includes("?") ? "&" : "?";
-  return `${baseUrl}${separator}arg=_&arg=agent&arg=${encodeURIComponent(agentName)}`;
+  const dispatchArguments = ["_", "agent", agentName ?? "", ...(isViewing ? [TERMINAL_VIEWER_ARGUMENT] : [])];
+  return `${baseUrl}${separator}${dispatchArguments.map((value) => `arg=${encodeURIComponent(value)}`).join("&")}`;
 }
 
 /** A create the chat app refused, with its reason in words and, when the account is the reason, the refusal's kind:
@@ -520,6 +601,7 @@ export interface CreatedChat {
  * shows up as provisional until mngr registers it). The display name is minted server-side.
  * ``projectId`` becomes the agent's ``project`` label and is empty for a chat started outside
  * any project; ``message`` is the chat's first message, sent once it runs (empty sends none).
+ * Always an agent chat: a room starts from a chat awaiting its first send (``launchChat``).
  * Throws a ``CreateChatRefusedError`` with the server's detail on rejection.
  */
 export function createChat(
@@ -541,16 +623,44 @@ export async function awaitingChatForEmptyList(): Promise<string> {
   return data.chat_id;
 }
 
+/** Choose the account and model a chat with no agent yet runs on: it launches on them, or takes them as its
+ *  create lands. The provisional record the chat app pushes back carries the choice. */
+export async function setLaunchChoice(chatId: string, accountId: string, pick: ModelIdentity | null): Promise<void> {
+  await postJson<unknown>(apiUrl(`/api/chats/${encodeURIComponent(chatId)}/launch-choice`), {
+    account_id: accountId,
+    model: pick,
+  });
+}
+
 /**
  * Launch a chat minted earlier (a seeded one awaiting its first send, or one whose create
- * failed) on ``accountId``: it keeps its id and name, so the window showing it becomes the chat.
+ * failed) on ``accountId``, or as a room when ``kind`` says so: it keeps its id and name, so the
+ * window showing it becomes the chat.
  */
-export function launchChat(chatId: string, accountId: string, message = ""): Promise<CreatedChat> {
-  // A seeded chat's launch brings the user's first message; a failed create's retry has none
-  // to bring, so the field is left out then.
-  return postCreateChat(
-    message === "" ? { chat_id: chatId, account_id: accountId } : { chat_id: chatId, account_id: accountId, message },
-  );
+export async function launchChat(
+  chatId: string,
+  accountId: string,
+  message = "",
+  kind: ChatKind = "agent",
+): Promise<CreatedChat> {
+  launchesInFlight.add(chatId);
+  try {
+    // A seeded chat's launch brings the user's first message; a failed create's retry has none
+    // to bring, so the field is left out then.
+    const body = { chat_id: chatId, account_id: accountId, kind };
+    return await postCreateChat(message === "" ? body : { ...body, message });
+  } catch (error) {
+    // The launch did not take: the next send may launch the chat, and a send that waited on this
+    // one gets the refusal back rather than waiting for a chat that is not coming.
+    launchesInFlight.delete(chatId);
+    settleRegistration(chatId, error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  }
+}
+
+/** Whether this page has posted a launch of ``chatId`` that the backend has not yet reported as creating. */
+export function isLaunchInFlight(chatId: string): boolean {
+  return launchesInFlight.has(chatId);
 }
 
 async function postCreateChat(body: Record<string, string | ModelIdentity | null>): Promise<CreatedChat> {
@@ -582,6 +692,8 @@ export interface PendingIntake {
   needsPick: boolean;
   // The chat the intake resolved to; null for a choice the user makes.
   chatId: string | null;
+  // The chat's composer placeholder until its next send, focused (the multiplayer spec, section 9.2); null for none.
+  hint: string | null;
 }
 
 /** What applying a held intake came to (the backend's ``IntakeApplyResponse``). */
@@ -591,6 +703,8 @@ export interface AppliedIntake {
   composerText: string | null;
   // The first message of a chat awaiting its first send with no account: the root launches it with this.
   firstMessage: string | null;
+  // The chat's composer placeholder until its next send, focused; null for none.
+  hint: string | null;
 }
 
 /** Thrown when a token names no held intake: it was applied, dismissed, or expired. */
@@ -613,8 +727,15 @@ export async function fetchPendingIntake(token: string): Promise<PendingIntake> 
     is_draft: boolean;
     needs_pick: boolean;
     chat_id: string | null;
+    hint?: string | null;
   }>(response, token);
-  return { message: data.message, isDraft: data.is_draft, needsPick: data.needs_pick, chatId: data.chat_id };
+  return {
+    message: data.message,
+    isDraft: data.is_draft,
+    needsPick: data.needs_pick,
+    chatId: data.chat_id,
+    hint: data.hint ?? null,
+  };
 }
 
 /** Apply a held intake, on ``chatId`` when it needed a pick; the token is consumed. Throws
@@ -629,8 +750,14 @@ export async function applyPendingIntake(token: string, chatId: string | null = 
     chat_id: string;
     composer_text: string | null;
     first_message: string | null;
+    hint?: string | null;
   }>(response, token);
-  return { chatId: data.chat_id, composerText: data.composer_text, firstMessage: data.first_message };
+  return {
+    chatId: data.chat_id,
+    composerText: data.composer_text,
+    firstMessage: data.first_message,
+    hint: data.hint ?? null,
+  };
 }
 
 /** Drop a held intake unapplied (the picker was dismissed); a token already gone is fine. The dismissal never

@@ -12,7 +12,7 @@ Merging the milestone" names plumbing nobody can see. Say what changed, or nothi
 ## Polling for the next report
 
 Poll for the report file with `create_worker.py await`, started through
-`system/scripts/run_in_background.py`. `await` reads `finish_report_path` from
+`system/scripts/workspace_bare_scripts/run_in_background.py`. `await` reads `finish_report_path` from
 the task file's frontmatter, blocks until that file appears, prints its
 contents, and exits 0; on timeout it exits non-zero (code 124).
 `run_in_background.py` returns at once and runs it detached; when `await`
@@ -28,8 +28,8 @@ and wait for one finish report use the same `await` (or the synchronous
 `create_worker.py launch-sync` wrapper) with no gate handling.
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name <WORKER_NAME> \
     --task-file <TASK_FILE>
 ```
@@ -94,16 +94,21 @@ tmux capture-pane -t minds-<WORKER_NAME>:claude -p -S -100 | tail -40
 
 If the output shows ongoing tool use, an active spinner / "Running…" line,
 or recent timestamps within the last few minutes, the worker is alive --
-re-arm the poll with a longer timeout (e.g. `60m`) and continue. Only
-invoke the failure flow (`.agents/skills/launch-task/references/worker-failure.md`)
-if the session is dead, the agent is wedged on the same operation for an
+re-arm the poll with a longer timeout (e.g. `60m`) and continue. A session
+that is dead is a crash: recover the worker
+(`.agents/skills/launch-task/references/dead-worker-recovery.md`) and re-arm
+the poll. Only invoke the failure flow
+(`.agents/skills/launch-task/references/worker-failure.md`) if that recovery
+does not bring it back, the agent is wedged on the same operation for an
 extended period, or output has been static.
 
 `await` makes the same call for you in the clearest case: exit code **76** means
-it watched the worker's agent end its turn on several consecutive polls with no
-report and no longer busy -- finished or wedged without reporting, worth
-surfacing immediately rather than waiting out the timeout. That check never
-fires while the worker is waiting on something that will wake it:
+it watched the worker's agent end its turn (or stop) on several consecutive
+polls with no report and no longer busy -- finished, dead or wedged without
+reporting, worth acting on immediately rather than waiting out the timeout, by
+the diagnosis above: a dead worker is recovered before anything is surfaced.
+That check never fires while the worker is waiting on something that will wake
+it:
 
 - **A live sub-worker of its own.** An agent labelled `lead_agent=<worker>` in
   state RUNNING or WAITING with no pending shed counts as the worker being
@@ -155,7 +160,7 @@ The worker is framed as addressing the user directly. When you answer, write
 your reply in the user's voice and forward it to the worker's chat:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
     --task-file <TASK_FILE> -m "<reply, in the user's voice>"
 ```
 
@@ -199,8 +204,18 @@ Merge the **pinned sha, never the branch tip** (the tip keeps moving):
 git merge --no-ff <commit> -m "Provisional merge of <WORKER_NAME> at milestone <name>"
 ```
 
+If the merge changed a `pyproject.toml` or `uv.lock` (a new skill's `python/`
+project, a dependency added to a skill or an app), bring the venv up to date
+before running anything from it; `uv run --no-sync` never installs:
+
+```bash
+git diff --quiet HEAD^1 HEAD -- '*pyproject.toml' uv.lock || uv sync --all-packages --frozen
+```
+
 Then the **provisional go-live**, the minimum needed to use the thing: a skill
-is on disk at `.agents/skills/<name>/` and invocable; an app or service gets
+is on disk at `.agents/skills/<name>/` and invocable (one with a `python/`
+project only after `uv sync --all-packages --frozen`, which installs its package
+and any dependency the merge added into the workspace venv); an app or service gets
 its tab refreshed. You do that refresh -- never hand it to the user. The calling
 skill's end-of-pass work (post-crystallize migration, closing the ticket) still
 waits for `done`.
@@ -221,25 +236,28 @@ are still coming.
 
 ```bash
 git revert -m 1 <provisional-merge-commit>
+git rev-parse HEAD
 ```
 
 A revert is a **rejection of that milestone**: message the worker with why, as a
 de facto "no with notes" (the merge commit's subject names the worker and
-milestone, so the target is easy to find).
+milestone, so the target is easy to find), and hand it the revert, the commit
+the second command printed:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
-    --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice>"
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
+    --task-file <TASK_FILE> -m "<why the milestone was reverted, in the user's voice> I reverted it as <the revert commit>: bring it back on your branch per 'A milestone the lead reverted' in worker-reporting.md, then fix it."
 ```
 
-The reverted commits remain ancestors of HEAD, so any later merge from that
-branch -- `done` included -- would **silently omit** them. First reinstate:
+The reverted commits remain ancestors of your `HEAD`, so a later merge from
+that branch would **silently omit** them. The worker brings them back on its
+own branch, as a revert of your revert, so they reach yours again only with
+its next merged report, fixed. Never reinstate them on your branch yourself:
+that puts the work the user rejected back in front of them.
 
-```bash
-git revert <revert-commit>
-```
-
-or supersede the pass per `.agents/shared/references/harden-contention.md`.
+A pass is superseded instead only once its worker is gone, and its new task
+then names the revert (`.agents/shared/references/harden-contention.md`,
+"Superseding a pass whose worker is gone").
 
 ## Terminal status: act and stop polling
 
@@ -269,10 +287,17 @@ On `type: status`:
   reports: provisional merge") are ancestors of HEAD, so this merge brings only
   the remainder and the freshness check covers exactly the window since that
   provisional merge.
+  If the merge changed a `pyproject.toml` or `uv.lock` (a new skill's `python/`
+  project, a dependency added to a skill or an app), bring the venv up to date
+  before running anything from it; `uv run --no-sync` never installs:
+
+  ```bash
+  git diff --quiet HEAD^1 HEAD -- '*pyproject.toml' uv.lock || uv sync --all-packages --frozen
+  ```
   On a clean merge, close any tracking ticket and destroy the worker before
   the calling skill's go-live:
   ```bash
-  uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <WORKER_NAME>
+  uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <WORKER_NAME>
   ```
   Destroy takes the worker's sub-workers with it and keeps what you may
   still need: the branch `mngr/<WORKER_NAME>`, the transcript (under
@@ -283,18 +308,20 @@ On `type: status`:
   On a conflict, recovery depends on the calling skill: if it defines
   a staleness rule (the harden flows do -- see
   `.agents/shared/references/harden-contention.md`), abort the merge and
-  follow that rule rather than hand-resolving; otherwise resolve the conflict
-  manually.
+  follow that rule -- the worker catches its branch up and resolves the
+  conflict there -- rather than resolving it yourself; otherwise resolve the
+  conflict manually.
 
 - `name: stuck`, or the 30m timeout tripped without a report arriving -- follow
   `.agents/skills/launch-task/references/worker-failure.md`: surface the report
   body (or its absence) to the user, point at the branch and worker agent, then
   stop the worker (and its sub-workers) so no process stays behind:
   ```bash
-  uv run .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
+  uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py stop --name <WORKER_NAME>
   ```
   Its branch, worktree, and transcript stay for inspection. A timeout is
-  the same once the liveness diagnosis says the worker is dead or wedged.
+  the same once the liveness diagnosis says the worker is wedged, or dead
+  with a recovery that did not bring it back.
 
 - `name: no-update-needed` (or other skill-specific benign no-op terminals) --
   the worker decided there was nothing to do. Close any tracking ticket and
@@ -314,7 +341,7 @@ finishing its task yourself. Re-take whatever preconditions the calling skill
 holds for a pass (a lease, a run record), then send it the decision:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
     --task-file <TASK_FILE> -m "<the user's decision>"
 ```
 

@@ -36,6 +36,13 @@ from imbue.imbue_common.pure import pure
 from loguru import logger
 from pydantic import ConfigDict, Field, field_validator
 from workspace_layout.windows import WindowClosedHint, window_query_value
+from workspace_themes.contract import STANDARD_THEME_ID, TERMINAL_TOKENS
+from workspace_themes.flask_routes import (
+    THEME_STATIC_ROUTE_TABLE,
+    register_workspace_theme_route,
+)
+from workspace_themes.primitives import THEME_ID_PATTERN
+from workspace_themes.serving import THEME_STATIC_ROUTE_PREFIX
 
 from terminal_app.errors import (
     InvalidTerminalValueError,
@@ -44,6 +51,7 @@ from terminal_app.errors import (
 )
 from terminal_app.primitives import (
     SESSION_QUERY_KEY,
+    VIEWER_ARGUMENT,
     TerminalTitle,
     TmuxSessionName,
     Workdir,
@@ -76,7 +84,40 @@ _CONFIG_ELEMENT_ID: Final[str] = "terminal-config"
 
 # The template's placeholders, filled in one pass so that a title or a config carrying a
 # placeholder's text is not itself filled.
-_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH)__")
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"__(TITLE|CONFIG_ID|CONFIG|CONTRACT_PATH|THEME|VIEWER_ARGUMENT)__")
+
+# xterm's theme keys for the contract's terminal tokens, in TERMINAL_TOKENS' order.
+_XTERM_THEME_KEYS: Final[tuple[str, ...]] = (
+    "background",
+    "foreground",
+    "cursor",
+    "selectionBackground",
+    "black",
+    "red",
+    "green",
+    "yellow",
+    "blue",
+    "magenta",
+    "cyan",
+    "white",
+    "brightBlack",
+    "brightRed",
+    "brightGreen",
+    "brightYellow",
+    "brightBlue",
+    "brightMagenta",
+    "brightCyan",
+    "brightWhite",
+)
+# What the script needs to know of workspace themes, from the theme library rather than copied into the script.
+_THEME_SCRIPT_CONFIG: Final[str] = json.dumps(
+    {
+        "standard": STANDARD_THEME_ID,
+        "idPattern": THEME_ID_PATTERN.pattern,
+        "bundlePrefix": THEME_STATIC_ROUTE_PREFIX,
+        "paletteTokens": dict(zip(_XTERM_THEME_KEYS, TERMINAL_TOKENS, strict=True)),
+    }
+)
 
 _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <html lang="en">
@@ -86,7 +127,8 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
 <title>__TITLE__</title>
 <style>
   html { height: 100%; }
-  body { display: flex; flex-direction: column; height: 100%; height: 100dvh; margin: 0; background: #000; color: #ddd; font-family: system-ui, sans-serif; }
+  /* ttyd's own default background, so the moment before it draws its terminal reads as the terminal. */
+  body { display: flex; flex-direction: column; height: 100%; height: 100dvh; margin: 0; background: #2b2b2b; color: #ddd; font-family: system-ui, sans-serif; }
   iframe { display: block; flex: 1 1 0; min-height: 0; width: 100%; border: 0; }
   #empty { display: flex; flex: 1 1 0; align-items: center; justify-content: center; font-size: 14px; color: #888; }
   /* The phone's key strip: the keys a soft keyboard lacks, under the terminal and so above the keyboard. */
@@ -125,6 +167,16 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
   const ctrlKey = keys.querySelector("[data-ctrl]");
   let current = config.session;
   let connection = null;
+  // Whether the shell says this window is being looked at on somebody else's desktop: the pty then attaches as a
+  // viewer (read-only, and never the client tmux sizes the window by), through the path's viewer argument.
+  let isViewing = false;
+  let shownPage = null;
+  // A framed page points the pty at nothing until the shell's handshake has said whether the window is viewed:
+  // attached before that word, a viewed terminal would join as a full client and size its owner's window for a
+  // moment (the window-size rule follows the latest client). A handshake that never comes (the shell's page
+  // died) is given up on after the grace, and the pty attached as it would be unframed.
+  const HANDSHAKE_GRACE_MS = 2000;
+  let isHandshakeAwaited = window.parent !== window;
 
   function coordinate(host) {
     const labels = host.split(".");
@@ -193,9 +245,34 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       keys.hidden = false;
       // A navigate to the session already framed re-points at the same target: assigning the
       // same src again would reload the frame and drop the live ttyd connection.
-      pointFrameAt(originFor(page.pty_label) + page.pty_path);
+      if (!isHandshakeAwaited) {
+        pointFrameAt(originFor(page.pty_label) + page.pty_path + (isViewing ? "&arg=__VIEWER_ARGUMENT__" : ""));
+      }
     }
+    shownPage = page;
     connection?.location(pathFor(page.name), page.title);
+  }
+
+  function pointHeldFrame() {
+    if (shownPage !== null && shownPage.pty_label !== "") show(shownPage);
+  }
+
+  // The shell's word on whether the window is viewed: the first one points the held frame, a changed one attaches
+  // the pty again the other way.
+  function takeViewing(next) {
+    const isFirstWord = isHandshakeAwaited;
+    isHandshakeAwaited = false;
+    if (next === isViewing && !isFirstWord) return;
+    isViewing = next;
+    pointHeldFrame();
+  }
+
+  if (isHandshakeAwaited) {
+    setTimeout(() => {
+      if (!isHandshakeAwaited) return;
+      isHandshakeAwaited = false;
+      pointHeldFrame();
+    }, HANDSHAKE_GRACE_MS);
   }
 
   async function refresh(session) {
@@ -274,7 +351,76 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     if (button !== null) pressKey(button);
     focusPty();
   });
-  frame.addEventListener("load", () => setCtrlArmed(false));
+  frame.addEventListener("load", () => {
+    setCtrlArmed(false);
+    if (palette !== undefined) postToPty({ type: "terminal:theme", theme: palette });
+  });
+
+  // The workspace's theme reaches the terminal as a palette (docs/system/blueprint/workspace-themes/, section
+  // 4.1). The terminal takes no other part in themes ([theming] mode = "none"), so the theme's bundle is loaded
+  // into a blank frame of this origin that nobody sees, never into this page: the --term-* tokens are read there
+  // once it has loaded and handed to the pty page's xterm, and the theme's rules style nothing here. The standard
+  // theme sets none, which leaves xterm its own colors.
+  // The standard theme's id, the pattern a theme id matches, where a theme's bundle is served, and each xterm color's
+  // --term-* token.
+  const THEME = __THEME__;
+  const THEME_ID = new RegExp(THEME.idPattern);
+  let palette = undefined;
+  let paletteFrame = null;
+  // The theme and revision worn or loading, so a repeated shell:theme reloads nothing.
+  let wornTheme = null;
+
+  function readPalette(probe) {
+    const style = probe.contentWindow.getComputedStyle(probe.contentDocument.documentElement);
+    const read = {};
+    for (const [key, token] of Object.entries(THEME.paletteTokens)) {
+      const value = style.getPropertyValue(token).trim();
+      if (value !== "") read[key] = value;
+    }
+    return Object.keys(read).length === 0 ? null : read;
+  }
+
+  function wearTheme(theme, revision) {
+    if (!THEME_ID.test(theme)) return;
+    const key = `${theme}@${revision}`;
+    if (key === wornTheme) return;
+    wornTheme = key;
+    paletteFrame?.remove();
+    paletteFrame = null;
+    if (theme === THEME.standard) {
+      palette = null;
+      postToPty({ type: "terminal:theme", theme: null });
+      return;
+    }
+    // Laid out (not display: none), so every engine resolves the frame's styles, but with no size and unseen.
+    const probe = document.createElement("iframe");
+    probe.setAttribute("aria-hidden", "true");
+    probe.tabIndex = -1;
+    probe.style.cssText = "position: absolute; width: 0; height: 0; border: 0; visibility: hidden;";
+    document.body.appendChild(probe);
+    paletteFrame = probe;
+    const probeDocument = probe.contentDocument;
+    probeDocument.documentElement.dataset.uiTheme = theme;
+    const link = probeDocument.createElement("link");
+    link.rel = "stylesheet";
+    const bundlePath = `${THEME.bundlePrefix}${theme}/theme.css` + (revision ? `?v=${encodeURIComponent(revision)}` : "");
+    link.href = new URL(bundlePath, location.href).href;
+    link.addEventListener("load", () => {
+      if (paletteFrame !== probe) return;
+      palette = readPalette(probe);
+      postToPty({ type: "terminal:theme", theme: palette });
+    });
+    // A theme that cannot be loaded (gone, or unavailable) leaves xterm its own colors, not the last theme's.
+    link.addEventListener("error", () => {
+      if (paletteFrame !== probe) return;
+      probe.remove();
+      paletteFrame = null;
+      wornTheme = null;
+      palette = null;
+      postToPty({ type: "terminal:theme", theme: null });
+    });
+    probeDocument.head.appendChild(link);
+  }
 
   window.addEventListener("message", (event) => {
     const data = event.data;
@@ -282,6 +428,11 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
     // The shell grants focus to the frame it created, which is this page: pass it on to ttyd.
     if (event.source === window.parent && data.type === "ttyd-focus") focusPty();
     if (event.source === frame.contentWindow && data.type === "terminal:ctrl") setCtrlArmed(data.armed === true);
+    // Typing happens in the pty frame, out of this page's sight: its input reports go up to the shell as this
+    // page's own would (the multiplayer spec, section 4.3), the way the chat root hands up its nested pages'.
+    if (event.source === frame.contentWindow && data.type === "shell:input" && window.parent !== window) {
+      window.parent.postMessage({ type: "shell:input" }, "*");
+    }
   });
   window.addEventListener("focus", () => connection?.focused());
 
@@ -296,8 +447,10 @@ _PAGE_TEMPLATE: Final[str] = """<!doctype html>
       .then(({ connectToShell }) => {
         connection = connectToShell({
           capabilities: { navigation: true, closeChord: false },
+          onHandshake: (handshake) => takeViewing(handshake.isViewing),
           onNavigate: navigate,
           onShown: focusPty,
+          onTheme: wearTheme,
         });
         if (current !== null) connection.location(pathFor(current), document.title);
       })
@@ -363,6 +516,7 @@ ROUTE_TABLE: RouteTable = {
     ("GET", HEALTH_PATH): RouteModels(response_model=HealthResponse),
     ("POST", WINDOW_CLOSED_PATH): RouteModels(request_model=WindowClosedHint, success_status=HTTP_NO_CONTENT),
     ("GET", APP_CONTRACT_ROUTE): SchemalessRoute(reason="the app contract module, a JavaScript file"),
+    **THEME_STATIC_ROUTE_TABLE,
 }
 
 
@@ -398,6 +552,8 @@ def render_page(config: PageConfig) -> str:
         "CONFIG_ID": _CONFIG_ELEMENT_ID,
         "CONFIG": encoded,
         "CONTRACT_PATH": APP_CONTRACT_ROUTE,
+        "THEME": _THEME_SCRIPT_CONFIG,
+        "VIEWER_ARGUMENT": VIEWER_ARGUMENT,
     }
     return _PLACEHOLDER.sub(lambda match: values[match.group(1)], _PAGE_TEMPLATE)
 
@@ -421,6 +577,7 @@ def build_pages_blueprint(
         description=APP_DESCRIPTION,
         route_table=ROUTE_TABLE,
     )
+    register_workspace_theme_route(blueprint)
     attach_document_policy(blueprint)
 
     def session_page(name: TmuxSessionName) -> SessionPage:

@@ -12,13 +12,15 @@ import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdenti
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
+import { ensureParticipants } from "./models/Participants";
 import { connectToShell } from "@imbue/workspace-ui/src/app_contract";
 import type { ShellConnection, ShellHandshake } from "@imbue/workspace-ui/src/app_contract";
 import { currentPresenceState, reportFocusChange, reportPresence, startPresenceReporting } from "./presence";
 import type { ChatPageEmbedApi } from "./embedApi";
 import { setCompactFromRoot } from "./compactLayout";
 import { rootPathFor } from "./root/selection";
-import { prependToComposer } from "./views/MessageInput";
+import { focusComposer, prependToComposer, setComposerHint } from "./views/MessageInput";
+import { mirrorParentTheme, wearThemeFromMessage } from "@imbue/workspace-ui/src/themes/themeClient";
 
 /** The path of a sub-agent view: the chat, the agent whose session it is, and the session. */
 export function subagentViewPath(key: string): string {
@@ -80,6 +82,8 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
   const onShown = (): void => {
     isShown = true;
     if (isPresenceReported) reportPresence("visible");
+    // Whoever joined while the page was out of view is drawn right once it is back.
+    void ensureParticipants();
     m.redraw();
   };
   const onHidden = (): void => {
@@ -87,7 +91,15 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     if (isPresenceReported) reportPresence("hidden");
     m.redraw();
   };
-  connection = connectToShell({ onHandshake, onShown, onHidden });
+  // A chat page wears its desktop's theme: told by the shell when it frames the page itself, read off the chat
+  // root when the root frames it (the shell never messages those).
+  connection = connectToShell({
+    onHandshake,
+    onShown,
+    onHidden,
+    onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
+  });
+  mirrorParentTheme();
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in
     // rather than by messaging (of the shell's messages, only the handshake comes down as one);
@@ -96,9 +108,13 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
       shown: onShown,
       hidden: onHidden,
       prependDraft: (text) => prependToComposer(chatId, text),
+      hintComposer: (hint) => setComposerHint(chatId, hint),
       setCompact: (isCompact) => {
         setCompactFromRoot(isCompact);
         m.redraw();
+      },
+      focus: () => {
+        if (!focusComposer()) window.focus();
       },
     };
     window.chatPageEmbed = embedApi;
@@ -122,7 +138,10 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     window.addEventListener("focus", reportFocusChange);
     window.addEventListener("blur", reportFocusChange);
   }
-  window.addEventListener("focus", () => connection?.focused());
+  window.addEventListener("focus", () => {
+    connection?.focused();
+    void ensureParticipants();
+  });
   reportChatLocation(chatId, options.path);
   return connection;
 }

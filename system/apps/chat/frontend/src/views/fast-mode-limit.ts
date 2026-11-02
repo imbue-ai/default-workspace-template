@@ -16,8 +16,11 @@
  * status line between turns -- so "5 turns" means five exchanges the user can see. The timeline
  * also breaks at system chips, notices and permission and secret verdicts, but none of those is a
  * turn the user took: the registry marks chips and notices as no turn, and verdicts are excluded on
- * top of that (the app talking to itself). So are the turns of a seeded chat's seed segment: the
- * Imbue Studio app wrote those before any agent ran, so they bought no fast turns.
+ * top of that (the app talking to itself). So are the turns of a seeded chat's seed segment: those
+ * were written before any agent ran, so they bought no fast turns. Nor is the `/compact` the idle
+ * sweep sends a Claude agent: the user never sent it, and it shows on its compaction's chip. Until
+ * something follows a `/compact`, the count cannot tell the sweep's from a typed one, so it leaves
+ * it out; the agent can read idle before the compaction's event reaches the page.
  */
 
 import m from "mithril";
@@ -34,7 +37,13 @@ import { hasFastModeLimit } from "../models/HarnessCatalog";
 import { getChatFastMode, setFastMode } from "../models/ModelSettings";
 import type { TranscriptEvent } from "../models/Response";
 import { SEED_SOURCE } from "../models/Response";
-import { isTurnUserMessage, resolutionOf, secretResolutionOf } from "./message-classification";
+import {
+  isLandedSweepCompactCommand,
+  isTurnUserMessage,
+  isUnresolvedCompactCommand,
+  resolutionOf,
+  secretResolutionOf,
+} from "./message-classification";
 
 // The chat whose switch raised the notice, or null while none is showing.
 let noticeChatId: string | null = null;
@@ -42,11 +51,16 @@ let noticeChatId: string | null = null;
 /** How many turns the user has actually taken with an agent in this conversation. */
 export function countUserTurns(events: readonly TranscriptEvent[]): number {
   let count = 0;
-  for (const event of events) {
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
     if (event.type !== "user_message") {
       continue;
     }
-    if (event.source === SEED_SOURCE) {
+    if (
+      event.source === SEED_SOURCE ||
+      isLandedSweepCompactCommand(events, i) ||
+      isUnresolvedCompactCommand(events, i)
+    ) {
       continue;
     }
     if (!isTurnUserMessage(event)) {

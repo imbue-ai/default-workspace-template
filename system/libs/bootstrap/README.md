@@ -12,7 +12,7 @@ service.
 
 ## What it does
 
-`uv run bootstrap` runs, in order:
+`bootstrap` runs, in order:
 
 1. **Global git config** - rewrites `git@`/`ssh://` GitHub remotes to `https://`.
    (`core.hooksPath` is deliberately NOT set here: the post-commit auto-push
@@ -21,7 +21,9 @@ service.
 2. **Workspace main branch** - on first boot only (gated by
    `data/.state/workspace_main_branch_initialized`), commits the rsynced workspace
    onto a clean `main` branch. It creates no chat: the chat app creates chats on
-   demand.
+   demand. The same first boot writes `data/.state/system_interface/offer_tour`,
+   which tells the system interface the workspace is new, so its show-around tour
+   may start by itself; a workspace that already existed never gets it.
 3. **Latchkey gateway env** - when `$MNGR_HOST_DIR/env` names no
    `LATCHKEY_GATEWAY` (a web-created workspace; a desktop's create passes its
    own values), appends `LATCHKEY_GATEWAY=http://host.docker.internal:1989`
@@ -37,6 +39,9 @@ service.
 4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
+   That environment gets the workspace venv activated (`.venv/bin` first on
+   `PATH`, `VIRTUAL_ENV` set), so a program line that names its entry point bare
+   resolves the venv's console script.
 
 ### Progress events
 
@@ -74,8 +79,10 @@ writes separate, rotated, container-local logs under
 
 To add, change, or remove a service, add/edit/delete its own
 `system/supervisord.conf.d/<name>.conf` and run
-`supervisorctl reread && supervisorctl update` (and `supervisorctl restart
-<name>` to bounce one). See the `update-app` skill, or
+`supervisorctl reread && supervisorctl update`. To bounce an app after a code
+change use `uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart`, which
+does not wait out a scaffolded app's `startsecs=30`; `supervisorctl restart
+<name>` is for a daemon with no port. See the `update-app` skill, or
 `.agents/shared/references/service-processes.md`, for details.
 
 ## Environment convergence (env-converge)

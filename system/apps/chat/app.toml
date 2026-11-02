@@ -24,7 +24,6 @@ mode = "new"
 path = "/"
 style = "avatar"
 scope = "independent"
-default_mode = "floating"
 
 # The chat list: a pure page, the launcher's "Chat" row (which raises the pinned window) and the shortcut.
 [[launch_paths]]
@@ -37,7 +36,6 @@ path = "/"
 # at the path the route answers. ``target`` says which chat receives the text, ``is_draft`` whether it is put
 # in the composer unsent.
 
-# The launcher's primary free-text row: what is typed into the desktop's field becomes a new chat's first message.
 # The launcher's Enter: a text typed into the desktop goes to the main chat.
 [[launch_paths]]
 id = "main"
@@ -48,6 +46,8 @@ params = [{name = "message", label = "Message to send", required = false}]
 presets = {target = "main_chat"}
 text_param = "message"
 
+# The launcher's Ctrl+Enter (its secondary free-text row): what is typed into the desktop's field becomes a new
+# chat's first message.
 [[launch_paths]]
 id = "new"
 label = "New Chat"
@@ -60,8 +60,8 @@ params = [
 presets = {target = "new_chat"}
 text_param = "message"
 
-# The launcher's secondary free-text row (Ctrl+Enter): the text goes to the one chat there is, or to the chat
-# picked from a picker the root opens over them.
+# A free-text row bound to no key: the text goes to the one chat there is, or to the chat picked from a picker
+# the root opens over them.
 [[launch_paths]]
 id = "send"
 label = "Send to chat..."
@@ -83,6 +83,42 @@ params = [{name = "message", label = "Draft message", required = false}]
 presets = {target = "current_chat", is_draft = "true"}
 draft_param = "message"
 
+# A click on a person in the desktop's tray (the multiplayer spec, section 7.5): a mention of them is drafted,
+# unsent, into the Lounge, the chat so titled of either kind, made as a room when there is none. Never a launcher row.
+[[launch_paths]]
+id = "lounge"
+label = "Mention in the Lounge"
+path = "/api/chats/intake"
+method = "POST"
+params = [{name = "message", label = "Mention", required = false}]
+presets = {target = "lounge", is_draft = "true"}
+mention_param = "message"
+
+# A window's "Chat about this app" (the multiplayer spec, section 9.2): the chat labelled app_chat with the app's
+# registered name, else the one titled "<App> Chat" (by the create's name-conflict rule), made with both on the
+# default provider when there is none, opened with the composer asking what to change. Never a launcher row.
+[[launch_paths]]
+id = "app-chat"
+label = "Chat about this app"
+path = "/api/chats/intake"
+method = "POST"
+params = [
+    {name = "app", label = "App", required = true},
+    {name = "app_display_name", label = "App name", required = true},
+]
+presets = {target = "app_chat"}
+app_params = {name = "app", display_name = "app_display_name"}
+
+# The chat's own look beyond the shared components: themes may style these elements in their apps/chat.css
+# (docs/system/blueprint/workspace-themes/, section 7). Renaming one breaks the themes that style it.
+[theming]
+mode = "parts"
+parts = [
+    {name = "user-message", description = "A message the user sent, in its bubble"},
+    {name = "composer", description = "The box a message is typed in, with its buttons"},
+    {name = "tool-call", description = "A block showing a tool the agent called and what came back"},
+]
+
 # A chat's launch stacks on the ``chat`` create template the committed mngr settings hold, and the
 # chat's create defaults resolve beside that file, so a change to it can break chat creation.
 [[references]]
@@ -92,6 +128,10 @@ note = "Holds the chat create template every chat launch stacks on"
 [[references]]
 path = ".agents/skills/connect-external-service"
 note = "request_secret.py files secret requests through /api/secret-requests"
+
+[[references]]
+path = ".agents/skills/update-self/python/update_self_skill/update_resume_note.py"
+note = "Writes the resume note whose tag and outcomes harnesses/message_display.py shows as a notice"
 
 # The Imbue Studio app's ask to show a chat (its chat notifications): the shell posts it here, and this app asks the
 # shell's ``show`` op for the window (desktop-interface contracts.md section 8).

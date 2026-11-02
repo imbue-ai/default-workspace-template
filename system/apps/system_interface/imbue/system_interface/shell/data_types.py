@@ -21,6 +21,7 @@ from workspace_layout.primitives import IfPresent
 from workspace_layout.primitives import ShowOutcome
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
+from workspace_layout.primitives import WindowPage
 from workspace_layout.primitives import WindowPath
 from workspace_layout.primitives import WindowTitle
 from workspace_layout.records import ClientRecord
@@ -32,11 +33,13 @@ from workspace_layout.records import StoredWindowPath
 from workspace_layout.records import Window
 from workspace_layout.records import WindowPlacement
 from workspace_layout.records import WindowView
+from workspace_themes.primitives import ThemeId
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.primitives import NonEmptyStr
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.app_theming import theming_of
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.primitives import LaunchTargetKind
 from imbue.system_interface.shell.primitives import PageId
@@ -84,7 +87,7 @@ def stoppable_program_of(entry: AppInventoryEntry, entries: Sequence[AppInventor
 
 
 @pure
-def app_view(entry: AppInventoryEntry, share_domain: str | None) -> InventoryApp:
+def app_view(entry: AppInventoryEntry, share_domain: str | None, theming_off: frozenset[AppName]) -> InventoryApp:
     """The ``app`` object of desktop contracts.md section 5.5; ``share_domain`` is the domain the workspace was last
     shared under, if it ever was, on which an app with a label has an address."""
     row = entry.row
@@ -105,6 +108,7 @@ def app_view(entry: AppInventoryEntry, share_domain: str | None) -> InventoryApp
         message_handlers=row.message_handlers,
         is_running=entry.is_running,
         share_url=f"https://{row.label}.{share_domain}/" if share_domain is not None and row.label else None,
+        theming=theming_of(row, theming_off),
     )
 
 
@@ -197,7 +201,30 @@ class DesktopsDocument(FrozenModel):
     """The whole of ``desktops.json``."""
 
     version: int = Field(description="The file format version")
-    desktops: tuple[Desktop, ...] = Field(description="Every desktop, in creation order; the first is the fallback")
+    desktops: tuple[Desktop, ...] = Field(
+        description="Every desktop, in display order (creation order, as the order route rearranged it); the first is "
+        "the fallback"
+    )
+
+
+class DesktopThemesDocument(FrozenModel):
+    """The whole of ``desktop_themes.json``: the workspace's default theme, and the desktops that wear another
+    (docs/system/blueprint/workspace-themes/, section 5.2).
+
+    Kept beside ``desktops.json`` rather than in it: a shell from before themes still reads that file, and its
+    records refuse a key they do not know.
+    """
+
+    version: int = Field(description="The file format version")
+    default: ThemeId | None = Field(description="The workspace's default theme; none wears the standard one")
+    desktops: dict[DesktopId, ThemeId] = Field(description="Each desktop that wears its own theme, by desktop id")
+
+
+class ThemeChoices(FrozenModel):
+    """What the workspace and its desktops chose to wear, as stored; availability is the catalog's to judge."""
+
+    default: ThemeId | None = Field(description="The workspace's default theme; none wears the standard one")
+    theme_by_desktop_id: dict[DesktopId, ThemeId] = Field(description="Each desktop that wears its own theme")
 
 
 class DefaultShortcutsOfferedDocument(FrozenModel):
@@ -235,12 +262,32 @@ class WindowOpenRequest(FrozenModel):
     )
 
 
+class PageShowRequest(FrozenModel):
+    """The body of ``POST /api/clients/<id>/show`` (desktop contracts.md section 5.3): the ``show`` op's arguments."""
+
+    app: AppName = Field(description="The app whose page to show")
+    path: WindowPath = Field(description="The path to put on the client's screen")
+    showing: tuple[WindowPath, ...] = Field(
+        default=(), description="The app's other paths that count as already showing it"
+    )
+    repoint: tuple[WindowPage, ...] = Field(
+        default=(), description="The pages whose windows the shell may point at the path"
+    )
+
+
 class LaunchTarget(FrozenModel):
     """Where a launch's page goes (post-launch-paths plan section 3.3)."""
 
-    kind: LaunchTargetKind = Field(description="A new window, a window already at the path, or a named window")
+    kind: LaunchTargetKind = Field(
+        description="A new window, a window already at the path, a named window, or the show op's choice"
+    )
     window_id: WindowId | None = Field(
         default=None, description="The window this client points at the page; required for the window kind"
+    )
+    beside: WindowId | None = Field(
+        default=None,
+        description="For the show kind, a window of the desktop the shown window is snapped beside (the multiplayer "
+        "spec, section 9.2); none lays nothing out",
     )
     sends_window_path: bool = Field(
         default=True,
@@ -249,9 +296,13 @@ class LaunchTarget(FrozenModel):
     )
 
     @model_validator(mode="after")
-    def _check_window_named_for_the_window_kind(self) -> "LaunchTarget":
+    def _check_fields_fit_the_kind(self) -> "LaunchTarget":
         if (self.kind is LaunchTargetKind.WINDOW) != (self.window_id is not None):
             raise InvalidShellValueError("a launch target names a window exactly when its kind is 'window'")
+        if self.beside is not None and self.kind is not LaunchTargetKind.SHOW:
+            raise InvalidShellValueError(
+                "only a launch target of the 'show' kind lays the shown window out beside one"
+            )
         if not self.sends_window_path and self.kind is not LaunchTargetKind.WINDOW:
             raise InvalidShellValueError("only a launch target of the 'window' kind has a window path to withhold")
         return self
@@ -297,6 +348,19 @@ class ClientDesktopView(FrozenModel):
     seen_windows: tuple[Window, ...] = Field(description="The desktop's windows as the client sees them")
 
 
+class ShownWindow(FrozenModel):
+    """What showing a path came to for one client (the ``show`` op's rule applied): the desktop the window is on,
+    the window, how it was put on screen, and whether that was a raise of a pulled-out window's own desktop window."""
+
+    desktop: Desktop = Field(description="The desktop the shown window is on, as it stands after the show")
+    window_id: WindowId = Field(description="The window showing the path")
+    outcome: ShowOutcome = Field(description="Raised, navigated, the pinned window navigated, or opened")
+    is_raised_in_own_window: bool = Field(
+        description="The window was pulled out into a desktop window of the embedder's own, so that was raised and "
+        "nothing on the desktop moved"
+    )
+
+
 class ShowChoice(FrozenModel):
     """What a ``show`` op settled on: how it shows the path, on which desktop, and the window (none for an open)."""
 
@@ -330,7 +394,7 @@ class DesktopChangeOutcome(FrozenModel):
 class DesktopsChangeOutcome(FrozenModel):
     """What an edit over every desktop that may change nothing came to: the desktops, and whether they were written."""
 
-    desktops: tuple[Desktop, ...] = Field(description="Every desktop after the edit, in creation order")
+    desktops: tuple[Desktop, ...] = Field(description="Every desktop after the edit, in display order")
     is_written: bool = Field(description="Whether the edit changed a desktop and the file was written")
 
 
@@ -365,12 +429,17 @@ def window_view(window: Window, client_paths: Mapping[ClientId, WindowPath]) -> 
 
 
 @pure
-def desktop_view(desktop: Desktop, client_paths: Mapping[WindowId, Mapping[ClientId, WindowPath]]) -> DesktopView:
+def desktop_view(
+    desktop: Desktop, client_paths: Mapping[WindowId, Mapping[ClientId, WindowPath]], theme: ThemeId | None
+) -> DesktopView:
     """The ``desktop`` object of desktop contracts.md section 5.2: the record of section 4.1 with each window
     carrying ``client_paths``, the path each client's page of an independent window is at (empty for a linked
-    window, and for a client at the home path), so a reader of the shell's windows sees what every client shows."""
+    window, and for a client at the home path), so a reader of the shell's windows sees what every client shows; and
+    ``theme``, the desktop's own theme, or None when it wears the workspace's default."""
     windows = tuple(window_view(window, client_paths.get(window.id, {})) for window in desktop.windows)
-    return DesktopView.model_validate({**dict(desktop), "windows": windows})
+    return DesktopView.model_validate(
+        {**dict(desktop), "windows": windows, "theme": None if theme is None else str(theme)}
+    )
 
 
 @pure
