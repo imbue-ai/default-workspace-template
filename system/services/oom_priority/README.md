@@ -68,8 +68,9 @@ ever acting on a laptop with swap.
   `priority` an app's manifest declares; the chat app sits at 25, just above
   the agent observer at 24, itself just above the shell) <
   user-created services (`USER_SERVICE`, 200) < user agent (300) < worker agent
-  (600) < agent subprocess (900) < Chromium's own processes (910-1000, renderers
-  at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
+  (600) < the Screen's stack (`SCREEN_STACK`, 850: the desktop an agent or the user
+  launched, so it goes before any agent and after the programs on it) < agent
+  subprocess (900) < Chromium's own processes (910-1000, renderers at the ceiling). Chat agents occupy a *dynamic* range that straddles the worker
   band: `CHAT_AGENT_FLOOR` (300, a chat being engaged with right now) through
   `CHAT_AGENT_BASE` (560, idle but recently used, and the launch band) up to
   `CHAT_AGENT_STALE_CEILING` (800, untouched long enough to count as abandoned).
@@ -114,8 +115,11 @@ without inspecting the process tree:
 | a workspace terminal's shell (a `terminal-N` tmux session's pane, and everything run in it) | session creation | `terminal-session` (the user-service level, 200) | `system/services/oom_priority/bin/oom_tag_service.py terminal-session bash -l`, the session command the terminal app gives `tmux new-session` (a pane otherwise inherits the tmux server's protected 0) |
 | an agent's main process | launch | chat -> the idle-but-fresh chat band (560); worker or unidentifiable -> worker agent | `system/services/oom_priority/bin/agent_oom_launch.py` |
 | an agent's subprocesses | each Bash tool call | agent subprocess (most expendable) | `system/scripts/agent_rewrite_bash_command.py` (PreToolUse; also sets the commit identity) |
-| the browser coordinator | launch | its `SERVICE_BANDS` value (70, an ordinary service band; Files and Getting Started sit above it) | `system/services/oom_priority/bin/oom_tag_service.py browser` (command prefix) |
-| Chromium's own processes | on fleet events (launch, new page, navigation) | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the browser service's re-tagging sweep (`browser.oom_retag`) -- see "The Chromium exception" below |
+| the Screen service | launch | `screen` (72, an ordinary service band; Files and Getting Started sit above it) | `system/services/oom_priority/bin/oom_tag_service.py screen` (command prefix) |
+| the four programs of the Screen's stack (`screen-xorg`, `screen-session`, `screen-pulse`, `screen-neko`) and its watcher | launch | `SCREEN_STACK` (850), by program name through `_NON_SERVICE_PROGRAM_BANDS` | `system/services/oom_priority/bin/oom_tag_service.py <program name>` (command prefix) |
+| a program started on the Screen by `screen run` | launch | agent subprocess (900) | the Screen service's launcher (`oom_tag_shell_prefix`) |
+| a program started from the Screen itself (the XFCE menu, a terminal on it) | the Screen service's sweep, every 10 s | agent subprocess (900) | the Screen service's band sweep (`screen.band_sweep`) -- see "The Chromium exception" below |
+| Chromium's own processes | the same sweep, with a burst after a launch or a new tab | `[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` (910-1000), renderers at the ceiling | the Screen service's band sweep -- see "The Chromium exception" below |
 
 Each supervisord service tags itself the same way an agent's main process does:
 its `command` in `system/supervisord.conf.d/<name>.conf` runs `system/services/oom_priority/bin/oom_tag_service.py <key> <the
@@ -204,12 +208,21 @@ The kernel cannot forbid the lowering: without `CAP_SYS_RESOURCE` any process
 may lower its own value back down to its inherited floor (`oom_score_adj_min`,
 0 everywhere in this container). But Chromium writes each value exactly once
 (its continuous re-adjustment is ChromeOS-only), so an external raise sticks.
-The browser service therefore sweeps its descendants and remaps every value
-found below `SHARED_BROWSER_FLOOR` (910) into `[SHARED_BROWSER_FLOOR,
-SHARED_BROWSER]` via `bands.shared_browser_oom_score_adj`. The mapping is
-order-preserving, so Chrome's gradation decides where in the band each process
-lands -- which is what makes earlyoom shed one tab's renderer before the whole
-browser. The sweep only remaps values below the floor, so it is idempotent.
+The Screen service (`system/apps/screen`, which launches the browser's Chromium
+and runs the desktop it shows on) therefore sweeps the process trees of the
+Chromium it launched and of its `screen-session` program and remaps every
+Chromium value found below `SHARED_BROWSER_FLOOR` (910) into
+`[SHARED_BROWSER_FLOOR, SHARED_BROWSER]` via `bands.shared_browser_oom_score_adj`.
+The mapping is order-preserving, so Chrome's gradation decides where in the band
+each process lands -- which is what makes earlyoom shed one tab's renderer
+before the whole browser. The sweep only remaps values below the floor, so it is
+idempotent. The same sweep is what raises everything else started from the Screen
+(the XFCE menu, a terminal on it), which inherits the session's band, to
+`AGENT_SUBPROCESS`, leaving only the session's own programs (`xfce4-session`,
+`xfwm4`, `xfce4-panel`, `xfdesktop`, `xfsettingsd`, `xfconfd`, the D-Bus daemon)
+in the stack's band (`SCREEN_STACK`, 850); under pressure the order is Chromium's
+renderers, then the programs on the Screen, then the stack, then the agents (the
+Screen spec, section 9.4).
 
 The input range is Chrome's own gradation (0-300), **not** 0-1000. Scaling
 against 1000 would compress every Chromium process into 910-937, the bottom
@@ -218,26 +231,19 @@ third of the band, and leave the top to whatever merely *inherited* a high value
 exactly backwards: the renderers hold nearly all of a browser's memory and cost
 one tab to shed, so they belong at the ceiling.
 
-The same reasoning is why the **coordinator is not in this band at all**. It is
-the daemon that launches and drives Chromium, and it is tagged as an ordinary
-(if most-expendable) service. Shedding it frees almost nothing: it holds little
-memory, the Chromium processes outlive its death, and supervisord restarts it
-straight back into the same session. Sitting at the ceiling it was picked first
-under every memory-pressure episode while releasing none of the memory that
-mattered. A descendant that never self-writes inherits its low service value and
-so is remapped near the band's floor, below every renderer -- correct, since it
-too holds almost no memory. Crashpad is never remapped at all: it re-parents to
-init, so the sweep (which walks the daemon's descendants) never sees it, and it
-just keeps the service band it inherited at fork time.
+The same reasoning is why the **Screen service is not in this band at all**. It
+launches Chromium and is tagged as an ordinary service (`screen`, 72). Shedding
+it frees almost nothing: it holds little memory, and supervisord restarts it
+straight back. Sitting at the ceiling it would be picked first under every
+memory-pressure episode while releasing none of the memory that mattered.
+Crashpad is never remapped at all: it re-parents to init, so the sweep (which
+walks the launched Chromium's and the session's descendants) never sees it, and
+it just keeps the band it inherited at fork time.
 
-The sweep is event-driven, not periodic: Chromium processes appear only at
-moments the fleet observes -- a browser launch, a new page (the CDP observer's
-`page` event fires for every new tab, whether opened by an agent command, a
-human in the cast viewer, or a page popup), and a navigation (`framenavigated`
-fires for every frame, and a cross-site navigation can swap in a fresh
-renderer). Each such event triggers a short burst of sweeps (`browser.oom_retag`,
-~1s cadence for ~6s), because the processes spawn and self-write their values
-over the seconds *after* the event; between events the sweeper sleeps.
+The sweep runs every 10 seconds and in a burst after each event that spawns
+Chromium processes (a launch, a new tab opened by the launch path, the open:url
+handler or a restore), about one sweep a second for six seconds, because the
+processes spawn and self-write their values over the seconds *after* the event.
 
 ## Dynamic chat band
 
@@ -384,7 +390,7 @@ It lists:
   critical (the shell, the chat and the terminal are what the workspace is
   reached and talked to through), does not share a critical app's program (the
   stop would take that app down with it), is not internal, and is running. The
-  browser is left out: its service holds almost nothing and its Chromium
+  Screen is left out: its service holds almost nothing and the browser's Chromium
   processes have their own section below. Each row carries how many windows show
   the app, which is what decides whether stopping it takes something off the
   user's screen, and `AUTO-STOP` (`stop_when_no_windows` in JSON), which says
@@ -392,17 +398,15 @@ It lists:
   grace period. An app it does not is one that may do work between requests, so
   it is the costlier one to take down. Its memory is the summed anonymous memory
   of its program's process tree.
-- **Browsers no window shows**, from the browser service's `GET /browsers`. A
-  candidate is a `running` browser that no window names, according to the same
-  inventory document. Its memory is the summed anonymous memory of the Chromium
-  processes on its profile and their children.
+- **The browser while no window shows the Screen**, from the Screen service's
+  `GET /browsers` (`system/apps/screen/README.md`, "The browser"). A candidate
+  is a `running` browser while no window of the `screen` app exists on any
+  desktop, according to the same inventory document. Its memory is the summed
+  anonymous memory of the Chromium processes on its profile and their children.
 
-The browser service stops a browser on its own once a window has shown it and
-none shows it any more (`system/apps/browser/README.md`). So the browsers this
-lists are ones no window ever showed. The fleet CLI opens a window for every
-browser it starts, so one reaches this list only when that open failed (no
-shell answered) or something started the browser through the service's API
-directly.
+The Screen's stack never stops for emptiness and the browser is never stopped
+when its windows close, so a browser nobody is looking at keeps its memory until
+it is stopped; closing the Screen's window frees nothing on its own.
 
 Each figure sums the processes' anonymous memory (the `Anonymous` lines of
 `smaps_rollup`, or of `smaps` under gVisor, which has no rollup); under gVisor
@@ -413,12 +417,12 @@ Pages a process still shares with its parent after a fork count in both, so a
 browser can read somewhat above what stopping it frees; read the free memory
 again after stopping something.
 
-Each source is read on its own. When `mngr list`, the browser service, the
+Each source is read on its own. When `mngr list`, the Screen service, the
 shell or supervisord cannot be read, that section says so, and its candidates are
 `null` in JSON: "unknown", not "none". The other sections are still listed, and
 the command still exits 0. The shell is read once, and its one document answers
-both the apps and the browsers, so a shell that cannot be reached takes both
-sections to "unknown" together.
+both the apps and whether a window shows the Screen, so a shell that cannot be
+reached takes both sections to "unknown" together.
 
 A lead runs it when one of its agents reports a shed. It shows the user the
 list and the free memory, and stops only what the user approves (a scheduled
@@ -435,8 +439,9 @@ update is the one flow that may go further on its own judgment; see the
 - **A worker**: `create_worker.py stop --name <name>` (the `launch-task`
   skill). It archives the worker, so dead-worker recovery does not take it for
   a crash and restart it. A plain `mngr stop` would look like a crash.
-- **A browser**: `POST /browsers/<name>/stop` on the browser service. This
-  keeps the browser's profile and tabs, and its next window starts it again.
+- **A browser**: `POST /browsers/<name>/stop` on the Screen service. This
+  keeps the browser's profile and tabs; the browser launch path, `uv run --no-sync
+  agentic-browser-fleet new` or `POST /browsers/<name>/start` starts it again.
 - **An app**: `supervisorctl stop <program>`, and `supervisorctl start
   <program>` to put it back. Stopping the program leaves the app's windows
   where they are: a window is the shell's, not the app's, and only an explicit

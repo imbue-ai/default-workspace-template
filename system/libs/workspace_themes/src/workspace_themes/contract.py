@@ -116,11 +116,13 @@ COLOR_TOKENS: Final[tuple[str, ...]] = (
     "--c-border-code",
     "--c-border-faint",
     "--c-border-strong",
+    "--c-bubble-other",
     "--c-danger",
     "--c-danger-bg",
     "--c-danger-border",
     "--c-danger-hover",
     "--c-fill-active",
+    "--c-fill-faint",
     "--c-fill-hover",
     "--c-inverse-surface",
     "--c-inverse-surface-hover",
@@ -243,13 +245,14 @@ BARE_CONTROLS_BY_PART: Final[Mapping[str, tuple[str, ...]]] = {
     "select": (":is(select)",),
 }
 
-# The standard title bar (section 4.3).
-STANDARD_TITLE_ALIGN: Final[TitleAlign] = TitleAlign.START
+# The standard title bar (section 4.3; the multiplayer spec, section 9.1): the window menu and Refresh lead, the
+# icon and title sit centred over the bar.
+STANDARD_TITLE_ALIGN: Final[TitleAlign] = TitleAlign.CENTER
 STANDARD_LEADING_SLOTS: Final[tuple[ChromeSlot, ...]] = (
+    ChromeSlot.MENU,
+    ChromeSlot.REFRESH,
     ChromeSlot.ICON,
     ChromeSlot.TITLE,
-    ChromeSlot.REFRESH,
-    ChromeSlot.MENU,
 )
 STANDARD_TRAILING_SLOTS: Final[tuple[ChromeSlot, ...]] = (
     ChromeSlot.MINIMIZE,

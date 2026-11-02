@@ -18,10 +18,12 @@ from pydantic import ValidationError
 from workspace_layout.answers import ClientView
 from workspace_layout.primitives import ClientId
 from workspace_layout.primitives import DesktopId
+from workspace_layout.primitives import ParticipantKey
 from workspace_layout.primitives import UserId
 from workspace_layout.primitives import WindowId
 from workspace_layout.records import ClientRecord
 from workspace_layout.records import EntryPresentation
+from workspace_layout.records import Viewport
 
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.model_update import to_update
@@ -59,6 +61,9 @@ class _StoredClient(FrozenModel):
     active_desktop: DesktopId | None = Field(default=None, description="The desktop the client is on")
     last_seen: datetime = Field(description="When the client last arrived or reported")
     user_id: UserId | None = Field(default=None, description="The signed-in visitor the client last arrived as")
+    participant: ParticipantKey | None = Field(
+        default=None, description="Who the client last arrived as; None for a record from before the key was kept"
+    )
     entries: dict[str, EntryPresentation] = Field(
         default_factory=dict, description="The client's presentation of each pinned entry, by app name"
     )
@@ -73,6 +78,9 @@ class _StoredClient(FrozenModel):
     desktop_moved_by: PageId | None = Field(
         default=None,
         description="The page whose report wrote the current desktop revision; None when an op or an arrival did",
+    )
+    viewport: Viewport | None = Field(
+        default=None, description="The backdrop size the client's desktop layout last reported; None until it has"
     )
 
 
@@ -102,9 +110,11 @@ def _record_of(client_id: ClientId, stored: _StoredClient) -> ClientRecord:
         active_desktop=stored.active_desktop,
         last_seen=stored.last_seen,
         user_id=stored.user_id,
+        participant=stored.participant,
         entries=stored.entries,
         shown_history=stored.shown_history,
         desktop_revision=stored.desktop_revision,
+        viewport=stored.viewport,
     )
 
 
@@ -214,8 +224,10 @@ class ClientStore(MutableModel):
                     active_desktop=report.active_desktop,
                     last_seen=stamped,
                     user_id=previous.user_id if previous is not None else None,
+                    participant=previous.participant if previous is not None else None,
                     entries=previous.entries if previous is not None else {},
                     shown_history=previous.shown_history if previous is not None else (),
+                    viewport=previous.viewport if previous is not None else None,
                 ),
                 is_revised_regardless=is_redirected,
                 mover=report.page_id,
@@ -241,9 +253,15 @@ class ClientStore(MutableModel):
         )
 
     def record_arrival(
-        self, client_id: ClientId, user_id: UserId | None, desktop_id: DesktopId, now: datetime
+        self,
+        client_id: ClientId,
+        user_id: UserId | None,
+        participant: ParticipantKey,
+        desktop_id: DesktopId,
+        now: datetime,
     ) -> ClientReportOutcome:
-        """Record a client's arrival (the shell page loading): the user it arrived as and the desktop it lands on."""
+        """Record a client's arrival (the shell page loading): the user it arrived as, the participant key it
+        arrived under, and the desktop it lands on."""
         stamped = now.astimezone(timezone.utc)
         return self._store_client(
             client_id,
@@ -251,8 +269,10 @@ class ClientStore(MutableModel):
                 active_desktop=desktop_id,
                 last_seen=stamped,
                 user_id=user_id,
+                participant=participant,
                 entries=previous.entries if previous is not None else {},
                 shown_history=previous.shown_history if previous is not None else (),
+                viewport=previous.viewport if previous is not None else None,
             ),
             is_revised_regardless=False,
             mover=None,
@@ -324,6 +344,17 @@ class ClientStore(MutableModel):
             client_id,
             lambda previous: previous.model_copy_update(
                 to_update(previous.field_ref().shown_history, with_shown_entry(previous.shown_history, entry)),
+                to_update(previous.field_ref().last_seen, stamped),
+            ),
+        )
+
+    def set_viewport(self, client_id: ClientId, viewport: Viewport, now: datetime) -> ClientRecord:
+        """Store the backdrop size a recorded client's desktop layout reported; raises ClientNotFoundError."""
+        stamped = now.astimezone(timezone.utc)
+        return self._update_recorded_client(
+            client_id,
+            lambda previous: previous.model_copy_update(
+                to_update(previous.field_ref().viewport, viewport),
                 to_update(previous.field_ref().last_seen, stamped),
             ),
         )

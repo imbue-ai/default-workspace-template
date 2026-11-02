@@ -88,8 +88,12 @@ things in), but one suffices if the emergency scenarios (E15) are run last.
   `ObserveEventFollower` with `require_writer`, or the chat's follower and the observer's
   writer disagree on the file. Check with
   `python3 -c "from imbue.mngr.api.observe import ObserveEventFollower; import inspect; print('require_writer' in inspect.signature(ObserveEventFollower).parameters)"`
-  under both the chat's tool env and the env the observer runs in (there are two tool
-  envs in a workspace; the one under `/root` and the one under `/home/user` can differ).
+  under both the workspace venv the chat runs from (`.venv/bin/python`) and the environment
+  the observer runs in (the interpreter on the shebang line of the `mngr` its cmdline
+  names). The observer runs `mngr` by bare name, so under supervisord, whose PATH
+  bootstrap leads with `.venv/bin`, that is normally the venv's own; it is a mngr
+  tool only when PATH reached one, and a workspace can hold two, the one under `/root`
+  and one under `/home/user`, which can differ.
 - **S0.2 Baseline health.** `supervisorctl status` shows `agent-observer`, `chat`,
   `system_interface`, `terminal` RUNNING. `curl -s localhost:8010/api/health` answers
   `agent_events.is_stream_healthy: true`. `curl -s localhost:8010/_instances` answers 200
@@ -167,8 +171,9 @@ that survives SIGKILL, a rollback that dies from an exception mid-run, an unread
   `mngr notify` invocation (the notifications plugin) does not start a second observer:
   `pgrep -af "mngr observe"` shows one. Stop the observer, run `mngr notify` again: it
   starts its own and says so. Stop that one and restart the program.
-- **A8 Pre-flight boot unchanged.** `CHAT_PORT=18010 chat-app --preflight` from the repo
-  root: `/api/health` answers 200 within the apply's budget, starts no follower
+- **A8 Pre-flight boot unchanged.** `CHAT_PORT=18010 .venv/bin/chat-app --preflight` from
+  the repo root (the install the apply's pre-flight boots): `/api/health` answers 200
+  within the apply's budget, starts no follower
   (`agent_events.is_stream_healthy` is `false` with the "not been started" detail), and
   `pgrep -af "mngr observe"` still shows one process. Kill it.
 - **A9 Bands.** `cat /proc/<pid>/oom_score_adj` for the observer, the chat, the shell, and
@@ -426,11 +431,17 @@ shell's, chat's, and terminal's supervisord pids and `git rev-parse HEAD`.
   serves `/_instances` 200: exit 2 after the settled-verdict budget with the failure
   naming the chat's instances API.
 - **E15 Rollback that does not restore health (exit 3).** Only in a workspace you can
-  afford to break: after an apply of a chat change with the flag, sabotage the kept
-  snapshot copy of the chat's tool environment (or the bundle) so the restore yields an
-  unbootable chat, then Roll back. Pass: the outcome says "did not come back healthy",
-  `emergency.json` exists, reloading the shell shows the staleness banner, exit 3 in the
-  log. Recover by hand (`git revert` of the revert, rebuild) and confirm the banner clears.
+  afford to break: after an apply with the flag of a chat change that also edits its
+  `pyproject.toml` (a `description` change in `system/apps/chat/pyproject.toml`, so a
+  rollback re-syncs the venv from the restored tree), break the venv in a way that sync
+  does not repair: delete the `flask` package directory from the `site-packages` of the
+  venv `.venv` links to, leaving its `dist-info` (uv judges what is installed by its
+  metadata, so `uv sync --frozen` does not reinstall it). Then Roll back. Sabotaging only
+  the kept bundle does not do it: the chat still boots, without its page, and the
+  rollback exits 0. Pass: the outcome says "did not come back healthy", `emergency.json`
+  exists, reloading the shell shows the staleness banner, exit 3 in the log. Recover by
+  hand (`git revert` of the revert, `uv sync --all-packages --frozen --reinstall-package
+  flask`, rebuild) and confirm the banner clears.
 - **E16 update-self keeps no notice.** Run the update-self apply (no flag, `--ff-only`)
   on a trivial fast-forward: no `last-good.json`, no band, `run.json` updated as before.
 - **E17 Settled verdict.** In E2's apply output, the phase timings show the post-restart
@@ -535,10 +546,12 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
   holds for an untouched point; after a rollback that failed, the copies must survive Close.
 - **D5's `--timeout` is the worker's own completion time.** Pass one the stand-in can meet,
   or accept `timed_out: true` beside the right `branch`.
-- **Tool-environment copies need uv-tool launchers.** The staging image's root-venv
-  entrypoints are not uv tools, so its snapshots held bundles only (F3, E15). E20 and E24's
-  tool-environment variants need an image whose critical apps run from uv tools; record
-  which the target is (`uv tool list`, and the snapshot locator's note in the apply output).
+- **An app's environment is the venv, which is never copied.** Every critical app runs
+  from the workspace venv, which the apply re-syncs (into a fresh target, swapped in by
+  link) only when a backend manifest or a built-in app's `pyproject.toml` changed, and a
+  rollback of such an apply re-syncs it from the restored tree. A chat-only or frontend
+  apply touches bundles only (F3). E15, and E20 and E24's environment variants, need an
+  apply that changes one (a built-in app's `pyproject.toml` will do).
 
 ### B. The shared script
 
@@ -591,15 +604,16 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
     note and rebuilt from merged source. Both apps are included because both bundles were
     replaced, not because the missing stamp affects rollback targeting. Stamp checks still
     prevent installing worker bundles built from stale or unverified source.
-- **E20 A shared backend manifest touches every critical app.** Apply a harmless edit to
+- **E20 An app's `pyproject.toml` touches every critical app.** Apply a harmless edit to
   `system/apps/system_interface/pyproject.toml` (a `description` change) with the flag.
-  Pass: the plan reinstalls every app's tool environment (`plan.app_tools` names all three;
-  the apply output lists three reinstalls); the record's `apps` and `programs` name `chat`,
-  `system_interface`, and `terminal`; `snapshots` include a tool-environment copy per app on
-  a uv-tool image; band on chat and terminal tabs and the shell's banner. Roll back: all
-  three restart, each instances API is held to the settled verdict, every band shows the
-  outcome. Before, the record named the shell alone and the rollback left the chat and
-  terminal running the updated code over the restored environment.
+  Pass: the plan counts the change as an app pyproject, so the apply re-syncs the
+  workspace venv every app runs from into a fresh target and swaps it in by link; the
+  record's `apps` and `programs` name `chat`, `system_interface`, and `terminal`;
+  `snapshots` hold neither the venv nor the mngr tool environment; band on chat and
+  terminal tabs and the shell's banner. Roll back: all three restart onto the venv the
+  rollback re-syncs from the restored tree, each instances API is held to the settled verdict,
+  every band shows the outcome. Before, the record named the shell alone and the rollback
+  left the chat and terminal running the updated code over the restored environment.
 - **E21 A startup-only change, through the banner.** E8 through the UI: a comment change
   under `system/libs/bootstrap/`, applied with the flag. Pass: `apps: []`, `programs: []`,
   `needs_system_services_restart: true`; the shell's top banner reads "The workspace was
@@ -663,7 +677,7 @@ E5, E8, E9, E15, F5, X4), then these. Numbering continues each group's.
 | `serve_isolated_instance.py up` inner-path check, `is_frontend_built` probe | B11 B12 C16 |
 | `preview_app.py` reframe on sibling down / re-up | C14 |
 | unregistered sidecar: no nudge, no discovery event | C15 |
-| bundle stamp comparison, tool-environment touch | E19 E20 |
+| bundle stamp comparison, venv re-sync touch | E19 E20 |
 | workspace-only notice, fast-settling rollback answered as under way | E21 |
 | serialized launch, refusal relayed verbatim, refusal scoped to its notice state | E22 E23 |
 | restored-page check, copies kept on failure, `confirm-last` on a touched point | E24 |

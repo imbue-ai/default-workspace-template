@@ -5,7 +5,9 @@ from pydantic import Field
 from pydantic import RootModel
 from workspace_layout.ops import OpBody
 from workspace_layout.primitives import ShowOutcome
+from workspace_layout.records import DesktopLayoutView
 from workspace_layout.records import DesktopView
+from workspace_layout.records import Viewport
 from workspace_layout.records import WindowView
 
 from imbue.imbue_common.frozen_model import FrozenModel
@@ -52,6 +54,16 @@ class PlacementsSavedResponse(FrozenModel):
 
     updated_at: str | None = Field(
         description="When the saved layout was written, as the read route spells it; null when nothing was saved"
+    )
+
+
+class OwnerLayoutView(DesktopLayoutView):
+    """What the placements read answers with ``?of=owner`` (the multiplayer spec, section 8.3): the layout, and the
+    backdrop size the client it came from last reported, so a viewing window can draw the layout at that size."""
+
+    viewport: Viewport | None = Field(
+        description="The chosen client's reported backdrop size; null when no client wrote a layout or it never "
+        "reported one"
     )
 
 

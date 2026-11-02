@@ -90,9 +90,7 @@ class RecordSnapshot(FrozenModel):
 class UnitRunResult(FrozenModel):
     """Outcome of one env.d unit script run."""
 
-    unit_name: str = Field(
-        description="Script file name (e.g. 1000-playwright-fortress.sh)"
-    )
+    unit_name: str = Field(description="Script file name (e.g. 2000-screen.sh)")
     exit_code: int = Field(description="The unit's exit code (0 = satisfied/installed)")
     duration_seconds: float = Field(description="Wall-clock run time")
 

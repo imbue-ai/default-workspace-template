@@ -112,7 +112,7 @@ A shortcut is `{target, mode, cell}` where `target` is `{kind: "launch", app, la
 `focus` raises the most recently focused window of that app in this client's layout of this desktop (restoring it when minimized) and runs the launch path only when there is none; `new` always runs it.
 A desktop holds at most one shortcut per `(app, launch)`.
 
-Every registered, non-internal app has at most one default shortcut: its manifest's `default_shortcut` when it declares one, whether or not that launch path takes typed or drafted text (none when it names a launch path the app does not offer); otherwise, when its row names a `program`, its first launch path that takes no text (one declaring neither a `text_param` nor a `draft_param`), or its first launch path when every one takes text, in `focus` mode. A shortcut of a launch path that takes text runs it with no text.
+Every registered, non-internal app has at most one default shortcut: its manifest's `default_shortcut` when it declares one, whether or not that launch path takes typed or drafted text (none when it names a launch path the app does not offer); otherwise, when its row names a `program`, its first launch path that takes no text and no mention (one declaring none of `text_param`, `draft_param`, and `mention_param`), or its first launch path when every one takes one, in `focus` mode. A shortcut of a launch path that takes text runs it with no text.
 A row naming no program and declaring no `default_shortcut` has none: such a row is a preview frame, an isolated test server, or an app registered before manifests without `forward_port.py --program`, while an app built from a manifest names one, and so does an app registered before manifests with `--program`.
 A new desktop is seeded from every app's default shortcut, in launcher order (by `launcher_rank`, lowest first, then the apps that declare none; registry order breaks every tie), laid out in reading order from the grid origin.
 An app that registers after a desktop was made is added to it as 3.2 says.
@@ -216,7 +216,7 @@ Close removes the window from the desktop for every client: the shell drops it f
 The close button, the window menu, a taskbar entry's context menu, an agent's `close`, and the minds chrome's close chord (`minds:close-active-tab`, which closes the focused window after sending it `shell:close-request`) all do this.
 The shell itself has no notion of stopping or deleting what the window showed; what the window showed is the app's to keep or collect, and the terminal and the browser collect it once no window shows it, told of the close through the manifest's `window_closed_path` and sweeping the shell's windows regardless (`docs/system/specs/window-bound-resources.md`).
 The app's *process* is another matter: an app whose manifest declares `stop_when_no_windows` is stopped by the shell a minute after its last window closes, and comes back on the next request for it, the shell holding its port meanwhile (`docs/system/specs/stop-when-no-windows.md`).
-A pinned window is never closed: the route answers `409`, the op is refused with "minimize it instead", and its close control, its menus' Close, and the close chord all minimize it instead (pinned-taskbar-entries plan section 3.2).
+A pinned window is never closed for everyone: the route answers `409`, the op is refused with "minimize it instead", and its close control, its menus' Close, and the close chord close it for this client alone -- minimized, and its entry out of this client's bar until something shows the window again (pinned-taskbar-entries plan section 3.2).
 
 ### 4.6 Following the URL
 
@@ -251,7 +251,7 @@ Adding a shortcut: the right-click menu of the launcher row of an app's default 
 Left to right: the launcher field; one entry per window of the active desktop in opening order (icon and title, minimized entries dimmed, the focused entry marked); the system tray.
 Entry click: restore and raise when minimized, minimize when focused, raise otherwise.
 Entry context menu: Restore or Minimize, Maximize or Restore, Close.
-A pinned window's entry is always present and may be drawn in the bar in a style or floating above the windows, as the client chooses; its menu's Close minimizes it rather than closing it, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
+A pinned window's entry is a plain bar entry (gone from this client's bar after its Close, until something shows the window), and the client may float the app's creature above the windows beside it; its menu's Close closes the window for this client alone rather than for everyone, and it adds the presentation verbs (pinned-taskbar-entries plan sections 4.2 and 4.4).
 The tray's widgets are Presence (one profile picture per connected user, the viewer's own last and ringed, drawn only while two or more are connected; the share identity spec) and Desktops (concepts.md 2.8); each is one component with one popover, and adding another is adding a component to a list.
 The taskbar is always visible on the desktop layout; auto-hide is deferred. A phone draws its own bar instead (`plan-phone-interface.md`).
 
@@ -327,7 +327,7 @@ The update apply's post-restart probes change from "every critical app's instanc
 - `store/`: the one implementation class, `DesktopStore`, holding the client's state (desktops, apps, the active desktop's layout, live pages, the gesture in progress, the open overlay), applying reducers, saving with debounce and conflict handling, and subscribing to the socket. Nothing else holds mutable state.
 - `pages/`: the live-page layer (`livePages.ts`), keyed by window id: create once, position, show and hide, make inert, navigate, destroy.
 - `gestures/`: `pointerGestures.ts`, the one module that listens to pointer events for window drag, resize, and shortcut drag, behind a `GestureSource` interface that yields `{begin, move, end}` with deltas, so it can be swapped for interact.js without touching a reducer.
-- `views/`: Mithril components, each a pure function of records and callbacks: `Backdrop`, `ShortcutIcon`, `Window`, `TitleBar`, `WindowMenu`, `Taskbar`, `TaskbarEntry`, `LauncherField`, `LauncherOverlay` (hosting today's New Tab sections), `SystemTray`, `DesktopsWidget`, `DesktopSettingsDialog`, `SnapPreview`, and the shared `Popover` and `Menu` (today's `placeMenu` rule, moved).
+- `views/`: Mithril components, each a pure function of records and callbacks: `Backdrop`, `ShortcutIcon`, `Window`, `TitleBar`, `WindowMenu`, `Taskbar`, `TaskbarEntry`, `LauncherField`, `LauncherOverlay` (hosting today's New Tab sections), `SystemTray`, `OverviewButton`, `Overview`, `WallpaperChooserDialog`, `SnapPreview`, and the shared `Popover` and `Menu` (today's `placeMenu` rule, moved).
 - `relay.ts`, `embed.ts`: unchanged.
 - `App.ts`, `index.ts`: wiring.
 
@@ -432,11 +432,12 @@ The files app is dufs plus its location beacon; the sidecar goes.
 Its one launch path is `new` at `/[?path=]`, which dufs already serves, and the beacon reports the folder path and the folder's name as the title.
 There is nothing to navigate in-app, so it declares no navigation capability and is reloaded when it must follow.
 
-### 9.4 Browser
+### 9.4 Browser, now the Screen
 
-The browser daemon keeps its pages at `/?session=<name>` and gains `POST /new` (the `new` launch path, `url` optional), which answers the fleet's one browser (created once, started again when it was stopped, `url` opened as a tab) as `{"path": "/?session=<name>"}`; the browser is stopped, its profile kept, once a window has shown it and none does any more.
-Its page reports its path and the page title, and handles `shell:navigate` by switching session.
-The fleet CLI and the daemon's own routes are untouched.
+The browser is a launch path of the Screen (`docs/system/specs/screen/spec.md`), the workspace's one streamed Linux desktop shown as one window: its `browser` launch path (`POST /launch/browser`, `url` optional) starts the Screen's stack when it is not running and brings Chromium to the front on it, and answers the Screen's one page, `/`.
+The stack never stops for emptiness: it starts on first demand and ends only under memory pressure or by Quit, so closing the last Screen window stops nothing (D3 of that spec, superseding decision 17 of concepts.md).
+The Screen's page reports `/` with the frontmost X window's title.
+Beside the four placement states it takes the fifth, `FULLSCREEN`, which fills the viewport over the taskbar with no title bar, and asks the Imbue Studio chrome for immersive mode through the embed contract where the chrome can (the Screen spec, section 12).
 
 ## 10. Sharing, memory, and updates
 
@@ -446,7 +447,7 @@ The update apply refreshes tool environments as today and probes every critical 
 
 ## 11. What is deleted
 
-`dockview-core`; `DockviewWorkspace.ts`, `Sidebar.ts`, `NewTabLauncher.ts` as a panel (its sections move into `LauncherOverlay`), `IframePanel.ts`, `liveSurfaces.ts` (replaced by `livePages.ts`), `tabMenu.ts`, `tab-rename.ts`, `AllAppsPicker.ts`, `ProjectMembershipDialog.ts`, `ProjectSettingsModal.ts` (replaced by `DesktopSettingsDialog`); the shell's `dockview_document.py`, `layouts.py`, `projects.py`, `instance_relay.py`, the instance fetching in `inventory.py`, and the instance vocabulary in `data_types.py` and `primitives.py`; `migrate_workspace_layouts.py`; the `manage-projects` skill (folded into `manage-layout`, renamed `manage-desktop`); the `app_instances` library and every `/_instances` blueprint in the built-ins; the prototypes' wallpaper binaries are not imported.
+`dockview-core`; `DockviewWorkspace.ts`, `Sidebar.ts`, `NewTabLauncher.ts` as a panel (its sections move into `LauncherOverlay`), `IframePanel.ts`, `liveSurfaces.ts` (replaced by `livePages.ts`), `tabMenu.ts`, `tab-rename.ts`, `AllAppsPicker.ts`, `ProjectMembershipDialog.ts`, `ProjectSettingsModal.ts` (replaced by `WallpaperChooserDialog`); the shell's `dockview_document.py`, `layouts.py`, `projects.py`, `instance_relay.py`, the instance fetching in `inventory.py`, and the instance vocabulary in `data_types.py` and `primitives.py`; `migrate_workspace_layouts.py`; the `manage-projects` skill (folded into `manage-layout`, renamed `manage-desktop`); the `app_instances` library and every `/_instances` blueprint in the built-ins; the prototypes' wallpaper binaries are not imported.
 The word "dock" leaves every file the change touches.
 
 ## 12. mngr-side changes

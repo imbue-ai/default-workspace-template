@@ -1,4 +1,7 @@
 import os
+import shutil
+import subprocess
+import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -73,6 +76,24 @@ def pages_client(session_source: TmuxSessionSource, tmp_path: Path, window_close
     contract_path = tmp_path / "app_contract.js"
     contract_path.write_text(TEST_APP_CONTRACT_SOURCE)
     return build_pages_test_client(session_source, registry_path, contract_path, window_closed_posts)
+
+
+@pytest.fixture
+def private_tmux_socket(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """A tmux server of the test's own: ``TMUX_TMPDIR`` points a script under test at it (with ``TMUX`` unset, so
+    the one this process runs in is never reached), and the socket path it resolves to is what the test's own
+    calls pass with ``-S``. Under ``/tmp`` directly, since a socket path is held to about 100 bytes."""
+    tmux_tmpdir = Path(tempfile.mkdtemp(prefix="dwt-tmux-", dir="/tmp"))
+    monkeypatch.setenv("TMUX_TMPDIR", str(tmux_tmpdir))
+    monkeypatch.delenv("TMUX", raising=False)
+    socket_path = tmux_tmpdir / f"tmux-{os.getuid()}" / "default"
+    # tmux makes the per-user directory itself only when it resolves the socket from the environment; a call that
+    # names the socket with ``-S`` needs it there already.
+    socket_path.parent.mkdir(mode=0o700)
+    yield socket_path
+    assert str(tmux_tmpdir).startswith("/tmp/dwt-tmux-")
+    subprocess.run(["tmux", "-S", str(socket_path), "kill-server"], capture_output=True, timeout=15.0)
+    shutil.rmtree(tmux_tmpdir, ignore_errors=True)
 
 
 @pytest.fixture

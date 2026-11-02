@@ -4,9 +4,8 @@ Those inserted paths are invisible to the venv-backed pytest runs (the same
 packages are installed in the workspace venv), so a stale path only explodes
 at runtime under a bare ``python3`` -- which is exactly how every claude
 launch runs ``agent_oom_launch.py``. Assert that every inserted path in
-every plain-python3 script -- the oom_priority entry points here in ``bin/``,
-the remaining hook scripts in ``system/scripts/``, and the shared agent
-scripts in ``.agents/shared/scripts/`` -- resolves to a real
+every plain-python3 script -- the oom_priority entry points here in ``bin/``
+and the remaining hook scripts in ``system/scripts/`` -- resolves to a real
 directory, so a package move cannot silently break agent startup again.
 """
 
@@ -18,9 +17,8 @@ _REPO_ROOT = _BIN_DIR.parents[3]
 _SCANNED_DIRS = (
     _BIN_DIR,
     _REPO_ROOT / "system" / "scripts",
-    _REPO_ROOT / ".agents" / "shared" / "scripts",
 )
-# The update-self apply (``.agents/skills/update-self/scripts/update_banding.py``)
+# The update-self apply (``.agents/skills/update-self/python/update_self_skill/update_banding.py``)
 # also bands itself under a bare python3, but its insert is computed from the
 # repo root it is applied to (it is staged and run against other trees), so
 # the literal pattern below cannot see it; it guards its own target with an

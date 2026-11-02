@@ -10,7 +10,7 @@ Status: implemented. Supersedes `plan-desktop-interface.md` section 4.12 (compac
 - The phone's own notion of "the window I am looking at" is per client and stored on the server as a short history, so a reload lands where you left off, the windows sheet can order by recency, and agent ops that target the phone know what it shows.
 - The pinned chat window keeps its rules: exactly one, never closed, its avatar in the pill, chats switched inside it from a drawer. Every other window is a full-page view of the app's page with only that page mounted, plus the chat page, which stays mounted because it is the landing page.
 - The desktop layout keeps a single new capability from this work: toasts, which replace every `alert()` the shell shows for a failed operation.
-- Out of the phone: the presence strip, the element-reference menu, pop-out and solo view, the avatar chooser, desktop settings, minimize, and per-window status dots. Agent notifications stay a studio-app feature, and how a phone reaches the workspace is not this plan's concern.
+- Out of the phone: the tray's people, cards, and bubbles, the element-reference menu, pop-out and solo view, the avatar chooser, desktop settings, minimize, and per-window status dots. Agent notifications stay a studio-app feature, and how a phone reaches the workspace is not this plan's concern.
 - In scope beyond the shell: the chat app's phone layout (header, drawer, composer settings button, kebab verbs), a row layout for the file viewer as further patches to the vendored dufs frontend, a key strip and tap-to-raise for the terminal, and correct stream sizing for the browser. Everything lands in one merge; the phases below are for implementation order only.
 
 ## Expected behavior

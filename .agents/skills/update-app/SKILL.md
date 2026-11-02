@@ -170,7 +170,7 @@ keep the service up: it is a routine with `--app <name>`, made with the
 `manage-routines` skill, never a thread or scheduler inside the service.
 The reverse holds: an app that no longer does anything between
 requests can go back to `true`. The field is read at registration, so the
-restart in step 2 is what applies it; `uv run app-manifest validate-manifest
+restart in step 2 is what applies it; `uv run --no-sync app-manifest validate-manifest
 system/apps/<package>/app.toml` checks the file.
 
 An app with an `api_schema_path` in its manifest describes its own API there:
@@ -201,7 +201,7 @@ process restarts:
   window:
 
   ```bash
-  python3 system/scripts/verify_app.py <name> --restart --marker "<text unique to your change>" --refresh
+  uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<text unique to your change>" --refresh
   ```
 
   With no window open yet, pass `--open` instead of `--refresh`: the call
@@ -216,21 +216,23 @@ process restarts:
   supervisorctl status <name>   # confirm it came back RUNNING
   ```
 
-- **Dependency or entry-point change to an app** (its `pyproject.toml`):
-  an app with an `app.toml` manifest runs from its own uv tool environment,
-  an editable install of `system/apps/<package>/` that picks up source
-  edits on its own but not a new dependency or console script. Reinstall
-  the tool, then restart (an app with no `app.toml` runs from the root
-  venv: for it, only the `uv sync --all-packages` below is needed):
+- **Dependency or entry-point change to an app** (its `pyproject.toml`): an
+  app's venv is an editable install of `system/apps/<package>/` that picks up
+  source edits on its own but not a new dependency or console script. A
+  user-built app is a standalone project with its own lock and venv: change its
+  dependencies in its own directory, then restart (its program syncs its venv
+  from its lock at start):
 
   ```bash
-  uv tool install -e system/apps/<package> --reinstall
-  uv sync --all-packages            # the app is also a workspace member; keep the lockfile current
-  python3 system/scripts/verify_app.py <name> --restart --marker "<text>" --refresh
+  (cd system/apps/<package> && uv add <dependency>)   # or `uv lock` after a hand edit
+  uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<text>" --refresh
   ```
 
-  (Background services under `system/services/` run from the root venv
-  instead: `uv sync --all-packages`, then restart.)
+  That touches only the app's own `pyproject.toml`, `uv.lock` and venv, never
+  the root lock or the chat's environment. A built-in app runs from the root
+  venv instead: `uv lock` and `uv sync --all-packages` at the repo root, then
+  restart. (A user service under `system/services/` works like a user app: `uv
+  add` in its directory, then `supervisorctl restart <name>`.)
 
 - **Frontend-only change** (templates, static JS/CSS served fresh on each
   request): no restart needed -- the next request already serves the new
@@ -246,7 +248,7 @@ process restarts:
   path for landing an `update-self` merge -- that restarts the whole services
   agent (`mngr start --restart system-services`) so `bootstrap` re-runs too,
   and must be followed by
-  `python3 system/scripts/refresh_workspace_view.py` (see step 3).
+  `uv run --no-sync system/scripts/refresh_workspace_view.py` (see step 3).
 
 If it doesn't come back `RUNNING`, read
 `/var/log/supervisor/<name>-stderr.log` or
@@ -282,7 +284,7 @@ window refresh is not enough -- the workspace shell itself was bounced. Rebuild
 the user's whole view instead:
 
 ```bash
-python3 system/scripts/refresh_workspace_view.py
+uv run --no-sync system/scripts/refresh_workspace_view.py
 ```
 
 Nothing else does this for you. The Imbue Studio app only intervenes when a workspace
@@ -349,7 +351,7 @@ where the data dies. Encode these, cheapest first:
   point it at the live store.** Boot a throwaway instance against a *copy* of
   the store on a *spare* port, exercise it there, then tear it down with its
   copy. The shared
-  [`serve_isolated_instance.py`](../../shared/scripts/serve_isolated_instance.py)
+  [`serve_isolated_instance.py`](../../shared/scripts/agents_shared/serve_isolated_instance.py)
   script owns all of it -- `--copy` copies the store into the instance's own
   space on disk, it picks a free port, injects it (via the
   `<PACKAGE_UPPER>_PORT` override) plus your data-dir override pointed at the
@@ -357,16 +359,21 @@ where the data dies. Encode these, cheapest first:
   and deletes the copy:
 
   ```bash
-  URL=$(python3 .agents/shared/scripts/serve_isolated_instance.py up \
+  URL=$(python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py up \
       --name <name>-test --cwd . \
       --port-env <PACKAGE_UPPER>_PORT \
       --copy data=data/.apps/<name> \
       --env '<PACKAGE_UPPER>_DATA_DIR={copy:data}' \
       --health-path /health \
-      -- uv run <name>)
+      --project system/apps/<package> \
+      -- <name>)
   # ...exercise the change at "$URL" (curl / Playwright); it can write freely...
-  python3 .agents/shared/scripts/serve_isolated_instance.py down --name <name>-test
+  python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py down --name <name>-test
   ```
+
+  `--project` boots a user-built app (a standalone project with its own lock and
+  venv) from its own venv, synced first, as its program does; drop it, and run
+  `-- .venv/bin/<name>`, for a built-in app, which runs from the root venv.
 
   **Never copy app data into `/tmp`.** In the workspace container `/tmp` is a
   small RAM disk (about 1 GiB): a copy of any real store fails part way with
@@ -382,7 +389,7 @@ where the data dies. Encode these, cheapest first:
   port, leaving the port, the service registration, and any window untouched:
 
   ```bash
-  python3 .agents/shared/scripts/serve_isolated_instance.py refresh --name <name>-test
+  python3 .agents/shared/scripts/agents_shared/serve_isolated_instance.py refresh --name <name>-test
   ```
 
   A change that only alters files the running process reads from disk on each
@@ -401,19 +408,24 @@ where the data dies. Encode these, cheapest first:
   names, surfaced as the labeled `<name>-preview` app:
 
   ```bash
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \
       --app <name> --worktree <dir>          # prints <name>-preview
   uv run --no-sync workspace-layout open <name>-preview   # puts a window of it in front of the user
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>   # after a rebuild, in place
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name>   # after a rebuild, in place
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
   ```
 
-  The worktree needs its own environment before the first `up`. A fresh
-  `git worktree add` has no `.venv`, and without one the app's command
-  resolves to the live install, so the preview silently serves the live code.
-  Run `uv sync --all-packages` in the worktree first, and again before
-  `refresh` after changing a dependency or entry point. If the app has a
-  frontend, build it there too.
+  Every `up` and `refresh` syncs the app's venv in the worktree and then starts
+  the app from it, so the preview serves the worktree's code: a built-in app
+  from the worktree's root `.venv` (`uv sync --all-packages --frozen`), a
+  user-built app from its own project's (`uv sync --locked`). That boot sync
+  counts against the preview's health wait, so on a fresh `git worktree add`
+  run the same sync there once before the first `up`. The sync never relocks:
+  after changing a dependency in the worktree, run `uv lock` (in the app's
+  directory, for a user-built app) before `refresh`, or a built-in app's
+  preview boots without the change and a user-built app's fails its `--locked`
+  sync.
+  If the app has a frontend, build it in the worktree too.
 
   `--with <sibling>` boots a sibling app's preview from the same worktree first
   and points the app's copied registry at it: a shell preview frames the

@@ -386,6 +386,31 @@ describe("picking a signed-in account", () => {
     expect(root.textContent).toContain("Anthropic (Claude Code)");
     expect(root.querySelector('[data-e2e^="pick-account-"]')).toBeNull();
   });
+
+  it("offers a room under the providers when opened for a chat awaiting its first send, and hands it over", () => {
+    const onRoomChosen = vi.fn();
+    const onDismissed = vi.fn();
+    openProviderChooser({ onRoomChosen, onDismissed });
+    const { root } = mount();
+
+    const text = root.textContent ?? "";
+    expect(text.indexOf("Chat room (no provider)")).toBeGreaterThan(text.indexOf("Anthropic (Claude Code)"));
+    root.querySelector<HTMLButtonElement>('[data-e2e="pick-room"]')!.click();
+
+    expect(onRoomChosen).toHaveBeenCalledOnce();
+    expect(onDismissed).not.toHaveBeenCalled();
+    expect(isProviderChooserOpen()).toBe(false);
+    expect(startFlow).not.toHaveBeenCalled();
+  });
+
+  it("offers no room when opened to pick or add a provider", () => {
+    openProviderChooser({ onSignedIn: vi.fn() });
+    expect(mount().root.querySelector('[data-e2e="pick-room"]')).toBeNull();
+    closeProviderChooser();
+
+    openProviderChooser();
+    expect(mount().root.querySelector('[data-e2e="pick-room"]')).toBeNull();
+  });
 });
 
 describe("a sign-in finished in the browser", () => {

@@ -12,8 +12,9 @@
 
    (See `.agents/shared/references/service-processes.md` for the
    mechanics.)
-3. If you scaffolded a lib, also: `uv tool uninstall <name>` (the app's own
-   tool environment), `rm -rf system/apps/<package>/`, and
-   `uv sync --all-packages` so the root lockfile forgets the member (the
-   scaffold never edits the root `pyproject.toml`; the `system/apps/*` glob
-   picked the package up).
+3. If you scaffolded a lib, also: `rm -rf system/apps/<package>/`. The app is a
+   standalone project with its own `uv.lock` and venv, so nothing shared needs
+   editing: the root `pyproject.toml` and `uv.lock` never named it, and the
+   app's venv directory beside the uv cache is deleted by the next run of the
+   venv-link helper (at boot, worktree setup or an update) once its `.venv`
+   link is gone.

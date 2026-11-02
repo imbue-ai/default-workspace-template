@@ -1,5 +1,7 @@
 # Plan: hand the agent CDP, not verbs
 
+Status: implemented in `system/apps/browser`, since moved into the Screen service (`system/apps/screen`, the Screen spec section 16): the gated CDP proxy and its per-frame lease check live there now, over the Screen's control lease.
+
 > **Remove browser-use entirely. The fleet keeps owning Chromium's lifecycle -- private display, profile, cap, ownership lease -- and hands the agent a gated CDP endpoint instead of our own driving verbs. The agent drives with `@playwright/cli`. Streaming, ownership, and human-takeover are preserved; the guarantee that today lives in `run_action()`'s per-command compare-and-set moves into a per-frame check in the proxy.**
 >
 > **Honest bound on the guarantee.** Today no agent action can touch a human-held browser. After this change no agent *input event* can, and no agent *frame* is forwarded once the lease flips -- but a frame already handed to Chromium may still land, exactly as one in-flight action can today. `Runtime.evaluate` is unfilterable (§6.1), so the residual is one in-flight JS evaluation rather than one in-flight verb. This is a real, bounded weakening. It is not "no weakening."

@@ -95,7 +95,7 @@ combined operation.
   failure, surface a specific cause AND propose 1-2 concrete alternatives before
   asking the user to choose.
 
-Keep validation code simple -- inline bash, `uv run python -c`, or short scripts
+Keep validation code simple -- inline bash, `uv run --no-sync python -c`, or short scripts
 under `data/.tasks/fetch-process-show/$SLUG/` if substantive.
 
 ## The sample loop (skeleton phase 5)
@@ -176,7 +176,7 @@ script-centric **skill**):
 1. **Kick off `crystallize-creation`** with `type=skill` and
    `source_artifacts_dir: data/.tasks/fetch-process-show/$SLUG/` in the task
    frontmatter, reusing `$SLUG` as its `$NAME`.
-2. **Launch the lead-proxy poll** (through `system/scripts/run_in_background.py`)
+2. **Launch the lead-proxy poll** (through `system/scripts/workspace_bare_scripts/run_in_background.py`)
    for worker reports, per `crystallize-creation` Step 5 /
    `.agents/shared/references/lead-proxy.md`.
    Do this *before* returning to the user. The poll does not block subsequent
@@ -237,7 +237,7 @@ missing auth scope, the user changed their mind about which fields matter), send
 short note to the worker:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py reply \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py reply \
     --task-file data/.tasks/harden/crystallize-$SLUG/task.md \
     -m "<short note about what changed>"
 ```
