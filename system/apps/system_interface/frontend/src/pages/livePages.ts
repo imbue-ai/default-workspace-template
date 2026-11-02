@@ -163,6 +163,8 @@ interface DrawnWindow {
   readonly windowId: string;
   /** Whether the stopped-app placeholder fills its content area. */
   readonly isPlaceholderShown: boolean;
+  /** Whether a title bar sits above its content area: a fullscreen window has none. */
+  readonly hasTitleBar: boolean;
 }
 
 export interface LivePagesOptions {
@@ -406,7 +408,11 @@ export class LivePagesLayer implements PageDriver {
       if (placement.is_detached || placement.window_id === this.tornOutWindowId) return;
       const { window } = found;
       const app = appByName(state, window.app);
-      drawn.push({ windowId: window.id, isPlaceholderShown: isAppShownStopped(state, app) });
+      drawn.push({
+        windowId: window.id,
+        isPlaceholderShown: isAppShownStopped(state, app),
+        hasTitleBar: placement.state !== "FULLSCREEN",
+      });
       if (app === undefined) return;
       const page = this.pages.get(window.id) ?? this.create(window, app);
       shownIds.add(window.id);
@@ -641,18 +647,19 @@ export class LivePagesLayer implements PageDriver {
     const isContentOpaque = drawn.map((entry) => entry.isPlaceholderShown || shownPageIds.has(entry.windowId));
     const going = drawn.map((entry, index) => ({
       rect: this.store.windowRect(entry.windowId),
+      hasTitleBar: entry.hasTitleBar,
       isContentOpaque: isContentOpaque[index],
     }));
     const now = drawn.map((entry, index): FrontWindow | null => {
       const rect = this.windowBox(entry.windowId);
-      return rect === null ? null : { rect, isContentOpaque: isContentOpaque[index] };
+      return rect === null ? null : { rect, hasTitleBar: entry.hasTitleBar, isContentOpaque: isContentOpaque[index] };
     });
     drawn.forEach((entry, index) => {
       const here = now[index];
       if (!shownPageIds.has(entry.windowId) || entry.windowId === focused || here === null) return;
-      const isCoveredWhereGoing = isPageCovered(going[index].rect, going.slice(index + 1), backdrop, metrics);
+      const isCoveredWhereGoing = isPageCovered(going[index], going.slice(index + 1), backdrop, metrics);
       const frontNow = now.slice(index + 1).filter((front): front is FrontWindow => front !== null);
-      if (isCoveredWhereGoing && isPageCovered(here.rect, frontNow, backdrop, metrics)) covered.add(entry.windowId);
+      if (isCoveredWhereGoing && isPageCovered(here, frontNow, backdrop, metrics)) covered.add(entry.windowId);
     });
     return covered;
   }

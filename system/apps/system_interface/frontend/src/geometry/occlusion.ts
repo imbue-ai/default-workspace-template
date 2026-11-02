@@ -3,8 +3,9 @@
  * rendering it. A wrong "covered" leaves a hole where the user expects the page, so every approximation here
  * errs towards "not covered".
  *
- * A window is a rounded rectangle (``windowRadius`` at each corner). Its title bar is always opaque; its content
- * area is opaque only while its own page (or the stopped-app placeholder) fills it, and is otherwise see-through.
+ * A window is a rounded rectangle (``windowRadius`` at each corner). Its title bar, which a fullscreen window does
+ * without, is always opaque; its content area is opaque only while its own page (or the stopped-app placeholder)
+ * fills it, and is otherwise see-through.
  * A front window covers with its rectangle less the corner squares, which keeps its rounded corners out of the
  * cover. A page is its window's content box with the window's two bottom corners rounded, so its own corner
  * squares need covering only where no front window rounds the same corner at the same point.
@@ -12,9 +13,14 @@
 
 import type { PixelRect, PixelSize } from "./frames";
 
-/** A window in front of the page under test: where it is drawn, and whether its content area paints. */
-export interface FrontWindow {
+/** Where a window is drawn, and whether it has a title bar above its content area. */
+export interface DrawnWindowRect {
   readonly rect: PixelRect;
+  readonly hasTitleBar: boolean;
+}
+
+/** A window in front of the page under test, and whether its content area paints. */
+export interface FrontWindow extends DrawnWindowRect {
   readonly isContentOpaque: boolean;
 }
 
@@ -26,19 +32,21 @@ export interface OcclusionMetrics {
 /** Strips thinner than this are rounding between the store's rectangles and the DOM's, not visible page. */
 const SLIVER_PX = 0.5;
 
-/** Whether the page of the window drawn at ``window`` is wholly hidden, within the backdrop, behind ``front``. */
+/** Whether the page of the window drawn as ``drawn`` is wholly hidden, within the backdrop, behind ``front``. */
 export function isPageCovered(
-  window: PixelRect,
+  drawn: DrawnWindowRect,
   front: readonly FrontWindow[],
   backdrop: PixelSize,
   metrics: OcclusionMetrics,
 ): boolean {
   const radius = metrics.windowRadius;
+  const window = drawn.rect;
+  const titleBarHeight = titleBarHeightOf(drawn, metrics);
   const content: PixelRect = {
     x: window.x,
-    y: window.y + metrics.titleBarHeight,
+    y: window.y + titleBarHeight,
     width: window.width,
-    height: window.height - metrics.titleBarHeight,
+    height: window.height - titleBarHeight,
   };
   const visible = intersection(content, { x: 0, y: 0, width: backdrop.width, height: backdrop.height });
   if (visible === null) return true;
@@ -58,16 +66,22 @@ export function isPageCovered(
 }
 
 /** The rectangles of a window that are certainly painted: its rectangle less the four corner squares when its
- *  content is opaque, else the title bar less its two top corner squares. */
+ *  content is opaque, else the title bar (if it has one) less its two top corner squares. */
 function opaqueParts(window: FrontWindow, metrics: OcclusionMetrics): PixelRect[] {
   const { x, y, width } = window.rect;
   const radius = metrics.windowRadius;
-  const height = window.isContentOpaque ? window.rect.height : Math.min(metrics.titleBarHeight, window.rect.height);
+  const height = window.isContentOpaque
+    ? window.rect.height
+    : Math.min(titleBarHeightOf(window, metrics), window.rect.height);
   const bottomInset = window.isContentOpaque ? radius : 0;
   return [
     { x, y: y + radius, width, height: height - radius - bottomInset },
     { x: x + radius, y, width: width - 2 * radius, height },
   ].filter((rect) => rect.width > 0 && rect.height > 0);
+}
+
+function titleBarHeightOf(window: DrawnWindowRect, metrics: OcclusionMetrics): number {
+  return window.hasTitleBar ? metrics.titleBarHeight : 0;
 }
 
 /** Whether ``window`` paints a rounded bottom corner at (``cornerX``, ``bottom``) on the given side. */
