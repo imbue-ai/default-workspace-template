@@ -421,6 +421,22 @@ def test_callback_on_an_auth_sandbox_sets_host_only_cookies_that_still_verify(
     assert verified.status_code == 200
 
 
+def test_callback_on_an_auth_sandbox_without_a_next_lands_on_the_host_holding_the_session(
+    tmp_path: Path,
+) -> None:
+    # The host-only cookie opens only the callback's host; the shell label (and an auth origin
+    # that serves nothing but /_auth) would hold no session.
+    harness = _make_harness(tmp_path, is_cookie_host_only=True)
+    nonce = harness.pending_logins.mint(is_retry=False)
+    token = _mint_handoff(nonce, audience=_WEB_HOST)
+
+    resp = harness.client.get(f"/_auth/callback?token={token}&state={nonce}", headers={"Host": _WEB_HOST})
+
+    assert resp.status_code == 302
+    assert resp.headers["Location"] == f"https://{_WEB_HOST}/"
+    assert SESSION_COOKIE_NAME in set_cookies_by_name(resp)
+
+
 def test_callback_on_an_auth_sandbox_refuses_a_token_minted_for_another_host(
     tmp_path: Path,
 ) -> None:

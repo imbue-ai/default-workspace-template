@@ -454,9 +454,12 @@ def build_gateway_app(
         # is genuinely one of this workspace's own origins. The bare domain no
         # longer routes, so the safe fallback is the shell (system_interface)
         # label origin; failing that, the workspace's own shell service simply
-        # is not registered and there is nowhere sensible to land.
+        # is not registered and there is nowhere sensible to land. A host-only
+        # session opens only the callback's own host, so there it lands instead.
         if _is_workspace_url(next_url):
             return next_url
+        if materials.is_cookie_host_only:
+            return f"{_callback_origin_for(request.host)}/"
         label_to_name = build_label_to_name(get_registered_apps())
         shell_label = next((label for label, name in label_to_name.items() if name == _SHELL_SERVICE_NAME), None)
         return f"https://{shell_label}.{workspace_domain}/" if shell_label else auth_origin
