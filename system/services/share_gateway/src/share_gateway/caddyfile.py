@@ -118,14 +118,17 @@ def read_registered_apps(apps_toml_path: Path) -> list[RegisteredApp]:
     return parse_registered_apps(text)
 
 
-def build_frame_ancestors_policy(workspace_domain: str, chrome_origin: str) -> str:
+def build_frame_ancestors_policy(workspace_domain: str, chrome_origin: str, own_hosts: Sequence[str] | None) -> str:
     """The ``frame-ancestors`` CSP source list for a shared workspace's responses.
 
-    Always allows the workspace's own origin family (``*.<domain>``) so its
-    services can embed one another; adds the hosted-chrome origin only when the
-    share carries one, so a share created by an older client stays deny-external.
+    Always allows the workspace's own hosts so its services can embed one
+    another: the whole origin family (``*.<domain>``), or, when ``own_hosts``
+    names them, only those (an auth sandbox, whose domain every sandbox of the
+    region shares). Adds the hosted-chrome origin only when the share carries
+    one, so a share created by an older client stays deny-external.
     """
-    sources = ["'self'", f"https://*.{workspace_domain}"]
+    own_sources = [f"https://*.{workspace_domain}"] if own_hosts is None else [f"https://{host}" for host in own_hosts]
+    sources = ["'self'", *own_sources]
     if chrome_origin:
         sources.append(chrome_origin)
     return " ".join(sources)
@@ -155,6 +158,23 @@ def _render_hardening_headers(indent: str) -> str:
     return "\n".join(f"{indent}{line}" for line in lines)
 
 
+def _render_callback_on_every_host_block(gateway_backend: str) -> str:
+    """The site-wide login callback route of a share whose session cookies are host-only.
+
+    An auth sandbox's cookies carry no ``Domain`` (every sandbox of the region
+    shares one workspace domain), so a cookie the auth label set would never
+    reach the Screen's or owner-exec's host. The callback is therefore served
+    on every host of the share, and the gateway sends the broker back to the
+    host being visited (``server.py``); a domain-wide share keeps the callback
+    confined to the auth label.
+    """
+    return f"""
+    handle /_auth/callback {{
+        reverse_proxy {gateway_backend}
+    }}
+"""
+
+
 def render_caddyfile(
     workspace_domain: str,
     apps: list[RegisteredApp],
@@ -164,10 +184,20 @@ def render_caddyfile(
     https_port: int,
     gateway_port: int,
     chrome_origin: str,
+    # Host-only session cookies (an auth sandbox, whose domain every sandbox of the region shares)
+    # belong to the host that set them, so the login callback that sets them must run on the host
+    # being visited, not only on the auth label, and only this share's own hosts may frame it.
+    is_cookie_host_only: bool,
 ) -> str:
     """Render the full Caddyfile for one shared workspace."""
     gateway_backend = f"127.0.0.1:{gateway_port}"
-    frame_ancestors = build_frame_ancestors_policy(workspace_domain, chrome_origin)
+    callback_on_every_host_block = _render_callback_on_every_host_block(gateway_backend) if is_cookie_host_only else ""
+    own_hosts = (
+        [f"{label}.{workspace_domain}" for label in sorted({auth_label, *(app.label for app in apps)})]
+        if is_cookie_host_only
+        else None
+    )
+    frame_ancestors = build_frame_ancestors_policy(workspace_domain, chrome_origin, own_hosts)
     site_hardening_headers = _render_hardening_headers(indent="    ")
     error_hardening_headers = _render_hardening_headers(indent="        ")
 
@@ -246,7 +276,7 @@ https://*.{workspace_domain}:{https_port} {{
     handle /_health {{
         reverse_proxy {gateway_backend}
     }}
-
+{callback_on_every_host_block}
     # A registered service whose backend refuses the connection (a stopped app
     # whose port the shell has not parked yet, or one it just released for the
     # app to bind) gets the auto-retrying loading page rather than a bare 502;

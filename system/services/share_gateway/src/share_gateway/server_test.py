@@ -81,7 +81,12 @@ class _GatewayHarness:
         self.pending_logins = pending_logins
 
 
-def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str = _CHROME_ORIGIN) -> _GatewayHarness:
+def _make_harness(
+    tmp_path: Path,
+    grants_text: str = _GRANTS,
+    chrome_origin: str = _CHROME_ORIGIN,
+    is_cookie_host_only: bool = False,
+) -> _GatewayHarness:
     grants_path = tmp_path / "share_grants.toml"
     grants_path.write_text(grants_text)
     materials = ShareMaterials(
@@ -90,6 +95,7 @@ def _make_harness(tmp_path: Path, grants_text: str = _GRANTS, chrome_origin: str
         connector_url="https://connector.example.com",
         broker_url=_BROKER_URL,
         chrome_origin=chrome_origin,
+        is_cookie_host_only=is_cookie_host_only,
     )
     pending_logins = PendingLoginRegistry()
     app = build_gateway_app(
@@ -381,6 +387,94 @@ def test_callback_sets_both_domain_cookies_and_redirects_to_next(tmp_path: Path)
     harness.client.set_cookie(SESSION_COOKIE_NAME, plain_value)
     verified = harness.client.get("/_auth/verify", headers=_verify_headers())
     assert verified.status_code == 200
+
+
+def test_callback_on_an_auth_sandbox_sets_host_only_cookies_that_still_verify(
+    tmp_path: Path,
+) -> None:
+    # SHARE_COOKIE_HOST_ONLY=1 (an auth sandbox, whose workspace domain every sandbox of the
+    # region shares): both copies are set without a Domain attribute, so the browser scopes
+    # them to the host that set them, and the verify path reads them as it reads domain-wide ones.
+    harness = _make_harness(tmp_path, is_cookie_host_only=True)
+    nonce = harness.pending_logins.mint(is_retry=False)
+    token = _mint_handoff(nonce, audience=_WEB_HOST)
+
+    resp = harness.client.get(
+        f"/_auth/callback?token={token}&state={nonce}&next=https://{_WEB_HOST}/panel",
+        headers={"Host": _WEB_HOST},
+    )
+
+    assert resp.status_code == 302
+    set_cookies = set_cookies_by_name(resp)
+    assert set(set_cookies) == {SESSION_COOKIE_NAME, PARTITIONED_SESSION_COOKIE_NAME}
+    for header in set_cookies.values():
+        assert "Domain=" not in header
+        assert "HttpOnly" in header
+        assert "Secure" in header
+    assert "SameSite=Lax" in set_cookies[SESSION_COOKIE_NAME]
+    assert "SameSite=None" in set_cookies[PARTITIONED_SESSION_COOKIE_NAME]
+    assert "Partitioned" in set_cookies[PARTITIONED_SESSION_COOKIE_NAME]
+    harness.client.set_cookie(
+        SESSION_COOKIE_NAME, _cookie_value(set_cookies[SESSION_COOKIE_NAME])
+    )
+    verified = harness.client.get("/_auth/verify", headers=_verify_headers())
+    assert verified.status_code == 200
+
+
+def test_callback_on_an_auth_sandbox_refuses_a_token_minted_for_another_host(
+    tmp_path: Path,
+) -> None:
+    # Every sandbox of a region shares the workspace domain, so on such a share the token must name
+    # the host the callback runs on: one the broker minted for the shared domain, or for another
+    # sandbox's host, opens no session here, even sent with that other host as its Host header
+    # (caddy routes by SNI, so the header is the client's to choose).
+    harness = _make_harness(tmp_path, is_cookie_host_only=True)
+    other_host = f"screen-other111.{_DOMAIN}"
+    for jti, audience, host in (
+        ("jti-domain", _DOMAIN, _WEB_HOST),
+        ("jti-other", other_host, _WEB_HOST),
+        ("jti-other-host", other_host, other_host),
+    ):
+        nonce = harness.pending_logins.mint(is_retry=False)
+        token = _mint_handoff(nonce, audience=audience, jti=jti, is_owner=True)
+
+        resp = harness.client.get(
+            f"/_auth/callback?token={token}&state={nonce}", headers={"Host": host}
+        )
+
+        assert resp.status_code == 302
+        assert resp.headers["Location"].startswith(f"{_BROKER_URL}/share/authorize?")
+        assert set_cookies_by_name(resp) == {}
+
+
+def test_verify_without_a_session_sends_the_callback_to_the_auth_origin_on_a_domain_wide_share(
+    tmp_path: Path,
+) -> None:
+    harness = _make_harness(tmp_path)
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+
+    assert resp.status_code == 302
+    query = parse_qs(urlsplit(resp.headers["Location"]).query)
+    assert query["callback_origin"] == [_AUTH_ORIGIN]
+    assert query["next"] == [f"https://{_WEB_HOST}/some/page"]
+
+
+def test_verify_without_a_session_sends_the_callback_to_the_visited_host_when_cookies_are_host_only(
+    tmp_path: Path,
+) -> None:
+    # Host-only cookies belong to the host that set them: a callback on the auth
+    # origin would leave the visited host without a session and the visitor
+    # bouncing between the gateway and the broker. The callback runs on the
+    # visited host instead (caddy serves it there on such a share).
+    harness = _make_harness(tmp_path, is_cookie_host_only=True)
+
+    resp = harness.client.get("/_auth/verify", headers=_verify_headers(host=_WEB_HOST))
+
+    assert resp.status_code == 302
+    query = parse_qs(urlsplit(resp.headers["Location"]).query)
+    assert query["callback_origin"] == [f"https://{_WEB_HOST}"]
+    assert query["next"] == [f"https://{_WEB_HOST}/some/page"]
 
 
 def test_verify_accepts_the_partitioned_copy_alone(tmp_path: Path) -> None:

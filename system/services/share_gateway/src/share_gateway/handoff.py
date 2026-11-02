@@ -1,10 +1,11 @@
 """Verification of the broker's handoff JWT at the gateway's login callback.
 
 The broker (at the accounts domain) mints a 60-second RS256 token
-``{sub, email, owner, aud: <workspace-domain>, jti, nonce}`` and redirects the
-visitor here. Verification: signature against the broker's published JWKS
-(cached; refreshed once on an unknown ``kid``), audience must be exactly this
-workspace's domain, ``nonce`` must match the state this gateway minted for the
+``{sub, email, owner, aud, jti, nonce}`` and redirects the visitor here.
+Verification: signature against the broker's published JWKS (cached;
+refreshed once on an unknown ``kid``), audience must be exactly this
+workspace's domain (on a share whose cookies are host-only, the host the
+callback runs on), ``nonce`` must match the state this gateway minted for the
 pending login, and each ``jti`` is single-use. The verified claims become the
 requester's identity record, which the session cookie then carries. An older
 broker may still add profile claims (``display_name``, ``avatar_url``); they
@@ -93,11 +94,14 @@ class SingleUseJtiRegistry:
 def verify_handoff_token(
     token: str,
     expected_nonce: str,
-    workspace_domain: str,
+    audience: str,
     jwks_cache: JwksCache,
     jti_registry: SingleUseJtiRegistry,
 ) -> RequesterIdentity:
-    """Verify a handoff token end to end and return the visitor's identity record."""
+    """Verify a handoff token end to end and return the visitor's identity record.
+
+    ``audience`` is the workspace domain, or, on a share whose cookies are host-only, the host the callback runs on.
+    """
     try:
         header = jwt.get_unverified_header(token)
     except jwt.PyJWTError as exc:
@@ -111,7 +115,7 @@ def verify_handoff_token(
             token,
             public_key,
             algorithms=[_HANDOFF_ALGORITHM],
-            audience=workspace_domain,
+            audience=audience,
         )
     except jwt.PyJWTError as exc:
         raise HandoffVerificationError(f"handoff token rejected: {exc}") from exc

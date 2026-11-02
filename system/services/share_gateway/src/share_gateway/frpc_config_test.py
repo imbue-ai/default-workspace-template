@@ -1,18 +1,22 @@
 import tomllib
 
-from share_gateway.frpc_config import render_frpc_toml
+from share_gateway.frpc_config import frpc_login_user, render_frpc_toml
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 
 
 def _render(
-    service_labels: list[str], media_port: int | None = None, local_media_address: str | None = "172.17.0.3"
+    service_labels: list[str],
+    media_port: int | None = None,
+    local_media_address: str | None = "172.17.0.3",
+    workspace_domain: str = _DOMAIN,
+    is_domain_shared: bool = False,
 ) -> dict:
     rendered = render_frpc_toml(
         relay_host="relay-us1.infra.imbue.com",
         relay_port=7000,
         relay_token="tok-abc",
-        workspace_domain=_DOMAIN,
+        workspace_domain=workspace_domain,
         service_labels=service_labels,
         auth_label="auth-x7k9q2w1",
         local_https_port=8443,
@@ -20,6 +24,7 @@ def _render(
         media_port=media_port,
         local_media_address=local_media_address,
         local_media_port=59000,
+        is_domain_shared=is_domain_shared,
     )
     return tomllib.loads(rendered)
 
@@ -29,6 +34,8 @@ def test_frpc_config_claims_exactly_the_service_and_auth_labels() -> None:
 
     assert parsed["serverAddr"] == "relay-us1.infra.imbue.com"
     assert parsed["serverPort"] == 7000
+    # frps prefixes every proxy name with the user, so it is the share's own first domain label.
+    assert parsed["user"] == "host-" + "a" * 32
     assert parsed["transport"]["tls"]["enable"] is True
     assert parsed["webServer"]["port"] == 7401
     assert parsed["metadatas"]["relay_token"] == "tok-abc"
@@ -107,4 +114,19 @@ def test_frpc_config_renders_no_media_proxy_without_a_media_port() -> None:
         media_port=None,
         local_media_address="172.17.0.3",
         local_media_port=59000,
+        is_domain_shared=False,
     )
+
+
+def test_frpc_config_logs_an_auth_sandbox_in_as_its_auth_label() -> None:
+    # Every auth sandbox of a region is a share on the one domain auth.<region>.<content domain>, and frps
+    # refuses a proxy name already in use, so the login user (the proxy names' prefix) is the per-sandbox
+    # auth label rather than the domain's first label, which would be "auth" for all of them.
+    auth_domain = "auth.us1.imbueminds.com"
+    parsed = _render(["screen-k3j9x2m1"], media_port=40123, workspace_domain=auth_domain, is_domain_shared=True)
+
+    assert parsed["user"] == "auth-x7k9q2w1"
+    assert parsed["proxies"][0]["customDomains"] == [f"auth-x7k9q2w1.{auth_domain}", f"screen-k3j9x2m1.{auth_domain}"]
+    assert [proxy["name"] for proxy in parsed["proxies"]] == ["share", "screen-media"]
+    assert frpc_login_user(auth_domain, "auth-x7k9q2w1", is_domain_shared=True) == "auth-x7k9q2w1"
+    assert frpc_login_user(_DOMAIN, "auth-x7k9q2w1", is_domain_shared=False) == "host-" + "a" * 32

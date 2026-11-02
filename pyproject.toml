@@ -116,6 +116,7 @@ package = false
 members = [
     "system/libs/app_manifest",
     "system/libs/app_schema",
+    "system/libs/auth_sandbox",
     "system/libs/bootstrap",
     "system/libs/chat_background_tasks",
     "system/libs/github_sync",
@@ -188,6 +189,10 @@ imbue-mngr-antigravity = { git = "https://github.com/imbue-ai/mngr", rev = "71be
 imbue-mngr-autocompact = { git = "https://github.com/imbue-ai/mngr", rev = "71be8c7679fe69d979ffef22d2e0d057588f19ce", subdirectory = "libs/mngr_autocompact" }
 concurrency-group = { git = "https://github.com/imbue-ai/mngr", rev = "71be8c7679fe69d979ffef22d2e0d057588f19ce", subdirectory = "libs/concurrency_group" }
 imbue-mngr-ttyd = { git = "https://github.com/imbue-ai/mngr", rev = "71be8c7679fe69d979ffef22d2e0d057588f19ce", subdirectory = "libs/mngr_ttyd" }
+# The auth sandbox library wraps the desktop's sign-in sequence (``imbue.mngr_latchkey.core.Latchkey``);
+# ``imbue-mngr-forward`` is that package's own dependency, published from the same commit.
+imbue-mngr-latchkey = { git = "https://github.com/imbue-ai/mngr", rev = "71be8c7679fe69d979ffef22d2e0d057588f19ce", subdirectory = "libs/mngr_latchkey" }
+imbue-mngr-forward = { git = "https://github.com/imbue-ai/mngr", rev = "71be8c7679fe69d979ffef22d2e0d057588f19ce", subdirectory = "libs/mngr_forward" }
 
 [tool.pytest.ini_options]
 testpaths = ["."]

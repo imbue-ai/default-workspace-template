@@ -213,6 +213,7 @@ class ShareStack:
             https_port=materials_module.CADDY_HTTPS_PORT,
             gateway_port=materials_module.GATEWAY_PORT,
             chrome_origin=self.materials.chrome_origin,
+            is_cookie_host_only=self.materials.is_cookie_host_only,
         )
 
     def admin_port_for(self, relay_id: str) -> int:
@@ -240,6 +241,7 @@ class ShareStack:
             media_port=self.assignment.media_port,
             local_media_address=self._media_proxy_address(),
             local_media_port=SCREEN_MEDIA_LOCAL_PORT,
+            is_domain_shared=self.materials.is_domain_shared,
         )
 
     def _media_proxy_address(self) -> str | None:

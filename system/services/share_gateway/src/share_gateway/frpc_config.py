@@ -18,11 +18,22 @@ share's ``media_port`` and splices each connection to neko's TCP mux at the work
 own interface address (``local_address.py`` says why loopback would not do) on the port
 below. It is rendered only when the assignment carries a ``media_port`` and the workspace
 has an address; the connector accepts exactly that one tcp claim at exactly that port.
+
+frpc logs in with a ``user``, which frps prefixes onto every proxy name (``<user>.<name>``) and
+refuses when a proxy of that name is already registered, so the user has to be unique among
+the shares tunnelling to one relay: a workspace share logs in as its own first domain label;
+an auth sandbox, whose workspace domain every sandbox of its region shares, as the per-sandbox
+auth label the connector chose for it (``frpc_login_user``).
 """
 
 # neko's TCP ICE mux inside the workspace (the Screen spec, section 5.1).
 SCREEN_MEDIA_LOCAL_PORT = 59000
 SCREEN_MEDIA_PROXY_NAME = "screen-media"
+
+
+def frpc_login_user(workspace_domain: str, auth_label: str, is_domain_shared: bool) -> str:
+    """The user frpc logs in as: the share's first domain label, or the auth label on a shared domain."""
+    return auth_label if is_domain_shared else workspace_domain.split(".", 1)[0]
 
 
 def _render_media_proxy(media_port: int | None, local_media_address: str | None, local_media_port: int) -> str:
@@ -50,7 +61,9 @@ def render_frpc_toml(
     media_port: int | None,
     local_media_address: str | None,
     local_media_port: int,
+    is_domain_shared: bool,
 ) -> str:
+    login_user = frpc_login_user(workspace_domain, auth_label, is_domain_shared)
     # Claim exactly the labels the relay should route: every registered
     # service label plus the auth label. Sorted + de-duplicated for a stable,
     # reload-friendly render. The auth label is always claimed (the login
@@ -80,7 +93,7 @@ transport.tls.enable = true
 webServer.addr = "127.0.0.1"
 webServer.port = {admin_port}
 
-user = "{workspace_domain.split(".", 1)[0]}"
+user = "{login_user}"
 
 [metadatas]
 relay_token = "{relay_token}"

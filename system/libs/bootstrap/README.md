@@ -24,7 +24,19 @@ service.
    demand. The same first boot writes `data/.state/system_interface/offer_tour`,
    which tells the system interface the workspace is new, so its show-around tour
    may start by itself; a workspace that already existed never gets it.
-3. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
+3. **Latchkey gateway env** - when `$MNGR_HOST_DIR/env` names no
+   `LATCHKEY_GATEWAY` (a web-created workspace; a desktop's create passes its
+   own values), appends `LATCHKEY_GATEWAY=http://host.docker.internal:1989`
+   (the VM-resident gateway, at the address the slice's `--add-host` mapping
+   resolves), a freshly generated `LATCHKEY_GATEWAY_PASSWORD` (32 random
+   bytes, base64) and `LATCHKEY_DISABLE_COUNTING=1` to that file, and adds
+   the three to the environment it launches supervisord with, so every
+   supervised service inherits them (later chat agents read them from the
+   file). The password exists in the container and
+   nowhere else until the Imbue Studio web chrome reads it over owner-exec to
+   provision the VM's gateway. A file that already names a gateway is left
+   untouched; a bare dev run with no host dir skips the step.
+4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
    supervised services inherit this shell's already-sourced agent environment.
    That environment gets the workspace venv activated (`.venv/bin` first on

@@ -86,6 +86,7 @@ class ShareMaterials:
         connector_url: str,
         broker_url: str,
         chrome_origin: str,
+        is_cookie_host_only: bool = False,
     ) -> None:
         self.workspace_domain = workspace_domain
         self.relay_token = relay_token
@@ -96,6 +97,21 @@ class ShareMaterials:
         # Empty when the share was created by an older client that did not set
         # SHARE_CHROME_ORIGIN -- embedding + CORS then stay disabled.
         self.chrome_origin = chrome_origin
+        # SHARE_COOKIE_HOST_ONLY=1: the session cookie is set for the request's
+        # host alone, with no Domain attribute. An auth sandbox shares its
+        # workspace domain with every other sandbox of its region, so a
+        # domain-wide cookie would let two users' sandboxes overwrite each
+        # other's sessions.
+        self.is_cookie_host_only = is_cookie_host_only
+
+    @property
+    def is_domain_shared(self) -> bool:
+        """Whether other shares of the region tunnel under this workspace domain too (an auth sandbox).
+
+        The connector marks exactly those shares with ``SHARE_COOKIE_HOST_ONLY=1``; the frpc login user
+        has to be unique per share for the same reason the session cookie has to be host-scoped.
+        """
+        return self.is_cookie_host_only
 
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, ShareMaterials):
@@ -115,6 +131,7 @@ def parse_share_materials(text: str) -> ShareMaterials | None:
         broker_url=values["SHARE_BROKER_URL"].rstrip("/"),
         # Optional: absent for shares created before the hosted-chrome rollout.
         chrome_origin=values.get("SHARE_CHROME_ORIGIN", "").rstrip("/"),
+        is_cookie_host_only=values.get("SHARE_COOKIE_HOST_ONLY", "") == "1",
     )
 
 

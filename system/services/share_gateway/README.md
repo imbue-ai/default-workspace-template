@@ -27,7 +27,18 @@ three things running:
    `/_auth/callback`, which verifies the broker's 60-second RS256 handoff
    token (JWKS, audience, nonce, single-use jti) and sets the
    workspace-domain session cookie (30 days). What a failed callback shows is
-   described under "Login outcomes".
+   described under "Login outcomes". When `share.env` carries
+   `SHARE_COOKIE_HOST_ONLY=1` (an auth sandbox of the web latchkey sign-in flow,
+   whose workspace domain `auth.<region>.<content domain>` every sandbox of the
+   region shares), both cookie copies are set with no `Domain` attribute, so each
+   belongs to the one service host that set it and two users' sandboxes never
+   overwrite each other's sessions. Such a cookie set by the auth label would
+   reach no other host, so on that share caddy also serves `/_auth/callback`
+   on every service host and the gateway names the visited host, not the auth
+   origin, as the broker's callback origin. The handoff token's audience is
+   then that host rather than the shared domain, so a token the broker minted
+   for one sandbox's host opens no session on another's. The verify path and
+   the cookie names are unchanged.
 2. **caddy** (`127.0.0.1:8443`): terminates the share's real TLS with the
    cert/key under `data/.secrets/share_tls/` and routes by Host -- the bare
    workspace domain to `system_interface`, `<service>.<domain>` to that
@@ -37,14 +48,21 @@ three things running:
    Every response it sends, a service's or its own, carries the browser
    hardening headers (`Strict-Transport-Security`, `X-Content-Type-Options:
    nosniff`, `Referrer-Policy: same-origin`, and a `frame-ancestors` policy
-   naming who may embed the workspace) and no `Server` header, so a service
+   naming who may embed the workspace: its own hosts, `*.<domain>` or, on a
+   share marked `SHARE_COOKIE_HOST_ONLY=1`, only its own label hosts, plus
+   the hosted chrome's origin) and no `Server` header, so a service
    gets them without setting any itself; a service's own
    `Content-Security-Policy` is left in place beside the gateway's.
 3. **frpc, one per relay**: outbound tunnels to EVERY relay of the region
    (the multi-relay design: any relay can then serve any visitor),
    authenticated by the per-share relay token (in the client metadata; the
    connector authorizes every Login/NewProxy). Each claims exactly this
-   workspace's registered service labels + the auth label. The relay set comes
+   workspace's registered service labels + the auth label, logged in as the
+   workspace domain's first label (frps prefixes every proxy name with it);
+   a share whose domain other shares of the region use too (an auth sandbox,
+   `SHARE_COOKIE_HOST_ONLY=1`) logs in as its auth label instead, the one
+   per-share label it holds, so two sandboxes never collide on a proxy name.
+   The relay set comes
    from the connector's `GET /shares/assignment` (relay-token auth), fetched
    at stack start, re-polled on the server-provided interval, and cached under
    `data/.state/share_gateway/assignment.json` so restarts work with the

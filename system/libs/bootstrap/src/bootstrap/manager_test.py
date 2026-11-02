@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
 import shutil
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,10 @@ from bootstrap.manager import (
     BOOTSTRAP_EVENTS_RELATIVE_PATH,
     BOOTSTRAP_STEP_COMPLETED_EVENT,
     BOOTSTRAP_STEP_STARTED_EVENT,
+    LATCHKEY_DISABLE_COUNTING_ENV_VAR,
+    LATCHKEY_GATEWAY_ENV_VAR,
+    LATCHKEY_GATEWAY_PASSWORD_ENV_VAR,
+    LATCHKEY_GATEWAY_URL,
     ROUTINES_ENV_WRAPPER,
     ROUTINES_TICK_CRON_NAME,
     UPDATE_APPLY_MARKER,
@@ -31,7 +36,9 @@ from bootstrap.manager import (
     TimezoneFetchError,
     _apply_container_timezone,
     _configure_git_global,
+    _configure_latchkey_gateway_env,
     _ensure_git_identity,
+    _ensure_latchkey_gateway_env,
     _fetch_user_timezone,
     _initialize_workspace_main_branch,
     _install_runtime_cron_entries,
@@ -45,6 +52,7 @@ from bootstrap.manager import (
     _wake_update_dri_agent,
     _write_routines_tick_cron_entry,
     _write_update_recovery_cron_entry,
+    generate_latchkey_gateway_password,
     main,
 )
 
@@ -909,6 +917,7 @@ def _prepare_boot(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> _StubSubpr
         "_ensure_supervisor_log_dir",
     ):
         monkeypatch.setattr(f"bootstrap.manager.{name}", lambda: None)
+    monkeypatch.setattr("bootstrap.manager._configure_latchkey_gateway_env", lambda: {})
     monkeypatch.delenv("LATCHKEY_GATEWAY", raising=False)
     return stub
 
@@ -921,7 +930,9 @@ def test_main_rolls_back_before_the_venv_sync_and_wakes_the_agent_after_it(
     # tree, not the half-applied one), and the DRI agent must be woken only
     # after it (a live agent's `uv run` would race the venv rewrite).
     stub = _prepare_boot(monkeypatch, tmp_path)
-    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda _environment: None
+    )
 
     main()
 
@@ -940,7 +951,9 @@ def test_main_announces_each_boot_step_to_the_agent_events_in_order(
     # progress, so every step reports a start and a completion, in the order the
     # boot runs them, and the hand-off to supervisord is the last event.
     _prepare_boot(monkeypatch, tmp_path)
-    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda _environment: None
+    )
 
     main()
 
@@ -973,6 +986,7 @@ def test_main_announces_each_boot_step_to_the_agent_events_in_order(
         "initialize_main_branch",
         "sync_venv",
         "set_timezone",
+        "latchkey_gateway_env",
         "converge_environment",
         "install_cron",
     ]
@@ -1018,7 +1032,9 @@ def test_main_converts_old_cron_entries_after_the_recovery_guard_and_before_the_
             order.append("migrate")
 
     stub.on_command = record_migration
-    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda _environment: None
+    )
 
     main()
 
@@ -1040,7 +1056,8 @@ def test_main_boots_when_the_cron_migration_cannot_run(
     stub.raise_on["migrate-cron"] = OSError("no routines yet")
     handed_off: list[bool] = []
     monkeypatch.setattr(
-        "bootstrap.manager._exec_supervisord", lambda: handed_off.append(True)
+        "bootstrap.manager._exec_supervisord",
+        lambda _environment: handed_off.append(True),
     )
 
     main()
@@ -1070,12 +1087,36 @@ def test_a_cron_migration_that_fails_is_a_warning_in_its_own_words(
     )
 
 
+def test_main_launches_supervisord_with_the_gateway_env_the_step_returned(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    # Supervised services only see the gateway through supervisord's environment, so what
+    # the latchkey_gateway_env step returns is exactly what the hand-off must add.
+    _prepare_boot(monkeypatch, tmp_path)
+    gateway_env = {
+        LATCHKEY_GATEWAY_ENV_VAR: LATCHKEY_GATEWAY_URL,
+        LATCHKEY_GATEWAY_PASSWORD_ENV_VAR: "pw",
+        LATCHKEY_DISABLE_COUNTING_ENV_VAR: "1",
+    }
+    monkeypatch.setattr(
+        "bootstrap.manager._configure_latchkey_gateway_env", lambda: gateway_env
+    )
+    handed_off: list[Mapping[str, str]] = []
+    monkeypatch.setattr("bootstrap.manager._exec_supervisord", handed_off.append)
+
+    main()
+
+    assert handed_off == [gateway_env]
+
+
 def test_main_boots_without_an_agent_state_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     # A bare dev run has no agent state dir: the boot runs exactly as before and records nothing.
     _prepare_boot(monkeypatch, tmp_path)
-    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda _environment: None
+    )
     monkeypatch.delenv("MNGR_AGENT_STATE_DIR", raising=False)
 
     main()
@@ -1090,7 +1131,9 @@ def test_a_workspaces_first_boot_offers_it_the_tour(
     # has to be made before that signal exists.
     _prepare_boot(monkeypatch, tmp_path)
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
-    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda _environment: None
+    )
 
     main()
 
@@ -1108,7 +1151,9 @@ def test_a_workspace_that_booted_before_is_never_offered_the_tour(
     _prepare_boot(monkeypatch, tmp_path)
     monkeypatch.setenv("MNGR_AGENT_WORK_DIR", str(tmp_path / "work"))
     (tmp_path / "data/.state" / first_boot_signal).touch()
-    monkeypatch.setattr("bootstrap.manager._exec_supervisord", lambda: None)
+    monkeypatch.setattr(
+        "bootstrap.manager._exec_supervisord", lambda _environment: None
+    )
 
     main()
 
@@ -1184,3 +1229,115 @@ def test_routines_tick_cron_entry_tolerates_an_unwritable_target(
     _write_routines_tick_cron_entry(target_dir=tmp_path / "missing")
 
     assert not (tmp_path / "missing").exists()
+
+
+# _ensure_latchkey_gateway_env
+
+
+def test_latchkey_gateway_env_is_appended_and_returned_when_the_file_names_no_gateway(
+    tmp_path: Path,
+) -> None:
+    # A web-created workspace's host env file carries mngr's own variables and no gateway: the
+    # step appends the three lines and returns them for the environment the services will inherit.
+    env_path = tmp_path / "env"
+    env_path.write_text("MNGR_HOST_ID=host-1234\nMNGR_AGENT_NAME=services\n")
+
+    variables = _ensure_latchkey_gateway_env(env_path, "pw+base64/=")
+
+    assert env_path.read_text() == (
+        "MNGR_HOST_ID=host-1234\nMNGR_AGENT_NAME=services\n"
+        f"{LATCHKEY_GATEWAY_ENV_VAR}={LATCHKEY_GATEWAY_URL}\n"
+        f"{LATCHKEY_GATEWAY_PASSWORD_ENV_VAR}=pw+base64/=\n"
+        f"{LATCHKEY_DISABLE_COUNTING_ENV_VAR}=1\n"
+    )
+    assert variables == {
+        LATCHKEY_GATEWAY_ENV_VAR: "http://host.docker.internal:1989",
+        LATCHKEY_GATEWAY_PASSWORD_ENV_VAR: "pw+base64/=",
+        LATCHKEY_DISABLE_COUNTING_ENV_VAR: "1",
+    }
+
+
+def test_latchkey_gateway_env_starts_a_new_line_and_creates_a_missing_file(
+    tmp_path: Path,
+) -> None:
+    unterminated = tmp_path / "env"
+    unterminated.write_text("MNGR_HOST_ID=host-1234")
+    assert _ensure_latchkey_gateway_env(unterminated, "pw")
+    assert unterminated.read_text().startswith(
+        f"MNGR_HOST_ID=host-1234\n{LATCHKEY_GATEWAY_ENV_VAR}="
+    )
+
+    absent = tmp_path / "absent-env"
+    assert _ensure_latchkey_gateway_env(absent, "pw")
+    assert absent.read_text().startswith(f"{LATCHKEY_GATEWAY_ENV_VAR}=")
+
+
+@pytest.mark.parametrize(
+    "existing",
+    [
+        "LATCHKEY_GATEWAY=http://127.0.0.1:1989\nLATCHKEY_GATEWAY_PASSWORD=desktop-chosen\n",
+        "export LATCHKEY_GATEWAY=http://127.0.0.1:1989\n",
+        "  LATCHKEY_GATEWAY=http://127.0.0.1:1989\n",
+    ],
+)
+def test_latchkey_gateway_env_leaves_a_named_gateway_alone(
+    tmp_path: Path, existing: str
+) -> None:
+    # A desktop-created workspace passed its own values at create; they are the ones the
+    # workspace's agents were built against, and nothing here may replace them.
+    env_path = tmp_path / "env"
+    env_path.write_text(existing)
+    assert _ensure_latchkey_gateway_env(env_path, "fresh") == {}
+
+    assert env_path.read_text() == existing
+
+
+def test_latchkey_gateway_env_ignores_a_commented_out_gateway(tmp_path: Path) -> None:
+    env_path = tmp_path / "env"
+    env_path.write_text("# LATCHKEY_GATEWAY=http://127.0.0.1:1989\n")
+
+    assert _ensure_latchkey_gateway_env(env_path, "fresh")
+
+    assert (
+        f"\n{LATCHKEY_GATEWAY_ENV_VAR}={LATCHKEY_GATEWAY_URL}\n" in env_path.read_text()
+    )
+
+
+def test_latchkey_gateway_env_tolerates_an_unwritable_host_dir(tmp_path: Path) -> None:
+    # The boot must reach supervisord even when the host dir is missing (a bare dev run
+    # that set MNGR_HOST_DIR to nothing real): nothing is exported, and nothing raises.
+    assert _ensure_latchkey_gateway_env(tmp_path / "missing" / "env", "pw") == {}
+
+
+def test_configure_latchkey_gateway_env_writes_through_the_host_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("MNGR_HOST_DIR", str(tmp_path))
+    (tmp_path / "env").write_text("MNGR_HOST_ID=host-1234\n")
+
+    variables = _configure_latchkey_gateway_env()
+
+    written = (tmp_path / "env").read_text()
+    assert f"{LATCHKEY_GATEWAY_ENV_VAR}={LATCHKEY_GATEWAY_URL}\n" in written
+    password = variables[LATCHKEY_GATEWAY_PASSWORD_ENV_VAR]
+    assert f"{LATCHKEY_GATEWAY_PASSWORD_ENV_VAR}={password}\n" in written
+    assert variables[LATCHKEY_GATEWAY_ENV_VAR] == LATCHKEY_GATEWAY_URL
+    assert variables[LATCHKEY_DISABLE_COUNTING_ENV_VAR] == "1"
+
+
+def test_configure_latchkey_gateway_env_skips_a_bare_dev_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("MNGR_HOST_DIR", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert _configure_latchkey_gateway_env() == {}
+
+    assert not list(tmp_path.iterdir())
+
+
+def test_generate_latchkey_gateway_password_is_32_random_bytes_in_base64() -> None:
+    first = generate_latchkey_gateway_password()
+    second = generate_latchkey_gateway_password()
+    assert first != second
+    assert len(base64.b64decode(first, validate=True)) == 32
