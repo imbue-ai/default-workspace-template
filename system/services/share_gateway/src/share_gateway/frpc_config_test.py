@@ -1,6 +1,7 @@
 import tomllib
 
-from share_gateway.frpc_config import frpc_login_user, render_frpc_toml
+from share_gateway.frpc_config import frpc_login_user
+from share_gateway.frpc_config import render_frpc_toml
 
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 
