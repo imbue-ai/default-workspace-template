@@ -102,7 +102,7 @@ bundle or to the shared library rebuilds them all:
 
 ```bash
 git worktree add -b "mngr/update-$SLUG" "data/.tasks/critical-live/update-$SLUG" HEAD
-cd "data/.tasks/critical-live/update-$SLUG" && uv sync --all-packages \
+cd "data/.tasks/critical-live/update-$SLUG" && uv sync --all-packages --frozen \
   && (cd system && npm ci && npm run build)
 ```
 
@@ -141,7 +141,7 @@ closed you can drive it freely on its own port.
 it first, on its own:
 
 ```bash
-uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \
     --app <name> --worktree "data/.tasks/critical-live/update-$SLUG" \
     [--with <sibling>]... [--instance-key <key>]
 ```
@@ -233,10 +233,11 @@ Then edit, and refresh the preview in place:
   ```
 
 - **Backend round:** additionally re-boot the preview's process on its existing
-  ports.
+  ports. The re-boot syncs the worktree `--frozen`, so after changing a
+  dependency run `uv lock` in the worktree first.
 
   ```bash
-  uv run python3 .agents/skills/update-app/scripts/preview_app.py refresh --app <name>
+  uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py refresh --app <name>
   ```
 
   If `refresh` exits non-zero the new build did not boot. Fix it and refresh
@@ -279,7 +280,7 @@ worktrees, so before creating the worker, release your hold on it:
 
 ```bash
 uv run --no-sync workspace-layout close <name>-preview
-uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
 git worktree remove "data/.tasks/critical-live/update-$SLUG"
 ```
 
@@ -302,7 +303,7 @@ launch, background-poll) with these specifics:
   the branch you built up instead of branching anew from the served HEAD:
 
   ```bash
-  uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+  uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
       --name "update-$SLUG" --template worker \
       --runtime-dir "data/.tasks/harden/update-$SLUG/" \
       --task-file "data/.tasks/harden/update-$SLUG/task.md" \
@@ -337,7 +338,7 @@ round:
 ```bash
 WORK_DIR=$(mngr ls --include "name == \"update-$SLUG\"" --format json \
     | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
-uv run python3 .agents/skills/update-app/scripts/preview_app.py up \
+uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py up \
     --app <name> --worktree "$WORK_DIR" [--with <sibling>]... [--instance-key <key>]
 uv run --no-sync workspace-layout open <name>-preview
 ```
@@ -368,7 +369,7 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    WORK_DIR=$(mngr ls --include "name == \"update-$SLUG\"" --format json \
        | python3 -c 'import sys, json; print(json.load(sys.stdin)["agents"][0]["work_dir"])')
    SCOPE="data/.tasks/harden/update-$SLUG/pass-scope.json"
-   uv run app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) --repo-root "$WORK_DIR" \
+   uv run --no-sync app-manifest pass-scope $(printf -- '--creation %s ' $CREATIONS) --repo-root "$WORK_DIR" \
        --out "$SCOPE" || exit 1
    jq -r '[.creations[] | .primary[], .wiring[].path, .references[].path] | unique | .[]' "$SCOPE" \
        > /tmp/update-$SLUG-paths.txt
@@ -461,7 +462,7 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
 
    ```bash
    uv run --no-sync workspace-layout close <name>-preview
-   uv run python3 .agents/skills/update-app/scripts/preview_app.py down --app <name>
+   uv run --no-sync .agents/skills/update-app/python/update_app_skill/preview_app.py down --app <name>
    ```
 
    The close goes first: nothing takes a window away when its app leaves the
@@ -472,7 +473,7 @@ ordinary app in the pass holds no lease, so another chat may have changed it.
    destroy it:
 
    ```bash
-   uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name "update-$SLUG"
+   uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name "update-$SLUG"
    ```
 
    After a failed apply (`1`, `2`, `3`), stop it instead

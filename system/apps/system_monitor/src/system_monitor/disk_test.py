@@ -86,7 +86,7 @@ def test_the_rows_cover_the_buckets_and_the_rest_of_the_disk(tmp_path: Path) -> 
     assert by_id["other"]["items"] == [
         {
             "name": "System software",
-            "hint": "the workspace's tools",
+            "hint": "the workspace's tools and installed packages",
             "bytes": 1500 * _MIB,
         },
         {
@@ -227,7 +227,11 @@ def test_a_row_that_cannot_be_measured_is_not_listed_as_space_that_cannot_be_fre
     assert missing == [missing_row]
     # The missing row's bytes are in the rest, so the rest is not called something that cannot be freed.
     assert rows[-1]["items"] == [
-        {"name": "System software", "hint": "the workspace's tools", "bytes": 10 * _MIB}
+        {
+            "name": "System software",
+            "hint": "the workspace's tools and installed packages",
+            "bytes": 10 * _MIB,
+        }
     ]
 
 

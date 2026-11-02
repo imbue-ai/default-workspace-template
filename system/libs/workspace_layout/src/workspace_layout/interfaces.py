@@ -8,6 +8,8 @@ from workspace_layout.answers import DesktopOpAnswer
 from workspace_layout.answers import OpenAnswer
 from workspace_layout.answers import ShowAnswer
 from workspace_layout.answers import TransientOpAnswer
+from workspace_layout.feed import BubblePost
+from workspace_layout.feed import ChatsActivityReport
 from workspace_layout.ops import ClientActivityReport
 from workspace_layout.ops import NavigateArgs
 from workspace_layout.ops import OpenArgs
@@ -16,6 +18,7 @@ from workspace_layout.ops import RefreshArgs
 from workspace_layout.ops import ShowArgs
 from workspace_layout.ops import WindowArgs
 from workspace_layout.records import DesktopView
+from workspace_layout.roster import RosterDocument
 
 
 class ShellLayoutInterface(MutableModel, ABC):
@@ -40,7 +43,7 @@ class ShellLayoutInterface(MutableModel, ABC):
 
     @abstractmethod
     def place(self, args: PlaceArgs) -> DesktopOpAnswer:
-        """Set a window's state (snapped to a half, or maximized) or its frame for a client."""
+        """Set a window's state (snapped to a half, maximized, or fullscreen) or its frame for a client."""
 
     @abstractmethod
     def close(self, args: WindowArgs) -> DesktopOpAnswer:
@@ -61,3 +64,17 @@ class ShellLayoutInterface(MutableModel, ABC):
     @abstractmethod
     def record_client_activity(self, report: ClientActivityReport) -> None:
         """Tell the shell a client sent a message to a page; best-effort, never raises."""
+
+    @abstractmethod
+    def roster(self) -> RosterDocument:
+        """Everyone who may be in the workspace, in the shell's order (the multiplayer spec, section 4.2)."""
+
+    @abstractmethod
+    def post_bubble(self, bubble: BubblePost) -> None:
+        """Tell the shell somebody just said something, for the bubble over their tray entry (the multiplayer spec,
+        section 6.5); best-effort, never raises."""
+
+    @abstractmethod
+    def report_chats_activity(self, report: ChatsActivityReport) -> None:
+        """Tell the shell what every chat is doing, for the tray's agent card (the multiplayer spec, section 6.4);
+        best-effort, never raises."""

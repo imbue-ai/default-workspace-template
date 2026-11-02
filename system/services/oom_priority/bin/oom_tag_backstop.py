@@ -22,9 +22,9 @@ value; those are found via a ``/proc/<pid>/task/*/children`` walk and raised
 too. Children spawned after the tag inherit it.
 
 The write is raise-only -- it makes a process more expendable, never less: a
-process already tagged higher (a Chromium process the browser service's sweep
+process already tagged higher (a Chromium process the Screen service's band sweep
 remapped into the shared-browser band, reachable here as a descendant of the
-``browser`` program) is left alone, and programs whose expected band is
+``screen`` program) is left alone, and programs whose expected band is
 ``PROTECTED`` (earlyoom, this listener itself, publish_cgroup_meminfo, and the
 one-shots env-converge and vm-exec-register) are never touched. Raising is also the direction that
 needs no capability.
@@ -42,9 +42,7 @@ import sys
 from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
-sys.path.insert(
-    0, str(Path(__file__).resolve().parents[1] / "src")
-)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority import app_registry, bands
 from oom_priority.proctree import list_descendant_pids
@@ -98,7 +96,9 @@ def handle_running_event(
     if not program_name or not pid_text.isdigit():
         return
     if priority_by_program is None:
-        priority_by_program = app_registry.read_priority_by_program(app_registry.registry_path())
+        priority_by_program = app_registry.read_priority_by_program(
+            app_registry.registry_path()
+        )
     band = bands.supervisord_program_band(program_name, priority_by_program)
     if band <= bands.PROTECTED:
         return

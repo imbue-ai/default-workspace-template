@@ -20,14 +20,14 @@ the app's own `icon.svg`, drawn to `docs/system/app-icons.md`.
 ## 1. Read what the theme wants
 
 ```bash
-uv run workspace-themes icon missing
+uv run --no-sync workspace-themes icon missing
 ```
 
 names every theme with icons of its own and the apps it has none for, with `app` when the theme still
 lacks its generic program icon (installed with `--app app`). For each theme:
 
 ```bash
-uv run workspace-themes icon spec <theme-id>
+uv run --no-sync workspace-themes icon spec <theme-id>
 ```
 
 It prints the limits, the guide's path, the reference icons, `draw_at_scale` (how many times
@@ -60,7 +60,7 @@ theme's size, one character per pixel, `.` for clear, and a legend for the rest:
 ```
 
 ```bash
-uv run workspace-themes icon grid /tmp/<app>-<theme>.txt --theme <theme-id> --legend "k=#000000,w=#ffffff" --out /tmp/<app>-<theme>.png --preview /tmp/<app>-<theme>-big.png
+uv run --no-sync workspace-themes icon grid /tmp/<app>-<theme>.txt --theme <theme-id> --legend "k=#000000,w=#ffffff" --out /tmp/<app>-<theme>.png --preview /tmp/<app>-<theme>-big.png
 ```
 
 Draw the outline first, then the fills, then the details; at 32 pixels a detail is one or two
@@ -70,7 +70,7 @@ yourself, following the theme's guide, to `/tmp/<app>-<theme>.svg`, and go to st
 ## 3. Fit each candidate
 
 ```bash
-uv run workspace-themes icon fit /tmp/<app>-<theme>/candidate-0.png --theme <theme-id> --out /tmp/<app>-<theme>-0.png --preview /tmp/<app>-<theme>-0-big.png
+uv run --no-sync workspace-themes icon fit /tmp/<app>-<theme>/candidate-0.png --theme <theme-id> --out /tmp/<app>-<theme>-0.png --preview /tmp/<app>-<theme>-0-big.png
 ```
 
 `fit` clears a flat background, trims and squares the drawing, scales it to the canvas
@@ -87,8 +87,8 @@ outline, text, or a different style from the references.
 ## 4. Check and install
 
 ```bash
-uv run workspace-themes icon check /tmp/<app>-<theme>-0.png --theme <theme-id>
-uv run workspace-themes icon install /tmp/<app>-<theme>-0.png --theme <theme-id> --app <registered app name>
+uv run --no-sync workspace-themes icon check /tmp/<app>-<theme>-0.png --theme <theme-id>
+uv run --no-sync workspace-themes icon install /tmp/<app>-<theme>-0.png --theme <theme-id> --app <registered app name>
 ```
 
 `install` checks again and puts the icon where the shell looks: the theme's own `icons/` for a

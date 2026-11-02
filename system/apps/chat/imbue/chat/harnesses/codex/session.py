@@ -139,7 +139,7 @@ class CodexHarnessSession(AgentHarnessSession):
 
     # Messages
 
-    def send(self, text: str, message_id: str) -> SendOutcome:
+    def send(self, text: str, message_id: str, is_resent_when_unsure: bool = True) -> SendOutcome:
         """Send through the live ledger (contract A2: the ledger is the sole authority).
 
         ``message_id`` is passed only as a CORRELATION TOKEN (``clientUserMessageId``), which

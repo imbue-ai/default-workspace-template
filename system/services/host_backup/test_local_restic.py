@@ -231,7 +231,7 @@ def test_a_no_backup_marker_keeps_its_directorys_contents_out_of_the_backup(
     unmarked = apps / "finances" / "raw"
     # uv writes a CACHEDIR.TAG into every tool environment and virtualenv, which
     # a restore could not refill, so that tag must not keep them out of the backup.
-    uv_tool_env = home / ".local" / "share" / "uv" / "tools" / "chat-app"
+    uv_tool_env = home / ".local" / "share" / "uv" / "tools" / "imbue-mngr"
     for directory in (marked / "repo-a" / "sha-1", unmarked, uv_tool_env / "bin"):
         directory.mkdir(parents=True)
     (marked / NO_BACKUP_MARKER_FILENAME).touch()
@@ -240,7 +240,7 @@ def test_a_no_backup_marker_keeps_its_directorys_contents_out_of_the_backup(
     (uv_tool_env / "CACHEDIR.TAG").write_text(
         "Signature: 8a477f597d28d172789f06886806bc55"
     )
-    (uv_tool_env / "bin" / "chat-app").write_text("#!/bin/sh\n")
+    (uv_tool_env / "bin" / "mngr").write_text("#!/bin/sh\n")
 
     env = _env_for_local_repo(repo_dir)
     assert init_repo(env).returncode == 0
@@ -260,7 +260,7 @@ def test_a_no_backup_marker_keeps_its_directorys_contents_out_of_the_backup(
         for path in listed
     )
     assert "/workspace/data/.apps/finances/raw/statement.csv" in listed
-    assert "/.local/share/uv/tools/chat-app/bin/chat-app" in listed
+    assert "/.local/share/uv/tools/imbue-mngr/bin/mngr" in listed
 
 
 def test_heavy_dirs_names_the_directory_holding_most_of_a_real_snapshot(

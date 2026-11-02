@@ -3,7 +3,7 @@ name = "app-schema"
 version = "0.1.0"
 description = "An app's self-description: the OpenAPI document for its HTTP API, built from its Flask routes"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     # The test helper reads the app's manifest to learn the schema path, title and description.
     "app-manifest",

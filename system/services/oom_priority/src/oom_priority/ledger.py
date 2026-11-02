@@ -19,8 +19,8 @@ latest ``notice_delivered`` for it. The revival hook uses this to decide whether
 to inject a notice; the launch-task report poll uses it to detect that a worker
 was paused and will not report until revived.
 
-Stdlib-only (see ``paths``): imported by Claude hooks and the launch-task script
-under a plain ``python3``.
+Stdlib-only (see ``paths``): imported by Claude hooks under a plain ``python3``, and by the
+launch-task script from the root venv.
 """
 
 import json

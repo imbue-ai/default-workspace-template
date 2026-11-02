@@ -186,7 +186,7 @@ def _rest_of_disk_items(
         items.append(
             {
                 "name": "System software",
-                "hint": "the workspace's tools",
+                "hint": "the workspace's tools and installed packages",
                 "bytes": system.total,
             }
         )

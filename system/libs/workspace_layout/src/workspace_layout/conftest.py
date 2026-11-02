@@ -39,7 +39,7 @@ def loopback_shell() -> Iterator[LoopbackShell]:
 @pytest.fixture
 def registry(tmp_path: Path) -> Path:
     """A registry holding the built-in apps a command names."""
-    return write_registry(tmp_path / "apps.toml", ["files", "terminal", "chat", "browser"])
+    return write_registry(tmp_path / "apps.toml", ["files", "terminal", "chat", "screen"])
 
 
 @pytest.fixture
