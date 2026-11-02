@@ -31,19 +31,24 @@ If you're doing something *other* than editing an existing app or service:
 
 **First, find the app and read its manifest.** Locate the code the change
 touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.toml`).
-If it says `critical = true` -- the shell (`system_interface`), the chat, the
-terminal, and any user app that declares it -- or if the change is under
-`system/libs/workspace_ui/` (the shared library both critical bundles are built
-from), `system/libs/workspace_layout/` (the layout wire contract the shell, the
-chat, and the terminal all run), or `system/libs/workspace_themes/` (the theme
-catalog and theme route the same three run), **follow [`references/critical-app.md`](references/critical-app.md) and
-stop reading here** -- for the whole change: when it also touches an ordinary
-app or a skill, those go through that flow with it. A critical app is never
-edited in the served tree: that
-flow runs the same live loop against an isolated worktree, with a preview window
-as the user's view, and goes live through the atomic update apply once a
-background worker has hardened the change. Everything below is for an app or
-service that is not critical.
+
+**Follow [`references/critical-app.md`](references/critical-app.md) and stop
+reading here** if any of these hold:
+
+- The `app.toml` says `critical = true`: the shell (`system_interface`), the
+  chat, the terminal, and any user app that declares it.
+- The change is under `system/libs/workspace_ui/`, the shared library both
+  critical bundles are built from.
+- The change is under `system/libs/workspace_layout/`, the layout wire contract
+  the shell, the chat and the terminal all run.
+- The change is under `system/libs/workspace_themes/`, the theme catalog and
+  theme route the same three run.
+
+That flow covers the whole change, including any ordinary app or skill it also
+touches. It never edits a critical app in the served tree. It runs the same
+live loop against an isolated worktree, shows the user a preview window, and
+goes live through the atomic update apply once a background worker has hardened
+the change.
 
 Not every change is a quick edit. Before you start, decide which of these
 the request is -- it changes what you do *before* touching code:
