@@ -53,6 +53,9 @@ export const SHELL_CLOSE_REQUEST = "shell:close-request";
  *  handshake and on every change; the page wears it, and remembers it unless it is a preview
  *  (`themes/themeClient.ts`). */
 export const SHELL_THEME = "shell:theme";
+/** Shell to app: somebody changed a keybinding; the page re-fetches its own backend's
+ *  `/api/keybindings/me` (no payload: each app resolves for its own actions and identity). */
+export const SHELL_KEYBINDINGS_CHANGED = "shell:keybindings-changed";
 /** Shell to app: the window's path changed elsewhere; the page should show that path in place. */
 export const SHELL_NAVIGATE = "shell:navigate";
 /** App to shell: what this page can do, sent once on connect. */
@@ -190,6 +193,8 @@ export interface ShellConnectionHandlers {
   onNavigate?: (path: string) => void;
   /** `isPreview`: the shell shows the theme without having saved it; a page wears it and does not remember it. */
   onTheme?: (theme: string, revision: string, isPreview: boolean) => void;
+  /** Somebody changed a keybinding; re-fetch the resolved chords from this app's own backend. */
+  onKeybindingsChanged?: () => void;
   capabilities?: ShellCapabilities;
 }
 
@@ -433,6 +438,9 @@ export function connectToShell(handlers: ShellConnectionHandlers): ShellConnecti
         if (theme !== null) handlers.onTheme?.(theme.theme, theme.revision, theme.isPreview);
         return;
       }
+      case SHELL_KEYBINDINGS_CHANGED:
+        handlers.onKeybindingsChanged?.();
+        return;
       case SHELL_NAVIGATE: {
         const path = message.path;
         if (typeof path === "string") handlers.onNavigate?.(path);

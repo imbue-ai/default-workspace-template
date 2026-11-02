@@ -51,6 +51,15 @@ function pressEscape(): void {
   m.redraw.sync();
 }
 
+/** Right-click the bare backdrop and answer the menu row with the given key. */
+function backdropMenuRow(key: string): HTMLElement | null {
+  (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
+    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
+  );
+  m.redraw.sync();
+  return document.querySelector(`.backdrop-menu [data-menu-row="${key}"]`);
+}
+
 /** A fresh fake shell whose home desktop holds win-1 (pulled out when ``isDetached``), a store started over it
  *  (opened to show ``soloWindowId`` alone when given), and the App mounted over the store. */
 async function mountApp(options: { isDetached?: boolean; soloWindowId?: string } = {}): Promise<void> {
@@ -420,18 +429,11 @@ describe("Escape", () => {
   it("offers the overview on the backdrop's menu except while viewing somebody else's desktop", async () => {
     setOwnIdentityForTesting({ owner: true, user_id: null, email: null, participant: "owner" });
     socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("alice", { owner: "user:user-alice-0001" })]);
-    const openBackdropMenu = (): Element | null => {
-      (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
-        new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
-      );
-      m.redraw.sync();
-      return document.querySelector('.backdrop-menu [data-menu-row="show-all-desktops"]');
-    };
-    expect(openBackdropMenu()?.getAttribute("aria-disabled")).toBeNull();
+    expect(backdropMenuRow("show-all-desktops")?.getAttribute("aria-disabled")).toBeNull();
     pressEscape();
     await store.switchDesktop("alice");
     m.redraw.sync();
-    expect(openBackdropMenu()?.getAttribute("aria-disabled")).toBe("true");
+    expect(backdropMenuRow("show-all-desktops")?.getAttribute("aria-disabled")).toBe("true");
     pressEscape();
   });
 
@@ -687,11 +689,7 @@ describe("the element menu", () => {
 
 /** Open the theme chooser from the backdrop's context menu. */
 function openThemeChooser(): void {
-  (document.querySelector(".shortcut-grid") as HTMLElement).dispatchEvent(
-    new MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: 300, clientY: 200 }),
-  );
-  m.redraw.sync();
-  const row = document.querySelector('.backdrop-menu [data-menu-row="change-theme"]') as HTMLElement;
+  const row = backdropMenuRow("change-theme") as HTMLElement;
   row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
   row.click();
   m.redraw.sync();
@@ -743,6 +741,74 @@ describe("the theme chooser", () => {
 
     await saveTheme(null, false);
     expect(themeCalls()).toHaveLength(3);
+  });
+});
+
+describe("the keyboard shortcuts dialog", () => {
+  const CATALOG = {
+    apps: [
+      {
+        app: "system_interface",
+        display_name: "Workspace",
+        actions: [
+          {
+            id: "launcher-secondary-send",
+            label: "Launcher: send the typed text to a chosen chat",
+            default_chords: ["ctrl+enter", "meta+enter"],
+            chords: ["ctrl+enter", "meta+enter"],
+            source: "default",
+          },
+        ],
+      },
+    ],
+    is_owner: true,
+    can_save_everywhere: false,
+    has_pending_permission: false,
+    unsent: [],
+  };
+
+  beforeEach(() => {
+    // The section reads the catalog as it opens; the stub answers the way the shell's route does.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({ ok: true, status: 200, json: async () => CATALOG })),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("opens from the backdrop's menu with the catalog, and closes from its button", async () => {
+    const row = backdropMenuRow("keyboard-shortcuts") as HTMLElement;
+    row.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    row.click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-keyboard-shortcuts-dialog]")).not.toBeNull();
+
+    await settle();
+    m.redraw.sync();
+    expect(
+      document.querySelector('[data-keybinding-action="system_interface.launcher-secondary-send"]'),
+    ).not.toBeNull();
+
+    (document.querySelector(".keyboard-shortcuts-close") as HTMLButtonElement).click();
+    m.redraw.sync();
+    expect(document.querySelector("[data-keyboard-shortcuts-dialog]")).toBeNull();
+  });
+
+  it("stays offered while viewing somebody else's desktop, where the theme row stands down", async () => {
+    // The shortcuts are the viewer's own wherever they are; the theme is the viewed desktop's.
+    setOwnIdentityForTesting({ owner: true, user_id: null, email: null, participant: "owner" });
+    socket.deliver().onDesktopsUpdated([...api.desktops, desktopRecord("alice", { owner: "user:user-alice-0001" })]);
+    await store.switchDesktop("alice");
+    m.redraw.sync();
+
+    expect(backdropMenuRow("keyboard-shortcuts")?.getAttribute("aria-disabled")).toBeNull();
+    expect(
+      document.querySelector('.backdrop-menu [data-menu-row="change-theme"]')?.getAttribute("aria-disabled"),
+    ).toBe("true");
+    pressEscape();
   });
 });
 

@@ -805,6 +805,15 @@ path = "/api/focus-chat"
 type = "open:file"
 show = "{path}?view"
 showing = ["{path}", "{path}/"]
+
+[[keybindings]]
+id = "rename"
+label = "Rename the selected entry"
+default_chords = ["f2"]
+
+[[keybindings]]
+id = "unbound"
+label = "Something with no default"
 """
 
 
@@ -888,6 +897,11 @@ def test_manifest_registration_copies_every_field_onto_the_row(tmp_path: Path) -
     assert row["message_handlers"] == [
         {"type": "minds:focus-chat", "path": "/api/focus-chat"},
         {"type": "open:file", "show": "{path}?view", "showing": ["{path}", "{path}/"]},
+    ]
+    # Each keybinding carries its default chords, an empty list for one the manifest leaves unbound.
+    assert row["keybindings"] == [
+        {"id": "rename", "label": "Rename the selected entry", "default_chords": ["f2"]},
+        {"id": "unbound", "label": "Something with no default", "default_chords": []},
     ]
 
 
@@ -985,6 +999,16 @@ def test_manifest_registration_copies_the_theming_mode_and_leaves_it_off_an_app_
             id="message-handler-showing-beside-a-path",
         ),
         pytest.param(
+            '[[keybindings]]\nid = "rename"\n',
+            "every keybinding needs a string 'id' and 'label'",
+            id="keybinding-without-a-label",
+        ),
+        pytest.param(
+            '[[keybindings]]\nid = "rename"\nlabel = "Rename"\ndefault_chords = "f2"\n',
+            "a keybinding's default_chords must be an array of strings",
+            id="keybinding-default-chords-not-an-array",
+        ),
+        pytest.param(
             '[pin]\nstyle = "avatar"\n',
             "pin must be a table with a string 'path'",
             id="pin-without-a-path",
@@ -1054,6 +1078,7 @@ def test_manifest_registration_is_authoritative_on_every_call(tmp_path: Path) ->
         "pin",
         "window_closed_path",
         "message_handlers",
+        "keybindings",
     ):
         assert stale_key not in row, stale_key
     assert "priority" not in row

@@ -43,6 +43,7 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
@@ -726,6 +727,15 @@ export class LivePagesLayer implements PageDriver {
     for (const page of this.pages.values()) {
       if (page.greetedDesktopId !== null) {
         sendToChildFrame(page.frame, SHELL_THEME, this.themeMessageFor(page, theme, isRemembered));
+      }
+    }
+  }
+
+  /** Tell every greeted page somebody changed a keybinding; each re-fetches its own resolved chords. */
+  broadcastKeybindingsChanged(): void {
+    for (const page of this.pages.values()) {
+      if (page.greetedDesktopId !== null) {
+        sendToChildFrame(page.frame, SHELL_KEYBINDINGS_CHANGED, {});
       }
     }
   }
