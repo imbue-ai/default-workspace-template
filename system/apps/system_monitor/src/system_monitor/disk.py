@@ -28,6 +28,9 @@ CACHE_DIRS: Final[tuple[Path, ...]] = (
 # Where the workspace's environment puts uv's, npm's and other tools' caches (XDG_CACHE_HOME), off the
 # home volume except on lima, where it links to ~/.cache; relative to the root.
 OFF_VOLUME_CACHE_DIR: Final[Path] = Path("var/cache/user")
+# Where every .venv's target lives, beside the uv cache (system/scripts/workspace_bare_scripts/venv_links.py);
+# relative to the root. Rebuilding one is not like clearing a cache, so it counts as system software.
+VENVS_DIR: Final[Path] = OFF_VOLUME_CACHE_DIR / "venvs"
 # What the top-level folders of the workspace hold, for the ones a user would not know.
 WORKSPACE_FOLDER_HINTS: Final[dict[str, str]] = {
     ".venv": "installed packages, rebuilt on demand",
@@ -173,30 +176,30 @@ def _measure_home_folder(
 
 
 def _rest_of_disk_items(
-    other: int, system: Measured | None, is_every_row_measured: bool
+    other: int, software: int | None, is_every_row_measured: bool
 ) -> list[dict[str, Any]]:
     """What the Everything else row's bytes break down into: the system software, then whatever else is
     on the disk."""
-    # A system walk bigger than what is left is on another disk (lima's boot disk is not its data disk),
+    # System software bigger than what is left is on another disk (lima's boot disk is not its data disk),
     # so none of what is left can be called system software.
-    if system is None or system.total > other:
+    if software is None or software > other:
         return []
     items: list[dict[str, Any]] = []
-    if system.total:
+    if software:
         items.append(
             {
                 "name": "System software",
                 "hint": "the workspace's tools and installed packages",
-                "bytes": system.total,
+                "bytes": software,
             }
         )
     # A row that could not be measured leaves its bytes in the rest, and those can be freed from here.
-    if is_every_row_measured and other - system.total:
+    if is_every_row_measured and other - software:
         items.append(
             {
                 "name": "Other files on the machine's disk",
                 "hint": "not part of this workspace, so it cannot be freed from here",
-                "bytes": other - system.total,
+                "bytes": other - software,
             }
         )
     return items
@@ -289,10 +292,23 @@ def scan(
     )
     counted += rows[-1]["bytes"]
     # Depending on the provider, ~/.cache links to the off-volume cache or the other way round, and du
-    # does not follow a link it is handed, so the caches are counted once.
+    # does not follow a link it is handed, so the caches are counted once. The venvs, inside whichever is
+    # real, go first: du counts a directory or a hardlinked file once, under the first argument it meets
+    # it in, so the packages the venvs link from the uv cache count as theirs, and the caches keep only
+    # what clearing them would free.
     off_volume_cache = root / OFF_VOLUME_CACHE_DIR
+    venvs = root / VENVS_DIR
     home_caches = [home / cache for cache in CACHE_DIRS]
-    caches = measure([*home_caches, off_volume_cache], [])
+    with_venvs = measure([venvs, *home_caches, off_volume_cache], [])
+    venvs_bytes = with_venvs.by_path.get(venvs, 0) if with_venvs is not None else 0
+    caches = (
+        Measured(
+            with_venvs.total - venvs_bytes,
+            {path: size for path, size in with_venvs.by_path.items() if path != venvs},
+        )
+        if with_venvs is not None
+        else None
+    )
     counted += row(
         "caches",
         "Package caches",
@@ -323,7 +339,11 @@ def scan(
             "label": "Everything else",
             "hint": "the workspace's system software and the rest of the machine's disk",
             "bytes": other,
-            "items": _rest_of_disk_items(other, system, not missing),
+            "items": _rest_of_disk_items(
+                other,
+                system.total + venvs_bytes if system is not None else None,
+                not missing,
+            ),
         }
     )
     return rows, missing

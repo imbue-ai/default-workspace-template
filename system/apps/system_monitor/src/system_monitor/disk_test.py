@@ -145,6 +145,13 @@ def test_the_package_caches_and_the_home_folder_are_each_counted_once(
     (home / ".claude.json").write_bytes(b"x" * _MIB)
     (root / real_cache / "uv").mkdir(parents=True)
     (root / real_cache / "uv" / "wheels").write_bytes(b"x" * 3 * _MIB)
+    # A venv beside the uv cache, with a package of its own and one hardlinked from the cache: both are
+    # system software, since clearing the cache would free neither.
+    (root / real_cache / "uv" / "archive").write_bytes(b"x" * _MIB)
+    venv = root / real_cache / "venvs" / "home-user-workspace-0123abcd"
+    venv.mkdir(parents=True)
+    (venv / "own").write_bytes(b"x" * 2 * _MIB)
+    (venv / "linked").hardlink_to(root / real_cache / "uv" / "archive")
     (root / linked_cache).parent.mkdir(parents=True, exist_ok=True)
     (root / linked_cache).symlink_to(root / real_cache)
     # A cache nested under a home entry, which the home tree's walk leaves out by --exclude.
@@ -167,7 +174,7 @@ def test_the_package_caches_and_the_home_folder_are_each_counted_once(
     assert [item["name"] for item in by_id["home"]["items"]] == [".mngr"]
     software = by_id["other"]["items"][0]
     assert software["name"] == "System software"
-    assert _MIB <= software["bytes"] < 2 * _MIB
+    assert 4 * _MIB <= software["bytes"] < 5 * _MIB
 
 
 def test_a_row_that_cannot_be_measured_is_reported_missing_and_the_rest_never_goes_negative(

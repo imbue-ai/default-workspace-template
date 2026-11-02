@@ -24,8 +24,8 @@ seconds. The design is `docs/system/specs/system-monitor.md`.
   gVisor and the figures go stale at once): workspace files with the folders
   under them, uploads, each app's data, each package cache, the chats, logs
   and settings kept in the home folder beside the workspace's files (with the
-  folders under them), and everything else (the system software and the rest
-  of the machine's disk), as of when
+  folders under them), and everything else (the system software, including
+  the venvs, and the rest of the machine's disk), as of when
   it ran; and the state of the backups (read from the backup service's events
   and settings, never by running restic), with a link to that service's README.
 
