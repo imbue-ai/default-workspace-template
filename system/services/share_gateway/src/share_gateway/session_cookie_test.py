@@ -5,6 +5,7 @@ from datetime import timezone
 import jwt
 from flask import Flask
 from flask import Response
+from werkzeug.datastructures import MultiDict
 
 from share_gateway.identity import RequesterIdentity
 from share_gateway.session_cookie import PARTITIONED_SESSION_COOKIE_NAME
@@ -98,13 +99,22 @@ def test_set_session_cookie_sets_a_plain_copy_and_a_partitioned_copy() -> None:
 
 def test_verify_session_from_cookies_accepts_whichever_copy_verifies() -> None:
     value = mint_session_cookie_value(_SECRET, _BOB, _DOMAIN)
-    assert verify_session_from_cookies(_SECRET, {SESSION_COOKIE_NAME: value}, _DOMAIN) == _BOB
-    assert verify_session_from_cookies(_SECRET, {PARTITIONED_SESSION_COOKIE_NAME: value}, _DOMAIN) == _BOB
+    assert verify_session_from_cookies(_SECRET, MultiDict({SESSION_COOKIE_NAME: value}), _DOMAIN) == _BOB
+    assert verify_session_from_cookies(_SECRET, MultiDict({PARTITIONED_SESSION_COOKIE_NAME: value}), _DOMAIN) == _BOB
     # A stale plain copy must not mask a valid partitioned one.
-    both = {SESSION_COOKIE_NAME: "garbage", PARTITIONED_SESSION_COOKIE_NAME: value}
+    both = MultiDict({SESSION_COOKIE_NAME: "garbage", PARTITIONED_SESSION_COOKIE_NAME: value})
     assert verify_session_from_cookies(_SECRET, both, _DOMAIN) == _BOB
-    assert verify_session_from_cookies(_SECRET, {}, _DOMAIN) is None
-    assert verify_session_from_cookies(_SECRET, {SESSION_COOKIE_NAME: "garbage"}, _DOMAIN) is None
+    assert verify_session_from_cookies(_SECRET, MultiDict(), _DOMAIN) is None
+    assert verify_session_from_cookies(_SECRET, MultiDict({SESSION_COOKIE_NAME: "garbage"}), _DOMAIN) is None
+
+
+def test_verify_session_from_cookies_tries_every_value_sent_under_a_name() -> None:
+    # Another sandbox of the region can set a same-named cookie for the whole auth domain, which the
+    # browser sends ahead of this host's own; it must not mask the host's session.
+    value = mint_session_cookie_value(_SECRET, _OWNER, _DOMAIN)
+    foreign = mint_session_cookie_value("another-sandbox-secret", _OWNER, _DOMAIN)
+    shadowed = MultiDict([(SESSION_COOKIE_NAME, foreign), (SESSION_COOKIE_NAME, value)])
+    assert verify_session_from_cookies(_SECRET, shadowed, _DOMAIN) == _OWNER
 
 
 def test_strip_session_cookie_removes_only_ours() -> None:
@@ -138,4 +148,4 @@ def test_set_session_cookie_host_only_sets_both_copies_without_a_domain() -> Non
     assert "Partitioned" in by_name[PARTITIONED_SESSION_COOKIE_NAME]
     # The value verifies exactly as a domain-scoped one does: the scope is the browser's business.
     value = mint_session_cookie_value(_SECRET, _OWNER, _DOMAIN)
-    assert verify_session_from_cookies(_SECRET, {SESSION_COOKIE_NAME: value}, _DOMAIN) == _OWNER
+    assert verify_session_from_cookies(_SECRET, MultiDict({SESSION_COOKIE_NAME: value}), _DOMAIN) == _OWNER

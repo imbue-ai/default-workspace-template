@@ -40,13 +40,13 @@ partitioned cookie leaves an iOS visitor with no session at all. Verification
 accepts whichever copy the browser sends.
 """
 
-from collections.abc import Mapping
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 
 import jwt
 from flask import Response
+from werkzeug.datastructures import MultiDict
 
 from share_gateway.identity import RequesterIdentity
 
@@ -99,13 +99,18 @@ def verify_session_cookie_value(
 
 
 def verify_session_from_cookies(
-    signing_secret: str, cookies: Mapping[str, str], workspace_domain: str
+    signing_secret: str, cookies: MultiDict[str, str], workspace_domain: str
 ) -> "RequesterIdentity | None":
-    """The identity of the first session cookie copy that verifies, or None when neither does."""
+    """The identity of the first session cookie value that verifies, or None when none does.
+
+    Every value sent under a name is tried: a cookie set for a parent domain under the same name (one user's auth
+    sandbox can set one for the whole region's auth domain) is sent beside this host's own, and ahead of it.
+    """
     for cookie_name in _SESSION_COOKIE_NAMES:
-        identity = verify_session_cookie_value(signing_secret, cookies.get(cookie_name, ""), workspace_domain)
-        if identity is not None:
-            return identity
+        for cookie_value in cookies.getlist(cookie_name):
+            identity = verify_session_cookie_value(signing_secret, cookie_value, workspace_domain)
+            if identity is not None:
+                return identity
     return None
 
 
