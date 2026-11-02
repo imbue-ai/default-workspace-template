@@ -99,8 +99,8 @@ live loop:
 Give every change the user requests to its own native subagent (the `Agent`
 tool), as soon as the request arrives, including the first one. A list of
 changes in one message is several requests, so each change in the list gets its
-own subagent. Leave the subagent's `isolation` unset, so every subagent edits
-the live app directly. Subagents run in the background, so starting one returns
+own subagent. Start each subagent with `model: "sonnet"`, and leave its
+`isolation` unset, so every subagent edits the live app directly. Subagents run in the background, so starting one returns
 at once and you stay free to read the next message. They work under your service
 lease (below) and do not take their own. This is separate from `launch-task`,
 which starts a background worker on its own branch.
