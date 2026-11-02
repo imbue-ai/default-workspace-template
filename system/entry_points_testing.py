@@ -29,9 +29,9 @@ UPDATE_SELF_SCRIPTS = REPO_ROOT / ".agents" / "skills" / "update-self" / "script
 # The packages the system python3 runs: stdlib only, no venv.
 BARE_PACKAGES = frozenset({"workspace_bare_scripts", "update_self_skill"})
 
-# Modules of venv packages that import only the standard library and the bare packages, so
-# they run under the system python3 too. One that needs a bare package puts its root on
-# sys.path itself when it runs by its path.
+# Modules of venv packages that import only the standard library, the bare packages and the
+# stdlib-only libraries below, so they run under the system python3 too. One that needs any of
+# those puts its directory on sys.path itself when it runs by its path.
 BARE_MODULES = (
     REPO_ROOT
     / ".agents"
