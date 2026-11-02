@@ -2943,20 +2943,22 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
         participants = _get_json(f"{e2e_server.base_url}/api/roster")["participants"]
         (alice_entry,) = [participant for participant in participants if participant["key"] == "user:user-alice"]
         assert outline.evaluate("(el) => getComputedStyle(el).borderTopColor") == _css_rgb(alice_entry["color"])
-        # Their window is shown as they have it, on an inert stage: Tab never lands on it (nor on anything else of
-        # the desktop), so Enter, aimed at its Close, closes nothing.
+        # Their window is shown as they have it, on an inert stage: focus never lands on it, so Enter, aimed at its
+        # Close, closes nothing; and Tab never reaches it (nor anything else of the desktop) either. Enter goes
+        # straight after the refused focus: a Tab cycle ends on whichever chrome control the launcher's rows put
+        # there, and Enter on that one (Stop viewing, a launch) would end the viewing rather than test the stage.
         viewed_window = _window(page, copied["id"])
         expect(viewed_window).to_be_visible(timeout=15000)
         expect(page.locator(".desktop-stage[inert]")).to_have_count(1)
         close_control = viewed_window.locator('[data-window-control="close"]')
         close_control.focus()
         assert not page.evaluate("() => document.activeElement?.closest('.desktop-stage') !== null")
+        page.keyboard.press("Enter")
         for _ in range(12):
             page.keyboard.press("Tab")
             assert not page.evaluate("() => document.activeElement?.closest('.desktop-stage') !== null"), (
                 "Tab reached something on the viewed desktop"
             )
-        page.keyboard.press("Enter")
         assert [window["id"] for window in _windows(e2e_server.base_url, "alice")] == [copied["id"]]
         expect(_window(visitor, copied["id"])).to_be_visible()
         expect(viewed_window).to_be_visible()

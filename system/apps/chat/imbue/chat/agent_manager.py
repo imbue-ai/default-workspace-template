@@ -18,6 +18,7 @@ from typing import assert_never
 from uuid import uuid4
 
 from chat_background_tasks.markers import TaskSource
+from latchkey_access.gateway import GatewayAccess
 from loguru import logger as _loguru_logger
 from oom_priority.bands import set_oom_score_adj
 from oom_priority.registry import lookup_pids_by_agent_id
@@ -151,7 +152,6 @@ from imbue.chat.harnesses.session_watcher import StreamedReply
 from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.chat.imbue_studio_notifications import ImbueStudioNotificationsClient
-from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.main_chat import MAIN_CHAT_INTRODUCTION
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.main_chat import MainChatCandidate

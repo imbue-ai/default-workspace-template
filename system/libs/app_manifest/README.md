@@ -43,7 +43,10 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   message of that type to, shaped like a launch path, or `show`, the
   `PageTemplate` of the app's page the shell shows for it, with `showing`, the
   templates of the app's other pages that count as already showing it, only
-  beside `show`),
+  beside `show`), `KeybindingAction` (`id`, a `KeybindingActionId` unique
+  within the manifest; `label`, a `KeybindingActionLabel`; and
+  `default_chords`, the chords that trigger it out of the box, whose grammar
+  the `workspace_profile` library checks),
   `DefaultShortcut`
   (`launch`, `mode`), `ShortcutMode`, `AppReference` (`path`, optional `note`),
   `ScopeRules` (`exclude`), `PreviewSpec` (the optional `[preview]` table: how
@@ -125,7 +128,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `scope.list_changed_files` is the diff both `footprint` and `select-tests`
   read, and `select_tests_for_pass_scope` selects from a pass scope file.
 - `app_manifest.primitives`: the validated string types (`AppName`,
-  `DisplayName`, `LaunchPathId`, `LaunchParamName`, `LaunchPathValue` (rooted with one
+  `DisplayName`, `KeybindingActionId` (the profile files' action id rule),
+  `KeybindingActionLabel` (one line, at most 80 characters), `LaunchPathId`,
+  `LaunchParamName`, `LaunchPathValue` (rooted with one
   slash, no query string or fragment, nothing a URL would escape), `MessageType`,
   `PageTemplate` (a path with `{field}` placeholders, starting with one `/` or a
   placeholder, optionally ending in a fixed query string, no fragment),
