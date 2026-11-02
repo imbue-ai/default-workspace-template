@@ -296,7 +296,7 @@ class Sources(NamedTuple):
     shell_url: str
     now: datetime
     is_chat_busy: IsChatBusy
-    main_chat_id: str | None
+    main_chat_file: Path
 
 
 # Free memory
@@ -518,14 +518,23 @@ def idle_agent_candidates(
     )
 
 
-def read_main_chat_id(path: Path) -> str | None:
-    """The chat id the chat app's main-chat file names; None when there is no main chat or the file cannot be read."""
+def read_main_chat_id(path: Path) -> tuple[str | None, list[str]]:
+    """The chat id the chat app's main-chat file names, or None when there is no main chat, plus a note when
+    the file is there but cannot be read, since the main chat may then be listed."""
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return None
-    chat_id = raw.get(MAIN_CHAT_ID_KEY) if isinstance(raw, dict) else None
-    return chat_id if isinstance(chat_id, str) and chat_id else None
+    except FileNotFoundError:
+        return None, []
+    except (OSError, ValueError) as error:
+        return None, [
+            f"could not read the main chat from {path}, so it may be listed: {error}"
+        ]
+    chat_id = raw.get(MAIN_CHAT_ID_KEY) if isinstance(raw, dict) else ""
+    if chat_id is None:
+        return None, []
+    if not isinstance(chat_id, str) or not chat_id:
+        return None, [f"{path} does not name a chat, so the main chat may be listed"]
+    return chat_id, []
 
 
 def collect_agent_section(sources: Sources) -> AgentSection:
@@ -536,17 +545,17 @@ def collect_agent_section(sources: Sources) -> AgentSection:
     candidates = idle_agent_candidates(
         agents, registry_pids, sources.proc_dir, sources.now, sources.is_chat_busy
     )
+    main_chat_id, main_chat_notes = read_main_chat_id(sources.main_chat_file)
+    notes += main_chat_notes
     notes += [
         f"{candidate.name} is the main chat, which the chat app starts again as soon as it stops,"
         " so it is not listed"
         for candidate in candidates
-        if candidate.chat_id == sources.main_chat_id
+        if candidate.chat_id == main_chat_id
     ]
     return AgentSection(
         candidates=tuple(
-            candidate
-            for candidate in candidates
-            if candidate.chat_id != sources.main_chat_id
+            candidate for candidate in candidates if candidate.chat_id != main_chat_id
         ),
         notes=tuple(notes),
     )
@@ -1116,9 +1125,7 @@ def _collect_live_report(now: datetime) -> Report:
             shell_url=os.environ.get(ENV_SHELL_URL, DEFAULT_SHELL_URL).rstrip("/"),
             now=now,
             is_chat_busy=busy_chat_check(os.environ),
-            main_chat_id=read_main_chat_id(
-                markers.main_checkout(_REPO_ROOT) / MAIN_CHAT_FILE
-            ),
+            main_chat_file=markers.main_checkout(_REPO_ROOT) / MAIN_CHAT_FILE,
         )
     )
 

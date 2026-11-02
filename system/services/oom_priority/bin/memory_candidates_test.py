@@ -247,7 +247,7 @@ def _sources(
     is_chat_busy: Callable[[str], bool] = _never_busy,
     supervised_pids: Mapping[str, int] | None = None,
     host_meminfo: Path | None = None,
-    main_chat_id: str | None = None,
+    main_chat_file: Path | None = None,
 ) -> memory_candidates.Sources:
     return memory_candidates.Sources(
         proc_dir=proc_dir,
@@ -259,7 +259,9 @@ def _sources(
         shell_url=_SHELL_URL,
         now=_NOW,
         is_chat_busy=is_chat_busy,
-        main_chat_id=main_chat_id,
+        main_chat_file=main_chat_file
+        if main_chat_file is not None
+        else proc_dir / "absent-main-chat",
     )
 
 
@@ -472,9 +474,7 @@ def test_the_main_chat_is_never_a_candidate_because_the_chat_app_starts_it_again
             proc,
             _FakeMngr([main_chat, other_chat]),
             _FakeHttp({f"{_SCREEN_URL}/browsers": _fleet()}),
-            main_chat_id=memory_candidates.read_main_chat_id(
-                tmp_path / memory_candidates.MAIN_CHAT_FILE
-            ),
+            main_chat_file=tmp_path / memory_candidates.MAIN_CHAT_FILE,
         )
     )
 
@@ -484,6 +484,40 @@ def test_the_main_chat_is_never_a_candidate_because_the_chat_app_starts_it_again
         "  note: main-successor is the main chat, which the chat app starts again as soon as it stops,"
         " so it is not listed" in memory_candidates.render_table(report)
     )
+
+
+def test_an_unreadable_main_chat_file_is_noted_and_the_agents_are_still_listed(
+    tmp_path: Path, runtime_dir: Path
+) -> None:
+    proc = tmp_path / "proc"
+    _write_meminfo(proc, {"MemTotal": 4 * 1024 * 1024, "MemAvailable": 100 * 1024})
+    old = _NOW - timedelta(hours=2)
+    _fake_process(proc, 10, 100)
+    main_chat_file = tmp_path / "main_chat.json"
+    main_chat_file.write_text("{not json", encoding="utf-8")
+
+    report = memory_candidates.collect_report(
+        _sources(
+            proc,
+            _FakeMngr(
+                [
+                    _agent_record(
+                        "trip-plan", "WAITING", {"user_created": "true"}, old, 10
+                    )
+                ]
+            ),
+            _FakeHttp({f"{_SCREEN_URL}/browsers": _fleet()}),
+            main_chat_file=main_chat_file,
+        )
+    )
+
+    assert report.agents.candidates is not None
+    assert [a.name for a in report.agents.candidates] == ["trip-plan"]
+    assert [
+        note
+        for note in report.agents.notes
+        if note.startswith(f"could not read the main chat from {main_chat_file}")
+    ]
 
 
 def test_lists_running_browsers_while_no_window_shows_the_screen_with_their_chromium_memory(

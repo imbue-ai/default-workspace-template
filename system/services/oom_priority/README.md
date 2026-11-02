@@ -384,6 +384,8 @@ It lists:
   - is not in the workspace's main chat, the one the chat app's
     `data/.apps/chat/main_chat.json` names. The chat app starts the main chat's
     agent again as soon as it finds it stopped, so a note names it instead.
+    A file that is there but cannot be read gets a note too, since the main
+    chat may then be listed.
 
   Its memory is the summed anonymous memory of its process trees (see below).
   The trees are rooted at the `pid` mngr reports and at every live pid the
