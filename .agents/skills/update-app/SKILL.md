@@ -27,7 +27,7 @@ If you're doing something *other* than editing an existing app or service:
 - **Creating a new app** -> `build-app`.
 - **Arranging windows** (open/place/focus/minimize/close) -> `manage-desktop`.
 
-## Match the flow to the scope of the change
+## Check whether the app is critical
 
 **First, find the app and read its manifest.** Locate the code the change
 touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.toml`).
@@ -44,6 +44,8 @@ here** if any of these hold:
   the shell, the chat and the terminal all run.
 - The change is under `system/libs/workspace_themes/`, the theme catalog and
   theme route the same three run.
+
+## Match the flow to the scope of the change
 
 Not every change is a quick edit. Before you start, decide which of these
 the request is -- it changes what you do *before* touching code:
