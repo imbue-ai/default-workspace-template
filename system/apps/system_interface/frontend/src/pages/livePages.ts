@@ -636,7 +636,7 @@ export class LivePagesLayer implements PageDriver {
     const covered = new Set<string>();
     if (this.store.windowGesture() !== null) return covered;
     const metrics = this.store.getMetrics();
-    const backdrop = this.store.getBackdropSize();
+    const backdrop = this.store.frameBackdrop();
     // A shown page parked as covered still counts: whatever covers it covers the window's content area too.
     const isContentOpaque = drawn.map((entry) => entry.isPlaceholderShown || shownPageIds.has(entry.windowId));
     const going = drawn.map((entry, index) => ({

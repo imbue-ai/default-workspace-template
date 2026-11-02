@@ -850,7 +850,7 @@ export class DesktopStore {
 
   /** The backdrop the frames are fractions of: the owner's while a viewed desktop is drawn in a letterbox, else
    *  this one. */
-  private frameBackdrop(): PixelSize {
+  frameBackdrop(): PixelSize {
     return this.viewingLetterbox()?.size ?? this.backdrop;
   }
 

@@ -150,6 +150,29 @@ async function showIndependentWindow(placements: Placement[]): Promise<HTMLIFram
   return frameOf("win-4");
 }
 
+/** This client views Alice's desktop, whose windows ``placements`` place on her 2000x1600 backdrop: drawn in a
+ *  letterbox at half scale on this 1000x800 one. */
+async function viewAlicesDesktopAtHalfScale(placements: Placement[]): Promise<void> {
+  api.desktops = [
+    ...api.desktops,
+    desktopRecord("alice", {
+      owner: "user:user-alice-0001",
+      windows: placements.map((placement) => windowRecord(placement.window_id, "docs", `/${placement.window_id}`)),
+    }),
+  ];
+  setOwnIdentityForTesting({
+    owner: true,
+    user_id: "user-josh-0001",
+    email: "josh@example.com",
+    participant: "user:user-josh-0001",
+  });
+  api.ownerViewport = { width: 2000, height: 1600 };
+  api.writeLayout("alice", api.ownerLayoutClientId, { updated_at: "2026-10-29T00:00:00Z", placements });
+  socket.deliver().onDesktopsUpdated(api.desktops);
+  await settle();
+  await store.switchDesktop("alice");
+}
+
 beforeEach(async () => {
   api = new FakeDesktopApi();
   socket = new FakeDesktopSocket();
@@ -449,27 +472,7 @@ describe("creating and positioning", () => {
   });
 
   it("lays a page over its content box in the stage's own pixels while a viewed desktop is drawn scaled down", async () => {
-    api.desktops = [
-      ...api.desktops,
-      desktopRecord("alice", {
-        owner: "user:user-alice-0001",
-        windows: [windowRecord("win-a", "docs", "/a")],
-      }),
-    ];
-    setOwnIdentityForTesting({
-      owner: true,
-      user_id: "user-josh-0001",
-      email: "josh@example.com",
-      participant: "user:user-josh-0001",
-    });
-    api.ownerViewport = { width: 2000, height: 1600 };
-    api.writeLayout("alice", api.ownerLayoutClientId, {
-      updated_at: "2026-10-29T00:00:00Z",
-      placements: [placementRecord("win-a")],
-    });
-    socket.deliver().onDesktopsUpdated(api.desktops);
-    await settle();
-    await store.switchDesktop("alice");
+    await viewAlicesDesktopAtHalfScale([placementRecord("win-a")]);
     expect(store.viewingLetterbox()?.scale).toBe(0.5);
 
     // The chrome and the host lie under the letterbox's half scale, so the box measures at half its size and
@@ -618,6 +621,19 @@ describe("covered pages", () => {
     expect(isParked(wrapperOf("win-1"))).toBe(true);
     expect(isParked(wrapperOf("win-2"))).toBe(false);
     expect(document.activeElement).toBe(frameOf("win-2"));
+  });
+
+  it("tests a viewed desktop's pages against the owner's backdrop the letterbox draws, not this one", async () => {
+    await viewAlicesDesktopAtHalfScale([
+      placementRecord("win-a", { frame: BOTTOM_RIGHT_QUARTER_FRAME }),
+      placementRecord("win-b"),
+    ]);
+    // win-a lies in the bottom right of Alice's 2000x1600 backdrop: beyond this 1000x800 one, inside the letterbox.
+    renderChrome("win-a", "win-b");
+    drawChromeAt("win-a", { left: 500, top: 400, width: 500, height: 400 });
+    layer.reconcile();
+    expect(activeFocusedWindowId(store.getState())).toBe("win-b");
+    expect(isParked(wrapperOf("win-a"))).toBe(false);
   });
 
   it("covers a page once the window travelling over it lands, and uncovers it as soon as the window leaves", () => {
