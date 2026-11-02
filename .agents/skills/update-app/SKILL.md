@@ -99,19 +99,12 @@ live loop:
 Give every change the user requests to its own native subagent (the `Agent`
 tool), as soon as the request arrives, including the first one. Subagents run in
 the background, so starting one returns at once and you stay free to read the
-next message. This is separate from `launch-task`, which starts a background
-worker on its own branch.
+next message. They work under your service lease (below) and do not take their
+own. This is separate from `launch-task`, which starts a background worker on
+its own branch.
 
 A list of changes in one message is several requests, not one large request:
 give each change in the list its own subagent.
-
-- **Hand off quickly.** Brief the subagent and start it; leave the design and
-  the edits to it.
-- **Brief each subagent fully.** Give it the user's request word for word, the
-  app's location, the files and parts of files it may change, and the parts other
-  subagents own, which it must leave alone.
-- **Subagents work under your lease.** You hold the service lease below for the
-  whole change; subagents do not take their own.
 
 ## One editor at a time: the service lease
 
