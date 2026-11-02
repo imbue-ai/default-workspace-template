@@ -53,6 +53,11 @@ the request is -- it changes what you do *before* touching code:
   backend logic fix, a config or `command` change, a restart. Go straight
   to the live change loop below: edit, apply, refresh, verify.
 
+- **Series of small / contained changes** -- several requests, each of which on
+  its own would be a small / contained change, that you see together: as a list
+  in one message, or as several messages picked up at once. Treat each request as
+  a small / contained change and go straight to the live change loop below.
+
 - **Larger-scope change** -- a redesign, a new page or view, a meaningful
   shift in look-and-feel, or a new user-facing capability. Run the *same*
   mock-confirm flow `build-app` used to create the service: **read
