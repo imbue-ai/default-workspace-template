@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { describeRequestError, describeRequestErrorKind } from "./request-error";
+import { describeRequestError, describeRequestErrorKind, isUnansweredRequest } from "./request-error";
 
 // Every case here is a shape mithril actually rejects with; the point of the
 // helper is that none of them can reach a user as a bare "null".
@@ -68,5 +68,31 @@ describe("describeRequestErrorKind", () => {
     expect(describeRequestErrorKind(Object.assign(new Error("null"), { code: 503, response: null }))).toBe("unknown");
     expect(describeRequestErrorKind("a plain string")).toBe("unknown");
     expect(describeRequestErrorKind(null)).toBe("unknown");
+  });
+});
+
+describe("isUnansweredRequest", () => {
+  it("reads a request that got no HTTP response as unanswered", () => {
+    expect(isUnansweredRequest(Object.assign(new Error(String(null)), { code: 0, response: null }))).toBe(true);
+  });
+
+  it("reads a gateway that gave up without the app's own detail as unanswered", () => {
+    for (const code of [502, 504]) {
+      expect(isUnansweredRequest(Object.assign(new Error(String(null)), { code, response: null }))).toBe(true);
+    }
+  });
+
+  it("reads a 502 or 504 carrying the app's own detail as answered", () => {
+    for (const code of [502, 504]) {
+      const error = Object.assign(new Error("{}"), { code, response: { detail: "the agent did not answer" } });
+      expect(isUnansweredRequest(error)).toBe(false);
+    }
+  });
+
+  it("reads any other status, and anything that is not a request error, as answered", () => {
+    expect(isUnansweredRequest(Object.assign(new Error("null"), { code: 503, response: null }))).toBe(false);
+    expect(isUnansweredRequest(Object.assign(new Error("{}"), { code: 500, response: { detail: "x" } }))).toBe(false);
+    expect(isUnansweredRequest(null)).toBe(false);
+    expect(isUnansweredRequest("a plain string")).toBe(false);
   });
 });
