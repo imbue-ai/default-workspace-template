@@ -12,6 +12,10 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
+from imbue.chat.config import DEFAULT_CHAT_DATA_DIR
+from imbue.chat.main_chat import MAIN_CHAT_FILENAME, MainChatStore
+from imbue.chat.primitives import ChatId
 from update_self_skill import (
     update_apply_contract,
     update_chat_pause,
@@ -345,6 +349,48 @@ def test_stop_chats_pauses_a_named_agent_for_memory_and_refuses_one_it_may_not(
     assert [entry.id for entry in _record(tmp_path).stopped_agents] == ["agent-idle"]
 
 
+def test_stop_chats_leaves_the_main_chat_running_and_refuses_to_pause_it_by_name(
+    tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The chat app starts the main chat again as soon as it stops, so a pause would not hold."""
+    fake_agents.set_agents(
+        [
+            *_workspace_agents(),
+            # The main chat has handed off once, so its live agent carries the chat's id.
+            chat("agent-main-2", "Main", "RUNNING", chat_id="agent-main-1"),
+        ]
+    )
+    # Written by the chat app's own store, so the file's place and shape are the ones it keeps.
+    MainChatStore(path=tmp_path / DEFAULT_CHAT_DATA_DIR / MAIN_CHAT_FILENAME).write(
+        ChatId("agent-main-1")
+    )
+    assert _main(tmp_path, "run-status", "start") == 0
+
+    assert _main(tmp_path, "run-status", "stop-chats") == 0
+    assert fake_agents.states()["Main"] == "RUNNING"
+    assert fake_agents.states()["Fix-the-login"] == "STOPPED"
+
+    fake_agents.clear_calls()
+    capsys.readouterr()
+    assert (
+        _main(
+            tmp_path,
+            "run-status",
+            "stop-chats",
+            "--agent",
+            "Main",
+            "--agent",
+            "Plan-the-trip",
+        )
+        == 1
+    )
+    assert "Main is the main chat" in capsys.readouterr().err
+    assert fake_agents.mngr_verbs() == []
+    assert "agent-main-2" not in [
+        entry.id for entry in _record(tmp_path).stopped_agents
+    ]
+
+
 def test_stop_chats_refuses_to_run_without_the_leads_identity(
     tmp_path: Path, fake_agents: FakeAgents, monkeypatch
 ) -> None:
@@ -418,6 +464,7 @@ def test_a_waiting_agent_whose_background_command_still_runs_is_paused_with_it(
         runners,
         lead,
         [],
+        None,
     )
     assert [target.agent.id for target in targets] == ["agent-idle"]
 

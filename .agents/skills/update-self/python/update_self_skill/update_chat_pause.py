@@ -6,8 +6,10 @@ What is paused: every chat (``user_created=true``) and background worker
 (``WAITING``) while a command it started through ``run_in_background.py`` still runs -- that
 command's report would start the agent's next turn in the middle of the apply. Left alone: the
 lead running the update, every member of its chat, every worker it launched (the update's own
-``update-self`` worker), and the ``is_primary=true`` services agent. A lead may also name agents
-to pause for memory earlier in the run; those are paused whatever their state.
+``update-self`` worker), the ``is_primary=true`` services agent, and the workspace's main chat,
+which the chat app starts again as soon as it finds it stopped. A lead may also name agents to
+pause for memory earlier in the run; those are paused whatever their state, and naming the main
+chat is refused.
 
 Pausing a busy-waiting agent stops its background runners first, so their reports cannot revive
 it mid-apply; the commands they ran go into the record and the resume note, so the agent knows
@@ -24,6 +26,7 @@ command line names its chat and the command it runs; a host without it (macOS) h
 
 from __future__ import annotations
 
+import json
 import os
 import signal
 import subprocess
@@ -95,6 +98,13 @@ AGENT_NAME_ENV = "MNGR_AGENT_NAME"
 
 CHAT_ID_ENV = "MINDS_CHAT_ID"
 
+# The chat app's record of which chat is the workspace's main chat (its ``DEFAULT_CHAT_DATA_DIR``
+# and ``MAIN_CHAT_FILENAME``), copied because update-self is standard library only; a test writes
+# it through the chat app's own store.
+MAIN_CHAT_FILE = Path("data") / ".apps" / "chat" / "main_chat.json"
+
+MAIN_CHAT_ID_KEY = "chat_id"
+
 CommandRunner = Callable[[Sequence[str], float], subprocess.CompletedProcess[str]]
 
 
@@ -104,6 +114,10 @@ class AgentListingError(Exception):
 
 class UnknownAgentError(Exception):
     """A name the lead asked to pause is not a chat or worker this workspace runs."""
+
+
+class MainChatPauseError(Exception):
+    """A name the lead asked to pause is the main chat's, which the chat app starts again at once."""
 
 
 @dataclass(frozen=True)
@@ -164,6 +178,16 @@ class PauseTarget:
     agent: ListedAgent
     runners: tuple[BackgroundRunner, ...]
     lead_chat_id: str
+
+
+def read_main_chat_id(repo_root: Path) -> str | None:
+    """The chat the chat app keeps as the main chat; None when there is none or its file cannot be read."""
+    try:
+        raw = json.loads((repo_root / MAIN_CHAT_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    chat_id = raw.get(MAIN_CHAT_ID_KEY) if isinstance(raw, dict) else None
+    return chat_id if isinstance(chat_id, str) and chat_id else None
 
 
 def run_command(
@@ -316,11 +340,12 @@ def select_pause_targets(
     runners: Sequence[BackgroundRunner],
     lead: LeadIdentity,
     requested_names: Sequence[str],
+    main_chat_id: str | None,
 ) -> list[PauseTarget]:
     """What to pause: the busy chats and workers, or exactly the ones the lead named.
 
-    A named agent that is not a live chat or worker of this workspace (or is the lead's own) is
-    refused rather than skipped, so a typo cannot read as a pause that happened.
+    A named agent that is not a live chat or worker of this workspace (or is the lead's own, or
+    the main chat's) is refused rather than skipped, so a typo cannot read as a pause that happened.
     """
     by_id = {agent.id: agent for agent in agents}
     candidates = [
@@ -330,6 +355,19 @@ def select_pause_targets(
         and not agent.is_primary
         and not _is_the_leads_own(agent, lead, by_id)
     ]
+    main_chat_names = sorted(
+        {
+            agent.name
+            for agent in candidates
+            if agent.chat_id == main_chat_id and agent.name in requested_names
+        }
+    )
+    if main_chat_names:
+        raise MainChatPauseError(
+            f"{', '.join(main_chat_names)} is the main chat, which the chat app starts again as"
+            " soon as it stops, so it cannot be paused"
+        )
+    candidates = [agent for agent in candidates if agent.chat_id != main_chat_id]
     runners_by_chat: dict[str, list[BackgroundRunner]] = {}
     for runner in runners:
         runners_by_chat.setdefault(runner.chat_id, []).append(runner)
