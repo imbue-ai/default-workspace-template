@@ -16,6 +16,7 @@ import pytest
 from imbue.chat.config import DEFAULT_CHAT_DATA_DIR
 from imbue.chat.main_chat import MAIN_CHAT_FILENAME, MainChatStore
 from imbue.chat.primitives import ChatId
+
 from update_self_skill import (
     update_apply_contract,
     update_chat_pause,

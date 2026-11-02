@@ -457,7 +457,9 @@ def test_the_main_chat_is_never_a_candidate_because_the_chat_app_starts_it_again
         old,
         10,
     )
-    other_chat = _agent_record("trip-plan", "WAITING", {"user_created": "true"}, old, 11)
+    other_chat = _agent_record(
+        "trip-plan", "WAITING", {"user_created": "true"}, old, 11
+    )
     for pid in (10, 11):
         _fake_process(proc, pid, 100)
     # Written by the chat app's own store, so the file's place and shape are the ones it keeps.
