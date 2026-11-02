@@ -19,9 +19,8 @@ there's a window to refresh:
   by an app (named `<app>-<role>`, code in the app's folder).
 
 A change reaches the user only after the process reloads and, for an app, the
-open window refreshes. Both are easy to forget, and forgetting either leaves the
-user looking at stale state as if the change never happened. The live change
-loop below does both.
+open window refreshes. Forgetting either leaves the user looking at stale state
+as if the change never happened. The live change loop below does both.
 
 If you're doing something *other* than editing an existing app or service:
 
