@@ -392,6 +392,22 @@ def test_stop_chats_leaves_the_main_chat_running_and_refuses_to_pause_it_by_name
     ]
 
 
+def test_stop_chats_warns_when_it_cannot_read_which_chat_is_the_main_chat(
+    tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_agents.set_agents(_workspace_agents())
+    main_chat_file = tmp_path / update_chat_pause.MAIN_CHAT_FILE
+    main_chat_file.parent.mkdir(parents=True)
+    main_chat_file.write_text("{not json", encoding="utf-8")
+    assert _main(tmp_path, "run-status", "start") == 0
+    capsys.readouterr()
+
+    assert _main(tmp_path, "run-status", "stop-chats") == 0
+
+    assert "the main chat is treated like any other chat" in capsys.readouterr().err
+    assert fake_agents.states()["Fix-the-login"] == "STOPPED"
+
+
 def test_stop_chats_refuses_to_run_without_the_leads_identity(
     tmp_path: Path, fake_agents: FakeAgents, monkeypatch
 ) -> None:

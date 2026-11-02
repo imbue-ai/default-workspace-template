@@ -181,13 +181,30 @@ class PauseTarget:
 
 
 def read_main_chat_id(repo_root: Path) -> str | None:
-    """The chat the chat app keeps as the main chat; None when there is none or its file cannot be read."""
+    """The chat the chat app keeps as the main chat; None when there is none, or, with a warning, when
+    its file cannot be read."""
+    path = repo_root / MAIN_CHAT_FILE
     try:
-        raw = json.loads((repo_root / MAIN_CHAT_FILE).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return None
-    chat_id = raw.get(MAIN_CHAT_ID_KEY) if isinstance(raw, dict) else None
-    return chat_id if isinstance(chat_id, str) and chat_id else None
+    except (OSError, ValueError) as exc:
+        _warn_main_chat_unknown(f"could not read {path} ({exc})")
+        return None
+    chat_id = raw.get(MAIN_CHAT_ID_KEY) if isinstance(raw, dict) else ""
+    if chat_id is None:
+        return None
+    if not isinstance(chat_id, str) or not chat_id:
+        _warn_main_chat_unknown(f"{path} does not name a chat")
+        return None
+    return chat_id
+
+
+def _warn_main_chat_unknown(reason: str) -> None:
+    print(
+        f"warning: {reason}, so the main chat is treated like any other chat",
+        file=sys.stderr,
+    )
 
 
 def run_command(
