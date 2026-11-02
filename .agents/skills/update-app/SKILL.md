@@ -45,12 +45,6 @@ here** if any of these hold:
 - The change is under `system/libs/workspace_themes/`, the theme catalog and
   theme route the same three run.
 
-The critical-app flow covers the whole change, including any ordinary app or
-skill it also touches. It never edits a critical app in the served tree. It runs the same
-live loop against an isolated worktree, shows the user a preview window, and
-goes live through the atomic update apply once a background worker has hardened
-the change.
-
 Not every change is a quick edit. Before you start, decide which of these
 the request is -- it changes what you do *before* touching code:
 
