@@ -32,8 +32,9 @@ If you're doing something *other* than editing an existing app or service:
 **First, find the app and read its manifest.** Locate the code the change
 touches and the `app.toml` of the app that owns it (`system/apps/<package>/app.toml`).
 
-**Follow [`references/critical-app.md`](references/critical-app.md) and stop
-reading here** if any of these hold:
+**Follow the critical-app flow in
+[`references/critical-app.md`](references/critical-app.md) and stop reading
+here** if any of these hold:
 
 - The `app.toml` says `critical = true`: the shell (`system_interface`), the
   chat, the terminal, and any user app that declares it.
@@ -44,8 +45,8 @@ reading here** if any of these hold:
 - The change is under `system/libs/workspace_themes/`, the theme catalog and
   theme route the same three run.
 
-That flow covers the whole change, including any ordinary app or skill it also
-touches. It never edits a critical app in the served tree. It runs the same
+The critical-app flow covers the whole change, including any ordinary app or
+skill it also touches. It never edits a critical app in the served tree. It runs the same
 live loop against an isolated worktree, shows the user a preview window, and
 goes live through the atomic update apply once a background worker has hardened
 the change.
