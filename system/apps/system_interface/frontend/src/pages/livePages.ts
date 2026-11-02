@@ -878,7 +878,10 @@ export class LivePagesLayer implements PageDriver {
     this.greet(page);
     // A page that loads the contract after its own load (a dynamic ``import()``) missed the visibility the load told
     // it. A page takes itself to be shown until told otherwise, so only a hidden one is told again.
-    if (page.isHidden) sendToChildFrame(page.frame, SHELL_HIDDEN);
+    if (page.isHidden) {
+      page.lastSentVisibility = false;
+      sendToChildFrame(page.frame, SHELL_HIDDEN);
+    }
   }
 
   private takeLocation(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

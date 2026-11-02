@@ -741,6 +741,15 @@ describe("the contract", () => {
     expect(spy.mock.calls.map((call) => call[0].type)).toEqual([SHELL_HANDSHAKE, SHELL_THEME, SHELL_HIDDEN]);
   });
 
+  it("tells a hidden page whose contract connects before its load that it is hidden once, not again on a reconcile", () => {
+    store.minimizeWindow("win-1");
+    layer.reconcile();
+    const spy = spyOnFrame("win-1");
+    messageFromPage("win-1", { type: SHELL_CAPABILITIES, navigation: false });
+    layer.reconcile();
+    expect(spy.mock.calls.map((call) => call[0].type)).toEqual([SHELL_HANDSHAKE, SHELL_THEME, SHELL_HIDDEN]);
+  });
+
   it("tells a page in its handshake whether the embedder opens its settings for the files shared from the computer", () => {
     store.setOpensLocalFiles(true);
     const spy = spyOnFrame("win-1");
