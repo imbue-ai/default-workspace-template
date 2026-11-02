@@ -1,8 +1,4 @@
-"""The Files keybinding actions: the browser actions a keystroke can trigger, declared in the app's ``app.toml``.
-
-The chords are what `frontend/src/views/keyboard.ts` answered before they became rebindable,
-spelled in the canonical grammar.
-"""
+"""The Files keybinding actions: the browser actions a keystroke can trigger, declared in the app's ``app.toml``."""
 
 from functools import cache
 from pathlib import Path
