@@ -80,10 +80,8 @@ The code runs under one of two interpreters, and what it imports decides which:
 - **Bare tier**: code whose imports are all standard library -- the bare
   packages (`workspace_bare_scripts`, update-self's) count as standard library
   here -- runs under the system `python3` with no venv. It pays nothing for an
-  environment it does not use. This also covers code that must work when the
-  venv is missing or broken, that something outside this release calls by
-  path, or that sits in a long-running program's launch chain: the agent
-  hooks, the bug-report collector, the pre-sync build steps, the scripts the
+  environment it does not use. Bare code includes the agent hooks, the
+  bug-report collector, the pre-sync build steps, the scripts the
   Imbue Studio app calls, update-self, `system/scripts/workspace_bare_scripts/`
   (`forward_port.py`, `with_secrets.py`, `run_in_background.py`, ...), and
   stdlib-only modules of other packages such as `notify_user.py` and
