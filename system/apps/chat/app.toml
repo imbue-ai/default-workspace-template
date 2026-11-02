@@ -109,6 +109,14 @@ params = [
 presets = {target = "app_chat"}
 app_params = {name = "app", display_name = "app_display_name"}
 
+# The keystrokes a person may re-bind in the Keyboard shortcuts dialog (the user-profile-state spec in the mngr
+# repository, section 10). Enter sends, and so does the Cmd/Ctrl pair other chat apps taught; Shift+Enter stays the
+# fixed line break, since a keystroke that matches no action falls through to the composer.
+[[keybindings]]
+id = "send-message"
+label = "Send the message"
+default_chords = ["enter", "ctrl+enter", "meta+enter"]
+
 # The chat's own look beyond the shared components: themes may style these elements in their apps/chat.css
 # (docs/system/blueprint/workspace-themes/, section 7). Renaming one breaks the themes that style it.
 [theming]

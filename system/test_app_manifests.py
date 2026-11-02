@@ -22,6 +22,7 @@ from app_manifest.scope import (
 from oom_priority import bands
 from oom_priority.supervisord_testing import supervisord_commands
 from workspace_bare_scripts import user_packages
+from workspace_profile.manifest import find_off_grammar_default_chords
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _APPS_DIR = _REPO_ROOT / "system" / "apps"
@@ -419,6 +420,19 @@ def test_built_in_manifest_priority_is_a_band(manifest_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
+    "manifest_path", _built_in_manifest_paths(), ids=lambda path: path.parent.name
+)
+def test_built_in_manifest_keybindings_spell_their_default_chords_in_the_grammar(
+    manifest_path: Path,
+) -> None:
+    # The shell's Keyboard shortcuts dialog skips a registry row whose default chords are
+    # off the grammar, and the app's own resolved-chords route refuses to load them.
+    manifest = load_manifest(manifest_path)
+
+    assert find_off_grammar_default_chords(manifest.keybindings) == []
+
+
+@pytest.mark.parametrize(
     "manifest_path",
     [
         path
@@ -496,6 +510,28 @@ def test_built_in_manifests_agree_with_the_contract_table() -> None:
     assert [
         (handler.type, handler.path) for handler in by_name["screen"].message_handlers
     ] == [("open:url", "/api/open-url")]
+    # The actions the Keyboard shortcuts dialog lists (the user-profile-state spec in the mngr
+    # repository, section 10): the terminal declares none, since xterm owns its page's keystrokes.
+    assert {
+        name: [str(action.id) for action in manifest.keybindings]
+        for name, manifest in by_name.items()
+        if manifest.keybindings
+    } == {
+        "system_interface": ["launcher-secondary-send"],
+        "chat": ["send-message"],
+        "files": [
+            "select-all",
+            "go-up",
+            "back",
+            "forward",
+            "new-folder",
+            "open",
+            "rename",
+            "delete",
+            "clear-selection",
+            "save-file",
+        ],
+    }
     # The stop-when-no-windows spec, section 4.2: Files, Getting Started, Routines, System Monitor, and the
     # Style Guide stop once no window shows them; the Screen never stops for emptiness (the Screen spec, D3);
     # and the critical ones (which the manifest refuses the field on) never stop.

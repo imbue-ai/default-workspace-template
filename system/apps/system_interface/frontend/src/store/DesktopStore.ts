@@ -27,6 +27,7 @@ import {
   isCustomSchemeLink,
 } from "@imbue/workspace-ui/src/links";
 import { StalePlacementsSaveError } from "../model/api";
+import { refreshShellKeybindings } from "../model/keybindings";
 import {
   NO_DRAFT_APP_REASON,
   NO_TEXT_APP_REASON,
@@ -281,6 +282,8 @@ export interface PageDriver {
   reloadApp(appName: string): void;
   /** Send every page of an app the theme it wears again (its theming was turned on or off). */
   resendTheme(appName: string): void;
+  /** Tell every greeted page somebody changed a keybinding, so it re-fetches its resolved chords. */
+  broadcastKeybindingsChanged(): void;
   /** Send the page ``shell:close-request`` (the Imbue Studio close chord). */
   requestClose(windowId: string): void;
   /** Whether the window's page declared it owns the close chord (``closeChord: true``). */
@@ -1177,6 +1180,10 @@ export class DesktopStore {
       onThemesChanged: (catalog) => {
         this.themeCatalogChanges += 1;
         this.takeThemeCatalog(catalog);
+      },
+      onKeybindingsChanged: () => {
+        void refreshShellKeybindings();
+        this.pageDriver?.broadcastKeybindingsChanged();
       },
       onLayoutOp: (event) => this.handleLayoutOp(event),
       onPresenceUpdated: (users) => this.takePresence(users),

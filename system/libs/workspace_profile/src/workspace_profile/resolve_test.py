@@ -1,7 +1,8 @@
 import json
 from pathlib import Path
 
-from workspace_profile.identity import RequestIdentity
+from workspace_layout.identity import RequestIdentity
+
 from workspace_profile.overrides import (
     UNSENT_CHANGES_RELATIVE_PATH,
     USER_OVERRIDES_RELATIVE_DIR,

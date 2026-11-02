@@ -103,6 +103,8 @@ export interface SocketHandlers {
   onUpdateNoticeChanged(notice: UpdateNoticeWire | null): void;
   /** The workspace's themes or its default theme changed (workspace-themes plan section 5.2). */
   onThemesChanged(catalog: ThemeCatalog): void;
+  /** Somebody changed a keybinding; the shell and every framed page re-fetch their resolved chords. */
+  onKeybindingsChanged(): void;
   onLayoutOp(event: LayoutOpEvent): void;
   /** The connected users, one entry per user, on connect and whenever someone joins or leaves. */
   onPresenceUpdated(users: PresentUser[]): void;
@@ -280,6 +282,9 @@ export class ShellSocket implements DesktopSocket {
         return;
       case "themes_changed":
         handlers.onThemesChanged(parseThemeCatalog(event.catalog));
+        return;
+      case "keybindings_changed":
+        handlers.onKeybindingsChanged();
         return;
       case "layout_op": {
         // A targeted op is for one client's windows; an untargeted one (a refresh of a whole app,

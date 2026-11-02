@@ -3,9 +3,9 @@
 One file, ``data/.state/profile/account.json``, written only by a client outside the workspace
 (the Imbue Studio desktop, or the hosted web chrome) and never by anything inside it. It names the
 workspace's account and owner, and carries the account-keyed settings the workspace's apps
-consume as extra keys beside the header fields (none yet; keybindings are the first planned
-key). It lives under ``data/.state/`` because it is machine state a client rebuilds: the
-account is its source of truth.
+consume as extra keys beside the header fields (the keybindings, today). It lives under
+``data/.state/`` because it is machine state a client rebuilds: the account is its source of
+truth.
 
 Reads are tolerant in both directions: an absent or unreadable file resolves from overrides
 and defaults alone, and a snapshot a newer client wrote (a higher ``snapshot_format``, or keys
@@ -36,10 +36,10 @@ SNAPSHOT_HEADER_KEYS: Final[frozenset[str]] = frozenset(
 )
 
 # The account-keyed setting keys this template's apps consume from the snapshot. A setting is
-# added here only when a workspace app reads it (keybindings will be the first); the vendored
-# contract fixture test pins this list against what the desktop writes, so a key added on one
-# side fails the other until mirrored.
-CONSUMED_SETTING_KEYS: Final[tuple[str, ...]] = ()
+# added here only when a workspace app reads it; the vendored contract fixture test pins this
+# list against what the desktop writes, so a key added on one side fails the other until
+# mirrored.
+CONSUMED_SETTING_KEYS: Final[tuple[str, ...]] = ("keybindings",)
 
 
 class WorkspaceProfileSnapshot(FrozenModel):

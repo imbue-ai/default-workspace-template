@@ -19,6 +19,8 @@ from app_manifest.primitives import DisplayName
 from app_manifest.primitives import EnvVarName
 from app_manifest.primitives import ExcludeGlob
 from app_manifest.primitives import IconPath
+from app_manifest.primitives import KeybindingActionId
+from app_manifest.primitives import KeybindingActionLabel
 from app_manifest.primitives import LaunchParamName
 from app_manifest.primitives import LaunchPathId
 from app_manifest.primitives import LaunchPathValue
@@ -262,6 +264,17 @@ class MessageHandler(FrozenModel):
         if self.showing and self.show is None:
             raise InvalidManifestValueError(f"message handler {str(self.type)!r} gives 'showing' only beside 'show'")
         return self
+
+
+class KeybindingAction(FrozenModel):
+    """An action the keyboard can trigger in an app, and the chords that do so out of the box (desktop-interface
+    contracts.md section 2). The chord spelling is the ``workspace_profile`` grammar, checked where chords are read."""
+
+    id: KeybindingActionId = Field(description="The action id, stable across releases")
+    label: KeybindingActionLabel = Field(description="What the action does, as the Keyboard shortcuts dialog shows it")
+    default_chords: tuple[NonEmptyStr, ...] = Field(
+        default=(), description="The canonical chords that trigger it by default; none leaves it unbound"
+    )
 
 
 class AppReference(FrozenModel):
@@ -522,6 +535,10 @@ class AppManifest(FrozenModel):
         default=(),
         description="The messages the app takes, each posted by the shell to a route under the app's origin",
     )
+    keybindings: tuple[KeybindingAction, ...] = Field(
+        default=(),
+        description="The actions a person may re-bind in the Keyboard shortcuts dialog, in display order",
+    )
     references: tuple[AppReference, ...] = Field(
         default=(),
         description="The artifacts outside the app's directory that belong to it",
@@ -584,6 +601,9 @@ class AppManifest(FrozenModel):
         message_types = [handler.type for handler in self.message_handlers]
         if len(set(message_types)) != len(message_types):
             raise InvalidManifestValueError(f"message handler types must be unique, got {message_types}")
+        keybinding_ids = [action.id for action in self.keybindings]
+        if len(set(keybinding_ids)) != len(keybinding_ids):
+            raise InvalidManifestValueError(f"keybinding action ids must be unique, got {keybinding_ids}")
         launch_path_ids = [launch_path.id for launch_path in self.launch_paths]
         if len(set(launch_path_ids)) != len(launch_path_ids):
             raise InvalidManifestValueError(f"launch path ids must be unique, got {launch_path_ids}")

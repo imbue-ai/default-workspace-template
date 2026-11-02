@@ -58,6 +58,7 @@ from workspace_themes.flask_routes import register_workspace_theme_route
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
+from imbue.chat import keybindings_endpoints
 from imbue.chat import latchkey_endpoints
 from imbue.chat import mentions_endpoints
 from imbue.chat import secret_requests_endpoints
@@ -3039,6 +3040,7 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     accounts_endpoints.ROUTE_TABLE,
     latchkey_endpoints.ROUTE_TABLE,
     focus_chat.ROUTE_TABLE,
+    keybindings_endpoints.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
     mentions_endpoints.ROUTE_TABLE,
     THEME_STATIC_ROUTE_TABLE,
@@ -3153,6 +3155,7 @@ def create_application(state: ChatAppState) -> Flask:
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     focus_chat.register_routes(application)
+    keybindings_endpoints.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
     state.mention_handler = MentionHandler(

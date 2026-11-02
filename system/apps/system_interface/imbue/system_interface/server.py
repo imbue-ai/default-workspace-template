@@ -71,6 +71,7 @@ from imbue.system_interface.shell.data_types import PopOutStateReport
 from imbue.system_interface.shell.errors import ClientNotFoundError
 from imbue.system_interface.shell.errors import InvalidShellValueError
 from imbue.system_interface.shell.errors import ShellStateError
+from imbue.system_interface.shell.keybindings_routes import register_keybindings_routes
 from imbue.system_interface.shell.route_helpers import HTTP_NOT_FOUND
 from imbue.system_interface.shell.route_helpers import IMAGE_CONTENT_SECURITY_POLICY
 from imbue.system_interface.shell.route_helpers import request_identity
@@ -939,6 +940,7 @@ def create_application(state: SystemInterfaceState) -> Flask:
     application.add_url_rule(ROSTER_ROUTE, view_func=_roster_endpoint, methods=["GET"])
     application.add_url_rule(f"{ROSTER_ROUTE}/<key>/picture", view_func=_participant_picture_endpoint, methods=["GET"])
     register_shell_routes(application)
+    register_keybindings_routes(application)
     register_avatar_routes(application)
     sock.route("/api/ws")(_ws_endpoint)
 

@@ -37,6 +37,7 @@ from workspace_layout.shell_url import DESKTOPS_ROUTE
 from workspace_layout.shell_url import INVENTORY_ROUTE
 from workspace_layout.shell_url import LAYOUT_OP_ROUTE
 from workspace_layout.shell_url import ROSTER_ROUTE
+from workspace_profile.manifest import KeybindingsMeResponse
 from workspace_themes.flask_routes import THEME_STATIC_ROUTE_TABLE
 
 from imbue.system_interface.api_models import HeartbeatRequest
@@ -76,6 +77,19 @@ from imbue.system_interface.shell.desktop_routes import DesktopWallpaperRequest
 from imbue.system_interface.shell.desktop_routes import ShortcutMoveRequest
 from imbue.system_interface.shell.desktop_routes import ShortcutRemoveRequest
 from imbue.system_interface.shell.embedder_messages import EmbedderMessageRelayRequest
+from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryOutcome
+from imbue.system_interface.shell.keybindings_routes import DeliverKeybindingsRequest
+from imbue.system_interface.shell.keybindings_routes import DiscardKeybindingRequest
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_CATALOG_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_DELIVER_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_DISCARD_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_ME_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_RESET_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KEYBINDINGS_SAVE_ROUTE
+from imbue.system_interface.shell.keybindings_routes import KeybindingsCatalogResponse
+from imbue.system_interface.shell.keybindings_routes import ResetKeybindingRequest
+from imbue.system_interface.shell.keybindings_routes import SaveKeybindingRequest
+from imbue.system_interface.shell.keybindings_routes import SaveKeybindingResponse
 from imbue.system_interface.shell.route_helpers import HTTP_ACCEPTED
 from imbue.system_interface.shell.route_helpers import HTTP_BAD_GATEWAY
 from imbue.system_interface.shell.route_helpers import HTTP_CREATED
@@ -235,4 +249,19 @@ SHELL_ROUTE_TABLE: RouteTable = {
     # The show-around tour
     ("GET", TOUR_ROUTE): RouteModels(response_model=TourProgress),
     ("POST", TOUR_ROUTE): RouteModels(request_model=TourProgress, response_model=TourProgress),
+    # Keybindings (user-profile-state spec, sections 9.3 and 10.3)
+    ("GET", KEYBINDINGS_ME_ROUTE): RouteModels(response_model=KeybindingsMeResponse),
+    ("GET", KEYBINDINGS_CATALOG_ROUTE): RouteModels(response_model=KeybindingsCatalogResponse),
+    ("POST", KEYBINDINGS_SAVE_ROUTE): RouteModels(
+        request_model=SaveKeybindingRequest, response_model=SaveKeybindingResponse
+    ),
+    ("POST", KEYBINDINGS_DISCARD_ROUTE): RouteModels(
+        request_model=DiscardKeybindingRequest, response_model=KeybindingsDeliveryOutcome
+    ),
+    ("POST", KEYBINDINGS_RESET_ROUTE): RouteModels(
+        request_model=ResetKeybindingRequest, response_model=KeybindingsDeliveryOutcome
+    ),
+    ("POST", KEYBINDINGS_DELIVER_ROUTE): RouteModels(
+        request_model=DeliverKeybindingsRequest, response_model=KeybindingsDeliveryOutcome
+    ),
 }

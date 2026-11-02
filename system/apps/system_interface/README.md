@@ -89,6 +89,20 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   own origin (`/_static/themes/<path>`), and the theme gallery page
   (`/theme-gallery`), which shows every part of a theme. A watch on the theme
   folders and the app manifests says `themes_changed` when the catalog does.
+- Keyboard shortcuts (the user-profile-state spec in the mngr repo, sections 9
+  and 10): the requester's resolved chords for the shell's own actions
+  (`/api/keybindings/me`, the route every built-in app with keybindings
+  serves), the catalog the Keyboard shortcuts dialog lists: every app's
+  `[[keybindings]]`, read from its registry row so an app that is stopped is
+  listed all the same, resolved for the requester (`/api/keybindings/catalog`),
+  and the save, reset, discard, and retry flows (`POST /api/keybindings`,
+  `.../reset`, `.../discard`, `.../deliver`). A save lands in the profile
+  files under `data/system/profile/` (the requester's override file; for the
+  owner's "everywhere" save also `unsent.json`, delivered to the account
+  through the latchkey gateway's `minds-workspaces-account-settings` verb,
+  whose first use files one permission request). Every save, and a watch on
+  the account's profile snapshot (`data/.state/profile/account.json`, written
+  from outside the workspace), says `keybindings_changed`.
 - The home-screen tile: `/apple-touch-icon.png` and `/manifest.webmanifest`,
   from the selected avatar design and the workspace's name, which also titles
   the page.
@@ -111,8 +125,8 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
 - The WebSocket (`/api/ws`): `apps_updated`, `desktops_updated`,
   `presence_updated`, `roster_updated`, `placements_updated`, `active_desktop_changed`,
   `client_entries_changed`, `avatar_status`, `avatar_selection_changed`,
-  `themes_changed`, and `layout_op` (contracts section 6); it accepts each
-  client's `client_state` report.
+  `themes_changed`, `keybindings_changed`, and `layout_op` (contracts section
+  6); it accepts each client's `client_state` report.
 
 Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.json` (whether the tour has run, and where it resumes), `offer_tour` (the bootstrap's mark on a new workspace, without which the tour never starts by itself),
 `desktop_themes.json` (the workspace's default theme and each desktop's own),
@@ -446,9 +460,13 @@ place and refused for the last desktop, and the plus makes "Desktop N" with
 the seeded shortcuts, owned by the viewer. The owner also sees the desktops
 left behind by people no longer in the roster, after a thin rule. Escape or a
 click on the bare backdrop closes it. The backdrop's own context menu offers
-"New desktop", "Show all desktops", and "Change wallpaper...", which opens the
+"New desktop", "Show all desktops", "Change wallpaper...", which opens the
 wallpaper chooser (`WallpaperChooserDialog.ts`, what the settings dialog
-became: a desktop's colour and glyph are no longer shown or edited). A person's
+became: a desktop's colour and glyph are no longer shown or edited), "Change
+theme...", which opens the theme chooser (`ThemeChooserDialog.ts`), and
+"Keyboard shortcuts...", which opens the viewer's keyboard shortcuts
+(`KeyboardShortcutsDialog.ts` around `KeyboardSettingsSection.ts`; the
+user-profile-state spec, section 10.3). A person's
 tray card lists the desktops they own, and a click on one of somebody else's
 *views* it: the client switches there with the viewing chrome on, an outline
 in the owner's colour around the whole desktop, the taskbar included, and a
@@ -463,8 +481,9 @@ is read-only from every side -- the desktop's stage (the wallpaper, the
 shortcut grid, the windows, the ghosts, the pages host) is `inert`, so nothing
 on it takes a press, a key, or focus and Tab reaches nothing inside it; the
 taskbar's entries mirror theirs without acting; the backdrop menu keeps "New
-desktop" and disables "Change wallpaper...", "Change theme...", and "Show all
-desktops"; the launcher's launch, window, and free-text rows stand down with
+desktop" and "Keyboard shortcuts..." (the viewer's own wherever they are) and
+disables "Change wallpaper...", "Change theme...", and "Show all desktops";
+the launcher's launch, window, and free-text rows stand down with
 "Stop viewing to open things here"; every change the store could still make
 (shortcuts, wallpaper, theme, launches, the app chat, closing, raising,
 minimizing, restoring, resizing, navigating, a bubble's chat) is refused with

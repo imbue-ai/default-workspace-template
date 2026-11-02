@@ -22,6 +22,7 @@ from loguru import logger
 from pydantic import Field
 from pydantic import PrivateAttr
 from pydantic import field_validator
+from watchdog.observers.api import BaseObserver
 from workspace_layout.identity import RequestIdentity
 from workspace_layout.identity import participant_key_of
 from workspace_layout.identity import visiting_user_id
@@ -43,6 +44,7 @@ from workspace_layout.records import StoredWindowPath
 from workspace_layout.records import Viewport
 from workspace_layout.records import Window
 from workspace_layout.records import WindowView
+from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 from workspace_themes.catalog import CachingThemeCatalogLoader
 from workspace_themes.interfaces import ThemeCatalogLoaderInterface
 
@@ -54,6 +56,8 @@ from imbue.system_interface.avatar.selection import AvatarSelectionStore
 from imbue.system_interface.avatar.status import AvatarStatusReader
 from imbue.system_interface.avatar.status import agent_events_path_from_environment
 from imbue.system_interface.avatar.status import background_tasks_root_from_environment
+from imbue.system_interface.file_watch import start_file_watch
+from imbue.system_interface.file_watch import stop_file_watch
 from imbue.system_interface.profiles import DEFAULT_SHARE_ENV_PATH
 from imbue.system_interface.profiles import ProfileResolver
 from imbue.system_interface.profiles import UserProfile
@@ -218,6 +222,7 @@ class ShellState(MutableModel):
 
     _prune_stop: threading.Event = PrivateAttr(default_factory=threading.Event)
     _theme_watch: ThemeCatalogWatch | None = PrivateAttr(default=None)
+    _snapshot_watch: BaseObserver | None = PrivateAttr(default=None)
     _prune_thread: threading.Thread | None = PrivateAttr(default=None)
 
     @field_validator("wallpaper_files_directory")
@@ -244,6 +249,17 @@ class ShellState(MutableModel):
         )
         theme_watch.start()
         self._theme_watch = theme_watch
+        # The profile snapshot is written from outside the workspace (the Imbue Studio desktop or
+        # the web chrome, over exec), so a change announces itself only through this watch: every
+        # page then re-fetches its resolved keybindings. The directory is made first so the watch
+        # can start before any client has written a snapshot.
+        snapshot_path = self.repo_root / SNAPSHOT_RELATIVE_PATH
+        try:
+            snapshot_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.warning("Could not prepare the profile snapshot directory: {}", e)
+        else:
+            self._snapshot_watch = start_file_watch(snapshot_path, self.broadcast_keybindings_changed)
 
     def stop(self) -> None:
         self.update_notice.stop()
@@ -257,6 +273,9 @@ class ShellState(MutableModel):
         if self._theme_watch is not None:
             self._theme_watch.stop()
             self._theme_watch = None
+        if self._snapshot_watch is not None:
+            stop_file_watch(self._snapshot_watch)
+            self._snapshot_watch = None
 
     def prune_unseen_clients(self) -> None:
         """Drop every client unseen for the retention period, together with the layouts it owns (desktop contracts.md section 4.3)."""
@@ -534,6 +553,10 @@ class ShellState(MutableModel):
         self.broadcaster.broadcast_themes_changed(
             theme_catalog_wire_json(self.themes.load(), self.desktops.read_theme_choices())
         )
+
+    def broadcast_keybindings_changed(self) -> None:
+        """Tell every window somebody changed a keybinding; each page re-fetches its resolved chords."""
+        self.broadcaster.broadcast_keybindings_changed()
 
     def desktop_views(self, desktops: Sequence[Desktop]) -> list[DesktopView]:
         """The ``desktops`` of a listing or a ``desktops_updated``: every client's stored path for each independent

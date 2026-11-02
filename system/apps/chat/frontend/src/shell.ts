@@ -10,6 +10,7 @@
 import m from "mithril";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
+import { refreshKeybindings } from "./models/keybindings";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
 import { ensureParticipants } from "./models/Participants";
@@ -98,7 +99,9 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     onShown,
     onHidden,
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
+    onKeybindingsChanged: () => void refreshKeybindings(),
   });
+  void refreshKeybindings();
   mirrorParentTheme();
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in

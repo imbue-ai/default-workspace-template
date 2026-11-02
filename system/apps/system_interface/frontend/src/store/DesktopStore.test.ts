@@ -737,6 +737,7 @@ describe("windows", () => {
       reload: () => undefined,
       reloadApp: () => undefined,
       resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
     });
@@ -754,6 +755,7 @@ describe("windows", () => {
       reload: () => undefined,
       reloadApp: () => undefined,
       resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: () => false,
     });
@@ -769,6 +771,7 @@ describe("windows", () => {
       reload: () => undefined,
       reloadApp: () => undefined,
       resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
       requestClose: (id) => void requested.push(id),
       ownsCloseChord: (id) => id === "win-1",
     });
@@ -814,6 +817,7 @@ describe("windows", () => {
       reload: (id) => void reloaded.push(`window:${id}`),
       reloadApp: (app) => void reloaded.push(`app:${app}`),
       resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
     });
@@ -831,6 +835,7 @@ describe("windows", () => {
       reload: () => undefined,
       reloadApp: () => undefined,
       resendTheme: (app) => void resent.push(app),
+      broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
     });
@@ -2932,6 +2937,7 @@ describe("the phone layout", () => {
       reload: (id) => void reloaded.push(id),
       reloadApp: () => undefined,
       resendTheme: () => undefined,
+      broadcastKeybindingsChanged: () => undefined,
       requestClose: () => undefined,
       ownsCloseChord: () => false,
     });
