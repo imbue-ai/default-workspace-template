@@ -842,7 +842,8 @@ def _exec_supervisord(added_environment: Mapping[str, str]) -> None:
     repo-root system/supervisord.conf. `-n` keeps it in the foreground (so the
     bootstrap tmux window stays alive as supervisord) while still creating the
     [unix_http_server] socket that `supervisorctl` talks to. supervisord runs under
-    this process's environment plus ``added_environment``.
+    this process's environment plus ``added_environment``, with the workspace venv
+    activated over both (``_supervisord_environment``).
     """
     logger.info("Launching supervisord with config {}", SUPERVISORD_CONF)
     os.execvpe(
