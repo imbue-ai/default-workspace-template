@@ -463,6 +463,25 @@ def test_callback_on_an_auth_sandbox_refuses_a_token_minted_for_another_host(
         assert set_cookies_by_name(resp) == {}
 
 
+def test_failed_callback_on_an_auth_sandbox_recovers_on_the_visited_host(tmp_path: Path) -> None:
+    # A host-only session belongs to the host that set it, so the retry's callback runs on the
+    # visited host, and a visitor already holding a session there is landed on that host.
+    harness = _make_harness(tmp_path, is_cookie_host_only=True)
+
+    retried = harness.client.get("/_auth/callback?token=whatever&state=never-minted", headers={"Host": _WEB_HOST})
+
+    assert retried.status_code == 302
+    query = _broker_query(retried)
+    assert query["callback_origin"] == [f"https://{_WEB_HOST}"]
+    assert query["confirmed"] == ["1"]
+
+    harness.client.set_cookie(SESSION_COOKIE_NAME, _session_cookie_for("bob@example.com"), domain=_WEB_HOST)
+    replayed = harness.client.get("/_auth/callback?token=whatever&state=never-minted", headers={"Host": _WEB_HOST})
+
+    assert replayed.status_code == 302
+    assert replayed.headers["Location"] == f"https://{_WEB_HOST}/"
+
+
 def test_verify_without_a_session_sends_the_callback_to_the_auth_origin_on_a_domain_wide_share(
     tmp_path: Path,
 ) -> None:
