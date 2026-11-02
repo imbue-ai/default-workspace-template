@@ -95,7 +95,7 @@ Each `[[apps]]` row:
 | `actions` | manifest | Array of inline tables `{id, label, params?}`; `params` is the array of the manifest's param names, present only when there are any. |
 | `launch_paths` | manifest | Array of inline tables `{id, label, path, params?}`; `params` as for `actions`. |
 | `launcher_rank` | manifest | Integer; absent reads as none. |
-| `keybindings` | manifest | Array of tables `{id, label, default_chords}`; absent reads as none. |
+| `keybindings` | manifest | Array of inline tables `{id, label, default_chords}`; absent reads as none. |
 
 `forward_port.py --manifest <path> --url <url>` reads the manifest with `tomllib`, validates `name` (must match the manifest), reads and validates the icon file, and upserts the row with every field above; `--name` may be given and must then equal the manifest's name.
 `--name --url` without `--manifest` is the manifest-less registration, with `--internal`, `--no-icon`, `--program`, `--display-name`, and `--icon-file` for the fields a manifest would carry; a pre-manifest app registers this way. `--display-name` is refused when it breaks the rule the shell applies on read, since such a row is skipped rather than shown.
