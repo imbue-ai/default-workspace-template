@@ -25,6 +25,7 @@ from typing import Any
 from pydantic import Field
 
 from imbue.chat.agent_discovery import AgentInfo
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.imbue_common.frozen_model import FrozenModel
 
 # Called with (agent_id, newly parsed events) each time the watcher reads new lines.
@@ -59,6 +60,27 @@ class ReplyDraft(FrozenModel):
         "the draft follows it, and a page whose transcript has moved past it drops the draft"
     )
     text: str = Field(description="The draft's markdown; '' when there is no draft to show")
+
+
+class StreamedReply(FrozenModel):
+    """A reply as the agent's live connection has streamed it so far."""
+
+    message_id: str = Field(description="The harness's own id for the message, which its transcript records too")
+    text: str = Field(description="The message's text so far")
+
+
+# The reply the agent's live connection is streaming (its harness session's ``read_streamed_reply``),
+# or None when it streams none.
+ReadStreamedReplyCallback = Callable[[], StreamedReply | None]
+
+
+class ReplyDraftSources(FrozenModel):
+    """Where a watcher can read a reply that its transcript does not hold yet; each read is the watcher's to make."""
+
+    capture_pane: CapturePaneCallback = Field(description="Captures the agent's terminal pane")
+    read_streamed_reply: ReadStreamedReplyCallback = Field(
+        description="Reads the reply the agent's live connection has streamed so far"
+    )
 
 
 class TranscriptReader(ABC):
@@ -160,6 +182,10 @@ class AgentSessionWatcher(TranscriptReader, ABC):
     # without a queued-message populator needs no changes. Everything downstream
     # (the WS snapshot field and the two common actions) is harness-agnostic.
 
+    def set_watch_observer(self, watch_observer: SharedWatchObserver) -> None:
+        """Watch the transcript's files through ``watch_observer``, the app's one observer, rather than one of the
+        watcher's own. Set before ``start``. No-op by default, for a harness that watches no files."""
+
     def set_queue_snapshot_callback(self, callback: QueueSnapshotCallback) -> None:
         """Register the sink that receives each new queued-message snapshot. No-op by default."""
 
@@ -174,14 +200,14 @@ class AgentSessionWatcher(TranscriptReader, ABC):
         """The current queued-message snapshot; empty for a harness with no populator."""
         return []
 
-    def read_reply_draft(self, capture_pane: CapturePaneCallback) -> ReplyDraft | None:
+    def read_reply_draft(self, sources: ReplyDraftSources) -> ReplyDraft | None:
         """The reply the agent is writing now, which its transcript does not hold yet.
 
-        For a harness that records a reply only once it is finished, while its terminal shows it
-        as it streams. Called by one poller at a time, and only while a page streams the chat and shows
-        it focused.
+        For a harness that records a reply only once it is finished, while its terminal or its live
+        connection shows it as it streams. Called by one poller at a time, and only while a page
+        streams the chat and shows it focused.
         None by default: the harness has no drafts to offer (its transcript already streams, or
-        nothing on screen can be read back).
+        nothing it shows can be read back).
         """
         return None
 

@@ -46,8 +46,13 @@ def _assistant_line(text: str = "sure") -> str:
     return json.dumps({"type": "assistant", "message": {"role": "assistant", "content": text}})
 
 
+def _queue_operation_line(operation: str) -> str:
+    return json.dumps({"type": "queue-operation", "operation": operation, "sessionId": "s"})
+
+
 _SENTINEL_LINE = _user_line(INTERRUPT_SENTINEL_TEXT)
 _MID_TOOL_SENTINEL_LINE = _user_line(MID_TOOL_INTERRUPT_SENTINEL_TEXT)
+_DEQUEUE_LINE = _queue_operation_line("dequeue")
 
 
 def _tool_result_line_quoting(text: str) -> str:
@@ -85,14 +90,15 @@ def test_tail_facts_assistant_before_sentinel_stays_dangling() -> None:
     assert facts.has_assistant_answer is False
 
 
-def test_tail_facts_no_sentinel_with_assistant() -> None:
+def test_tail_facts_an_assistant_record_before_any_sentinel_is_not_an_answer() -> None:
+    """Until the chord's sentinel lands, an assistant record is the turn it is about to cancel."""
     facts = compute_tail_facts([_user_line("hi"), _assistant_line()])
     assert facts.has_interrupt_sentinel is False
-    assert facts.has_assistant_answer is True
+    assert facts.has_assistant_answer is False
 
 
 def test_tail_facts_mid_tool_variant_is_not_the_tap_sentinel() -> None:
-    """The mid-tool ``for tool use`` variant is the sibling interrupt plan's; not matched here."""
+    """The mid-tool ``for tool use`` variant is the stop button's to match, not the tap's sentinel."""
     facts = compute_tail_facts([_MID_TOOL_SENTINEL_LINE])
     assert facts.has_interrupt_sentinel is False
 
@@ -102,72 +108,78 @@ def test_tail_facts_ignores_non_json_lines() -> None:
     assert facts.has_interrupt_sentinel is True
 
 
-def _facts(*, sentinel: bool, answer: bool) -> Any:
-    return compute_tail_facts(([_SENTINEL_LINE] if sentinel else []) + ([_assistant_line()] if answer else []))
+def test_tail_facts_a_dequeue_on_either_side_of_the_sentinel_starts_a_turn() -> None:
+    """Claude writes the flushed prompt's dequeue before or after the sentinel; either starts its turn."""
+    assert compute_tail_facts([_SENTINEL_LINE, _DEQUEUE_LINE]).has_dequeued_prompt is True
+    assert compute_tail_facts([_DEQUEUE_LINE, _SENTINEL_LINE]).has_dequeued_prompt is True
+
+
+@pytest.mark.parametrize("operation", ["remove", "popAll", "enqueue"])
+def test_tail_facts_a_queue_op_other_than_dequeue_starts_no_turn(operation: str) -> None:
+    """A ``remove`` is a message folded into the running turn, which the chord then cancels."""
+    facts = compute_tail_facts([_queue_operation_line(operation), _SENTINEL_LINE])
+    assert facts.has_dequeued_prompt is False
+
+
+def _facts(*, sentinel: bool, answer: bool, dequeued: bool = False) -> Any:
+    return compute_tail_facts(
+        ([_SENTINEL_LINE] if sentinel else [])
+        + ([_DEQUEUE_LINE] if dequeued else [])
+        + ([_assistant_line()] if answer else [])
+    )
 
 
 def test_poll_verdict_early_flushed_on_drained_with_answer() -> None:
+    assert poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True)) == TapVerdict.FLUSHED
+
+
+def test_poll_verdict_early_flushed_when_the_chord_dequeued_a_prompt() -> None:
+    """A drained mirror and a post-chord dequeue is an early FLUSHED, even before any answer."""
     assert (
-        poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True), turn_came_alive=False)
+        poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False, dequeued=True))
         == TapVerdict.FLUSHED
     )
 
 
-def test_poll_verdict_early_flushed_when_turn_came_alive() -> None:
-    """A drained mirror where a turn was seen alive is an early FLUSHED, even before any answer."""
-    assert (
-        poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=True)
-        == TapVerdict.FLUSHED
-    )
-
-
-def test_poll_verdict_waits_when_drained_but_no_answer_and_no_live_turn() -> None:
-    """A drained mirror with a dangling sentinel and no turn seen alive keeps watching."""
-    assert poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=False) is None
+def test_poll_verdict_waits_when_drained_but_no_answer_and_nothing_dequeued() -> None:
+    """A drained mirror with a dangling sentinel and no dequeue keeps watching."""
+    assert poll_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False)) is None
 
 
 def test_poll_verdict_waits_when_mirror_not_empty() -> None:
-    assert poll_verdict(mirror_is_empty=False, facts=_facts(sentinel=True, answer=True), turn_came_alive=True) is None
+    assert poll_verdict(mirror_is_empty=False, facts=_facts(sentinel=True, answer=True, dequeued=True)) is None
 
 
 def test_deadline_verdict_not_flushed_when_mirror_nonempty() -> None:
     assert (
-        deadline_verdict(mirror_is_empty=False, facts=_facts(sentinel=False, answer=False), turn_came_alive=False)
-        == TapVerdict.NOT_FLUSHED
+        deadline_verdict(mirror_is_empty=False, facts=_facts(sentinel=False, answer=False)) == TapVerdict.NOT_FLUSHED
     )
 
 
-def test_deadline_verdict_needs_recovery_when_no_turn_ever_came_alive() -> None:
-    """Drained mirror + a dangling sentinel + no turn ever seen alive = the flush committed the
-    messages but nothing ran to answer them (the cancelled follow-on)."""
+def test_deadline_verdict_needs_recovery_when_nothing_was_dequeued() -> None:
+    """Drained mirror + a dangling sentinel + no dequeue = the messages joined the turn the chord
+    cancelled and nothing ran to answer them (the cancelled follow-on)."""
     assert (
-        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=False)
-        == TapVerdict.NEEDS_RECOVERY
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False)) == TapVerdict.NEEDS_RECOVERY
     )
 
 
-def test_deadline_verdict_flushed_when_a_turn_came_alive() -> None:
-    """Drained mirror + a dangling sentinel but a turn WAS seen alive in the window = a successful
-    flush (the turn started, maybe already finished), NOT a cancelled follow-on. No recovery."""
+def test_deadline_verdict_flushed_when_the_chord_dequeued_a_prompt() -> None:
+    """Drained mirror + a dangling sentinel, but a prompt was dequeued after the chord = its turn
+    started, however slow to answer, NOT a cancelled follow-on. No recovery."""
     assert (
-        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False), turn_came_alive=True)
+        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=False, dequeued=True))
         == TapVerdict.FLUSHED
     )
 
 
 def test_deadline_verdict_flushed_on_idle_gap_variant() -> None:
     """Drained mirror with no sentinel (natural flush already happened) = FLUSHED, not failure."""
-    assert (
-        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=False, answer=False), turn_came_alive=False)
-        == TapVerdict.FLUSHED
-    )
+    assert deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=False, answer=False)) == TapVerdict.FLUSHED
 
 
 def test_deadline_verdict_flushed_when_sentinel_answered() -> None:
-    assert (
-        deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True), turn_came_alive=False)
-        == TapVerdict.FLUSHED
-    )
+    assert deadline_verdict(mirror_is_empty=True, facts=_facts(sentinel=True, answer=True)) == TapVerdict.FLUSHED
 
 
 def test_read_raw_tail_returns_only_lines_after_baseline(tmp_path: Path) -> None:
@@ -342,10 +354,12 @@ def test_execute_flushed_presses_chord_and_returns_tapped(tmp_path: Path) -> Non
     session.write_text(_user_line("hello") + "\n")
 
     def grow_with_answer(events_call: int) -> None:
-        # The first watch-loop refresh (events call #2) is when the flushed turn's answer lands.
+        # The first watch-loop refresh (events call #2) is when the chord lands and the flushed turn answers.
         if events_call == 2:
             with session.open("a") as f:
-                f.write(_assistant_line() + "\n")
+                f.write(
+                    _SENTINEL_LINE + "\n" + _DEQUEUE_LINE + "\n" + _user_line("hi") + "\n" + _assistant_line() + "\n"
+                )
 
     watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_answer)
     presses: list[bool] = []
@@ -365,9 +379,10 @@ def test_execute_flushed_presses_chord_and_returns_tapped(tmp_path: Path) -> Non
 
 
 def test_execute_needs_recovery_sends_notification_and_returns_tapped(tmp_path: Path) -> None:
-    """Mirror drains, a dangling sentinel persists, and NO turn is ever seen alive during the watch
-    (the marker is gone before the first poll) -> the flush committed the messages but nothing ran
-    to answer them -> recovery sent, tapped."""
+    """Mirror drains, a dangling sentinel persists, and nothing is dequeued during the watch -> the
+    messages joined the turn the chord cancelled and nothing ran to answer them -> recovery sent,
+    tapped. The cancelled turn's ``active`` marker stays on disk throughout, as it does for real:
+    an interrupt fires no Stop hook to clear it."""
     state_dir, keybindings_path = _make_agent_paths(tmp_path)
     session = tmp_path / "session.jsonl"
     session.write_text(_user_line("hello") + "\n")
@@ -375,9 +390,7 @@ def test_execute_needs_recovery_sends_notification_and_returns_tapped(tmp_path: 
     def grow_with_sentinel_no_live_turn(events_call: int) -> None:
         if events_call == 2:
             with session.open("a") as f:
-                f.write(_SENTINEL_LINE + "\n")
-            # Clear the marker before the watch's first poll reads it: no turn is ever seen alive.
-            (state_dir / "active").unlink()
+                f.write(_queue_operation_line("remove") + "\n" + _SENTINEL_LINE + "\n")
 
     watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel_no_live_turn)
     recoveries: list[str] = []
@@ -394,22 +407,53 @@ def test_execute_needs_recovery_sends_notification_and_returns_tapped(tmp_path: 
     assert result.status == ClaudeTapStatus.TAPPED
     assert len(recoveries) == 1
     assert recoveries[0].startswith("<task-notification>")
+    assert (state_dir / "active").exists()
 
 
-def test_execute_flushed_when_a_turn_is_seen_alive_without_answer(tmp_path: Path) -> None:
-    """A dangling sentinel with no answer, but a turn IS seen alive during the watch = a successful
-    flush (the turn started -- fast or slow), not a cancelled follow-on -> no recovery."""
+def test_execute_needs_recovery_when_the_cancelled_turn_kept_writing_until_the_chord_landed(tmp_path: Path) -> None:
+    """The running turn writes past the baseline before the chord lands: a tool call, then the queued
+    message folded into it (``remove``), then the sentinel. That tool call is the cancelled turn's,
+    not an answer to the queued message -> recovery sent."""
     state_dir, keybindings_path = _make_agent_paths(tmp_path)
     session = tmp_path / "session.jsonl"
     session.write_text(_user_line("hello") + "\n")
 
-    def grow_with_sentinel(events_call: int) -> None:
+    def grow_with_the_cancelled_turns_last_records(events_call: int) -> None:
         if events_call == 2:
             with session.open("a") as f:
+                f.write(_assistant_line("calling a tool") + "\n" + _queue_operation_line("remove") + "\n")
+        if events_call == 3:
+            with session.open("a") as f:
                 f.write(_SENTINEL_LINE + "\n")
-        # The ``active`` marker stays: a turn is seen alive (the flush started one).
 
-    watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel)
+    recoveries: list[str] = []
+    result = execute_claude_shoulder_tap(
+        agent_state_dir=state_dir,
+        keybindings_path=keybindings_path,
+        watcher=_FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_the_cancelled_turns_last_records),
+        press_chord=lambda: True,
+        send_recovery=lambda text: recoveries.append(text) or True,
+        try_message_lock=lambda: nullcontext(True),
+        now=_stepping_now([0.0, 0.0, 0.0, 100.0]),
+        sleep=lambda _s: None,
+    )
+    assert result.status == ClaudeTapStatus.TAPPED
+    assert len(recoveries) == 1
+
+
+def test_execute_flushed_when_the_chord_dequeues_a_prompt_that_has_not_answered_yet(tmp_path: Path) -> None:
+    """A dangling sentinel with no answer, but the chord dequeued the parked prompt = its own turn
+    started (it is just slow to answer), not a cancelled follow-on -> no recovery."""
+    state_dir, keybindings_path = _make_agent_paths(tmp_path)
+    session = tmp_path / "session.jsonl"
+    session.write_text(_user_line("hello") + "\n")
+
+    def grow_with_sentinel_and_dequeue(events_call: int) -> None:
+        if events_call == 2:
+            with session.open("a") as f:
+                f.write(_SENTINEL_LINE + "\n" + _DEQUEUE_LINE + "\n")
+
+    watcher = _FakeTapWatcher([_QUEUED, []], session, on_refresh=grow_with_sentinel_and_dequeue)
     recoveries: list[str] = []
     result = execute_claude_shoulder_tap(
         agent_state_dir=state_dir,
@@ -422,7 +466,7 @@ def test_execute_flushed_when_a_turn_is_seen_alive_without_answer(tmp_path: Path
         sleep=lambda _s: None,
     )
     assert result.status == ClaudeTapStatus.TAPPED
-    # A turn was seen alive, so no cancelled-follow-on nudge is sent.
+    # The prompt's own turn started, so no cancelled-follow-on nudge is sent.
     assert recoveries == []
 
 
@@ -470,8 +514,6 @@ def test_execute_recovery_send_failure_returns_error(tmp_path: Path) -> None:
         if events_call == 2:
             with session.open("a") as f:
                 f.write(_SENTINEL_LINE + "\n")
-            # End the turn (clear the marker) so this reaches the NEEDS_RECOVERY resend.
-            (state_dir / "active").unlink()
 
     result = execute_claude_shoulder_tap(
         agent_state_dir=state_dir,

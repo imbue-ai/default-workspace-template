@@ -48,12 +48,16 @@ conversation, the GitHub side and the push.
   any name the user picks must match `^[A-Za-z0-9._-]+$` and not start with `-`.
 - `BASE_REF` and `SOURCE_SHA`: step 2.
 - `$WT`: the worker's worktree, step 4.
-- `PT=/home/user/workspace/.agents/skills/publish-template/scripts`: this skill's
-  tools. Always run them from here; the copies inside `$WT` are the base's.
+- `PT=/home/user/workspace/.agents/skills/publish-template/scripts` and
+  `PTM=/home/user/workspace/.agents/skills/publish-template/python/publish_template_skill`:
+  this skill's tools. Always run them from here; the copies inside `$WT` are the
+  base's. The `PTM` tools run in the workspace's own environment
+  (`uv run --no-sync --project /home/user/workspace`), whatever the shell's
+  directory.
 
 Note each value when you resolve it. Every command runs in a fresh shell, so a
 variable set in one is empty in the next: set the ones a command uses at its
-start (`PT=...; WT=...; python3 "$PT/..." ...`).
+start (`PTM=...; WT=...; uv run --no-sync --project /home/user/workspace "$PTM/..." ...`).
 
 ## Steps
 
@@ -101,7 +105,7 @@ Ask in plain language, never listing files at the user:
 
 - **What to include** -- an app or feature, a skill, a chat behavior, a workflow,
   a service, config, seed data: anything committed in the repo tree. You turn it
-  into include paths. For an app, `uv run app-manifest footprint
+  into include paths. For an app, `uv run --no-sync app-manifest footprint
   system/apps/<package>/app.toml` prints its directory, its supervisord programs
   and the skills, scripts and docs it claims; propose those plus anything else the
   user named. Include a program's own `system/supervisord.conf.d/<name>.conf`,
@@ -148,7 +152,7 @@ In `/home/user/workspace`, with no network (never fetch or pull upstream for
 this):
 
 ```bash
-BASE_REF=$(uv run .agents/shared/scripts/resolve_template_base.py)
+BASE_REF=$(python3 .agents/shared/scripts/agents_shared/resolve_template_base.py)
 SOURCE_SHA=$(git rev-parse HEAD)
 ```
 
@@ -213,15 +217,15 @@ TASK_EOF
 Launch it, then await its report in the background:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name <slug> --template worker \
     --runtime-dir data/.tasks/launch-task/<slug>/ \
     --task-file data/.tasks/launch-task/<slug>/task.md
 ```
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name <slug> --task-file data/.tasks/launch-task/<slug>/task.md
 ```
 
@@ -295,7 +299,7 @@ Two latchkey scopes, never the `gh` CLI and never a token anywhere on disk:
 push, which goes through the gateway's git proxy.
 
 ```bash
-python3 "$PT/github_access.py" check
+uv run --no-sync --project /home/user/workspace "$PTM/github_access.py" check
 ```
 
 A kind reported UNKNOWN (exit 2) means the gateway could not answer. File
@@ -324,8 +328,8 @@ approval is waiting in Imbue Studio (two, if you filed both), then wait in the
 background and end your turn; the result starts your next one:
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the GitHub approval" -- \
-    python3 "$PT/github_access.py" wait
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the GitHub approval" -- \
+    uv run --no-sync --project /home/user/workspace "$PTM/github_access.py" wait
 ```
 
 If it times out, say so and stop, leaving everything in place.
@@ -333,7 +337,7 @@ If it times out, say so and stop, leaving everything in place.
 ## 7. Create the repo
 
 ```bash
-python3 "$PT/github_repo.py" create --name <repo_name> --description "<description>" \
+uv run --no-sync --project /home/user/workspace "$PTM/github_repo.py" create --name <repo_name> --description "<description>" \
     --visibility private --worktree "$WT"
 ```
 
@@ -347,12 +351,12 @@ to collaborators, and a personal public repo can always be forked.
 ## 8. Push and tag
 
 ```bash
-uv run --no-project --with 'pydantic>=2' python "$PT/push_snapshot.py" \
+uv run --no-sync --project /home/user/workspace "$PTM/push_snapshot.py" \
     --worktree "$WT" --parent "$BASE_REF" --repo "$REPO" \
     --message "template: <slug>
 
 Assembled on clean DEFAULT_WORKSPACE_TEMPLATE base $BASE_REF (provenance link only; no upstream fetch)." \
-  && python3 "$PT/github_repo.py" topic --repo "$REPO"
+  && uv run --no-sync --project /home/user/workspace "$PTM/github_repo.py" topic --repo "$REPO"
 ```
 
 `push_snapshot.py` runs the pre-push gate and publishes ONE new commit holding
@@ -370,7 +374,7 @@ mention it as a follow-up.
 Only after the push succeeded:
 
 ```bash
-python3 "$PT/record_publish.py" --workspace /home/user/workspace --slug <slug> \
+uv run --no-sync --project /home/user/workspace "$PTM/record_publish.py" --workspace /home/user/workspace --slug <slug> \
     --repo-url "github.com/$REPO" --note "first published" --source-sha "$SOURCE_SHA"
 ```
 
@@ -392,7 +396,7 @@ Destroy the worker (this removes `$WT`) and its branch; the published commit liv
 on GitHub, and the branch's intermediate commits were never meant to:
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py destroy --name <slug>
 git worktree prune
 git branch -D "mngr/<slug>"
 ```

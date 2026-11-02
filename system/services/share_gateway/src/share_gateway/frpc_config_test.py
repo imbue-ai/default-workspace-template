@@ -5,7 +5,9 @@ from share_gateway.frpc_config import render_frpc_toml
 _DOMAIN = "host-" + "a" * 32 + "." + "b" * 32 + ".us1.imbueminds.com"
 
 
-def _render(service_labels: list[str]) -> dict:
+def _render(
+    service_labels: list[str], media_port: int | None = None, local_media_address: str | None = "172.17.0.3"
+) -> dict:
     rendered = render_frpc_toml(
         relay_host="relay-us1.infra.imbue.com",
         relay_port=7000,
@@ -15,6 +17,9 @@ def _render(service_labels: list[str]) -> dict:
         auth_label="auth-x7k9q2w1",
         local_https_port=8443,
         admin_port=7401,
+        media_port=media_port,
+        local_media_address=local_media_address,
+        local_media_port=59000,
     )
     return tomllib.loads(rendered)
 
@@ -64,3 +69,42 @@ def test_frpc_config_stamps_proxy_protocol_v2_on_the_share_proxy() -> None:
 def test_frpc_config_always_claims_the_auth_label_even_with_no_services() -> None:
     parsed = _render([])
     assert parsed["proxies"][0]["customDomains"] == [f"auth-x7k9q2w1.{_DOMAIN}"]
+
+
+def test_frpc_config_renders_the_screen_media_tcp_proxy_when_the_assignment_has_a_media_port() -> None:
+    parsed = _render(["terminal-bbbb2222"], media_port=40123)
+    proxies = parsed["proxies"]
+    assert [proxy["name"] for proxy in proxies] == ["share", "screen-media"]
+    media = proxies[1]
+    assert media == {
+        "name": "screen-media",
+        "type": "tcp",
+        "localIP": "172.17.0.3",
+        "localPort": 59000,
+        "remotePort": 40123,
+    }
+
+
+def test_frpc_config_renders_no_media_proxy_without_a_local_address() -> None:
+    # neko reads a connection only at the interface address its ICE stack gathered, so a workspace without one
+    # is not offered the relay media path rather than a proxy to loopback nothing would answer.
+    parsed = _render(["terminal-bbbb2222"], media_port=40123, local_media_address=None)
+    assert [proxy["name"] for proxy in parsed["proxies"]] == ["share"]
+
+
+def test_frpc_config_renders_no_media_proxy_without_a_media_port() -> None:
+    parsed = _render(["terminal-bbbb2222"], media_port=None)
+    assert [proxy["name"] for proxy in parsed["proxies"]] == ["share"]
+    assert "screen-media" not in render_frpc_toml(
+        relay_host="relay-us1.infra.imbue.com",
+        relay_port=7000,
+        relay_token="tok-abc",
+        workspace_domain=_DOMAIN,
+        service_labels=[],
+        auth_label="auth-x7k9q2w1",
+        local_https_port=8443,
+        admin_port=7401,
+        media_port=None,
+        local_media_address="172.17.0.3",
+        local_media_port=59000,
+    )

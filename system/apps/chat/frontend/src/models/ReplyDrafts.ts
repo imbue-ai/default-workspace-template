@@ -1,12 +1,13 @@
 /**
  * The reply an agent is writing that its transcript does not hold yet.
  *
- * Claude records a reply only once it has finished writing it, so the chat app reads the
- * reply off the agent's terminal while it streams and sends it on the chat's stream as
- * `assistant_draft` frames (the backend's `reply_drafts.py`). A frame names the transcript
- * event the draft follows: the page shows the draft at the end of its transcript only while
- * that event is still the last one it holds, so the reply landing (or anything else landing)
- * retires the draft at once, without waiting for the frame that clears it.
+ * Claude, Codex, Pi and Antigravity record a reply only once they have finished writing it, so the
+ * chat app reads the reply while it streams (off Claude's terminal, off Codex's live connection, off
+ * the file Pi's lifecycle extension keeps, off Antigravity's unfinished planner step) and sends it
+ * on the chat's stream as `assistant_draft` frames (the backend's `reply_drafts.py`). A frame
+ * names the transcript event the draft follows: the page shows the draft at the end of its
+ * transcript only while that event is still the last one it holds, so the reply landing (or
+ * anything else landing) retires the draft at once, without waiting for the frame that clears it.
  */
 
 import m from "mithril";

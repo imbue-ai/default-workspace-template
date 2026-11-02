@@ -178,7 +178,7 @@ hardening inline: commit, then dispatch. Hardening always runs in the background
 worker.
 
 ```bash
-uv run .agents/skills/launch-task/scripts/create_worker.py launch \
+uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py launch \
     --name crystallize-$NAME \
     --template worker \
     --runtime-dir data/.tasks/harden/crystallize-$NAME/ \
@@ -190,14 +190,14 @@ extra flag.
 
 ## Step 5: Background-poll for worker reports
 
-Start the poll through `system/scripts/run_in_background.py`, which returns at
+Start the poll through `system/scripts/workspace_bare_scripts/run_in_background.py`, which returns at
 once, then continue with other work (subsequent skill steps, interface design,
 other user requests). Each report arrives in your chat as a message that starts
 your next turn; handle it then.
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the background agent" -- \
-    uv run .agents/skills/launch-task/scripts/create_worker.py await \
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the background agent" -- \
+    uv run --no-sync .agents/skills/launch-task/scripts/create_worker.py await \
     --name crystallize-$NAME \
     --task-file data/.tasks/harden/crystallize-$NAME/task.md \
     --timeout 90m
@@ -236,7 +236,9 @@ and the `done` merge brings the remainder of the branch.
 On `done`, after merging the worker's branch and destroying the worker (the
 sub-workers it split its pass across are already gone with it):
 
-- **skill**: read and follow `references/post-crystallize-migration.md` before
+- **skill**: if it has a `python/` project, run `uv sync --all-packages --frozen`
+  first, so the workspace venv carries its package and any dependency the merge
+  added. Then read and follow `references/post-crystallize-migration.md` before
   declaring crystallize done -- point consumers at the installed skill path,
   delete the stale runtime dir, pick up any breaking renames the worker
   introduced, restart any caching service, and close the ticket recorded in

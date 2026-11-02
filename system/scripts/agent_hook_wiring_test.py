@@ -71,8 +71,8 @@ def test_every_wired_hook_script_exists() -> None:
 
 def test_claude_and_codex_run_the_same_pretooluse_guards() -> None:
     """The safety/workflow guards are cross-harness by design, so the two configs must
-    name the same set. (Only PreToolUse: claude also wires SessionStart and Stop hooks
-    that have no codex counterpart -- see tool-call-policies.md, category C.)"""
+    name the same set. (Only PreToolUse: the other events carry per-harness wiring --
+    session setup, turn-end nudges -- that the two configs need not share.)"""
     claude = json.loads(_CLAUDE_SETTINGS.read_text())
     codex = json.loads(_CODEX_HOOKS.read_text())
     claude_guards = _referenced_scripts(_hook_commands(claude, "PreToolUse"))

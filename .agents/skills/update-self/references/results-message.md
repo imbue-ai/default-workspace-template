@@ -89,7 +89,7 @@ List each, in plain terms:
 ## The resume note
 
 `run-status resume-chats` sends each chat the pass paused one note
-(`scripts/update_resume_note.py` composes it), so you never write it by hand.
+(`python/update_self_skill/update_resume_note.py` composes it), so you never write it by hand.
 The chat shows the user only its summary line, as a notice labelled "Workspace
 updated" (or "Workspace update not applied" when the update did not land),
 saying the chat was paused for the update and is carrying on. The rest is for

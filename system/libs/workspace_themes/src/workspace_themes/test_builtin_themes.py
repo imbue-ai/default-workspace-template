@@ -12,12 +12,12 @@ _BUILTIN_THEME_IDS = ("standard", "mac-classic", "windows-2000")
 # and this suite runs there too.
 _BUILT_IN_VISIBLE_APP_NAMES = frozenset(
     {
-        "browser",
         "chat",
         "datalib",
         "files",
         "getting-started",
         "routines",
+        "screen",
         "system-monitor",
         "terminal",
     }

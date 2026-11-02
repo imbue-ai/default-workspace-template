@@ -200,6 +200,7 @@ HARNESS_LABEL: Final[dict[HarnessType, str]] = {
     HarnessType.ANTIGRAVITY: "Antigravity CLI",
     HarnessType.OPENCODE: "OpenCode",
     HarnessType.SEED: "Imbue Studio",
+    HarnessType.ROOM: "Chat room",
 }
 
 # claude

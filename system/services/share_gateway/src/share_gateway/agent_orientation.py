@@ -20,8 +20,9 @@ from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
-from share_gateway.agent_grants import AGENT_ACCESS_STATE_DIR
-from share_gateway.agent_grants import WORKSPACE_SCOPE
+from share_grants.agent_grants import AGENT_ACCESS_STATE_DIR
+from share_grants.agent_grants import WORKSPACE_SCOPE
+
 from share_gateway.caddyfile import RegisteredApp
 from share_gateway.log import log
 
@@ -209,10 +210,10 @@ def template_commit(repo_root: Path) -> str:
 
     A workspace's HEAD is never a template commit: bootstrap writes an ``Initial workspace commit`` on top of the
     cloned template, and later work sits on that. The newest marker on the first-parent history says where the
-    template is (the markers ``.agents/shared/scripts/resolve_template_base.py`` reads): an ``update-self:`` merge
-    names the upstream commit as its second parent, and the initial commit's first parent is the template it was
-    written on (the initial commit itself when it has no parent). HEAD when the history has no marker; '' when git
-    cannot read it.
+    template is (the markers ``.agents/shared/scripts/agents_shared/resolve_template_base.py`` reads): an
+    ``update-self:`` merge names the upstream commit as its second parent, and the initial commit's first parent is
+    the template it was written on (the initial commit itself when it has no parent). HEAD when the history has no
+    marker; '' when git cannot read it.
     """
     lines = _run_git(repo_root, ["log", "--first-parent", "--format=%H%x09%P%x09%s", "HEAD"]).splitlines()
     for line in lines:

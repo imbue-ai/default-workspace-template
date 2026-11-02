@@ -79,10 +79,13 @@ format) and a template's own publish count. See
 - **The ledger** is `docs/VERSION_HISTORY.md`. Its `## Templates` section is
   where a publish or update is recorded, by `publish-template`'s
   `record_publish.py`; §1 reads it and §8 appends to it.
-- **`PT=/home/user/workspace/.agents/skills/publish-template/scripts`** -- the
-  publish tools this flow shares. Always run them from the live workspace's copy;
-  the copies in `$WT` are the published tip's. Like `$WT`, `PUBLISHED_TIP` and
-  `SOURCE_SHA`, it is a value to note, not shell state: every command runs in a
+- **`PT=/home/user/workspace/.agents/skills/publish-template/scripts`** and
+  **`PTM=/home/user/workspace/.agents/skills/publish-template/python/publish_template_skill`**
+  -- the publish tools this flow shares. Always run them from the live workspace's
+  copy; the copies in `$WT` are the published tip's. The `PTM` tools run in the
+  live workspace's environment (`uv run --no-sync --project /home/user/workspace`),
+  so they work from `$WT` too. Like `$WT`, `PUBLISHED_TIP` and
+  `SOURCE_SHA`, they are values to note, not shell state: every command runs in a
   fresh shell, so set the ones a command uses at its start.
 - **`$WT` -- the worker's worktree.** `mngr create` places worker worktrees under
   `/home/user/worktrees/<name>-<uuid>/`; the path cannot be guessed -- resolve it from
@@ -184,7 +187,7 @@ and a correct base descends from that one:
 ```bash
 PUBLISHED_BASE="$(git log --first-parent --format='%H %s' "$PUBLISHED_TIP" \
     | awk '$2 != "template:" {print $1; exit}')"
-INITIAL="$(uv run .agents/shared/scripts/resolve_template_base.py --origin)"
+INITIAL="$(python3 .agents/shared/scripts/agents_shared/resolve_template_base.py --origin)"
 if [ -z "$PUBLISHED_BASE" ]; then
     echo "NO BASE"
 elif [ -n "$INITIAL" ] && [ "$INITIAL" != "$PUBLISHED_BASE" ] \
@@ -232,8 +235,8 @@ v(n). NEVER diff the workspace against the published repo: the published tree ha
 had personal data stripped and modifications applied, so a workspace-vs-published
 diff would try to re-add exactly the things the recipe deliberately removed. Also
 note the **base delta**: compare the published base (`PUBLISHED_BASE` from 2b)
-against the current resolved base (`uv run
-.agents/shared/scripts/resolve_template_base.py`, as in `publish-template`'s step 2).
+against the current resolved base
+(`python3 .agents/shared/scripts/agents_shared/resolve_template_base.py`, as in `publish-template`'s step 2).
 If `BASE_REF` moved, the template substrate advanced too -- report it, but an
 app-delta update re-publishes on the existing published base; re-cutting on a
 newer base is a separate, larger operation (surface it as an option, default to
@@ -467,7 +470,7 @@ No `github-rest-api` grant is needed -- the repo exists, and this flow neither
 creates it nor changes its settings.
 
 ```bash
-python3 "$PT/github_access.py" check --need git-write
+uv run --no-sync --project /home/user/workspace "$PTM/github_access.py" check --need git-write
 ```
 
 If it is NOT permitted, file the request yourself, as the only command in its
@@ -484,8 +487,8 @@ latchkey curl -XPOST http://latchkey-self.invalid/permission-requests \
 ```
 
 ```bash
-python3 system/scripts/run_in_background.py --description "Wait for the GitHub approval" -- \
-    python3 "$PT/github_access.py" wait --need git-write
+python3 system/scripts/workspace_bare_scripts/run_in_background.py --description "Wait for the GitHub approval" -- \
+    uv run --no-sync --project /home/user/workspace "$PTM/github_access.py" wait --need git-write
 ```
 
 Never fall back to a token-in-URL push.
@@ -495,7 +498,7 @@ Never fall back to a token-in-URL push.
 **cwd = `$WT`.** This publishes the update:
 
 ```bash
-uv run --no-project --with 'pydantic>=2' python "$PT/push_snapshot.py" \
+uv run --no-sync --project /home/user/workspace "$PTM/push_snapshot.py" \
     --worktree "$WT" --parent "<PUBLISHED_TIP>" --repo "<owner>/<repo>" \
     --tag "template/<slug>/v(n+1)" \
     --message "template: <slug> v(n+1)
@@ -519,7 +522,7 @@ callout at the top before running it. If the push failed or the user aborted,
 SKIP this entirely: an update that did not publish is never recorded.
 
 ```bash
-python3 "$PT/record_publish.py" --workspace /home/user/workspace --slug <slug> \
+uv run --no-sync --project /home/user/workspace "$PTM/record_publish.py" --workspace /home/user/workspace --slug <slug> \
     --repo-url "github.com/<owner>/<repo>" --note "<one line: what changed>" \
     --source-sha "$SOURCE_SHA"
 ```

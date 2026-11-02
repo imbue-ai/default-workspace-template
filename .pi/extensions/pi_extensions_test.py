@@ -232,7 +232,7 @@ def _tk_result(
             id="the-wrapper-reading-a-secret-file",
         ),
         pytest.param(
-            "python3 .agents/skills/connect-external-service/scripts/request_secret.py "
+            "python3 .agents/skills/connect-external-service/python/connect_external_service_skill/request_secret.py "
             "--file svc --var SVC_TOKEN --rationale 'to call the API'",
             id="lone-secret-request",
         ),

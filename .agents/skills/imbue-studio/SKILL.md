@@ -1,6 +1,8 @@
 ---
 name: imbue-studio
 description: Use whenever Imbue Studio, minds, a workspace, the studio API, or an Imbue account comes up. Explains how to reach Imbue Studio's API from the user's machine or from inside a workspace, how to start the app when it is not running, where the live contract lives, which permissions a workspace agent needs and how to ask for them, how to tell whether a workspace is shared and why a shared one is untrusted, and what an agent must never do with the user's credentials.
+metadata:
+  author: imbue
 ---
 
 # Driving Imbue Studio
@@ -100,6 +102,7 @@ These are the verbs:
 | `minds-workspaces-destroy` | destroy a workspace | yes |
 | `minds-workspaces-lifecycle` | start / stop the host | yes |
 | `minds-workspaces-update` | update settings (color, account) | yes |
+| `minds-workspaces-account-settings` | save keyboard-shortcut changes to the workspace's account | yes |
 | `minds-workspaces-recover` | health check, restart, machine resize | yes |
 
 Targeted verbs are granted per workspace, so ask for one workspace at a time.

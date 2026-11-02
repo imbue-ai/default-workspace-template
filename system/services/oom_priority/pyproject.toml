@@ -3,7 +3,7 @@ name = "oom-priority"
 version = "0.1.0"
 description = "Memory-shedding priority bands, the shed ledger, and the agent-pid registry that steer and record earlyoom's out-of-memory kills"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 # Deliberately zero runtime dependencies: every module here is imported by
 # Claude SessionStart/PreToolUse hooks and the earlyoom kill hook, which run in
 # a plain `python3` environment (no `uv`, no third-party packages). Keeping the

@@ -64,6 +64,34 @@ never signs the next share: it is discarded when the runner next starts
 without share materials, and replaced at stack start when the runner comes
 back to find the next share's materials already in place.
 
+## The Screen's media path
+
+While the stack is up the gateway also brokers the Screen's stream for visitors
+(`docs/system/specs/screen/spec.md` section 15, `specs/turn-relay/spec.md` section 7):
+
+- Every relay's frpc config carries a second proxy, `screen-media` of type `tcp`,
+  `localIP` the workspace's own interface address, `localPort` 59000 (neko's TCP ICE mux
+  inside the workspace) and `remotePort` the assignment's `media_port`, so a visitor's
+  browser can dial any relay of the region at that port and reach the Screen. The local
+  address is the interface's, never loopback: neko's ICE stack keys its TCP mux by the
+  address a connection arrives on and gathers a candidate for the interface alone, so a
+  connection spliced to loopback is accepted and then read by nothing
+  (`local_address.py`). The proxy is rendered only when the assignment carries a
+  `media_port` and the workspace has a routable address; a connector or a share without
+  one renders none (an older connector's answer still parses, with `media_port` null and
+  no `published_endpoints`).
+- At stack start, and again at half life (the credential lives one hour), the gateway
+  fetches `GET /turn/ice-servers` from the connector with the relay token and keeps the
+  answer in memory only. A refusal (plan, quota, rate limit) or an unreachable connector
+  leaves an empty list and the next attempt five minutes away; a credential already held
+  keeps being served until it expires. The share never fails over it.
+- `GET /connect-info` on the loopback port (`127.0.0.1:8791`, beside `/_auth/*`) answers
+  `{"ice_servers": [...], "candidates": [...]}` to the Screen service: the ICE servers as
+  fetched, and as candidates the assignment's `published_endpoints` (the box's own ports,
+  for a cloud workspace) plus one `tcp` candidate per relay address at `media_port`, each
+  with its `guest_port`. caddy routes a visitor to this app only for `/_auth/*`, `/_agent/*`
+  and `/_health`, so the credential is never served on a visitor-facing route.
+
 ## The session
 
 The session cookie carries the visitor's identity record -- `user_id` and

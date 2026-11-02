@@ -61,9 +61,7 @@ def _news_app_scope(repo_root: Path) -> CreationScope:
         (".agents/changelog/news.md", ReferenceKind.OTHER),
     ],
 )
-def test_reference_kind_comes_from_the_paths_prefix(
-    reference_path: str, expected_kind: ReferenceKind
-) -> None:
+def test_reference_kind_comes_from_the_paths_prefix(reference_path: str, expected_kind: ReferenceKind) -> None:
     assert reference_kind_for_path(ReferencePath(reference_path)) is expected_kind
 
 
@@ -146,6 +144,28 @@ def test_wiring_attributes_each_block_to_the_file_it_is_written_in(tmp_path: Pat
     ]
 
 
+def test_a_declared_wiring_program_may_be_an_event_listener(tmp_path: Path) -> None:
+    # A watcher the app owns is a supervisord event listener, declared in its own kind of section.
+    build_news_workspace(tmp_path)
+    write_supervisord_conf(tmp_path, ())
+    write_supervisord_dropin(tmp_path, "news", ("program:news",))
+    write_supervisord_dropin(tmp_path, "news-watch", ("eventlistener:news-watch",))
+    manifest_path = write_app_manifest(
+        tmp_path,
+        "news",
+        'name = "news"\ndisplay_name = "News"\nicon = "icon.svg"\n[wiring]\nprograms = ["news-watch"]\n',
+        is_icon_written=True,
+    )
+
+    wiring = find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
+
+    # Drop-ins are read in name order, as supervisord reads them.
+    assert [(section.path, list(section.sections)) for section in wiring] == [
+        ("system/supervisord.conf.d/news-watch.conf", ["eventlistener:news-watch"]),
+        ("system/supervisord.conf.d/news.conf", ["program:news"]),
+    ]
+
+
 def test_a_declared_wiring_program_with_no_block_is_an_error(tmp_path: Path) -> None:
     build_news_workspace(tmp_path)
     manifest_path = write_app_manifest(
@@ -155,7 +175,8 @@ def test_a_declared_wiring_program_with_no_block_is_an_error(tmp_path: Path) -> 
         is_icon_written=True,
     )
 
-    with pytest.raises(ScopeComputationError, match="program:xvfb"):
+    # The error names both section kinds the block could have taken.
+    with pytest.raises(ScopeComputationError, match="program:xvfb or eventlistener:xvfb"):
         find_wiring_sections(tmp_path, load_manifest(manifest_path, repo_root=tmp_path))
 
 
@@ -266,9 +287,7 @@ def test_an_unresolved_repo_root_is_resolved_before_use(tmp_path: Path) -> None:
     build_news_workspace(tmp_path.resolve())
     unresolved_root = Path(str(tmp_path).replace(str(tmp_path.resolve()), str(tmp_path), 1))
 
-    scope = compute_app_scope(
-        unresolved_root, _news_manifest_path(unresolved_root), _news_manifest(unresolved_root)
-    )
+    scope = compute_app_scope(unresolved_root, _news_manifest_path(unresolved_root), _news_manifest(unresolved_root))
 
     assert list(scope.primary) == ["system/apps/news/"]
 
@@ -313,9 +332,7 @@ def test_the_reverse_lookup_matches_a_file_beneath_a_referenced_directory(
 ) -> None:
     build_news_workspace(tmp_path)
 
-    matches = find_referencing_manifests(
-        tmp_path, RepoRelativePath(".agents/skills/news-refresh/SKILL.md")
-    )
+    matches = find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/news-refresh/SKILL.md"))
 
     assert [match.manifest.name for match in matches] == ["news"]
 
@@ -341,9 +358,7 @@ def test_the_reverse_lookup_skips_a_manifest_it_cannot_load_and_warns(tmp_path: 
     captured: list[str] = []
     sink_id = logger.add(lambda message: captured.append(str(message)), level="WARNING")
     try:
-        matches = find_referencing_manifests(
-            tmp_path, RepoRelativePath(".agents/skills/news-refresh")
-        )
+        matches = find_referencing_manifests(tmp_path, RepoRelativePath(".agents/skills/news-refresh"))
     finally:
         logger.remove(sink_id)
 
@@ -813,9 +828,7 @@ def test_a_second_catch_up_brings_in_only_what_the_lead_did_since_the_first(tmp_
     run_git(tmp_path, ("checkout", "-q", "-b", "worker"))
     commit_changes(tmp_path, {"system/scripts/helper.sh": "#!/bin/sh\n\necho ONE\n\necho two\n"}, "worker edit")
     run_git(tmp_path, ("checkout", "-q", "main"))
-    first_round = commit_changes(
-        tmp_path, {"docs/system/unrelated.md": "# unrelated, edited again\n"}, "another chat"
-    )
+    first_round = commit_changes(tmp_path, {"docs/system/unrelated.md": "# unrelated, edited again\n"}, "another chat")
     run_git(tmp_path, ("checkout", "-q", "worker"))
     run_git(tmp_path, ("merge", "-q", "--no-ff", "main", "-m", "Catch up"))
     before_second_merge = commit_changes(
@@ -855,7 +868,10 @@ def test_a_file_the_hardened_change_committed_outside_every_footprint_is_the_pas
     diff_base = commit_everything(tmp_path, "base")
     commit_changes(
         tmp_path,
-        {"system/apps/news/runner.py": "ROUTES = ('/api/entries',)\n", "system/scripts/helper.sh": "#!/bin/sh\necho\n"},
+        {
+            "system/apps/news/runner.py": "ROUTES = ('/api/entries',)\n",
+            "system/scripts/helper.sh": "#!/bin/sh\necho\n",
+        },
         "the chat's change, with a helper it needed",
     )
     commit_changes(

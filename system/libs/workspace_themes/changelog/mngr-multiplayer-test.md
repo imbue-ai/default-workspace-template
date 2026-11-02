@@ -1,0 +1,3 @@
+The standard title bar (the chrome a theme without a `[chrome]` table wears) becomes the multiplayer spec's section 9.1 arrangement: the window menu and Refresh lead, the app icon and title sit centred over the bar, and minimize, maximize, and close end at the right edge. Themes that declare their own `[chrome]` keep their arrangement; the one visible change for them is that a centre-aligned title now carries its icon with it into the centre when the chrome names an icon slot.
+
+The colour contract gains two tokens a theme may set: `--c-bubble-other` (a chat bubble that is not the viewer's own, and the chat list's selected row) and `--c-fill-faint` (a hover one step lighter than a selection drawn with `--c-bubble-other`).

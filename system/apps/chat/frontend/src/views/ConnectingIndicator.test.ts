@@ -37,6 +37,7 @@ function provisionalChat(chatId: string, phase: ProvisionalChatPhase): Provision
     chat_id: chatId,
     name: "Chat 1",
     account_id: "acct-1",
+    kind: "agent",
     phase,
     error: null,
     is_seeded: false,

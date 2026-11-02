@@ -191,23 +191,47 @@ export async function loadAccounts(): Promise<void> {
   markAccountsLoaded();
 }
 
+/** Run `load` until it succeeds, waiting out a backoff delay after each failure. With
+ *  `maxAttempts` it gives up after that many tries and rejects with the last failure; without
+ *  it, it never rejects. */
+async function retryWithBackoff(load: () => Promise<void>, maxAttempts?: number): Promise<void> {
+  const backoff = new ReconnectBackoff();
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await load();
+      return;
+    } catch (error) {
+      if (maxAttempts !== undefined && attempt >= maxAttempts) throw error;
+      await new Promise((resolve) => setTimeout(resolve, backoff.nextDelay()));
+    }
+  }
+}
+
 /** Load the account list, retrying a failed fetch with backoff until it succeeds.
  *
  * The boot-time caller races the backend coming up: the page can be served before the API
  * answers, and a decision made off one silently failed fetch (whether the composer asks for a
  * provider) would be wrong for the whole page load. Never rejects.
  */
-export async function loadAccountsWithRetry(): Promise<void> {
-  const backoff = new ReconnectBackoff();
-  let isLoaded = false;
-  while (!isLoaded) {
-    try {
-      await loadAccounts();
-      isLoaded = true;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, backoff.nextDelay()));
-    }
-  }
+export function loadAccountsWithRetry(): Promise<void> {
+  return retryWithBackoff(loadAccounts);
+}
+
+/** Enough attempts to outlast the desktop app remaking its connection to the workspace, so that
+ *  only a failure that persists reaches the user. */
+const LANES_AND_ACCOUNTS_ATTEMPTS = 5;
+
+/** Load the lanes and the accounts the chooser lists, retrying a failure with backoff.
+ *
+ * The chooser opens the moment a fresh workspace's welcome chat finds no account, which is also
+ * when the desktop app's connection to the workspace is youngest. Rejects with the last failure
+ * once the attempts run out.
+ */
+export function loadLanesAndAccountsWithRetry(): Promise<void> {
+  return retryWithBackoff(async () => {
+    await loadLanes();
+    await loadAccounts();
+  }, LANES_AND_ACCOUNTS_ATTEMPTS);
 }
 
 /** Name an account, or pass "" to go back to the provider's own name.
@@ -425,6 +449,7 @@ let chooserOnSignedIn: ((accountId: string) => void) | null = null;
 // waiting on a sign-in or a pick (a seeded chat's first send) puts its message back.
 let chooserOnDismissed: (() => void) | null = null;
 let chooserUnpickable: UnpickableAccount | null = null;
+let chooserOnRoomChosen: (() => void) | null = null;
 
 export function isProviderChooserOpen(): boolean {
   return chooserOpen;
@@ -449,6 +474,9 @@ export interface ProviderChooserIntent {
   onSignedIn?: (accountId: string) => void;
   /** Run if the chooser closes before any sign-in succeeded or an account was picked. */
   onDismissed?: () => void;
+  /** Run when "Chat room (no provider)" is picked instead of an account: the chat awaiting its first send becomes a
+   *  room (the multiplayer spec, section 7.3). Its presence puts that row last, under the providers. */
+  onRoomChosen?: () => void;
   /** A signed-in account to list but refuse, and the reason its row reads. */
   unpickable?: UnpickableAccount;
 }
@@ -461,7 +489,23 @@ export function openProviderChooser(intent: ProviderChooserIntent = {}): void {
   chooserOnSignedIn = intent.onSignedIn ?? null;
   chooserOnDismissed = intent.onDismissed ?? null;
   chooserUnpickable = intent.unpickable ?? null;
+  chooserOnRoomChosen = intent.onRoomChosen ?? null;
   m.redraw();
+}
+
+/** Whether the chooser offers a room in place of a provider. */
+export function isRoomChoiceOffered(): boolean {
+  return chooserOnRoomChosen !== null;
+}
+
+/** Pick a room instead of a provider: what a finished sign-in does, with the room hook in place of the account's. */
+export function pickRoom(): void {
+  const run = chooserOnRoomChosen;
+  chooserOnSignedIn = null;
+  chooserOnDismissed = null;
+  chooserOnRoomChosen = null;
+  closeProviderChooser();
+  run?.();
 }
 
 /** Whether the chooser was opened to pick an account, so a signed-in one can be used as is. */
@@ -501,6 +545,7 @@ export function closeProviderChooser(): void {
   chooserOnSignedIn = null;
   chooserOnDismissed = null;
   chooserUnpickable = null;
+  chooserOnRoomChosen = null;
   dismissed?.();
   m.redraw();
 }
