@@ -96,23 +96,19 @@ live loop:
 
 ## One native subagent per requested change
 
-When the user asks for more than one change, give each requested change to its
-own native subagent (the `Agent` tool) and run them in parallel: put the
-`Agent` calls for all of them in one message. This is separate from
-`launch-task`, which starts a background worker on its own branch.
+Give every change the user requests to its own native subagent (the `Agent`
+tool), as soon as the request arrives, including the first one. Subagents run in
+the background, so starting one returns at once and you stay free to read the
+next message. This is separate from `launch-task`, which starts a background
+worker on its own branch.
 
+- **Hand off quickly.** Brief the subagent and start it; leave the design and
+  the edits to it.
 - **Brief each subagent fully.** Give it the user's request word for word, the
-  app's location, the files and parts of files it may change, and the parts the
-  other subagents own, which it must leave alone.
-- **Keep overlapping changes together.** When two requests need the same lines
-  of the same file, give them to one subagent, or run one after the other.
-- **Give later requests their own subagent.** A request that arrives while
-  subagents are running gets a new subagent of its own.
+  app's location, the files and parts of files it may change, and the parts other
+  subagents own, which it must leave alone.
 - **Subagents work under your lease.** You hold the service lease below for the
   whole change; subagents do not take their own.
-- **Integrate and verify yourself.** When the subagents finish, check that each
-  change works through the live change loop, resolve any conflicts between
-  them, and deliver.
 
 ## One editor at a time: the service lease
 
