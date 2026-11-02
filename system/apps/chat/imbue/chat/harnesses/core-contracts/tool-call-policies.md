@@ -192,8 +192,8 @@ waits on finished early. The agent waits on the event instead -- a command run i
 (`run_in_background.py`) wakes it when it ends, and a state is checked with short sleeps
 (`until curl -sf URL; do sleep 1; done`). A sleep is judged wherever it runs as a command of its
 own, chained, alone, or in a loop or branch body; one under 5 seconds is allowed, and so is one
-that is only an argument (the command handed to `run_in_background.py`) or one in a call claude
-runs with `run_in_background`. A wait that really is about time belongs inside a background
+in a list the command sends to the background with `&`, one that is only an argument (the command
+handed to `run_in_background.py`), or one in a call claude runs with `run_in_background`. A wait that really is about time belongs inside a background
 command. `AGENTS.md` carries the same rule as prose.
 
 ## The rule that keeps this honest

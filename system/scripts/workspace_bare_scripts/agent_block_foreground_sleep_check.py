@@ -9,9 +9,12 @@ A timed sleep is a guess at how long something else takes, and it holds the agen
 whole guess: a message to the agent waits until it ends, and so does the agent when the thing it
 waits on finished early. A sleep is judged wherever it runs as a command of its own -- chained
 after a `cd`, alone, or in a loop or `if` body -- and is allowed when it is shorter than 5 seconds,
-so a condition poll such as `until curl -sf URL; do sleep 1; done` passes. A sleep that is only
-an argument (the command handed to `run_in_background.py`, a `bash -c` script) is not a command of
-this one and is never judged. Neither is a sleep whose duration is not a literal number.
+so a condition poll such as `until curl -sf URL; do sleep 1; done` passes. A sleep in a list the
+command sends to the background with `&` (`(sleep 900 | mcpc login URL > f &)`) holds no turn and
+is allowed; a `;` inside a backgrounded group or loop still reads as the end of a foreground list,
+so `{ sleep 30; } &` is blocked. A sleep that is only an argument (the command handed to
+`run_in_background.py`, a `bash -c` script) is not a command of this one and is never judged.
+Neither is a sleep whose duration is not a literal number.
 
 Runs under a bare `python3` with no virtualenv, like the sibling checkers, so its entry script puts
 the parser lib's source directory on `sys.path`.
@@ -52,18 +55,38 @@ _REFUSAL = (
 
 
 def is_blocked(command: str) -> bool:
-    """True when `command` runs a `sleep` of 5 seconds or more as one of its own commands."""
+    """True when `command` runs a `sleep` of 5 seconds or more as one of its own commands, in a
+    list it does not send to the background with `&`."""
     parsed = parse_command(command)
     if parsed is None:
         return False
+    list_sleeps = False
     for segment in parsed.segments:
         words = list(segment.words)
         while words and (_ENV_ASSIGN.match(words[0]) or words[0] in _LEADING_KEYWORDS):
             words.pop(0)
         if words and os.path.basename(words[0]) == "sleep":
-            if _seconds(words[1:]) >= _MIN_BLOCKED_SECONDS:
+            list_sleeps = list_sleeps or _seconds(words[1:]) >= _MIN_BLOCKED_SECONDS
+        if segment.terminator is None:
+            return list_sleeps
+        # `|`, `&&`, `||` and a parenthesis carry the list on; `;` (a newline included) ends it
+        # in the foreground, a lone `&` in the background.
+        list_ends = _list_operators(segment.terminator)
+        if "&" in list_ends:
+            list_sleeps = False
+        elif ";" in list_ends:
+            if list_sleeps:
                 return True
     return False
+
+
+def _list_operators(terminator: str) -> str:
+    """`terminator` without the operators that join commands into one list (`&&`, `||`, `|&`).
+
+    The lexer returns a run of operators as one token (`&)`, or `&;` for a `&` before a newline),
+    so what is left is tested for the operator it holds rather than compared whole.
+    """
+    return terminator.replace("&&", "").replace("||", "").replace("|&", "")
 
 
 def _seconds(args: list[str]) -> float:
