@@ -1376,7 +1376,8 @@ def build_parser() -> argparse.ArgumentParser:
     stop_chats_parser = run_status_sub.add_parser(
         "stop-chats",
         help="Pause the other chats and background agents that are busy (or the ones "
-        "named), recording each so resume-chats brings it back.",
+        "named), recording each so resume-chats brings it back. The main chat is left "
+        "running: the chat app starts it again as soon as it stops.",
         parents=[common],
     )
     stop_chats_parser.add_argument(
@@ -1385,7 +1386,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         metavar="NAME",
         help="Pause this chat or background agent whatever it is doing (to free memory); "
-        "repeatable. Without it, every busy one is paused.",
+        "repeatable, and refused for the main chat. Without it, every busy one is paused.",
     )
     stop_chats_parser.add_argument(
         "--chat",
