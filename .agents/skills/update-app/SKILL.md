@@ -12,16 +12,14 @@ supervisord (one program per file under `system/supervisord.conf.d/`). They diff
 there's a window to refresh:
 
 - **App** -- the user opens it as a window rendering at the service's own
-  origin, `http://<name>.<workspace-host>/` (scaffolded via
-  `build-app`). Lives under `system/apps/<package>/`.
+  origin, `http://<name>.<workspace-host>/`. Lives under
+  `system/apps/<package>/`.
 - **Background service** -- a supervisord program with no window (`host-backup`,
   `share-gateway`, forwarders), standalone under `system/services/` or co-owned
   by an app (named `<app>-<role>`, code in the app's folder).
 
-Two things are easy to forget when editing either, and both leave the user
-looking at stale state: a code change doesn't take effect until the process
-is reloaded, and an open app window keeps showing the old page until it's
-refreshed. The live change loop below handles both.
+A change reaches the user only after the process reloads and, for an app, the
+open window refreshes. The live change loop below does both.
 
 If you're doing something *other* than editing an existing app or service:
 
