@@ -14,7 +14,7 @@ serialized by their callers (the shell).
 
 Keybindings (`keybindings.py` and `manifest.py`) are the one setting with a declared
 per-user override, and resolve per assignment rather than as one value: each built-in app
-declares its actions and default chords as `[[keybindings]]` in its `app.toml`, which
+with keyboard shortcuts declares its actions and default chords as `[[keybindings]]` in its `app.toml`, which
 registration copies onto its registry row for the shell's Keyboard shortcuts dialog;
 `load_app_keybinding_actions` reads the same declarations (refusing a default chord off the
 grammar) for the app's `GET <api base>/keybindings/me`, which answers the resolved chords for a
