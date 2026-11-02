@@ -19,6 +19,7 @@ sys.path.insert(
 )
 
 CHECK_NAMES = (
+    "block_foreground_sleep",
     "block_pipe_tail_head",
     "latchkey_request",
     "secrets_guard",
@@ -29,6 +30,10 @@ CHECK_NAMES = (
 def main(argv: list[str]) -> int:
     check = argv[1] if len(argv) > 1 else ""
     check_argv = [argv[0], *argv[2:]]
+    if check == "block_foreground_sleep":
+        from workspace_bare_scripts import agent_block_foreground_sleep_check
+
+        return agent_block_foreground_sleep_check.main(check_argv)
     if check == "block_pipe_tail_head":
         from workspace_bare_scripts import agent_block_pipe_tail_head_check
 

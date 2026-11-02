@@ -83,6 +83,7 @@ fi
 for guard in \
     agent_prevent_commit_rewrite.sh \
     agent_block_pipe_tail_head.sh \
+    agent_block_foreground_sleep.sh \
     agent_latchkey_request_standalone.sh \
     agent_secrets_guard.sh \
     agent_tk_standalone.sh

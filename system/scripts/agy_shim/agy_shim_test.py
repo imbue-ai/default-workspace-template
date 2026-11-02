@@ -67,6 +67,12 @@ def test_it_blocks_a_pipe_into_head() -> None:
     assert "tail or head" in result.stderr
 
 
+def test_it_blocks_a_foreground_sleep() -> None:
+    result = _run("-c", "sleep 240; cat /tmp/out.txt")
+    assert result.returncode == 2
+    assert "foreground `sleep`" in result.stderr
+
+
 def test_a_quote_in_the_command_does_not_defeat_a_guard() -> None:
     """THE bypass. Building the guard payload by string interpolation makes any command
     containing a quote invalid JSON; the guards run under `set -e`, so jq's parse error exits

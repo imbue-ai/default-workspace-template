@@ -49,8 +49,11 @@ interpreted the way a shell would.
   blocks a pipe into `head`/`tail` whose input would have to be regenerated. It
   groups the segments into pipelines by their `terminator` and inspects the
   words of each stage that feeds the pipe.
+- `system/scripts/workspace_bare_scripts/agent_block_foreground_sleep_check.py` -- the PreToolUse gate
+  that blocks a foreground `sleep` of 5 seconds or more. It strips each segment's leading
+  keywords (`do`, `then`, ...) and reads the duration of every segment that runs `sleep`.
 
-All three gates import this package under a bare `python3` (no virtualenv) via an
+All four gates import this package under a bare `python3` (no virtualenv) via an
 explicit `sys.path` entry, which is why this package is **stdlib-only** and must
 stay that way.
 
