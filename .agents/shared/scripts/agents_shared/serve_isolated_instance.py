@@ -43,8 +43,9 @@ environment -- that is what ``--port-env`` / ``--env`` inject. Scaffolded Flask
 services do this out of the box (``<PKG>_PORT`` / ``<PKG>_DATA_DIR``); an older
 service is retrofitted with the same one-liner when it is edited.
 
-It imports only the standard library and the stdlib-only ``forward_port`` it registers
-through, so it runs under the system ``python3`` with no venv.
+It imports only the standard library, the stdlib-only ``forward_port`` it registers
+through, and the stdlib-only ``disk_headroom.space`` it checks a ``--copy``'s room with,
+so it runs under the system ``python3`` with no venv.
 
 Usage:
     python3 serve_isolated_instance.py up --name <slug> --cwd <dir> \\
