@@ -7,7 +7,7 @@
 import { candidatesToAdd } from "./candidates";
 import { IcePolicy } from "./ice_policy";
 import type { NekoSocket } from "./neko_socket";
-import { pageStorage, rememberNeedsRelay } from "./relay_memory";
+import { pageStorage, readNeedsRelay, rememberNeedsRelay } from "./relay_memory";
 import { windowScheduler } from "./scheduler";
 import { fetchConnectInfo } from "./service_client";
 import type { ConnectInfo } from "./state";
@@ -15,7 +15,8 @@ import { EMPTY_CONNECT_INFO } from "./state";
 
 export type StreamStatus = "idle" | "connecting" | "connected" | "failed" | "screencast";
 
-// How long after the server closed its peer a new one is asked for.
+// How long after the server closed its peer a new one is asked for, and after a failed connect-info fetch another
+// is tried.
 const REREQUEST_MS = 1500;
 
 export class NekoStream {
@@ -27,6 +28,8 @@ export class NekoStream {
   private isReleased = false;
   private connectInfo: ConnectInfo = EMPTY_CONNECT_INFO;
   private isRelayAttempt = false;
+  /** Counts requests, so the answer to a connect-info fetch a later request superseded asks for nothing. */
+  private requestGeneration = 0;
   private status: StreamStatus = "idle";
   readonly policy: IcePolicy;
   private readonly onStatus: (status: StreamStatus) => void;
@@ -78,27 +81,38 @@ export class NekoStream {
       this.pc = null;
       this.showConnecting();
       window.clearTimeout(this.retryTimer);
-      this.retryTimer = window.setTimeout(
-        () => this.request(this.videoId, this.connectInfo, this.isRelayAttempt),
-        REREQUEST_MS,
-      );
+      this.retryTimer = window.setTimeout(() => this.request(this.videoId), REREQUEST_MS);
     });
   }
 
-  /** Ask neko for a peer with the announced video profile; audio stays off until unmuted (spec section 8.3).
-   *  ``isRelay`` says whether ``connectInfo`` was fetched with ``relay=1``. */
-  request(videoId: string, connectInfo: ConnectInfo, isRelay: boolean): void {
+  /** Ask for a peer: ``connect-info`` first (with the relay servers up front on a network that needed them last
+   *  time, spec section 5.3), then neko's offer for the announced video profile; audio stays off until unmuted
+   *  (spec section 8.3). The answer to a fetch that a later request or a release superseded asks for nothing, and
+   *  a failed fetch is tried again after a moment, so a stream asked for once keeps asking until it is released. */
+  request(videoId: string): void {
     this.videoId = videoId;
-    this.connectInfo = connectInfo;
-    this.isRelayAttempt = isRelay;
-    this.pending = [];
     this.isReleased = false;
+    window.clearTimeout(this.retryTimer);
+    const generation = ++this.requestGeneration;
+    const isRelay = readNeedsRelay(pageStorage());
     this.showConnecting();
-    this.socket.send("signal/request", {
-      video: { selector: { id: videoId, type: "exact" } },
-      audio: { disabled: !this.isAudioEnabled },
-    });
-    this.policy.attemptStarted(isRelay);
+    fetchConnectInfo(isRelay)
+      .then((connectInfo) => {
+        if (generation !== this.requestGeneration || this.isReleased) return;
+        this.connectInfo = connectInfo;
+        this.isRelayAttempt = isRelay;
+        this.pending = [];
+        this.socket.send("signal/request", {
+          video: { selector: { id: videoId, type: "exact" } },
+          audio: { disabled: !this.isAudioEnabled },
+        });
+        this.policy.attemptStarted(isRelay);
+      })
+      .catch((error) => {
+        if (generation !== this.requestGeneration || this.isReleased) return;
+        console.error("[screen] connect-info failed", error);
+        this.retryTimer = window.setTimeout(() => this.request(videoId), REREQUEST_MS);
+      });
   }
 
   /** Whether a peer is up or being set up. */

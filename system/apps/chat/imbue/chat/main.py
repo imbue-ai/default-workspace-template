@@ -2,6 +2,7 @@ import argparse
 import atexit
 import os
 import signal
+import threading
 from collections.abc import Sequence
 from pathlib import Path
 from types import FrameType
@@ -306,6 +307,32 @@ def main() -> None:
     application = build_application(config, args)
     state = state_of(application)
 
+    # Tear down the broadcaster, watchers, agent manager, and http clients on
+    # exit. ``atexit`` covers a normal return; the signal handlers cover
+    # supervisord's SIGTERM and an interactive SIGINT (Ctrl-C), which would
+    # otherwise end the process abruptly.
+    atexit.register(state.shutdown)
+    signal.signal(signal.SIGTERM, _exit_on_signal)
+    signal.signal(signal.SIGINT, _exit_on_signal)
+
+    # Threaded HTTP/1.1 server: each request (and each long-lived SSE/WebSocket
+    # connection) owns its own OS thread, which is what flask-sock needs. HTTP/1.1
+    # (vs werkzeug's HTTP/1.0 default) is required for keepalive and incremental
+    # SSE streaming.
+    server = make_threaded_server(config.chat_host, config.chat_port, application)
+
+    # Served before the agent manager starts, whose first read of the agent list asks mngr about
+    # every agent: a page that connects first is told the list is not known yet rather than
+    # refused. The start stays on the main thread so a failure in it still ends the process for
+    # supervisord.
+    serving = threading.Thread(target=server.serve_forever, name="chat-server", daemon=True)
+    serving.start()
+
+    # Registered once the server answers, so a window the shell opens on the chat right after the
+    # registration finds the app answering.
+    if not (args.no_register or args.preflight or args.secondary):
+        register_app(args.manifest, AppUrl(f"http://localhost:{config.chat_port}"))
+
     if not args.preflight:
         # Follow the agent observer's event stream now that the app is assembled. This is
         # the one place the follower is started; ``build_application`` only constructs, so
@@ -317,25 +344,10 @@ def main() -> None:
         if state.tray_feed is not None:
             state.tray_feed.start()
 
-    # Tear down the broadcaster, watchers, agent manager, and http clients on
-    # exit. ``atexit`` covers a normal return; the signal handlers cover
-    # supervisord's SIGTERM and an interactive SIGINT (Ctrl-C), which
-    # ``serve_forever`` would otherwise turn into an abrupt exit.
-    atexit.register(state.shutdown)
-    signal.signal(signal.SIGTERM, _exit_on_signal)
-    signal.signal(signal.SIGINT, _exit_on_signal)
-
-    # Threaded HTTP/1.1 server: each request (and each long-lived SSE/WebSocket
-    # connection) owns its own OS thread, which is what flask-sock needs. HTTP/1.1
-    # (vs werkzeug's HTTP/1.0 default) is required for keepalive and incremental
-    # SSE streaming.
-    server = make_threaded_server(config.chat_host, config.chat_port, application)
-
-    # Registered once the socket is bound and just before serving, so a window the shell opens
-    # on the chat right after the registration finds the app answering.
-    if not (args.no_register or args.preflight or args.secondary):
-        register_app(args.manifest, AppUrl(f"http://localhost:{config.chat_port}"))
-    server.serve_forever()
+    # Nothing shuts the server down, so serving ends only if the server itself failed.
+    serving.join()
+    logger.error("The chat server stopped serving")
+    raise SystemExit(1)
 
 
 if __name__ == "__main__":

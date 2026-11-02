@@ -47,9 +47,10 @@ import subprocess
 import tempfile
 import time
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import NamedTuple
+from typing import NamedTuple, TypeVar
 
 WORKSPACE_DIR = "/home/user/workspace"
 # The workspace's own service definitions, read for the supervisorctl status in
@@ -66,6 +67,17 @@ SCAN_GATE_DIR = WORKSPACE_DIR + "/.agents/skills/publish-template/scripts"
 # The workspace's own mngr, asked for what agents exist and what was said in
 # them. Named here rather than inline so a test can point it at a stub.
 MNGR_BINARY = "mngr"
+
+# How many mngr calls run at once: each is a whole CLI start, and a report makes
+# one or two per agent.
+MNGR_CALL_CONCURRENCY = 4
+
+# The lifecycle state of an agent whose tmux session is gone, so it has no pane
+# to capture.
+STOPPED_AGENT_STATE = "STOPPED"
+
+_Item = TypeVar("_Item")
+_Result = TypeVar("_Result")
 
 # The kernel's own readings, named here rather than inline so the host-health
 # section can be exercised against fixtures.
@@ -529,6 +541,8 @@ class ListedAgent(NamedTuple):
     target: str
     chat_id: str
     chat_seq: int
+    # mngr's lifecycle state for the agent (``RUNNING``, ``STOPPED``, ...).
+    state: str
 
 
 def parse_chat_seq(raw: str) -> int:
@@ -665,6 +679,16 @@ def parse_scan_timeout(flags: Sequence[str]) -> float:
             except ValueError:
                 return DEFAULT_SCAN_TIMEOUT_SECONDS
     return DEFAULT_SCAN_TIMEOUT_SECONDS
+
+
+def map_concurrently(
+    function: Callable[[_Item], _Result], items: Sequence[_Item]
+) -> list[_Result]:
+    """``function`` applied to every item, ``MNGR_CALL_CONCURRENCY`` at a time, in the items' order."""
+    if not items:
+        return []
+    with ThreadPoolExecutor(max_workers=MNGR_CALL_CONCURRENCY) as executor:
+        return list(executor.map(function, items))
 
 
 class StagedMember(NamedTuple):
@@ -996,7 +1020,21 @@ class Collector:
         log_members: list[tuple[str, str, float]] = []
         pane_members: list[tuple[str, str, float]] = []
         used_names: set[str] = set()
-        for agent in self.list_agents(timeout):
+        agents = self.list_agents(timeout)
+        pane_by_agent_id: dict[str, str | None] = {}
+        if is_pane_included:
+            # A stopped agent's pane is gone, and asking mngr for it costs a CLI start
+            # that only fails.
+            capturable = [
+                agent for agent in agents if agent.state != STOPPED_AGENT_STATE
+            ]
+            panes = map_concurrently(
+                lambda agent: self.capture_pane(agent.target, timeout), capturable
+            )
+            pane_by_agent_id = {
+                agent.agent_id: pane for agent, pane in zip(capturable, panes)
+            }
+        for agent in agents:
             agent_dir_member = safe_member_component(agent.name)
             for path in self.select_agent_log_files(agent.agent_id):
                 member = unique_member_name(
@@ -1010,9 +1048,7 @@ class Collector:
                 log_members.append(
                     (member, read_tail(path, MAX_LINES_PER_LOG), safe_mtime(path))
                 )
-            if not is_pane_included:
-                continue
-            pane = self.capture_pane(agent.target, timeout)
+            pane = pane_by_agent_id.get(agent.agent_id)
             if pane is not None:
                 member = unique_member_name(
                     "{}/{}/{}".format(
@@ -1095,7 +1131,7 @@ class Collector:
                 "--provider",
                 "local",
                 "--format",
-                "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}",
+                "{name}|{id}|{id}@{host.id}.{host.provider_name}|{labels.chat_id}|{labels.chat_seq}|{state}",
             ],
             timeout,
         )
@@ -1105,13 +1141,17 @@ class Collector:
         agents: list[ListedAgent] = []
         for line in listed.splitlines():
             parts = line.split("|")
-            if len(parts) != 5:
+            if len(parts) != 6:
                 continue
-            name, agent_id, target, chat_id, chat_seq = (p.strip() for p in parts)
+            name, agent_id, target, chat_id, chat_seq, state = (
+                p.strip() for p in parts
+            )
             if not name or not agent_id or not target:
                 continue
             agents.append(
-                ListedAgent(name, agent_id, target, chat_id, parse_chat_seq(chat_seq))
+                ListedAgent(
+                    name, agent_id, target, chat_id, parse_chat_seq(chat_seq), state
+                )
             )
         self._listed_agents = tuple(agents)
         return self._listed_agents
@@ -1191,8 +1231,11 @@ class Collector:
         """
         fetched = []
         used_names: set[str] = set()
-        for segments in group_into_chats(self.list_agents(timeout)):
-            chat = self.read_chat(segments, timeout)
+        chats = group_into_chats(self.list_agents(timeout))
+        for segments, chat in zip(
+            chats,
+            map_concurrently(lambda segments: self.read_chat(segments, timeout), chats),
+        ):
             if chat is None:
                 continue
             events, harness = chat
