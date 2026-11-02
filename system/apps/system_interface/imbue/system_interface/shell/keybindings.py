@@ -1,6 +1,6 @@
 """The shell's keybindings: its own declared actions, the catalog of every app's, and the profile-file writes.
 
-The Keyboard shortcuts dialog lists every built-in app's actions from the ``[[keybindings]]`` its
+The Keyboard shortcuts dialog lists every registered app's actions from the ``[[keybindings]]`` its
 ``app.toml`` declares, which registration copies onto the app's registry row, so an app that is
 stopped (one that stops when no window shows it) is listed all the same. They are resolved for the
 requesting identity by the ``workspace_profile`` library. Saves land in the profile files that
