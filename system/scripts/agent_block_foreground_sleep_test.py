@@ -30,7 +30,7 @@ def _run(command: str, run_in_background: bool | None = None) -> int:
         "supervisorctl restart apartment-hunt > /tmp/rs.txt 2>&1\nsleep 8\ncurl -s localhost:8088/api/state",
         "uv run apartment-hunt > /tmp/ahboot.txt 2>&1 &\nBOOTPID=$!\nsleep 12\ncurl localhost:8098/",
         # A long sleep inside a loop or branch body still holds the turn.
-        "for i in $(seq 1 55); do [ -z \"$(git status --porcelain)\" ] && exit 0; sleep 10; done",
+        'for i in $(seq 1 55); do [ -z "$(git status --porcelain)" ] && exit 0; sleep 10; done',
         "for i in 1 2 3; do ./probe.py && break; sleep 20; done",
         "for t in 1 2 3; do sleep 8; curl -s https://example.com/$t; done",
         'case "$s" in *generating*) sleep 10;; *) echo done;; esac',
