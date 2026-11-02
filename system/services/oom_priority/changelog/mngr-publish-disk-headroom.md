@@ -1,1 +1,0 @@
-The test that checks every plain-`python3` script's `sys.path` inserts point at real directories now also scans `.agents/shared/scripts/`, which covers `serve_isolated_instance.py`'s insert of the `disk_headroom` library; no behavior change.
