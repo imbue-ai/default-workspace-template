@@ -128,7 +128,9 @@ The models behind a workspace app's two descriptions (a third, the OpenAPI docum
   `scope.list_changed_files` is the diff both `footprint` and `select-tests`
   read, and `select_tests_for_pass_scope` selects from a pass scope file.
 - `app_manifest.primitives`: the validated string types (`AppName`,
-  `DisplayName`, `LaunchPathId`, `LaunchParamName`, `LaunchPathValue` (rooted with one
+  `DisplayName`, `KeybindingActionId` (the profile files' action id rule),
+  `KeybindingActionLabel` (one line, at most 80 characters), `LaunchPathId`,
+  `LaunchParamName`, `LaunchPathValue` (rooted with one
   slash, no query string or fragment, nothing a URL would escape), `MessageType`,
   `PageTemplate` (a path with `{field}` placeholders, starting with one `/` or a
   placeholder, optionally ending in a fixed query string, no fragment),
