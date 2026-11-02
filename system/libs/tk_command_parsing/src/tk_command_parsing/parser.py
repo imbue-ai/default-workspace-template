@@ -38,6 +38,11 @@ _PUNCT = "();<>|&"
 # still runs the command in place), so it is skipped when locating the verb.
 _ENV_ASSIGN = re.compile(r"^[A-Za-z_]\w*=")
 
+# Shell keywords that can sit before a command in the same segment (`do sleep 30`).
+_LEADING_KEYWORDS = frozenset(
+    {"do", "then", "else", "elif", "if", "while", "until", "time", "!", "{"}
+)
+
 # The command names that identify a tk invocation, after stripping any path
 # prefix (``system/vendor/tk/ticket`` -> ``ticket``).
 _TK_BASENAMES = ("tk", "ticket")
@@ -98,6 +103,18 @@ def parse_command(command: str) -> ParsedCommand | None:
             words.append(tok)
     segments.append(_classify_segment(tuple(words), has_redirect, None))
     return ParsedCommand(segments=tuple(segments))
+
+
+def command_words(segment: CommandSegment) -> list[str]:
+    """The words of the command ``segment`` runs: its words past any leading
+    ``VAR=value`` assignments and the shell keywords that can precede a command
+    (``do``, ``then``, ``if``, ``time``, ``{``, ...), so ``do sleep 30`` and
+    ``A=1 cat f`` yield ``sleep 30`` and ``cat f``.
+    """
+    words = list(segment.words)
+    while words and (_ENV_ASSIGN.match(words[0]) or words[0] in _LEADING_KEYWORDS):
+        words.pop(0)
+    return words
 
 
 def flag_values(args: Sequence[str], flag: str) -> list[str]:

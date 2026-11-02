@@ -23,15 +23,11 @@ import os
 import re
 import sys
 
-from tk_command_parsing.parser import CommandSegment, parse_command
+from tk_command_parsing.parser import CommandSegment, command_words, parse_command
 
 # The wrapper's trigger: a pipe (`|` or `|&`, not `||`) into head or tail, possibly across a
 # line continuation.
 _PIPE_INTO_TRUNCATOR = re.compile(r"(?<!\|)\|&?[\s\\]*(tail|head)(\s|$)")
-_ENV_ASSIGN = re.compile(r"^[A-Za-z_]\w*=")
-_LEADING_KEYWORDS = frozenset(
-    {"do", "then", "else", "if", "while", "until", "time", "!"}
-)
 _TRUNCATORS = frozenset({"head", "tail"})
 
 _READERS = frozenset(
@@ -104,7 +100,7 @@ def _pipelines(segments: tuple[CommandSegment, ...]) -> list[list[CommandSegment
 def _is_recoverable(producers: list[CommandSegment]) -> bool:
     """True when every stage after the last `tee FILE` is a plain read."""
     for start in range(len(producers) - 1, -1, -1):
-        words = _command_words(producers[start])
+        words = command_words(producers[start])
         if words[:1] == ["tee"] and any(
             not w.startswith(("-", "/dev/")) for w in words[1:]
         ):
@@ -116,7 +112,7 @@ def _is_recoverable(producers: list[CommandSegment]) -> bool:
 def _is_plain_read(stage: CommandSegment) -> bool:
     if any("$(" in w or "`" in w for w in stage.words):
         return False
-    words = _command_words(stage)
+    words = command_words(stage)
     if not words:
         return False
     name = os.path.basename(words[0])
@@ -132,15 +128,8 @@ def _git_subcommand(args: list[str]) -> str | None:
     return args[i] if i < len(args) else None
 
 
-def _command_words(stage: CommandSegment) -> list[str]:
-    words = list(stage.words)
-    while words and (_ENV_ASSIGN.match(words[0]) or words[0] in _LEADING_KEYWORDS):
-        words.pop(0)
-    return words
-
-
 def _command_name(stage: CommandSegment) -> str | None:
-    words = _command_words(stage)
+    words = command_words(stage)
     return os.path.basename(words[0]) if words else None
 
 

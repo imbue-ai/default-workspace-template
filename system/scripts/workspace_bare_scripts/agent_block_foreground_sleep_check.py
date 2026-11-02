@@ -26,15 +26,11 @@ import os
 import re
 import sys
 
-from tk_command_parsing.parser import parse_command
+from tk_command_parsing.parser import command_words, parse_command
 
 _MIN_BLOCKED_SECONDS = 5.0
 _DURATION = re.compile(r"^(\d*\.?\d+)([smhd]?)$")
 _UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
-_ENV_ASSIGN = re.compile(r"^[A-Za-z_]\w*=")
-_LEADING_KEYWORDS = frozenset(
-    {"do", "then", "else", "elif", "if", "while", "until", "time", "!", "{"}
-)
 
 _REFUSAL = (
     "Do not wait with a foreground `sleep` of 5 seconds or more. A timed sleep is a guess at how "
@@ -62,9 +58,7 @@ def is_blocked(command: str) -> bool:
         return False
     list_sleeps = False
     for segment in parsed.segments:
-        words = list(segment.words)
-        while words and (_ENV_ASSIGN.match(words[0]) or words[0] in _LEADING_KEYWORDS):
-            words.pop(0)
+        words = command_words(segment)
         if words and os.path.basename(words[0]) == "sleep":
             list_sleeps = list_sleeps or _seconds(words[1:]) >= _MIN_BLOCKED_SECONDS
         if segment.terminator is None:
