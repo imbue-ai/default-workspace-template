@@ -21,10 +21,10 @@ from workspace_profile.manifest import resolve_keybindings_me_response
 from workspace_profile.snapshot import load_workspace_profile_snapshot
 
 from imbue.chat.identity import request_identity
+from imbue.chat.primitives import CHAT_APP_NAME
 
 KEYBINDINGS_ME_ROUTE: Final[str] = f"/api{KEYBINDINGS_ME_SUBPATH}"
 
-CHAT_APP_NAME: Final[str] = "chat"
 CHAT_APP_MANIFEST_PATH: Final[Path] = Path(__file__).resolve().parents[2] / "app.toml"
 
 
@@ -39,7 +39,7 @@ def keybindings_me_endpoint() -> Response:
     workspace_root = Path.cwd()
     return model_response(
         resolve_keybindings_me_response(
-            CHAT_APP_NAME,
+            str(CHAT_APP_NAME),
             chat_keybinding_actions(),
             snapshot=load_workspace_profile_snapshot(workspace_root),
             identity=request_identity(),
