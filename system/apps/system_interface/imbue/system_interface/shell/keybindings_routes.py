@@ -1,5 +1,5 @@
-"""The shell's keybindings routes: its own manifest and resolved chords, the whole-workspace catalog
-the Keyboard settings lists, and the save, discard, and deliver flows (user-profile-state spec,
+"""The shell's keybindings routes: its own resolved chords, the whole-workspace catalog the
+Keyboard settings lists, and the save, discard, and deliver flows (user-profile-state spec,
 sections 9.3 and 10.3)."""
 
 import os
@@ -15,7 +15,6 @@ from pydantic import Field
 from workspace_profile.errors import InvalidChordError
 from workspace_profile.keybindings import normalize_chord
 from workspace_profile.keybindings import resolve_app_keybindings
-from workspace_profile.manifest import KEYBINDINGS_ACTIONS_SUBPATH
 from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
 from workspace_profile.manifest import resolve_keybindings_me_response
 from workspace_profile.resolve import resolve_request_user_id
@@ -24,13 +23,14 @@ from workspace_profile.snapshot import load_workspace_profile_snapshot
 from imbue.imbue_common.enums import LowerCaseStrEnum
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.app_context import get_state
-from imbue.system_interface.shell.keybindings import SHELL_KEYBINDINGS_MANIFEST
+from imbue.system_interface.shell.keybindings import SHELL_APP_NAME
 from imbue.system_interface.shell.keybindings import discard_unsent_keybinding
-from imbue.system_interface.shell.keybindings import fetch_app_keybindings_manifests
+from imbue.system_interface.shell.keybindings import list_app_keybinding_actions
 from imbue.system_interface.shell.keybindings import remove_user_keybinding
 from imbue.system_interface.shell.keybindings import resolve_assignment_source
 from imbue.system_interface.shell.keybindings import save_unsent_keybinding
 from imbue.system_interface.shell.keybindings import save_user_keybinding
+from imbue.system_interface.shell.keybindings import shell_keybinding_actions
 from imbue.system_interface.shell.keybindings_delivery import ENV_AGENT_ID
 from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryOutcome
 from imbue.system_interface.shell.keybindings_delivery import KeybindingsDeliveryStatus
@@ -43,7 +43,6 @@ from imbue.system_interface.shell.route_helpers import detail_response
 from imbue.system_interface.shell.route_helpers import request_identity
 from imbue.system_interface.shell.state import ShellState
 
-KEYBINDINGS_ACTIONS_ROUTE: Final[str] = f"/api{KEYBINDINGS_ACTIONS_SUBPATH}"
 KEYBINDINGS_ME_ROUTE: Final[str] = f"/api{KEYBINDINGS_ME_SUBPATH}"
 KEYBINDINGS_CATALOG_ROUTE: Final[str] = "/api/keybindings/catalog"
 KEYBINDINGS_SAVE_ROUTE: Final[str] = "/api/keybindings"
@@ -165,17 +164,13 @@ def _can_save_everywhere() -> bool:
     return GatewayAccess.from_environ(os.environ) is not None and bool(os.environ.get(ENV_AGENT_ID, ""))
 
 
-def get_keybindings_actions() -> ResponseReturnValue:
-    """The shell's own keybindings manifest."""
-    return model_response(SHELL_KEYBINDINGS_MANIFEST)
-
-
 def get_keybindings_me() -> ResponseReturnValue:
     """The requesting user's resolved chords for the shell's own actions."""
     shell = _shell()
     return model_response(
         resolve_keybindings_me_response(
-            SHELL_KEYBINDINGS_MANIFEST,
+            SHELL_APP_NAME,
+            shell_keybinding_actions(),
             snapshot=load_workspace_profile_snapshot(shell.repo_root),
             identity=request_identity(),
             workspace_root=shell.repo_root,
@@ -189,28 +184,31 @@ def get_keybindings_catalog() -> ResponseReturnValue:
     identity = request_identity()
     snapshot = load_workspace_profile_snapshot(shell.repo_root)
     apps = []
-    for app_manifest in fetch_app_keybindings_manifests(shell.inventory.entries()):
-        manifest = app_manifest.manifest
+    for app_actions in list_app_keybinding_actions(shell.inventory.entries()):
         resolved = resolve_app_keybindings(
-            manifest.app,
-            {action.id: action.default_chords for action in manifest.actions},
+            app_actions.app,
+            {str(action.id): tuple(str(chord) for chord in action.default_chords) for action in app_actions.actions},
             snapshot=snapshot,
             identity=identity,
             workspace_root=shell.repo_root,
         )
         actions = tuple(
             KeybindingActionView(
-                id=action.id,
-                label=action.label,
-                default_chords=action.default_chords,
-                chords=tuple(resolved[action.id]),
+                id=str(action.id),
+                label=str(action.label),
+                default_chords=tuple(str(chord) for chord in action.default_chords),
+                chords=tuple(resolved[str(action.id)]),
                 source=resolve_assignment_source(
-                    manifest.app, action.id, snapshot=snapshot, identity=identity, workspace_root=shell.repo_root
+                    app_actions.app,
+                    str(action.id),
+                    snapshot=snapshot,
+                    identity=identity,
+                    workspace_root=shell.repo_root,
                 ),
             )
-            for action in manifest.actions
+            for action in app_actions.actions
         )
-        apps.append(KeybindingAppView(app=manifest.app, display_name=app_manifest.display_name, actions=actions))
+        apps.append(KeybindingAppView(app=app_actions.app, display_name=app_actions.display_name, actions=actions))
     _merged, unsent = merged_account_keybindings(shell.repo_root)
     unsent_views = tuple(
         UnsentKeybindingView(app=app_name, action=action_id, chords=tuple(chords))
@@ -239,13 +237,9 @@ def save_keybinding() -> ResponseReturnValue:
         chords = [normalize_chord(chord) for chord in body.chords]
     except InvalidChordError as e:
         return detail_response(str(e), HTTP_BAD_REQUEST)
-    # Only the named app's manifest is consulted (the shell's own is always included),
-    # so a save never fans out to every app the way the catalog read does.
-    named_entries = [entry for entry in shell.inventory.entries() if str(entry.row.name) == body.app]
     is_known_action = any(
-        app_manifest.manifest.app == body.app
-        and any(action.id == body.action for action in app_manifest.manifest.actions)
-        for app_manifest in fetch_app_keybindings_manifests(named_entries)
+        app_actions.app == body.app and any(action.id == body.action for action in app_actions.actions)
+        for app_actions in list_app_keybinding_actions(shell.inventory.entries())
     )
     if not is_known_action:
         return detail_response(f"no app declares the action {body.app}.{body.action}", HTTP_BAD_REQUEST)
@@ -322,9 +316,6 @@ def deliver_keybindings() -> ResponseReturnValue:
 
 def register_keybindings_routes(application: Flask) -> None:
     """Wire the keybindings routes onto the Flask application."""
-    application.add_url_rule(
-        KEYBINDINGS_ACTIONS_ROUTE, view_func=get_keybindings_actions, methods=["GET"], endpoint="keybindings_actions"
-    )
     application.add_url_rule(
         KEYBINDINGS_ME_ROUTE, view_func=get_keybindings_me, methods=["GET"], endpoint="keybindings_me"
     )

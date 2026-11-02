@@ -351,6 +351,51 @@ def test_a_malformed_message_handler_fails_to_load_with_its_reason(
         )
 
 
+def test_keybindings_declare_the_actions_a_person_may_rebind_in_display_order() -> None:
+    manifest = AppManifest.model_validate(
+        {
+            **_full_manifest_data(),
+            "keybindings": [
+                {"id": "rename", "label": "Rename the selected entry", "default_chords": ["f2"]},
+                {"id": "unbound", "label": "Something with no default"},
+            ],
+        }
+    )
+
+    assert [(action.id, action.label, action.default_chords) for action in manifest.keybindings] == [
+        ("rename", "Rename the selected entry", ("f2",)),
+        ("unbound", "Something with no default", ()),
+    ]
+    assert AppManifest.model_validate(_full_manifest_data()).keybindings == ()
+
+
+@pytest.mark.parametrize(
+    ("action", "match"),
+    [
+        pytest.param({"id": "Rename", "label": "Rename"}, "invalid keybinding action id", id="uppercase-id"),
+        pytest.param({"id": "rename", "label": ""}, "keybinding label must not be empty", id="empty-label"),
+        pytest.param({"id": "rename", "label": "two\nlines"}, "is a single line", id="two-line-label"),
+        pytest.param({"id": "rename", "label": "Rename", "default_chords": [""]}, "at least 1 character", id="empty-chord"),
+    ],
+)
+def test_a_malformed_keybinding_fails_to_load_with_its_reason(action: dict[str, object], match: str) -> None:
+    with pytest.raises(ValidationError, match=match):
+        AppManifest.model_validate({**_full_manifest_data(), "keybindings": [action]})
+
+
+def test_duplicate_keybinding_action_ids_are_rejected() -> None:
+    with pytest.raises(ValidationError, match="keybinding action ids must be unique"):
+        AppManifest.model_validate(
+            {
+                **_full_manifest_data(),
+                "keybindings": [
+                    {"id": "rename", "label": "Rename"},
+                    {"id": "rename", "label": "Rename again"},
+                ],
+            }
+        )
+
+
 def test_duplicate_message_handler_types_are_rejected() -> None:
     with pytest.raises(ValidationError, match="message handler types must be unique"):
         AppManifest.model_validate(

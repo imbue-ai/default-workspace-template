@@ -1,4 +1,4 @@
-"""The shell's keybindings routes: the manifest, the catalog, and the save / discard / deliver flows."""
+"""The shell's keybindings routes: its declared actions, the catalog, and the save / discard / deliver flows."""
 
 import json
 from collections.abc import Generator
@@ -17,6 +17,7 @@ from workspace_profile.overrides import load_unsent_change_values
 from workspace_profile.overrides import load_user_override_values
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
+from imbue.system_interface.shell.keybindings import shell_keybinding_actions
 from imbue.system_interface.shell.keybindings_delivery import ENV_AGENT_ID
 from imbue.system_interface.shell.testing import build_inventory
 from imbue.system_interface.shell.testing import identity_headers
@@ -28,9 +29,39 @@ from imbue.system_interface.ws_broadcaster import WebSocketBroadcaster
 _VISITOR = RequestIdentity(owner=False, user_id="visitor-1", email="v@example.com")
 
 
-def _client(tmp_path: Path) -> FlaskClient:
+# A registered app that declares a keybinding, at an address nothing answers: what an app that
+# stops when no window shows it looks like while it is stopped.
+_STOPPED_NOTES_ROW = """
+[[apps]]
+name = "notes"
+url = "http://127.0.0.1:9"
+program = "notes"
+display_name = "Notes"
+stop_when_no_windows = true
+
+[[apps.keybindings]]
+id = "save-note"
+label = "Save the note"
+default_chords = ["ctrl+s", "meta+s"]
+"""
+
+# A row whose default chord is off the grammar: the catalog cannot offer it for re-binding.
+_OFF_GRAMMAR_ROW = """
+[[apps]]
+name = "sketch"
+url = "http://127.0.0.1:9"
+program = "sketch"
+
+[[apps.keybindings]]
+id = "undo"
+label = "Undo"
+default_chords = ["Control+Z"]
+"""
+
+
+def _client(tmp_path: Path, *extra_rows: str) -> FlaskClient:
     broadcaster = WebSocketBroadcaster()
-    inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster)
+    inventory = build_inventory(write_two_app_registry(tmp_path, *extra_rows), broadcaster)
     application = shell_application(tmp_path, inventory, broadcaster)
     return application.test_client()
 
@@ -57,20 +88,14 @@ def _write_snapshot(tmp_path: Path, keybindings: dict[str, Any]) -> None:
     )
 
 
-def test_the_shells_manifest_declares_the_launcher_action(tmp_path: Path) -> None:
-    answered = _client(tmp_path).get("/api/keybindings/actions")
-
-    assert answered.status_code == 200
-    assert answered.get_json() == {
-        "app": "system_interface",
-        "actions": [
-            {
-                "id": "launcher-secondary-send",
-                "label": "Launcher: send the typed text to a chosen chat",
-                "default_chords": ["ctrl+enter", "meta+enter"],
-            }
-        ],
-    }
+def test_the_shells_app_toml_declares_the_launcher_action() -> None:
+    assert [action.model_dump(mode="json") for action in shell_keybinding_actions()] == [
+        {
+            "id": "launcher-secondary-send",
+            "label": "Launcher: send the typed text to a chosen chat",
+            "default_chords": ["ctrl+enter", "meta+enter"],
+        }
+    ]
 
 
 def test_me_resolves_the_owners_snapshot_value(tmp_path: Path) -> None:
@@ -84,9 +109,7 @@ def test_me_resolves_the_owners_snapshot_value(tmp_path: Path) -> None:
     assert visitor.get_json()["chords_by_action"] == {"launcher-secondary-send": ["ctrl+enter", "meta+enter"]}
 
 
-def test_the_catalog_lists_the_shell_and_skips_apps_that_serve_no_manifest(tmp_path: Path) -> None:
-    # The two-app registry's rows point at addresses that answer nothing, so only
-    # the shell's own actions appear; an app's manifest joins when it answers.
+def test_the_catalog_lists_the_shell_alone_when_no_registered_app_declares_keybindings(tmp_path: Path) -> None:
     answered = _client(tmp_path).get("/api/keybindings/catalog")
 
     assert answered.status_code == 200
@@ -98,6 +121,43 @@ def test_the_catalog_lists_the_shell_and_skips_apps_that_serve_no_manifest(tmp_p
     (action,) = catalog["apps"][0]["actions"]
     assert action["chords"] == ["ctrl+enter", "meta+enter"]
     assert action["source"] == "default"
+
+
+def test_the_catalog_lists_a_stopped_apps_declared_actions_from_its_registry_row(tmp_path: Path) -> None:
+    # Nothing answers at the notes row's address: the actions come from the registry, not the app.
+    catalog = _client(tmp_path, _STOPPED_NOTES_ROW).get("/api/keybindings/catalog").get_json()
+
+    assert [(app["app"], app["display_name"]) for app in catalog["apps"]] == [
+        ("system_interface", "Workspace"),
+        ("notes", "Notes"),
+    ]
+    assert catalog["apps"][1]["actions"] == [
+        {
+            "id": "save-note",
+            "label": "Save the note",
+            "default_chords": ["ctrl+s", "meta+s"],
+            "chords": ["ctrl+s", "meta+s"],
+            "source": "default",
+        }
+    ]
+
+
+def test_a_save_for_a_stopped_apps_action_is_accepted(tmp_path: Path) -> None:
+    answered = _client(tmp_path, _STOPPED_NOTES_ROW).post(
+        "/api/keybindings",
+        json={"app": "notes", "action": "save-note", "chords": ["ctrl+shift+s"], "scope": "workspace"},
+    )
+
+    assert answered.status_code == 200
+    assert load_user_override_values(_repo_root(tmp_path), "local") == {
+        "keybindings": {"notes": {"save-note": ["ctrl+shift+s"]}}
+    }
+
+
+def test_the_catalog_skips_a_row_whose_default_chords_are_off_the_grammar(tmp_path: Path) -> None:
+    catalog = _client(tmp_path, _STOPPED_NOTES_ROW, _OFF_GRAMMAR_ROW).get("/api/keybindings/catalog").get_json()
+
+    assert [app["app"] for app in catalog["apps"]] == ["system_interface", "notes"]
 
 
 def test_a_workspace_save_normalizes_the_chords_into_the_requesters_override(tmp_path: Path) -> None:

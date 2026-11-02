@@ -330,23 +330,3 @@ def test_the_app_describes_its_api_the_way_its_manifest_says(
     assert_api_schema_describes_app(
         pages_client, Path(__file__).resolve().parents[2] / "app.toml"
     )
-
-
-def test_the_keybindings_routes_declare_no_actions(pages_client: FlaskClient) -> None:
-    # xterm owns the page's keystrokes, so the manifest is deliberately empty; the
-    # routes exist so every built-in app answers the same pair.
-    actions = pages_client.get("/api/keybindings/actions")
-    assert actions.status_code == 200
-    assert actions.get_json() == {"app": "terminal", "actions": []}
-
-    me = pages_client.get("/api/keybindings/me")
-    assert me.status_code == 200
-    assert me.get_json() == {"app": "terminal", "chords_by_action": {}}
-
-
-def test_a_keybindings_read_with_an_unreadable_identity_header_is_refused(pages_client: FlaskClient) -> None:
-    # A present header that does not parse is nobody's proxy's (the multiplayer spec, D10), so
-    # the read is refused rather than resolved as the owner's.
-    me = pages_client.get("/api/keybindings/me", headers={"X-Imbue-Identity": "not json"})
-    assert me.status_code == 400
-    assert "X-Imbue-Identity" in me.get_json()["detail"]

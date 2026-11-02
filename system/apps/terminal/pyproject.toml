@@ -17,8 +17,6 @@ dependencies = [
     # Serves the workspace's themes from this app's own origin (docs/system/blueprint/workspace-themes/).
     "workspace-themes",
     "workspace-layout",
-    # Resolves account-keyed settings (keybindings) for a request identity.
-    "workspace-profile",
 ]
 
 [dependency-groups]

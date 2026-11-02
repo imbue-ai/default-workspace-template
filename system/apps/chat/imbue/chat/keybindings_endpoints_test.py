@@ -1,4 +1,4 @@
-"""The chat's keybindings routes: the manifest, and the resolved chords layered by the profile files."""
+"""The chat's keybindings: the actions its app.toml declares, and the resolved chords layered by the profile files."""
 
 import json
 from pathlib import Path
@@ -8,6 +8,7 @@ from flask.testing import FlaskClient
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_profile.snapshot import SNAPSHOT_RELATIVE_PATH
 
+from imbue.chat.keybindings_endpoints import chat_keybinding_actions
 from imbue.chat.server import create_application
 from imbue.chat.testing import build_test_state
 
@@ -16,20 +17,14 @@ def _client() -> FlaskClient:
     return create_application(build_test_state()).test_client()
 
 
-def test_the_manifest_declares_the_send_action_with_its_default_chords() -> None:
-    answered = _client().get("/api/keybindings/actions")
-
-    assert answered.status_code == 200
-    assert answered.get_json() == {
-        "app": "chat",
-        "actions": [
-            {
-                "id": "send-message",
-                "label": "Send the message",
-                "default_chords": ["enter", "ctrl+enter", "meta+enter"],
-            }
-        ],
-    }
+def test_the_app_toml_declares_the_send_action_with_its_default_chords() -> None:
+    assert [action.model_dump(mode="json") for action in chat_keybinding_actions()] == [
+        {
+            "id": "send-message",
+            "label": "Send the message",
+            "default_chords": ["enter", "ctrl+enter", "meta+enter"],
+        }
+    ]
 
 
 def test_me_answers_the_defaults_when_no_profile_file_exists() -> None:

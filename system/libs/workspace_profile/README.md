@@ -14,9 +14,11 @@ serialized by their callers (the shell).
 
 Keybindings (`keybindings.py` and `manifest.py`) are the one setting with a declared
 per-user override, and resolve per assignment rather than as one value: each built-in app
-declares its actions and default chords in a manifest it serves at
-`GET <api base>/keybindings/actions`, answers the resolved chords for a request identity at
-`GET <api base>/keybindings/me`, and consumes those instead of hard-coded chords. The chord
+declares its actions and default chords as `[[keybindings]]` in its `app.toml`, which
+registration copies onto its registry row for the shell's Keyboard shortcuts dialog;
+`load_app_keybinding_actions` reads the same declarations (refusing a default chord off the
+grammar) for the app's `GET <api base>/keybindings/me`, which answers the resolved chords for a
+request identity, and the app consumes those instead of hard-coded chords. The chord
 grammar (lowercase tokens joined with `+`, modifiers in the fixed ctrl/alt/shift/meta order,
 named keys from the lowercased `KeyboardEvent.key` vocabulary, `cmd` normalized to `meta`) is
 mirrored by the desktop's write path and pinned cross-repo through the same contract fixture.

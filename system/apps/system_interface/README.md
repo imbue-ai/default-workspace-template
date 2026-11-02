@@ -90,11 +90,12 @@ workspace venv, run by supervisord from the repo root) listens on `http://127.0.
   (`/theme-gallery`), which shows every part of a theme. A watch on the theme
   folders and the app manifests says `themes_changed` when the catalog does.
 - Keyboard shortcuts (the user-profile-state spec in the mngr repo, sections 9
-  and 10): the shell's own manifest and the requester's resolved chords
-  (`/api/keybindings/actions`, `/api/keybindings/me`, the pair every built-in
-  app serves), the catalog the Keyboard shortcuts dialog lists, every app's
-  manifest resolved for the requester (`/api/keybindings/catalog`), and the
-  save, reset, discard, and retry flows (`POST /api/keybindings`,
+  and 10): the requester's resolved chords for the shell's own actions
+  (`/api/keybindings/me`, the route every built-in app with keybindings
+  serves), the catalog the Keyboard shortcuts dialog lists: every app's
+  `[[keybindings]]`, read from its registry row so an app that is stopped is
+  listed all the same, resolved for the requester (`/api/keybindings/catalog`),
+  and the save, reset, discard, and retry flows (`POST /api/keybindings`,
   `.../reset`, `.../discard`, `.../deliver`). A save lands in the profile
   files under `data/system/profile/` (the requester's override file; for the
   owner's "everywhere" save also `unsent.json`, delivered to the account

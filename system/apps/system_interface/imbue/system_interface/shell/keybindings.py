@@ -1,30 +1,30 @@
-"""The shell's keybindings: its own manifest, the catalog of every app's, and the profile-file writes.
+"""The shell's keybindings: its own declared actions, the catalog of every app's, and the profile-file writes.
 
-The Keyboard settings lists every built-in app's actions from the manifests their backends serve
-(``GET <api base>/keybindings/actions``, the api base read off each registry row's schema path),
-resolved for the requesting identity by the ``workspace_profile`` library. Saves land in the
-profile files that library owns: a visitor's (or the owner's "only in this workspace") choice in
-the user's override file, and the owner's "everywhere" choice in the unsent file plus the owner's
-override file, so the workspace behaves as asked at once while the delivery to the account runs
+The Keyboard shortcuts dialog lists every built-in app's actions from the ``[[keybindings]]`` its
+``app.toml`` declares, which registration copies onto the app's registry row, so an app that is
+stopped (one that stops when no window shows it) is listed all the same. They are resolved for the
+requesting identity by the ``workspace_profile`` library. Saves land in the profile files that
+library owns: a visitor's (or the owner's "only in this workspace") choice in the user's override
+file, and the owner's "everywhere" choice in the unsent file plus the owner's override file, so
+the workspace behaves as asked at once while the delivery to the account runs
 (``keybindings_delivery.py``).
 """
 
 import threading
 from collections.abc import Sequence
+from functools import cache
 from pathlib import Path
 from typing import Final
 
-import httpx
+from app_manifest.manifest import KeybindingAction
 from loguru import logger
 from pydantic import Field
-from pydantic import ValidationError
 from workspace_layout.identity import RequestIdentity
 from workspace_profile.keybindings import keybinding_assignment
 from workspace_profile.keybindings import with_keybinding_assignment
 from workspace_profile.keybindings import without_keybinding_assignment
-from workspace_profile.manifest import KEYBINDINGS_ACTIONS_SUBPATH
-from workspace_profile.manifest import KeybindingActionDeclaration
-from workspace_profile.manifest import KeybindingsActionsResponse
+from workspace_profile.manifest import find_off_grammar_default_chords
+from workspace_profile.manifest import load_app_keybinding_actions
 from workspace_profile.overrides import load_unsent_change_values
 from workspace_profile.overrides import load_user_override_values
 from workspace_profile.overrides import write_unsent_change_values
@@ -36,23 +36,12 @@ from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.system_interface.shell.data_types import AppInventoryEntry
 
 SHELL_APP_NAME: Final[str] = "system_interface"
-
-SHELL_KEYBINDINGS_MANIFEST: Final[KeybindingsActionsResponse] = KeybindingsActionsResponse(
-    app=SHELL_APP_NAME,
-    actions=(
-        KeybindingActionDeclaration(
-            id="launcher-secondary-send",
-            label="Launcher: send the typed text to a chosen chat",
-            default_chords=("ctrl+enter", "meta+enter"),
-        ),
-    ),
-)
+SHELL_DISPLAY_NAME: Final[str] = "Workspace"
+SHELL_APP_MANIFEST_PATH: Final[Path] = Path(__file__).resolve().parents[3] / "app.toml"
 
 # One lock for every read-modify-write of the profile's override and unsent files, the way
 # STATE_FILES_LOCK serializes the shell's own state files.
 PROFILE_FILES_LOCK: Final[threading.RLock] = threading.RLock()
-
-_MANIFEST_FETCH_TIMEOUT_SECONDS: Final[float] = 3.0
 
 # Where a resolved chord assignment came from, for the Keyboard settings' badges.
 SOURCE_DEFAULT: Final[str] = "default"
@@ -61,49 +50,40 @@ SOURCE_UNSENT: Final[str] = "unsent"
 SOURCE_WORKSPACE: Final[str] = "workspace"
 
 
-class AppKeybindingsManifest(FrozenModel):
-    """One app's manifest with what the settings screen shows for the app itself."""
+class AppKeybindingActions(FrozenModel):
+    """One app's declared keybinding actions with what the settings screen shows for the app itself."""
 
+    app: str = Field(description="The app's name, the key its assignments are stored under")
     display_name: str = Field(description="The app's name as users see it")
-    manifest: KeybindingsActionsResponse = Field(description="The declared actions")
+    actions: tuple[KeybindingAction, ...] = Field(description="The declared actions, in display order")
 
 
-def _api_base_of(entry: AppInventoryEntry) -> str | None:
-    schema_path = entry.row.api_schema_path
-    if schema_path is None or not str(schema_path).endswith("/schema"):
-        return None
-    return str(entry.row.url).rstrip("/") + str(schema_path).removesuffix("/schema")
+@cache
+def shell_keybinding_actions() -> tuple[KeybindingAction, ...]:
+    """The keybinding actions the shell itself declares, read once per process."""
+    return load_app_keybinding_actions(SHELL_APP_MANIFEST_PATH)
 
 
-def fetch_app_keybindings_manifests(entries: Sequence[AppInventoryEntry]) -> list[AppKeybindingsManifest]:
-    """Every app's keybindings manifest: the shell's own, then each registered app that serves one.
+def list_app_keybinding_actions(entries: Sequence[AppInventoryEntry]) -> list[AppKeybindingActions]:
+    """Every app's declared keybinding actions: the shell's own, then each registered app that declares any.
 
-    An app that is down, serves no such route, or answers something unreadable is skipped
-    (logged): its actions reappear in the catalog when it answers again.
+    A row whose default chords are off the grammar (a registration the reader cannot trust) is
+    skipped with a warning rather than offered for re-binding.
     """
-    manifests = [AppKeybindingsManifest(display_name="Workspace", manifest=SHELL_KEYBINDINGS_MANIFEST)]
+    listed = [
+        AppKeybindingActions(app=SHELL_APP_NAME, display_name=SHELL_DISPLAY_NAME, actions=shell_keybinding_actions())
+    ]
     for entry in entries:
-        if str(entry.row.name) == SHELL_APP_NAME:
+        row = entry.row
+        if str(row.name) == SHELL_APP_NAME or not row.keybindings:
             continue
-        api_base = _api_base_of(entry)
-        if api_base is None:
+        off_grammar = find_off_grammar_default_chords(row.keybindings)
+        if off_grammar:
+            logger.warning("Skipped {}'s keybindings: default chords off the grammar: {}", row.name, off_grammar)
             continue
-        try:
-            response = httpx.get(f"{api_base}{KEYBINDINGS_ACTIONS_SUBPATH}", timeout=_MANIFEST_FETCH_TIMEOUT_SECONDS)
-        except httpx.HTTPError as e:
-            logger.debug("Skipped {}'s keybindings manifest: {}", entry.row.name, e)
-            continue
-        if response.status_code != 200:
-            logger.debug("Skipped {}'s keybindings manifest: HTTP {}", entry.row.name, response.status_code)
-            continue
-        try:
-            manifest = KeybindingsActionsResponse.model_validate(response.json())
-        except (ValueError, ValidationError) as e:
-            logger.warning("Ignored {}'s unreadable keybindings manifest: {}", entry.row.name, e)
-            continue
-        display_name = str(entry.row.display_name) if entry.row.display_name is not None else str(entry.row.name)
-        manifests.append(AppKeybindingsManifest(display_name=display_name, manifest=manifest))
-    return manifests
+        display_name = str(row.display_name) if row.display_name is not None else str(row.name)
+        listed.append(AppKeybindingActions(app=str(row.name), display_name=display_name, actions=row.keybindings))
+    return listed
 
 
 def resolve_assignment_source(

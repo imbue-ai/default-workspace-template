@@ -15,6 +15,7 @@ from app_manifest.errors import RegistryReadError
 from app_manifest.manifest import AppParams
 from app_manifest.manifest import DEFAULT_PRIORITY
 from app_manifest.manifest import DefaultShortcut
+from app_manifest.manifest import KeybindingAction
 from app_manifest.manifest import LaunchPathMethod
 from app_manifest.manifest import MessageHandler
 from app_manifest.manifest import Pin
@@ -164,6 +165,10 @@ class RegistryRow(FrozenModel):
     message_handlers: tuple[MessageHandler, ...] = Field(
         default=(),
         description="The messages the app takes and where the shell posts each; absent means none",
+    )
+    keybindings: tuple[KeybindingAction, ...] = Field(
+        default=(),
+        description="The actions a person may re-bind, with their default chords; absent means none",
     )
     theming_mode: ThemingMode | None = Field(
         default=None,

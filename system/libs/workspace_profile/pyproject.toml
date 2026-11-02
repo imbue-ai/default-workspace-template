@@ -5,6 +5,8 @@ description = "Reads the workspace profile snapshot a client writes and resolves
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    # The [[keybindings]] declarations each app's app.toml carries.
+    "app-manifest",
     "imbue-common",
     "loguru>=0.7",
     "pydantic>=2.0",

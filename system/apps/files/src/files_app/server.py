@@ -29,9 +29,7 @@ from loguru import logger
 from workspace_layout.errors import InvalidIdentityHeaderError
 from workspace_layout.identity import IDENTITY_HEADER
 from workspace_layout.identity import parse_identity_header
-from workspace_profile.manifest import KEYBINDINGS_ACTIONS_SUBPATH
 from workspace_profile.manifest import KEYBINDINGS_ME_SUBPATH
-from workspace_profile.manifest import KeybindingsActionsResponse
 from workspace_profile.manifest import KeybindingsMeResponse
 from workspace_profile.manifest import resolve_keybindings_me_response
 from workspace_profile.snapshot import load_workspace_profile_snapshot
@@ -49,7 +47,8 @@ from files_app.connections import SYNCED_FOLDERS
 from files_app.connections_cache import ConnectionsCache
 from files_app.device_files import DeviceFiles
 from files_app.gateway import Gateway
-from files_app.keybindings import FILES_KEYBINDINGS_MANIFEST
+from files_app.keybindings import FILES_APP_NAME
+from files_app.keybindings import files_keybinding_actions
 from files_app.local_files import LocalFiles
 from files_app.local_files import content_disposition
 from files_app.sources import FileSource
@@ -91,7 +90,6 @@ _FILE_VERBS: Final[dict[str, str]] = {
 ROUTE_TABLE: RouteTable = {
     ("GET", f"{API_PREFIX}/connections"): RouteModels(response_model=Connections),
     ("GET", f"{API_PREFIX}/stamps"): RouteModels(response_model=FolderStamps),
-    ("GET", f"{API_PREFIX}{KEYBINDINGS_ACTIONS_SUBPATH}"): RouteModels(response_model=KeybindingsActionsResponse),
     ("GET", f"{API_PREFIX}{KEYBINDINGS_ME_SUBPATH}"): RouteModels(response_model=KeybindingsMeResponse),
     ("GET", f"{ASSETS_PREFIX}/{{name}}"): SchemalessRoute(reason="a file of the frontend's build"),
     **{
@@ -231,11 +229,6 @@ def create_app(
         device_paths.update({device.id: device.has_device_paths for device in listed.devices})
         return model_response(listed)
 
-    @app.get(f"{API_PREFIX}{KEYBINDINGS_ACTIONS_SUBPATH}")
-    def keybindings_actions() -> Response:
-        """The Files keybindings manifest: every browser action a keystroke can trigger."""
-        return model_response(FILES_KEYBINDINGS_MANIFEST)
-
     @app.get(f"{API_PREFIX}{KEYBINDINGS_ME_SUBPATH}")
     def keybindings_me() -> Response:
         """The requesting user's resolved chords for the Files actions."""
@@ -246,7 +239,8 @@ def create_app(
             return error_response(str(error), 400)
         return model_response(
             resolve_keybindings_me_response(
-                FILES_KEYBINDINGS_MANIFEST,
+                FILES_APP_NAME,
+                files_keybinding_actions(),
                 snapshot=load_workspace_profile_snapshot(workspace_root),
                 identity=identity,
                 workspace_root=workspace_root,
