@@ -131,15 +131,6 @@ const DECLINED_COMPACT_SEND_FAILURE_KINDS: ReadonlySet<unknown> = new Set([
   "compact_unavailable",
 ]);
 
-/** Drop the "Sending…" bubble of a send no transcript turn will retire: a /compact the server ran as a
- *  compaction (its own status and chips show what the send did), or a message Stop took back while the
- *  agent came up (it is in the composer again). */
-function dropOutgoingNoTurnWillRetire(chatId: string, outgoingId: string, status: SendStatus | null): void {
-  if (status === "compaction_requested" || status === "withdrawn") {
-    dropOutgoing(chatId, outgoingId);
-  }
-}
-
 /** Have the message's row say the chat app sent it a second time, when it did: mngr could not confirm the
  *  first, which may have reached the agent too. */
 function noteIfResent(
