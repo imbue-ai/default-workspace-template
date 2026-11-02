@@ -350,12 +350,19 @@ export class LivePagesLayer implements PageDriver {
   }
 
   /** Put one shown page over its window's content box as it is now, leaving its stacking and
-   *  interactivity alone: the per-move step of a drag or resize, which redraws nothing. */
+   *  interactivity alone: the per-move step of a drag or resize, which redraws nothing. While the
+   *  overview is up the box is a tile's, and the page keeps the tile's scale. */
   placePage(windowId: string): void {
     const page = this.pages.get(windowId);
     if (page === undefined || !this.isShown(page)) return;
     const box = this.contentBox(windowId);
-    if (box !== null) this.position(page, box);
+    if (box === null) return;
+    if (this.overview === null) {
+      this.position(page, box);
+      return;
+    }
+    const scale = this.overview.scaleOf(windowId);
+    if (scale !== null && scale > 0) this.showScaled(page, box, scale);
   }
 
   /**

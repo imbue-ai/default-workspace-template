@@ -1329,6 +1329,21 @@ describe("the overview (the multiplayer spec, section 8.2)", () => {
     expect(isParked(wrapperOf("win-2"))).toBe(true);
   });
 
+  it("keeps a page at its tile's scale when a tile's resize re-places it", () => {
+    renderTiles();
+    layer.setOverview({ scaleOf: () => 0.5 });
+    layer.reconcile();
+    const content = overviewTiles.querySelector('[data-window-id="win-1"] [data-window-content]') as HTMLElement;
+    content.getBoundingClientRect = () => ({ left: 40, top: 100, width: 300, height: 240 }) as DOMRect;
+    layer.placePage("win-1");
+    const wrapper = wrapperOf("win-1");
+    expect([wrapper.style.width, wrapper.style.height, wrapper.style.transform]).toEqual([
+      "600px",
+      "480px",
+      "scale(0.5)",
+    ]);
+  });
+
   it("hides a page whose tile scale is not positive rather than sizing it by a zero scale", () => {
     renderTiles();
     layer.setOverview({ scaleOf: (windowId) => (windowId === "win-1" ? 0 : 0.5) });
