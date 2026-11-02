@@ -193,9 +193,9 @@ check sees it; after editing one, re-install it live with
   module's path, keeping the interpreter the script's tier calls for: a skill's
   `scripts/<name>.py` is `python/<skill_name>_skill/<name>.py` (for example
   `python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py`;
-  `notify_user.py`, `request_secret.py`, `serve_isolated_instance.py`,
-  `resolve_template_base.py` and `preview_wrapper_server.py` are bare and run
-  under `python3`, the rest under `uv run --no-sync`), a
+  `notify_user.py`, `request_secret.py`, `resolve_template_base.py` and
+  `preview_wrapper_server.py` are bare and run under `python3`, the rest under
+  `uv run --no-sync`), a
   shared one is under `.agents/shared/scripts/agents_shared/`, and
   `system/scripts/run_in_background.py`, `tool_env.py` and
   `list_mngr_plugins.py` are under `system/scripts/workspace_bare_scripts/`;

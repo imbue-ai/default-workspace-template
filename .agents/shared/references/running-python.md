@@ -93,6 +93,17 @@ The code runs under one of two interpreters, and what it imports decides which:
   `uv run --no-sync <entry>`. It may use any dependency its `pyproject.toml`
   declares.
 
+Only some bare code has to be bare: code that must work when the venv is
+missing or broken, that something outside this release calls by path, or that
+sits in a long-running program's launch chain. Whatever that code needs is made
+bare too, which is why the agent hooks' `tk_command_parsing` is on the bare
+search path. Other stdlib-only code is bare only because that is lighter to
+run. It may import what bare code already can (the standard library, the bare
+packages and the libraries on the bare search path), but it never widens that
+set: once it needs anything else, it moves to the venv tier and its callers
+switch to `uv run --no-sync`. It does not get a new bare search path, and it
+does not hold another package's module to the standard library.
+
 A bare module that imports a bare package it does not sit beside puts that
 package's directory on `sys.path` itself, only when it runs by its path
 (`if not __package__:`), as path arithmetic on `Path(__file__)`. A test holds
