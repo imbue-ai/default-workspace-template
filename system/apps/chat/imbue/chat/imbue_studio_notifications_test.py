@@ -4,10 +4,10 @@ failure is dropped quietly."""
 from collections.abc import Generator
 from contextlib import contextmanager
 
+from latchkey_access.gateway import GatewayAccess
 from pydantic import SecretStr
 
 from imbue.chat.imbue_studio_notifications import ImbueStudioNotificationsClient
-from imbue.chat.latchkey_gateway import GatewayAccess
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import RecordingGateway
 from imbue.chat.testing import serve_app

@@ -100,8 +100,10 @@ _IMPORTED_SOURCE_PREFIXES = (
     "system/libs/app_manifest/",
     "system/libs/app_schema/",
     "system/libs/chat_background_tasks/",
+    "system/libs/latchkey_access/",
     "system/libs/share_grants/",
     "system/libs/workspace_layout/",
+    "system/libs/workspace_profile/",
     "system/libs/workspace_themes/",
 )
 # The manifests this environment was resolved from. The root ``uv.lock`` is
@@ -122,8 +124,10 @@ _BACKEND_MANIFESTS = frozenset(
         "system/libs/app_manifest/pyproject.toml",
         "system/libs/app_schema/pyproject.toml",
         "system/libs/chat_background_tasks/pyproject.toml",
+        "system/libs/latchkey_access/pyproject.toml",
         "system/libs/share_grants/pyproject.toml",
         "system/libs/workspace_layout/pyproject.toml",
+        "system/libs/workspace_profile/pyproject.toml",
         "system/libs/workspace_themes/pyproject.toml",
         "pyproject.toml",
     }

@@ -3,8 +3,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { NekoEventHandler, NekoSocket } from "./neko_socket";
+import { rememberNeedsRelay } from "./relay_memory";
 import type { ConnectInfo } from "./state";
-import { EMPTY_CONNECT_INFO } from "./state";
 import { NekoStream } from "./webrtc";
 import type { StreamStatus } from "./webrtc";
 
@@ -85,6 +85,7 @@ describe("NekoStream", () => {
 
   beforeEach(() => {
     FakePeerConnection.instances = [];
+    window.localStorage.clear();
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection);
     vi.stubGlobal("fetch", async () => ({ ok: true, json: async () => RELAY_INFO }));
     socket = new FakeSocket();
@@ -107,7 +108,9 @@ describe("NekoStream", () => {
 
   /** A relay attempt whose peer failed: the policy falls back to the screencast. */
   async function fallBack(): Promise<void> {
-    stream.request("watch", EMPTY_CONNECT_INFO, true);
+    rememberNeedsRelay(window.localStorage);
+    stream.request("watch");
+    await settle();
     const peer = await provide();
     peer.becomes("failed");
     expect(statuses).toEqual(["connecting", "connecting", "screencast"]);
@@ -116,7 +119,8 @@ describe("NekoStream", () => {
   }
 
   it("says connecting again while a peer fails before the screencast", async () => {
-    stream.request("watch", EMPTY_CONNECT_INFO, false);
+    stream.request("watch");
+    await settle();
     const peer = await provide();
     peer.becomes("disconnected");
     expect(statuses).toEqual(["connecting", "connecting"]);
@@ -139,6 +143,75 @@ describe("NekoStream", () => {
     const connected = await provide();
     connected.becomes("connected");
     expect(statuses).toEqual(["screencast", "connected"]);
+  });
+
+  it("asks neko for a peer only once connect-info has answered, with the relay servers a network needed last time", async () => {
+    rememberNeedsRelay(window.localStorage);
+    stream.request("watch");
+    expect(socket.sent).toEqual([]);
+    expect(statuses).toEqual(["connecting"]);
+    await settle();
+    expect(socket.sent).toEqual(["signal/request"]);
+    expect(stream.isRelay).toBe(true);
+    expect(stream.lastConnectInfo).toEqual(RELAY_INFO);
+  });
+
+  it("asks for nothing on the answer to a fetch that a later request superseded", async () => {
+    let answerFirst: () => void = () => undefined;
+    let fetches = 0;
+    vi.stubGlobal("fetch", () => {
+      fetches += 1;
+      if (fetches === 1) {
+        return new Promise((resolve) => {
+          answerFirst = () => resolve({ ok: true, json: async () => RELAY_INFO });
+        });
+      }
+      return Promise.resolve({ ok: true, json: async () => RELAY_INFO });
+    });
+    stream.request("watch");
+    stream.request("watch");
+    await settle();
+    expect(socket.sent).toEqual(["signal/request"]);
+    answerFirst();
+    await settle();
+    expect(socket.sent).toEqual(["signal/request"]);
+  });
+
+  it("asks for nothing on the answer to a fetch that a release overtook", async () => {
+    let answer: () => void = () => undefined;
+    vi.stubGlobal(
+      "fetch",
+      () =>
+        new Promise((resolve) => {
+          answer = () => resolve({ ok: true, json: async () => RELAY_INFO });
+        }),
+    );
+    stream.request("watch");
+    stream.release();
+    answer();
+    await settle();
+    expect(socket.sent).toEqual([]);
+    expect(statuses).toEqual(["connecting", "idle"]);
+  });
+
+  it("tries a failed connect-info fetch again after a moment", async () => {
+    vi.useFakeTimers();
+    try {
+      let fetches = 0;
+      vi.stubGlobal("fetch", async () => {
+        fetches += 1;
+        if (fetches === 1) throw new Error("offline");
+        return { ok: true, json: async () => RELAY_INFO };
+      });
+      stream.request("watch");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.sent).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(fetches).toBe(2);
+      expect(socket.sent).toEqual(["signal/request"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps the screencast showing while a late peer fails", async () => {

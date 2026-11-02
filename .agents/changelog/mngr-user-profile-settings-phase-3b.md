@@ -1,0 +1,1 @@
+The manage-routines skill's timezone prose reflects that the container clock now comes from `data/.state/user_timezone`, written once by the client that created the workspace, rather than a boot-time fetch from the desktop (user-profile-state spec, phase 3B).

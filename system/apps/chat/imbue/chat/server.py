@@ -58,6 +58,7 @@ from workspace_themes.flask_routes import register_workspace_theme_route
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
+from imbue.chat import keybindings_endpoints
 from imbue.chat import latchkey_endpoints
 from imbue.chat import mentions_endpoints
 from imbue.chat import secret_requests_endpoints
@@ -2840,12 +2841,15 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
         # The connect-time replay: every provisional chat this process holds, then the chat
         # list. The list comes last on purpose -- it is how a page knows the replay is over,
         # so a record it still holds that this process did not replay (a create the previous
-        # process was running) can be dropped rather than waited on forever.
+        # process was running) can be dropped rather than waited on forever. Before the first
+        # read of the agent list there is no list to send: an empty one would tell the page every
+        # chat is gone, so the page waits for the push that follows that read instead.
         for provisional in agent_manager.get_provisional_chats_as_shown():
             websocket.send(json.dumps(provisional_chat_created_message(provisional)))
-        websocket.send(
-            json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
-        )
+        if agent_manager.is_agent_list_known():
+            websocket.send(
+                json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
+            )
         shutdown = False
         while not shutdown:
             # The pages send nothing; anything that arrives is drained and ignored.
@@ -3036,6 +3040,7 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     accounts_endpoints.ROUTE_TABLE,
     latchkey_endpoints.ROUTE_TABLE,
     focus_chat.ROUTE_TABLE,
+    keybindings_endpoints.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
     mentions_endpoints.ROUTE_TABLE,
     THEME_STATIC_ROUTE_TABLE,
@@ -3150,6 +3155,7 @@ def create_application(state: ChatAppState) -> Flask:
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     focus_chat.register_routes(application)
+    keybindings_endpoints.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
     state.mention_handler = MentionHandler(

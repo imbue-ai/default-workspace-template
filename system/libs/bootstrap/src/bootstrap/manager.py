@@ -20,7 +20,6 @@ import re
 import shutil
 import subprocess
 import time
-import urllib.request
 import uuid
 from collections.abc import Generator, Mapping
 from contextlib import contextmanager
@@ -29,7 +28,6 @@ from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from loguru import logger
-from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_fixed
 
 from bootstrap.claude_state_migration import (
     LEGACY_ROOT_HOME,
@@ -57,11 +55,12 @@ RUNTIME_CRON_DIR = STATE_DIR / "cron.d"
 # names; install only names it will accept and warn about the rest.
 _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
-# The last timezone the bootstrap applied. /etc/localtime lives on the container
-# rootfs and is lost when the container is recreated, and the fetch that sets it
-# needs the user's computer to be reachable at boot; a boot whose fetch fails
-# re-applies this instead of leaving the container on UTC.
-USER_TIMEZONE_CACHE = STATE_DIR / "user_timezone"
+# The user's timezone, written once by the client that created the workspace
+# (the user-profile-state spec, section 8.4; the old boot-time fetch cached the
+# same file). /etc/localtime lives on the container rootfs and is lost when the
+# container is recreated, so each boot re-applies this instead of leaving the
+# container on UTC.
+USER_TIMEZONE_FILE = STATE_DIR / "user_timezone"
 
 # The in-flight update-apply marker and the script that rolls a stale one
 # back (see the update-self skill's apply/recover). The marker persists with
@@ -340,86 +339,6 @@ def _configure_git_global() -> None:
             )
 
 
-class TimezoneFetchError(Exception):
-    """The timezone endpoint answered with an unusable payload."""
-
-
-def _parse_timezone_response(body: bytes) -> str:
-    """Parse the timezone endpoint's body into an IANA name, or "" for unknown.
-
-    A well-formed ``{"timezone": ""}`` is the desktop client's documented
-    answer when the user's timezone cannot be determined -- a valid response,
-    returned as "" so callers fall back to the cached zone without treating it as a
-    failure. Raises ValueError for a non-JSON or non-UTF-8 body and
-    TimezoneFetchError for a well-formed body of the wrong shape.
-    """
-    payload = json.loads(body.decode("utf-8"))
-    timezone_name = payload.get("timezone") if isinstance(payload, dict) else None
-    if not isinstance(timezone_name, str):
-        raise TimezoneFetchError(f"unexpected timezone payload: {payload!r}")
-    return timezone_name
-
-
-# The gateway's reverse tunnel may not be up yet this early in boot, and there
-# is no readiness event to wait on -- hence the small bounded retry.
-@retry(
-    retry=retry_if_exception_type((OSError, ValueError, TimezoneFetchError)),
-    stop=stop_after_attempt(3),
-    wait=wait_fixed(3),
-    reraise=True,
-)
-def _request_timezone(request: urllib.request.Request) -> str:
-    """One GET of the timezone endpoint; raises so the retry decorator can act.
-
-    OSError covers URLError/HTTPError (refused, 403/503, timeout); ValueError
-    covers a non-JSON or non-UTF-8 body; TimezoneFetchError an unexpected
-    payload shape. A well-formed "unknown" answer is returned as "" without
-    retrying -- the server's answer will not change within the retry window.
-    """
-    with urllib.request.urlopen(request, timeout=5) as response:
-        body = response.read()
-    return _parse_timezone_response(body)
-
-
-def _fetch_user_timezone() -> str:
-    """Fetch the user's IANA timezone name from the Imbue Studio desktop client.
-
-    GETs /api/v1/timezone through the latchkey gateway's minds-api-proxy using
-    the gateway env vars mngr injects into the agent environment. Timezone-at-
-    boot: the caller points /etc/localtime + /etc/timezone at the result so
-    cron schedules run in the user's local time. Returns "" on any failure
-    (missing env, refused connection, non-200, malformed body) -- and when the
-    desktop client itself does not know the timezone -- so the caller can fall
-    back to the cached zone.
-    """
-    gateway = os.environ.get("LATCHKEY_GATEWAY", "")
-    password = os.environ.get("LATCHKEY_GATEWAY_PASSWORD", "")
-    if not gateway or not password:
-        logger.debug("Latchkey gateway env not fully set; skipping timezone fetch")
-        return ""
-    headers = {"X-Latchkey-Gateway-Password": password}
-    # Desktop-hosted gateways authorize via this per-agent JWT and deny
-    # requests without it; VPS gateways omit the env var.
-    permissions_override = os.environ.get("LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE", "")
-    if permissions_override:
-        headers["X-Latchkey-Gateway-Permissions-Override"] = permissions_override
-    request = urllib.request.Request(
-        f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/timezone",
-        headers=headers,
-    )
-    try:
-        timezone_name = _request_timezone(request)
-    except (OSError, ValueError, TimezoneFetchError) as e:
-        logger.warning(
-            "Could not fetch the user timezone from the gateway ({})",
-            e,
-        )
-        return ""
-    if not timezone_name:
-        logger.debug("Desktop client does not know the user timezone")
-    return timezone_name
-
-
 def _apply_container_timezone(
     tz_name: str,
     zoneinfo_dir: Path = Path("/usr/share/zoneinfo"),
@@ -462,44 +381,33 @@ def _apply_container_timezone(
 
 
 def _set_container_timezone(
-    fetched_tz_name: str,
-    cache_path: Path = USER_TIMEZONE_CACHE,
+    timezone_file_path: Path = USER_TIMEZONE_FILE,
     zoneinfo_dir: Path = Path("/usr/share/zoneinfo"),
     localtime_path: Path = Path("/etc/localtime"),
     timezone_path: Path = Path("/etc/timezone"),
 ) -> None:
-    """Apply the fetched timezone, or the cached one when the fetched zone is
-    empty or cannot be applied.
+    """Apply the user timezone the file under ``data/.state`` names, when there is one.
 
-    A successfully applied fetched zone is written to ``cache_path`` for the
-    next boot. Best-effort throughout: a missing or unwritable cache is logged,
-    never raised.
+    The creating client writes the file exactly once, when the workspace is made
+    (the user-profile-state spec, section 8.4); a workspace created by an older
+    client holds whatever the old boot-time fetch last cached there. Best-effort
+    throughout: an absent or unreadable file leaves the container on its
+    current zone, never raises.
     """
-    if fetched_tz_name and _apply_container_timezone(
-        fetched_tz_name,
-        zoneinfo_dir=zoneinfo_dir,
-        localtime_path=localtime_path,
-        timezone_path=timezone_path,
-    ):
-        try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_text(fetched_tz_name + "\n")
-        except OSError as e:
-            logger.warning("Could not cache the timezone at {}: {}", cache_path, e)
-        return
     try:
-        cached_tz_name = cache_path.read_text().strip()
+        timezone_name = timezone_file_path.read_text().strip()
     except FileNotFoundError:
-        cached_tz_name = ""
+        timezone_name = ""
     except (OSError, UnicodeDecodeError) as e:
-        logger.warning("Could not read the cached timezone at {}: {}", cache_path, e)
+        logger.warning(
+            "Could not read the user timezone at {}: {}", timezone_file_path, e
+        )
         return
-    if not cached_tz_name:
-        logger.info("No timezone applied or cached; container keeps its current zone")
+    if not timezone_name:
+        logger.info("No user timezone on file; container keeps its current zone")
         return
-    logger.info("Falling back to the last applied timezone {}", cached_tz_name)
     _apply_container_timezone(
-        cached_tz_name,
+        timezone_name,
         zoneinfo_dir=zoneinfo_dir,
         localtime_path=localtime_path,
         timezone_path=timezone_path,
@@ -978,7 +886,7 @@ def _emit_bootstrap_event(
 
     The envelope is spelled out by hand rather than through ``imbue_common``'s
     ``EventEnvelope``: this package deliberately depends on nothing beyond loguru
-    and tenacity (see its pyproject), so the first boot has nothing to import.
+    (see its pyproject), so the first boot has nothing to import.
     """
     events_path = _bootstrap_events_path()
     if events_path is None:
@@ -1058,7 +966,7 @@ def main() -> None:
     # their local time. Must precede _exec_supervisord: cron reads the
     # timezone once at daemon start.
     with _bootstrap_step("set_timezone", "Setting the clock to your timezone"):
-        _set_container_timezone(_fetch_user_timezone())
+        _set_container_timezone()
 
     # Overlay symlinks must exist before services start writing.
     with _bootstrap_step("converge_environment", "Preparing the environment"):

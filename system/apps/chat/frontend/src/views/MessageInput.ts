@@ -12,6 +12,7 @@ import {
   waitForComposerUploads,
 } from "../models/ComposerAttachments";
 import type { ComposerAttachment } from "../models/ComposerAttachments";
+import { matchesKeybinding } from "../models/keybindings";
 import { buildMessageWithAttachments, formatFileSize } from "../models/attachments";
 import { stageElementReferences } from "../models/elementReferences";
 import {
@@ -1210,7 +1211,9 @@ export function MessageInput(): m.Component<MessageInputAttrs> {
           m.redraw();
           return;
         }
-        if (event.key === "Enter" && !event.shiftKey) {
+        // The fallback is the manifest's defaults, so sending works in the moment
+        // before the resolved chords land; Shift+Enter stays the fixed line break.
+        if (matchesKeybinding(event, "send-message", ["enter", "ctrl+enter", "meta+enter"])) {
           event.preventDefault();
           void handleSubmit();
         }
