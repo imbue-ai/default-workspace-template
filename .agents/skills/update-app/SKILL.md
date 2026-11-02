@@ -102,6 +102,9 @@ the background, so starting one returns at once and you stay free to read the
 next message. This is separate from `launch-task`, which starts a background
 worker on its own branch.
 
+A list of changes in one message is several requests, not one large request:
+give each change in the list its own subagent.
+
 - **Hand off quickly.** Brief the subagent and start it; leave the design and
   the edits to it.
 - **Brief each subagent fully.** Give it the user's request word for word, the
