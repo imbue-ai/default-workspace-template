@@ -65,12 +65,6 @@ function keyBytes(base64url) {
   return Uint8Array.from(atob(base64), (character) => character.charCodeAt(0));
 }
 
-function isSameKey(buffer, bytes) {
-  if (!buffer) return false;
-  const existing = new Uint8Array(buffer);
-  return existing.length === bytes.length && existing.every((value, index) => value === bytes[index]);
-}
-
 // The id the workspace lists this device under: the start of the SHA-256 of its push endpoint.
 async function deviceIdOf(subscription) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(subscription.endpoint));
@@ -214,15 +208,14 @@ async function turnOn() {
       await render();
       return;
     }
-    const key = keyBytes(publicKey);
-    let subscription = await registration.pushManager.getSubscription();
-    if (subscription && !isSameKey(subscription.options.applicationServerKey, key)) {
-      await subscription.unsubscribe();
-      subscription = null;
-    }
-    if (!subscription) {
-      subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: key });
-    }
+    // A subscription the browser still holds is not one the workspace has (else this button would not show): it may
+    // be under an old key, or one its push service already called gone, so it is replaced.
+    const existing = await registration.pushManager.getSubscription();
+    if (existing) await existing.unsubscribe();
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: keyBytes(publicKey),
+    });
     await registerSubscription(subscription);
   } catch (error) {
     showStatus(`Could not turn notifications on: ${error.message}`, "bad");
