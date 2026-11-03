@@ -42,6 +42,14 @@ _LATCHKEY_VERSION_PIN_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"\$\{LATCHKEY_VERSION:=([0-9][0-9.]*)\}"
 )
 _SYMLINK_LIST_PATH: Final[str] = "/tmp/auth-sandbox-symlinks"
+# Run by the venv's python with the pinned version as its argument: the sign-in packages import, and the pinned
+# latchkey meets the floor the venv's imbue-mngr-latchkey enforces on every run (below it, every sign-in in the
+# image would refuse to start while the build itself succeeded).
+SIGN_IN_PACKAGES_CHECK: Final[str] = (
+    "import sys, auth_sandbox.cli; from imbue.mngr_latchkey.core import LATCHKEY_MIN_VERSION; "
+    "parse = lambda version: tuple(int(part) for part in version.split('.')); "
+    "sys.exit(0 if parse(LATCHKEY_MIN_VERSION) <= parse(sys.argv[1]) else 1)"
+)
 # The environment a latchkey invocation needs to run at all in the image: the CLI refuses to start
 # without an encryption key (there is no system keychain in a sandbox), and the usage ping stays off.
 # Every build-time invocation points at a throwaway directory, so nothing of it lands in the image.
@@ -154,8 +162,13 @@ def build_steps(settings: ImageBuildSettings) -> tuple[BuildStep, ...]:
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
         ),
         BuildStep(
-            description="check the sign-in packages import from the workspace venv",
-            command=f"cd {root} && .venv/bin/python -c 'import auth_sandbox.cli, imbue.mngr_latchkey.core'",
+            description=(
+                f"check the sign-in packages import from the workspace venv and accept latchkey {settings.latchkey_version}"
+            ),
+            command=(
+                f"cd {root} && .venv/bin/python -c {shlex.quote(SIGN_IN_PACKAGES_CHECK)}"
+                f" {shlex.quote(settings.latchkey_version)}"
+            ),
             timeout_seconds=_QUICK_STEP_TIMEOUT_SECONDS,
         ),
         BuildStep(

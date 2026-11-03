@@ -1,12 +1,16 @@
 import re
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
+from imbue.mngr_latchkey.core import LATCHKEY_MIN_VERSION
 
 from auth_sandbox.errors import ImageBuildError
 from auth_sandbox.image_build import (
     BOOT_SCRIPT_SOURCE,
     COMMAND_NAMES,
+    SIGN_IN_PACKAGES_CHECK,
     SUPERVISORD_CONF_SOURCE,
     ImageBuildSettings,
     build_steps,
@@ -46,7 +50,8 @@ def test_build_steps_seed_then_screen_then_the_sign_in_pieces_each_checked() -> 
         'd="$(mktemp -d)" && v="$(LATCHKEY_DIRECTORY="$d" LATCHKEY_ENCRYPTION_KEY="$(openssl rand -base64 32)"'
         ' LATCHKEY_DISABLE_COUNTING=1 latchkey --version)" && rm -rf "$d" && test "$v" = 3.19.3'
     )
-    assert "import auth_sandbox.cli, imbue.mngr_latchkey.core" in commands[4]
+    assert commands[4].startswith("cd /home/user/workspace && .venv/bin/python -c ")
+    assert commands[4].endswith(" 3.19.3")
     install = commands[5]
     assert (
         f"install -m 0755 /home/user/workspace/{BOOT_SCRIPT_SOURCE} /opt/auth-sandbox/boot.sh"
@@ -90,3 +95,15 @@ def test_run_build_stops_at_the_first_failing_step_and_never_snapshots() -> None
         run_build(sandbox, _SETTINGS)
     assert len(sandbox.commands) == 4
     assert sandbox.snapshot_count == 0
+
+
+def test_the_sign_in_packages_check_refuses_a_latchkey_below_the_floor_the_venv_enforces() -> (
+    None
+):
+    def check(version: str) -> int:
+        return subprocess.run(
+            [sys.executable, "-c", SIGN_IN_PACKAGES_CHECK, version], check=False
+        ).returncode
+
+    assert check(LATCHKEY_MIN_VERSION) == 0
+    assert check("0.0.1") == 1

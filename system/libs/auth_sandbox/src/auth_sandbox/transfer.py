@@ -7,7 +7,8 @@ environment and the destination key goes on its stdin, so no key is ever in an `
 - export: source the sandbox's directory under the sandbox key, destination ``export/`` under the transfer key.
 
 The pinned CLI merges into a destination that already holds a store under a different key, and exports a
-browser state with or without services (verified against 3.19.3; spec section 15).
+browser state with or without services (verified against 3.19.3, and again against 3.21.0 on 2026-11-02;
+spec section 15).
 """
 
 import shutil
