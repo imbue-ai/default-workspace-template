@@ -16,6 +16,7 @@ and a granted account that has never arrived has no presence record and no arriv
 roster falls back to this. The desktop is its only writer; the shell never rewrites it.
 """
 
+import json
 from collections.abc import Callable
 from collections.abc import Set as AbstractSet
 from datetime import datetime
@@ -38,7 +39,6 @@ from share_grants.grants import parse_grants
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.system_interface.shell.data_types import GrantedIdentity
-from imbue.system_interface.shell.state_files import read_json_object
 
 # Beside ``DEFAULT_SHARE_ENV_PATH`` (``profiles.py``): relative to the workspace root the supervised process runs from.
 DEFAULT_SHARE_GRANTS_PATH: Final[Path] = Path("data/.secrets/share_grants.toml")
@@ -169,8 +169,10 @@ class ShareIdentitiesReader(MutableModel):
         version = self.document_version()
         if version is None:
             return {}
-        raw = read_json_object(self.share_identities_path)
-        if raw is None:
+        try:
+            raw = json.loads(self.share_identities_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as e:
+            self._warn_once(version, f"Could not read the share identities at {self.share_identities_path}: {e}")
             return {}
         try:
             document = _ShareIdentitiesDocument.model_validate(raw)

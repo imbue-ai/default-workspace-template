@@ -125,3 +125,15 @@ def test_the_identities_reader_warns_once_per_version_of_a_file_it_cannot_read(
     _bump_mtime(reader.share_identities_path)
     assert reader.read_identities() == {}
     assert len([record for record in loguru_records if record.startswith("WARNING")]) == 2
+
+    # So is one that is not JSON at all, or not a JSON object.
+    reader.share_identities_path.write_text("{not json")
+    _bump_mtime(reader.share_identities_path)
+    assert reader.read_identities() == {}
+    assert reader.read_identities() == {}
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 3
+    reader.share_identities_path.write_text("[]")
+    _bump_mtime(reader.share_identities_path)
+    assert reader.read_identities() == {}
+    assert reader.read_identities() == {}
+    assert len([record for record in loguru_records if record.startswith("WARNING")]) == 4
