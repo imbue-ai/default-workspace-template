@@ -94,7 +94,9 @@ phone-sized viewport and a finger instead of a mouse. Drive the isolated
 instance (`web-frontend-testing.md`) in a browser context at 393x852 and at
 852x393 with `has_touch=True` and `is_mobile=True` (without `is_mobile`,
 Chromium ignores the page's viewport tag and does not draw what a phone
-does), and check:
+does). Open it with `module_browser.new_context(viewport=..., has_touch=True,
+is_mobile=True)` from the repo-root `conftest.py`, which refuses
+pytest-playwright's `context` and `page`. Then check:
 
 - The page carries `<meta name="viewport" content="width=device-width,
   initial-scale=1">`, without which a phone draws the desktop layout shrunk
