@@ -253,6 +253,11 @@ def build_selection_workspace(repo_root: Path) -> None:
         "system/services/oom_priority/bin/oom_tag_service_test.py",
         "def test_every_program_has_a_band() -> None:\n    pass\n",
     )
+    write_repo_file(
+        repo_root,
+        "system/scripts/workspace_bare_scripts/wait_for_critical_path_test.py",
+        "def test_no_critical_path_program_waits() -> None:\n    pass\n",
+    )
     write_repo_file(repo_root, ".agents/skills/refresh/SKILL.md", "# refresh\n")
     write_repo_file(repo_root, ".agents/skills/refresh/scripts/refresh.py", "VALUE = 1\n")
     write_repo_file(
