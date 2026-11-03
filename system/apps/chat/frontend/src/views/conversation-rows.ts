@@ -21,7 +21,7 @@
  */
 
 import m from "mithril";
-import type { TranscriptEvent, ToolResultEvent } from "../models/Response";
+import type { AssistantMessageEvent, TranscriptEvent, ToolResultEvent } from "../models/Response";
 import {
   renderUserMessage,
   renderAssistantMessage,
@@ -113,6 +113,7 @@ function buildRows(
   sections: SectionView[],
   toolResults: Map<string, ToolResultEvent>,
   resentTurnIds: ReadonlySet<string>,
+  replyDraft: (() => AssistantMessageEvent | null) | null,
 ): RowDescriptor[] {
   const rows: RowDescriptor[] = [];
   // The compactions that landed after a turn's reply: one chip row of their own below it.
@@ -151,6 +152,8 @@ function buildRows(
             trailing_reply: section.trailing_reply,
             toolResults,
             chatId,
+            liveStepId: section.live_step_id,
+            replyDraft: replyDraft ?? undefined,
           }),
       });
       pushTrailingCompactionRow(section.trailing_status);
@@ -296,12 +299,35 @@ export function buildConversationRows(
   liveCompaction: LiveCompaction | null = null,
   resentTurns: ResentTurns | null = null,
 ): RowDescriptor[] {
+  return buildConversationView(chatId, events, isTailSettled, liveCompaction, resentTurns, null).rows;
+}
+
+/** The rows, and whether the reply the agent is still writing shows inside them. */
+export interface ConversationView {
+  rows: RowDescriptor[];
+  /** True when a step is live at the tail: the draft shows in it (read at draw time through
+   *  ``replyDraft``), as the words would once they land, rather than below the transcript. */
+  isReplyDraftInStep: boolean;
+}
+
+/** ``buildConversationRows`` for a chat that streams a reply draft (see models/ReplyDrafts). */
+export function buildConversationView(
+  chatId: string,
+  events: TranscriptEvent[],
+  isTailSettled: boolean,
+  liveCompaction: LiveCompaction | null,
+  resentTurns: ResentTurns | null,
+  replyDraft: (() => AssistantMessageEvent | null) | null,
+): ConversationView {
   const toolResults = buildToolResultsWithSkillExpansions(events);
   const hiddenEventIds = computeAuthErrorHiddenEventIds(events);
   for (const eventId of resentTurns?.foldedTurnIds ?? []) hiddenEventIds.add(eventId);
   const visibleEvents = hiddenEventIds.size > 0 ? events.filter((e) => !hiddenEventIds.has(e.event_id)) : events;
   const sections = buildSections(visibleEvents, toolResults, isTailSettled, liveCompaction);
-  return buildRows(chatId, sections, toolResults, resentTurns?.notedTurnIds ?? new Set());
+  return {
+    rows: buildRows(chatId, sections, toolResults, resentTurns?.notedTurnIds ?? new Set(), replyDraft),
+    isReplyDraftInStep: sections.some((section) => section.live_step_id !== null),
+  };
 }
 
 /**

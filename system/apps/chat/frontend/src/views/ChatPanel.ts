@@ -72,14 +72,14 @@ import { TerminalViewToggle } from "./TerminalViewToggle";
 import { buildAgentTerminalUrl } from "../models/Chats";
 import { getShellHandshake } from "../shell";
 import {
-  buildConversationRows,
+  buildConversationView,
   MESSAGE_LIST_CLASS,
   renderTranscriptSegments,
   type RowDescriptor,
 } from "./conversation-rows";
 import { ActivityIndicator, turnStatusPlacement } from "./ActivityIndicator";
 import { TurnDoneMark } from "./TurnDoneMark";
-import type { TranscriptEvent } from "../models/Response";
+import type { AssistantMessageEvent, TranscriptEvent } from "../models/Response";
 import { getResentSendsKey, resentTurnsIn } from "../models/ResentSends";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
 import { renderQueuedMessages } from "./QueuedMessageView";
@@ -133,9 +133,14 @@ export function isSeededTranscriptShown(provisional: ProvisionalChat | null): bo
 
 const NO_TOOL_RESULTS: Map<string, ToolResultEvent> = new Map();
 
+/** The chat's reply draft, while the window reaches the live end, or null when there is none to show. */
+function liveReplyDraft(chatId: string): AssistantMessageEvent | null {
+  return hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
+}
+
 /** The chat's reply draft as a reply node, or nothing when there is none to show. */
 function renderReplyDraft(chatId: string): m.Vnode[] {
-  const draft = hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
+  const draft = liveReplyDraft(chatId);
   return draft === null ? [] : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId)];
 }
 
@@ -156,6 +161,8 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
   // on the render version + idle flag), not on every scroll-driven redraw.
   let rowsCacheKey: string | null = null;
   let cachedRows: RowDescriptor[] = [];
+  // Whether the cached rows show the reply draft, in the step live at their tail.
+  let isReplyDraftInStep = false;
 
   // The scroll engine owns everything about scrolling: the FOLLOW /
   // USER_CONTROLLED state machine, anchor positioning, spacer sizing, the
@@ -741,13 +748,16 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
       // side-channel enrichment. The same pipeline feeds the subagent view, so a
       // subagent's "View conversation" renders an identical progress timeline.
       if (liveCompaction === null) closeRunningCompactionChips();
-      cachedRows = buildConversationRows(
+      const view = buildConversationView(
         chatId,
         events,
         tailTurnSettled,
         liveCompaction,
         resentTurnsIn(chatId, events),
+        () => liveReplyDraft(chatId),
       );
+      cachedRows = view.rows;
+      isReplyDraftInStep = view.isReplyDraftInStep;
       rowsCacheKey = renderKey;
     }
     const rows = cachedRows;
@@ -776,9 +786,10 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           (node) => node !== null,
         ),
         // The reply the agent is still writing, which its transcript does not hold yet, while the
-        // window reaches the live end. A node of its own rather than a row: a draft changes a few
+        // window reaches the live end. With a step live it shows in that step, as its words will
+        // once they land; otherwise as a node of its own rather than a row: a draft changes a few
         // times a second, and a row would re-walk the whole held transcript on every change.
-        ...renderReplyDraft(chatId),
+        ...(isReplyDraftInStep ? [] : renderReplyDraft(chatId)),
         // The status row under the latest turn while the agent works on it, or that turn's done
         // mark once it has finished; anything queued behind it follows.
         ...(isTurnStatusAfterSends ? [] : turnStatusNodes(chatId, events)),

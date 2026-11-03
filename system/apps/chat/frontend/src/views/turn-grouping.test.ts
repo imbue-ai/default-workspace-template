@@ -581,6 +581,48 @@ describe("narration and close-time ejection", () => {
     expect(sections[0].trailing_reply).toHaveLength(0);
   });
 
+  // A reply still being written goes where its words will land: in the live step, which is
+  // where prose the agent speaks next joins.
+  it("names the live step as the one the agent's next words join", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+    ];
+    expect(run(events, /* idle */ false)[0].live_step_id).toBe("s1");
+    expect(run(events, /* idle */ true)[0].live_step_id).toBeNull();
+  });
+
+  // A step carried over a user message shows in both sections; only the tail's copy is live.
+  it("names only the tail section's copy of a carried-over step as live", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      workMsg("t2", "Edit", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "also check this"),
+      workMsg("t4", "Read", "w2"),
+      result("t4", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.live_step_id)).toEqual([null, "s1"]);
+  });
+
+  // With every step closed, the agent's next words are ungrouped prose, not a step's.
+  it("names no live step once the open step has closed", () => {
+    const events = [
+      userMsg("t0", "go"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Do it")),
+      tkMsg("t2", 'tk close s1 "did it"', "t2"),
+      result("t2", "t2", closeOut("s1", "Do it", "did it")),
+    ];
+    expect(run(events, /* idle */ false)[0].live_step_id).toBeNull();
+  });
+
   // When the agent goes idle with a step still open, its trailing prose is the
   // wrap-up reply (no spinner, so no in-flight narration to preserve).
   it("treats trailing prose of an idle open step as the below-timeline reply", () => {

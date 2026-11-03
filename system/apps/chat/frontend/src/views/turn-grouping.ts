@@ -202,6 +202,9 @@ export interface SectionView {
   trailing_reply: AssistantMessageEvent[];
   /** Compactions that landed after the trailing reply, rendered below the timeline and reply. */
   trailing_status: CompactionPart[];
+  /** The step the agent's next words join, where a reply it is still writing shows: the live
+   *  frontier step, while no handoff node is taking its words. Null on every other section. */
+  live_step_id: string | null;
 }
 
 /** A status transition line printed by tk on every state change:
@@ -1101,5 +1104,12 @@ function finalizeSection(
     }
   }
 
-  return { user_event: section.user_event, key: section.key, items, trailing_reply, trailing_status };
+  return {
+    user_event: section.user_event,
+    key: section.key,
+    items,
+    trailing_reply,
+    trailing_status,
+    live_step_id: section.open_handoff === null ? frontierId : null,
+  };
 }
