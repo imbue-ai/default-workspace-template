@@ -195,12 +195,10 @@ export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean): 
 export interface HandoffRowFrame {
   readonly key: string;
   readonly expansionKey: string;
-  /** The root's DOM id, for a row the virtualized list measures. */
-  readonly id?: string;
   readonly extraClass?: string;
 }
 
-/** A handoff node standing as a row of its own: the same timeline node a progress block draws, in its own
+/** A handoff node standing outside a progress block: the same timeline node a progress block draws, in its own
  *  thread-less frame. */
 export function renderHandoffRow(
   node: HandoffNode,
@@ -211,7 +209,6 @@ export function renderHandoffRow(
   return m(
     "div",
     {
-      id: frame.id,
       key: frame.key,
       class:
         (frame.extraClass === undefined ? "" : `${frame.extraClass} `) +
