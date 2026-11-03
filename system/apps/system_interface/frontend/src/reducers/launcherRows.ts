@@ -23,6 +23,7 @@ import {
 } from "../model/launch";
 import { matchesQuery } from "@imbue/workspace-ui/src/search";
 import { TOUR_LAUNCHER_LABEL, TOUR_LAUNCHER_SEARCH_WORDS } from "../model/tourCards";
+import { NOTIFICATIONS_LAUNCHER_LABEL, NOTIFICATIONS_LAUNCHER_SEARCH_WORDS } from "../model/notificationsPage";
 import { activePlacements, appByName, effectiveWindowTitle, isWindowMinimized, openableApps } from "./desktopState";
 import type { DesktopState } from "./desktopState";
 
@@ -69,6 +70,16 @@ export interface TourRow {
 
 export const TOUR_ROW_KEY = "tour";
 
+/** The row that goes to the page turning notifications on for this device (``model/notificationsPage``): after the
+ *  tour's row, offered with no query and for a query matching its words, where the window offers the page. */
+export interface NotificationsRow {
+  readonly kind: "notifications";
+  readonly key: typeof NOTIFICATIONS_ROW_KEY;
+  readonly label: string;
+}
+
+export const NOTIFICATIONS_ROW_KEY = "notifications";
+
 /** Why every row that opens something stands down while the window views somebody else's desktop. */
 export const VIEWING_ROW_DISABLED_REASON = "Stop viewing to open things here";
 
@@ -98,13 +109,15 @@ export interface TextRow {
   readonly disabledReason: string | null;
 }
 
-export type LauncherRow = LaunchRow | WindowRow | TextRow | TourRow;
+export type LauncherRow = LaunchRow | WindowRow | TextRow | TourRow | NotificationsRow;
 
 /** The menu's rows by section, and flat in the order the menu draws them. */
 export interface LauncherMenuRows {
   readonly launchRows: readonly LaunchRow[];
   /** The tour's row, drawn after the launch-path rows; empty when the query rules it out. */
   readonly tourRows: readonly TourRow[];
+  /** The notifications page's row, drawn after the tour's; empty when not offered or the query rules it out. */
+  readonly notificationsRows: readonly NotificationsRow[];
   readonly windowRows: readonly WindowRow[];
   readonly textRows: readonly TextRow[];
   readonly rows: readonly LauncherRow[];
@@ -127,6 +140,11 @@ function tourRowsOf(apps: readonly AppRecord[], query: string): TourRow[] {
   if (apps.length === 0) return [];
   if (!matchesQuery(query, TOUR_LAUNCHER_LABEL, ...TOUR_LAUNCHER_SEARCH_WORDS)) return [];
   return [{ kind: "tour", key: TOUR_ROW_KEY, label: TOUR_LAUNCHER_LABEL }];
+}
+
+function notificationsRowsOf(query: string): NotificationsRow[] {
+  if (!matchesQuery(query, NOTIFICATIONS_LAUNCHER_LABEL, ...NOTIFICATIONS_LAUNCHER_SEARCH_WORDS)) return [];
+  return [{ kind: "notifications", key: NOTIFICATIONS_ROW_KEY, label: NOTIFICATIONS_LAUNCHER_LABEL }];
 }
 
 function launchRowsOf(apps: readonly AppRecord[], query: string, viewingReason: string | null): LaunchRow[] {
@@ -215,6 +233,9 @@ export interface LauncherRowsOptions {
   /** Whether the tour's row is offered (true unless said otherwise); the phone layout, where the tour never draws,
    *  leaves it out. */
   readonly isTourOffered?: boolean;
+  /** Whether the notifications page's row is offered (false unless said otherwise): only a window that is not
+   *  framed by another page offers it. */
+  readonly isNotificationsOffered?: boolean;
   /** Who the viewer is and who may be here (NO_OWNERSHIP unless said otherwise), which say whose desktop each
    *  window row is on. */
   readonly ownership?: DesktopOwnership;
@@ -237,26 +258,33 @@ export function launcherRowsOf(
   const viewingReason = options.isViewing === true ? VIEWING_ROW_DISABLED_REASON : null;
   const launchRows = isMessage ? [] : launchRowsOf(apps, text, viewingReason);
   const tourRows = isMessage || options.isTourOffered === false ? [] : tourRowsOf(apps, text);
+  const notificationsRows = isMessage || options.isNotificationsOffered !== true ? [] : notificationsRowsOf(text);
   const windowRows =
     text === "" || isMessage ? [] : windowRowsOf(state, text, options.ownership ?? NO_OWNERSHIP, viewingReason);
   const textRows = textRowsOf(apps, text, viewingReason);
   return {
     launchRows,
     tourRows,
+    notificationsRows,
     windowRows,
     textRows,
-    rows: [...launchRows, ...tourRows, ...windowRows, ...textRows],
+    rows: [...launchRows, ...tourRows, ...notificationsRows, ...windowRows, ...textRows],
     isNoMatch:
-      text !== "" && !isMessage && launchRows.length === 0 && tourRows.length === 0 && windowRows.length === 0,
+      text !== "" &&
+      !isMessage &&
+      launchRows.length === 0 &&
+      tourRows.length === 0 &&
+      notificationsRows.length === 0 &&
+      windowRows.length === 0,
   };
 }
 
 export function isRowEnabled(row: LauncherRow): boolean {
-  return row.kind === "tour" || row.disabledReason === null;
+  return row.kind === "tour" || row.kind === "notifications" || row.disabledReason === null;
 }
 
-/** The row Enter runs when nothing moved the highlight: the first enabled launch-path, tour, or window row, else
- *  the primary text action (the first enabled text row); -1 when the menu has no enabled row. */
+/** The row Enter runs when nothing moved the highlight: the first enabled launch-path, tour, notifications, or window
+ *  row, else the primary text action (the first enabled text row); -1 when the menu has no enabled row. */
 export function defaultHighlightIndex(rows: readonly LauncherRow[]): number {
   const firstMatch = rows.findIndex((row) => row.kind !== "text" && isRowEnabled(row));
   if (firstMatch >= 0) return firstMatch;

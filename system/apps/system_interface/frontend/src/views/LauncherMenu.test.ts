@@ -124,6 +124,12 @@ describe("the launcher menu", () => {
     (root.querySelector("[data-tour-row]") as HTMLElement).click();
     expect(attrs.onRun).toHaveBeenCalledWith(expect.objectContaining({ kind: "tour" }));
     unmountViews();
+    const offered = render(launcherRowsOf(stateWithWindows(), "", { isNotificationsOffered: true }));
+    const notificationsRow = offered.root.querySelector("[data-notifications-row]") as HTMLElement;
+    expect(notificationsRow.textContent).toContain("Notifications on this device");
+    notificationsRow.click();
+    expect(offered.attrs.onRun).toHaveBeenCalledWith(expect.objectContaining({ kind: "notifications" }));
+    unmountViews();
     // A GET free-text row over the path bound is the disabled row; the chat-like app's POST rows never are.
     const bounded = desktopStateWithApps([getMethodFreeTextAppRecord("noting", ["new", "send"])]);
     const tooLong = render(launcherRowsOf(bounded, "x".repeat(2100)));

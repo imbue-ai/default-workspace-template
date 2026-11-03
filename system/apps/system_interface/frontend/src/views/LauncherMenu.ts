@@ -210,20 +210,28 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
         m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
         keys,
       ]);
+    case "notifications":
+      return m("button", { ...rowAttrs(row, index, attrs), "data-notifications-row": "" }, [
+        glyphCell(glyph("bell", markSize), attrs.isSheet),
+        m("span", { class: "min-w-0 flex-1 truncate" }, row.label),
+        keys,
+      ]);
   }
 }
 
 /** The menu's sections, launch-path rows then window rows then free-text rows, each after a divider. */
 function launcherSections(attrs: LauncherSectionsAttrs): m.Children {
-  const { launchRows, tourRows, windowRows, textRows, rows, isNoMatch } = attrs.menu;
+  const { launchRows, tourRows, notificationsRows, windowRows, textRows, rows, isNoMatch } = attrs.menu;
   // The flat index of each section's first row, so hover and highlight speak of one list.
   const tourFrom = launchRows.length;
-  const windowsFrom = launchRows.length + tourRows.length;
+  const notificationsFrom = tourFrom + tourRows.length;
+  const windowsFrom = notificationsFrom + notificationsRows.length;
   const textFrom = windowsFrom + windowRows.length;
   return [
     m("div", { "data-section": "launch" }, [
       launchRows.map((row, index) => rowView(row, index, attrs)),
       tourRows.map((row, index) => rowView(row, tourFrom + index, attrs)),
+      notificationsRows.map((row, index) => rowView(row, notificationsFrom + index, attrs)),
     ]),
     windowRows.length === 0
       ? null
