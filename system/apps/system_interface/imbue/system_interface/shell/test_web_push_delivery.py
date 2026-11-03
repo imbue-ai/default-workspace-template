@@ -45,7 +45,9 @@ def _push_service(received: list[dict[str, Any]], status: int) -> Flask:
     return service
 
 
-def _device_subscription(endpoint: str, device_key: ec.EllipticCurvePrivateKey, auth_secret: bytes) -> Any:
+def _device_subscription(
+    endpoint: str, device_key: ec.EllipticCurvePrivateKey, auth_secret: bytes
+) -> BrowserPushSubscription:
     """The subscription a browser would hand over, at a loopback endpoint the https rule would refuse."""
     public_point = device_key.public_key().public_bytes(
         serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint
