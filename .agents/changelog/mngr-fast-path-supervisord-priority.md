@@ -1,0 +1,1 @@
+- `github-sync` writes its supervisord program behind the `system/scripts/wait_for_critical_path.py` prefix, so in a workspace with GitHub sync on, its boot-time `uv sync` waits until the system interface and the chat app accept connections (or 30 seconds) instead of competing with them.
