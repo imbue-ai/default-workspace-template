@@ -100,7 +100,8 @@ does), and check:
   initial-scale=1">`, without which a phone draws the desktop layout shrunk
   to fit.
 - Nothing scrolls sideways at 393 wide
-  (`document.documentElement.scrollWidth <= window.innerWidth`): a wide table
+  (`document.documentElement.scrollWidth <= 393`; not `window.innerWidth`,
+  which an emulated phone widens to fit a page that overflows): a wide table
   or code block scrolls inside its own container, and fixed widths give way
   to the screen's.
 - Every action the desktop offers can be done by tapping. Nothing is reachable
