@@ -80,7 +80,7 @@ from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
 
-_LOGGER = logging.getLogger(__name__)
+_logger = logging.getLogger(__name__)
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
@@ -1069,7 +1069,7 @@ def register(
         if icon_error is not None:
             if is_new_pickable:
                 raise RegistrationError(icon_error)
-            _LOGGER.warning("%s; registering without an icon", icon_error)
+            _logger.warning("%s; registering without an icon", icon_error)
         if icon is None and not is_icon_declined and is_new_pickable:
             raise RegistrationError(
                 f"app {name!r} is new and has no icon: pass --icon-file with a tile icon "
