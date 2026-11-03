@@ -20,8 +20,8 @@ This module is intentionally **stdlib-only**: the PreToolUse gate hooks in
 ``agent_latchkey_request_check.py``, ``agent_block_pipe_tail_head_check.py``,
 ``agent_block_foreground_sleep_check.py`` and ``agent_secrets_guard_check.py`` --
 import it under a bare ``python3`` with no virtualenv, so it must not pull in any
-third-party dependency. That is also
-why the records below are ``typing.NamedTuple`` rather than a pydantic model.
+third-party dependency. That is also why the records below are
+``typing.NamedTuple`` rather than a pydantic model.
 """
 
 from __future__ import annotations
