@@ -131,7 +131,7 @@ _LOCAL_COMMAND_OUTPUT_OPENS = ("<local-command-stdout>", "<local-command-stderr>
 # hides them and they would otherwise render as a bare user bubble full of raw XML. They
 # are shown rather than hidden (the user asked for this output), just not as prose: a
 # collapsed chip renders its body in a <pre><code>, which is what makes it read as
-# terminal output instead of conversation.
+# terminal output instead of conversation. The person ran the command, so the chip is theirs.
 _BASH_INPUT_RE = re.compile(r"<bash-input>([\s\S]*?)</bash-input>")
 _BASH_OUTPUT_RE = re.compile(r"<bash-(?:stdout|stderr)>([\s\S]*?)</bash-(?:stdout|stderr)>")
 _BASH_ANY_OPEN = ("<bash-input>", "<bash-stdout>", "<bash-stderr>")
@@ -416,10 +416,12 @@ def _match_bash_block(content: str) -> MessageDisplay | None:
     inputs = _BASH_INPUT_RE.findall(content)
     if inputs:
         body = "\n".join(part.strip() for part in inputs if part.strip())
-        return MessageDisplay(display=DisplayKind.CHIP, display_label=_BASH_INPUT_LABEL, display_body=body)
+        return MessageDisplay(display=DisplayKind.PERSON_CHIP, display_label=_BASH_INPUT_LABEL, display_body=body)
     streams = [part.strip() for part in _BASH_OUTPUT_RE.findall(content) if part.strip()]
     # An empty result still gets a chip: the alternative is a bare bubble of raw XML.
-    return MessageDisplay(display=DisplayKind.CHIP, display_label=_BASH_OUTPUT_LABEL, display_body="\n".join(streams))
+    return MessageDisplay(
+        display=DisplayKind.PERSON_CHIP, display_label=_BASH_OUTPUT_LABEL, display_body="\n".join(streams)
+    )
 
 
 def _match_permission_resolution(content: str) -> MessageDisplay | None:
@@ -506,7 +508,8 @@ def classify_user_message(content: str, *, is_meta: bool = False) -> MessageDisp
         return None
     # A chip renders its body verbatim; when an attachment block was stripped for
     # classification, show the message text rather than the raw attachment markdown.
-    if decision.display is DisplayKind.CHIP and decision.display_body is None and visible != content:
+    is_chip = decision.display in (DisplayKind.CHIP, DisplayKind.PERSON_CHIP)
+    if is_chip and decision.display_body is None and visible != content:
         decision = decision.model_copy_update(to_update(decision.field_ref().display_body, visible))
     # A prompt's body, unlike a chip's, KEEPS that attachment block: it renders in the bubble as
     # an inline image or a file link. Put back what ``_visible_text`` took off the end, and

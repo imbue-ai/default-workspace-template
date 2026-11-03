@@ -153,7 +153,9 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
       "over) renders below it. Click to expand the raw body. Same " +
       "chrome as Stop-hook feedback (`.message-system-collapsed` wrapping a " +
       "`.tool-call-block`). The chip label distinguishes the source " +
-      "(e.g. 'Stop hook feedback', 'Browser fleet', 'Background task').",
+      "(e.g. 'Stop hook feedback', 'Browser fleet', 'Background task'). A chip of " +
+      "the person's own doing (`display: person_chip`, a bash-mode command and its " +
+      "output) stands on the person's side instead and ends the agent's stretch.",
   },
   [UserMessageKind.SkillExpansion]: {
     rail: Rail.Assistant,

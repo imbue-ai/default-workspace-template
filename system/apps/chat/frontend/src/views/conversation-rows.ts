@@ -36,7 +36,7 @@ import {
   type RunPart,
 } from "./message-renderers";
 import { computeAuthErrorHiddenEventIds } from "./auth-recovery";
-import { isHiddenUserMessage } from "./message-classification";
+import { isHiddenUserMessage, isPersonsChipMessage } from "./message-classification";
 import type { CompactionPart } from "./compaction-chips";
 import { buildSections, isGenuineUserTurn, type LiveCompaction, type SectionView } from "./turn-grouping";
 import { ProgressBlock } from "./ProgressBlock";
@@ -186,7 +186,7 @@ function buildRows(
     if (section.is_after_switch) endTurn();
     const userEvent = section.user_event;
     if (userEvent !== null && !isHiddenUserMessage(userEvent)) {
-      if (isGenuineUserTurn(userEvent)) {
+      if (isGenuineUserTurn(userEvent) || isPersonsChipMessage(userEvent)) {
         endTurn();
         rows.push({
           key: userEvent.event_id,

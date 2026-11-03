@@ -97,6 +97,8 @@ export interface UserMessageEvent extends BaseTranscriptEvent {
   display?:
     | "hidden"
     | "chip"
+    // A chip of the person's own doing (a bash-mode command and its output), drawn on their side.
+    | "person_chip"
     | "skill_expansion"
     | "permission_resolution"
     | "secret_resolution"

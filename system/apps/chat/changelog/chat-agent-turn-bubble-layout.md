@@ -1,3 +1,5 @@
 Each stretch of the agent's output is now one grey bubble, with the agent's name and face once at its top. A stretch runs until a person speaks or another agent takes over. Its prose, tool calls, step timeline, cards, and system notices such as a finished background task all sit inside the bubble, starting on the same left edge as the text. Before, each piece of text was its own bubble under its own name and face, and the tool calls and timeline sat at a different edge. The bubble is as wide as the widest thing in it, up to 80% of the row. A turn's closing reply below its steps is inside the bubble too, no longer plain text.
 
+A command you run in bash mode (`!ls`) and its output are yours, not the agent's: they stand on your side of the transcript and end the agent's stretch, carried as a new `person_chip` display kind.
+
 The status line and done mark under the latest turn sit below the bubble, lined up with its text. The agent's face and other people's pictures beside their bubbles are 36px, up from 24px.

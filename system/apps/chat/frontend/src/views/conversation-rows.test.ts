@@ -394,6 +394,35 @@ describe("one bubble for each stretch of the agent's output", () => {
     ]);
   });
 
+  it("stands a bash-mode command and its output on the person's side, ending the agent's stretch", () => {
+    const bashInput: UserMessageEvent = {
+      ...userMsg("t3", "<bash-input>ls</bash-input>", "b1"),
+      display: "person_chip",
+      display_label: "Bash",
+      display_body: "ls",
+    };
+    const bashOutput: UserMessageEvent = {
+      ...userMsg("t4", "<bash-stdout>notes.txt</bash-stdout>", "b2"),
+      display: "person_chip",
+      display_label: "Output",
+      display_body: "notes.txt",
+    };
+    const rows = buildConversationRows(
+      "agent-1",
+      [
+        userMsg("t1", "hello"),
+        assistantText("t2", "hi", "end_turn"),
+        bashInput,
+        bashOutput,
+        assistantText("t5", "I see notes.txt.", "end_turn"),
+      ],
+      true,
+    );
+
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2"], "b1", "b2", ["a-t5"]]);
+    expect(renderRows(rows).querySelectorAll("[data-machine-bubble] .message-system-collapsed")).toHaveLength(0);
+  });
+
   it("puts the agent's output past the rows in the last bubble only while that stretch is open", () => {
     const tail = (): m.Children[] => [m("div.live-tail", { key: "live" }, "still writing")];
     const open = buildConversationRows(

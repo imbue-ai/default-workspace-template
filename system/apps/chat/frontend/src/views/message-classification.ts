@@ -50,6 +50,7 @@ export function classifyUserMessage(event: ClassifiableUserMessage): UserMessage
     case "hidden":
       return { kind: UserMessageKind.Hidden, label: null, body: content };
     case "chip":
+    case "person_chip":
       return {
         kind: UserMessageKind.SystemChip,
         label: event.display_label ?? null,
@@ -114,6 +115,12 @@ export function isTurnUserMessage(event: ClassifiableUserMessage): boolean {
  *  the SystemChip kinds. */
 export function isSystemChipUserMessage(event: ClassifiableUserMessage): boolean {
   return classifyUserMessage(event).kind === UserMessageKind.SystemChip;
+}
+
+/** True when the message is a chip of the person's own doing (a bash-mode command or its output): it stands on
+ *  their side of the transcript rather than in the agent's turn. */
+export function isPersonsChipMessage(event: Pick<UserMessageEvent, "display">): boolean {
+  return event.display === "person_chip";
 }
 
 /** True when the message is a one-line notice on the agent's rail. */
