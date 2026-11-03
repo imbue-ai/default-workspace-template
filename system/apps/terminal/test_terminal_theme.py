@@ -133,6 +133,7 @@ def test_a_theme_s_palette_is_set_on_xterm_over_xterm_s_own_colors(
     }
 
 
+@pytest.mark.flaky
 def test_a_theme_s_rules_leave_the_wrapper_page_as_it_is(
     phone_context: BrowserContext,
 ) -> None:

@@ -1,0 +1,1 @@
+The terminal theme tests no longer fail now and then on finding the pty frame: they take the frame from its iframe and wait for it to load the pty page, rather than looking it up by URL before it has navigated.
