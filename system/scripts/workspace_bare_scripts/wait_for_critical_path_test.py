@@ -160,11 +160,15 @@ def test_returns_once_a_late_app_registers_and_listens(
 ) -> None:
     registry = tmp_path / "apps.toml"
     _write_registry(registry, {"system_interface": listening_url})
-    registered = threading.Timer(
-        0.3,
-        _write_registry,
-        args=(registry, {"system_interface": listening_url, "chat": listening_url}),
-    )
+    late_servers: list[socket.socket] = []
+
+    def _listen_and_register() -> None:
+        late_server = socket.create_server(("127.0.0.1", 0))
+        late_servers.append(late_server)
+        late_url = f"http://127.0.0.1:{late_server.getsockname()[1]}"
+        _write_registry(registry, {"system_interface": listening_url, "chat": late_url})
+
+    registered = threading.Timer(0.3, _listen_and_register)
     registered.start()
     try:
         waiting_for = wait_for_critical_path.wait_for_apps(
@@ -172,8 +176,11 @@ def test_returns_once_a_late_app_registers_and_listens(
         )
     finally:
         registered.join()
+        for late_server in late_servers:
+            late_server.close()
 
     assert waiting_for == []
+    assert len(late_servers) == 1
 
 
 def test_the_stub_execs_its_command_under_a_bare_python3(
