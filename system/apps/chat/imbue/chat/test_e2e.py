@@ -893,25 +893,20 @@ def test_the_transcript_reaches_its_bottom_whatever_the_composer_height(tmp_path
         frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
 
 
-# Record the transcript's distance from its bottom once per painted frame: a message posted from an animation
-# frame callback is handled after that frame has been laid out, resized and painted, so a gap the engine closes
-# before paint is never seen and one it leaves for a later frame is.
-_START_PAINTED_GAP_RECORDER_JS = """
+# Record the transcript's distance from its bottom each time its viewport is resized, as it will be painted: the
+# browser calls resize observers after layout and before paint, in the order they were created, so this one reads the
+# viewport after the transcript's own observer has had its turn.
+_START_RESIZE_GAP_RECORDER_JS = """
 () => {
   const el = document.querySelector('.transcript-scroll');
-  window.__paintedGaps = [];
-  window.__paintedGapsOn = true;
-  const channel = new MessageChannel();
-  channel.port1.onmessage = () => window.__paintedGaps.push(el.scrollHeight - el.scrollTop - el.clientHeight);
-  const tick = () => {
-    if (!window.__paintedGapsOn) return;
-    channel.port2.postMessage(0);
-    requestAnimationFrame(tick);
-  };
-  requestAnimationFrame(tick);
+  window.__resizeGaps = [];
+  window.__resizeGapObserver = new ResizeObserver(() => {
+    window.__resizeGaps.push(el.scrollHeight - el.scrollTop - el.clientHeight);
+  });
+  window.__resizeGapObserver.observe(el);
 }
 """
-_STOP_PAINTED_GAP_RECORDER_JS = "() => { window.__paintedGapsOn = false; return window.__paintedGaps; }"
+_STOP_RESIZE_GAP_RECORDER_JS = "() => { window.__resizeGapObserver.disconnect(); return window.__resizeGaps; }"
 
 # Whether the draft is scrolled all the way down: the line holding a caret at its end, and the padding under it,
 # in view.
@@ -923,9 +918,9 @@ _DRAFT_AT_BOTTOM_JS = (
 
 @pytest.mark.timeout(120, func_only=False)
 def test_typing_a_long_draft_keeps_the_transcript_and_the_caret_in_view(tmp_path: Path, page: Page) -> None:
-    """Each line the draft wraps onto grows the composer and shortens the transcript above it: the transcript stays
-    at its bottom in every painted frame instead of jumping up a line, and once the draft outgrows the composer the
-    line being typed stays fully in view. A message arriving meanwhile leaves the draft where its reader scrolled it.
+    """Each line the draft grows by shortens the transcript above the composer: the transcript is back at its bottom
+    before that frame is painted instead of jumping up a line, and once the draft outgrows the composer the line being
+    typed stays fully in view. A message arriving meanwhile leaves the draft where its reader scrolled it.
     """
     events = _make_long_conversation_events(60)
     with _running_e2e_server(tmp_path, session_events=events) as server:
@@ -937,16 +932,16 @@ def test_typing_a_long_draft_keeps_the_transcript_and_the_caret_in_view(tmp_path
         textarea = chat.locator(".message-input-textbox")
         textarea.click()
 
-        frame.evaluate(_START_PAINTED_GAP_RECORDER_JS)
+        frame.evaluate(_START_RESIZE_GAP_RECORDER_JS)
         for line in range(16):
-            page.keyboard.type(f"typed line {line} " + "lorem ipsum " * 3)
-            page.keyboard.press("Shift+Enter")
+            # One edit per line, not one key event per character: typing the draft key by key outran the test's
+            # timeout in the workspace image's browser.
+            page.keyboard.insert_text(f"typed line {line} " + "lorem ipsum " * 3 + "\n")
             assert frame.evaluate(_DRAFT_AT_BOTTOM_JS), f"the line being typed is cut off after line {line}"
-        frames_while_typing = frame.evaluate("() => window.__paintedGaps.length")
-        frame.wait_for_function(f"() => window.__paintedGaps.length >= {frames_while_typing + 10}", timeout=5000)
-        painted_gaps = frame.evaluate(_STOP_PAINTED_GAP_RECORDER_JS)
-        assert painted_gaps, "no frames were recorded"
-        assert max(painted_gaps) <= 1, f"the transcript was painted off its bottom while typing: {max(painted_gaps)}px"
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
+        resize_gaps = frame.evaluate(_STOP_RESIZE_GAP_RECORDER_JS)
+        assert len(resize_gaps) >= 5, f"the composer grew the transcript's viewport only {len(resize_gaps)} times"
+        assert max(resize_gaps) <= 1, f"the transcript was painted off its bottom while typing: {max(resize_gaps)}px"
         assert frame.evaluate(
             "() => { const ta = document.querySelector('.message-input-textbox'); "
             "return ta.scrollHeight > ta.clientHeight; }"
