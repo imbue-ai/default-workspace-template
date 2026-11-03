@@ -771,8 +771,15 @@ export function buildSections(
         continue;
       }
       const parsed = parseMessage(e, toolResults);
+      // Only step records render in the timeline. A `tk start`/`tk close` on a
+      // regular ticket the agent picked up prints the same
+      // `Updated <id> -> <status>` line as a step does; skip it (it is neither
+      // a `-step-` id nor a known step) rather than mint a phantom node titled
+      // with the raw ticket id. Any work batched with that command stays in
+      // the step that was already open (or renders inline if none was).
+      const stepTransitions = parsed.transitions.filter((t) => isStepId(t.id) || knownSteps.has(t.id));
       if (current.dormant_step_id !== null) {
-        if (parsed.transitions.length > 0) {
+        if (stepTransitions.length > 0) {
           current.dormant_step_id = null;
         } else if (parsed.render !== null && isWork(parsed.render)) {
           current.current_step_id = current.dormant_step_id;
@@ -787,14 +794,7 @@ export function buildSections(
       // message with a `tk close` -- it stays in the closing step).
       const stepBefore = current.current_step_id;
       let lastOpened: string | null = null;
-      for (const t of parsed.transitions) {
-        // Only step records render in the timeline. A `tk start`/`tk close` on a
-        // regular ticket the agent picked up prints the same
-        // `Updated <id> -> <status>` line as a step does; skip it (it is neither
-        // a `-step-` id nor a known step) rather than mint a phantom node titled
-        // with the raw ticket id. Any work batched with that command stays in
-        // the step that was already open (or renders inline if none was).
-        if (!isStepId(t.id) && !knownSteps.has(t.id)) continue;
+      for (const t of stepTransitions) {
         applyTransition(current, t);
         if (t.status === "in_progress") lastOpened = t.id;
       }

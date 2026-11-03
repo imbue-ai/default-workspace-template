@@ -647,6 +647,43 @@ describe("narration and close-time ejection", () => {
     expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
   });
 
+  // Moving a step ends the carried-over step's claim on the turn without taking it up: the agent
+  // closing it and answering leaves the answer as the turn's reply.
+  it("leaves a carried-over step out of the turn once the agent moves a step", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "never mind, what's RAM?"),
+      tkMsg("t4", "tk close s1", "c1"),
+      result("t4", "c1", closeOut("s1", "Check overall disk usage", "Stopped early")),
+      assistantText("t5", "RAM is short-term memory.", "ans"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections[1].live_step_id).toBeNull();
+    expect(stepItems(sections[1].items)[0].status).toBe("done");
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+  });
+
+  // A regular ticket is not a step, so picking one up leaves the carried-over step to be taken up
+  // by the work that follows.
+  it("takes a carried-over step up again after a regular ticket transition", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "keep going"),
+      tkMsg("t4", "tk start cod-oglc", "k2"),
+      result("t4", "k2", startOut("cod-oglc")),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections[1].live_step_id).toBe("s1");
+    expect(stepItems(sections[1].items).map((s) => s.ticket_id)).toEqual(["s1"]);
+    expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-w2"]);
+  });
+
   // With every step closed, the agent's next words are ungrouped prose, not a step's.
   it("names no live step once the open step has closed", () => {
     const events = [
