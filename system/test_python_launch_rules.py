@@ -32,7 +32,7 @@ import re
 import shlex
 import subprocess
 import tomllib
-from collections.abc import Collection
+from collections.abc import Collection, Sequence
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
@@ -147,15 +147,23 @@ def _shell_command_string(words: list[str], shell_index: int) -> str | None:
     return None
 
 
+def _past_options(
+    words: Sequence[object], index: int, options_with_values: Collection[str]
+) -> int:
+    """The index of the first word from ``index`` on that is not an option or an option's value."""
+    while (
+        index < len(words)
+        and isinstance(words[index], str)
+        and str(words[index]).startswith("-")
+    ):
+        index += 2 if words[index] in options_with_values else 1
+    return index
+
+
 def _uv_subcommand(arguments: list[str]) -> str | None:
     """The subcommand ``uv`` runs from ``arguments``, past its global options."""
-    words = iter(arguments)
-    for argument in words:
-        if not argument.startswith("-"):
-            return argument
-        if argument in _UV_GLOBAL_OPTIONS_WITH_VALUES:
-            next(words, None)
-    return None
+    index = _past_options(arguments, 0, _UV_GLOBAL_OPTIONS_WITH_VALUES)
+    return arguments[index] if index < len(arguments) else None
 
 
 def _runs_uv_run(command: str) -> bool:
@@ -1487,19 +1495,6 @@ def _joined_path(node: ast.BinOp) -> str:
     return "/".join(parts)
 
 
-def _past_options(
-    words: list[object], index: int, options_with_values: Collection[str]
-) -> int:
-    """The index of the first word from ``index`` on that is not an option or an option's value."""
-    while (
-        index < len(words)
-        and isinstance(words[index], str)
-        and str(words[index]).startswith("-")
-    ):
-        index += 2 if words[index] in options_with_values else 1
-    return index
-
-
 def _command_word(words: list[object]) -> str | None:
     """The program an argv runs: its first word, or the command ``uv run`` runs past uv's and
     run's options."""
@@ -1541,12 +1536,15 @@ def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
             element.value if isinstance(element, ast.Constant) else None
             for element in node.elts
         ]
-        return any(
-            word == "-m"
-            and isinstance(after, str)
-            and after.split(".")[0] in programs.packages
-            for word, after in zip(words, words[1:])
-        ) or _command_word(words) in programs.commands
+        return (
+            any(
+                word == "-m"
+                and isinstance(after, str)
+                and after.split(".")[0] in programs.packages
+                for word, after in zip(words, words[1:])
+            )
+            or _command_word(words) in programs.commands
+        )
     return False
 
 
