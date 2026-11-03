@@ -240,6 +240,7 @@ import { handoffStateFixture } from "../models/chatSnapshotFixture";
 import { setMentionsForTesting } from "../models/Mentions";
 import { getOutgoingMessages } from "../models/OutgoingMessages";
 import {
+  MAX_TEXTAREA_HEIGHT_PX,
   MessageInput,
   prependToComposer,
   raiseFailureNotice,
@@ -702,8 +703,6 @@ describe("MessageInput layout with attachments", () => {
 describe("MessageInput draft scroll position", () => {
   const ONE_LINE_PX = 28;
   const DRAFT_CONTENT_PX = 600;
-  // The composer's height cap (MAX_TEXTAREA_HEIGHT_PX in MessageInput.ts).
-  const COMPOSER_CAP_PX = 240;
 
   beforeEach(() => {
     mocks.agent.activity_state = undefined;
@@ -769,7 +768,7 @@ describe("MessageInput draft scroll position", () => {
   it("leaves an overflowing draft where its reader scrolled it when the composer redraws", () => {
     const textarea = makeOverflowingDraftTextarea();
     const composer = mountComposer(textarea);
-    expect(textarea.clientHeight).toBe(COMPOSER_CAP_PX);
+    expect(textarea.clientHeight).toBe(MAX_TEXTAREA_HEIGHT_PX);
     textarea.scrollTop = 40;
 
     composer.redraw();
@@ -781,11 +780,11 @@ describe("MessageInput draft scroll position", () => {
     const textarea = makeOverflowingDraftTextarea();
     const composer = mountComposer(textarea);
     // The browser has revealed the caret line, but not the padding under it.
-    textarea.scrollTop = DRAFT_CONTENT_PX - COMPOSER_CAP_PX - 5;
+    textarea.scrollTop = DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX - 5;
 
     composer.type();
 
-    expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - COMPOSER_CAP_PX);
+    expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX);
   });
 
   it("keeps an overflowing draft's position while typing in its middle", () => {
@@ -805,12 +804,12 @@ describe("MessageInput draft scroll position", () => {
       const textarea = makeOverflowingDraftTextarea(undefined, "@al");
       const composer = mountComposer(textarea);
       composer.type();
-      textarea.scrollTop = DRAFT_CONTENT_PX - COMPOSER_CAP_PX - 5;
+      textarea.scrollTop = DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX - 5;
 
       composer.press("Enter");
 
       expect(textarea.value.endsWith("@alice ")).toBe(true);
-      expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - COMPOSER_CAP_PX);
+      expect(textarea.scrollTop).toBe(DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX);
     } finally {
       mocks.isRoom = false;
       setMentionsForTesting([]);

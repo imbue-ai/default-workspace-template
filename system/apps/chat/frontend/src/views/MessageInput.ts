@@ -89,7 +89,7 @@ import { Button } from "@imbue/workspace-ui/src/components/Button";
 import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { ATTACHMENT_CHIP_HEIGHT_CLASS, AttachmentStrip } from "./AttachmentStrip";
 
-const MAX_TEXTAREA_HEIGHT_PX = 240;
+export const MAX_TEXTAREA_HEIGHT_PX = 240;
 
 /* Styling.
  * Utilities in the markup; the message-input and composer-attachment class
