@@ -1,9 +1,9 @@
 """Decide whether a Bash command waits in the foreground on a `sleep` of 5 seconds or more.
 
 Takes the command as its only argument (passed by agent_block_foreground_sleep.sh, which calls
-this only when the raw text contains `sleep` followed by a number, and never for a command the
-harness already runs in the background). Exits 0 to allow; exits 2 with the refusal on stderr to
-BLOCK.
+this only when the raw text contains `sleep` followed by a number or `inf`, and never for a
+command the harness already runs in the background). Exits 0 to allow; exits 2 with the refusal on
+stderr to BLOCK.
 
 A timed sleep is a guess at how long something else takes, and it holds the agent's turn for the
 whole guess: a message to the agent waits until it ends, and so does the agent when the thing it
@@ -29,7 +29,7 @@ import sys
 from tk_command_parsing.parser import command_words, parse_command
 
 _MIN_BLOCKED_SECONDS = 5.0
-_DURATION = re.compile(r"^(\d*\.?\d+)([smhd]?)$")
+_DURATION = re.compile(r"^(\d*\.?\d+|(?i:inf(?:inity)?))([smhd]?)$")
 _UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
 _LIST_JOINER = re.compile(r"(?:&&|\|\||\|&?);*")
 

@@ -23,8 +23,8 @@ if [[ -z "$command" ]]; then
 fi
 
 # Cheap guard, matched with bash's own regex so it forks nothing: only a command whose text has
-# `sleep` followed by a number pays for the Python checker.
-sleep_re='(^|[^[:alnum:]_.-])sleep[[:space:]]+\.?[0-9]'
+# `sleep` followed by a number or `inf` pays for the Python checker.
+sleep_re='(^|[^[:alnum:]_.-])sleep[[:space:]]+(\.?[0-9]|[iI][nN][fF])'
 [[ "$command" =~ $sleep_re ]] || exit 0
 
 script_dir=$(cd "$(dirname "$0")" && pwd)

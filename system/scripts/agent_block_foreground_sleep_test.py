@@ -25,6 +25,8 @@ def _run(command: str, run_in_background: bool | None = None) -> int:
         "sleep 30 && cat /tmp/dd_full.txt",
         "sleep 1m; cat /tmp/out.txt",
         "sleep 2 3; cat /tmp/out.txt",  # sleep sums its arguments
+        "sleep infinity",
+        "sleep inf; cat /tmp/out.txt",
         # Waiting out a service restart.
         "supervisorctl restart reading-room > /dev/null; sleep 8; supervisorctl status reading-room",
         "supervisorctl restart apartment-hunt > /tmp/rs.txt 2>&1\nsleep 8\ncurl -s localhost:8088/api/state",
@@ -62,6 +64,7 @@ def test_a_foreground_sleep_of_five_seconds_or_more_is_blocked(command: str) -> 
         # A sleep in a list sent to the background holds no turn.
         "mkdir -p data/.tasks/mcp-login\n(sleep 900 | mcpc login https://mcp.example.com/mcp > data/.tasks/mcp-login/example.out 2>&1 &)",
         "sleep 600 &",
+        "sleep infinity &",
         "sleep 30 && echo done &",
         # A list carries on across a newline after `&&`, `||` or `|`, up to the `&` that ends it.
         "sleep 30 &&\n  curl -s localhost:8000/ > /tmp/out.txt &",
