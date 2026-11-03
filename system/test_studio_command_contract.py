@@ -184,7 +184,7 @@ def test_the_contract_is_the_version_these_scripts_were_reviewed_against() -> No
 
     assert contract["contract_version"] == _REVIEWED_CONTRACT_VERSION, (
         f"the pinned Imbue Studio app declares workspace command contract version "
-        f"{contract["contract_version"]}, and these scripts were last reviewed against "
+        f"{contract['contract_version']}, and these scripts were last reviewed against "
         f"{_REVIEWED_CONTRACT_VERSION}: check every command against the new version, then "
         "move _REVIEWED_CONTRACT_VERSION"
     )
