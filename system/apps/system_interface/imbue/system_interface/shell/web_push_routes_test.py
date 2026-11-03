@@ -127,6 +127,16 @@ def test_a_registration_with_an_endpoint_that_is_not_https_is_refused(client: Fl
     assert "https" in response.get_json()["detail"]
 
 
+def test_a_registration_whose_keys_are_not_base64url_is_refused(client: FlaskClient) -> None:
+    registration = _registration()
+    registration["subscription"] = {"endpoint": _ENDPOINT, "keys": {"p256dh": "!!!", "auth": "secret"}}
+
+    response = client.post("/api/web-push/devices", json=registration)
+
+    assert response.status_code == 400
+    assert client.get("/api/web-push/devices").get_json()["devices"] == []
+
+
 def test_a_test_send_reaches_only_that_device(client: FlaskClient, app: Flask) -> None:
     device_id = _register(client)
     _register(client, _OTHER_ENDPOINT)

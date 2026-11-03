@@ -62,6 +62,8 @@ _ACCEPTED_STATUS_CODES: Final[frozenset[int]] = frozenset({200, 201, 202})
 # How much of a push service's answer a delivery keeps, for the page's raw view and the log.
 _ANSWER_EXCERPT_LENGTH: Final[int] = 500
 _DEVICE_ID_LENGTH: Final[int] = 16
+# A key off this alphabet makes pywebpush raise outside the errors a post reports, failing the send to every device.
+_BASE64URL_PATTERN: Final[str] = r"^[A-Za-z0-9_-]+={0,2}$"
 
 _PUSH_PROVIDER_NAME_BY_DOMAIN: Final[dict[str, str]] = {
     "mozilla.com": "Mozilla",
@@ -78,8 +80,15 @@ class UnexpectedPushAnswerError(ShellError):
 class PushSubscriptionKeys(FrozenModel):
     """The keys a browser hands over with a subscription, which the message is encrypted to (RFC 8291)."""
 
-    p256dh: str = Field(min_length=1, max_length=256, description="The device's public key, base64url")
-    auth: str = Field(min_length=1, max_length=64, description="The device's authentication secret, base64url")
+    p256dh: str = Field(
+        min_length=1, max_length=256, pattern=_BASE64URL_PATTERN, description="The device's public key, base64url"
+    )
+    auth: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=_BASE64URL_PATTERN,
+        description="The device's authentication secret, base64url",
+    )
 
 
 class BrowserPushSubscription(FrozenModel):
