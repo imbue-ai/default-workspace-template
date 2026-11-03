@@ -176,7 +176,7 @@ def test_a_person_a_domain_grant_admitted_is_listed_from_their_presence_while_th
     source = _source(tmp_path)
     source.share_grants.share_grants_path.write_text(_GRANTS)
     source.presence.heartbeat(_OWNER, _T0)
-    # Dana came in through the partner.org grant; Eve's domain is not granted (a grant since removed).
+    # Dana came in through the partner.org grant; Eve's domain is not granted.
     source.presence.heartbeat(_DANA, _T0 - timedelta(hours=1), last_input_at=_T0 - timedelta(hours=1))
     source.presence.heartbeat(_EVE, _T0)
 

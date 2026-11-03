@@ -253,9 +253,8 @@ class RosterSource(MutableModel):
         keys = [owner_key, *(key for key in granted_keys if key is not None)]
         # The owner may be granted too; they are listed once, first.
         ordered = list(dict.fromkeys(keys))
-        # A domain grant names nobody: who it covers is whoever has been admitted under it, which the presence
-        # records say. They are listed while the domain stays granted, so a revoked domain's visitors leave the
-        # roster even though their presence files stay.
+        # A domain grant names nobody: who it covers is whoever the presence records say was admitted under it,
+        # listed while the domain stays granted, since presence files outlive a revoked grant.
         domain_admitted = [
             key
             for key, presence in sorted(presence_by_key.items(), key=lambda item: str(item[0]))
