@@ -125,6 +125,15 @@ def _mentions(text: str, word: str) -> bool:
     return re.search(rf"(?<![\w-]){re.escape(word)}(?![\w-])", text) is not None
 
 
+def _argparse_choices(help_text: str) -> set[str]:
+    """Every value of every argparse choice set (``{a,b,...}``) the help text shows."""
+    return {
+        value
+        for group in re.findall(r"\{([^{}\s]+)\}", help_text)
+        for value in group.split(",")
+    }
+
+
 def _string_literals(path: Path) -> set[str]:
     return {
         node.value
@@ -146,16 +155,21 @@ def _argparse_problems(command: dict[str, Any]) -> list[str]:
                 f"`{shown}` exited {result.returncode}: {result.stderr.strip()[-500:]}"
             )
             continue
-        expected = (
-            *invocation["value_options"],
-            *invocation["flag_options"],
-            *invocation["fixed_values"],
-        )
-        missing = [word for word in expected if not _mentions(result.stdout, word)]
+        options = (*invocation["value_options"], *invocation["flag_options"])
+        missing = [word for word in options if not _mentions(result.stdout, word)]
         if missing:
             problems.append(
                 f"`{shown}` no longer lists {missing}, which the app passes to "
                 f"{invocation['purpose']}"
+            )
+        choices = _argparse_choices(result.stdout)
+        missing_choices = [
+            value for value in invocation["fixed_values"] if value not in choices
+        ]
+        if missing_choices:
+            problems.append(
+                f"`{shown}` no longer offers {missing_choices} as a choice, which the app "
+                f"passes to {invocation['purpose']}"
             )
     return problems
 
