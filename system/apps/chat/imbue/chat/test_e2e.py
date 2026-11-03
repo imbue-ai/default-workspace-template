@@ -1690,34 +1690,6 @@ def test_a_message_sent_while_a_new_chat_starts_stays_where_it_is_and_is_the_cha
         assert box_once_landed["y"] == box_while_starting["y"]
 
 
-# Records, on every change to a chat page, whether the message ``__watchedText`` names is on the page once it has been,
-# and whether the status row is ever drawn above it: what the page showed in its place each time, if anything.
-_RECORD_MESSAGE_GAPS_SCRIPT = """
-(() => {
-  window.__messageGaps = [];
-  window.__rowsAbove = [];
-  let isShown = false;
-  const check = () => {
-    const text = window.__watchedText;
-    if (!text || !document.querySelector(".message-list-wrapper, .message-list-not-found")) return;
-    const bubble = [...document.querySelectorAll(".outgoing-message, .held-send, .message-user")].find(
-      (element) => (element.innerText || "").includes(text),
-    );
-    if (bubble === undefined) {
-      if (isShown) window.__messageGaps.push((document.body.innerText || "").slice(0, 200));
-      return;
-    }
-    isShown = true;
-    const row = document.querySelector(".agent-activity-indicator");
-    if (row !== null && (bubble.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_PRECEDING) !== 0) {
-      window.__rowsAbove.push(row.innerText || "(dot)");
-    }
-  };
-  new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
-})();
-"""
-
-
 # Flaky: in CI the chat page's socket has twice taken about twenty seconds to connect while the create failed at
 # once, so the notice arrived after a twenty-second wait had given up; the wait below outlasts that stall.
 @pytest.mark.flaky
@@ -2018,6 +1990,34 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         provider_row = chat.locator('[data-menu-row="providers"]')
         expect(provider_row).to_contain_text("Anthropic 2")
         expect(provider_row).not_to_contain_text("next message")
+
+
+# Records, on every change to a chat page, whether the message ``__watchedText`` names is on the page once it has been,
+# and whether the status row is ever drawn above it: what the page showed in its place each time, if anything.
+_RECORD_MESSAGE_GAPS_SCRIPT = """
+(() => {
+  window.__messageGaps = [];
+  window.__rowsAbove = [];
+  let isShown = false;
+  const check = () => {
+    const text = window.__watchedText;
+    if (!text || !document.querySelector(".message-list-wrapper, .message-list-not-found")) return;
+    const bubble = [...document.querySelectorAll(".outgoing-message, .held-send, .message-user")].find(
+      (element) => (element.innerText || "").includes(text),
+    );
+    if (bubble === undefined) {
+      if (isShown) window.__messageGaps.push((document.body.innerText || "").slice(0, 200));
+      return;
+    }
+    isShown = true;
+    const row = document.querySelector(".agent-activity-indicator");
+    if (row !== null && (bubble.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_PRECEDING) !== 0) {
+      window.__rowsAbove.push(row.innerText || "(dot)");
+    }
+  };
+  new MutationObserver(check).observe(document, { childList: true, subtree: true, characterData: true });
+})();
+"""
 
 
 @pytest.mark.timeout(120, func_only=False)
