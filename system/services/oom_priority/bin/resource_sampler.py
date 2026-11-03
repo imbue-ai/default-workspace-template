@@ -21,7 +21,7 @@ import sys
 import threading
 from pathlib import Path
 
-# import-path: no-venv -- supervisord runs it always-on as the System Monitor's /proc reader, and it imports nothing a venv installs
+# import-path: no-venv -- supervisord runs it always-on as the System Monitor's /proc reader, and everything it imports is standard-library only
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority import resource_sampler, supervisor_rpc
