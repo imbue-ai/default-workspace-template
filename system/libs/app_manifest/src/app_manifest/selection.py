@@ -86,8 +86,7 @@ _ROOT_CONFIG_FILES: Final[frozenset[str]] = frozenset({"pyproject.toml", "confte
 _GUARD_DIRECTORY: Final[str] = "system"
 _SUPERVISORD_CONF: Final[str] = "system/supervisord.conf"
 _SUPERVISORD_DROPIN_DIRECTORY: Final[str] = "system/supervisord.conf.d"
-# The checks outside the always-run set that read every real supervisord program block: each
-# program's OOM band, and that no critical-path program waits on the critical path.
+# The checks outside the always-run set that read every real supervisord program block.
 _WIRING_GUARDS: Final[tuple[str, ...]] = (
     "system/services/oom_priority/bin/oom_tag_service_test.py",
     "system/scripts/workspace_bare_scripts/wait_for_critical_path_test.py",
