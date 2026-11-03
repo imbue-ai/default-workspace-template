@@ -265,8 +265,7 @@ On `type: status`:
 
 - `name: done` -- read its `Undeclared couplings:` and `Flaky tests:` lines
   (and, for an app's crystallize pass, its `Phone:` and `Sharing:` lines)
-  from its body, or,
-  when that body is only "Committed on branch" or
+  from its body, or, when that body is only "Committed on branch" or
   "Verified on branch", from the worker's last `final-creation` gate (under
   `<REPORTS_DIR>/consumed/`), which carries them instead. If it lists
   `Undeclared couplings:`, they are built-in defects (a built-in suite
