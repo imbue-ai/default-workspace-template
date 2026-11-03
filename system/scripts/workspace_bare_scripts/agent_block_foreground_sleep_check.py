@@ -21,7 +21,7 @@ with known gaps rather than a complete model:
   the end of a foreground list (`{ sleep 30; } &`, `sleep 30 &&<newline>cmd &`), and so does a
   heredoc body that holds a sleep (the parser reads it as commands).
 - Allowed although in the foreground: a sleep behind a wrapper (`timeout N`, `nohup`, `exec`,
-  `env`), one whose duration is not a literal number (`sleep $DELAY`, `sleep "30"`, `sleep 1e3`),
+  `env`), one whose duration is not a literal number (`sleep $DELAY`, `sleep 1e3`),
   one in a process substitution, one cleared by an inner `&` (`sleep 30 && (cmd &)`,
   `sleep 30 & wait`), a run of sleeps each under 5 seconds, and a long condition poll of short
   sleeps.
