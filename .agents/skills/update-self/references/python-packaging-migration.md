@@ -48,7 +48,7 @@ above, whether the skill is the user's):
 | `test_no_plain_uv_run_in_agent_facing_files`, `test_python3_invocations_name_bare_entry_points` or `test_uv_run_invocations_name_scripts_that_exist` names a user file | [Commands in the user's docs](#commands-in-the-users-docs) |
 | `system/test_entry_point_import_cost.py` names a user skill's entry | [A packaged skill](#a-packaged-skill), last step |
 | `test_prevent_loading_modules_by_file_path` fails and lists a user file | [A packaged skill](#a-packaged-skill), step 2 |
-| `test_prevent_sys_path_edits` or `test_prevent_running_the_workspaces_own_code_as_a_process` fails and lists a user file | [Launches and import-path edits in the user's code](#launches-and-import-path-edits-in-the-users-code) |
+| `test_prevent_sys_path_edits`, `test_sys_path_edits_only_add_a_bare_search_path` or `test_prevent_running_the_workspaces_own_code_as_a_process` fails and lists a user file | [Launches and import-path edits in the user's code](#launches-and-import-path-edits-in-the-users-code) |
 | `system/test_no_type_errors.py` reports errors in a user skill or script, or a user app's own `test_no_type_errors` fails | [Type errors in the user's skills and apps](#type-errors-in-the-users-skills-and-apps) |
 
 ## A user skill with scripts
