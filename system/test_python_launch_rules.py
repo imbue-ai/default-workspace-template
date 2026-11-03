@@ -1175,6 +1175,15 @@ def _sys_path_insert_targets(source: str, file: Path) -> list[tuple[int, Path | 
     return targets
 
 
+def _lets_an_edit_leave_the_bare_search_paths(site: _Site, runs_bare: bool) -> bool:
+    """Code the system python3 runs is type-checked against exactly the bare search paths, so
+    there only an ``other-tree`` edit, whose directory is known only at run time, may leave them."""
+    return any(
+        marker.is_valid() and (not runs_bare or marker.reason == "other-tree")
+        for marker in site.markers
+    )
+
+
 def _sys_path_edits_outside_the_bare_search_paths(
     repo_root: Path, allowed: tuple[Path, ...]
 ) -> list[str]:
@@ -1189,6 +1198,7 @@ def _sys_path_edits_outside_the_bare_search_paths(
         ]
         if not outside:
             continue
+        runs_bare = is_bare_entry(repo_root / relative)
         kept = {
             site.line
             for site in _sites(
@@ -1198,7 +1208,7 @@ def _sys_path_edits_outside_the_bare_search_paths(
                 _statement_spans(ast.parse(source)),
                 _IMPORT_PATH_MARKER,
             )
-            if site.is_kept()
+            if _lets_an_edit_leave_the_bare_search_paths(site, runs_bare)
         }
         offenders.extend(
             f"{relative}:{line}: adds {target if target is not None else 'a path this check cannot read'}"
@@ -1216,7 +1226,8 @@ def test_sys_path_edits_only_add_a_bare_search_path() -> None:
         "A sys.path edit may only add a bare search path (entry_points_testing.BARE_SEARCH_PATHS: "
         "where the bare packages and the stdlib-only libraries live), written as path arithmetic on "
         "Path(__file__) so the bare type check, which searches exactly those directories, resolves "
-        "what the runtime imports, unless an `# import-path: <reason> -- <why>` marker keeps it "
+        "what the runtime imports, unless an `# import-path: <reason> -- <why>` marker keeps it; in "
+        "code the system python3 runs, only an `other-tree` marker does "
         "(.agents/shared/references/running-python.md):\n" + "\n".join(offenders)
     )
 
@@ -1255,6 +1266,30 @@ def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(
     assert offenders == [
         f"{relative}:6: adds {(module.parent / 'elsewhere').resolve()}",
         f"{relative}:7: adds a path this check cannot read",
+    ]
+
+
+def test_only_an_other_tree_marker_lets_bare_code_leave_the_bare_search_paths(
+    tmp_path: Path,
+) -> None:
+    allowed_dir = tmp_path / "system" / "scripts"
+    package = allowed_dir / "workspace_bare_scripts"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("")
+    (package / "probe.py").write_text(
+        "import sys\nfrom pathlib import Path\n\n"
+        "# import-path: no-venv -- the system python3 runs this with no venv\n"
+        'sys.path.insert(0, str(Path(__file__).resolve().parent / "elsewhere"))\n'
+        "# import-path: other-tree -- the target release's tree, known only at run time\n"
+        "sys.path.insert(0, target_tree)\n"
+    )
+    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+
+    offenders = _sys_path_edits_outside_the_bare_search_paths(tmp_path, (allowed_dir,))
+
+    assert offenders == [
+        f"system/scripts/workspace_bare_scripts/probe.py:5: adds {(package / 'elsewhere').resolve()}"
     ]
 
 

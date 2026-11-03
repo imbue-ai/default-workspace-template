@@ -168,7 +168,8 @@ imports: the bare tier, or `uv run --no-project`) or `other-tree` (it loads
 code from a tree known only at run time).
 
 A marked site is not counted, and a marked `sys.path` edit may add a directory
-outside the bare search paths. A marker with another reason, with no why, or
+outside the bare search paths, except in code the system `python3` runs, where
+only an `other-tree` edit may. A marker with another reason, with no why, or
 with no site of its kind below it fails the test. Each marker is a claim
 someone will check, so an agent that adds one names it in its report; and a
 marker is never the way past a count when the site can become an import --
