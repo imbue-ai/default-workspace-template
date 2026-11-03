@@ -539,8 +539,9 @@ class HandoffState(FrozenModel):
     held_sends: tuple[HeldSendSnapshot, ...] = Field(
         default=(),
         description=(
-            "The messages held for after the switch, the confirming message first, so a page (a reloaded one "
-            "too) keeps showing them until they land in the transcript"
+            "The messages sent during the switch, the confirming message first, those the switch has already "
+            "delivered included until it is done, so a page (a reloaded one too) keeps showing them until they "
+            "land in the transcript"
         ),
     )
     model_pick: ModelPick | None = Field(

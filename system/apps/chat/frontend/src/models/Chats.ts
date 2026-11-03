@@ -111,7 +111,8 @@ export interface HandoffState {
   target_harness: string;
   // What the phase text names the destination by: the harness for a handoff, the account for a rebind.
   target_label: string;
-  // The messages held for after the switch, the confirming one first.
+  // The messages sent during the switch, the confirming one first, those it has already delivered
+  // included until it is done.
   held_sends: HeldSend[];
   // The model the chat runs on once the switch lands, applied on the far side of the restart or
   // the create; null when none was picked. Read by a page that has no armed switch of its own to
