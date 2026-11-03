@@ -145,7 +145,8 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
     boundary: true,
     isTurn: false,
     netVisual:
-      "Right-aligned COLLAPSED chip ('▸ <label>') at the point it arrived. It is " +
+      "COLLAPSED chip ('▸ <label>') at the point it arrived, inside the agent's " +
+      "bubble on its text edge, as part of the stretch it lands in. It is " +
       "not a turn of its own, but the timeline breaks at it: what the agent said " +
       "before stays above it, and the work it resumes (any open step carried " +
       "over) renders below it. Click to expand the raw body. Same " +
