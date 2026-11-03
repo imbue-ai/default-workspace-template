@@ -634,6 +634,8 @@ def _ty_checked_files(project_dir: Path) -> set[str]:
         text=True,
         check=False,
     )
+    # 0 or 1 means ty checked; anything else (a config it cannot read) reports no files at all.
+    assert result.returncode in (0, 1), result.stdout + result.stderr
     return {
         line.split(":")[0] for line in result.stdout.splitlines() if "error[" in line
     }
