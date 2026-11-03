@@ -40,8 +40,8 @@ interface ProgressBlockAttrs {
    *  only references a subset. */
   toolResults: Map<string, ToolResultEvent>;
   chatId: string;
-  /** Optional DOM id for the root, so a virtualized list can measure this
-   *  block's height by querying ``.message-list > [id]``. */
+  /** Optional DOM id for the root, also the prefix that keeps the expansion
+   *  state of the handoff nodes inside this block apart from another block's. */
   id?: string;
 }
 
