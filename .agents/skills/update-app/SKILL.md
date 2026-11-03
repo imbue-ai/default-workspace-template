@@ -47,53 +47,70 @@ here** if any of these hold:
 
 ## Match the flow to the scope of the change
 
-Not every change is a quick edit. Before you start, decide which of these
-the request is -- it changes what you do *before* touching code:
+Requests can arrive several to a message, one per message across the feedback
+rounds, or mixed in with feedback on a change already in progress. Whenever new
+requests arrive, decide how they group into units of work and how large each
+unit is, before touching code for them. Both decisions change what you do
+before editing.
 
-- **Small / contained change** -- a bug fix, a copy tweak, a new field, a
-  backend logic fix, a config or `command` change, a restart. Go straight
-  to the live change loop below: edit, apply, refresh, verify.
+**Group the requests.** Use your judgment; any grouping is possible. For
+example, the requests may all be parts of one larger change, each be
+independent, or split into a few mid-sized groups, or two small fixes beside
+one large change. A request that arrives during the feedback rounds may extend
+the change in progress or stand apart from it. Put requests in one unit when
+they only make sense together. Keep them apart when each can be confirmed and
+shipped on its own, so that waiting on the user to confirm one shape never
+holds up an unrelated fix. A new view or capability added to an existing
+service gets its own feedback gate (`interactive-delivery.md` phase 8): confirm
+and ship it on its own rather than bundling it with unrelated changes.
 
-- **Larger-scope change** -- a redesign, a new page or view, a meaningful
-  shift in look-and-feel, or a new user-facing capability. Run the *same*
-  mock-confirm flow `build-app` used to create the service: **read
-  `.agents/shared/references/interactive-delivery.md`**, put a cheap,
-  throwaway version of the *proposed* change in front of the user, loop until
-  they **explicitly confirm** the shape, and only then build the real thing
-  to a usable state. Never build heavy against an unconfirmed shape.
+**Size each unit.** Scope is a range:
 
-  This is the demonstrative-prototype choice from
-  [`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
-  phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
-  throwaway) is fastest for quick look-and-feel loops. When it won't convince --
-  a redesign, or a data-touching change -- boot the *actually changed* app as a
-  labeled preview window beside the live one (Type 1 -- the real edit shown
-  through the real surface) with `preview_app.py` (invocation under "Protect
-  the user's data while you verify"; the same preview mechanism the careful
-  flow uses). Either way, *reading* the live store to render a preview is
-  fine; never let a preview or verification *write* to it.
+- **Small and contained:** a bug fix, a copy tweak, a new field, a backend
+  logic fix, a config or `command` change, a restart, or any change to
+  behavior behind an unchanged surface. Go straight to the live change loop
+  below: edit, apply, refresh, verify.
+- **Larger scope:** a redesign, a new page or view, a meaningful shift in look
+  and feel, a new user-facing capability. Confirm the shape before building it
+  (below).
+- **In between:** a unit with some of each, for example a new control on an
+  existing page. Decide by how much it changes what the user sees: confirm the
+  shape first if that change is substantial, and go straight to the live
+  change loop if it is minor.
 
-  **Does this change warrant a preview at all?** For an ordinary app a
-  preview is the exception, not the default. If the change *works*, a taste
-  mismatch is cheap to fix next round, so most changes can just go live and
-  iterate. Reserve a preview for changes that are costly to redo -- a redesign,
-  a data-touching change, a substantial visual shift. A routine tweak, a copy
-  change, or a behavior-only change behind an unchanged surface doesn't need one.
-  (A critical app leans the other way -- the careful flow previews by default,
-  because the live app is off-limits. It still asks this same question before
-  the *final* pre-merge preview: a change the user cannot observe gives them
-  nothing to judge.)
+### Confirming the shape
 
-  A new view or capability bolted onto an existing service is its own
-  delivery with its own feedback gate (interactive-delivery phase 8):
-  confirm and ship it on its own rather than bundling it with unrelated
-  changes.
+For a unit at the larger end, run the *same* mock-confirm flow `build-app` used
+to create the service: **read
+`.agents/shared/references/interactive-delivery.md`**, put a cheap, throwaway
+version of the *proposed* change in front of the user, loop until they
+**explicitly confirm** the shape, and only then build the real thing to a
+usable state. Never build heavy against an unconfirmed shape.
 
-When in doubt about which bucket you're in, treat a change that alters what
-the user *sees or perceives* as larger-scope (confirm the shape first) and a
-change that only alters behavior behind an unchanged surface as contained.
-Either way, the mechanics of surfacing the change to the user are the same
-live loop:
+This is the demonstrative-prototype choice from
+[`interactive-delivery.md`](../../shared/references/interactive-delivery.md)
+phase 5, in app terms. A lighter **hand mock** (Type 2 -- a detached
+throwaway) is fastest for quick look-and-feel loops. When it won't convince --
+a redesign, or a data-touching change -- boot the *actually changed* app as a
+labeled preview window beside the live one (Type 1 -- the real edit shown
+through the real surface) with `preview_app.py` (invocation under "Protect
+the user's data while you verify"; the same preview mechanism the careful
+flow uses). Either way, *reading* the live store to render a preview is
+fine; never let a preview or verification *write* to it.
+
+**Does this change warrant a preview at all?** For an ordinary app a
+preview is the exception, not the default. If the change *works*, a taste
+mismatch is cheap to fix next round, so most changes can just go live and
+iterate. Reserve a preview for changes that are costly to redo -- a redesign,
+a data-touching change, a substantial visual shift. A routine tweak, a copy
+change, or a behavior-only change behind an unchanged surface doesn't need one.
+(A critical app leans the other way -- the careful flow previews by default,
+because the live app is off-limits. It still asks this same question before
+the *final* pre-merge preview: a change the user cannot observe gives them
+nothing to judge.)
+
+Every unit, whatever its size, reaches the user through the live change loop
+below.
 
 ## One editor at a time: the service lease
 
