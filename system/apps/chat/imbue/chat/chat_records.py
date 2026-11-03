@@ -159,6 +159,11 @@ class ChatTransitionRecord(FrozenModel):
             (held for held in (*self.delivered_sends, *self.held_sends) if held.message_id == message_id), None
         )
 
+    def is_trigger_listed(self) -> bool:
+        """Whether the page lists the confirming message: the switch was made with one, and still holds it or has
+        delivered it, so its turn is still to come."""
+        return bool(self.trigger_text) and self.held_send_for(self.trigger_message_id) is not None
+
     def held_sends_after_trigger(self) -> tuple[HeldSend, ...]:
         """The held sends other than the confirming message, in order."""
         return tuple(held for held in self.held_sends if held.message_id != self.trigger_message_id)
@@ -229,6 +234,10 @@ class ChatHandoffRecord(ChatTransitionRecord):
     @property
     def transition_id(self) -> str:
         return self.handoff_id
+
+    def is_trigger_listed(self) -> bool:
+        """Also once the prompt carries the confirming message, which takes it off the held list undelivered."""
+        return super().is_trigger_listed() or (bool(self.trigger_text) and self.prompt is not None)
 
 
 class ChatRebindRecord(ChatTransitionRecord):

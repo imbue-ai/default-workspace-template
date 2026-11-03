@@ -918,11 +918,12 @@ def _transition_state_of(record: ChatRecord | None) -> HandoffState | None:
     # into the successor's prompt, a rebind delivers it first, and either way the page keeps
     # showing it until its turn appears in the transcript. A switch made with nothing to say
     # (a fresh start picked from the provider menu) has no confirming message to show. The
-    # other held sends stay listed the same way once the switch has delivered them.
+    # other held sends stay listed the same way once the switch has delivered them; any of
+    # them, the confirming message included, that did not land has no turn to wait for.
     others = transition.shown_sends_after_trigger()
     trigger = (
         (_held_send_snapshot(transition.trigger_message_id, split_author_prefix(transition.trigger_text)[1]),)
-        if transition.trigger_text
+        if transition.is_trigger_listed()
         else ()
     )
     return HandoffState(
