@@ -11,10 +11,11 @@ agents, under one connected window. Handles are assigned in roster order, so a c
 the workspace agent's ``agent`` is reserved before anyone else's.
 
 ``GET /api/roster`` answers the document, and ``roster_updated`` carries the same body whenever presence changes
-(someone came or went, or a person's newest input time moved), a grants file changes (the desktop and the gateway
-both write them, so the shell watches them), and on connect. The announcer pushes a document only when it differs
-from the one it last pushed, and the watch folds a burst of file events (an atomic replace fires twice; the gateway
-rewrites its last-seen record every ten seconds per working visiting agent) into one announcement.
+(someone came or went, or a person's newest input time moved), a grants file or the desktop's identities sidecar
+changes (the desktop and the gateway write them, so the shell watches them), and on connect. The announcer pushes a
+document only when it differs from the one it last pushed, and the watch folds a burst of file events (an atomic
+replace fires twice; the gateway rewrites its last-seen record every ten seconds per working visiting agent) into one
+announcement.
 """
 
 import threading
@@ -463,12 +464,13 @@ def build_roster_announcer(
 
 
 class RosterWatch(MutableModel):
-    """Announces the roster whenever one of the files it is computed from changes: the two grants documents and the
-    gateway's last-seen record. The gateway creates the agent-access directories when the workspace is first shared,
-    which is after the shell started on a fresh workspace, so a file whose directory does not exist yet is tried
-    again every ``retry_interval_seconds`` until it is watched, and a watch that starts late announces the roster
-    once, since the file may have been written before it began. A burst of events (an atomic replace fires twice)
-    is announced once, ``coalesce_seconds`` after its first event."""
+    """Announces the roster whenever one of the files it is computed from changes: the two grants documents, the
+    desktop's identities sidecar beside the people's grants, and the gateway's last-seen record. The gateway creates
+    the agent-access directories when the workspace is first shared, which is after the shell started on a fresh
+    workspace, so a file whose directory does not exist yet is tried again every ``retry_interval_seconds`` until it
+    is watched, and a watch that starts late announces the roster once, since the file may have been written before
+    it began. A burst of events (an atomic replace fires twice) is announced once, ``coalesce_seconds`` after its
+    first event."""
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid", "frozen": False}
 
