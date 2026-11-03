@@ -5,9 +5,10 @@
  * chat app reads the reply while it streams (off Claude's terminal, off Codex's live connection, off
  * the file Pi's lifecycle extension keeps, off Antigravity's unfinished planner step) and sends it
  * on the chat's stream as `assistant_draft` frames (the backend's `reply_drafts.py`). A frame
- * names the transcript event the draft follows: the page shows the draft at the end of its
- * transcript only while that event is still the last one it holds, so the reply landing (or
- * anything else landing) retires the draft at once, without waiting for the frame that clears it.
+ * names the transcript event the draft follows: the page shows the draft where the reply will land
+ * (in the live step while one is open, otherwise at the end of the transcript) only while that event
+ * is still the last one it holds, so the reply landing (or anything else landing) retires the draft
+ * at once, without waiting for the frame that clears it.
  */
 
 import m from "mithril";
@@ -51,7 +52,7 @@ export function clearReplyDraft(chatId: string): void {
   draftByChat.delete(chatId);
 }
 
-/** The draft to show after the transcript, when the event it follows is the last one held. */
+/** The draft to show, when the event it follows is the last one held. */
 export function shownReplyDraft(chatId: string, lastEventId: string | null): AssistantMessageEvent | null {
   const held = draftByChat.get(chatId);
   if (held === undefined || held.afterEventId !== (lastEventId ?? "")) {
