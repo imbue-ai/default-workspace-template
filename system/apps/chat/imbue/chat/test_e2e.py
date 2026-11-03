@@ -2047,7 +2047,7 @@ def test_a_message_sent_during_a_switch_stays_on_the_page_while_the_switch_deliv
 ) -> None:
     """A message sent while a chat switches is held, and the switch takes it off its held list as it delivers it,
     before its turn reaches the transcript; the chat's state is pushed meanwhile. The message stays on the page
-    throughout, and the switch's status row stays above it."""
+    throughout, and the switch's status row stays below it."""
     confirming = "Carry on on the other account"
     follow_up = "Find what's using disk space here"
     page.add_init_script(f"window.__watchedText = {json.dumps(follow_up)};" + _RECORD_MESSAGE_GAPS_SCRIPT)
