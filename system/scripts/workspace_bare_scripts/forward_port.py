@@ -639,7 +639,11 @@ def _read_manifest(
     if theming is not None:
         mode = theming.get("mode", "tokens") if isinstance(theming, dict) else None
         if not isinstance(mode, str):
-            return {}, None, f"manifest {str(path)!r}: theming must be a table whose mode is a string"
+            return (
+                {},
+                None,
+                f"manifest {str(path)!r}: theming must be a table whose mode is a string",
+            )
         fields["theming_mode"] = mode
 
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
@@ -1080,6 +1084,39 @@ def register(
             manifest_fields=manifest_fields,
             theming_mode=theming_mode,
         )
+
+
+def register_manifest(
+    path: Path,
+    manifest_path: Path,
+    url: str,
+    *,
+    overrides: dict[str, object] | None = None,
+) -> str:
+    """Register the app ``manifest_path`` describes at ``url``, as ``--manifest`` does; return its name.
+
+    ``overrides`` replaces manifest-owned keys on the row for this registration only: the
+    next registration from the manifest alone (the app's own restart) writes the manifest's
+    values back. Raises RegistrationError when the manifest is refused or an override names
+    a key the manifest does not own.
+    """
+    manifest_fields, icon_path, manifest_error = _read_manifest(manifest_path, None)
+    if manifest_error is not None:
+        raise RegistrationError(manifest_error)
+    unknown_keys = sorted(set(overrides or {}) - set(_MANIFEST_OWNED_KEYS))
+    if unknown_keys:
+        raise RegistrationError(
+            f"overrides name keys a manifest does not own: {', '.join(unknown_keys)}"
+        )
+    name = str(manifest_fields["name"])
+    register(
+        path,
+        name,
+        url,
+        icon_path=icon_path,
+        manifest_fields={**manifest_fields, **(overrides or {})},
+    )
+    return name
 
 
 def remove(path: Path, name: str) -> None:

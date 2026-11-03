@@ -37,6 +37,10 @@ The two shapes:
   letters/digits with single hyphens (e.g. ``preview-1``, not ``preview_1``),
   not ``localhost``, and not starting with ``host-`` or ``agent-``. ``down``
   kills both servers and deregisters both services.
+- **Frame only** (``frame``, called by ``build-app``'s ``mock_frame.py``). The
+  same labeled frame around a service something else already runs -- a new app's
+  live program while it is still a mock -- with a banner kind and note of its own.
+  Nothing else is booted or registered, and ``down`` removes only the frame.
 
 The service must read its port (and, when relevant, its data dir) from the
 environment -- that is what ``--port-env`` / ``--env`` inject. Scaffolded Flask
@@ -870,6 +874,96 @@ def _teardown(
     return survivors
 
 
+def _unwind_failed_boot(
+    verb: str,
+    exc: Exception,
+    repo_root: Path,
+    name: str,
+    runner: Runner,
+    registry: Registry,
+    *,
+    pids: Sequence[int],
+    services: Sequence[str],
+    sleeper: Callable[[float], None],
+) -> None:
+    """Report a failed ``verb``, tear down what it stood up, and remove its state directory.
+
+    The log is copied out and quoted *before* the teardown removes the state
+    directory it lives in, so the path the message names still exists when the
+    agent goes to read the rest of it.
+    """
+    failed_log = getattr(exc, "log_path", None)
+    excerpt = ""
+    if failed_log is not None:
+        preserved = _preserve_failed_log(repo_root, name, failed_log)
+        excerpt = _log_excerpt(failed_log, preserved)
+    sys.stderr.write(
+        f"{verb} failed: {exc}\n{excerpt}tearing down partial instance...\n"
+    )
+    survivors = _teardown(
+        repo_root, runner, registry, pids=pids, services=services, sleeper=sleeper
+    )
+    if survivors:
+        sys.stderr.write(
+            f"warning: pid(s) {', '.join(str(pid) for pid in survivors)} survived "
+            "SIGKILL and may still hold their port.\n"
+        )
+    shutil.rmtree(_state_dir(repo_root, name), ignore_errors=True)
+
+
+def _boot_wrapper(
+    repo_root: Path,
+    name: str,
+    log_path: Path,
+    wrapper_args: Sequence[str],
+    pids: list[int],
+    *,
+    http: HttpClient,
+    spawner: Spawner,
+    sleeper: Callable[[float], None],
+    port: int | None = None,
+) -> int:
+    """Boot the preview frame with ``wrapper_args`` and wait for it; return its port.
+
+    It takes ``port`` when given (a frame re-booted where it was), else a free one. Its
+    pid is appended to ``pids`` as soon as it is spawned, so a caller's teardown
+    reaches it when the health wait fails.
+    """
+    wrapper_port = port if port is not None else find_free_port()
+    _append_boot_marker(log_path, name)
+    pids.append(
+        spawner.spawn_detached(
+            _banded(
+                repo_root,
+                [
+                    sys.executable,
+                    str(WRAPPER_SCRIPT),
+                    "--port",
+                    str(wrapper_port),
+                    *wrapper_args,
+                ],
+            ),
+            cwd=str(repo_root),
+            env=dict(os.environ),
+            log_path=str(log_path),
+        )
+    )
+    wrapper_probe = wait_healthy(
+        http,
+        f"http://{LOOPBACK_HOST}:{wrapper_port}/",
+        _HEALTH_ATTEMPTS,
+        _HEALTH_INTERVAL_SECONDS,
+        sleeper,
+    )
+    if not wrapper_probe.is_healthy:
+        raise InstanceError(
+            f"preview wrapper did not become healthy on port {wrapper_port}\n"
+            f"{wrapper_probe.describe()}",
+            log_path=log_path,
+        )
+    return wrapper_port
+
+
 def up(
     name: str,
     command: Sequence[str],
@@ -1022,43 +1116,23 @@ def up(
                 and preview_service_name is not None
                 and preview_title is not None
             )
-            wrapper_port = find_free_port()
-            _append_boot_marker(wrapper_log_path, name)
-            pids.append(
-                spawner.spawn_detached(
-                    _banded(
-                        repo_root,
-                        [
-                            sys.executable,
-                            str(WRAPPER_SCRIPT),
-                            "--port",
-                            str(wrapper_port),
-                            "--inner-service",
-                            service_name,
-                            "--title",
-                            preview_title,
-                            "--inner-path",
-                            inner_path,
-                        ],
-                    ),
-                    cwd=str(repo_root),
-                    env=dict(os.environ),
-                    log_path=str(wrapper_log_path),
-                )
+            wrapper_port = _boot_wrapper(
+                repo_root,
+                name,
+                wrapper_log_path,
+                [
+                    "--inner-service",
+                    service_name,
+                    "--title",
+                    preview_title,
+                    "--inner-path",
+                    inner_path,
+                ],
+                pids,
+                http=http,
+                spawner=spawner,
+                sleeper=sleeper,
             )
-            wrapper_probe = wait_healthy(
-                http,
-                f"http://{LOOPBACK_HOST}:{wrapper_port}/",
-                _HEALTH_ATTEMPTS,
-                _HEALTH_INTERVAL_SECONDS,
-                sleeper,
-            )
-            if not wrapper_probe.is_healthy:
-                raise InstanceError(
-                    f"preview wrapper did not become healthy on port {wrapper_port}\n"
-                    f"{wrapper_probe.describe()}",
-                    log_path=wrapper_log_path,
-                )
             _register_service(
                 registry,
                 repo_root,
@@ -1106,27 +1180,17 @@ def up(
         # missing ``uv`` binary surfaces as FileNotFoundError, and find_free_port
         # can raise a socket OSError. Either way a server may already be running,
         # so teardown must run.
-        #
-        # The log is copied out and quoted *before* the teardown below removes the
-        # state directory it lives in, so the path this message names still exists
-        # when the agent goes to read the rest of it.
-        failed_log = getattr(exc, "log_path", None)
-        excerpt = ""
-        if failed_log is not None:
-            preserved = _preserve_failed_log(repo_root, name, failed_log)
-            excerpt = _log_excerpt(failed_log, preserved)
-        sys.stderr.write(
-            f"up failed: {exc}\n{excerpt}tearing down partial instance...\n"
+        _unwind_failed_boot(
+            "up",
+            exc,
+            repo_root,
+            name,
+            runner,
+            registry,
+            pids=pids,
+            services=services,
+            sleeper=sleeper,
         )
-        survivors = _teardown(
-            repo_root, runner, registry, pids=pids, services=services, sleeper=sleeper
-        )
-        if survivors:
-            sys.stderr.write(
-                f"warning: pid(s) {', '.join(str(pid) for pid in survivors)} survived "
-                "SIGKILL and may still hold their port.\n"
-            )
-        shutil.rmtree(state_dir, ignore_errors=True)
         return 1
 
     # What the caller needs on stdout: the preview's service name when
@@ -1151,6 +1215,137 @@ def up(
             f"instance up: reach it at {inner_url} (serving {cwd}). Run "
             f"`python3 {_SELF_HINT} down --name {name}` to tear it down.\n"
         )
+    return 0
+
+
+def frame(
+    name: str,
+    repo_root: Path,
+    *,
+    inner_service: str,
+    frame_service_name: str,
+    title: str,
+    display_name: str,
+    kind: str,
+    note: str | None = None,
+    inner_path: str = "/",
+    runner: Runner,
+    registry: Registry,
+    http: HttpClient,
+    spawner: Spawner,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> int:
+    """Frame the already-registered ``inner_service`` in the labeled wrapper, booting nothing else.
+
+    The motion ``up`` makes for a preview's frame, around a service something else
+    runs (a live app's own supervisord program): the wrapper is booted with ``kind``
+    and ``note`` for its banner and registered as ``frame_service_name`` under
+    ``display_name``, and the inner service's registration is left alone. Re-running
+    it re-boots the wrapper on the port it had (a changed note, say), so its
+    registration -- and the origin an open window shows it at -- stays put. ``down``
+    with the same ``name`` kills the wrapper and deregisters it, and never touches the
+    inner service.
+
+    On any failure the partial state is torn down and 1 is returned.
+    """
+    if not inner_path.startswith("/"):
+        sys.stderr.write(
+            f"frame: the inner path must start with '/', got {inner_path!r}.\n"
+        )
+        return 1
+    state_path = _state_path(repo_root, name)
+    previous_port: int | None = None
+    if state_path.exists():
+        try:
+            previous = json.loads(state_path.read_text())
+        except (json.JSONDecodeError, OSError) as exc:
+            sys.stderr.write(f"error: could not read frame state {state_path}: {exc}\n")
+            return 1
+        survivors = _teardown(
+            repo_root,
+            runner,
+            registry,
+            pids=previous.get("pids") or [],
+            services=[],
+            sleeper=sleeper,
+        )
+        if survivors:
+            sys.stderr.write(
+                f"frame: the previous wrapper (pid(s) "
+                f"{', '.join(str(pid) for pid in survivors)}) survived SIGKILL; keeping "
+                f"{state_path} so it stays findable.\n"
+            )
+            return 1
+        previous_port = previous.get("wrapper_port")
+
+    state_dir = _state_dir(repo_root, name)
+    wrapper_log_path = state_dir / WRAPPER_LOG_FILENAME
+    state_dir.mkdir(parents=True, exist_ok=True)
+    wrapper_args = [
+        "--inner-service",
+        inner_service,
+        "--title",
+        title,
+        "--inner-path",
+        inner_path,
+        "--kind",
+        kind,
+    ]
+    if note:
+        wrapper_args += ["--note", note]
+    pids: list[int] = []
+    # Counted as registered from the start when re-framing: the row is already there,
+    # and a failed re-boot must not leave it routing at a dead port.
+    services: list[str] = [frame_service_name] if previous_port is not None else []
+    try:
+        wrapper_port = _boot_wrapper(
+            repo_root,
+            name,
+            wrapper_log_path,
+            wrapper_args,
+            pids,
+            http=http,
+            spawner=spawner,
+            sleeper=sleeper,
+            port=previous_port,
+        )
+        _register_service(
+            registry,
+            repo_root,
+            frame_service_name,
+            wrapper_port,
+            "forward_port register (frame)",
+            display_name=display_name,
+        )
+        if frame_service_name not in services:
+            services.append(frame_service_name)
+        state = {
+            "name": name,
+            "inner_service": inner_service,
+            "wrapper_port": wrapper_port,
+            "inner_path": inner_path,
+            "pids": pids,
+            "services": services,
+            "wrapper_log": str(wrapper_log_path),
+        }
+        state_path.write_text(json.dumps(state, indent=2))
+    except (InstanceError, OSError) as exc:
+        _unwind_failed_boot(
+            "frame",
+            exc,
+            repo_root,
+            name,
+            runner,
+            registry,
+            pids=pids,
+            services=services,
+            sleeper=sleeper,
+        )
+        return 1
+    sys.stderr.write(
+        f"frame up: '{frame_service_name}' frames '{inner_service}' (wrapper on port "
+        f"{wrapper_port}).\n"
+    )
     return 0
 
 

@@ -1340,3 +1340,146 @@ def test_a_project_launch_links_and_syncs_the_project_then_becomes_its_own_scrip
         "--port",
         "1",
     ]
+
+
+# frame only (a mock around an app something else runs)
+
+_FRAME_NAME = "inbox-mock"
+
+
+def _frame(
+    tmp_path: Path,
+    *,
+    runner: _RecordingRunner | None = None,
+    registry: _RecordingRegistry | None = None,
+    http: _FakeHttp | None = None,
+    spawner: _FakeSpawner | None = None,
+    note: str | None = "Sample data; refresh does not work yet.",
+) -> int:
+    return mod.frame(
+        _FRAME_NAME,
+        tmp_path,
+        inner_service="inbox",
+        frame_service_name=_FRAME_NAME,
+        title="Inbox",
+        display_name="Inbox (mock)",
+        kind=wrapper_mod.KIND_MOCK,
+        note=note,
+        runner=runner or _RecordingRunner(),
+        registry=registry or _RecordingRegistry(),
+        http=http or _FakeHttp(_all_healthy),
+        spawner=spawner or _FakeSpawner(),
+        sleeper=lambda _seconds: None,
+    )
+
+
+def _wrapper_arg(argv: list[str], flag: str) -> str:
+    return argv[argv.index(flag) + 1]
+
+
+def test_frame_boots_only_a_mock_wrapper_and_registers_only_the_frame(
+    tmp_path: Path,
+) -> None:
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+
+    code = _frame(tmp_path, registry=registry, spawner=spawner)
+
+    assert code == 0
+    [wrapper_argv] = spawner.detached_spawns
+    assert wrapper_argv[1] == str(Path(wrapper_mod.__file__).resolve())
+    assert _wrapper_arg(wrapper_argv, "--inner-service") == "inbox"
+    assert _wrapper_arg(wrapper_argv, "--kind") == "mock"
+    assert (
+        _wrapper_arg(wrapper_argv, "--note")
+        == "Sample data; refresh does not work yet."
+    )
+    # The framed app's own registration is its program's business; only the frame is added.
+    assert registry.registered == [
+        _Registration(
+            _FRAME_NAME,
+            f"http://localhost:{_wrapper_arg(wrapper_argv, '--port')}",
+            internal=False,
+            display_name="Inbox (mock)",
+        )
+    ]
+    state = json.loads(mod._state_path(tmp_path, _FRAME_NAME).read_text())
+    assert state["pids"] == spawner.detached_pids
+    assert state["services"] == [_FRAME_NAME]
+
+
+def test_reframing_reboots_the_wrapper_on_its_port_without_deregistering_it(
+    tmp_path: Path,
+) -> None:
+    """A changed note re-boots the wrapper, and an open mock window keeps working: the
+    frame's row is never removed (which would mint it a new origin), and it keeps
+    routing to the same port."""
+    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+    assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
+    first_pid = spawner.detached_pids[0]
+
+    code = _frame(
+        tmp_path,
+        runner=runner,
+        registry=registry,
+        spawner=spawner,
+        note="Now reading your inbox live; sending is not wired up yet.",
+    )
+
+    assert code == 0
+    assert runner.killed_pgroup(first_pid)
+    first_argv, second_argv = spawner.detached_spawns
+    assert _wrapper_arg(second_argv, "--port") == _wrapper_arg(first_argv, "--port")
+    assert _wrapper_arg(second_argv, "--note") == (
+        "Now reading your inbox live; sending is not wired up yet."
+    )
+    assert registry.removed == []
+    state = json.loads(mod._state_path(tmp_path, _FRAME_NAME).read_text())
+    assert state["pids"] == [spawner.detached_pids[1]]
+
+
+def test_a_failed_reframe_deregisters_the_frame_rather_than_leave_it_routing_nowhere(
+    tmp_path: Path,
+) -> None:
+    registry = _RecordingRegistry()
+    assert _frame(tmp_path, registry=registry) == 0
+
+    code = _frame(tmp_path, registry=registry, http=_FakeHttp(lambda _url: None))
+
+    assert code == 1
+    assert registry.removed == [_FRAME_NAME]
+    assert not mod._state_path(tmp_path, _FRAME_NAME).exists()
+
+
+def test_down_removes_the_frame_and_nothing_else(tmp_path: Path) -> None:
+    runner = _RecordingRunner()
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+    assert _frame(tmp_path, runner=runner, registry=registry, spawner=spawner) == 0
+
+    code = mod.down(_FRAME_NAME, tmp_path, runner=runner, registry=registry)
+
+    assert code == 0
+    assert runner.killed_pgroup(spawner.detached_pids[0])
+    assert registry.removed == [_FRAME_NAME]
+    assert not mod._state_dir(tmp_path, _FRAME_NAME).exists()
+
+
+def test_a_mock_wrapper_page_says_it_is_a_mock_and_shows_the_note_escaped() -> None:
+    page = wrapper_mod.build_wrapper_html(
+        "inbox",
+        "Inbox",
+        kind=wrapper_mod.KIND_MOCK,
+        note="<b>Refresh</b> is not wired up",
+    )
+    preview_page = wrapper_mod.build_wrapper_html("inbox", "Inbox")
+
+    assert '<span class="tag">Mock</span>' in page
+    assert "&lt;b&gt;Refresh&lt;/b&gt; is not wired up" in page
+    assert "<b>Refresh</b>" not in page
+    assert '<span class="tag">Preview</span>' in preview_page
+    assert 'class="preview-note"' not in preview_page
+    with pytest.raises(ValueError, match="kind must be one of"):
+        wrapper_mod.build_wrapper_html("inbox", "Inbox", kind="draft")

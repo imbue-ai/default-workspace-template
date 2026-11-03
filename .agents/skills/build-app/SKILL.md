@@ -1,6 +1,6 @@
 ---
 name: build-app
-description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a throwaway mock page the app serves first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
+description: "Use when you want to create a new app for the user -- a page, dashboard, or tool they can open as a window on the desktop. Runs an interactive flow: confirm the look and feel on a throwaway mock page the app serves, shown framed as a mock, first, then build the real app to a usable state, then harden it in the background. Covers scaffolding a new Flask app (canonical path) and the escape hatch for wrapping a pre-existing third-party server."
 metadata:
   author: imbue
   crystallized: true
@@ -36,8 +36,9 @@ Map of the flow:
   in business terms; a small plan; wait for approval.
 - **Step 1 -- scaffold + throwaway mock** (skeleton phases 4-6): scaffold the
   service, serve a mock page from it and put that in front of the user (a page,
-  never a picture of one), loop to explicit confirmation of the look-and-feel.
-  Hard gate.
+  never a picture of one) inside the mock frame that labels it a mock, loop to
+  explicit confirmation of the look-and-feel. Hard gate. The frame stays until
+  the app is really hooked up to its data.
 - **Step 2-4 -- build to a usable site** (the existing build mechanics, run
   *after* confirmation): implement real routes, verify, surface the window.
 - **Step 5 -- finalize in the background** (skeleton phase 7): once the user
@@ -384,10 +385,27 @@ This is skeleton phase 5 (the cheap throwaway mock). Keep it disposable:
   render *that real data* in the mock so the user judges the UI against real
   content. Otherwise use representative placeholder data that covers the shapes
   the real view will show (including an empty state and a busy/overflow state).
-- `workspace-layout open` to surface it (see Step 4 for the command and its `--desktop` flag), then loop:
-  present -> take feedback -> update the mock so the change is *visible* ->
-  re-present. Do not accept feedback and move on having only asserted you'll apply
-  it.
+- **Show the mock inside the mock frame, never as the bare app.** A mock looks like
+  a finished app, so on its own it reads as one. The frame puts a "Mock" banner
+  around it and a note under the banner saying what is not real yet; the bare app
+  stays out of the launcher and off the desktop while it is up. Check the page, then
+  frame it and open the frame beside the chat, in one call:
+
+  ```bash
+  uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --screenshot /tmp/<name>-mock.png && uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py up --app <name> --note "<what is not real yet>" --open
+  ```
+
+  The note is one plain sentence in the user's terms naming what is not real:
+  whether the content is made up or a sample of their real data (and how much of
+  it), and which controls do nothing yet ("Showing 20 of your emails as a sample;
+  refresh and archive don't work yet."). Never open the app itself (`verify_app.py
+  --open`, `workspace-layout open <name>`) while it is a mock.
+- Loop: present -> take feedback -> update the mock so the change is *visible* ->
+  re-present, with the same call ending in `--refresh` in place of `--open` (and
+  `--screenshot` dropped). Run `mock_frame.py up` after every restart, since the
+  app's restart registers it as an ordinary app again; and change the note
+  whenever what is real changes. Do not accept feedback and move on having only
+  asserted you'll apply it.
 - Loop until the user **explicitly confirms** the look-and-feel is right.
 
 The user may respond to the mock with a request for functionality that requires updated backend support.
@@ -457,6 +475,26 @@ the thorough testing and review gates happen in the background (Step 5), not her
 The starter `runner.py` has just `GET /` (a placeholder HTML page)
 and `GET /health` (returns `{"status": "ok"}`). Replace the
 placeholder with your real routes.
+
+### The mock frame stays until the app is really hooked up
+
+Confirming the mock does not take the frame down. The app stays framed through
+this step for as long as any of it is still not real -- above all its data: an app
+showing a confirmed `sample.json` (the `fetch-process-show` hand-off) is still a
+mock until it reads from the real source (the crystallized pipeline's output, the
+live API), even once its routes are real. Each time a piece becomes real, update
+the note to say what still is not ("Your real inbox loads now; archive doesn't
+work yet."), with `mock_frame.py up ... --refresh` after the restart as in Step 1.
+
+Once the app reads its real data and does what the user will use it for, take the
+frame down and open the app itself in its place:
+
+```bash
+uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py down --app <name> && uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart --marker "<expected-heading-or-text>" --open
+```
+
+`down` closes the mock window, removes the frame, and puts the app back in the
+launcher and on the desktop.
 
 Every page is served under the starter's `Content-Security-Policy`
 (`CONTENT_SECURITY_POLICY` and the `after_request` that sets it; keep it, the app
@@ -567,7 +605,9 @@ uv run --no-sync system/scripts/workspace_scripts/verify_app.py <name> --restart
 ```
 
 `--open` is Step 4 folded in; for an app already on the user's screen, use
-`--refresh` instead and drop `--screenshot`. Leave `--restart` out right after
+`--refresh` instead and drop `--screenshot`. While the mock frame is still up
+(above), drop both and end the call with `mock_frame.py up ... --refresh` instead.
+Leave `--restart` out right after
 `scaffold_flask_lib.py --start`, which already started the app. If a changed API
 route needs exercising, append one `curl` to the same tool call. Test files
 and the test gate belong to Step 5's background pass, not to the chat turn.
