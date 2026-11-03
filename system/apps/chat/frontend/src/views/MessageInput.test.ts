@@ -715,10 +715,14 @@ describe("MessageInput draft scroll position", () => {
   });
 
   /** A textarea holding a draft taller than the composer's cap, laid out the way the browser would: one line
-   *  tall while its height is "auto", and its scrollTop clamped to the range its height leaves. The caret sits at
-   *  `caretPosition`, or at the end. With `isScrollLostOnCollapse`, collapsing it to "auto" resets its scrollTop,
-   *  as some browsers do. */
-  function makeOverflowingDraftTextarea(caretPosition?: number, draftSuffix = "", isScrollLostOnCollapse = false) {
+   *  tall while its height is "auto", and its scrollTop clamped to the range its height leaves. The draft ends with
+   *  `draftSuffix`, and the caret sits at `caretPosition`, or at the end. With `isScrollLostOnCollapse`, collapsing
+   *  it to "auto" resets its scrollTop, as some browsers do. */
+  function makeOverflowingDraftTextarea({
+    caretPosition,
+    draftSuffix = "",
+    isScrollLostOnCollapse = false,
+  }: { caretPosition?: number; draftSuffix?: string; isScrollLostOnCollapse?: boolean } = {}) {
     let storedScrollTopPx = 0;
     let heightStyle = "";
     const value = "a long draft ".repeat(40) + draftSuffix;
@@ -788,7 +792,7 @@ describe("MessageInput draft scroll position", () => {
   });
 
   it("keeps an overflowing draft's scroll position across a redraw where collapsing it to measure loses it", () => {
-    const textarea = makeOverflowingDraftTextarea(undefined, "", true);
+    const textarea = makeOverflowingDraftTextarea({ isScrollLostOnCollapse: true });
     const composer = mountComposer(textarea);
     textarea.scrollTop = 40;
 
@@ -824,7 +828,7 @@ describe("MessageInput draft scroll position", () => {
   });
 
   it("keeps an overflowing draft's position while typing in its middle", () => {
-    const textarea = makeOverflowingDraftTextarea(5);
+    const textarea = makeOverflowingDraftTextarea({ caretPosition: 5 });
     const composer = mountComposer(textarea);
     textarea.scrollTop = 40;
 
@@ -837,7 +841,7 @@ describe("MessageInput draft scroll position", () => {
     mocks.isRoom = true;
     setMentionsForTesting([{ handle: "alice", display_name: "Alice", kind: "invited", key: "alice", chat_id: null }]);
     try {
-      const textarea = makeOverflowingDraftTextarea(undefined, "@al");
+      const textarea = makeOverflowingDraftTextarea({ draftSuffix: "@al" });
       const composer = mountComposer(textarea);
       composer.type();
       textarea.scrollTop = DRAFT_CONTENT_PX - MAX_TEXTAREA_HEIGHT_PX - 5;
