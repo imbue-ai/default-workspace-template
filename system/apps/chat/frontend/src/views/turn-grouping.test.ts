@@ -665,6 +665,24 @@ describe("narration and close-time ejection", () => {
     expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
   });
 
+  // A chip landing before the agent took the step up does not hand it the agent's next words.
+  it("keeps a carried-over step out of the turn across a chip", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "what's RAM?"),
+      assistantText("t4", "RAM is short-term memory.", "ans"),
+      notice("t5", "n1"),
+      assistantText("t6", "The download you asked about earlier finished.", "after"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u-t0", "u-t3", "n1"]);
+    expect(sections[2].live_step_id).toBeNull();
+    expect(stepItems(sections[2].items)[0].events).toHaveLength(0);
+    expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["after"]);
+  });
+
   // A regular ticket is not a step, so picking one up leaves the carried-over step to be taken up
   // by the work that follows.
   it("takes a carried-over step up again after a regular ticket transition", () => {

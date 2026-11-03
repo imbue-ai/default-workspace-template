@@ -39,8 +39,8 @@
  * background task, a bash-mode command and its output) breaks the timeline the
  * same way, though it is not a turn the user took: it lands between two of the
  * agent's requests, so whatever the agent does next happens after it. The
- * section closes there, any open step carries over, and the chip heads the next
- * section. The reply the agent gave before it stays above it, and the work it
+ * section closes there, any open step carries over (a step the new turn's prose
+ * was kept out of stays out), and the chip heads the next section. The reply the agent gave before it stays above it, and the work it
  * does after renders below it. The one exception is a chip landing inside an
  * open handoff node, which stays in the handoff's turn.
  *
@@ -752,11 +752,13 @@ export function buildSections(
       // module docstring): close the prior section (carrying open steps) and open a new one
       // headed by the message.
       lastSwitched = null;
+      const wasDormant = current !== null && current.dormant_step_id !== null;
       carryover = current === null ? [] : openStepsAtEnd(current);
       current = ensureSection(e, `section-${e.event_id}`);
-      if (isGenuineUserTurn(e)) {
+      if (isGenuineUserTurn(e) || wasDormant) {
         // The user moved on: a step the agent left open belongs to the earlier request, so an
-        // answer to this one does not join it unless the agent takes the step up again.
+        // answer to this one does not join it unless the agent takes the step up again. A chip
+        // does not change which request the agent is answering, so a dormant step stays so.
         current.dormant_step_id = current.current_step_id;
         current.current_step_id = null;
       }
