@@ -85,7 +85,8 @@ The code runs under one of two interpreters, and what it imports decides which:
   path, or that sits in a long-running program's launch chain: the agent
   hooks, the bug-report collector, the pre-sync build steps, the scripts the
   Imbue Studio app calls, update-self, `system/scripts/workspace_bare_scripts/`
-  (`forward_port.py`, `with_secrets.py`, `run_in_background.py`, ...), and
+  (`with_secrets.py`, `run_in_background.py`, ...), the stdlib-only libraries
+  such as `app_registration` (which `system/scripts/forward_port.py` runs), and
   stdlib-only modules of other packages such as `notify_user.py` and
   `request_secret.py`.
 - **Venv tier**: code that imports a third-party package, or a venv-tier
