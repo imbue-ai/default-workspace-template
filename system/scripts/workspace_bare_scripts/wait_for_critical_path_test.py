@@ -16,10 +16,12 @@ from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
+from oom_priority.supervisord_testing import supervisord_commands
 
 from workspace_bare_scripts import forward_port, wait_for_critical_path
 
 _STUB = Path(__file__).resolve().parents[1] / "wait_for_critical_path.py"
+_SUPERVISORD_CONF = Path(__file__).resolve().parents[2] / "supervisord.conf"
 
 
 def _write_registry(registry: Path, url_by_name: dict[str, str]) -> None:
@@ -190,3 +192,11 @@ def test_the_stub_refuses_to_run_without_a_command() -> None:
 
     assert completed.returncode == 2
     assert "usage" in completed.stderr
+
+
+def test_no_critical_path_program_waits_on_the_critical_path() -> None:
+    # Prefixed, a critical-path program would wait for itself until the deadline on every start.
+    commands = supervisord_commands(_SUPERVISORD_CONF, ("program", "eventlistener"))
+    for name in wait_for_critical_path.CRITICAL_PATH_APPS:
+        assert name in commands, name
+        assert "wait_for_critical_path.py" not in commands[name], name
