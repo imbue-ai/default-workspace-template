@@ -102,6 +102,10 @@ _PUSH_TIMEOUT_SECONDS = 12.0
 # its own bound.
 _PUSH_TITLE_MAX_LENGTH = 120
 _PUSH_BODY_MAX_LENGTH = 1000
+# The shell also refuses a notification whose JSON, as its service worker reads
+# it, is over this many UTF-8 bytes; a body of emoji fits the character bound
+# but not this one, so the body is cut further until it fits.
+_PUSH_PAYLOAD_MAX_BYTES = 3993
 
 # This module sits five directories below the repo root
 # (.agents/skills/notify-user/python/notify_user_skill/).
@@ -256,11 +260,23 @@ def _cut(text: str, limit: int) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
+def _payload_size(notification: dict[str, str]) -> int:
+    """The notification's size as the shell sends it: its JSON in plain UTF-8, an absent tag as null."""
+    sent = {
+        "title": notification["title"],
+        "body": notification["body"],
+        "path": notification["path"],
+        "tag": notification.get("tag"),
+    }
+    return len(json.dumps(sent, ensure_ascii=False).encode("utf-8"))
+
+
 def device_notification(
     message: str, title: str | None, environ: dict[str, str]
 ) -> dict[str, str]:
     """The notification the devices show: the title over the message, or the message as the title (cut, and then
-    carried in the body) when there is none, each cut to what the shell takes; tapping it opens this chat."""
+    carried in the body) when there is none, each cut to what the shell takes, the body further until the whole fits
+    in one push message; tapping it opens this chat."""
     chat_id = _chat_id(environ)
     path = (
         "/?" + urllib.parse.urlencode({"open": f"chat:/?chat={chat_id}"})
@@ -281,6 +297,12 @@ def device_notification(
     # One notification per chat on a device: a newer one from the same chat replaces it.
     if chat_id:
         notification["tag"] = f"chat-{chat_id}"
+    body_limit = _PUSH_BODY_MAX_LENGTH
+    while (
+        notification["body"] and _payload_size(notification) > _PUSH_PAYLOAD_MAX_BYTES
+    ):
+        body_limit = body_limit * 9 // 10
+        notification["body"] = _cut(body, body_limit) if body_limit > 3 else ""
     return notification
 
 

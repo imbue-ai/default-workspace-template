@@ -405,6 +405,18 @@ def test_a_long_title_and_message_are_cut_to_what_the_shell_takes() -> None:
     assert notification["body"].endswith("...")
 
 
+def test_a_body_too_many_bytes_for_one_push_is_cut_until_the_shell_takes_it() -> None:
+    notification = notify_user.device_notification(
+        "\U0001f600" * 1000, "Done", _GATEWAY_ENV
+    )
+
+    # The chat id gives it a tag, so this is every field the shell sends.
+    sent_bytes = json.dumps(notification, ensure_ascii=False).encode("utf-8")
+    assert len(sent_bytes) <= 3993
+    assert notification["body"].startswith("\U0001f600" * 500)
+    assert notification["body"].endswith("...")
+
+
 def test_does_not_push_while_a_page_is_watching_the_chat(
     environ: dict[str, str],
 ) -> None:
