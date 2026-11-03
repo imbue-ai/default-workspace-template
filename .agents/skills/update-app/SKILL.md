@@ -213,8 +213,8 @@ process restarts:
   the frame's own note (keeping the restarted app out of the launcher) and
   reloads the mock window, and otherwise it reloads the app's own windows.
   With no window open yet, a framed app's call ends with `mock_frame.py up
-  --app <name> --open` instead. Once a framed app reads its real data, take the frame down as `build-app`
-  Step 2 says.
+  --app <name> --open` instead. Once a framed app reads its real data, take
+  the frame down as `build-app` Step 2 says.
 
   A daemon with no port cannot use `verify_app.py` (it needs a port to
   check), so bounce it with supervisord directly; the call waits out the
