@@ -155,6 +155,13 @@ class SendMessageRequest(FrozenModel):
     desktop_id: str = Field(
         default="", description="The id of the desktop the sender was on at send time ('' for legacy callers)"
     )
+    is_repeat: bool = Field(
+        default=False,
+        description=(
+            "Whether the page is sending again, under the same message_id, a request that got no answer: it is "
+            "then answered as the send it repeats was, a refusal included, and never delivered a second time"
+        ),
+    )
 
 
 class MeResponse(FrozenModel):
@@ -671,11 +678,27 @@ class ActiveAgentSnapshot(FrozenModel):
             "harness had not finished starting. The Connecting sub-state of Sending (contract A1)."
         )
     )
+    is_resending_after_sign_in: bool = Field(
+        description=(
+            "Whether the account was signed in again and the chat app is restarting the agent to send it "
+            "the message its sign-in failure refused, if any"
+        )
+    )
     is_busy: bool = Field(
         description="Whether the agent will resume on its own: a turn is in flight, or a pending background task"
     )
     background_tasks: tuple[BackgroundTaskSnapshot, ...] = Field(
         description="The chat's pending background tasks, oldest first"
+    )
+
+
+class ResentSendSnapshot(FrozenModel):
+    """A message delivered by sending it a second time, whose first copy may have landed too."""
+
+    text: str = Field(description="What went to the agent, which its user turn holds")
+    sent_after: float = Field(description="Epoch seconds before the send began; an earlier turn is not this message")
+    closed_at: float | None = Field(
+        description="Epoch seconds the chat's next send began, or None before then: a later copy may be the user's own"
     )
 
 
@@ -698,6 +721,9 @@ class ChatSnapshot(FrozenModel):
     active_agent: ActiveAgentSnapshot = Field(description="The agent the chat currently runs on")
     last_messaged_at: float | None = Field(
         description="Epoch seconds of the chat's most recent message, or None when it has never been messaged; the chat list orders on it",
+    )
+    resent_sends: tuple[ResentSendSnapshot, ...] = Field(
+        default=(), description="The chat's recent messages delivered by sending them a second time, oldest first"
     )
     awaiting_chat_ids: tuple[ChatId, ...] = Field(
         default=(),

@@ -109,6 +109,9 @@ class AccountRow(FrozenModel):
     name: str = Field(description="The user's own name for the account; '' for none")
     label: str = Field(description="The provider, the harness and the number as one string")
     reauth_method: str = Field(description="The method 'Sign in again' runs for the account")
+    signed_in_at: str | None = Field(
+        description="When the account last finished a sign-in (ISO 8601), or null for one signed in before this was kept"
+    )
 
 
 class AccountsResponse(FrozenModel):
@@ -225,6 +228,7 @@ def list_accounts() -> Response:
             name=numbered.account.name,
             label=numbered.label,
             reauth_method=_reauth_method_id(numbered.account, numbered.harness),
+            signed_in_at=accounts.read_signed_in_at(numbered.account.id),
         )
         for numbered in accounts.number_accounts(index.accounts)
     )

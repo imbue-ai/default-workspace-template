@@ -42,7 +42,17 @@ observe`, its own supervised service) writes, and serves:
   account list changes (`accounts_updated` on `/api/ws`, from a poll of the
   account index) and reads it again, so a chat whose account was removed
   elsewhere shows the signed-out notice at once; a send refused for it anyway
-  offers "Choose a provider" in place of Retry.
+  offers "Choose a provider" in place of Retry. Each account carries when it
+  last finished a sign-in (`signed_in_at`, kept in its own folder), so a turn
+  that failed on the chat's sign-in before then reads "Signed in again." in
+  every open chat (a turn of the chat's current agent only: an earlier agent's
+  failure was on that agent's account). While the chat app is sending the refused message again
+  itself (its agent's snapshot reports `is_resending_after_sign_in`), the turn
+  says so; otherwise it offers to send the message again while it is still the
+  chat's newest turn, and after a resend that stopped partway, the messages it
+  did not get to. Once a refused message is sent again right after its
+  sign-in error, before the user writes anything else, the original and the
+  error are hidden, so the message shows once.
   The list's right edge drags to resize it (100px to 480px, 180px by default,
   kept per browser). On a phone-sized touchscreen (the shell's rule: a short side at
   most 500px and a long side at most 1000px, either way round), or a window at
@@ -369,6 +379,15 @@ client-activity report. The route answers 503 until
 the agent list has been read from mngr once, so a send during the app's first
 seconds is retried rather than mistaken for an unknown chat. See `docs/system/blueprint/chat-agent-split/`.
 
+A send naming its send-time id (`message_id`) goes through `send_ledger.py`: a
+page whose request got no answer sends it again under the same id, marked
+`is_repeat`, and the repeat gets the first send's answer, a refusal included
+(waiting for it while it is still under way), rather than a second delivery. A
+Retry under the same id gets a taken send's answer, but is sent afresh after a
+refusal. A page whose request still gets no answer cannot know whether the chat
+app took it, and the chat app is out of its reach, so nothing sends it again: it
+gets the "Couldn't confirm your message arrived" notice.
+
 A send mngr reports `agent_not_found` (the agent moved) or `not_submitted`
 (Claude never took it, and mngr cleared it from the input box) is sent again
 once, by discovery or at the same place. One the agent is not accepting yet
@@ -379,8 +398,8 @@ either, and is tried once more. One mngr could not confirm
 (`submission_unconfirmed`), or failed in a way it could not classify
 (`unknown`), may or may not have arrived; not sending one that never arrived is
 worse than sending it twice, so it is sent again once at the same place, and
-the route answers a send that then lands `{"status": "resent"}`. The page shows
-"Sent again" under the message, with a "?" saying the agent may see it twice,
+the route answers a send that then lands `{"status": "resent"}` (as the ledger
+answers its repeats). The page shows "Sent again" under the message, with a "?" saying the agent may see it twice,
 and folds a second copy that reaches the transcript into that line
 (`frontend/src/models/ResentSends.ts`). A send still unconfirmed the second
 time is not sent a third: its failure gets the "Couldn't confirm your message
@@ -882,7 +901,16 @@ access wasn't approved (claude.ai's own Deny reports nothing, so the chooser
 keeps waiting with Try again). A ChatGPT code login that ChatGPT refuses says to turn on device code
 sign-in for Codex in ChatGPT's security settings. "Sign in again" on an API-key
 account asks for a key again; any other account signs in through its lane's
-first way in (`reauth_method` on each account row).
+first way in (`reauth_method` on each account row). Signing in again
+restarts the live agents bound to the account (by the `account=<id>` label described below),
+and once a restarted agent is back, the message (or messages) its sign-in error
+answered is sent to it again through the delivery the message route uses, so
+the user does not retype it. Nothing is sent when the agent had already worked
+on that turn before the sign-in failed, when the user has written since, or while
+the chat is switching to another agent or account (or once it has switched).
+Which messages a sign-in error refused goes by timestamp, on both the page
+(`auth-recovery.ts`) and the chat app: claude can write the error into its
+transcript ahead of the message it refused.
 
 Only the workspace's owner can deliver a relayed callback: the callback route
 answers 403 to a request whose `X-Imbue-Identity` says `owner: false`.
