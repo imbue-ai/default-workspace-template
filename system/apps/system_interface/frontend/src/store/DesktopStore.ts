@@ -850,7 +850,7 @@ export class DesktopStore {
 
   /** The backdrop the frames are fractions of: the owner's while a viewed desktop is drawn in a letterbox, else
    *  this one. */
-  private frameBackdrop(): PixelSize {
+  frameBackdrop(): PixelSize {
     return this.viewingLetterbox()?.size ?? this.backdrop;
   }
 
@@ -3374,11 +3374,16 @@ export class DesktopStore {
     void this.flushPendingSave();
   }
 
+  /** The move or resize of a window in progress, else null. */
+  windowGesture(): MoveGesture | ResizeGesture | null {
+    const gesture = this.gesture;
+    return gesture !== null && (gesture.kind === "move" || gesture.kind === "resize") ? gesture : null;
+  }
+
   /** The frame a placement renders at while a gesture moves or resizes it, else its own. */
   gestureRectFor(windowId: string): PixelRect | null {
-    const gesture = this.gesture;
-    if (gesture === null || gesture.kind === "shortcut" || gesture.kind === "floating-entry") return null;
-    if (gesture.windowId !== windowId) return null;
+    const gesture = this.windowGesture();
+    if (gesture === null || gesture.windowId !== windowId) return null;
     return gesture.currentRect;
   }
 
