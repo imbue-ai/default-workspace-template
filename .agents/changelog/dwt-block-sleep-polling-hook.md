@@ -1,0 +1,1 @@
+The `connect-external-service` latchkey reference tells an agent waiting for an approved permission to appear to retry with a short sleep (a second or two) between tries, rather than to sleep for a few seconds, which the new foreground-sleep guard can refuse.
