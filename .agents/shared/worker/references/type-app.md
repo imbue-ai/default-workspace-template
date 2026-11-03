@@ -116,11 +116,19 @@ sideways scroll and runs the app's main action by tapping it.
 
 Over a share, every route answers whoever holds a grant on the whole
 workspace or on this app (`system/services/share_gateway/README.md`,
-"Grants"), and a visiting agent scoped to it, not just the pages the user
-clicks. Each request carries `X-Imbue-Identity` ("Request identity" there):
-`owner` is always present, `user_id` and `email` are present over a share, and
-a request with no header is the owner's. Locally the header looks the same,
-so the test client exercises all of this without turning sharing on.
+"Grants"), and a visiting agent scoped to it ("Visiting agents" there), not
+just the pages the user clicks. Each request carries `X-Imbue-Identity`
+("Request identity" there): `owner` is always present; a person over a share
+adds `user_id` and `email`; a visiting agent adds `agent_id`, `agent_name` and
+`granter`, with no `user_id`; and a request with no header is the owner's.
+Read it with `workspace_layout.identity`, as the shell and the chat app do
+(the app depends on `workspace-layout` by editable path, per
+`.agents/shared/references/running-python.md`, "User packages are standalone
+projects"): `parse_identity_header` (a header that does not parse is refused
+with a 400, never read as the owner's), `is_owner_participant`, and
+`participant_key_of`, which names the requester `user:<id>`, `agent:<id>`, or
+`owner`. Locally the header looks the same, so the test client exercises all
+of this without turning sharing on.
 
 - **The API.** Go through every route the app's API document lists and decide
   what a visitor may do with it. Reading what the app shows is usually what
@@ -135,22 +143,23 @@ so the test client exercises all of this without turning sharing on.
   report. The API document is what a visiting agent reads to learn the app
   (`build-app`'s "The app describes its own API"), so a route's description
   says when it is owner-only.
-- **Who did what.** When the app stores something a person made or changed
-  (an edit, a submission, a comment), store the header's `user_id` with it,
-  owner when the header says so or is absent; `email` is for display only,
+- **Who did what.** When the app stores something a person or an agent made
+  or changed (an edit, a submission, a comment), store the requester's
+  participant key with it; `email` and `agent_name` are for display only,
   never the key.
 - **The access log.** When visitors can change anything, the app keeps a log
   of who did it: one line per request that changed something, with the time,
-  the `user_id`, whether it was the owner, and the route. Keep it under the
+  the participant key, whether it was the owner, and the route. Keep it under the
   app's data directory and bound it like any other store ("Bound disk growth"
   in `harden-creation.md`). Log reads too only when the app shows data the
   owner would want to know was seen.
 
-Cover each with a test through the test client, sending a visitor's header
-(`{"owner": false, "user_id": "...", "email": "..."}`): an owner-only route
-answers the visitor 403 and still works for the owner and for a request with
-no header, a change records the visitor's `user_id`, and the access log gains
-its line.
+Cover each with a test through the test client, sending a person's header
+(`{"owner": false, "user_id": "...", "email": "..."}`) and a visiting agent's
+(`{"owner": false, "agent_id": "...", "agent_name": "...", "granter": "..."}`):
+an owner-only route answers both 403 and still works for the owner and for a
+request with no header, a change records the visitor's participant key, and
+the access log gains its line.
 
 ## Critical apps
 

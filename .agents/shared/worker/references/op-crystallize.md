@@ -74,10 +74,11 @@ testing/hardening and preserve-and-surface contract from `harden-creation.md`.
 **Pre-existing shape:** Once its own tests pass on your branch,
 commit and declare a **milestone** per `worker-reporting.md`'s "Milestone
 reports (non-blocking)". Name it for what is true at that commit, and make its
-`## Tested` section list exactly what you ran here and what you have not. The
-lead may merge that commit and let the user start using the hardened build
-while you work through the rest of the pass, so do not stop your turn: push it
-and go straight on. The first work after it is the phone and sharing checks
+`## Tested` section list exactly what you ran here and what you have not,
+naming the phone and sharing checks among what you have not. The lead may
+merge that commit and let the user start using the hardened build while you
+work through the rest of the pass, so do not stop your turn: push it and go
+straight on. The first work after it is the phone and sharing checks
 (`type-app.md`, "Phone and sharing checks"), so the user gets the hardened
 core first; then Stage 4.
 
