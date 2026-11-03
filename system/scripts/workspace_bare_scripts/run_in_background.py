@@ -417,7 +417,7 @@ def is_signal_exit(returncode: int) -> bool:
 def is_agent_running(agent_id: str, proc_dir: Path = Path("/proc")) -> bool:
     """Whether a process outside this runner's own process group carries the agent's id: the
     test ``mngr stop`` kills by, so a stopped agent has none. The group holds this runner and the
-    command it ran, which carry the id without being the agent. False where ``/proc`` is absent."""
+    command it ran, which carries the id without being the agent. False where ``/proc`` is absent."""
     needle = f"{AGENT_ID_ENV}={agent_id}".encode()
     if not proc_dir.is_dir():
         return False
