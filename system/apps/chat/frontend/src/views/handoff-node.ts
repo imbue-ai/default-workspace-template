@@ -17,7 +17,6 @@ import type { ToolResultEvent } from "../models/Response";
 import { harnessLabel } from "./harness-labels";
 import { isBlockExpanded, toggleBlockExpanded } from "./expansion-state";
 import { StableUserMessage, renderAssistantRun } from "./message-renderers";
-import { agentColumn } from "./machine-bubbles";
 import { isLiveHandoffRequest } from "./turn-grouping";
 import type { HandoffNode } from "./turn-grouping";
 import {
@@ -167,7 +166,8 @@ export function renderHandoffNode(
       // under the bullet and painted opaque, so it spans the row and caps the thread.
       status === "done"
         ? m("div", {
-            class: "pv-handoff-rule relative z-(--z-content) mt-3.5 -ml-[30px] h-2 border-t border-subtle bg-chat",
+            class:
+              "pv-handoff-rule relative z-(--z-content) mt-3.5 -ml-[30px] h-2 border-t border-subtle bg-agent-bubble",
             "aria-hidden": "true",
           })
         : null,
@@ -179,7 +179,7 @@ export function renderHandoffNode(
  *  reached the stream. Null once the transcript carries the request, when nothing is converging, and for a switch
  *  with no summary to show (a restart on another account, or a fresh start): the activity line by the composer is
  *  the one place that says it is under way. */
-export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean, isHeaded: boolean): m.Vnode | null {
+export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean): m.Vnode | null {
   const chat = getChatById(chatId);
   const handoff = chat?.handoff ?? null;
   if (handoff === null || handoff.kind === "rebind" || handoff.is_fresh_start || hasOpenRequest) return null;
@@ -188,7 +188,6 @@ export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean, i
   return renderHandoffRow(node, chatId, new Map(), {
     key: "handoff-tail",
     expansionKey: node.key,
-    isHeaded,
     extraClass: "handoff-tail-node",
   });
 }
@@ -196,15 +195,13 @@ export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean, i
 export interface HandoffRowFrame {
   readonly key: string;
   readonly expansionKey: string;
-  /** Whether the row opens a stretch of the agent's output, so it wears the agent's name and face. */
-  readonly isHeaded: boolean;
   /** The root's DOM id, for a row the virtualized list measures. */
   readonly id?: string;
   readonly extraClass?: string;
 }
 
 /** A handoff node standing as a row of its own: the same timeline node a progress block draws, in its own
- *  thread-less frame in the agent's column. */
+ *  thread-less frame. */
 export function renderHandoffRow(
   node: HandoffNode,
   chatId: string,
@@ -220,14 +217,11 @@ export function renderHandoffRow(
         (frame.extraClass === undefined ? "" : `${frame.extraClass} `) +
         "progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
     },
-    agentColumn(
-      frame.isHeaded,
-      m("div.pv.pv--timeline.relative", [
-        m(
-          "div.pv-timeline-nodes",
-          renderHandoffNode(node, chatId, toolResults, { isLast: true, expansionKey: frame.expansionKey }),
-        ),
-      ]),
-    ),
+    m("div.pv.pv--timeline.relative", [
+      m(
+        "div.pv-timeline-nodes",
+        renderHandoffNode(node, chatId, toolResults, { isLast: true, expansionKey: frame.expansionKey }),
+      ),
+    ]),
   );
 }

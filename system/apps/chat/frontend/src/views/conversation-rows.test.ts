@@ -17,7 +17,6 @@ import {
   type RowDescriptor,
 } from "./conversation-rows";
 import { AutocompactNotice } from "./AutocompactNotice";
-import { AGENT_COLUMN_CLASS } from "./machine-bubbles";
 import { ToolChipGroup, type ChipEntry } from "./ToolChipGroup";
 
 function userMsg(ts: string, content: string, id = `u-${ts}`): UserMessageEvent {
@@ -122,6 +121,58 @@ function agentMsg(ts: string, callId: string, description: string): AssistantMes
   };
 }
 
+/** Every node of a rendered (unmounted) vnode tree. */
+function vnodes(
+  node: unknown,
+): { tag?: unknown; key?: unknown; attrs?: Record<string, unknown>; children?: unknown }[] {
+  if (node == null || typeof node !== "object") return [];
+  if (Array.isArray(node)) return node.flatMap(vnodes);
+  const v = node as { tag?: unknown; key?: unknown; attrs?: Record<string, unknown>; children?: unknown };
+  return [v, ...vnodes(v.children)];
+}
+
+/** The parts a stretch's row holds in its bubble, as the vnodes the row renders. */
+function turnParts(row: RowDescriptor): { key?: unknown; children?: unknown }[] {
+  const bubble = vnodes(row.render()).find((v) => v.attrs?.["data-machine-bubble"] !== undefined);
+  return bubble === undefined ? [] : (bubble.children as { key?: unknown }[]);
+}
+
+/** The transcript as the list shows it: a person's turn by its key, a stretch of the agent's output by the keys of
+ *  the parts in its bubble. */
+function layout(rows: RowDescriptor[]): (string | string[])[] {
+  return rows.map((row) => (row.key.startsWith("turn-") ? turnParts(row).map((part) => String(part.key)) : row.key));
+}
+
+/** The part of a stretch with this key, wherever it sits. */
+function part(rows: RowDescriptor[], key: string): unknown {
+  const found = rows.flatMap(turnParts).find((p) => p.key === key);
+  expect(found).toBeDefined();
+  return found;
+}
+
+const NOTICE: UserMessageEvent = {
+  ...userMsg("t5", "<task-notification>\n<status>completed</status>\n</task-notification>", "n1"),
+  display: "notice",
+  display_label: "Background task completed",
+  display_body: 'Background command "Wait for the worker" completed',
+};
+
+const AGENT_SWITCH: AgentSwitchEvent = {
+  timestamp: "t3",
+  type: "agent_switch",
+  event_id: "sw1",
+  source: "chat",
+  agent_id: "agent-b",
+  from_agent_id: "agent-a",
+  to_agent_id: "agent-b",
+  from_harness: "claude",
+  to_harness: "codex",
+  seq: 1,
+  message_id: null,
+  message: null,
+  is_fresh_start: false,
+};
+
 describe("buildConversationRows", () => {
   // The point of the shared builder: a subagent's transcript runs the same
   // section -> rows pipeline as the main chat, so a turn that declares tk steps
@@ -140,38 +191,27 @@ describe("buildConversationRows", () => {
 
     const rows = buildConversationRows("agent-1", events, /* isTailSettled */ true);
 
-    const userRow = rows.find((r) => r.key === "u-t1");
-    expect(userRow).toBeDefined();
-    const progressRows = rows.filter((r) => r.key.startsWith("progress-"));
-    expect(progressRows).toHaveLength(1);
-    // The raw tk Bash calls are folded into the progress block, not surfaced as
-    // their own rows.
-    expect(rows.some((r) => r.key === "a-c1" || r.key === "a-c2")).toBe(false);
+    // The raw tk Bash calls are folded into the progress block, not surfaced as parts of their own.
+    expect(layout(rows)).toEqual(["u-t1", ["progress-section-u-t1"]]);
   });
 
-  it("renders a turn with no steps as plain user/assistant rows", () => {
+  it("renders a turn with no steps as a person's row and the agent's stretch", () => {
     const events: TranscriptEvent[] = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn")];
 
     const rows = buildConversationRows("agent-1", events, true);
 
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2"]);
-    expect(rows.some((r) => r.key.startsWith("progress-"))).toBe(false);
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2"]]);
+    expect(rows[1].anchorEventId).toBe("a-t2");
   });
 
-  // A notice the agent was woken by sits between what it said before and what it did after.
+  // A notice the agent was woken by sits between what it said before and what it did after, in the same stretch.
   it("renders a notice between the turn it ended and the work it woke the agent for", () => {
-    const notice: UserMessageEvent = {
-      ...userMsg("t5", "<task-notification>\n<status>completed</status>\n</task-notification>", "n1"),
-      display: "notice",
-      display_label: "Background task completed",
-      display_body: 'Background command "Wait for the worker" completed',
-    };
     const plain = buildConversationRows(
       "agent-1",
-      [userMsg("t1", "hello"), assistantText("t2", "on it", "end_turn"), notice, assistantText("t6", "it finished")],
+      [userMsg("t1", "hello"), assistantText("t2", "on it", "end_turn"), NOTICE, assistantText("t6", "it finished")],
       true,
     );
-    expect(plain.map((r) => r.key)).toEqual(["u-t1", "a-t2", "n1", "a-t6"]);
+    expect(layout(plain)).toEqual(["u-t1", ["a-t2", "n1", "a-t6"]]);
 
     const withStep = buildConversationRows(
       "agent-1",
@@ -180,16 +220,16 @@ describe("buildConversationRows", () => {
         tkMsg("t2", "tk start cod-step-aaa", "c1"),
         result("c1", "Updated cod-step-aaa -> in_progress\ntk-step cod-step-aaa title: Look into it"),
         assistantText("t3", "running in the background", "end_turn"),
-        notice,
+        NOTICE,
         tkMsg("t6", 'tk close cod-step-aaa "looked into it"', "c2"),
         result("c2", "Updated cod-step-aaa -> closed\ntk-step cod-step-aaa title: Look into it"),
       ],
       true,
     );
-    expect(withStep.map((r) => r.key)).toEqual(["u-t1", "progress-section-u-t1", "n1", "progress-section-n1"]);
+    expect(layout(withStep)).toEqual(["u-t1", ["progress-section-u-t1", "n1", "progress-section-n1"]]);
   });
 
-  // Back-to-back tool calls arrive as separate events; on separate rows each
+  // Back-to-back tool calls arrive as separate events; as separate parts each
   // would render as a lone chip a full message gap below the last.
   it("merges a run of consecutive tool-call events into one chip row", () => {
     const events: TranscriptEvent[] = [
@@ -201,12 +241,11 @@ describe("buildConversationRows", () => {
 
     const rows = buildConversationRows("agent-1", events, true);
 
-    // One row for both calls, standing where the first of them does, and the
+    // One part for both calls, standing where the first of them does, and the
     // wrap-up reply below it.
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-t4"]);
-    const chipRow = rows.find((r) => r.key === "a-c1")!;
-    expect(chipRow.estimate).toBe(ESTIMATED_CHIP_ROW_HEIGHT_PX);
-    expect(chipRow.anchorEventId).toBe("a-c1");
+    expect(layout(rows)).toEqual(["u-t1", ["a-c1", "a-t4"]]);
+    expect(rows[1].estimate).toBe(ESTIMATED_CHIP_ROW_HEIGHT_PX + ESTIMATED_ASSISTANT_HEIGHT_PX);
+    expect(rows[1].anchorEventId).toBe("a-c1");
   });
 
   // The line of intent and the calls that carry it out are one message, so the
@@ -222,10 +261,9 @@ describe("buildConversationRows", () => {
 
     const rows = buildConversationRows("agent-1", events, true);
 
-    // The prose and both calls are one row, standing where the prose does; the
+    // The prose and both calls are one part, standing where the prose does; the
     // result stays its own message below.
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "a-t5"]);
-    expect(rows.find((r) => r.key === "a-t2")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2", "a-t5"]]);
   });
 
   // Only chip-only events accrete onto a run: prose is a message in its own
@@ -242,11 +280,9 @@ describe("buildConversationRows", () => {
 
     const rows = buildConversationRows("agent-1", events, true);
 
-    // c1+c2 on one chip row, then the mid-turn prose heading a row that takes
+    // c1+c2 on one chip run, then the mid-turn prose heading a run that takes
     // c3 with it, then the wrap-up reply.
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-t4", "a-t6"]);
-    expect(rows.find((r) => r.key === "a-c1")!.estimate).toBe(ESTIMATED_CHIP_ROW_HEIGHT_PX);
-    expect(rows.find((r) => r.key === "a-t4")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
+    expect(layout(rows)).toEqual(["u-t1", ["a-c1", "a-t4", "a-t6"]]);
   });
 
   // A sub-agent is a whole conversation rather than an action, so its card is
@@ -262,74 +298,52 @@ describe("buildConversationRows", () => {
 
     const rows = buildConversationRows("agent-1", events, true);
 
-    // The card does not fold into c1's chip row; it heads its own, which c3
+    // The card does not fold into c1's chip run; it heads its own, which c3
     // then joins the way it would inside a single event.
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-c2", "a-t5"]);
-    expect(rows.find((r) => r.key === "a-c2")!.estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX);
+    expect(layout(rows)).toEqual(["u-t1", ["a-c1", "a-c2", "a-t5"]]);
   });
 
-  // A chat that moved to another agent shows the seam as its own row, the handoff node keyed by
-  // the switch event, between the two agents' turns.
-  it("renders an agent switch as a handoff node row between the agents' turns", () => {
-    const agentSwitch: AgentSwitchEvent = {
-      timestamp: "t3",
-      type: "agent_switch",
-      event_id: "sw1",
-      source: "chat",
-      agent_id: "agent-b",
-      from_agent_id: "agent-a",
-      to_agent_id: "agent-b",
-      from_harness: "claude",
-      to_harness: "codex",
-      seq: 1,
-      message_id: null,
-      message: null,
-      is_fresh_start: false,
-    };
+  // A chat that moved to another agent shows the seam at the end of the retiring agent's stretch, the handoff node
+  // keyed by the switch event, and the new agent's output is a stretch of its own.
+  it("ends the retiring agent's stretch at its handoff node and starts the new agent's", () => {
     const events: TranscriptEvent[] = [
       userMsg("t1", "hello"),
       assistantText("t2", "from claude", "end_turn"),
-      agentSwitch,
+      AGENT_SWITCH,
       assistantText("t4", "from codex", "end_turn"),
     ];
 
-    const rows = buildConversationRows("agent-1", events, true);
+    expect(layout(buildConversationRows("agent-1", events, true))).toEqual([
+      "u-t1",
+      ["a-t2", "handoff-sw1"],
+      ["a-t4"],
+    ]);
 
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "handoff-sw1", "a-t4"]);
-    expect(rows[2].anchorEventId).toBe("sw1");
-
-    // A fresh start had no handoff to show: no row stands between the two agents' turns.
+    // A fresh start had no handoff to show, though the two agents' output is still two stretches.
     const fresh = buildConversationRows(
       "agent-1",
-      [events[0], events[1], { ...agentSwitch, is_fresh_start: true }, events[3]],
+      [events[0], events[1], { ...AGENT_SWITCH, is_fresh_start: true }, events[3]],
       true,
     );
-    expect(fresh.map((r) => r.key)).toEqual(["u-t1", "a-t2", "a-t4"]);
+    expect(layout(fresh)).toEqual(["u-t1", ["a-t2"], ["a-t4"]]);
   });
 });
 
-describe("the agent's name and face over its stretches of output", () => {
+describe("one bubble for each stretch of the agent's output", () => {
   const STEP_DONE = "Updated cod-step-aaa -> closed\ntk-step cod-step-aaa title: Install the update";
 
   /** Each row mounted on its own, as the windowed list mounts it. */
-  function renderRow(row: RowDescriptor): HTMLElement {
-    const slot = document.createElement("div");
-    m.render(slot, row.render());
-    return slot;
-  }
-
   function renderRows(rows: RowDescriptor[]): HTMLElement {
     const list = document.createElement("div");
-    for (const row of rows) list.appendChild(renderRow(row));
+    for (const row of rows) {
+      const slot = document.createElement("div");
+      m.render(slot, row.render());
+      list.appendChild(slot);
+    }
     return list;
   }
 
-  /** The keys of the rows that draw the agent's name and face. */
-  function headedKeys(rows: RowDescriptor[]): string[] {
-    return rows.filter((row) => renderRow(row).querySelector("[data-machine-header]") !== null).map((row) => row.key);
-  }
-
-  it("heads only the first row of a stretch, through prose, tool work and more prose", () => {
+  it("holds prose, tool work and more prose in one bubble under one header", () => {
     const rows = buildConversationRows(
       "agent-1",
       [
@@ -341,77 +355,73 @@ describe("the agent's name and face over its stretches of output", () => {
       true,
     );
 
-    expect(rows.map((row) => row.key)).toEqual(["u-t1", "a-t2", "a-t4"]);
-    expect(headedKeys(rows)).toEqual(["a-t2"]);
-    expect(renderRows(rows).querySelectorAll("[data-machine-header]")).toHaveLength(1);
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2", "a-t4"]]);
+    const list = renderRows(rows);
+    expect(list.querySelectorAll("[data-machine-header]")).toHaveLength(1);
+    const bubbles = list.querySelectorAll("[data-machine-bubble]");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0].querySelector(".tool-chip-group")).not.toBeNull();
+    expect(bubbles[0].textContent).toContain("The new version does move it.");
   });
 
-  it("heads the stretch again once the person speaks, but not after a system notice", () => {
-    const notice: UserMessageEvent = {
-      ...userMsg("t4", "<task-notification>\n<status>completed</status>\n</task-notification>", "n1"),
-      display: "notice",
-      display_label: "Background task completed",
-      display_body: 'Background command "Wait for the worker" completed',
-    };
+  it("starts a new bubble once the person speaks, but keeps a system notice inside the stretch's", () => {
     const rows = buildConversationRows(
       "agent-1",
       [
         userMsg("t1", "install it"),
         assistantText("t2", "Waiting on the background agent.", "end_turn"),
-        notice,
-        assistantText("t5", "It finished; installing now.", "end_turn"),
-        userMsg("t6", "thanks"),
-        assistantText("t7", "Any time.", "end_turn"),
+        NOTICE,
+        assistantText("t6", "It finished; installing now.", "end_turn"),
+        userMsg("t7", "thanks"),
+        assistantText("t8", "Any time.", "end_turn"),
       ],
       true,
     );
 
-    expect(rows.map((row) => row.key)).toEqual(["u-t1", "a-t2", "n1", "a-t5", "u-t6", "a-t7"]);
-    expect(headedKeys(rows)).toEqual(["a-t2", "a-t7"]);
-    expect(rows[rows.length - 1].isAgentHeaderShown).toBe(true);
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2", "n1", "a-t6"], "u-t7", ["a-t8"]]);
+    const list = renderRows(rows);
+    expect(list.querySelectorAll("[data-machine-header]")).toHaveLength(2);
+    expect(list.querySelector("[data-machine-bubble] .message-notice")).not.toBeNull();
   });
 
-  it("heads the stretch again after another agent takes over", () => {
-    const agentSwitch: AgentSwitchEvent = {
-      timestamp: "t3",
-      type: "agent_switch",
-      event_id: "sw1",
-      source: "chat",
-      agent_id: "agent-b",
-      from_agent_id: "agent-a",
-      to_agent_id: "agent-b",
-      from_harness: "claude",
-      to_harness: "codex",
-      seq: 1,
-      message_id: null,
-      message: null,
-      is_fresh_start: false,
-    };
-    const rows = buildConversationRows(
+  it("puts the agent's output past the rows in the last bubble only while that stretch is open", () => {
+    const tail = (): m.Children[] => [m("div.live-tail", { key: "live" }, "still writing")];
+    const open = buildConversationRows(
       "agent-1",
-      [
-        userMsg("t1", "hello"),
-        assistantText("t2", "from claude", "end_turn"),
-        agentSwitch,
-        assistantText("t4", "from codex"),
-      ],
+      [userMsg("t1", "hello"), assistantText("t2", "working on it")],
       true,
+      null,
+      null,
+      tail,
     );
+    expect(open[open.length - 1].takesLiveTail).toBe(true);
+    expect(layout(open)).toEqual(["u-t1", ["a-t2", "live"]]);
 
-    expect(rows.map((row) => row.key)).toEqual(["u-t1", "a-t2", "handoff-sw1", "a-t4"]);
-    expect(headedKeys(rows)).toEqual(["a-t2", "a-t4"]);
-
-    // Before the new agent's first event lands, the reply it is writing past the rows opens its stretch.
-    const rowsBeforeReply = buildConversationRows(
+    // Another agent took over and has written nothing yet: the reply it is writing is not the retiring agent's.
+    const switched = buildConversationRows(
       "agent-1",
-      [userMsg("t1", "hello"), assistantText("t2", "from claude", "end_turn"), agentSwitch],
+      [userMsg("t1", "hello"), assistantText("t2", "from claude", "end_turn"), AGENT_SWITCH],
       true,
+      null,
+      null,
+      tail,
     );
-    expect(rowsBeforeReply.map((row) => row.key)).toEqual(["u-t1", "a-t2", "handoff-sw1"]);
-    expect(rowsBeforeReply[rowsBeforeReply.length - 1].isAgentHeaderShown).toBe(false);
+    expect(layout(switched)).toEqual(["u-t1", ["a-t2", "handoff-sw1"]]);
+    expect(switched[switched.length - 1].takesLiveTail).toBe(false);
+
+    // The transcript ends on the person's turn: the agent's output past it is a stretch of its own, drawn by the page.
+    const afterPerson = buildConversationRows(
+      "agent-1",
+      [userMsg("t1", "hello"), assistantText("t2", "hi", "end_turn"), userMsg("t3", "and?")],
+      true,
+      null,
+      null,
+      tail,
+    );
+    expect(afterPerson[afterPerson.length - 1].takesLiveTail).toBe(false);
   });
 
-  it("heads a turn with steps once, over its timeline, and draws its prose and reply as bubbles", () => {
+  it("holds a turn's timeline, its prose and its closing reply in the one bubble", () => {
     const rows = buildConversationRows(
       "agent-1",
       [
@@ -427,24 +437,15 @@ describe("the agent's name and face over its stretches of output", () => {
       true,
     );
 
-    expect(rows.map((row) => row.key)).toEqual(["u-t1", "progress-section-u-t1"]);
-    expect(headedKeys(rows)).toEqual(["progress-section-u-t1"]);
-
-    const block = renderRows(rows).querySelector(".progress-block")!;
-    expect(block.querySelectorAll("[data-machine-header]")).toHaveLength(1);
-    // The timeline and every bubble share the agent's column.
-    expect(block.querySelector(".pv--timeline")?.parentElement?.className).toBe(AGENT_COLUMN_CLASS);
-    const bubbleTexts = [...block.querySelectorAll("[data-machine-bubble]")].map((bubble) =>
-      bubble.textContent?.trim(),
-    );
-    expect(bubbleTexts).toEqual([
-      "Checks all passed. Installing now.",
-      "The script moved in the update.",
-      "Your workspace is on the new version.",
-    ]);
-    expect(block.querySelector(".pv-final [data-machine-bubble]")?.textContent?.trim()).toBe(
-      "Your workspace is on the new version.",
-    );
+    expect(layout(rows)).toEqual(["u-t1", ["progress-section-u-t1"]]);
+    const list = renderRows(rows);
+    expect(list.querySelectorAll("[data-machine-header]")).toHaveLength(1);
+    const bubbles = list.querySelectorAll("[data-machine-bubble]");
+    expect(bubbles).toHaveLength(1);
+    expect(bubbles[0].querySelector(".pv--timeline")).not.toBeNull();
+    expect(bubbles[0].querySelector(".pv-final")?.textContent?.trim()).toBe("Your workspace is on the new version.");
+    expect(bubbles[0].textContent).toContain("Checks all passed. Installing now.");
+    expect(bubbles[0].textContent).toContain("The script moved in the update.");
   });
 });
 
@@ -468,7 +469,7 @@ describe("a message the chat app sent again", () => {
       notedTurnIds: new Set(["copy-1"]),
       foldedTurnIds: new Set(["copy-2"]),
     });
-    expect(rows.map((row) => row.key)).toEqual(["copy-1", "a-t2", "a-t4"]);
+    expect(layout(rows)).toEqual(["copy-1", ["a-t2", "a-t4"]]);
     expect(hasClass(rows[0].render(), "message-resent-note")).toBe(true);
   });
 
@@ -499,30 +500,20 @@ describe("a compaction's chips in the rows", () => {
     ];
   }
 
-  /** Every node of a rendered (unmounted) vnode tree. */
-  function vnodes(node: unknown): { tag?: unknown; attrs?: Record<string, unknown> }[] {
-    if (node == null || typeof node !== "object") return [];
-    if (Array.isArray(node)) return node.flatMap(vnodes);
-    const v = node as { tag?: unknown; attrs?: Record<string, unknown>; children?: unknown };
-    return [v, ...vnodes(v.children)];
-  }
-
-  /** Each chip row a row renders, as its chips. */
-  function rowChips(rows: RowDescriptor[], key: string): ChipEntry[][] {
-    const row = rows.find((r) => r.key === key);
-    expect(row).toBeDefined();
-    return vnodes(row!.render())
+  /** Each chip row a part renders, as its chips. */
+  function partChips(rows: RowDescriptor[], key: string): ChipEntry[][] {
+    return vnodes(part(rows, key))
       .filter((v) => v.tag === ToolChipGroup)
       .map((v) => v.attrs!.chips as ChipEntry[]);
   }
 
-  /** Each chip row a row renders, as its chips: a call by its id, a status chip by its label. */
+  /** Each chip row a part renders, as its chips: a call by its id, a status chip by its label. */
   function chipRows(rows: RowDescriptor[], key: string): string[][] {
-    return rowChips(rows, key).map((chips) => chips.map((c) => (c.kind === "tool" ? c.call.tool_call_id : c.label)));
+    return partChips(rows, key).map((chips) => chips.map((c) => (c.kind === "tool" ? c.call.tool_call_id : c.label)));
   }
 
   function hasNotice(rows: RowDescriptor[], key: string): boolean {
-    return vnodes(rows.find((r) => r.key === key)!.render()).some((v) => v.tag === AutocompactNotice);
+    return vnodes(part(rows, key)).some((v) => v.tag === AutocompactNotice);
   }
 
   // idle: the sweep compacted after the turn's reply, so the chips follow it.
@@ -532,12 +523,10 @@ describe("a compaction's chips in the rows", () => {
       [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn"), compacted("t3", "cs1", "idle")],
       true,
     );
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "cs1"]);
-    const row = rows.find((r) => r.key === "cs1")!;
-    expect(row.estimate).toBe(ESTIMATED_CHIP_ROW_HEIGHT_PX);
-    expect(row.anchorEventId).toBe("cs1");
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2", "cs1"]]);
+    expect(rows[1].estimate).toBe(ESTIMATED_ASSISTANT_HEIGHT_PX + ESTIMATED_CHIP_ROW_HEIGHT_PX);
     expect(chipRows(rows, "cs1")).toEqual([["Compacting while idle…", "Compacted"]]);
-    expect((row.render() as { attrs: { id?: string } }).attrs.id).toBe("cs1");
+    expect((part(rows, "cs1") as { attrs: { id?: string } }).attrs.id).toBe("cs1");
   });
 
   // native: the agent's own compaction joins the chip run it landed in, between its tool calls.
@@ -553,7 +542,7 @@ describe("a compaction's chips in the rows", () => {
       ],
       true,
     );
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1", "a-t5"]);
+    expect(layout(rows)).toEqual(["u-t1", ["a-c1", "a-t5"]]);
     expect(chipRows(rows, "a-c1")).toEqual([["c1", "Compacting to free up context…", "Compacted", "c2"]]);
   });
 
@@ -570,17 +559,16 @@ describe("a compaction's chips in the rows", () => {
       ],
       true,
     );
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "a-t5"]);
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2", "a-t5"]]);
     expect(chipRows(rows, "a-t2")).toEqual([["Compacting to free up context…", "Compacted", "c2"]]);
 
-    // At the head of a turn's stream, the chip row is a row of its own.
+    // At the head of a turn's stream, the chip row is a part of its own.
     const leading = buildConversationRows(
       "agent-1",
       [userMsg("t1", "go"), compacted("t2", "cs-lead", "native"), assistantText("t3", "done", "end_turn")],
       true,
     );
-    expect(leading.map((r) => r.key)).toEqual(["u-t1", "cs-lead", "a-t3"]);
-    expect(leading.find((r) => r.key === "cs-lead")!.estimate).toBe(ESTIMATED_CHIP_ROW_HEIGHT_PX);
+    expect(layout(leading)).toEqual(["u-t1", ["cs-lead", "a-t3"]]);
   });
 
   // manual: the typed /compact is the user's own bubble, and the chips stand under it.
@@ -595,23 +583,23 @@ describe("a compaction's chips in the rows", () => {
       ],
       true,
     );
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "u-compact", "cs-manual"]);
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2"], "u-compact", ["cs-manual"]]);
     expect(chipRows(rows, "cs-manual")).toEqual([["Compacting as requested…", "Compacted"]]);
   });
 
   it("puts the start chip alone where the pair will land while the agent compacts, then the pair", () => {
     const before = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn"), ...compactCommand("t3")];
     const during = buildConversationRows("agent-1", before, true, { cause: "manual" });
-    expect(during.map((r) => r.key)).toEqual(["u-t1", "a-t2", "u-compact", "compaction-running"]);
+    expect(layout(during)).toEqual(["u-t1", ["a-t2"], "u-compact", ["compaction-running"]]);
     expect(chipRows(during, "compaction-running")).toEqual([["Compacting as requested…"]]);
-    // It has no event of its own yet, so the row resolves by the one before it.
-    expect(during.find((r) => r.key === "compaction-running")!.anchorEventId).toBeNull();
+    // It has no event of its own yet, so its row resolves by the one before it.
+    expect(during[during.length - 1].anchorEventId).toBeNull();
 
     // The marker can outlast the event by a poll: the event's own pair shows, and no second start chip.
     const landed = buildConversationRows("agent-1", [...before, compacted("t4", "cs-manual", "manual")], true, {
       cause: "manual",
     });
-    expect(landed.map((r) => r.key)).toEqual(["u-t1", "a-t2", "u-compact", "cs-manual"]);
+    expect(layout(landed)).toEqual(["u-t1", ["a-t2"], "u-compact", ["cs-manual"]]);
     expect(chipRows(landed, "cs-manual")).toEqual([["Compacting as requested…", "Compacted"]]);
   });
 
@@ -619,13 +607,13 @@ describe("a compaction's chips in the rows", () => {
   it("shows the idle sweep's /compact on the start chip, not as a bubble, while it runs and once it lands", () => {
     const before = [userMsg("t1", "hello"), assistantText("t2", "hi there", "end_turn"), ...compactCommand("t3")];
     const during = buildConversationRows("agent-1", before, true, { cause: "idle" });
-    expect(during.map((r) => r.key)).toEqual(["u-t1", "a-t2", "compaction-running"]);
+    expect(layout(during)).toEqual(["u-t1", ["a-t2", "compaction-running"]]);
     expect(chipRows(during, "compaction-running")).toEqual([["Compacting while idle…"]]);
 
     const landed = buildConversationRows("agent-1", [...before, compacted("t4", "cs-idle", "idle")], true);
-    expect(landed.map((r) => r.key)).toEqual(["u-t1", "a-t2", "cs-idle"]);
+    expect(layout(landed)).toEqual(["u-t1", ["a-t2", "cs-idle"]]);
     expect(chipRows(landed, "cs-idle")).toEqual([["Compacting while idle…", "Compacted"]]);
-    const commands = rowChips(landed, "cs-idle")
+    const commands = partChips(landed, "cs-idle")
       .flat()
       .flatMap((c) => (c.kind === "status" ? c.sections : []))
       .filter((section) => section.kind === "output" && section.marker === "compaction-command");
@@ -643,7 +631,7 @@ describe("a compaction's chips in the rows", () => {
       ],
       true,
     );
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-c1"]);
+    expect(layout(rows)).toEqual(["u-t1", ["a-c1"]]);
     expect(chipRows(rows, "a-c1")).toEqual([["c1", "Compacting while idle…", "Compacted"]]);
   });
 
@@ -653,10 +641,10 @@ describe("a compaction's chips in the rows", () => {
       [...compactCommand("t1"), userMsg("t2", "never mind"), compacted("t3", "cs-idle", "idle")],
       true,
     );
-    expect(refused.map((r) => r.key)).toEqual(["u-compact", "u-t2", "cs-idle"]);
+    expect(layout(refused)).toEqual(["u-compact", "u-t2", ["cs-idle"]]);
 
     const pending = buildConversationRows("agent-1", compactCommand("t1"), true, { cause: "manual" });
-    expect(pending.map((r) => r.key)).toEqual(["u-compact", "compaction-running"]);
+    expect(layout(pending)).toEqual(["u-compact", ["compaction-running"]]);
   });
 
   it("puts the one-time notice under the chip row holding the latest idle compaction only", () => {
@@ -675,9 +663,9 @@ describe("a compaction's chips in the rows", () => {
       ],
       true,
     );
-    expect(rows.map((r) => r.key)).toEqual(["u-t1", "a-t2", "cs1", "u-t4", "a-c1", "u-t7", "a-t8", "cs3"]);
+    expect(layout(rows)).toEqual(["u-t1", ["a-t2", "cs1"], "u-t4", ["a-c1"], "u-t7", ["a-t8", "cs3"]]);
     expect(hasNotice(rows, "cs1")).toBe(false);
-    // The latest idle compaction joined the turn's last chip run; the notice sits under that row.
+    // The latest idle compaction joined the turn's last chip run; the notice sits under that run.
     expect(chipRows(rows, "a-c1")).toEqual([["c1", "Compacting while idle…", "Compacted"]]);
     expect(hasNotice(rows, "a-c1")).toBe(true);
     expect(hasNotice(rows, "cs3")).toBe(false);

@@ -5,9 +5,7 @@
  * transcript walk (see turn-grouping): step nodes, ungrouped work/prose runs
  * (rendered inline, thread-breaking -- including a step's ejected closing
  * prose), and chips. Step nodes carry their own grouped events; expanding a step
- * reveals that grouped work. The wrap-up reply renders below the timeline, in a
- * bubble like the rest of the agent's prose, and the whole block sits in the
- * agent's column.
+ * reveals that grouped work. The wrap-up reply renders below the timeline.
  *
  * This component renders structure it is given; it does no grouping or
  * ordering itself.
@@ -20,7 +18,6 @@ import type { ToolResultEvent, AssistantMessageEvent } from "../models/Response"
 import { renderAssistantRun, renderPermissionItem, renderUserMessage } from "./message-renderers";
 import type { StepNode, StepStatus, TimelineItem } from "./turn-grouping";
 import { renderHandoffNode } from "./handoff-node";
-import { agentColumn } from "./machine-bubbles";
 import {
   TIMELINE_BODY_CLASS,
   TIMELINE_BULLET_CLASS,
@@ -43,8 +40,6 @@ interface ProgressBlockAttrs {
    *  only references a subset. */
   toolResults: Map<string, ToolResultEvent>;
   chatId: string;
-  /** Whether the block opens a stretch of the agent's output, so it wears the agent's name and face. */
-  isHeaded: boolean;
   /** Optional DOM id for the root, so a virtualized list can measure this
    *  block's height by querying ``.message-list > [id]``. */
   id?: string;
@@ -179,7 +174,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
 
   return {
     view(vnode) {
-      const { items, trailing_reply, toolResults, chatId, isHeaded, id } = vnode.attrs;
+      const { items, trailing_reply, toolResults, chatId, id } = vnode.attrs;
       blockKeyPrefix = id ?? "";
 
       // Index of the last node on the thread (a step or a handoff), so only it gets the `--last` cap.
@@ -196,16 +191,16 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           // Real work / prose that happened with no step open -- including a
           // step's ejected closing prose: rendered inline as a thread-breaking
           // block, exactly like a no-steps turn. Top space as padding, not
-          // margin, so the opaque chat background extends up and masks a bit
+          // margin, so the opaque bubble fill extends up and masks a bit
           // of the timeline thread above the run. z-[2]:
           // design-system-exception -- lifts it above the thread; the z scale
           // has no "content + 1" layer.
           return m(
             "div",
-            { class: "pv-ungrouped relative z-[2] mb-3.5 bg-chat pt-1.5", key: item.key },
+            { class: "pv-ungrouped relative z-[2] mb-3.5 bg-agent-bubble pt-1.5", key: item.key },
             // The whole ungrouped run at once, so its tool calls merge into one
             // chip row the way a step's revealed work does.
-            renderAssistantRun(item.events, toolResults, chatId, { isBesideFace: isHeaded && idx === 0 }),
+            renderAssistantRun(item.events, toolResults, chatId),
           );
         }
         if (item.kind === "permission") {
@@ -213,8 +208,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           // thread-breaking block so it is always visible, as the
           // permission-request card the renderer produces (with its review button
           // or, once the user decides, a granted/denied verdict). The card
-          // carries its own opaque surface, so no background here (it would
-          // paint the shell's off-white over the pure-white transcript).
+          // carries its own opaque surface, so no background here.
           // z-[2]: design-system-exception, as above.
           return m(
             "div",
@@ -235,13 +229,12 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
             expansionKey: `handoff:${blockKeyPrefix}:${item.node.key}`,
           });
         }
-        // A chip that landed inside an open handoff; the opaque pure-white chat background
-        // masks the thread behind it.
+        // A chip that landed inside an open handoff; the opaque bubble fill masks the thread behind it.
         // z-[2]: design-system-exception, as above.
         return m(
           "div",
           {
-            class: "pv-stophook relative z-[2] mt-1.5 mb-3.5 bg-chat",
+            class: "pv-stophook relative z-[2] mt-1.5 mb-3.5 bg-agent-bubble",
             key: `${item.kind}-${item.event.event_id}`,
           },
           renderUserMessage(item.event),
@@ -254,7 +247,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
           class: "progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal text-primary",
           id,
         },
-        agentColumn(isHeaded, [
+        [
           m("div.pv.pv--timeline.relative", [
             // The vertical thread the bullets sit on; nodes mask it with their
             // own opaque backgrounds.
@@ -271,7 +264,7 @@ export function ProgressBlock(): m.Component<ProgressBlockAttrs> {
               renderAssistantRun([ev], toolResults, chatId),
             ),
           ),
-        ]),
+        ],
       );
     },
   };

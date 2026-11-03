@@ -35,16 +35,11 @@ export function timelineSpinnerBullet(): m.Vnode {
   );
 }
 
-/**
- * The row itself, minus the status markers each call site adds. The right-hand
- * inset is the agent's gutter (see --width-agent-gutter): task rows stop short
- * of the column edge exactly as the agent's prose does, so the timeline and the
- * replies around it share one right margin.
- */
-export const TIMELINE_NODE_CLASS = "relative flex max-w-[calc(100%-var(--width-agent-gutter))] items-start gap-3.5";
+/** The row itself, minus the status markers each call site adds. */
+export const TIMELINE_NODE_CLASS = "relative flex items-start gap-3.5";
 
 /**
- * The bullet gutter. Its opaque chat background masks the thread behind it.
+ * The bullet gutter. Its opaque bubble fill masks the thread behind it.
  *
  * The box is exactly one title line tall and centres the bullet in it, so the
  * bullet and the title agree by construction rather than by two line boxes
@@ -64,7 +59,7 @@ export const TIMELINE_NODE_CLASS = "relative flex max-w-[calc(100%-var(--width-a
  */
 export const TIMELINE_BULLET_CLASS =
   "pv-tl-bullet relative top-[0.1em] z-(--z-content) flex h-[calc(var(--font-size-body)*1.4)] w-4 shrink-0 " +
-  "items-center bg-chat";
+  "items-center bg-agent-bubble";
 
 /** Everything right of the bullet: title, caption, and the expanded body. */
 export const TIMELINE_BODY_CLASS = "pv-tl-body min-w-0 flex-1";

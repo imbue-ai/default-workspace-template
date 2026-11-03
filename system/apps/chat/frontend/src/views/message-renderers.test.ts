@@ -473,37 +473,6 @@ describe("renderAssistantRun", () => {
     expect(chipRows(children)).toEqual([["t1"], ["t2"]]);
   });
 
-  /** Whether each bubble in a rendered run is squared toward the agent's face, in order. */
-  function bubbleCorners(children: m.Children[]): boolean[] {
-    return children
-      .filter((c) => (c as m.Vnode<{ "data-machine-bubbles"?: string }>).attrs?.["data-machine-bubbles"] !== undefined)
-      .map((group) => {
-        const bubble = (group as m.Vnode).children as unknown as m.Vnode<{ className: string }>[];
-        return bubble[0].attrs.className.includes("rounded-tl-[4px]");
-      });
-  }
-
-  it("squares only the bubble a headed run opens with toward the agent's face", () => {
-    const run = [assistantEvent("a1", "first words", [call("t1")]), assistantEvent("a2", "and more", [])];
-    expect(bubbleCorners(renderAssistantRun(run, new Map(), "agent-x", { isBesideFace: true }))).toEqual([
-      true,
-      false,
-    ]);
-    expect(bubbleCorners(renderAssistantRun(run, new Map(), "agent-x"))).toEqual([false, false]);
-  });
-
-  it("squares no bubble when tool work opens the headed run, but does past a whitespace text", () => {
-    const afterChip = [assistantEvent("a1", "", [call("t1")]), assistantEvent("a2", "the words", [])];
-    expect(bubbleCorners(renderAssistantRun(afterChip, new Map(), "agent-x", { isBesideFace: true }))).toEqual([
-      false,
-    ]);
-
-    const afterWhitespace = [assistantEvent("a1", "\n", []), assistantEvent("a2", "the words", [])];
-    expect(bubbleCorners(renderAssistantRun(afterWhitespace, new Map(), "agent-x", { isBesideFace: true }))).toEqual([
-      true,
-    ]);
-  });
-
   it("keeps each chip pointing at the event that issued it", () => {
     const children = renderAssistantRun(
       [assistantEvent("a1", "", [call("t1")]), assistantEvent("a2", "", [call("t2")])],

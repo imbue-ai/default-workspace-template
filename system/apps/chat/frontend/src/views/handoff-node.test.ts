@@ -174,25 +174,25 @@ describe("the handoff node", () => {
 
   it("stands in at the tail only while the transcript has no request to show", () => {
     state.chat = chatWith(handoffStateFixture({ phase: "draining" }));
-    const tail = renderHandoffTailNode("agent-a", false, false);
+    const tail = renderHandoffTailNode("agent-a", false);
     expect(tail).not.toBeNull();
     m.render(ROOT(), tail);
     expect(ROOT().textContent).toContain("Handing off to Codex…");
     // Once the request is on the stream the rows carry the node; nothing stands in.
-    expect(renderHandoffTailNode("agent-a", true, false)).toBeNull();
+    expect(renderHandoffTailNode("agent-a", true)).toBeNull();
     state.chat = chatWith(null);
-    expect(renderHandoffTailNode("agent-a", false, false)).toBeNull();
+    expect(renderHandoffTailNode("agent-a", false)).toBeNull();
   });
 
   it("stands in for nothing while a chat restarts on another account: the line by the composer says it once", () => {
     state.chat = chatWith(rebindStateFixture());
 
-    expect(renderHandoffTailNode("agent-a", false, false)).toBeNull();
+    expect(renderHandoffTailNode("agent-a", false)).toBeNull();
   });
 
   it("stands in for nothing while a chat with no user turn starts on another provider: there is nothing to hand off", () => {
     state.chat = chatWith(handoffStateFixture({ phase: "switching", is_fresh_start: true, held_sends: [] }));
 
-    expect(renderHandoffTailNode("agent-a", false, false)).toBeNull();
+    expect(renderHandoffTailNode("agent-a", false)).toBeNull();
   });
 });

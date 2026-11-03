@@ -24,7 +24,8 @@ import {
   participantName,
 } from "../models/Participants";
 import type { UserMessageEvent } from "../models/Response";
-import { participantPicture } from "./participant-picture";
+import { TURN_FACE_SIZE_PX, participantPicture } from "./participant-picture";
+import { FACE_COLUMN_CLASS } from "./machine-bubbles";
 import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
 import type { UserMessageClass } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";
@@ -40,9 +41,6 @@ import { appPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 export const USER_MESSAGE_ROW_CLASS = "message message-user flex flex-col items-end";
 /** Another person's turn (the multiplayer spec, section 5.4): left-aligned, their picture beside the bubble. */
 export const OTHER_PERSON_ROW_CLASS = "message message-user message-other flex flex-col items-start";
-/** The side of the picture beside another person's bubble. */
-export const AUTHOR_PICTURE_SIZE_PX = 24;
-
 /** Who a user turn was said by, for drawing: null for the viewer's own turn (right-aligned, no name), else the
  *  author's key and name. A turn with no author is the owner's -- and so is one annotated under either of the
  *  owner's keys (the multiplayer spec, section 11): the synthetic ``owner`` from before the workspace was shared,
@@ -159,13 +157,17 @@ export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
       // Another person's turn: their name above, their picture at the left, the bubble squared at its top-left.
       const entry = getParticipant(author.key);
       return m("div", { class: "message-other-turn flex w-full flex-col items-start", "data-author": author.key }, [
-        m("div", { class: "message-author mb-1 ml-8 text-(length:--font-size-helper) text-secondary" }, author.name),
+        m(
+          "div",
+          { class: `message-author mb-1 ${FACE_COLUMN_CLASS} text-(length:--font-size-helper) text-secondary` },
+          author.name,
+        ),
         m("div", { class: "flex w-full items-start gap-2" }, [
           participantPicture({
             name: author.name,
             pictureUrl: entry?.profile_picture_url ?? null,
             color: entry?.color ?? null,
-            size: AUTHOR_PICTURE_SIZE_PX,
+            size: TURN_FACE_SIZE_PX,
             extra: "message-author-picture mt-0.5",
           }),
           m("div", { class: OTHER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, bubbleChildren),

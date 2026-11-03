@@ -32,6 +32,7 @@ import { chatSnapshotFixture } from "../models/chatSnapshotFixture";
 import { closeProviderChooser, getUnpickableAccount } from "../models/Providers";
 import { setParticipantsForTesting } from "../models/Participants";
 import { StableAssistantMessage, renderAssistantMessage } from "./message-renderers";
+import { renderAgentTurn } from "./machine-bubbles";
 
 const ACCOUNT_ID = "acct-openai";
 
@@ -79,7 +80,7 @@ beforeEach(() => {
   const event = authErrorEvent();
   const toolResults = new Map<string, ToolResultEvent>();
   m.mount(document.getElementById("root") as HTMLElement, {
-    view: () => m(StableAssistantMessage, { event, toolResults, chatId: "chat-1", isBesideFace: false }),
+    view: () => m(StableAssistantMessage, { event, toolResults, chatId: "chat-1" }),
   });
 });
 
@@ -127,7 +128,7 @@ describe("the agent's header without a hand-cranked render", () => {
     };
     const toolResults = new Map<string, ToolResultEvent>();
     m.mount(document.getElementById("root") as HTMLElement, {
-      view: () => renderAssistantMessage(event, toolResults, "chat-1", true),
+      view: () => m("div", renderAgentTurn(renderAssistantMessage(event, toolResults, "chat-1"))),
     });
     const header = (): HTMLElement | null => document.querySelector("[data-machine-header]");
     const face = (): HTMLElement | null => document.querySelector(".machine-face");

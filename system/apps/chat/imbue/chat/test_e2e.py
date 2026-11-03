@@ -594,7 +594,7 @@ def _tool_result_line(uuid: str, timestamp: str, tool_use_id: str, output: str) 
     }
 
 
-# A line of intent, a tool call, a finished step, and the closing reply below the timeline.
+# A line of intent, a tool call, a background task's report, a finished step, and the closing reply below the timeline.
 _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
     {
         "type": "user",
@@ -612,6 +612,16 @@ _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
         "tool_use",
     ),
     _tool_result_line("uuid-st-3", "2026-01-01T00:00:02Z", "toolu_st1", "notes"),
+    {
+        "type": "user",
+        "uuid": "uuid-st-3b",
+        "timestamp": "2026-01-01T00:00:02.5Z",
+        "message": {
+            "role": "user",
+            "content": "<background-task-report>\n<summary>Wait for the update's background agent (finished)</summary>\n"
+            "A command you started with run_in_background.py has exited.\nExit code: 0\n</background-task-report>",
+        },
+    },
     _assistant_line(
         "uuid-st-4",
         "2026-01-01T00:00:03Z",
@@ -643,27 +653,32 @@ _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
 
 
 @pytest.mark.timeout(60, func_only=False)
-def test_a_stretch_of_the_agents_output_is_headed_once_and_its_work_shares_its_bubbles_edge(
+def test_a_stretch_of_the_agents_output_is_one_bubble_with_its_work_on_its_text_edge(
     tmp_path: Path, page: Page
 ) -> None:
-    """The agent's name and face head its turn once, and its bubbles, tool calls and step timeline start on one edge,
-    with the closing reply below the timeline drawn as a bubble too."""
+    """A stretch of the agent's output is one bubble under one header, beside the agent's face, and its prose, tool
+    calls, system notices, step timeline and closing reply all start on the bubble's text edge."""
     with _running_e2e_server(tmp_path, session_events=_STEPPED_TURN_SESSION_EVENTS) as server:
         _open_fixture_chat(page, server)
         chat = _chat(page)
-        reply = chat.locator(".pv-final [data-machine-bubble]")
+        reply = chat.locator(".pv-final [data-agent-prose]")
         expect(reply).to_have_text("Your workspace is on the new version.", timeout=15000)
 
         expect(chat.locator("[data-machine-header]")).to_have_count(1)
-        bubble_left = _box(chat.locator("[data-machine-bubble]").first)["left"]
-        face_right = _box(chat.locator(".machine-face"))["right"]
-        assert bubble_left > face_right, "the agent's bubble starts under its face, not beside it"
+        expect(chat.locator("[data-machine-bubble]")).to_have_count(1)
+        bubble = chat.locator("[data-machine-bubble]")
+        face = _box(chat.locator(".machine-face"))
+        assert face["right"] - face["left"] == 36, "the agent's face is not 36px wide"
+        assert _box(bubble)["left"] > face["right"], "the agent's bubble starts under its face, not beside it"
+        text_left = _box(bubble.locator("[data-agent-prose]").first)["left"]
+        assert text_left > _box(bubble)["left"], "the agent's text does not sit inside its bubble's padding"
         for name, locator in (
-            ("the tool-call row", chat.locator(".tool-chip-group").first),
-            ("the step bullet", chat.locator(".pv-tl-bullet").first),
+            ("the tool-call row", bubble.locator(".tool-chip-group").first),
+            ("the background task's notice", bubble.locator(".message-notice").first),
+            ("the step bullet", bubble.locator(".pv-tl-bullet").first),
             ("the closing reply", reply),
         ):
-            assert abs(_box(locator)["left"] - bubble_left) <= 1, f"{name} does not start on the bubbles' edge"
+            assert abs(_box(locator)["left"] - text_left) <= 1, f"{name} does not start on the text's edge"
 
 
 @pytest.mark.timeout(60, func_only=False)

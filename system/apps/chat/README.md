@@ -1045,11 +1045,12 @@ workspace agent's avatar icon) rewritten to `GET /api/participants/<key>/picture
 (the shell URL's query kept, so a versioned picture stays cached), which the chat
 app proxies from the shell -- asked at that path with the page's own query, its
 caching answer relayed -- so the page needs no second origin.
-The agent's prose is drawn as bubbles, one per reply, with tool chips, cards and the
-step timeline between them, outside the bubbles but on the same edge. The workspace's
-name and picture head each stretch of the agent's output once, at its first row: a
-stretch runs until a person speaks or another agent takes over, and a system notice
-in between does not end it.
+Each stretch of the agent's output is one grey bubble under the workspace's name and
+picture: a stretch runs until a person speaks or another agent takes over, and holds
+the agent's prose, tool chips, cards, step timeline and the system notices among
+them, all starting on the bubble's text edge. The bubble is as wide as the widest
+thing in it, up to 80% of the row; the status line and done mark sit below it, on
+the same edge. People's and the agent's pictures are 36px.
 
 ## Rooms and mentions
 

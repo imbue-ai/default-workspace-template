@@ -28,7 +28,7 @@ import { SecretCard, isFiledSecretRequest, parseSecretRequest } from "./secret-c
 import { ToolChipGroup, type ChipEntry } from "./ToolChipGroup";
 import { AutocompactNotice } from "./AutocompactNotice";
 import { compactionChips, type CompactionPart } from "./compaction-chips";
-import { agentColumn, machineBubbles } from "./machine-bubbles";
+import { renderAgentProse } from "./machine-bubbles";
 import { badgeClass } from "@imbue/workspace-ui/src/components/Badge";
 import { BADGE_PART } from "@imbue/workspace-ui/src/themes/parts";
 
@@ -179,20 +179,17 @@ export function StableAssistantMessage(): m.Component<{
   event: AssistantMessageEvent;
   toolResults: Map<string, ToolResultEvent>;
   chatId: string;
-  /** Whether the message opens a headed row, so its first bubble sits beside the agent's face. */
-  isBesideFace: boolean;
 }> {
   let renderedEvent: AssistantMessageEvent | null = null;
   let renderedToolResultCount = 0;
   let renderedSubagentCardCount = 0;
   let renderedResultSignature = "";
   let renderedReauthSignature = "";
-  let renderedIsBesideFace = false;
   let renderedDetailVersion = -1;
   let renderedExpansionVersion = -1;
   return {
     onbeforeupdate(vnode) {
-      const { event, toolResults, chatId, isBesideFace } = vnode.attrs;
+      const { event, toolResults, chatId } = vnode.attrs;
       const currentToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       // A subagent card can appear after the message was first rendered: the
       // backend re-broadcasts the parent with subagent_metadata once a running
@@ -211,7 +208,6 @@ export function StableAssistantMessage(): m.Component<{
         currentSubagentCardCount !== renderedSubagentCardCount ||
         currentResultSignature !== renderedResultSignature ||
         reauthNoteSignature(event, chatId) !== renderedReauthSignature ||
-        isBesideFace !== renderedIsBesideFace ||
         getEventDetailVersion(chatId) !== renderedDetailVersion ||
         // Opening a tool chip swaps WHICH detail panel exists, so it needs a
         // real re-render to build one.
@@ -222,28 +218,23 @@ export function StableAssistantMessage(): m.Component<{
       const event = vnode.attrs.event;
       const toolResults = vnode.attrs.toolResults;
       const chatId = vnode.attrs.chatId;
-      const isBesideFace = vnode.attrs.isBesideFace;
       renderedEvent = event;
       renderedToolResultCount = countResolvedToolResults(event.tool_calls, toolResults);
       renderedSubagentCardCount = countSubagentCards(event.tool_calls);
       renderedResultSignature = resolvedResultSignature(event.tool_calls, toolResults);
       renderedReauthSignature = reauthNoteSignature(event, chatId);
-      renderedIsBesideFace = isBesideFace;
       renderedDetailVersion = getEventDetailVersion(chatId);
       renderedExpansionVersion = getExpansionVersion();
 
-      return m("div", renderAssistantRun([event], toolResults, chatId, { isBesideFace }));
+      return m("div", renderAssistantMessageChildren(event, toolResults, chatId));
     },
   };
 }
 
-/** One assistant message as a top-level row in the agent's column; `isHeaded` puts the agent's name and face
- *  over it, for the row that opens a stretch of the agent's output. */
 export function renderAssistantMessage(
   event: AssistantMessageEvent,
   toolResults: Map<string, ToolResultEvent>,
   chatId: string,
-  isHeaded: boolean,
 ): m.Vnode {
   return m(
     "div",
@@ -252,7 +243,7 @@ export function renderAssistantMessage(
       class: "message message-assistant mb-5",
       key: event.event_id,
     },
-    agentColumn(isHeaded, m(StableAssistantMessage, { event, toolResults, chatId, isBesideFace: isHeaded })),
+    m(StableAssistantMessage, { event, toolResults, chatId }),
   );
 }
 
@@ -290,7 +281,7 @@ export function isChipOnlyEvent(event: RunPart, toolResults: Map<string, ToolRes
 }
 
 /**
- * A run of assistant events as ONE top-level row.
+ * A run of assistant events as ONE part of the agent's turn.
  *
  * A harness emits an event per model response, so what a reader sees as one
  * message -- a line of intent, then the calls that carry it out -- arrives as
@@ -309,13 +300,12 @@ export function renderAssistantRunRow(
   events: RunPart[],
   toolResults: Map<string, ToolResultEvent>,
   chatId: string,
-  isHeaded: boolean,
 ): m.Vnode {
   const key = events[0].event_id;
   return m(
     "div",
     { id: key, class: "message message-assistant mb-5", key },
-    agentColumn(isHeaded, renderAssistantRun(events, toolResults, chatId, { isBesideFace: isHeaded })),
+    renderAssistantRun(events, toolResults, chatId),
   );
 }
 
@@ -576,8 +566,6 @@ export interface AssistantRunOptions {
   readonly resolutionsByRequestId?: ReadonlyMap<string, RequestResolution>;
   /** The user's note on a declined secret request, by request id. */
   readonly secretNotesByRequestId?: ReadonlyMap<string, string>;
-  /** Whether the run opens a headed row, so a bubble that comes first sits beside the agent's face. */
-  readonly isBesideFace?: boolean;
 }
 
 /**
@@ -610,7 +598,6 @@ export function renderAssistantRun(
   // fresh array here would leave it pushing into the flushed one.
   const pendingChips: ChipEntry[] = [];
   let isNoticeUnderRow = false;
-  const isBesideFace = options.isBesideFace ?? false;
 
   // Anything that is not a tool chip ends the run in progress: the row has to
   // land above whatever interrupted it, in transcript order.
@@ -638,7 +625,6 @@ export function renderAssistantRun(
       children,
       pendingChips,
       flushChips,
-      isBesideFace,
     );
   }
   flushChips();
@@ -678,7 +664,6 @@ function appendEventParts(
   children: m.Children[],
   pendingChips: ChipEntry[],
   flushChips: () => void,
-  isRunBesideFace: boolean,
 ): void {
   const textContent = event.text || "";
   const toolCalls = event.tool_calls || [];
@@ -717,14 +702,8 @@ function appendEventParts(
         ]),
       );
     } else {
-      // The agent speaking: the reply as one bubble, squared toward the face when nothing comes before it.
-      const bubbles = machineBubbles({
-        text: textContent,
-        timestamp: event.timestamp,
-        expansionKeyPrefix: event.event_id,
-        isBesideFace: isRunBesideFace && children.length === 0,
-      });
-      if (bubbles !== null) children.push(bubbles);
+      const prose = renderAgentProse(textContent, event.timestamp, event.event_id);
+      if (prose !== null) children.push(prose);
     }
   }
   for (const toolCall of toolCalls) {
@@ -785,35 +764,5 @@ export function renderPermissionItem(
     "div",
     { id: event.event_id, class: "message message-assistant mb-5", key: event.event_id },
     renderAssistantMessageChildren(event, toolResults, chatId, resolutionsByRequestId, secretNotesByRequestId),
-  );
-}
-
-/**
- * A permission-break item as a top-level row, in the agent's column. The root's
- * ``id`` is the row key (``perm-<event_id>``), the key the virtualization
- * measures by -- under the bare event id the measured height would never be
- * read, leaving the row stuck at its estimate and shifting content each time it
- * crosses the window edge.
- */
-export function renderPermissionRow(
-  event: AssistantMessageEvent,
-  toolResults: Map<string, ToolResultEvent>,
-  chatId: string,
-  rowKey: string,
-  isHeaded: boolean,
-  resolutionsByRequestId: ReadonlyMap<string, RequestResolution>,
-  secretNotesByRequestId: ReadonlyMap<string, string>,
-): m.Vnode {
-  return m(
-    "div",
-    { id: rowKey, class: "message message-assistant mb-5", key: event.event_id },
-    agentColumn(
-      isHeaded,
-      renderAssistantRun([event], toolResults, chatId, {
-        resolutionsByRequestId,
-        secretNotesByRequestId,
-        isBesideFace: isHeaded,
-      }),
-    ),
   );
 }

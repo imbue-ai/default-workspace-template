@@ -8,6 +8,10 @@
 
 import m from "mithril";
 
+/** The side of the face beside a turn's bubble, the agent's or another person's. The face and the gap beside it make
+ *  up `--width-face-gutter` in style.css. */
+export const TURN_FACE_SIZE_PX = 36;
+
 /** The first letter of a name, uppercased; "?" for an empty one. */
 export function monogramOf(name: string): string {
   const first = name.trim().slice(0, 1);

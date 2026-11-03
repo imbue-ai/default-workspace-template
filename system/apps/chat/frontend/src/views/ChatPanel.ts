@@ -74,6 +74,7 @@ import { getShellHandshake } from "../shell";
 import {
   buildConversationRows,
   MESSAGE_LIST_CLASS,
+  renderAgentTurnRow,
   renderTranscriptSegments,
   type RowDescriptor,
 } from "./conversation-rows";
@@ -133,21 +134,31 @@ export function isSeededTranscriptShown(provisional: ProvisionalChat | null): bo
 
 const NO_TOOL_RESULTS: Map<string, ToolResultEvent> = new Map();
 
-/** The chat's reply draft as a reply node, or nothing when there is none to show. */
-function renderReplyDraft(chatId: string, isHeaded: boolean): m.Vnode[] {
+/** The agent's output past the transcript: a switch the transcript does not show yet (draining, or restarting in
+ *  place; once the summary request is on the stream the rows carry it), then the reply the agent is still writing,
+ *  while the window reaches the live end. Not a row of its own: a draft changes a few times a second, and a row
+ *  would re-walk the whole held transcript on every change. */
+function renderAgentLiveTail(chatId: string): m.Vnode[] {
+  const handoffNode = renderHandoffTailNode(
+    chatId,
+    hasOpenHandoffRequest(getEventsForChat(chatId), getChatById(chatId)?.handoff ?? null),
+  );
   const draft = hasMoreAfter(chatId) ? null : shownReplyDraft(chatId, getLastEventId(chatId));
-  return draft === null ? [] : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId, isHeaded)];
-}
-
-/** The agent's nodes past the rows (a handoff the transcript does not show yet, then the reply draft). They
- *  continue the stretch the transcript ends in, so the first of them wears the header only when it has not. */
-function renderAgentTail(chatId: string, rows: readonly RowDescriptor[], hasOpenRequest: boolean): m.Vnode[] {
-  const isTailHeaded = !(rows[rows.length - 1]?.isAgentHeaderShown ?? false);
-  const handoffNode = renderHandoffTailNode(chatId, hasOpenRequest, isTailHeaded);
   return [
     ...(handoffNode === null ? [] : [handoffNode]),
-    ...renderReplyDraft(chatId, isTailHeaded && handoffNode === null),
+    ...(draft === null ? [] : [renderAssistantMessage(draft, NO_TOOL_RESULTS, chatId)]),
   ];
+}
+
+/** The agent's output past the transcript, when no stretch at the end of the rows takes it (the transcript ends on a
+ *  person's turn, or on a switch to another agent): a stretch of its own. */
+function renderStandaloneLiveTail(chatId: string, rows: readonly RowDescriptor[]): m.Vnode[] {
+  return (rows[rows.length - 1]?.takesLiveTail ?? false) ? [] : asAgentTurn(renderAgentLiveTail(chatId));
+}
+
+/** The agent's nodes as a stretch of their own, or nothing when there are none. */
+function asAgentTurn(nodes: m.Vnode[]): m.Vnode[] {
+  return nodes.length === 0 ? [] : [renderAgentTurnRow("live-agent-turn", nodes)];
 }
 
 export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; isCompact?: boolean }> {
@@ -665,7 +676,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
     const tailNodes =
       getEventCount(chatId) === 0
         ? [
-            renderHandoffTailNode(chatId, false, true),
+            ...asAgentTurn([renderHandoffTailNode(chatId, false)].filter((node) => node !== null)),
             ...renderQueuedMessages(chatId),
             ...renderHeldSends(chatId),
             ...renderOutgoingMessages(chatId),
@@ -758,6 +769,7 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
         tailTurnSettled,
         liveCompaction,
         resentTurnsIn(chatId, events),
+        () => renderAgentLiveTail(chatId),
       );
       rowsCacheKey = renderKey;
     }
@@ -780,12 +792,9 @@ export function ChatPanel(): m.Component<{ chatId: string; isVisible?: boolean; 
           { kind: "rows", startIndex: plan.startIndex, endIndex: plan.endIndex },
           { kind: "spacer", height: plan.bottomPadPx },
         ]),
-        // A switch the transcript does not show yet (draining, or restarting in place) gets its
-        // node here; once the summary request is on the stream the rows carry it. Then the reply
-        // the agent is still writing, which its transcript does not hold yet, while the window
-        // reaches the live end: a node of its own rather than a row, since a draft changes a few
-        // times a second and a row would re-walk the whole held transcript on every change.
-        ...renderAgentTail(chatId, rows, hasOpenHandoffRequest(events, chat?.handoff ?? null)),
+        // The agent's output past the transcript sits in the last row's bubble when that row is the
+        // agent's; after a person's turn it is a stretch of its own.
+        ...renderStandaloneLiveTail(chatId, rows),
         // The status row under the latest turn while the agent works on it, or that turn's done
         // mark once it has finished; anything queued behind it follows.
         ...(isTurnStatusAfterSends ? [] : turnStatusNodes(chatId, events)),
