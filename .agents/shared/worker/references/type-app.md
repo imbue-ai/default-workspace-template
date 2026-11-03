@@ -149,10 +149,10 @@ of this without turning sharing on.
   never the key.
 - **The access log.** When visitors can change anything, the app keeps a log
   of who did it: one line per request that changed something, with the time,
-  the participant key, whether it was the owner, and the route. Keep it under the
-  app's data directory and bound it like any other store ("Bound disk growth"
-  in `harden-creation.md`). Log reads too only when the app shows data the
-  owner would want to know was seen.
+  the participant key, whether it was the owner, and the route. Keep it under
+  the app's data directory and bound it like any other store ("Bound disk
+  growth" in `harden-creation.md`). Log reads too only when the app shows data
+  the owner would want to know was seen.
 
 Cover each with a test through the test client, sending a person's header
 (`{"owner": false, "user_id": "...", "email": "..."}`) and a visiting agent's
