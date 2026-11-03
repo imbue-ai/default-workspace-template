@@ -1,0 +1,1 @@
+The chat-agent-split plan now says a switch keeps listing each held send it has delivered (the record's `delivered_sends`) until the switch is done, so the page can show it until its turn reaches the transcript.
