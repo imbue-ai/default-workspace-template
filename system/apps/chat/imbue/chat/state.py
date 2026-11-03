@@ -30,6 +30,7 @@ from imbue.chat.harnesses.auth_flows import AuthFlowService
 from imbue.chat.harnesses.claude.auth import ClaudeAuthService
 from imbue.chat.harnesses.interrupt import PressChord
 from imbue.chat.harnesses.interrupt import RestartProcess
+from imbue.chat.harnesses.path_watch import SharedWatchObserver
 from imbue.chat.harnesses.registry import build_loader
 from imbue.chat.harnesses.registry import build_watcher
 from imbue.chat.harnesses.registry import get_harness_spec
@@ -46,6 +47,7 @@ from imbue.chat.reply_drafts import capture_tmux_session_pane
 from imbue.chat.roster_client import RosterClient
 from imbue.chat.secret_requests import SecretRequestChatBridge
 from imbue.chat.secret_requests import SecretRequestStore
+from imbue.chat.send_ledger import SendLedger
 from imbue.chat.tray_feed import TrayFeed
 from imbue.chat.tray_feed import first_paragraph
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
@@ -111,6 +113,8 @@ class ChatAppState(MutableModel):
     # The intakes held for the chat root to apply (``chat_intakes.py``): drafts, choices, and first messages
     # that need an account; in memory, so a restart drops them.
     pending_intakes: PendingIntakeStore = Field(default_factory=PendingIntakeStore)
+    # Each send's answer by its send-time id, so the page can repeat a send it got no answer to.
+    send_ledger: SendLedger = Field(default_factory=SendLedger)
     event_queues: AgentEventQueues
     chat_namer: ChatNamer | None = Field(
         default=None,
@@ -146,6 +150,11 @@ class ChatAppState(MutableModel):
         description="Makes the Lounge when it is needed; None for a secondary chat, which creates nothing",
     )
     watchers: dict[str, AgentSessionWatcher] = {}
+    watch_observer: SharedWatchObserver = Field(
+        default_factory=SharedWatchObserver.build,
+        description="The one filesystem observer every session watcher watches through, so chats watching the same "
+        "directory share its OS watch and threads",
+    )
     # The archived segments read so far, by agent id: loaded on the first read that reaches
     # one and dropped with the chat (``stop_and_remove_watcher``, or
     # ``release_unviewed_stopped_transcripts`` for a stopped one), so a chat that is not
@@ -225,6 +234,7 @@ class ChatAppState(MutableModel):
             watcher.set_finished_tasks_callback(
                 lambda task_ids: self.agent_manager.forget_finished_tasks(agent_info.id, agent_info.harness, task_ids)
             )
+            watcher.set_watch_observer(self.watch_observer)
             self.agent_manager.register_queue_idle_handler(agent_info.id, watcher.notify_idle)
             self.agent_manager.register_queue_busy_handler(agent_info.id, watcher.notify_busy)
             # A harness that holds the queue on its agent's behalf (antigravity) also needs to
@@ -241,6 +251,7 @@ class ChatAppState(MutableModel):
                     SendDelivery,
                 ),
                 lambda: self.agent_manager.is_agent_alive(agent_info.id),
+                lambda text, sent_after: self.agent_manager.note_resent_send(agent_info.id, text, sent_after),
             )
             self.watchers[agent_info.id] = watcher
             self._starting_watchers[id(watcher)] = watcher
@@ -521,6 +532,7 @@ class ChatAppState(MutableModel):
         self.broadcaster.shutdown()
         self.agent_manager.stop()
         self.stop_all_watchers()
+        self.watch_observer.close()
         try:
             self.http_client.close()
         except (httpx.HTTPError, RuntimeError) as e:

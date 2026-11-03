@@ -58,6 +58,7 @@ from workspace_themes.flask_routes import register_workspace_theme_route
 
 from imbue.chat import accounts_endpoints
 from imbue.chat import focus_chat
+from imbue.chat import keybindings_endpoints
 from imbue.chat import latchkey_endpoints
 from imbue.chat import mentions_endpoints
 from imbue.chat import secret_requests_endpoints
@@ -228,6 +229,8 @@ from imbue.chat.request_helpers import require_loopback
 from imbue.chat.secret_requests import ChatLookup
 from imbue.chat.secret_requests import NoticeDeliveryError
 from imbue.chat.secret_requests import SecretRequestChatBridge
+from imbue.chat.send_ledger import RepeatedSendOutcomeUnknownError
+from imbue.chat.send_ledger import SendStillUnderWayError
 from imbue.chat.state import ChatAppState
 from imbue.chat.state import attach_state
 from imbue.chat.state import get_state
@@ -240,6 +243,7 @@ from imbue.imbue_common.model_update import to_update
 from imbue.imbue_common.pure import pure
 from imbue.mngr.errors import AgentNotFoundError
 from imbue.mngr.errors import MngrError
+from imbue.mngr.errors import SendFailureKind
 from imbue.mngr.primitives import AgentId
 
 logger = _loguru_logger
@@ -640,7 +644,7 @@ COMPACT_WHILE_STOPPED_DETAIL: Final[str] = "The agent isn't running. Send it a m
 # The message route's status for a /compact the chat asked mngr to run instead of sending it, which
 # no transcript turn will echo.
 COMPACTION_REQUESTED_SEND_STATUS: Final[str] = "compaction_requested"
-# The message route's status for a send Stop took back while its agent came up: nothing reached the agent.
+# The message route's status for a send Stop took back before it landed: nothing reached the agent.
 WITHDRAWN_SEND_STATUS: Final[str] = "withdrawn"
 # The message route's status for a send delivered by a second send, mngr having been unable to confirm the
 # first, which may have landed too.
@@ -741,6 +745,7 @@ def _deliver_message(
     # Taken before the send, which can wait out mngr's confirmation window while the compaction
     # it starts is already running.
     requested_at = time.monotonic()
+    sent_after = agent_manager.note_send_begun(agent_info.id)
     # A send that has to wait for the agent to come up -- a stopped agent the send starts, or a
     # harness still starting -- reads as Connecting on the chat until it resolves. A room's send
     # starts nothing (it appends to the room's transcript), so a stopped room stays stopped and
@@ -762,6 +767,8 @@ def _deliver_message(
                 SendMessageRequest(message=text, message_id=message_id, is_single_send=not is_resent_when_unsure),
                 message_id,
             )
+        if outcome is SendOutcome.RESENT:
+            agent_manager.note_resent_send(agent_info.id, text, sent_after)
         # A delivered send means the agent is up: mngr's own send auto-starts a stopped
         # file-harness agent (``is_start_desired``), and the observe stream would not see that
         # revival for minutes. Reflect it now, as the codex revive above does, so the UI's
@@ -828,7 +835,7 @@ class _SendAccepted(FrozenModel):
         default=False, description="Whether the send was a /compact the chat asked mngr to run in its place"
     )
     is_withdrawn: bool = Field(
-        default=False, description="Whether Stop took the send back while its agent came up, so nothing was delivered"
+        default=False, description="Whether Stop took the send back before it landed, so nothing was delivered"
     )
     is_resent: bool = Field(
         default=False,
@@ -927,6 +934,7 @@ def _send_to_chat(
             # The kind travels beside the detail so the chat can decide what to offer: trying again
             # can clear a blocked input, where only a restart is left for an agent that would not start.
             # A /compact the chat declines is its own refusal, not a failure.
+            logger.info("Send to chat {} failed: {}", chat_id, send_failure.kind)
             status_code = 409 if send_failure.kind in _DECLINED_SEND_FAILURE_KINDS else 500
             return _SendRefused(
                 answer=SendFailureResponse(detail=send_failure.detail, kind=send_failure.kind), status=status_code
@@ -1201,7 +1209,46 @@ def _send_message_endpoint(chat_id: str) -> Response:
     if parsed is None:
         return _chat_not_found_response(chat_id)
     send_message_request = parse_request_body(SendMessageRequest)
-    message_id = send_message_request.message_id or uuid4().hex
+    if not send_message_request.message_id:
+        return _send_message(state, chat_id, parsed, send_message_request, uuid4().hex)
+    # A page that got no answer sends the same message again under the same id; the ledger answers
+    # the repeat as the first send was answered rather than delivering it twice.
+    message_id = send_message_request.message_id
+    try:
+        return state.send_ledger.send_once(
+            f"{chat_id}:{message_id}",
+            lambda: _send_message(state, chat_id, parsed, send_message_request, message_id),
+            _replay_send_answer,
+            send_message_request.is_repeat,
+        )
+    except SendStillUnderWayError:
+        return error_response("The message is still on its way.", 503)
+    except RepeatedSendOutcomeUnknownError:
+        return model_response(
+            SendFailureResponse(
+                detail="Couldn't confirm your message arrived.", kind=SendFailureKind.SUBMISSION_UNCONFIRMED.value
+            ),
+            500,
+        )
+
+
+def _replay_send_answer(data: bytes, status: int) -> Response:
+    """A send's answer again, for the request that repeated it: held (202), delivered, or the refusal of the send
+    it repeats: an ``ErrorResponse``, or a ``SendFailureResponse`` where the refusal carried its kind."""
+    if status >= 400:
+        body = json.loads(data)
+        refusal = SendFailureResponse.model_validate(body) if "kind" in body else ErrorResponse.model_validate(body)
+        return model_response(refusal, status)
+    if status == 202:
+        return model_response(HeldSendResponse.model_validate_json(data), 202)
+    return model_response(SendMessageResponse.model_validate_json(data), status)
+
+
+def _send_message(
+    state: ChatAppState, chat_id: str, parsed: ChatId, send_message_request: SendMessageRequest, message_id: str
+) -> Response:
+    """The message route's send itself, once per send-time id."""
+    agent_manager: AgentManager = state.agent_manager
     # Attributed only once the chat is known to be an agent's or one being created: the annotation is a file under
     # the chat's folder, which a send must not leave behind for a chat that is not there (nor write beside the
     # chats' folders for an id that is no chat's, such as ``..``).
@@ -1633,12 +1680,15 @@ def _flush_queue_endpoint(chat_id: str) -> Response:
         return error_response(str(e), 500)
 
     if block:
+        sent_after = agent_manager.note_send_begun(agent_info.id)
         resend = agent_manager.send_message_kept_until_recorded(agent_info.id, agent_info.harness, block)
         if isinstance(resend, SendFailure):
             # The harness said why; passing that on rather than a generic sentence is the whole
             # point of carrying it this far.
+            logger.info("Flush of chat {}'s queue failed: {}", chat_id, resend.kind)
             return model_response(SendFailureResponse(detail=resend.reason, kind=resend.kind), 500)
         if resend is SendDelivery.RESENT:
+            agent_manager.note_resent_send(agent_info.id, block, sent_after)
             return model_response(SendMessageResponse(status=RESENT_SEND_STATUS))
 
     return model_response(SendMessageResponse(status="ok"))
@@ -2856,12 +2906,15 @@ def _run_ws_broadcast_loop(websocket: Any, agent_manager: AgentManager) -> None:
         # The connect-time replay: every provisional chat this process holds, then the chat
         # list. The list comes last on purpose -- it is how a page knows the replay is over,
         # so a record it still holds that this process did not replay (a create the previous
-        # process was running) can be dropped rather than waited on forever.
+        # process was running) can be dropped rather than waited on forever. Before the first
+        # read of the agent list there is no list to send: an empty one would tell the page every
+        # chat is gone, so the page waits for the push that follows that read instead.
         for provisional in agent_manager.get_provisional_chats_as_shown():
             websocket.send(json.dumps(provisional_chat_created_message(provisional)))
-        websocket.send(
-            json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
-        )
+        if agent_manager.is_agent_list_known():
+            websocket.send(
+                json.dumps(chats_updated_message(agent_manager.get_chat_snapshots(), agent_manager.get_main_chat_id()))
+            )
         shutdown = False
         while not shutdown:
             # The pages send nothing; anything that arrives is drained and ignored.
@@ -3052,6 +3105,7 @@ ROUTE_TABLE: Final[RouteTable] = merge_route_tables(
     accounts_endpoints.ROUTE_TABLE,
     latchkey_endpoints.ROUTE_TABLE,
     focus_chat.ROUTE_TABLE,
+    keybindings_endpoints.ROUTE_TABLE,
     secret_requests_endpoints.ROUTE_TABLE,
     mentions_endpoints.ROUTE_TABLE,
     THEME_STATIC_ROUTE_TABLE,
@@ -3166,6 +3220,7 @@ def create_application(state: ChatAppState) -> Flask:
     accounts_endpoints.register_routes(application)
     latchkey_endpoints.register_routes(application)
     focus_chat.register_routes(application)
+    keybindings_endpoints.register_routes(application)
     state.secret_request_bridge = _ServerSecretRequestBridge()
     secret_requests_endpoints.register_routes(application)
     state.mention_handler = MentionHandler(

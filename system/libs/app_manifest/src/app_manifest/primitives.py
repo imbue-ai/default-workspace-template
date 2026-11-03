@@ -282,6 +282,41 @@ class MessageType(str):
         return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
 
 
+# A keybinding action id: the key a person's chosen chords are stored under in the profile files, so it is the
+# ``workspace_profile`` library's id rule (``APP_OR_ACTION_ID_RE``), and stable across releases.
+KEYBINDING_ACTION_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+MAX_KEYBINDING_ACTION_LABEL_LENGTH: Final[int] = 80
+
+
+class KeybindingActionId(str):
+    """The id of a keybinding action an app declares: lowercase, starts alphanumeric, at most 64 characters."""
+
+    def __new__(cls, value: str) -> Self:
+        if not KEYBINDING_ACTION_ID_PATTERN.fullmatch(value):
+            raise InvalidManifestValueError(
+                f"invalid keybinding action id {value!r}: ids match ^[a-z0-9][a-z0-9_-]{{0,63}}$"
+            )
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
+
+class KeybindingActionLabel(str):
+    """What a keybinding action does, as the Keyboard shortcuts dialog shows it: one line, at most 80 characters."""
+
+    def __new__(cls, value: str) -> Self:
+        problem = _describe_one_line_problem(value, "keybinding label", MAX_KEYBINDING_ACTION_LABEL_LENGTH)
+        if problem is not None:
+            raise InvalidManifestValueError(problem)
+        return super().__new__(cls, value)
+
+    @classmethod
+    def __get_pydantic_core_schema__(cls, source_type: Any, handler: GetCoreSchemaHandler) -> CoreSchema:
+        return core_schema.no_info_after_validator_function(cls, core_schema.str_schema())
+
+
 # A page template (a ``show`` message handler's page and each of its ``showing`` pages; desktop-interface
 # contracts.md section 2): a path under the app's origin with ``{field}`` placeholders the shell fills from the
 # message's fields, optionally ending in a fixed query string. A field's value is itself a rooted path (a file's),

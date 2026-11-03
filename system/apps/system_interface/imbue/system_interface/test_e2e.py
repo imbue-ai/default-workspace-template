@@ -329,8 +329,9 @@ def themed_e2e_server(tmp_path: Path, request: pytest.FixtureRequest) -> Generat
 # It imports the shell's served contract module and connects: it reports its location (path and a title derived
 # from it) once greeted, and exposes the verbs the tests drive (navigate in place, ask for an open). A navigable
 # page declares the capability and shows a pushed path in place; a plain one declares nothing, so the shell reloads
-# its frame to move it. Its ``#held`` input is state no reload survives. It installs the served element context
-# menu as a scaffolded app's page does, so a right-click in the frame drafts through the shell.
+# its frame to move it. Its ``#held`` input is state no reload survives, and it records each shown and hidden it is
+# told. It installs the served element context menu as a scaffolded app's page does, so a right-click in the frame
+# drafts through the shell.
 _STUB_PAGE_TEMPLATE = """<!doctype html><html><head><meta charset="utf-8"><title>Stub</title></head><body>
 <div id="where"></div><input id="held" value="" />
 <script type="module">
@@ -344,12 +345,15 @@ const show = (path) => { where.textContent = path; document.title = titleOf(path
 show(here());
 window.__navigations = [];
 window.__presses = 0;
+window.__visibility = [];
 window.addEventListener("pointerdown", () => { window.__presses += 1; });
 const handlers = {
   onHandshake(handshake) {
     window.__handshake = handshake;
     connection.location(here(), titleOf(here()));
   },
+  onShown: () => window.__visibility.push("shown"),
+  onHidden: () => window.__visibility.push("hidden"),
 };
 if (isNavigable) {
   handlers.capabilities = { navigation: true, closeChord: false };
@@ -1503,6 +1507,40 @@ def test_clicking_a_lower_window_raises_it_and_the_focused_one_takes_pointer_eve
     wait_for(_first_on_top, timeout=15.0, poll_interval=0.1, error_message="the raise never reached the file")
 
 
+# The animation frames a page runs in half a second: none while the browser is not rendering it.
+_FRAMES_IN_HALF_A_SECOND = """() => new Promise((resolve) => {
+  let frames = 0;
+  const count = () => { frames += 1; requestAnimationFrame(count); };
+  requestAnimationFrame(count);
+  setTimeout(() => resolve(frames), 500);
+})"""
+
+
+@pytest.mark.timeout(60, func_only=False)
+def test_a_page_a_window_in_front_wholly_covers_stops_rendering_until_uncovered(
+    e2e_server: E2EServer, page: Page
+) -> None:
+    """Maximizing the front of two windows covers the other's page: once the window has landed the browser stops
+    rendering that page, which its app is still told is shown, and restoring the front window brings it back."""
+    _land(page, e2e_server)
+    first, second = _open_a_second_window_over_the_first(page, e2e_server)
+    first_frame = _page_frame(page, first)
+    second_frame = _page_frame(page, second)
+    first_page = page.locator(f'iframe[data-live-page="{first}"]')
+    assert first_frame.evaluate(_FRAMES_IN_HALF_A_SECOND) > 0
+
+    _window(page, second).locator("[data-drag-handle]").dblclick()
+    expect(_window(page, second)).to_have_attribute("data-window-state", "MAXIMIZED")
+    expect(first_page).to_be_hidden()
+    assert first_frame.evaluate(_FRAMES_IN_HALF_A_SECOND) == 0
+    assert second_frame.evaluate(_FRAMES_IN_HALF_A_SECOND) > 0
+    assert first_frame.evaluate("() => window.__visibility") == ["shown"]
+
+    _window(page, second).locator("[data-drag-handle]").dblclick()
+    expect(first_page).to_be_visible()
+    assert first_frame.evaluate(_FRAMES_IN_HALF_A_SECOND) > 0
+
+
 @pytest.mark.timeout(60, func_only=False)
 def test_raising_a_window_by_its_content_takes_the_focus_off_the_window_now_under_it(
     e2e_server: E2EServer, page: Page
@@ -2226,13 +2264,23 @@ def test_an_independent_pinned_window_keeps_a_path_per_client_and_an_agent_navig
         pinned = _pinned_window(server.base_url)
         assert pinned["scope"] == "independent"
         with _second_client(page, server) as other_page:
-            for client_page in (page, other_page):
-                _taskbar_entry(client_page, pinned["id"]).click()
-                expect(_window(client_page, pinned["id"])).to_be_visible(timeout=15000)
-            frame = _page_frame(page, pinned["id"])
-            other_frame = _page_frame(other_page, pinned["id"])
             client_id = _client_id(page)
             other_client_id = _client_id(other_page)
+            for client_page, this_client_id in ((page, client_id), (other_page, other_client_id)):
+                _taskbar_entry(client_page, pinned["id"]).click()
+                expect(_window(client_page, pinned["id"])).to_be_visible(timeout=15000)
+                # Wait for the restore to be durable server-side before navigating. The taskbar click shows the
+                # window optimistically, but a concurrent layout refetch can re-apply the pre-restore (minimized)
+                # placement and drop the window from the DOM, so the later .window-title assertion finds nothing.
+                _wait_for_stored_placement(
+                    server,
+                    this_client_id,
+                    pinned["id"],
+                    lambda placement: not placement["is_minimized"],
+                    "the pinned-window restore",
+                )
+            frame = _page_frame(page, pinned["id"])
+            other_frame = _page_frame(other_page, pinned["id"])
 
             frame.evaluate("() => window.__navigateTo('/?doc=1')")
             other_frame.evaluate("() => window.__navigateTo('/?doc=2')")
@@ -2902,6 +2950,10 @@ def _css_rgb(hex_color: str) -> str:
     return f"rgb({red}, {green}, {blue})"
 
 
+# Flaky: a multi-client viewing race -- the owner reads alice's stored layout while the visitor's window
+# restore is still landing there, so the viewed window can read as minimized and not render. The
+# durable-restore wait below is the root-cause attempt; retried on offload like the sibling pinned-window test.
+@pytest.mark.flaky
 @pytest.mark.timeout(90, func_only=False)
 def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chrome_on(
     e2e_server: E2EServer, page: Page
@@ -2924,6 +2976,18 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
         (copied,) = _windows(e2e_server.base_url, "alice")
         _taskbar_entry(visitor, copied["id"]).click()
         expect(_window(visitor, copied["id"])).to_be_visible(timeout=15000)
+        # Wait for the visitor's restore to be durable in alice's placements before the owner views the desktop:
+        # the taskbar click shows the window optimistically for the visitor, but the owner reads alice's stored
+        # layout, and if the restore has not landed there yet the owner sees the window as minimized and it never
+        # renders (so viewed_window below finds nothing).
+        _wait_for_stored_placement(
+            e2e_server,
+            _client_id(visitor),
+            copied["id"],
+            lambda placement: not placement["is_minimized"],
+            "alice's copied-window restore",
+            desktop_id="alice",
+        )
         entry = page.locator('[data-tray-person="user:user-alice"]')
         expect(entry).to_be_visible(timeout=15000)
         entry.hover()
@@ -2943,20 +3007,22 @@ def test_a_persons_card_lists_their_desktops_and_a_click_views_one_with_the_chro
         participants = _get_json(f"{e2e_server.base_url}/api/roster")["participants"]
         (alice_entry,) = [participant for participant in participants if participant["key"] == "user:user-alice"]
         assert outline.evaluate("(el) => getComputedStyle(el).borderTopColor") == _css_rgb(alice_entry["color"])
-        # Their window is shown as they have it, on an inert stage: Tab never lands on it (nor on anything else of
-        # the desktop), so Enter, aimed at its Close, closes nothing.
+        # Their window is shown as they have it, on an inert stage: focus never lands on it, so Enter, aimed at its
+        # Close, closes nothing; and Tab never reaches it (nor anything else of the desktop) either. Enter goes
+        # straight after the refused focus: a Tab cycle ends on whichever chrome control the launcher's rows put
+        # there, and Enter on that one (Stop viewing, a launch) would end the viewing rather than test the stage.
         viewed_window = _window(page, copied["id"])
         expect(viewed_window).to_be_visible(timeout=15000)
         expect(page.locator(".desktop-stage[inert]")).to_have_count(1)
         close_control = viewed_window.locator('[data-window-control="close"]')
         close_control.focus()
         assert not page.evaluate("() => document.activeElement?.closest('.desktop-stage') !== null")
+        page.keyboard.press("Enter")
         for _ in range(12):
             page.keyboard.press("Tab")
             assert not page.evaluate("() => document.activeElement?.closest('.desktop-stage') !== null"), (
                 "Tab reached something on the viewed desktop"
             )
-        page.keyboard.press("Enter")
         assert [window["id"] for window in _windows(e2e_server.base_url, "alice")] == [copied["id"]]
         expect(_window(visitor, copied["id"])).to_be_visible()
         expect(viewed_window).to_be_visible()

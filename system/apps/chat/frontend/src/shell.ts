@@ -10,6 +10,7 @@
 import m from "mithril";
 import { adoptClientIdentity } from "@imbue/workspace-ui/src/models/ClientIdentity";
 import { addChatsUpdatedListener, createChat, getChatById } from "./models/Chats";
+import { refreshKeybindings } from "./models/keybindings";
 import type { CreatedChat } from "./models/Chats";
 import type { ModelIdentity } from "./models/ModelSettings";
 import { ensureParticipants } from "./models/Participants";
@@ -40,10 +41,10 @@ let isShown = true;
 
 /**
  * Whether the frame's document is laid out at all: what the transcript's scroll management
- * keys on. A pane that stops showing this page hides the frame with `display: none`, which
- * drops the document's layout in the same pass that the page's scroll container starts
- * reporting zero sizes (the frame's viewport, `innerHeight`, keeps its old value); the
- * shell's `shell:shown` and `shell:hidden` follow a redraw later and feed presence instead.
+ * keys on. A frame hidden with `display: none` (the chat root's held frames) drops the
+ * document's layout in the same pass that the page's scroll container starts reporting zero
+ * sizes (the frame's viewport, `innerHeight`, keeps its old value); the shell keeps a hidden
+ * window's page laid out at its size, and its `shell:shown` and `shell:hidden` feed presence.
  * Reading the layout keeps the panel's visibility in lockstep with the element, so a redraw
  * while hidden (a streamed event) never runs the scroll management against a zero-height
  * element.
@@ -98,7 +99,9 @@ export function connectChatToShell(chatId: string, options: ChatShellOptions): S
     onShown,
     onHidden,
     onTheme: (theme, revision, isPreview) => void wearThemeFromMessage({ theme, revision, isPreview }),
+    onKeybindingsChanged: () => void refreshKeybindings(),
   });
+  void refreshKeybindings();
   mirrorParentTheme();
   if (connection.isFramed) {
     // The chat root frames chat pages from this same origin and drives them by calling in

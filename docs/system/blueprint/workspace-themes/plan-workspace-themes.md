@@ -124,11 +124,11 @@ A theme sets tokens on `:root` (and under `:root[data-touch]` or `:root[data-pho
 | Type | `--font-sans`, `--font-mono`, `--font-display` (headings, section labels, and what a theme sets its titles, buttons, and menus in), `--font-size-heading-lg`, `--font-size-heading`, `--font-size-body`, `--font-size-row`, `--font-size-helper`, `--weight-regular`, `--weight-semibold`, `--weight-bold` |
 | Shape | `--radius-sm`, `--radius-md`, `--radius-lg`, `--radius-xl` |
 | Motion | `--dur-fast`, `--dur-base`, `--dur-slow` |
-| Desktop | `--desk-window-radius`, `--desk-window-shadow`, `--desk-taskbar-surface`, `--desk-taskbar-entry-shadow`, `--desk-backdrop`, `--desk-default-wallpaper`, `--desk-icon-radius`, `--desk-icon-shadow`, `--desk-icon-shadow-lifted`, `--desk-shortcut-label-shadow`, `--desk-toast-radius`, `--desk-phone-sheet-radius`, `--desk-phone-tile-radius`, `--desk-avatar-color` and `--desk-avatar-shadow-color` (the workspace character's body and the pool it casts) |
-| Desktop metrics | `--desk-title-bar-height` (16 to 64 px), `--desk-taskbar-height` (24 to 96 px), `--desk-window-control-size` (12 to 48 px), `--desk-taskbar-entry-size` (16 to 64 px) |
+| Desktop | `--desk-window-shadow`, `--desk-taskbar-surface`, `--desk-taskbar-entry-shadow`, `--desk-backdrop`, `--desk-default-wallpaper`, `--desk-icon-radius`, `--desk-icon-shadow`, `--desk-icon-shadow-lifted`, `--desk-shortcut-label-shadow`, `--desk-toast-radius`, `--desk-phone-sheet-radius`, `--desk-phone-tile-radius`, `--desk-avatar-color` and `--desk-avatar-shadow-color` (the workspace character's body and the pool it casts) |
+| Desktop metrics | `--desk-title-bar-height` (16 to 64 px), `--desk-window-radius` (0 to 32 px), `--desk-taskbar-height` (24 to 96 px), `--desk-window-control-size` (12 to 48 px), `--desk-taskbar-entry-size` (16 to 64 px) |
 | Terminal | `--term-background`, `--term-foreground`, `--term-cursor`, `--term-selection`, `--term-ansi-0` to `--term-ansi-15` |
 
-The title bar and taskbar heights are read by the shell's geometry (`theme/metrics.ts`) when the theme changes; the window control and taskbar entry sizes are read by the shell's stylesheets alone. The validator refuses a value outside its range or in a unit other than `px`.
+The title bar and taskbar heights and the window radius are read by the shell's geometry (`theme/metrics.ts`) when the theme changes; the window control and taskbar entry sizes are read by the shell's stylesheets alone. The validator refuses a value outside its range or in a unit other than `px`.
 Every other desktop token the shell declares (the grid, the snap and drag thresholds, the resize handles) belongs to behaviour and is not a theme's to set.
 The standard theme's values are the ones `base.css` and the shell's `theme/default.css` declare; they are compiled into every app, so a page with no theme loaded wears the standard look.
 

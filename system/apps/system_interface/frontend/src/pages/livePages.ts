@@ -2,13 +2,14 @@
  * The live pages (desktop-interface plan section 6.4): one iframe per window per client, keyed
  * by window id, created when the window is first shown in this client and destroyed only when
  * the window closes or its desktop is deleted. A page is never re-parented (that reloads it):
- * hidden pages are ``display: none``, and the reconcile step positions each page over its
- * window's content box (``placePage`` re-places one page per pointer move of a drag or resize,
- * with no redraw), in the same stacking context as the window chrome so a window's edges and
- * shield stay clickable over a cross-origin page. Every page but the focused one is inert
- * (``pointer-events: none``), and every page is inert for the length of a press on a handle,
- * which is longer than the drag it may become: the pixels a press spends reaching the drag
- * threshold have to be ones the shell can see.
+ * a hidden page is parked out of the browser's rendering (``PARKED_TRANSFORM``), and so is a shown
+ * page whose window the windows in front of it cover, which stays shown to the app contract. The
+ * reconcile step positions each page over its window's content box (``placePage`` re-places one
+ * page per pointer move of a drag or resize, with no redraw), in the same stacking context as the
+ * window chrome so a window's edges and shield stay clickable over a cross-origin page. Every
+ * page but the focused one is inert (``pointer-events: none``), and every page is inert for the
+ * length of a press on a handle, which is longer than the drag it may become: the pixels a press
+ * spends reaching the drag threshold have to be ones the shell can see.
  *
  * The shell side of the app contract lives here too: the handshake after every load and on a
  * desktop change, ``shell:theme`` after every handshake and on every change of the theme the shell
@@ -43,10 +44,15 @@ import {
   SHELL_OPEN,
   SHELL_OPEN_LINK,
   SHELL_SHOWN,
+  SHELL_KEYBINDINGS_CHANGED,
   SHELL_THEME,
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
+import { viewportRect } from "../geometry/frames";
+import type { PixelRect } from "../geometry/frames";
+import { isPageCovered } from "../geometry/occlusion";
+import type { FrontWindow } from "../geometry/occlusion";
 import { OVERVIEW_PAGE_Z_INDEX, windowPageZIndex } from "../geometry/stacking";
 import { windowPageUrl } from "../model/pageUrl";
 import { notePageInput } from "../model/Presence";
@@ -101,6 +107,11 @@ const PAGE_CORNERS_CLASS = "rounded-b-(--desk-window-radius)";
 // refused with a 400, which would leave the whole report, path included, unstored.
 export const MAX_WINDOW_TITLE_LENGTH = 256;
 
+// A parked page is moved far out of the viewport, where browsers stop rendering a cross-origin frame, and made
+// invisible, which keeps it out of clicks, focus, find-in-page and the accessibility tree. Unlike ``display: none``,
+// it keeps the page's size, layout and scroll.
+const PARKED_TRANSFORM = "translateX(-100000px)";
+
 /** The `shell:theme` payload (workspace-themes plan section 5.3): a theme the shell wears without remembering it
  *  is a preview, which the page wears without remembering either. */
 function themeMessage(
@@ -134,6 +145,27 @@ interface LivePage {
   lastSentVisibility: boolean | null;
   /** Whether the page is hidden because its app is stopped; it reloads once the app runs again. */
   isHeldForStop: boolean;
+  /** Hidden from the user and told so (``shell:hidden``). */
+  isHidden: boolean;
+  /** Shown, but behind the windows in front of it, so parked without telling the page. */
+  isCovered: boolean;
+}
+
+/** A page the desktop's reconcile shows, once it knows which pages the windows in front cover. */
+interface ShownPage {
+  readonly page: LivePage;
+  readonly box: HostRect;
+  readonly stackIndex: number;
+  readonly isInteractive: boolean;
+}
+
+/** A window whose chrome the desktop draws, back to front: what may cover the pages behind it. */
+interface DrawnWindow {
+  readonly windowId: string;
+  /** Whether the stopped-app placeholder fills its content area. */
+  readonly isPlaceholderShown: boolean;
+  /** Whether a title bar sits above its content area: a fullscreen window has none. */
+  readonly hasTitleBar: boolean;
 }
 
 export interface LivePagesOptions {
@@ -319,12 +351,19 @@ export class LivePagesLayer implements PageDriver {
   }
 
   /** Put one shown page over its window's content box as it is now, leaving its stacking and
-   *  interactivity alone: the per-move step of a drag or resize, which redraws nothing. */
+   *  interactivity alone: the per-move step of a drag or resize, which redraws nothing. While the
+   *  overview is up the box is a tile's, and the page keeps the tile's scale. */
   placePage(windowId: string): void {
     const page = this.pages.get(windowId);
     if (page === undefined || !this.isShown(page)) return;
     const box = this.contentBox(windowId);
-    if (box !== null) this.position(page, box);
+    if (box === null) return;
+    if (this.overview === null) {
+      this.position(page, box);
+      return;
+    }
+    const scale = this.overview.scaleOf(windowId);
+    if (scale !== null && scale > 0) this.showScaled(page, box, scale);
   }
 
   /**
@@ -365,6 +404,8 @@ export class LivePagesLayer implements PageDriver {
     // overview's tiles are, so the owner's windows can be looked at but not typed into.
     const isViewing = this.store.viewedDesktop() !== null;
     const shownIds = new Set<string>();
+    const shown: ShownPage[] = [];
+    const drawn: DrawnWindow[] = [];
     placements.forEach((placement, index) => {
       const found = windowsById.get(placement.window_id);
       if (found === undefined || desktop === null) return;
@@ -375,6 +416,11 @@ export class LivePagesLayer implements PageDriver {
       if (placement.is_detached || placement.window_id === this.tornOutWindowId) return;
       const { window } = found;
       const app = appByName(state, window.app);
+      drawn.push({
+        windowId: window.id,
+        isPlaceholderShown: isAppShownStopped(state, app),
+        hasTitleBar: placement.state !== "FULLSCREEN",
+      });
       if (app === undefined) return;
       const page = this.pages.get(window.id) ?? this.create(window, app);
       shownIds.add(window.id);
@@ -385,16 +431,26 @@ export class LivePagesLayer implements PageDriver {
         return;
       }
       page.wrapper.classList.toggle(PAGE_CORNERS_CLASS, placement.state !== "FULLSCREEN");
-      this.show(page, box, index, !this.isGestureActive && !isViewing && window.id === focused);
+      shown.push({
+        page,
+        box,
+        stackIndex: index,
+        isInteractive: !this.isGestureActive && !isViewing && window.id === focused,
+      });
+    });
+    const covered = this.coveredWindowIds(drawn, new Set(shown.map(({ page }) => page.windowId)), focused);
+    for (const { page, box, stackIndex, isInteractive } of shown) {
+      this.show(page, box, stackIndex, isInteractive, covered.has(page.windowId));
       // A page is told again when its desktop, or whether that desktop is being viewed, changed since: a terminal
       // attaches to its session as a viewer or as a user by it.
       if (
+        desktop !== null &&
         page.greetedDesktopId !== null &&
         (page.greetedDesktopId !== desktop.id || page.greetedIsViewing !== isViewing)
       ) {
         this.greet(page);
       }
-    });
+    }
     for (const page of this.pages.values()) {
       if (!shownIds.has(page.windowId)) this.hide(page);
     }
@@ -455,7 +511,7 @@ export class LivePagesLayer implements PageDriver {
     const page = this.pages.get(soloWindowId) ?? this.create(found.window, app);
     if (!this.prepareShownPage(page, app)) return;
     const hostBox = this.host.getBoundingClientRect();
-    this.show(page, { left: 0, top: 0, width: hostBox.width, height: hostBox.height }, 0, true);
+    this.show(page, { left: 0, top: 0, width: hostBox.width, height: hostBox.height }, 0, true, false);
     if (page.greetedDesktopId !== null && page.greetedDesktopId !== found.desktop.id) this.greet(page);
     this.followIfRevised(windowsById);
     this.focusIfChanged(soloWindowId);
@@ -483,7 +539,7 @@ export class LivePagesLayer implements PageDriver {
         continue;
       }
       const hostBox = this.host.getBoundingClientRect();
-      this.show(page, { left: 0, top: 0, width: hostBox.width, height: hostBox.height }, 0, true);
+      this.show(page, { left: 0, top: 0, width: hostBox.width, height: hostBox.height }, 0, true, false);
       if (page.greetedDesktopId !== null && page.greetedDesktopId !== found.desktop.id) this.greet(page);
     }
     this.followIfRevised(windowsById);
@@ -579,18 +635,66 @@ export class LivePagesLayer implements PageDriver {
     }
   }
 
-  /** A window's content box in the host's own pixels. The measurement is in screen pixels: while a viewed desktop is
-   *  drawn in a letterbox (the multiplayer spec, section 8.3), the host and the chrome lie under one scale, and a
-   *  page's position and size are in the host's unscaled pixels, so the box is divided by that scale. */
+  /**
+   * The shown pages the windows in front of them cover, both where the windows are drawn now and where they are
+   * going: a window still travelling to its place covers nothing until it lands there, and one travelling away
+   * uncovers at once. Nothing is covered while a window is moved or resized, which moves it with no reconcile.
+   * The focused window's page never is: nothing is in front of it, and parking it (its content dragged below the
+   * backdrop) would take the keyboard from the window the user is in.
+   */
+  private coveredWindowIds(
+    drawn: readonly DrawnWindow[],
+    shownPageIds: ReadonlySet<string>,
+    focused: string | null,
+  ): Set<string> {
+    const covered = new Set<string>();
+    if (this.store.windowGesture() !== null) return covered;
+    const metrics = this.store.getMetrics();
+    const backdrop = this.store.frameBackdrop();
+    // While a fullscreen window is on screen the desktop paints over the taskbar's band as well.
+    const drawnArea = this.store.isFullscreenShown() ? viewportRect(backdrop, metrics.taskbarHeight) : backdrop;
+    // A shown page parked as covered still counts: whatever covers it covers the window's content area too.
+    const isContentOpaque = drawn.map((entry) => entry.isPlaceholderShown || shownPageIds.has(entry.windowId));
+    const going = drawn.map((entry, index) => ({
+      rect: this.store.windowRect(entry.windowId),
+      hasTitleBar: entry.hasTitleBar,
+      isContentOpaque: isContentOpaque[index],
+    }));
+    const now = drawn.map((entry, index): FrontWindow | null => {
+      const rect = this.windowBox(entry.windowId);
+      return rect === null ? null : { rect, hasTitleBar: entry.hasTitleBar, isContentOpaque: isContentOpaque[index] };
+    });
+    drawn.forEach((entry, index) => {
+      const here = now[index];
+      if (!shownPageIds.has(entry.windowId) || entry.windowId === focused || here === null) return;
+      const isCoveredWhereGoing = isPageCovered(going[index], going.slice(index + 1), drawnArea, metrics);
+      const frontNow = now.slice(index + 1).filter((front): front is FrontWindow => front !== null);
+      if (isCoveredWhereGoing && isPageCovered(here, frontNow, drawnArea, metrics)) covered.add(entry.windowId);
+    });
+    return covered;
+  }
+
+  /** Where a window's chrome is drawn right now (mid-travel included), in the host's pixels. */
+  private windowBox(windowId: string): PixelRect | null {
+    const box = this.measureInHost(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"]`);
+    return box === null ? null : { x: box.left, y: box.top, width: box.width, height: box.height };
+  }
+
   private contentBox(windowId: string): HostRect | null {
+    return this.measureInHost(`[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"] [${WINDOW_CONTENT_ATTRIBUTE}]`);
+  }
+
+  /** The box of the element ``selector`` names under the backdrop, in the host's own pixels; null when it is absent
+   *  or empty. The measurement is in screen pixels: while a viewed desktop is drawn in a letterbox (the multiplayer
+   *  spec, section 8.3), the host and the chrome lie under one scale, and a page's position and size are in the
+   *  host's unscaled pixels, so the box is divided by that scale. */
+  private measureInHost(selector: string): HostRect | null {
     // Searched from the backdrop's root, not the host's parent: the overview's tiles lie outside the desktop's
     // stage the host sits in.
     const root = this.host.closest<HTMLElement>(`[${DESKTOP_ROOT_ATTRIBUTE}]`) ?? this.host.parentElement;
-    const content = root?.querySelector<HTMLElement>(
-      `[${WINDOW_ID_ATTRIBUTE}="${CSS.escape(windowId)}"] [${WINDOW_CONTENT_ATTRIBUTE}]`,
-    );
-    if (content === undefined || content === null) return null;
-    const box = content.getBoundingClientRect();
+    const element = root?.querySelector<HTMLElement>(selector);
+    if (element === undefined || element === null) return null;
+    const box = element.getBoundingClientRect();
     if (box.width <= 0 || box.height <= 0) return null;
     const origin = this.host.getBoundingClientRect();
     const scale = this.store.viewingLetterbox()?.scale ?? 1;
@@ -607,7 +711,6 @@ export class LivePagesLayer implements PageDriver {
     // A surface while the page loads, under the chrome (whose content box is transparent) and over the
     // wallpaper; the bottom corners follow the chrome's rounding.
     wrapper.className = `live-page absolute overflow-hidden ${PAGE_CORNERS_CLASS} bg-page`;
-    wrapper.style.display = "none";
     const frame = document.createElement("iframe");
     frame.setAttribute(LIVE_PAGE_ATTRIBUTE, window.id);
     frame.setAttribute("sandbox", PAGE_FRAME_SANDBOX);
@@ -630,7 +733,10 @@ export class LivePagesLayer implements PageDriver {
       greetedIsViewing: false,
       lastSentVisibility: null,
       isHeldForStop: false,
+      isHidden: true,
+      isCovered: false,
     };
+    this.updateParking(page);
     // Every load, not just the first: a reload (a Refresh, or the page's own) is a fresh page that
     // has to be told who it is again, and has declared nothing yet.
     frame.addEventListener("load", () => {
@@ -657,7 +763,6 @@ export class LivePagesLayer implements PageDriver {
     style.top = `${box.top}px`;
     style.width = `${box.width}px`;
     style.height = `${box.height}px`;
-    style.transform = "";
   }
 
   /** Lay a page over an overview tile's box: at the size its window renders at (the box over the scale), scaled
@@ -668,34 +773,47 @@ export class LivePagesLayer implements PageDriver {
     style.top = `${box.top}px`;
     style.width = `${box.width / scale}px`;
     style.height = `${box.height / scale}px`;
+    page.isHidden = false;
+    page.isCovered = false;
+    style.visibility = "";
     style.transformOrigin = "top left";
     style.transform = `scale(${scale})`;
     style.zIndex = OVERVIEW_PAGE_Z_INDEX;
     style.pointerEvents = "none";
-    style.display = "";
     this.syncVisibility(page, true);
   }
 
-  private show(page: LivePage, box: HostRect, stackIndex: number, isInteractive: boolean): void {
+  private show(page: LivePage, box: HostRect, stackIndex: number, isInteractive: boolean, isCovered: boolean): void {
     this.position(page, box);
     const style = page.wrapper.style;
     style.zIndex = windowPageZIndex(stackIndex);
     style.pointerEvents = isInteractive ? "auto" : "none";
-    style.display = "";
+    page.isHidden = false;
+    page.isCovered = isCovered;
+    this.updateParking(page);
     this.syncVisibility(page, true);
   }
 
-  /** Out of sight, and out of the document's focus: a hidden frame left holding it is the one the browser
-   *  restores focus to when the chrome window's focus comes back, and the page would then report focus it
-   *  never got from the user. */
   private hide(page: LivePage): void {
-    page.wrapper.style.display = "none";
-    if (document.activeElement === page.frame) this.host.focus({ preventScroll: true });
+    page.isHidden = true;
+    page.isCovered = false;
+    this.updateParking(page);
     this.syncVisibility(page, false);
   }
 
+  /** Park a page that is hidden or covered, and take the document's focus out of it: a parked frame left holding
+   *  it is the one the browser restores focus to when the chrome window's focus comes back, and the page would
+   *  then report focus it never got from the user. */
+  private updateParking(page: LivePage): void {
+    const isParked = page.isHidden || page.isCovered;
+    const style = page.wrapper.style;
+    style.transform = isParked ? PARKED_TRANSFORM : "";
+    style.visibility = isParked ? "hidden" : "";
+    if (isParked && document.activeElement === page.frame) this.host.focus({ preventScroll: true });
+  }
+
   private isShown(page: LivePage): boolean {
-    return page.wrapper.style.display !== "none";
+    return !page.isHidden;
   }
 
   /** The handshake names the desktop the page's window is on (a hidden page can reload while another desktop
@@ -730,6 +848,15 @@ export class LivePagesLayer implements PageDriver {
     }
   }
 
+  /** Tell every greeted page somebody changed a keybinding; each re-fetches its own resolved chords. */
+  broadcastKeybindingsChanged(): void {
+    for (const page of this.pages.values()) {
+      if (page.greetedDesktopId !== null) {
+        sendToChildFrame(page.frame, SHELL_KEYBINDINGS_CHANGED, {});
+      }
+    }
+  }
+
   private syncVisibility(page: LivePage, isVisible: boolean): void {
     // Nothing until the page has had its handshake: before its load there is nobody listening.
     if (page.greetedDesktopId === null || page.lastSentVisibility === isVisible) return;
@@ -752,6 +879,12 @@ export class LivePagesLayer implements PageDriver {
     page.isNavigationCapable = payload.navigation === true;
     page.isCloseChordCapable = payload.closeChord === true;
     this.greet(page);
+    // A page that loads the contract after its own load (a dynamic ``import()``) missed the visibility the load told
+    // it. A page takes itself to be shown until told otherwise, so only a hidden one is told again.
+    if (page.isHidden) {
+      page.lastSentVisibility = false;
+      sendToChildFrame(page.frame, SHELL_HIDDEN);
+    }
   }
 
   private takeLocation(frame: HTMLIFrameElement, payload: Record<string, unknown>): void {

@@ -232,6 +232,11 @@ class WebSocketBroadcaster(MutableModel):
         window takes the catalog, and the pages it frames wear the new revision."""
         self.broadcast({"type": "themes_changed", "catalog": dict(catalog)})
 
+    def broadcast_keybindings_changed(self) -> None:
+        """Somebody changed a keybinding (a save here, or the snapshot rewritten from outside); every
+        window and the pages it frames re-fetch their resolved chords from their own backends."""
+        self.broadcast({"type": "keybindings_changed"})
+
     def broadcast_presence_updated(self, users: Sequence[Mapping[str, Any]]) -> None:
         """Broadcast the connected users whenever someone joins or leaves (one entry per user)."""
         self.broadcast({"type": "presence_updated", "users": users})

@@ -65,6 +65,14 @@ workspace rooted at `system/package.json` (one `npm ci`, one lockfile).
   test holds its external and custom-scheme rules (the app contract's
   `isExternalUrl` and `isCustomSchemeUrl`) to the desktop app's (the vendored
   `link-externality-vectors.json`).
+- `src/keybindings.ts`: the browser side of the keybinding chord grammar the
+  `workspace_profile` library defines (the user-profile-state spec in the mngr
+  repo, section 10): `chordFromKeydown` spells one keystroke canonically,
+  `keydownMatchesChords` and `keydownMatchesAction` match it against the chords
+  an app's backend resolved at `/api/keybindings/me`, which the apps re-fetch
+  on the `shell:keybindings-changed` message of `src/app_contract.ts`; its
+  contract test holds the named-key vocabulary to the desktop's (the vendored
+  `workspace_profile_contract.json`).
 - `src/download.ts`: `startDownload`, how the workspace's own pages download a
   file of their own origin: by loading it in a hidden frame rather than through
   a `download` link, whose request the browser sends without the workspace's

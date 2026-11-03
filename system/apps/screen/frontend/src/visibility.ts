@@ -1,9 +1,10 @@
 /**
  * Whether this viewer should hold media (docs/system/specs/screen/spec.md section 8.2): visible when the document is
- * not hidden, the shell said shown (or never said hidden), and the stage intersects the viewport. Hidden for the
- * hide delay, the media is released; visible again, it is requested at once. The inputs are fed by the composition
- * in ``index.ts`` (``visibilitychange``, the shell's messages, an IntersectionObserver, a 1.5 s belt); this is the
- * state machine over them.
+ * not hidden, the shell said shown (or never said hidden), the stage intersects the viewport, and the stage is laid
+ * out. Hidden for the hide delay, the media is released; visible again, it is requested at once. The inputs are fed
+ * by the composition in ``index.ts`` (``visibilitychange``, the shell's messages, an IntersectionObserver, a 1.5 s
+ * belt that owns the laid-out input alone, so a frame the observer missed is caught and let go by the same hand);
+ * this is the state machine over them.
  */
 
 import type { Scheduler } from "./scheduler";
@@ -22,6 +23,7 @@ export class ViewerVisibility {
   private isDocumentHidden = false;
   private isShellShown = true;
   private isIntersecting = true;
+  private isLaidOut = true;
   private hasMedia = false;
   private hideTimer: number | null = null;
 
@@ -33,7 +35,7 @@ export class ViewerVisibility {
 
   /** Whether the viewer is visible right now. */
   get isVisible(): boolean {
-    return !this.isDocumentHidden && this.isShellShown && this.isIntersecting;
+    return !this.isDocumentHidden && this.isShellShown && this.isIntersecting && this.isLaidOut;
   }
 
   /** Whether the viewer holds (or has asked for) media. */
@@ -53,6 +55,12 @@ export class ViewerVisibility {
 
   setIntersecting(isIntersecting: boolean): void {
     this.isIntersecting = isIntersecting;
+    this.evaluate();
+  }
+
+  /** Whether the stage has a size on screen (the belt's reading of its rectangle). */
+  setLaidOut(isLaidOut: boolean): void {
+    this.isLaidOut = isLaidOut;
     this.evaluate();
   }
 
