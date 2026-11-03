@@ -25,6 +25,7 @@ def _run(command: str, run_in_background: bool | None = None) -> int:
         "sleep 30 && cat /tmp/dd_full.txt",
         "sleep 1m; cat /tmp/out.txt",
         "sleep 2 3; cat /tmp/out.txt",  # sleep sums its arguments
+        "sleep 30 > /dev/null 2>&1",
         "sleep infinity",
         "sleep inf; cat /tmp/out.txt",
         # Waiting out a service restart.
@@ -58,6 +59,9 @@ def test_a_foreground_sleep_of_five_seconds_or_more_is_blocked(command: str) -> 
         "supervisorctl update; sleep 2.5; curl -s localhost:8000/",
         "until curl -sf localhost:8080/; do sleep 1; done",
         "sleep 4.9",
+        # A redirect's fd and target are not durations.
+        "sleep 3 2>/dev/null",
+        "sleep 2 2>&1",
         # A sleep handed to the background runner is the runner's, not this command's.
         "python3 system/scripts/workspace_bare_scripts/run_in_background.py --description 'Check back' -- bash -c 'sleep 300; cat /tmp/out.txt'",
         "python3 system/scripts/workspace_bare_scripts/run_in_background.py --description 'Check back' -- sleep 300",

@@ -61,7 +61,10 @@ def is_blocked(command: str) -> bool:
     for segment in parsed.segments:
         words = command_words(segment)
         if words and os.path.basename(words[0]) == "sleep":
-            list_sleeps = list_sleeps or _seconds(words[1:]) >= _MIN_BLOCKED_SECONDS
+            # A redirect's fd and target stay among the words (`sleep 3 2>/dev/null` reads as
+            # `sleep 3 2 /dev/null`), so a redirected sleep is judged by its first argument.
+            args = words[1:2] if segment.has_redirect else words[1:]
+            list_sleeps = list_sleeps or _seconds(args) >= _MIN_BLOCKED_SECONDS
         if segment.terminator is None:
             return list_sleeps
         # `|`, `&&`, `||` and a parenthesis carry the list on; `;` (a newline included) ends it
