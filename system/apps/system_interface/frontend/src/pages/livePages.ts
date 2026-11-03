@@ -49,6 +49,7 @@ import {
   SHELL_START_WITH_TEXT,
 } from "@imbue/workspace-ui/src/app_contract";
 import { requestFrameFocus } from "@imbue/workspace-ui/src/terminalFocus";
+import { viewportRect } from "../geometry/frames";
 import type { PixelRect } from "../geometry/frames";
 import { isPageCovered } from "../geometry/occlusion";
 import type { FrontWindow } from "../geometry/occlusion";
@@ -650,6 +651,8 @@ export class LivePagesLayer implements PageDriver {
     if (this.store.windowGesture() !== null) return covered;
     const metrics = this.store.getMetrics();
     const backdrop = this.store.frameBackdrop();
+    // While a fullscreen window is on screen the desktop paints over the taskbar's band as well.
+    const drawnArea = this.store.isFullscreenShown() ? viewportRect(backdrop, metrics.taskbarHeight) : backdrop;
     // A shown page parked as covered still counts: whatever covers it covers the window's content area too.
     const isContentOpaque = drawn.map((entry) => entry.isPlaceholderShown || shownPageIds.has(entry.windowId));
     const going = drawn.map((entry, index) => ({
@@ -664,9 +667,9 @@ export class LivePagesLayer implements PageDriver {
     drawn.forEach((entry, index) => {
       const here = now[index];
       if (!shownPageIds.has(entry.windowId) || entry.windowId === focused || here === null) return;
-      const isCoveredWhereGoing = isPageCovered(going[index], going.slice(index + 1), backdrop, metrics);
+      const isCoveredWhereGoing = isPageCovered(going[index], going.slice(index + 1), drawnArea, metrics);
       const frontNow = now.slice(index + 1).filter((front): front is FrontWindow => front !== null);
-      if (isCoveredWhereGoing && isPageCovered(here, frontNow, backdrop, metrics)) covered.add(entry.windowId);
+      if (isCoveredWhereGoing && isPageCovered(here, frontNow, drawnArea, metrics)) covered.add(entry.windowId);
     });
     return covered;
   }

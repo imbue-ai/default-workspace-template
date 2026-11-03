@@ -32,11 +32,12 @@ export interface OcclusionMetrics {
 /** Strips thinner than this are rounding between the store's rectangles and the DOM's, not visible page. */
 const SLIVER_PX = 0.5;
 
-/** Whether the page of the window drawn as ``drawn`` is wholly hidden, within the backdrop, behind ``front``. */
+/** Whether the page of the window drawn as ``drawn`` is wholly hidden, within ``drawnArea`` (what the desktop paints
+ *  from its top-left corner), behind ``front``. */
 export function isPageCovered(
   drawn: DrawnWindowRect,
   front: readonly FrontWindow[],
-  backdrop: PixelSize,
+  drawnArea: PixelSize,
   metrics: OcclusionMetrics,
 ): boolean {
   const radius = metrics.windowRadius;
@@ -48,7 +49,7 @@ export function isPageCovered(
     width: window.width,
     height: window.height - titleBarHeight,
   };
-  const visible = intersection(content, { x: 0, y: 0, width: backdrop.width, height: backdrop.height });
+  const visible = intersection(content, { x: 0, y: 0, width: drawnArea.width, height: drawnArea.height });
   if (visible === null) return true;
   const covers = front.flatMap((other) => opaqueParts(other, metrics));
   const bottom = window.y + window.height;

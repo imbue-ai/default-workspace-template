@@ -623,6 +623,29 @@ describe("covered pages", () => {
     expect(document.activeElement).toBe(frameOf("win-2"));
   });
 
+  it("keeps live a page below the backdrop while a fullscreen window behind it opens the taskbar's band", () => {
+    // win-3 fullscreen at the back, win-1 dragged down until only its title bar is in the backdrop, win-2 on top.
+    store.restoreWindow("win-3");
+    store.toggleFullscreen("win-3");
+    store.setWindowFrame("win-1", { x: 0.05, y: 1, width: 0.6, height: 0.7 });
+    store.raiseWindow("win-2");
+    drawChromeAt("win-3", { left: 0, top: 0, width: 1000, height: 848 });
+    drawChromeAt("win-1", { left: 50, top: 764, width: 600, height: 560 });
+    drawChromeAt("win-2", CASCADE_RECT);
+    layer.reconcile();
+    expect(activePlacements(store.getState()).map((placement) => placement.window_id)).toEqual([
+      "win-3",
+      "win-1",
+      "win-2",
+    ]);
+    expect(isParked(wrapperOf("win-1"))).toBe(false);
+    // Out of fullscreen the backdrop clips the band again, and the page there is out of sight.
+    store.toggleFullscreen("win-3");
+    store.raiseWindow("win-2");
+    layer.reconcile();
+    expect(isParked(wrapperOf("win-1"))).toBe(true);
+  });
+
   it("tests a viewed desktop's pages against the owner's backdrop the letterbox draws, not this one", async () => {
     await viewAlicesDesktopAtHalfScale([
       placementRecord("win-a", { frame: BOTTOM_RIGHT_QUARTER_FRAME }),
