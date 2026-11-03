@@ -140,7 +140,8 @@ Its state lives under `data/.state/system_interface/`: `desktops.json`, `tour.js
 has offered), `placements/<desktop>/<client>.json`,
 `window_paths/<client>.json` (a client's own paths for independent windows),
 `clients.json`, `users.json` (the desktop made for each visiting user),
-`avatar_selection.json`, and the client-activity
+`avatar_selection.json`, `web_push/` (the Web Push signing key and the
+owner's devices, see "Notifications on a phone"), and the client-activity
 event log (`events/client_activity/events.jsonl`, what `workspace-layout context`
 reads). Wallpapers are listed from `static/wallpapers/` (bundled) and
 `data/.apps/system_interface/wallpapers/` (files the user adds); avatar designs
