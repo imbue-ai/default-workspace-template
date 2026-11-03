@@ -44,8 +44,6 @@ from imbue.chat.accounts import commit_account
 from imbue.chat.accounts import delete_account
 from imbue.chat.activity_state import ActivityState
 from imbue.chat.agent_discovery import MngrMessenger
-from imbue.chat.agent_discovery import SendDelivery
-from imbue.chat.agent_discovery import SendFailure
 from imbue.chat.authors import new_author_annotation
 from imbue.chat.auto_open import chat_root_path
 from imbue.chat.chat_seed import SeedRole
@@ -57,6 +55,7 @@ from imbue.chat.primitives import CHAT_APP_NAME
 from imbue.chat.primitives import ChatId
 from imbue.chat.testing import FIXTURE_AGENT_ID
 from imbue.chat.testing import FIXTURE_SESSION_ID
+from imbue.chat.testing import HookedSendMngrMessenger
 from imbue.chat.testing import RecordingMngrMessenger
 from imbue.chat.testing import RunningWorkspace
 from imbue.chat.testing import SummaryWritingMngrMessenger
@@ -70,9 +69,7 @@ from imbue.chat.testing import scripted_send_mngr_messenger
 from imbue.chat.testing import seed_agent_state
 from imbue.chat.testing import wait_until_true
 from imbue.chat.testing import write_background_task_marker
-from imbue.mngr.api.find import AgentMatch
 from imbue.mngr.errors import SendFailureKind
-from imbue.mngr.primitives import AgentId
 from imbue.mngr.utils.polling import wait_for
 from imbue.system_interface.app_context import DEFAULT_STATIC_DIRECTORY as SHELL_STATIC_DIRECTORY
 from imbue.system_interface.shell.desktops import DEFAULT_DESKTOP_NAME
@@ -2023,24 +2020,6 @@ def test_a_chat_changes_account_in_place_from_the_page(tmp_path: Path, page: Pag
         expect(provider_row).not_to_contain_text("next message")
 
 
-class _HookedSendMngrMessenger(RecordingMngrMessenger):
-    """A recording messenger that runs each of ``during_send`` with the message while its send is in flight."""
-
-    during_send: list[Callable[[str], None]] = []
-
-    def send_to_agent(
-        self,
-        agent_id: AgentId,
-        message: str,
-        known_locations: Sequence[AgentMatch],
-        is_resent_when_unsure: bool = True,
-        is_taken_back: Callable[[], bool] = lambda: False,
-    ) -> SendDelivery | SendFailure:
-        for run in self.during_send:
-            run(message)
-        return super().send_to_agent(agent_id, message, known_locations, is_resent_when_unsure, is_taken_back)
-
-
 @pytest.mark.timeout(120, func_only=False)
 def test_a_message_sent_during_a_switch_stays_on_the_page_while_the_switch_delivers_it(
     tmp_path: Path, page: Page
@@ -2053,7 +2032,7 @@ def test_a_message_sent_during_a_switch_stays_on_the_page_while_the_switch_deliv
     page.add_init_script(f"window.__watchedText = {json.dumps(follow_up)};" + _RECORD_MESSAGE_GAPS_SCRIPT)
     is_delivering = {confirming: threading.Event(), follow_up: threading.Event()}
     is_released = {confirming: threading.Event(), follow_up: threading.Event()}
-    messenger = _HookedSendMngrMessenger()
+    messenger = HookedSendMngrMessenger()
     with _switched_workspace(
         tmp_path, messenger=messenger, additional_accounts=(("anthropic", "Anthropic"),)
     ) as server:
