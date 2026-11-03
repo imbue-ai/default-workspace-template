@@ -233,7 +233,7 @@ def register_app(manifest_path: Path, app_url: AppUrl) -> None:
     started_at = time.monotonic()
     try:
         forward_port.register_manifest(registry_path(), manifest_path, app_url)
-    except (forward_port.RegistryError, OSError) as e:
+    except (forward_port.RegistryError, OSError, ValueError) as e:
         raise AppRegistrationError(f"registration of {manifest_path} failed: {e}") from e
     elapsed = time.monotonic() - started_at
     if elapsed > REGISTRATION_SLOW_SECONDS:

@@ -343,7 +343,7 @@ def register_app(registered_manifest_path: Path, port: int) -> None:
             registered_manifest_path,
             f"http://localhost:{port}",
         )
-    except (forward_port.RegistryError, OSError) as e:
+    except (forward_port.RegistryError, OSError, ValueError) as e:
         raise DatalibLaunchError(f"the app is not registered: {e}") from e
 
 

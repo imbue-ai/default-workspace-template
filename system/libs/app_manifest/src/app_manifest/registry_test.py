@@ -237,3 +237,13 @@ def test_register_app_reports_the_refusal_of_a_bad_manifest(tmp_path: Path, regi
 
     with pytest.raises(AppRegistrationError, match="invalid app name"):
         register_app(manifest_path, AppUrl("http://localhost:8300"))
+
+
+def test_register_app_reports_a_registry_that_does_not_parse(tmp_path: Path, registration_registry: Path) -> None:
+    (tmp_path / "icon.svg").write_text(APP_ICON_MARKUP)
+    manifest_path = tmp_path / "app.toml"
+    manifest_path.write_text('name = "registered"\ndisplay_name = "Registered"\nicon = "icon.svg"\n')
+    registration_registry.write_text("[[apps]\nname = \n")
+
+    with pytest.raises(AppRegistrationError, match="registration of"):
+        register_app(manifest_path, AppUrl("http://localhost:8300"))
