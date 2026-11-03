@@ -212,7 +212,8 @@ process restarts:
   `--refresh`: while the app's mock frame is up it re-frames the app with
   the frame's own note (keeping the restarted app out of the launcher) and
   reloads the mock window, and otherwise it reloads the app's own windows.
-  Once a framed app reads its real data, take the frame down as `build-app`
+  With no window open yet, a framed app's call ends with `mock_frame.py up
+  --app <name> --open` instead. Once a framed app reads its real data, take the frame down as `build-app`
   Step 2 says.
 
   A daemon with no port cannot use `verify_app.py` (it needs a port to
@@ -275,7 +276,10 @@ uv run --no-sync workspace-layout refresh --app <name>
 For an app `build-app` made, reload with `uv run --no-sync .agents/skills/build-app/python/build_app_skill/mock_frame.py refresh --app
 <name>` instead: while its mock frame is up the user's window is the frame's,
 which that reloads, and otherwise it reloads the app's own windows. Never
-`open` a framed app itself; its window is the frame's.
+`open` a framed app itself; its window is the frame's. With no window open yet,
+surface the frame with `uv run --no-sync
+.agents/skills/build-app/python/build_app_skill/mock_frame.py up --app <name>
+--open`, which keeps the frame's note.
 
 `refresh --app` reloads every page of the service on every client. If no
 window is open yet and the change is ready to show, surface it instead with
