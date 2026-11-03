@@ -57,9 +57,9 @@ _CRON_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
 
 # The workspace's timezone, written by the client that created the workspace and
 # again when the user changes it from Imbue Studio (the user-profile-state spec,
-# section 8.4; the old boot-time fetch cached the same file). /etc/localtime lives on the container rootfs and is lost when the
-# container is recreated, so each boot re-applies this instead of leaving the
-# container on UTC.
+# section 8.4; the old boot-time fetch cached the same file). /etc/localtime
+# lives on the container rootfs and is lost when the container is recreated, so
+# each boot re-applies this instead of leaving the container on UTC.
 USER_TIMEZONE_FILE = STATE_DIR / "user_timezone"
 
 # The in-flight update-apply marker and the script that rolls a stale one
