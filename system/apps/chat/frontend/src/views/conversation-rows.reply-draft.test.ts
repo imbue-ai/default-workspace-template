@@ -76,10 +76,12 @@ describe("the reply draft", () => {
     const view = buildConversationView("agent-1", events, false, null, null, () => DRAFT);
     const block = view.rows.find((row) => row.key.startsWith("progress-"))!;
     toggleBlockExpanded(`step:${block.key}:s1`);
-
-    const expanded = renderRow(block).querySelector(".pv-tl-expanded");
-    expect(expanded?.textContent).toContain("Looking inside the cache now.");
-    toggleBlockExpanded(`step:${block.key}:s1`);
+    try {
+      const expanded = renderRow(block).querySelector(".pv-tl-expanded");
+      expect(expanded?.textContent).toContain("Looking inside the cache now.");
+    } finally {
+      toggleBlockExpanded(`step:${block.key}:s1`);
+    }
   });
 
   it("stays out of the rows when no step is live", () => {
