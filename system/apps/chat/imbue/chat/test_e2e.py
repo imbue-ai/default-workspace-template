@@ -893,6 +893,83 @@ def test_the_transcript_reaches_its_bottom_whatever_the_composer_height(tmp_path
         frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=5000)
 
 
+# Record the transcript's distance from its bottom once per painted frame: a message posted from an animation
+# frame callback is handled after that frame has been laid out, resized and painted, so a gap the engine closes
+# before paint is never seen and one it leaves for a later frame is.
+_START_PAINTED_GAP_RECORDER_JS = """
+() => {
+  const el = document.querySelector('.transcript-scroll');
+  window.__paintedGaps = [];
+  window.__paintedGapsOn = true;
+  const channel = new MessageChannel();
+  channel.port1.onmessage = () => window.__paintedGaps.push(el.scrollHeight - el.scrollTop - el.clientHeight);
+  const tick = () => {
+    if (!window.__paintedGapsOn) return;
+    channel.port2.postMessage(0);
+    requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+"""
+_STOP_PAINTED_GAP_RECORDER_JS = "() => { window.__paintedGapsOn = false; return window.__paintedGaps; }"
+
+# Whether the draft is scrolled all the way down: the line holding a caret at its end, and the padding under it,
+# in view.
+_DRAFT_AT_BOTTOM_JS = (
+    "() => { const ta = document.querySelector('.message-input-textbox'); "
+    "return ta.scrollTop + ta.clientHeight >= ta.scrollHeight - 1; }"
+)
+
+
+@pytest.mark.timeout(120, func_only=False)
+def test_typing_a_long_draft_keeps_the_transcript_and_the_caret_in_view(tmp_path: Path, page: Page) -> None:
+    """Each line the draft wraps onto grows the composer and shortens the transcript above it: the transcript stays
+    at its bottom in every painted frame instead of jumping up a line, and once the draft outgrows the composer the
+    line being typed stays fully in view. A message arriving meanwhile leaves the draft where its reader scrolled it.
+    """
+    events = _make_long_conversation_events(60)
+    with _running_e2e_server(tmp_path, session_events=events) as server:
+        page.set_viewport_size({"width": 1000, "height": 720})
+        _open_fixture_chat(page, server)
+        chat = _chat(page)
+        frame = _chat_frame(page)
+        frame.wait_for_function(_TRANSCRIPT_AT_BOTTOM_JS, timeout=15000)
+        textarea = chat.locator(".message-input-textbox")
+        textarea.click()
+
+        frame.evaluate(_START_PAINTED_GAP_RECORDER_JS)
+        for line in range(16):
+            page.keyboard.type(f"typed line {line} " + "lorem ipsum " * 3)
+            page.keyboard.press("Shift+Enter")
+            assert frame.evaluate(_DRAFT_AT_BOTTOM_JS), f"the line being typed is cut off after line {line}"
+        page.wait_for_timeout(300)
+        painted_gaps = frame.evaluate(_STOP_PAINTED_GAP_RECORDER_JS)
+        assert painted_gaps, "no frames were recorded"
+        assert max(painted_gaps) <= 1, f"the transcript was painted off its bottom while typing: {max(painted_gaps)}px"
+        assert frame.evaluate(
+            "() => { const ta = document.querySelector('.message-input-textbox'); "
+            "return ta.scrollHeight > ta.clientHeight; }"
+        ), "the draft never outgrew the composer"
+
+        frame.evaluate("() => { document.querySelector('.message-input-textbox').scrollTop = 40; }")
+        with open(server.session_file, "a") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "type": "user",
+                        "uuid": "long-u-while-drafting",
+                        "timestamp": "2026-01-01T00:02:00Z",
+                        "message": {"role": "user", "content": "arrived-while-drafting"},
+                    }
+                )
+                + "\n"
+            )
+        expect(chat.locator(".message-user", has_text="arrived-while-drafting")).to_be_attached(
+            timeout=_TRIGGER_TIMEOUT_MS
+        )
+        assert frame.evaluate("() => document.querySelector('.message-input-textbox').scrollTop") == 40
+
+
 def _make_long_tool_conversation_events(turn_count: int) -> list[dict[str, Any]]:
     """Turns of a question, a reply with three file reads, their 30-line results, and a closing reply."""
     events: list[dict[str, Any]] = []

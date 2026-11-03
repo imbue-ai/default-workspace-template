@@ -12,36 +12,55 @@ vi.hoisted(() => {
 
 import { createTranscriptScrollEngine } from "./transcript-scroll-engine";
 import type { TranscriptScrollDataSource, TranscriptScrollEngine } from "./transcript-scroll-engine";
+import type { RowDescriptor } from "./conversation-rows";
 
 const CLIENT_HEIGHT_PX = 655;
 const SCROLL_HEIGHT_PX = 39280;
 const BOTTOM_PX = SCROLL_HEIGHT_PX - CLIENT_HEIGHT_PX;
 
+// The scroll element's layout, which a test changes to model the browser
+// re-laying it out (the composer growing under it, content shrinking mid-patch).
+interface ScrollLayout {
+  scrollHeightPx: number;
+  clientHeightPx: number;
+}
+
 // A scroll element whose scrollTop is a real stored property (jsdom computes no
 // layout, so its native scrollTop/scrollHeight/clientHeight are inert) -- the
-// engine's FOLLOW pin writes scrollTop and reads it back, which this models.
-function makeScrollElement(): HTMLElement {
+// engine's FOLLOW pin writes scrollTop and reads it back, which this models,
+// clamped to the maximum the way the browser clamps it.
+function makeScrollElement(
+  layout: ScrollLayout = { scrollHeightPx: SCROLL_HEIGHT_PX, clientHeightPx: CLIENT_HEIGHT_PX },
+): HTMLElement {
   const element = document.createElement("div");
   let scrollTopPx = 0;
   Object.defineProperty(element, "scrollTop", {
     configurable: true,
     get: () => scrollTopPx,
     set: (value: number) => {
-      scrollTopPx = value;
+      scrollTopPx = Math.max(0, Math.min(value, layout.scrollHeightPx - layout.clientHeightPx));
     },
   });
-  Object.defineProperty(element, "scrollHeight", { configurable: true, get: () => SCROLL_HEIGHT_PX });
-  Object.defineProperty(element, "clientHeight", { configurable: true, get: () => CLIENT_HEIGHT_PX });
+  Object.defineProperty(element, "scrollHeight", { configurable: true, get: () => layout.scrollHeightPx });
+  Object.defineProperty(element, "clientHeight", { configurable: true, get: () => layout.clientHeightPx });
   return element;
 }
 
-// No loaded rows: the FOLLOW pin positions from the element's own
+// No loaded rows by default: the FOLLOW pin positions from the element's own
 // scrollHeight/clientHeight, so an empty window exercises it, and a null total
-// keeps the fill planner idle -- this test is about positioning alone.
-function makeDataSource(): TranscriptScrollDataSource {
+// keeps the fill planner idle -- these tests are about positioning alone. Rows
+// give the engine something to anchor a reader who scrolled up.
+function makeDataSource(rowCount = 0): TranscriptScrollDataSource {
+  const eventIds = Array.from({ length: rowCount }, (_, index) => `event-${index}`);
+  const rows: RowDescriptor[] = eventIds.map((eventId) => ({
+    key: eventId,
+    estimate: SCROLL_HEIGHT_PX / rowCount,
+    anchorEventId: eventId,
+    render: () => null,
+  }));
   return {
-    getRows: () => [],
-    getWindowEventIds: () => [],
+    getRows: () => rows,
+    getWindowEventIds: () => eventIds,
     getFirstOffset: () => 0,
     getTotalEvents: () => null,
     getRenderVersion: () => 1,
@@ -58,10 +77,27 @@ async function flushMicrotasks(): Promise<void> {
 
 // A constructable ResizeObserver stand-in: jsdom has none, and the engine does
 // `new ResizeObserver(...)` in attach(), so a plain mock factory is not enough.
+// Each instance keeps its callback and what it observes, so a test can fire the
+// observer of a given element the way the browser does after a layout.
 class StubResizeObserver {
-  observe = vi.fn();
+  static instances: StubResizeObserver[] = [];
+  readonly observed: Element[] = [];
+  constructor(readonly callback: ResizeObserverCallback) {
+    StubResizeObserver.instances.push(this);
+  }
+  observe = vi.fn((target: Element) => {
+    this.observed.push(target);
+  });
   unobserve = vi.fn();
   disconnect = vi.fn();
+}
+
+function fireResizeObserverOf(target: Element): void {
+  for (const observer of StubResizeObserver.instances) {
+    if (observer.observed.includes(target)) {
+      observer.callback([], observer as unknown as ResizeObserver);
+    }
+  }
 }
 
 describe("transcript scroll engine repositions after a chat switch", () => {
@@ -70,6 +106,7 @@ describe("transcript scroll engine repositions after a chat switch", () => {
   let originalResizeObserver: typeof globalThis.ResizeObserver;
 
   beforeEach(() => {
+    StubResizeObserver.instances = [];
     originalResizeObserver = globalThis.ResizeObserver;
     globalThis.ResizeObserver = StubResizeObserver as unknown as typeof globalThis.ResizeObserver;
     element = makeScrollElement();
@@ -100,5 +137,74 @@ describe("transcript scroll engine repositions after a chat switch", () => {
     await flushMicrotasks();
 
     expect(element.scrollTop).toBe(BOTTOM_PX);
+  });
+});
+
+describe("transcript scroll engine keeps FOLLOW at the bottom through layout changes", () => {
+  let engine: TranscriptScrollEngine;
+  let layout: ScrollLayout;
+  let element: HTMLElement;
+  let originalResizeObserver: typeof globalThis.ResizeObserver;
+
+  beforeEach(async () => {
+    StubResizeObserver.instances = [];
+    originalResizeObserver = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = StubResizeObserver as unknown as typeof globalThis.ResizeObserver;
+    layout = { scrollHeightPx: SCROLL_HEIGHT_PX, clientHeightPx: CLIENT_HEIGHT_PX };
+    element = makeScrollElement(layout);
+    engine = createTranscriptScrollEngine({ dataSource: makeDataSource() });
+    engine.setChat("agent-1");
+    engine.computeRenderPlan();
+    engine.afterRender(element);
+    await flushMicrotasks();
+    expect(element.scrollTop).toBe(BOTTOM_PX);
+  });
+
+  afterEach(() => {
+    engine.detach();
+    globalThis.ResizeObserver = originalResizeObserver;
+  });
+
+  it("returns to the bottom in the same frame after the browser clamps the view up during a redraw", async () => {
+    // The redraw's patch lays the content out shorter for a moment (a spacer
+    // shrinks before the row replacing it is inserted), and the browser clamps
+    // scrollTop up to fit; the content is back to full height by the time the
+    // engine positions. Gliding back from the clamp painted it as a bounce.
+    engine.computeRenderPlan();
+    element.scrollTop = BOTTOM_PX - 150;
+    engine.afterRender(element);
+    await flushMicrotasks();
+
+    expect(element.scrollTop).toBe(BOTTOM_PX);
+  });
+
+  it("re-pins to the bottom as soon as the viewport gets shorter, before any redraw", () => {
+    // The composer grows a line: the transcript's viewport loses 20px at its
+    // bottom while scrollTop stays put. The resize observer runs before paint;
+    // the pin must happen there, not a frame later.
+    layout.clientHeightPx = CLIENT_HEIGHT_PX - 20;
+    fireResizeObserverOf(element);
+
+    expect(element.scrollTop).toBe(SCROLL_HEIGHT_PX - (CLIENT_HEIGHT_PX - 20));
+  });
+
+  it("leaves a viewport resize alone once the reader has scrolled up", async () => {
+    engine.detach();
+    engine = createTranscriptScrollEngine({ dataSource: makeDataSource(200) });
+    engine.setChat("agent-1");
+    engine.computeRenderPlan();
+    engine.afterRender(element);
+    await flushMicrotasks();
+    expect(element.scrollTop).toBe(BOTTOM_PX);
+
+    element.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+    element.scrollTop = BOTTOM_PX - 100;
+    element.dispatchEvent(new Event("scroll"));
+    await flushMicrotasks();
+
+    layout.clientHeightPx = CLIENT_HEIGHT_PX - 20;
+    fireResizeObserverOf(element);
+
+    expect(element.scrollTop).toBe(BOTTOM_PX - 100);
   });
 });
