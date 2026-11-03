@@ -1030,7 +1030,7 @@ check: name every marker you add in your report. Never raise the count.
 def test_prevent_sys_path_edits() -> None:
     sites = _import_path_sites(REPO_ROOT)
     offenders = _sys_path_editors(sites)
-    assert len(offenders) <= snapshot(22), (
+    assert len(offenders) <= snapshot(1), (
         "These change where imports are looked up (sys.path, PYTHONPATH in Python or a shell "
         "script, or a pytest pythonpath setting):\n"
         + "\n".join(site.describe() for site in sites if not site.is_kept())
@@ -1110,19 +1110,6 @@ def test_a_pytest_pythonpath_setting_is_counted(tmp_path: Path) -> None:
     assert _sys_path_editors(_import_path_sites(tmp_path)) == ["app/pyproject.toml"]
 
 
-# Files whose sys.path edit adds a directory outside the bare search paths, each for a reason
-# no import can replace.
-_SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS = (
-    # publish-template's two tools run under `uv run --no-project` (pydantic via --with, no
-    # venv) and import their own package from the skill's python/.
-    ".agents/skills/publish-template/scripts/validate_template.py",
-    ".agents/skills/publish-template/scripts/write_template_manifest.py",
-    # The update's apply loads oom_priority's bands from the target release's tree, a path
-    # known only at run time.
-    ".agents/skills/update-self/python/update_self_skill/update_banding.py",
-)
-
-
 def _file_relative_path(node: ast.expr, file: Path) -> Path | None:
     """Where ``Path(__file__)``-based path arithmetic points, or None for any other expression."""
     if (
@@ -1194,8 +1181,6 @@ def _sys_path_edits_outside_the_bare_search_paths(
     resolved_allowed = {path.resolve() for path in allowed}
     offenders: list[str] = []
     for relative in _tracked_python_files(repo_root):
-        if relative in _SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS:
-            continue
         source = (repo_root / relative).read_text()
         outside = [
             (line, target)
@@ -1234,11 +1219,6 @@ def test_sys_path_edits_only_add_a_bare_search_path() -> None:
         "what the runtime imports, unless an `# import-path: <reason> -- <why>` marker keeps it "
         "(.agents/shared/references/running-python.md):\n" + "\n".join(offenders)
     )
-
-
-def test_every_named_sys_path_exception_still_edits_sys_path() -> None:
-    for relative in _SYS_PATH_EDITS_OUTSIDE_THE_BARE_SEARCH_PATHS:
-        assert _edits_sys_path((REPO_ROOT / relative).read_text()), relative
 
 
 def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(
@@ -1589,7 +1569,7 @@ reviewer will check: name every marker you add in your report. Never raise the c
 
 def test_prevent_running_the_workspaces_own_code_as_a_process() -> None:
     sites = _program_launch_sites(REPO_ROOT)
-    assert len(sites) <= snapshot(24), (
+    assert len(sites) <= snapshot(8), (
         "These name one of the workspace's own scripts, modules or commands to run it as "
         "a process:\n"
         + "\n".join(sites)

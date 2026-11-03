@@ -108,6 +108,7 @@ from typing import Callable, NamedTuple, Sequence
 # Run by its path, the module puts the bare packages' directory on sys.path; imported as
 # part of its package, the venv already has it.
 if not __package__:
+    # import-path: no-venv -- the system python3 runs this with no venv, so it finds its stdlib-only packages by path
     sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "system" / "scripts"))
 
 from workspace_bare_scripts import forward_port
@@ -155,6 +156,7 @@ _SELF_HINT = ".agents/shared/scripts/agents_shared/serve_isolated_instance.py"
 
 # The wrapper server ships beside this module and imports only the standard library, so it
 # runs by its path under whichever interpreter runs this one.
+# own-process: server -- the preview wrapper is the server an isolated instance runs behind
 WRAPPER_SCRIPT = Path(__file__).resolve().with_name("preview_wrapper_server.py")
 
 # Boot budget: a fresh instance (first import + startup) runs alongside whatever
@@ -205,6 +207,7 @@ _BOOT_MARKER_PREFIX = "===== boot "
 # bash command self-tags AGENT_SUBPROCESS (900). That makes the surface the user is
 # actually looking at the first non-browser thing shed under memory pressure, with
 # nothing re-polling health afterwards to tell them their window went dead.
+# own-process: wrapper -- it sets the instance's band and execs the instance in its place
 _OOM_TAG_SCRIPT = "system/services/oom_priority/bin/oom_tag_service.py"
 # The band every user-created service shares. A served instance is exactly that.
 # The tradeoff is deliberate: at 200 the instance outlives every agent, including
@@ -476,6 +479,7 @@ class Spawner:
 # .venv) is booted: like its supervisord program, it links the project's venv and syncs it
 # from the project's own lock; it then execs the command with that venv first on PATH, so
 # a bare console-script name in the launch argv resolves to the project's own install.
+# own-process: other-tier -- the system python3 links the project's venv before that venv exists
 VENV_LINKS_SCRIPT = "system/scripts/workspace_bare_scripts/venv_links.py"
 
 

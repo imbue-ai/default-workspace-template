@@ -55,6 +55,7 @@ LAUNCHER = (
 # An app that declares ``[[secrets]]`` runs under the wrapper, which is the only reader
 # of its secret files; the preview does the same. The worktree has no ``data/``, so the
 # wrapper reads the live repo's files.
+# own-process: wrapper -- the only reader of the app's secret files; it execs the app with them
 WITH_SECRETS_SCRIPT = Path("system") / "scripts" / "with_secrets.py"
 SECRETS_DIRECTORY = Path("data") / ".secrets"
 

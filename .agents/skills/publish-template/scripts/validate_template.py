@@ -7,6 +7,7 @@ from pathlib import Path
 # Kept as a stub: build_template.sh runs this path without the workspace venv (`uv run
 # --no-project`, from a snapshot of this skill outside the repo), so the package beside
 # scripts/ is put on sys.path here.
+# import-path: no-venv -- `uv run --no-project` runs this from a snapshot with no venv to install its package
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 
 from publish_template_skill.validate_template import main

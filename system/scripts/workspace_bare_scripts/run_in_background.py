@@ -93,6 +93,7 @@ EXIT_CODE_FILE_NAME = "exit_code"
 MESSAGE_FILE_NAME = "message.md"
 RUNNER_LOG_FILE_NAME = "runner.log"
 
+# own-process: other-tree -- update-self's staged copy messages through the workspace tree's messenger
 MESSAGE_CHAT_REL = Path("system") / "scripts" / "message_chat.py"
 
 # The marker layout ``system/libs/chat_background_tasks`` reads, copied because update-self's

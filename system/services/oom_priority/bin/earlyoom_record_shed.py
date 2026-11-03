@@ -22,6 +22,7 @@ import os
 import sys
 from pathlib import Path
 
+# import-path: no-venv -- the system python3 runs this with no venv, so it finds its stdlib-only packages by path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority.ledger import append_shed_record

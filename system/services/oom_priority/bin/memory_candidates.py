@@ -51,7 +51,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Final, NamedTuple
 
+# import-path: no-venv -- the system python3 runs this with no venv, so it finds its stdlib-only packages by path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+# import-path: no-venv -- the system python3 runs this with no venv, so it finds its stdlib-only packages by path
 sys.path.insert(
     0,
     str(Path(__file__).resolve().parents[3] / "libs" / "chat_background_tasks" / "src"),
