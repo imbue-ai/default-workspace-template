@@ -72,7 +72,7 @@ import shutil
 import sys
 from pathlib import Path
 
-# import-path: no-venv -- every agent's command starts with this wrapper, so an agent still starts when the venv is missing or broken
+# import-path: no-venv -- every agent but the services agent starts through this wrapper, so an agent still starts when the venv is missing or broken
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority import bands
