@@ -144,9 +144,10 @@ of this without turning sharing on.
   403 the way the chat app's `system/apps/chat/imbue/chat/identity.py` does.
   Whether visitors may change, delete, spend, or run a command or touch files
   outside the app's data is the user's call, not yours: unless the task file
-  says, keep the behavior and name each such route in your report. The API document is what a visiting agent reads to learn the app
-  (`build-app`'s "The app describes its own API"), so a route's description
-  says when it is owner-only.
+  says, keep the behavior and name each such route in your report. The API
+  document is what a visiting agent reads to learn the app (`build-app`'s
+  "The app describes its own API"), so a route's description says when it is
+  owner-only.
 - **Who did what.** When the app stores something a person or an agent made
   or changed (an edit, a submission, a comment), store the requester's
   participant key with it; `email` and `agent_name` are for display only,
