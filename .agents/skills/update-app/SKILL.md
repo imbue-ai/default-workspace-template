@@ -104,8 +104,7 @@ own subagent. Start each subagent with `model: "sonnet"`, and leave its
 at once and you stay free to read the next message. They work under your service
 lease (below) and do not take their own. Subagents only build their change and
 report back; they do not test it in a browser or wait for each other. Once they
-have all reported, have one subagent verify every change together, or verify them
-yourself. This is separate from `launch-task`, which starts a background worker on
+have all reported, have one subagent verify every change together. This is separate from `launch-task`, which starts a background worker on
 its own branch.
 
 ## One editor at a time: the service lease
