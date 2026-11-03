@@ -1256,6 +1256,8 @@ def test_the_sys_path_target_check_reads_file_relative_paths_and_refuses_others(
         "sys.path.insert(0, computed_somewhere)\n"
         "# import-path: other-tree -- the target release's tree, known only at run time\n"
         "sys.path.insert(0, target_tree)\n"
+        "# import-path: no-venv -- `uv run --no-project` runs this with no venv\n"
+        'sys.path.insert(0, str(Path(__file__).resolve().parent / "beside"))\n'
     )
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
