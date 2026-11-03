@@ -1248,7 +1248,10 @@ def frame(
     with the same ``name`` kills the wrapper and deregisters it, and never touches the
     inner service.
 
-    On any failure the partial state is torn down and 1 is returned.
+    Returns 1 on failure. A failed boot is torn down, a re-frame's row deregistered
+    with it; an inner path without a leading ``/``, an unreadable state file, or a
+    previous wrapper that survives SIGKILL is refused before anything changes,
+    leaving a previous frame as it was.
     """
     if not inner_path.startswith("/"):
         sys.stderr.write(
