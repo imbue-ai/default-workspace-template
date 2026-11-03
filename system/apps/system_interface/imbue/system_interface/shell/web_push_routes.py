@@ -60,7 +60,7 @@ def _web_push() -> WebPushNotifier:
 
 def _asset_response(filename: str, mimetype: str) -> Response:
     response = send_file(_ASSETS_DIRECTORY / filename, mimetype=mimetype)
-    # A stale worker or page would hide a fix behind the browser's cache; both are small.
+    # A cached worker or page would keep running old code after the shell is updated.
     response.headers["Cache-Control"] = "no-cache"
     return response
 

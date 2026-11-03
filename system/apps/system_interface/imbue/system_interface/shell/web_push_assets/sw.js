@@ -56,8 +56,8 @@ self.addEventListener("notificationclick", (event) => {
 });
 
 // A push service that rotates a subscription hands the worker a new one; registering it keeps the device on the list.
-// Best effort: with no signed-in session at hand the registration is refused, and the page registers the device again
-// the next time it is opened.
+// Best effort: with no signed-in session at hand the registration is refused, and the user turns notifications on
+// again from the page.
 self.addEventListener("pushsubscriptionchange", (event) => {
   event.waitUntil(
     (async () => {

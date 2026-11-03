@@ -83,7 +83,7 @@ class PushSubscriptionKeys(FrozenModel):
 class BrowserPushSubscription(FrozenModel):
     """A ``PushSubscription`` as the browser's ``toJSON()`` writes it."""
 
-    # The browser's own object, whose other fields (``expirationTime``) this build does not read.
+    # The browser's own object, which carries fields this build does not read.
     model_config = ConfigDict(extra="ignore")
 
     endpoint: str = Field(
