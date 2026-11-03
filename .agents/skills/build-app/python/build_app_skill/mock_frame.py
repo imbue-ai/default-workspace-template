@@ -13,7 +13,8 @@ window count reached zero. Both last until the app's next
 registration from its manifest alone, which its program makes on every start, so ``up``
 is re-run after every restart (``verify_app.py --restart`` and then ``up --refresh``,
 in one call). ``down`` closes the mock window, removes the frame, and registers the app
-from its manifest again, so it is an ordinary app the user can open.
+from its manifest again, so it is an ordinary app the user can open; for an app that has
+since been removed it takes the frame down and leaves the registry alone.
 
 Run from the repo root via ``uv run --no-sync``:
 
@@ -23,8 +24,9 @@ Run from the repo root via ``uv run --no-sync``:
 
 Exit codes:
     0  Success.
-    1  The app has no manifest or is not registered, the frame did not come up, the
-       window could not be opened or refreshed, or the frame could not be torn down.
+    1  ``up``: the app has no manifest or is not registered, the frame did not come up,
+       or the window could not be opened or refreshed. ``down``: the frame could not be
+       torn down.
 """
 
 from __future__ import annotations
@@ -202,11 +204,22 @@ def up(
 
 
 def down(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -> int:
-    """Close the mock window, remove the frame, and make the app an ordinary app again."""
-    app = find_app(app_name, repo_root)
+    """Close the mock window, remove the frame, and make the app an ordinary app again.
+
+    The frame comes down even when the app itself is gone (removed while still a mock);
+    its registration is then left alone, since registering it would add it back.
+    """
     if layout.run(["close", frame_name(app_name)]) != 0:
         sys.stderr.write(f"note: no {frame_name(app_name)} window was open to close.\n")
     code = frames.down(app_name, repo_root)
+    try:
+        app = find_app(app_name, repo_root)
+    except MockFrameError:
+        sys.stderr.write(
+            f"mock frame: {app_name!r} has no manifest or is not registered, so its "
+            "registration is left as it is.\n"
+        )
+        return code
     _register(app, repo_root, None)
     return code
 

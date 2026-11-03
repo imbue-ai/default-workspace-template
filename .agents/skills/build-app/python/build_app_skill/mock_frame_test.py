@@ -239,6 +239,24 @@ def test_down_restores_the_app_even_when_no_mock_window_is_open_or_the_frame_wil
     assert _row(registry) == plain_row
 
 
+def test_down_takes_the_frame_down_for_an_app_removed_while_still_a_mock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    registry = _registered_app(tmp_path, monkeypatch)
+    frames = _RecordingFrames()
+    layout = _RecordingLayout()
+    assert mock_frame.up(_APP, _NOTE, tmp_path, frames=frames, layout=layout) == 0
+    forward_port.remove(registry, _APP)
+
+    code = mock_frame.down(_APP, tmp_path, frames=frames, layout=layout)
+
+    assert code == 0
+    assert layout.ops == [["close", "inbox-status-mock"]]
+    assert frames.downs == [_APP]
+    rows = tomllib.loads(registry.read_text()).get("apps", [])
+    assert [row["name"] for row in rows] == []
+
+
 def test_the_mock_windows_name_stays_within_the_registry_cap() -> None:
     long_name = "x" * forward_port.MAX_DISPLAY_NAME_LENGTH
 
