@@ -54,8 +54,11 @@ latchkey curl -XPATCH http://latchkey-self.invalid/minds-api-proxy/api/v1/worksp
   -H 'Content-Type: application/json' -d '{"timezone": "<Area/City>"}'
 ```
 
-If Imbue Studio cannot be reached, or its answer has no `timezone` field (an
-older app), set it the same way by hand:
+If it answers with an error (a zone it does not know, a permission the user
+denied), tell the user what it says and do not set the zone by hand. Only if
+Imbue Studio cannot be reached, or it succeeds but its answer has no
+`timezone` field (an older app, which ignores the field), set it the same way
+by hand:
 
 ```bash
 ln -sf "/usr/share/zoneinfo/<Area/City>" /etc/localtime
