@@ -31,11 +31,11 @@ import tomllib
 from pathlib import Path
 from typing import Final
 
-# import-path: no-venv -- Datalib's program line runs it to start datalib-http, a Rust binary, so nothing in Datalib needs a venv
+# import-path: no-venv -- Datalib's program line runs it to start datalib-http, a downloaded binary, so nothing in Datalib needs a venv
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[2] / "services" / "oom_priority" / "src")
 )
-# import-path: no-venv -- Datalib's program line runs it to start datalib-http, a Rust binary, so nothing in Datalib needs a venv
+# import-path: no-venv -- Datalib's program line runs it to start datalib-http, a downloaded binary, so nothing in Datalib needs a venv
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[2] / "libs" / "app_registration" / "src")
 )
