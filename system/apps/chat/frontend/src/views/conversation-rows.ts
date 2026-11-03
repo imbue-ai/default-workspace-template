@@ -6,10 +6,12 @@
  * top-level rows (buildRows) -- a user message, a whole ProgressBlock for a turn
  * that has tk steps, an ungrouped assistant message, a stop-hook chip, a handoff
  * node, a trailing wrap-up reply, or the chip row of a compaction that followed
- * it. Every row of the agent's output sits in the agent's column, and the first
- * row of each stretch of it wears the agent's name and face. Sharing it here means a subagent's "View conversation"
+ * it. Sharing it here means a subagent's "View conversation"
  * gets the real progress view -- step timeline, statuses, summaries -- and the
  * same windowed virtualization as the main chat, with zero rendering drift.
+ *
+ * Every row of the agent's output sits in the agent's column, and the first row
+ * of each stretch of it wears the agent's name and face.
  *
  * Structure and decoration both come from the transcript walk (tk prints its
  * step decoration on stdout, which buildSections parses); there is no
