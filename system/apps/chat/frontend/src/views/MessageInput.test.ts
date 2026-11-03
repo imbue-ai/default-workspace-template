@@ -650,17 +650,22 @@ function fakeComposerRow(attributes: Set<string>) {
   };
 }
 
+/** Stand in for ResizeObserver, which jsdom lacks and the composer row constructs when it mounts. */
+function stubInertResizeObserver(): void {
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe(): void {}
+      disconnect(): void {}
+    },
+  );
+}
+
 describe("MessageInput layout with attachments", () => {
   beforeEach(() => {
     mocks.agent.activity_state = undefined;
     localStorage.clear();
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe(): void {}
-        disconnect(): void {}
-      },
-    );
+    stubInertResizeObserver();
   });
 
   afterEach(() => {
@@ -702,13 +707,7 @@ describe("MessageInput draft scroll position", () => {
   beforeEach(() => {
     mocks.agent.activity_state = undefined;
     localStorage.clear();
-    vi.stubGlobal(
-      "ResizeObserver",
-      class {
-        observe(): void {}
-        disconnect(): void {}
-      },
-    );
+    stubInertResizeObserver();
   });
 
   afterEach(() => {
