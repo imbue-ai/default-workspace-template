@@ -1,4 +1,5 @@
-"""Post one notification from this chat into the Imbue Studio app's notification feed.
+"""Post one notification from this chat into the Imbue Studio app's notification feed, and to the owner's devices
+that turned notifications on.
 
 The message goes to the app's per-agent notifications route through the
 latchkey gateway's ``minds-api-proxy`` (the gateway injects the app's API key;
@@ -12,11 +13,18 @@ ids as ``watched_by``, so the app can show nothing to a user who is already
 reading the chat. When that question cannot be answered in two seconds the
 notification goes out without the field, with a warning on stderr.
 
+Unless a page is watching the chat, the same message also goes to every device
+the owner turned notifications on for (a phone with the workspace on its home
+screen, a browser): one POST to the workspace shell's loopback
+``/api/web-push/send``, whose Web Push reaches a device with the Imbue Studio
+app closed. Tapping it opens the chat. A workspace with no such device answers
+that nothing was sent, which is not a failure.
+
 Exit codes:
-    0  -- the app accepted the notification
-    1  -- it did not (no gateway env, the app unreachable, a refusal); the
-          reason is on stderr so the agent can tell the user the notification
-          did not go out
+    0  -- the app, or at least one device, accepted the notification
+    1  -- neither did (no gateway env, the app unreachable, a refusal, and no
+          device to push to); the reason is on stderr so the agent can tell the
+          user the notification did not go out
 
 Usage:
     python3 .agents/skills/notify-user/python/notify_user_skill/notify_user.py [--title TITLE] MESSAGE
@@ -39,6 +47,8 @@ Environment:
                                 The per-agent authorization JWT, forwarded when
                                 set (a desktop-hosted gateway needs it; a
                                 VPS-hosted one never injects it).
+    MINDS_WORKSPACE_SERVER_URL  The workspace shell's address (default
+                                http://127.0.0.1:8000), which pushes to devices.
 
 The gateway is addressed directly with the same headers the in-app callers send
 rather than through ``latchkey curl`` (the ``imbue-studio`` skill's usual route), so
@@ -54,6 +64,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -69,6 +80,10 @@ ENV_CHAT_ID = "MINDS_CHAT_ID"
 ENV_GATEWAY = "LATCHKEY_GATEWAY"
 ENV_GATEWAY_PASSWORD = "LATCHKEY_GATEWAY_PASSWORD"
 ENV_GATEWAY_PERMISSIONS = "LATCHKEY_GATEWAY_PERMISSIONS_OVERRIDE"
+ENV_SHELL_URL = "MINDS_WORKSPACE_SERVER_URL"
+
+DEFAULT_SHELL_URL = "http://127.0.0.1:8000"
+WEB_PUSH_SEND_PATH = "/api/web-push/send"
 
 # One round trip to the desktop app; a wedged app must not stall the agent's
 # turn.
@@ -77,6 +92,14 @@ _TIMEOUT_SECONDS = 10.0
 # The watcher question is a courtesy: the notification goes out without its
 # answer rather than wait on a slow chat app.
 _WATCHERS_TIMEOUT_SECONDS = 2.0
+
+# The shell posts to each device's push service in turn, five seconds at most
+# apiece; a workspace has a few devices.
+_PUSH_TIMEOUT_SECONDS = 12.0
+
+# The longest title a device notification takes; a longer message without a
+# title is cut there and carried whole in the body.
+_PUSH_TITLE_MAX_LENGTH = 120
 
 # This module sits five directories below the repo root
 # (.agents/skills/notify-user/python/notify_user_skill/).
@@ -144,17 +167,26 @@ def watchers_of_chat(http: HttpClient, environ: dict[str, str]) -> list[str]:
     return watched_by
 
 
-def notify(
+def _watched_by_or_none(http: HttpClient, environ: dict[str, str]) -> list[str] | None:
+    """The pages watching this chat, or None (warned on stderr) when that cannot be told."""
+    try:
+        return watchers_of_chat(http, environ)
+    except WatchersUnknownError as exc:
+        sys.stderr.write(
+            f"notify-user: could not check who is watching this chat ({exc}); sending anyway\n"
+        )
+        return None
+
+
+def post_to_studio_app(
     message: str,
     title: str | None,
+    watched_by: list[str] | None,
     *,
     http: HttpClient,
     environ: dict[str, str],
 ) -> bool:
-    """Post the notification; return whether the app accepted it, reporting any failure on stderr."""
-    if not message.strip():
-        sys.stderr.write("notify-user: the message is empty; nothing was sent.\n")
-        return False
+    """Post the notification to the Imbue Studio app; return whether it accepted it, reporting any failure on stderr."""
     gateway = environ.get(ENV_GATEWAY, "")
     password = environ.get(ENV_GATEWAY_PASSWORD, "")
     if not gateway or not password:
@@ -180,15 +212,11 @@ def notify(
     permissions = environ.get(ENV_GATEWAY_PERMISSIONS, "")
     if permissions:
         headers["X-Latchkey-Gateway-Permissions-Override"] = permissions
-    payload: dict[str, str | list[str]] = {"message": message.strip()}
+    payload: dict[str, str | list[str]] = {"message": message}
     if title:
         payload["title"] = title.strip()
-    try:
-        payload["watched_by"] = watchers_of_chat(http, environ)
-    except WatchersUnknownError as exc:
-        sys.stderr.write(
-            f"notify-user: could not check who is watching this chat ({exc}); sending anyway\n"
-        )
+    if watched_by is not None:
+        payload["watched_by"] = watched_by
     status, text = http.post_json(
         f"{gateway.rstrip('/')}/minds-api-proxy/api/v1/agents/{agent_id}/notifications",
         payload,
@@ -207,6 +235,102 @@ def notify(
             "did not go out.\n"
         )
     return False
+
+
+def device_notification(
+    message: str, title: str | None, environ: dict[str, str]
+) -> dict[str, str]:
+    """The notification the devices show: the title over the message, or the message as the title (cut, and then
+    carried whole in the body) when there is none; tapping it opens this chat."""
+    chat_id = environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
+    path = (
+        "/?" + urllib.parse.urlencode({"open": f"chat:/?chat={chat_id}"})
+        if chat_id
+        else "/"
+    )
+    stripped_title = (title or "").strip()
+    if stripped_title:
+        heading, body = stripped_title[:_PUSH_TITLE_MAX_LENGTH], message
+    elif len(message) <= _PUSH_TITLE_MAX_LENGTH:
+        heading, body = message, ""
+    else:
+        heading, body = message[: _PUSH_TITLE_MAX_LENGTH - 3].rstrip() + "...", message
+    notification = {"title": heading, "body": body, "path": path}
+    # One notification per chat on a device: a newer one from the same chat replaces it.
+    if chat_id:
+        notification["tag"] = f"chat-{chat_id}"
+    return notification
+
+
+def push_to_devices(
+    message: str,
+    title: str | None,
+    watched_by: list[str] | None,
+    *,
+    http: HttpClient,
+    environ: dict[str, str],
+) -> int:
+    """Push the notification to the owner's registered devices through the shell; return how many push services
+    took it. Skipped (0) while a page is watching the chat. A device the shell could not reach is reported on
+    stderr; a workspace with no registered device sends nothing and says nothing."""
+    if watched_by:
+        return 0
+    shell_url = (environ.get(ENV_SHELL_URL) or DEFAULT_SHELL_URL).rstrip("/")
+    status, text = http.post_json(
+        f"{shell_url}{WEB_PUSH_SEND_PATH}",
+        device_notification(message, title, environ),
+        {"Content-Type": "application/json"},
+        timeout=_PUSH_TIMEOUT_SECONDS,
+    )
+    if status != 200:
+        reason = text if status is None else f"answered {status}: {text.strip()[:200]}"
+        sys.stderr.write(
+            f"notify-user: could not push the notification to your devices (the workspace {reason}).\n"
+        )
+        return 0
+    try:
+        outcome = json.loads(text)
+        deliveries = outcome["deliveries"]
+        accepted_count = int(outcome["accepted_count"])
+    except (ValueError, KeyError, TypeError):
+        sys.stderr.write(
+            "notify-user: the workspace's answer about your devices is not readable.\n"
+        )
+        return 0
+    if deliveries and accepted_count == 0:
+        sys.stderr.write(
+            f"notify-user: none of your {len(deliveries)} device(s) took the notification.\n"
+        )
+    return accepted_count
+
+
+def notify(
+    message: str,
+    title: str | None,
+    *,
+    http: HttpClient,
+    environ: dict[str, str],
+) -> bool:
+    """Notify the user in the Imbue Studio app and on their devices; return whether either took it, reporting any
+    failure on stderr."""
+    stripped = message.strip()
+    if not stripped:
+        sys.stderr.write("notify-user: the message is empty; nothing was sent.\n")
+        return False
+    watched_by = _watched_by_or_none(http, environ)
+    is_app_accepted = post_to_studio_app(
+        stripped, title, watched_by, http=http, environ=environ
+    )
+    pushed_count = push_to_devices(
+        stripped, title, watched_by, http=http, environ=environ
+    )
+    if pushed_count:
+        sys.stderr.write(
+            f"notify-user: also pushed to {pushed_count} of your devices.\n"
+            if is_app_accepted
+            else f"notify-user: pushed to {pushed_count} of your devices, though not to the Imbue Studio app.\n"
+        )
+    return is_app_accepted or pushed_count > 0
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -88,10 +88,14 @@ class KeybindingsDeliveryStore(MutableModel):
             write_json_atomic(self._path(), {"version": _DELIVERY_STATE_VERSION, "pending_request_id": request_id})
 
 
-def merged_account_keybindings(workspace_root: Path) -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, list[str]]]]:
+def merged_account_keybindings(
+    workspace_root: Path,
+) -> tuple[dict[str, dict[str, list[str]]], dict[str, dict[str, list[str]]]]:
     """The account value to PUT (the snapshot's overlaid with the unsent saves), and the unsent part alone."""
     snapshot = load_workspace_profile_snapshot(workspace_root)
-    account = parse_keybindings_value(snapshot.value_by_key.get(KEYBINDINGS_SETTING_KEY)) if snapshot is not None else {}
+    account = (
+        parse_keybindings_value(snapshot.value_by_key.get(KEYBINDINGS_SETTING_KEY)) if snapshot is not None else {}
+    )
     unsent = parse_keybindings_value(load_unsent_change_values(workspace_root).get(KEYBINDINGS_SETTING_KEY))
     merged = {app: dict(chords_by_action) for app, chords_by_action in account.items()}
     for app_name, chords_by_action in unsent.items():
