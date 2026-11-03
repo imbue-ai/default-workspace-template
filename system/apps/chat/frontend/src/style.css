@@ -13,7 +13,7 @@
 @source "./**/*.ts";
 
 /* A turn's face (TURN_FACE_SIZE_PX, 36px) and the 8px gap beside it: a turn's bubble starts this far in
-   (views/machine-bubbles.ts). */
+   (views/participant-picture.ts). */
 :root {
   --width-face-gutter: 44px;
 }

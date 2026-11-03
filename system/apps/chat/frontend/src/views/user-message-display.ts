@@ -24,8 +24,7 @@ import {
   participantName,
 } from "../models/Participants";
 import type { UserMessageEvent } from "../models/Response";
-import { TURN_FACE_SIZE_PX, participantPicture } from "./participant-picture";
-import { FACE_COLUMN_CLASS } from "./machine-bubbles";
+import { FACE_COLUMN_CLASS, TURN_FACE_SIZE_PX, participantPicture } from "./participant-picture";
 import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
 import type { UserMessageClass } from "./message-classification";
 import { UserMessageKind } from "./message-kinds";

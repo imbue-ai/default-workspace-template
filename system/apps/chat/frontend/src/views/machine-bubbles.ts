@@ -11,11 +11,7 @@
 import m from "mithril";
 import { MarkdownContent } from "../markdown";
 import { getWorkspaceAgent } from "../models/Participants";
-import { TURN_FACE_SIZE_PX, participantPicture } from "./participant-picture";
-
-/** The column a turn's bubble starts in: one face and the gap beside it in from the row's edge (`--width-face-gutter`
- *  in style.css). A margin, so a row in the message list's stretching flex column keeps the column's right edge. */
-export const FACE_COLUMN_CLASS = "ml-(--width-face-gutter)";
+import { FACE_COLUMN_CLASS, TURN_FACE_SIZE_PX, participantPicture } from "./participant-picture";
 
 /** The agent bubble's text edge, for a line of the agent's that sits below the bubble rather than in it: the face
  *  column plus the bubble's own left padding. */
