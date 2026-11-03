@@ -169,12 +169,12 @@ code from a tree known only at run time).
 
 The why answers what a reviewer of this one site asks: why it cannot be an
 import, or why this code runs with no venv. Name what runs it and what would
-break otherwise -- `claude's SessionStart and Stop hooks run it, so a broken
-or unsynced venv must not break every session` -- not the reason in other
-words: `the system python3 runs this with no venv` says only what `no-venv`
-already says. A why copied unchanged onto another site is usually one of
-these. When the only answer is the tier rule (the code imports nothing a venv
-installs), say that, and name its caller.
+break otherwise -- `claude's SessionStart and Stop hooks run it to record the
+chat's background tasks, which a missing or unsynced venv must not stop` --
+not the reason in other words: `the system python3 runs this with no venv`
+says only what `no-venv` already says. A why copied unchanged onto another
+site is usually one of these. When the only answer is the tier rule (the code
+imports nothing a venv installs), say that, and name its caller.
 
 A marked site passes, and a marked `sys.path` edit may add a directory
 outside the bare search paths, except in code the system `python3` runs, where

@@ -11,11 +11,11 @@ on sys.path, so run it as ``python3 <path>``, never with -I, -P or PYTHONSAFEPAT
 import sys
 from pathlib import Path
 
-# import-path: no-venv -- claude's SessionStart and Stop hooks run it, so a broken or unsynced venv must not break every session
+# import-path: no-venv -- claude's SessionStart and Stop hooks run it to record the chat's background tasks, which a missing or unsynced venv must not stop
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "services" / "oom_priority" / "src")
 )
-# import-path: no-venv -- claude's SessionStart and Stop hooks run it, so a broken or unsynced venv must not break every session
+# import-path: no-venv -- claude's SessionStart and Stop hooks run it to record the chat's background tasks, which a missing or unsynced venv must not stop
 sys.path.insert(
     0,
     str(Path(__file__).resolve().parents[1] / "libs" / "chat_background_tasks" / "src"),
