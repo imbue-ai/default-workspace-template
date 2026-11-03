@@ -252,7 +252,10 @@ in the pass, by its type:
   dependency the merge added. If it is a built-in upstream skill, note the local
   drift to reconcile later via `update-self` / `submit-upstream-changes`.
 - **app**: refresh its window (`uv run --no-sync workspace-layout refresh
-  --app <app-name>`).
+  --app <app-name>`). While `build-app`'s mock frame is still up, the user's
+  window is the frame's: reload it with `uv run --no-sync
+  .agents/skills/build-app/python/build_app_skill/mock_frame.py up --app
+  <app-name> --note "<what is not real yet>" --refresh` instead.
 - **service**: it has no window -- restart its programs (`supervisorctl restart
   <program>`): the one named after the package (`host_backup` runs as
   `host-backup`) and any `<program>-<role>` ones. `oom_priority`'s programs
