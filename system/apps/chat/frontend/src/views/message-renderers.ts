@@ -574,8 +574,7 @@ function renderThinkingDisclosure(event: AssistantMessageEvent, chatId: string):
  *
  * Callers that hold a whole list of events (a step's revealed work, an ungrouped
  * run, a handoff's body) pass them all so the merging can happen; a caller that
- * holds one event (a top-level virtualized row, which is measured and windowed
- * on its own) passes just that one and gets a row per event.
+ * holds one event (a lone message in a stretch's bubble) passes just that one.
  */
 export function renderAssistantRun(
   events: RunPart[],

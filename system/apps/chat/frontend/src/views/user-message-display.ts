@@ -216,11 +216,12 @@ function renderResentNote(eventId: string): m.Vnode {
 }
 
 /**
- * Render a `user_message` as a top-level row, or `null` when it produces no row of its own
+ * Render a `user_message`: a person's turn as a top-level row, a system chip or notice as a
+ * part of the stretch of the agent's output it lands in, or `null` when it draws nothing
  * (hidden `/welcome`, a skill expansion folded into its Skill tool block, or a compaction,
- * whose chips the transcript walk places in the agent's chip rows). A `SystemChip` row gets
- * the collapsed-system class; a genuine prompt gets the user-bubble class; a notice sits on
- * the agent's rail instead.
+ * whose chips the transcript walk places in the agent's chip rows). A `SystemChip` gets
+ * the collapsed-system class; a genuine prompt gets the user-bubble class; a notice gets
+ * the notice row.
  */
 export function renderUserMessage(event: UserMessageEvent, isResent = false): m.Vnode | null {
   const kind = classifyUserMessage(event).kind;
