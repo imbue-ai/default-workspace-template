@@ -7441,7 +7441,8 @@ def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done
     broadcaster: WebSocketBroadcaster, tmp_path: Path
 ) -> None:
     """The switch takes each held send off its list as it delivers it, before its turn can reach the transcript, so
-    the page goes on showing it from the snapshot: the snapshot lists it until the switch is done."""
+    the page goes on showing it from the snapshot: the snapshot lists it until the switch is done. A send that did not
+    land has no turn to wait for, so it stops being listed."""
     sent: list[tuple[str, str, str]] = []
     manager, store, _argv_log = _handoff_manager(broadcaster, tmp_path, sent, has_user_turn=False)
     first = f"agent-{uuid4().hex}"
@@ -7458,7 +7459,7 @@ def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done
             is_delivering_trigger.set()
             is_follow_up_held.wait(timeout=10.0)
         sent.append((agent_info.id, text, message_id))
-        return SendOutcome.OK
+        return SendOutcome.FAILED if message_id == "m-2" else SendOutcome.OK
 
     manager.set_handoff_capabilities(
         HandoffCapabilities(
@@ -7471,10 +7472,15 @@ def test_a_switch_keeps_listing_each_held_send_it_has_delivered_until_it_is_done
         manager.begin_handoff(chat_id, _openai_account(), "Carry on in Codex", "m-1", HeldSendOrigin.CLIENT)
         wait_for(is_delivering_trigger.is_set, timeout=15.0)
         assert manager.hold_send(chat_id, "m-2", "and this", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
+        assert manager.hold_send(chat_id, "m-3", "and that", HeldSendOrigin.CLIENT) is HandoffPhase.SWITCHING
         is_follow_up_held.set()
         _wait_until_settled(store, chat_id)
-        assert [message_id for _agent, _text, message_id in sent] == ["m-1", "m-2"]
-        assert listed_while_delivering == {"m-1": ["m-1"], "m-2": ["m-1", "m-2"]}
+        assert [message_id for _agent, _text, message_id in sent] == ["m-1", "m-2", "m-3"]
+        assert listed_while_delivering == {
+            "m-1": ["m-1"],
+            "m-2": ["m-1", "m-2", "m-3"],
+            "m-3": ["m-1", "m-3"],
+        }
         assert manager.get_handoff_state(chat_id) is None
     finally:
         manager.stop()

@@ -128,7 +128,8 @@ class ChatTransitionRecord(FrozenModel):
         default=(),
         description=(
             "The held sends the switch has taken off the held list to deliver, in order, kept until the switch is "
-            "done so the page can keep showing them until their turns appear in the transcript"
+            "done so the page can keep showing them until their turns appear in the transcript; one that did not "
+            "land leaves it again"
         ),
     )
     returned_block: str = Field(
@@ -163,6 +164,15 @@ class ChatTransitionRecord(FrozenModel):
         """The sends the switch holds or has delivered, other than the confirming message, in order."""
         return tuple(
             held for held in (*self.delivered_sends, *self.held_sends) if held.message_id != self.trigger_message_id
+        )
+
+    def without_delivered_send(self, message_id: str) -> Self:
+        """This switch with the delivered send ``message_id`` taken off its delivered list: it did not land."""
+        return self.model_copy_update(
+            to_update(
+                self.field_ref().delivered_sends,
+                tuple(held for held in self.delivered_sends if held.message_id != message_id),
+            )
         )
 
 

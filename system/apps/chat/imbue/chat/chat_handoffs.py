@@ -1027,7 +1027,8 @@ class HandoffRunner:
         by this loop rather than overtaking one still held. Raises ``HandoffStepError`` while
         the successor is untracked (a resume that ran before the observe stream listed it):
         the sends stay on the record for the next resume rather than being popped with
-        nothing to receive them.
+        nothing to receive them. A send that does not land leaves the delivered list again, so the
+        page stops showing it.
         """
         successor_info = self._deps.get_agent_info(successor_id)
         if successor_info is None:
@@ -1036,7 +1037,10 @@ class HandoffRunner:
             )
         self._deps.ensure_watcher(successor_info)
         while (held := self._deps.take_next_held_send(chat_id, handoff_id)) is not None:
-            deliver_held_send(self._deps.deliver, successor_info, held, chat_id)
+            if not deliver_held_send(self._deps.deliver, successor_info, held, chat_id):
+                self._update_handoff(
+                    chat_id, handoff_id, lambda current: current.without_delivered_send(held.message_id)
+                )
         logger.info("Handoff of chat {}: now running on agent {}", chat_id, successor_id)
 
 
