@@ -1499,6 +1499,18 @@ def test_a_failed_reframe_deregisters_the_frame_but_keeps_its_record_for_a_retry
     assert mod.read_frame(_FRAME_NAME, tmp_path) is None
 
 
+def test_a_first_frame_that_fails_leaves_no_record(tmp_path: Path) -> None:
+    """Nothing was framed, so nothing may read as a frame to boot again."""
+    registry = _RecordingRegistry()
+
+    code = _frame(tmp_path, registry=registry, http=_FakeHttp(lambda _url: None))
+
+    assert code == 1
+    assert registry.registered == []
+    assert mod.read_frame(_FRAME_NAME, tmp_path) is None
+    assert not mod._state_dir(tmp_path, _FRAME_NAME).exists()
+
+
 def test_a_frame_records_what_it_was_booted_with_until_it_comes_down(
     tmp_path: Path,
 ) -> None:
