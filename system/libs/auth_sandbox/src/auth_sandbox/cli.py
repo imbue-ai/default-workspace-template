@@ -1,9 +1,10 @@
 """The commands owner-exec runs on the chrome's behalf, each a thin entry point over the modules beside it.
 
 Exit codes: 0 when the command did what it says; 1 when latchkey refused (its reason, condensed, is the last
-line on stderr, which the dialog shows); 3 when a material the command needs is missing or malformed: a key
-file, the incoming state, the values file, or the latchkey binary and its config themselves (2 is click's own
-code for a usage error, which no retry in the sandbox cures). Nothing here prints a key, and no key is ever in
+line on stderr, which the dialog shows); 3 when a material the command needs is missing or malformed (a key
+file, the incoming state, the values file, or the latchkey binary and its config themselves), or a file or
+directory of the sandbox's cannot be read or written (2 is click's own code for a usage error, which no retry in
+the sandbox cures). Nothing here prints a key, and no key is ever in
 an argument.
 """
 
