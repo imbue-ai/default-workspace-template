@@ -38,9 +38,8 @@ import { computeAuthErrorHiddenEventIds } from "./auth-recovery";
 import { isHiddenUserMessage } from "./message-classification";
 import type { CompactionPart } from "./compaction-chips";
 import { buildSections, isGenuineUserTurn, type LiveCompaction, type SectionView } from "./turn-grouping";
-import { agentColumn } from "./machine-bubbles";
 import { ProgressBlock } from "./ProgressBlock";
-import { renderHandoffNode } from "./handoff-node";
+import { renderHandoffRow } from "./handoff-node";
 import type { ResentTurns } from "../models/ResentSends";
 
 // Per-type fallback row heights, used until a row has been measured (live or
@@ -250,8 +249,7 @@ function buildRows(
           });
         }
       } else if (item.kind === "handoff") {
-        // The handoff node as a row of its own: the same timeline node a progress block
-        // draws, in its own thread-less frame. The row's id is the node's key so the
+        // The handoff node as a row of its own. The row's id is the node's key so the
         // virtualized list can measure it.
         const node = item.node;
         const key = `handoff-${node.key}`;
@@ -261,24 +259,7 @@ function buildRows(
             estimate: ESTIMATED_USER_HEIGHT_PX,
             anchorEventId: node.request?.event_id ?? node.switch?.event_id ?? null,
           },
-          (isHeaded) =>
-            m(
-              "div",
-              {
-                id: key,
-                key,
-                class: "progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
-              },
-              agentColumn(
-                isHeaded,
-                m("div.pv.pv--timeline.relative", [
-                  m(
-                    "div.pv-timeline-nodes",
-                    renderHandoffNode(node, chatId, toolResults, { isLast: true, expansionKey: key }),
-                  ),
-                ]),
-              ),
-            ),
+          (isHeaded) => renderHandoffRow(node, chatId, toolResults, { key, id: key, expansionKey: key, isHeaded }),
         );
       }
     }

@@ -185,18 +185,47 @@ export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean, i
   if (handoff === null || handoff.kind === "rebind" || handoff.is_fresh_start || hasOpenRequest) return null;
   const node: HandoffNode = { key: `live-${chatId}`, request: null, events: [], switch: null, prompt: null };
   // Keyed like its siblings in the message list: a keyed list refuses an unkeyed member.
+  return renderHandoffRow(node, chatId, new Map(), {
+    key: "handoff-tail",
+    expansionKey: node.key,
+    isHeaded,
+    extraClass: "handoff-tail-node",
+  });
+}
+
+export interface HandoffRowFrame {
+  readonly key: string;
+  readonly expansionKey: string;
+  /** Whether the row opens a stretch of the agent's output, so it wears the agent's name and face. */
+  readonly isHeaded: boolean;
+  /** The root's DOM id, for a row the virtualized list measures. */
+  readonly id?: string;
+  readonly extraClass?: string;
+}
+
+/** A handoff node standing as a row of its own: the same timeline node a progress block draws, in its own
+ *  thread-less frame in the agent's column. */
+export function renderHandoffRow(
+  node: HandoffNode,
+  chatId: string,
+  toolResults: Map<string, ToolResultEvent>,
+  frame: HandoffRowFrame,
+): m.Vnode {
   return m(
     "div",
     {
-      key: "handoff-tail",
-      class: "handoff-tail-node progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
+      id: frame.id,
+      key: frame.key,
+      class:
+        (frame.extraClass === undefined ? "" : `${frame.extraClass} `) +
+        "progress-block mt-[18px] mb-[28px] text-(length:--font-size-body) leading-normal",
     },
     agentColumn(
-      isHeaded,
+      frame.isHeaded,
       m("div.pv.pv--timeline.relative", [
         m(
           "div.pv-timeline-nodes",
-          renderHandoffNode(node, chatId, new Map(), { isLast: true, expansionKey: node.key }),
+          renderHandoffNode(node, chatId, toolResults, { isLast: true, expansionKey: frame.expansionKey }),
         ),
       ]),
     ),
