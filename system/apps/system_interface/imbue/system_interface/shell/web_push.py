@@ -27,6 +27,7 @@ from py_vapid import Vapid
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
+from pydantic import model_validator
 from pywebpush import WebPushException
 from pywebpush import webpush
 
@@ -60,6 +61,9 @@ MAX_REGISTERED_DEVICES: Final[int] = 20
 # A push service's answer for a subscription that no longer exists (RFC 8030 section 7.3): the device is forgotten.
 _GONE_STATUS_CODES: Final[frozenset[int]] = frozenset({404, 410})
 _ACCEPTED_STATUS_CODES: Final[frozenset[int]] = frozenset({200, 201, 202})
+# The longest payload one aes128gcm record carries within the push services' 4096-byte message limit (RFC 8291): the
+# record's 86-byte header, its padding delimiter and its 16-byte tag take the rest.
+MAX_PUSH_PAYLOAD_BYTES: Final[int] = 3993
 # How much of a push service's answer a delivery keeps, for the page's raw view and the log.
 _ANSWER_EXCERPT_LENGTH: Final[int] = 500
 _DEVICE_ID_LENGTH: Final[int] = 16
@@ -181,6 +185,15 @@ class PushNotificationRequest(FrozenModel):
         if not value.startswith("/") or value.startswith("//") or "\\" in value:
             raise InvalidShellValueError("the path is a path under the shell's root, starting with a single '/'")
         return value
+
+    @model_validator(mode="after")
+    def _payload_fits_one_push_message(self) -> "PushNotificationRequest":
+        size = len(push_payload(self).encode("utf-8"))
+        if size > MAX_PUSH_PAYLOAD_BYTES:
+            raise InvalidShellValueError(
+                f"the notification is {size} bytes as sent; a push service takes at most {MAX_PUSH_PAYLOAD_BYTES}"
+            )
+        return self
 
 
 class PushProviderAnswer(FrozenModel):

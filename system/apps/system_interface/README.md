@@ -662,7 +662,9 @@ oldest dropped first).
   "tag"}` shows one notification on every registered device. `path` is the
   page a tap opens, under the shell's root (a deep link such as
   `/?open=chat:/?chat=<id>`); a later notification with the same `tag`
-  replaces the earlier one and still alerts. It is loopback-only and refuses a request a
+  replaces the earlier one and still alerts. A notification over the 3993
+  bytes of JSON a push service takes is refused (400) before any post. It is
+  loopback-only and refuses a request a
   share's proxy stamped, so only the workspace's own agents and apps send. It
   answers each push service's status; a device whose service says the
   subscription is gone (404, 410) is forgotten. The `notify-user` skill posts

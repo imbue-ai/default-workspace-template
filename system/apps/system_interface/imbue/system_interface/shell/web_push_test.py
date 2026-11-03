@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from imbue.system_interface.shell.web_push import BrowserPushSubscription
 from imbue.system_interface.shell.web_push import DEVICES_FILENAME
 from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
+from imbue.system_interface.shell.web_push import MAX_PUSH_PAYLOAD_BYTES
 from imbue.system_interface.shell.web_push import MAX_REGISTERED_DEVICES
 from imbue.system_interface.shell.web_push import PushNotificationRequest
 from imbue.system_interface.shell.web_push import PushProviderAnswer
@@ -138,8 +139,13 @@ def test_a_non_ascii_message_travels_as_utf8_within_the_push_services_limit() ->
 
     assert "Отчёт готов" in payload
     assert json.loads(payload)["body"] == body[:1000]
-    # 4096 bytes of message, less the aes128gcm header, padding delimiter and tag (RFC 8291).
-    assert len(payload.encode("utf-8")) <= 3993
+    assert len(payload.encode("utf-8")) <= MAX_PUSH_PAYLOAD_BYTES
+
+
+def test_a_notification_too_large_for_one_push_message_is_refused() -> None:
+    # 1000 four-byte characters: within the body's bound in characters, over the push services' in bytes.
+    with pytest.raises(ValidationError, match="bytes as sent"):
+        PushNotificationRequest(title="Done", body="\U0001f600" * 1000)
 
 
 def test_a_notification_title_is_required_and_bounded() -> None:

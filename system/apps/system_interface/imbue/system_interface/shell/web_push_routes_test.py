@@ -199,6 +199,16 @@ def test_a_send_path_must_stay_under_the_shells_root(client: FlaskClient) -> Non
         assert client.post("/api/web-push/send", json={"title": "Done", "path": path}).status_code == 400
 
 
+def test_a_send_too_large_for_a_push_service_is_refused_before_any_post(client: FlaskClient, app: Flask) -> None:
+    _register(client)
+
+    response = client.post("/api/web-push/send", json={"title": "Done", "body": "\U0001f600" * 1000})
+
+    assert response.status_code == 400
+    assert "bytes as sent" in response.get_json()["detail"]
+    assert _transport(app).posted == []
+
+
 def test_a_preview_shell_reaches_no_device(tmp_path: Path, broadcaster: WebSocketBroadcaster) -> None:
     inventory = build_inventory(write_two_app_registry(tmp_path), broadcaster)
     application = shell_application(tmp_path, inventory, broadcaster, is_preview=True)
