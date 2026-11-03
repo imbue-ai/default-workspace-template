@@ -513,6 +513,19 @@ def find_free_port() -> int:
         return int(sock.getsockname()[1])
 
 
+def _port_is_free(port: int) -> bool:
+    """Whether a server can listen on ``port`` on the loopback host now, binding as the
+    wrapper's server does (address reuse on, so a just-closed server's lingering
+    connections do not hold it)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind((LOOPBACK_HOST, port))
+        except OSError:
+            return False
+    return True
+
+
 def wait_healthy(
     http: HttpClient,
     url: str,
@@ -1327,8 +1340,9 @@ def frame(
     runs (a live app's own supervisord program): the wrapper is booted with ``kind``
     and ``note`` for its banner and registered as ``frame_service_name`` under
     ``display_name``, and the inner service's registration is left alone. Re-running
-    it re-boots the wrapper on the port it had (a changed note, say), so its
-    registration -- and the origin an open window shows it at -- stays put. ``down``
+    it re-boots the wrapper on the port it had while that port is free (a changed
+    note, say; a fresh one when another process took it), so its registration --
+    and the origin an open window shows it at -- stays put. ``down``
     with the same ``name`` kills the wrapper and deregisters it, and never touches the
     inner service.
 
@@ -1346,6 +1360,7 @@ def frame(
         return 1
     state_path = _state_path(repo_root, name)
     previous_port: int | None = None
+    has_row = False
     is_reframe = state_path.exists()
     if is_reframe:
         try:
@@ -1369,6 +1384,15 @@ def frame(
             )
             return 1
         previous_port = previous.get("wrapper_port")
+        has_row = previous_port is not None
+        # After a reboot the port can be another server's, which would answer the
+        # health probe in place of a wrapper that could not bind it.
+        if previous_port is not None and not _port_is_free(previous_port):
+            sys.stderr.write(
+                f"note: the frame's port {previous_port} is held by another process; "
+                "booting the frame on a fresh port.\n"
+            )
+            previous_port = None
 
     state_dir = _state_dir(repo_root, name)
     wrapper_log_path = state_dir / WRAPPER_LOG_FILENAME
@@ -1397,7 +1421,7 @@ def frame(
     pids: list[int] = []
     # Counted as registered from the start when re-framing a frame that had a port: its
     # row is already there, and a failed re-boot must not leave it routing at a dead port.
-    services: list[str] = [frame_service_name] if previous_port is not None else []
+    services: list[str] = [frame_service_name] if has_row else []
     try:
         wrapper_port = _boot_wrapper(
             repo_root,

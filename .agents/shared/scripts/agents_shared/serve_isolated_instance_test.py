@@ -18,6 +18,7 @@ import io
 import json
 import os
 import signal
+import socket
 import subprocess
 import sys
 import time
@@ -1462,6 +1463,28 @@ def test_reframing_reboots_the_wrapper_on_its_port_without_deregistering_it(
     assert registry.removed == []
     state = json.loads(mod._state_path(tmp_path, _FRAME_NAME).read_text())
     assert state["pids"] == [spawner.detached_pids[1]]
+
+
+def test_a_reframe_whose_port_another_server_took_moves_to_a_fresh_one(
+    tmp_path: Path,
+) -> None:
+    """After a reboot the dead wrapper's port can be another server's, which would answer
+    the health probe for a wrapper that could not bind it; the frame moves instead, its
+    row re-pointed rather than removed."""
+    registry = _RecordingRegistry()
+    spawner = _FakeSpawner()
+    assert _frame(tmp_path, registry=registry, spawner=spawner) == 0
+    taken_port = int(_wrapper_arg(spawner.detached_spawns[0], "--port"))
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as squatter:
+        squatter.bind((mod.LOOPBACK_HOST, taken_port))
+        squatter.listen()
+        assert _frame(tmp_path, registry=registry, spawner=spawner) == 0
+
+    new_port = int(_wrapper_arg(spawner.detached_spawns[1], "--port"))
+    assert new_port != taken_port
+    assert registry.removed == []
+    assert registry.registered[-1].url == f"http://localhost:{new_port}"
 
 
 def test_a_frame_never_signals_a_pid_a_restart_handed_to_another_process(
