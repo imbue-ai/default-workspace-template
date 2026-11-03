@@ -141,7 +141,7 @@ class SnapshotCreatedEvent(BackupEvent):
 
 
 class EnvRecordCaptureCompletedEvent(BackupEvent):
-    """The pre-snapshot `env-converge capture` refresh finished (success or not).
+    """The pre-snapshot environment record capture finished (success or not).
 
     Runs before the snapshot is taken so the environment record inside the
     backup describes the packages installed at backup time (the probe-based
@@ -151,13 +151,9 @@ class EnvRecordCaptureCompletedEvent(BackupEvent):
 
     tick_id: str
     success: bool
-    exit_code: int | None = Field(
-        default=None,
-        description="env-converge exit code; None when the process could not run or timed out",
-    )
     duration_seconds: float
-    stderr: str = Field(
-        description="Trailing stderr from env-converge (empty on clean success)"
+    error_message: str = Field(
+        description="Why the capture failed, trimmed to its tail (empty on success)"
     )
 
 
