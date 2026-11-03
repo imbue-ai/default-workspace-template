@@ -159,10 +159,6 @@ class ShareIdentitiesReader(MutableModel):
 
     _warned_version: int | None = PrivateAttr(default=None)
 
-    def document_version(self) -> int | None:
-        """What version of the file is on disk (its mtime); None while there is none."""
-        return _file_version(self.share_identities_path)
-
     def read_identities(self) -> dict[str, GrantedIdentity]:
         """What the desktop recorded of each granted account, by user id; nothing while the file is absent, or
         while it is one this shell cannot read, which is warned about once per version of the file."""
