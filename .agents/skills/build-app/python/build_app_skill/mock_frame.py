@@ -30,12 +30,13 @@ Run from the repo root via ``uv run --no-sync``:
 
 Exit codes:
     0  Success.
-    1  ``up``: no note was given and no frame is up, the note is blank, the path does
-       not start with ``/``, the app has no manifest or is not registered, its
-       registration could not be rewritten, the frame did not come up, or the window
-       could not be opened or refreshed. ``refresh``: as ``up`` while a frame is up,
-       else the app's windows could not be reloaded. ``down``: the frame could not be
-       torn down, or the app's registration could not be rewritten.
+    1  ``up``: the frame's record could not be read, no note was given and no frame is
+       up, the note is blank, the path does not start with ``/``, the app has no
+       manifest or is not registered, its registration could not be rewritten, the
+       frame did not come up, or the window could not be opened or refreshed.
+       ``refresh``: the frame's record could not be read, as ``up`` while a frame is
+       up, else the app's windows could not be reloaded. ``down``: the frame could not
+       be torn down, or the app's registration could not be rewritten.
 """
 
 from __future__ import annotations
