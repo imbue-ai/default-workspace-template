@@ -7,6 +7,8 @@ from pydantic import SecretStr
 
 from auth_sandbox.cli import (
     EXIT_MISSING_MATERIAL,
+    EXIT_REFUSED,
+    _finish,
     export_command,
     import_browser_state_command,
     render_config_command,
@@ -14,6 +16,7 @@ from auth_sandbox.cli import (
     sign_in_command,
 )
 from auth_sandbox.environment import identity_from_environ, sign_in_environment
+from auth_sandbox.sign_in import SignInOutcome
 
 
 def test_sign_in_without_a_sandbox_key_names_the_missing_file_and_runs_nothing(
@@ -59,6 +62,24 @@ def test_sign_in_with_a_latchkey_it_cannot_run_is_missing_material_not_a_refusal
     )
     assert result.exit_code == EXIT_MISSING_MATERIAL
     assert "/nonexistent/latchkey" in result.output
+
+
+def test_a_credential_latchkey_did_not_store_is_a_refusal_with_its_reason(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    # Exit 1 is what the chrome retries in the same sandbox; 3 would end its session.
+    with pytest.raises(SystemExit) as refused:
+        _finish(SignInOutcome(is_stored=False, detail="login window closed"))
+    assert refused.value.code == EXIT_REFUSED
+    assert capsys.readouterr().err.strip() == "login window closed"
+
+    with pytest.raises(SystemExit) as unexplained:
+        _finish(SignInOutcome(is_stored=False, detail=""))
+    assert unexplained.value.code == EXIT_REFUSED
+    assert capsys.readouterr().err.strip() == "latchkey stored no credential"
+
+    _finish(SignInOutcome(is_stored=True, detail=""))
+    assert capsys.readouterr().err == ""
 
 
 def test_set_credentials_needs_an_account_and_a_values_file(tmp_path: Path) -> None:
