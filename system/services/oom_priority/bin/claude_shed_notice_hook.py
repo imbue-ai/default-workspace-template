@@ -17,7 +17,7 @@ import os
 import sys
 from pathlib import Path
 
-# import-path: no-venv -- claude's SessionStart hook runs it for an agent revived after a memory shed, whatever state the venv is in
+# import-path: no-venv -- claude's SessionStart hook runs it for an agent revived after a memory shed, so the agent is told it was shed even when the venv is missing or broken
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from oom_priority.ledger import (
