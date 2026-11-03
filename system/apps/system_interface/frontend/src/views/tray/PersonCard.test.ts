@@ -125,6 +125,22 @@ describe("PersonCard", () => {
     expect(root.querySelector("[data-tray-card-looking='win-1']")?.textContent).toContain("Reports");
     expect(root.querySelector("[data-tray-card-looking='win-1']")?.textContent).toContain("Looking at");
     expect(root.querySelector("[data-tray-card-desktops]")).toBeNull();
+    expect(root.querySelector("[data-tray-card-domain]")).toBeNull();
+  });
+
+  it("says a person a domain grant admitted is here through their domain", () => {
+    const dana = rosterParticipantRecord("user:user-dana-7720", {
+      display_name: "Dana",
+      email: "dana@partner.org",
+      is_admitted_by_domain: true,
+    });
+    const root = render({ entry: dana, clients: [] });
+    expect(root.querySelector("[data-tray-card-domain]")?.textContent).toBe("Here through partner.org");
+    unmountViews();
+    const unnamed = rosterParticipantRecord("user:user-x", { email: null, is_admitted_by_domain: true });
+    expect(render({ entry: unnamed, clients: [] }).querySelector("[data-tray-card-domain]")?.textContent).toBe(
+      "Here through a domain grant",
+    );
   });
 
   it("lists the desktops a person owns, marks the one the viewer is on, and goes to one on a click", () => {

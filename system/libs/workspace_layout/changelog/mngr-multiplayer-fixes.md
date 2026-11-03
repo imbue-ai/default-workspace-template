@@ -1,0 +1,1 @@
+- `RosterParticipant` gains `is_admitted_by_domain` (default false): whether a workspace-level domain grant, rather than a grant naming them, is what admits the person; the shell lists such people from their presence records (the mngr repo's `specs/multiplayer-refinements/spec.md`, section 4.2).

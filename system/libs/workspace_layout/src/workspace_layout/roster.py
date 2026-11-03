@@ -49,6 +49,11 @@ class RosterParticipant(FrozenModel):
     last_input_at: str | None = Field(
         description="When their newest page last saw keyboard or pointer input (ISO 8601), when the page reports it"
     )
+    is_admitted_by_domain: bool = Field(
+        default=False,
+        description="Whether the person is here through a domain grant rather than a grant naming them: the shell "
+        "lists them from their presence record while the domain stays granted",
+    )
 
 
 class RosterDocument(FrozenModel):

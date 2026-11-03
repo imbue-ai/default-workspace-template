@@ -101,6 +101,7 @@ def build_production_state(
         profiles=profiles,
         users=shell.users,
         share_grants=shell.share_grants,
+        share_identities=shell.share_identities,
         agent_grants=shell.agent_grants,
         agent_last_seen_path=WORKSPACE_ROOT_DIRECTORY / AGENT_LAST_SEEN_FILE,
         workspace_name=workspace_name,
@@ -118,6 +119,7 @@ def build_production_state(
         roster_watch=RosterWatch(
             watched_paths=(
                 shell.share_grants.share_grants_path,
+                shell.share_identities.share_identities_path,
                 shell.agent_grants.agent_grants_path,
                 roster.agent_last_seen_path,
             ),

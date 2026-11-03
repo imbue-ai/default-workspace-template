@@ -426,6 +426,7 @@ describe("the tray's records (the multiplayer spec)", () => {
       is_connected: true,
       last_seen: "2026-10-25T11:00:00Z",
       last_input_at: null,
+      is_admitted_by_domain: false,
     };
     expect(parseRoster([participant])).toEqual([participant]);
     expect(() => parseRoster([{ ...participant, kind: "ghost" }])).toThrow(WireShapeError);
