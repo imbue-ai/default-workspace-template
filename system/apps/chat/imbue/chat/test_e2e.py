@@ -952,18 +952,7 @@ def test_typing_a_long_draft_keeps_the_transcript_and_the_caret_in_view(tmp_path
         ), "the draft never outgrew the composer"
 
         frame.evaluate("() => { document.querySelector('.message-input-textbox').scrollTop = 40; }")
-        with open(server.session_file, "a") as handle:
-            handle.write(
-                json.dumps(
-                    {
-                        "type": "user",
-                        "uuid": "long-u-while-drafting",
-                        "timestamp": "2026-01-01T00:02:00Z",
-                        "message": {"role": "user", "content": "arrived-while-drafting"},
-                    }
-                )
-                + "\n"
-            )
+        _append_user_turn(server.session_file, "long-u-while-drafting", "arrived-while-drafting")
         expect(chat.locator(".message-user", has_text="arrived-while-drafting")).to_be_attached(
             timeout=_TRIGGER_TIMEOUT_MS
         )
