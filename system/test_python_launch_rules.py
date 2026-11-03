@@ -1599,7 +1599,9 @@ def _is_test_support(relative: str) -> bool:
 def _launch_sites_in(
     repo_root: Path, relative: str, programs: _OwnPrograms
 ) -> list[_Site]:
-    """A file naming its own path (a usage hint it prints) is not calling other workspace code."""
+    """The launch sites in ``relative``, marked or not. The file's own path is not one of the
+    scripts matched: a file naming itself (a usage hint it prints) is not calling other
+    workspace code."""
     source = (repo_root / relative).read_text()
     tree = ast.parse(source)
     others = programs._replace(scripts=programs.scripts - {relative})
