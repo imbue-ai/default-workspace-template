@@ -76,6 +76,38 @@ def test_names_the_apps_still_down_at_the_deadline(
     assert waiting_for == ["chat"]
 
 
+def test_an_app_that_has_accepted_is_not_probed_again(
+    tmp_path: Path, closed_url: str
+) -> None:
+    with socket.create_server(("127.0.0.1", 0)) as serving:
+        registry = tmp_path / "apps.toml"
+        _write_registry(
+            registry,
+            {
+                "system_interface": f"http://127.0.0.1:{serving.getsockname()[1]}",
+                "chat": closed_url,
+            },
+        )
+
+        waiting_for = wait_for_critical_path.wait_for_apps(
+            registry, ("system_interface", "chat"), 0.3, 0.05
+        )
+
+        serving.setblocking(False)
+        accepted: list[socket.socket] = []
+        try:
+            while True:
+                accepted.append(serving.accept()[0])
+        except BlockingIOError:
+            pass
+        finally:
+            for connection in accepted:
+                connection.close()
+
+    assert waiting_for == ["chat"]
+    assert len(accepted) == 1
+
+
 def test_an_unregistered_app_and_a_missing_registry_are_waited_for(
     tmp_path: Path, listening_url: str
 ) -> None:

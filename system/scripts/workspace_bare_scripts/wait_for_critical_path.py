@@ -111,7 +111,7 @@ def _accepts_connections(url: str) -> bool:
         return False
 
 
-def _apps_not_serving(registry: Path, app_names: tuple[str, ...]) -> list[str]:
+def _apps_not_serving(registry: Path, app_names: list[str]) -> list[str]:
     url_by_name = _registered_url_by_name(registry)
     return [
         name
@@ -126,10 +126,15 @@ def wait_for_apps(
     deadline_seconds: float,
     poll_interval_seconds: float,
 ) -> list[str]:
-    """Wait until every named app accepts connections, or the deadline passes; the names still not serving."""
+    """Wait until every named app has accepted a connection, or the deadline passes; the names that never did.
+
+    An app is probed only until it first accepts: every deferred program waits here at once, and each probe
+    of an app already serving would cost it a request thread while the other app is still starting.
+    """
     deadline = time.monotonic() + deadline_seconds
+    waiting_for = list(app_names)
     while True:
-        waiting_for = _apps_not_serving(registry, app_names)
+        waiting_for = _apps_not_serving(registry, waiting_for)
         if not waiting_for or time.monotonic() >= deadline:
             return waiting_for
         time.sleep(poll_interval_seconds)
