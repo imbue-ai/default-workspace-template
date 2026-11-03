@@ -208,7 +208,8 @@ process restarts:
   opens the window only after the checks pass, the order step 3 asks for.
 
   While `build-app`'s mock frame is still up around the app, the user's
-  window is the frame's: drop both and end the call with `&& uv run --no-sync
+  window is the frame's: in this call, or the dependency change's below, drop
+  `--refresh` / `--open` and end the call with `&& uv run --no-sync
   .agents/skills/build-app/python/build_app_skill/mock_frame.py up --app
   <name> --note "<what is not real yet>" --refresh`, which also keeps the
   restarted app out of the launcher. Once it reads its real data, take the
@@ -270,6 +271,12 @@ to click Refresh:
 ```bash
 uv run --no-sync workspace-layout refresh --app <name>
 ```
+
+While `build-app`'s mock frame is still up around the app, the user's window
+is the frame's, not the app's: reload it with `uv run --no-sync
+.agents/skills/build-app/python/build_app_skill/mock_frame.py up --app <name>
+--note "<what is not real yet>" --refresh` (`--open` to surface it), never
+`refresh` or `open` the app itself.
 
 `refresh --app` reloads every page of the service on every client. If no
 window is open yet and the change is ready to show, surface it instead with
