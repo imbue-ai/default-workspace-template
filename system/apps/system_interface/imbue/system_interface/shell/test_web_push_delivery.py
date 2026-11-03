@@ -58,7 +58,7 @@ def _device_subscription(
 
 
 def test_a_message_reaches_the_push_service_encrypted_to_the_device_and_signed_by_the_shell(tmp_path: Path) -> None:
-    service = WebPushNotifier(directory=tmp_path / "web_push", transport=PywebpushTransport())
+    notifier = WebPushNotifier(directory=tmp_path / "web_push", transport=PywebpushTransport())
     device_key = ec.generate_private_key(ec.SECP256R1())
     auth_secret = os.urandom(16)
     received: list[dict[str, Any]] = []
@@ -66,7 +66,7 @@ def test_a_message_reaches_the_push_service_encrypted_to_the_device_and_signed_b
 
     with serve_app(_push_service(received, 201)) as push_provider:
         subscription = _device_subscription(f"{push_provider.http_url}/push/abc", device_key, auth_secret)
-        answer = service.transport.post(subscription, payload, service.signing_key())
+        answer = notifier.transport.post(subscription, payload, notifier.signing_key())
 
     assert answer.status_code == 201
     ((message,),) = [received]
@@ -79,27 +79,27 @@ def test_a_message_reaches_the_push_service_encrypted_to_the_device_and_signed_b
     authorization = headers["Authorization"]
     assert Vapid.verify(authorization) is True
     token_part, key_part = authorization.removeprefix("vapid ").split(",")
-    assert key_part == f"k={service.public_key()}"
+    assert key_part == f"k={notifier.public_key()}"
     claims = json.loads(_base64url_decoded(token_part.removeprefix("t=").split(".")[1]))
     assert claims["aud"] == push_provider.http_url
     assert claims["sub"] == VAPID_SUBJECT
 
 
 def test_a_refusal_and_no_answer_at_all_come_back_as_answers_not_errors(tmp_path: Path) -> None:
-    service = WebPushNotifier(directory=tmp_path / "web_push", transport=PywebpushTransport())
+    notifier = WebPushNotifier(directory=tmp_path / "web_push", transport=PywebpushTransport())
     device_key = ec.generate_private_key(ec.SECP256R1())
     received: list[dict[str, Any]] = []
 
     with serve_app(_push_service(received, 410)) as push_provider:
-        gone = service.transport.post(
+        gone = notifier.transport.post(
             _device_subscription(f"{push_provider.http_url}/push/gone", device_key, os.urandom(16)),
             "{}",
-            service.signing_key(),
+            notifier.signing_key(),
         )
-    unreachable = service.transport.post(
+    unreachable = notifier.transport.post(
         _device_subscription(f"http://127.0.0.1:{find_free_port()}/push/x", device_key, os.urandom(16)),
         "{}",
-        service.signing_key(),
+        notifier.signing_key(),
     )
 
     assert gone.status_code == 410

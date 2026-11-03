@@ -45,7 +45,7 @@ def _registration(endpoint: str, label: str = "Android, Firefox") -> DeviceRegis
         ("https://push.example.org/abc", "push.example.org"),
     ],
 )
-def test_push_service_name_names_the_vendor_or_else_the_host(endpoint: str, expected: str) -> None:
+def test_push_provider_name_names_the_vendor_or_else_the_host(endpoint: str, expected: str) -> None:
     assert push_provider_name(endpoint) == expected
 
 
@@ -75,7 +75,7 @@ def test_registering_a_device_again_moves_it_last_with_its_new_label_and_time() 
     ]
 
 
-def test_devices_and_the_key_survive_a_new_service_over_the_same_directory(tmp_path: Path) -> None:
+def test_devices_and_the_key_survive_a_new_notifier_over_the_same_directory(tmp_path: Path) -> None:
     first = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
     first.register(_registration("https://push.example.org/a"), _NOW)
     public_key = first.public_key()
@@ -89,21 +89,21 @@ def test_devices_and_the_key_survive_a_new_service_over_the_same_directory(tmp_p
 def test_an_unreadable_devices_file_reads_as_no_devices(tmp_path: Path) -> None:
     (tmp_path / DEVICES_FILENAME).write_text("not json")
 
-    service = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
+    notifier = WebPushNotifier(directory=tmp_path, transport=RecordingPushTransport())
 
-    assert service.list_devices() == ()
+    assert notifier.list_devices() == ()
 
 
 def test_a_device_whose_push_service_did_not_answer_is_kept(tmp_path: Path) -> None:
     transport = RecordingPushTransport(status_code_by_endpoint={"https://push.example.org/a": None})
-    service = WebPushNotifier(directory=tmp_path, transport=transport)
-    service.register(_registration("https://push.example.org/a"), _NOW)
+    notifier = WebPushNotifier(directory=tmp_path, transport=transport)
+    notifier.register(_registration("https://push.example.org/a"), _NOW)
 
-    outcome = service.send(PushNotificationRequest(title="Done"), None)
+    outcome = notifier.send(PushNotificationRequest(title="Done"), None)
 
     ((delivery,),) = [outcome.deliveries]
     assert (delivery.is_accepted, delivery.is_forgotten, delivery.detail) == (False, False, "unreachable")
-    assert len(service.list_devices()) == 1
+    assert len(notifier.list_devices()) == 1
 
 
 class _MeetingPushTransport(PushTransportInterface):
@@ -120,11 +120,11 @@ class _MeetingPushTransport(PushTransportInterface):
 
 def test_every_device_is_posted_to_at_once(tmp_path: Path) -> None:
     transport = _MeetingPushTransport(barrier=threading.Barrier(3, timeout=10))
-    service = WebPushNotifier(directory=tmp_path, transport=transport)
+    notifier = WebPushNotifier(directory=tmp_path, transport=transport)
     for index in range(3):
-        service.register(_registration(f"https://push.example.org/{index}"), _NOW)
+        notifier.register(_registration(f"https://push.example.org/{index}"), _NOW)
 
-    outcome = service.send(PushNotificationRequest(title="Done"), None)
+    outcome = notifier.send(PushNotificationRequest(title="Done"), None)
 
     assert outcome.accepted_count == 3
     assert [delivery.device_id for delivery in outcome.deliveries] == [
