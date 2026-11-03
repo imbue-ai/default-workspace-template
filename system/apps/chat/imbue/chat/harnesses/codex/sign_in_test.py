@@ -131,13 +131,13 @@ def test_the_device_login_shows_its_page_and_code(tmp_path: Path) -> None:
     service.abort(started.flow_id)
 
 
-class _RefusingDeviceLoginClient(_ScriptedLoginClient):
+class _FailingDeviceLoginClient(_ScriptedLoginClient):
     def start_device_login(self) -> ChatgptDeviceLoginStart:
-        raise CodexAppServerError("device code login is not enabled")
+        raise CodexAppServerError("loginChatGptDevice failed")
 
 
 def test_a_device_login_that_cannot_start_offers_another_way(tmp_path: Path) -> None:
-    service = _service(tmp_path, _RefusingDeviceLoginClient(None))
+    service = _service(tmp_path, _FailingDeviceLoginClient(None))
 
     with pytest.raises(FlowError) as raised:
         service.start("openai", "device")

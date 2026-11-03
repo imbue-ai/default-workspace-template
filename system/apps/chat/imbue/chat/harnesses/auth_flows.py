@@ -115,7 +115,7 @@ _VERDICT_DEADLINE_SECONDS: Final = 120.0
 # desktop app shows can say how the sign-in ended. A flow still pending after this is reported as
 # finishing, and the chooser shows how it ends.
 _RELAYED_VERDICT_WAIT_SECONDS: Final = 20.0
-_DEVICE_LOGIN_REFUSED_DETAIL: Final = (
+_DEVICE_LOGIN_START_FAILED_DETAIL: Final = (
     "ChatGPT couldn't start a sign-in with a code. Try again, or use an OpenAI API key instead."
 )
 # How still a screen has to be before we call it drawn, when the method names no anchor to
@@ -444,7 +444,7 @@ class AuthFlowService:
             logger.warning("Codex sign-in could not begin: {}", e)
             self._fail_locked(
                 session,
-                _DEVICE_LOGIN_REFUSED_DETAIL
+                _DEVICE_LOGIN_START_FAILED_DETAIL
                 if method.login is CodexLogin.DEVICE
                 else "Codex could not begin the sign-in.",
             )
