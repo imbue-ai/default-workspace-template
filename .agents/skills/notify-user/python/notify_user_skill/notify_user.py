@@ -114,15 +114,22 @@ class HttpClient:
     def post_json(
         self, url: str, payload: dict, headers: dict, timeout: float
     ) -> tuple[int | None, str]:
-        """POST a JSON body; return ``(status, response text)``, status ``None`` if unreachable."""
+        """POST a JSON body; return ``(status, response text)``, status ``None`` if unreachable, too slow, or garbled."""
         body = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(url, data=body, headers=headers, method="POST")
         try:
+            request = urllib.request.Request(
+                url, data=body, headers=headers, method="POST"
+            )
             with urllib.request.urlopen(request, timeout=timeout) as response:
                 return int(response.status), response.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as exc:
             return int(exc.code), exc.read().decode("utf-8", "replace")
-        except (urllib.error.URLError, OSError) as exc:
+        except (
+            urllib.error.URLError,
+            OSError,
+            http.client.HTTPException,
+            ValueError,
+        ) as exc:
             return None, str(exc)
 
     def get(self, url: str, timeout: float) -> tuple[int | None, str]:

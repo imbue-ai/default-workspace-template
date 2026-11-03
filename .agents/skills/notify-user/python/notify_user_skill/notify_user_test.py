@@ -470,3 +470,35 @@ def test_no_registered_device_says_nothing(
 
     assert len(http.pushes) == 1
     assert "device" not in capsys.readouterr().err
+
+
+class _RealPushHttp(_RecordingHttp):
+    """The app accepts and no page watches the chat, while the push to the shell goes out for real."""
+
+    def __init__(self) -> None:
+        super().__init__(200)
+
+    def post_json(
+        self, url: str, payload: dict, headers: dict, timeout: float
+    ) -> tuple[int | None, str]:
+        if _is_push(url):
+            return notify_user.HttpClient.post_json(
+                self, url, payload, headers, timeout
+            )
+        return super().post_json(url, payload, headers, timeout)
+
+
+def test_a_malformed_shell_address_is_an_unreachable_push_not_a_crash(
+    environ: dict[str, str], capsys: pytest.CaptureFixture[str]
+) -> None:
+    # A typo in the port, which urllib reports as a ValueError rather than a URLError.
+    environ = {**environ, "MINDS_WORKSPACE_SERVER_URL": "http://127.0.0.1:80o0"}
+
+    assert (
+        notify_user.notify("Done.", None, http=_RealPushHttp(), environ=environ) is True
+    )
+
+    assert (
+        "could not push the notification to your devices (the workspace was unreachable: nonnumeric port"
+        in capsys.readouterr().err
+    )
