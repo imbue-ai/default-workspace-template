@@ -1,8 +1,4 @@
-import json
-import threading
 from collections.abc import Generator
-from http.server import BaseHTTPRequestHandler
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -14,6 +10,7 @@ from routines.migrate import LEGACY_CRON_DIR
 from routines.mock_chat_app_test import ScriptedChatApp
 from routines.mock_clock_test import FakeClock
 from routines.mock_http_server_test import FakeHttpServer
+from routines.mock_http_server_test import serving_fake_http_server
 from routines.mock_notifier_test import RecordingNotifier
 from routines.mock_repository_test import RecordingRepository
 from routines.paths import RoutinesPaths
@@ -132,38 +129,5 @@ def http_chat_app(tmp_path: Path, http_server: FakeHttpServer, clock: FakeClock)
 
 @pytest.fixture
 def http_server() -> Generator[FakeHttpServer, None, None]:
-    holder: list[FakeHttpServer] = []
-
-    class Handler(BaseHTTPRequestHandler):
-        def _serve(self) -> None:
-            length = int(self.headers.get("Content-Length", "0"))
-            raw = self.rfile.read(length) if length else b""
-            body = json.loads(raw) if raw else None
-            status, answer = holder[0].take(
-                self.command, self.path, {key.lower(): value for key, value in self.headers.items()}, body
-            )
-            payload = json.dumps(answer).encode()
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
-
-        def do_GET(self) -> None:
-            self._serve()
-
-        def do_POST(self) -> None:
-            self._serve()
-
-        def log_message(self, format: str, *args: object) -> None:
-            return
-
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    holder.append(FakeHttpServer(url=f"http://127.0.0.1:{server.server_port}"))
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    try:
-        yield holder[0]
-    finally:
-        server.shutdown()
-        server.server_close()
+    with serving_fake_http_server() as server:
+        yield server

@@ -1,3 +1,4 @@
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,8 @@ from flask.testing import FlaskClient
 from routines.data_types import RoutineDefinition
 from routines.mock_chat_app_test import ScriptedChatApp
 from routines.mock_clock_test import FakeClock
+from routines.mock_http_server_test import FakeHttpServer
+from routines.mock_http_server_test import serving_fake_http_server
 from routines.mock_notifier_test import RecordingNotifier
 from routines.mock_repository_test import RecordingRepository
 from routines.paths import RoutinesPaths
@@ -97,3 +100,9 @@ def preview_client(
     service: RoutinesService, static_directory: Path, fix_chat_starter: RecordingFixChatStarter
 ) -> FlaskClient:
     return create_app(service, static_directory, is_preview=True, fix_chat_starter=fix_chat_starter).test_client()
+
+
+@pytest.fixture
+def http_server() -> Generator[FakeHttpServer, None, None]:
+    with serving_fake_http_server() as server:
+        yield server
