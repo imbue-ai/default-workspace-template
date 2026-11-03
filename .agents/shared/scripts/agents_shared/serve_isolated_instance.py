@@ -43,8 +43,8 @@ environment -- that is what ``--port-env`` / ``--env`` inject. Scaffolded Flask
 services do this out of the box (``<PKG>_PORT`` / ``<PKG>_DATA_DIR``); an older
 service is retrofitted with the same one-liner when it is edited.
 
-It imports only the standard library and the stdlib-only ``forward_port`` it registers
-through, so it runs under the system ``python3`` with no venv.
+It imports only the standard library and the stdlib-only ``app_registration.forward_port``
+it registers through, so it runs under the system ``python3`` with no venv.
 
 Usage:
     python3 serve_isolated_instance.py up --name <slug> --cwd <dir> \\
@@ -105,13 +105,24 @@ import urllib.request
 from pathlib import Path
 from typing import Callable, NamedTuple, Sequence
 
-# Run by its path, the module puts the bare packages' directory on sys.path; imported as
-# part of its package, the venv already has it.
+# Run by its path, the module puts the bare packages' directories on sys.path; imported as
+# part of its package, the venv already has them.
 if not __package__:
     # import-path: no-venv -- the system python3 runs this with no venv, so it finds its stdlib-only packages by path
     sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "system" / "scripts"))
+    # import-path: no-venv -- the system python3 runs this with no venv, so it finds its stdlib-only packages by path
+    sys.path.insert(
+        0,
+        str(
+            Path(__file__).resolve().parents[4]
+            / "system"
+            / "libs"
+            / "app_registration"
+            / "src"
+        ),
+    )
 
-from workspace_bare_scripts import forward_port
+from app_registration import forward_port
 
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and

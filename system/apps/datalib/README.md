@@ -36,8 +36,8 @@ is used, so a workspace that never uses datalib downloads nothing. The launcher 
 1. Moves a store written at `data/.skills/datalib` itself into the `Default`
    library, if there is one (see "The libraries folder" below).
 2. Reads the API token (see below).
-3. Registers the app and the datalib-http port 8731 through
-   `system/scripts/forward_port.py`.
+3. Registers the app and the datalib-http port 8731 through the
+   `app_registration` library, which `system/scripts/forward_port.py` runs.
 4. Sets its own `oom_score_adj` to the agent-subprocess band (900), which
    datalib-http and every sync step it starts inherit. Under memory pressure
    datalib is then shed before any agent or service. The program line starts
@@ -138,7 +138,7 @@ screen runs inside `datalib-http` and has to finish after the window closes.
 `launch_datalib_http_test.py` pins the token handling, the move of a store
 into the default library, and the registered manifest copy;
 `test_datalib_app.py` runs the launcher as a process, through
-the real `forward_port.py` and around a fake `datalib-http`
+the real `app_registration` library and around a fake `datalib-http`
 (`datalib_launcher_testing.py`); `test_datalib_pin.py` holds the skill to the
 version the install script installs and to the data root the app serves, and
 keeps the program out of `system/supervisord.conf.d/`.

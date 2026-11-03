@@ -5,8 +5,8 @@ datalib-http requires its API token on every route, and a browser gets in by
 loading ``/?token=<token>`` once. A window opens at a launch path's ``path``
 with its ``presets`` as the query, so the token travels as a preset: this
 script writes a copy of ``app.toml`` whose one launch path carries
-``presets = { token = "<token>" }``, registers that copy through
-``system/scripts/forward_port.py``, and then execs datalib-http with the same
+``presets = { token = "<token>" }``, registers that copy through the
+``app_registration`` library, and then execs datalib-http with the same
 token in ``DATALIB_TOKEN``.
 
 Usage (the ``datalib`` program line, from the repo root):
@@ -14,8 +14,9 @@ Usage (the ``datalib`` program line, from the repo root):
 
 Standard-library only, like forward_port.py: the program line runs it under a
 plain ``python3``, so the app never depends on the root venv being intact. The
-one import beyond the standard library is the stdlib-only ``oom_priority``
-package, by path, the way ``oom_tag_service.py`` imports it.
+imports beyond the standard library are the stdlib-only ``oom_priority`` and
+``app_registration`` packages, by path, the way ``oom_tag_service.py`` imports
+``oom_priority``.
 """
 
 import argparse
@@ -25,7 +26,6 @@ import os
 import re
 import secrets
 import shutil
-import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -35,12 +35,16 @@ from typing import Final
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[2] / "services" / "oom_priority" / "src")
 )
+# import-path: no-venv -- the system python3 runs this with no venv, so it finds its stdlib-only packages by path
+sys.path.insert(
+    0, str(Path(__file__).resolve().parents[2] / "libs" / "app_registration" / "src")
+)
 
+from app_registration import forward_port  # noqa: E402
 from oom_priority import bands  # noqa: E402
 
 # The app's fixed wiring, relative to the repo root every supervised program runs from.
 MANIFEST_PATH: Final[Path] = Path("system/apps/datalib/app.toml")
-FORWARD_PORT_PATH: Final[Path] = Path("system/scripts/forward_port.py")
 DEFAULT_PORT: Final[int] = 8731
 BIND_HOST: Final[str] = "127.0.0.1"
 
@@ -68,7 +72,7 @@ DATA_ROOT_LINE: Final[re.Pattern[str]] = re.compile(
 )
 
 # Where the manifest copy that carries the token is written. Machine state: it is rewritten on
-# every start and never read by anything but forward_port.py.
+# every start and never read by anything but the registration.
 STATE_DIRECTORY: Final[Path] = Path("data/.state/datalib-app")
 
 # datalib-http reads both from its environment: where to listen, and the token to require
@@ -308,7 +312,7 @@ def write_registered_manifest(
             f"cannot read the manifest {manifest_path} and its icon name: {e}"
         ) from e
     state_directory.mkdir(parents=True, exist_ok=True)
-    # forward_port.py reads the icon relative to the manifest it is given.
+    # The registration reads the icon relative to the manifest it is given.
     shutil.copyfile(manifest_path.parent / icon_name, state_directory / icon_name)
     registered_path = state_directory / manifest_path.name
     registered_path.write_text(
@@ -331,25 +335,16 @@ def child_environment(port: int, token: str) -> dict[str, str]:
     }
 
 
-def register_app(
-    forward_port_path: Path, registered_manifest_path: Path, port: int
-) -> None:
+def register_app(registered_manifest_path: Path, port: int) -> None:
     """Register the manifest copy and datalib-http's port in the app registry."""
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(forward_port_path),
-            "--manifest",
-            str(registered_manifest_path),
-            "--url",
+    try:
+        forward_port.register_manifest(
+            forward_port.apps_file(),
+            registered_manifest_path,
             f"http://localhost:{port}",
-        ],
-        check=False,
-    )
-    if result.returncode != 0:
-        raise DatalibLaunchError(
-            f"{forward_port_path} exited {result.returncode}; the app is not registered"
         )
+    except (forward_port.RegistryError, OSError) as e:
+        raise DatalibLaunchError(f"the app is not registered: {e}") from e
 
 
 def launch(arguments: argparse.Namespace) -> None:
@@ -369,7 +364,7 @@ def launch(arguments: argparse.Namespace) -> None:
     registered_manifest_path = write_registered_manifest(
         arguments.manifest, token, arguments.state_directory
     )
-    register_app(arguments.forward_port, registered_manifest_path, arguments.port)
+    register_app(registered_manifest_path, arguments.port)
     if not bands.set_oom_score_adj(os.getpid(), OOM_SCORE_ADJ):
         logger.warning(
             "Could not set oom_score_adj to %d; datalib-http keeps the band it was started in",
@@ -411,12 +406,6 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
         type=Path,
         default=STATE_DIRECTORY,
         help="Where the manifest copy that carries the token is written",
-    )
-    parser.add_argument(
-        "--forward-port",
-        type=Path,
-        default=FORWARD_PORT_PATH,
-        help="The registration script",
     )
     return parser.parse_args(argv)
 

@@ -49,7 +49,7 @@ from pathlib import Path
 from agents_shared import serve_isolated_instance
 from app_manifest.errors import ManifestLoadError
 from app_manifest.registry_location import registry_path
-from workspace_bare_scripts import forward_port
+from app_registration import forward_port
 
 # Where the shared substrate files each instance, and where this script keeps what it
 # adds: the registry copy and the sibling list.

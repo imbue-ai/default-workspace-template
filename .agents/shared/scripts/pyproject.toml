@@ -6,6 +6,7 @@ requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6",
     # serve_isolated_instance registers its servers through forward_port.
+    "app-registration",
     "workspace-scripts",
 ]
 

@@ -115,6 +115,7 @@ package = false
 # layout uses. The shared skill scripts and system/scripts are a project each too.
 members = [
     "system/libs/app_manifest",
+    "system/libs/app_registration",
     "system/libs/app_schema",
     "system/libs/bootstrap",
     "system/libs/chat_background_tasks",
@@ -162,6 +163,7 @@ chat-background-tasks = { workspace = true }
 share-grants = { workspace = true }
 oom-priority = { workspace = true }
 app-manifest = { workspace = true }
+app-registration = { workspace = true }
 workspace-themes = { workspace = true }
 app-schema = { workspace = true }
 workspace-layout = { workspace = true }

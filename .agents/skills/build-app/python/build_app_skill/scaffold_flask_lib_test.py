@@ -774,7 +774,7 @@ def _workspace_for_a_real_lock(root: Path) -> Path:
     """A workspace uv can resolve a scaffolded app against, without the whole tree.
 
     The root pyproject and lock as they are, every root member's pyproject (uv reads them
-    to discover the workspace), the full source of the two libraries a scaffolded app
+    to discover the workspace), the full source of the libraries a scaffolded app
     installs, and the venv-link helper its program line runs.
     """
     root.mkdir(parents=True)
@@ -790,7 +790,11 @@ def _workspace_for_a_real_lock(root: Path) -> Path:
             shutil.copy(
                 directory / "pyproject.toml", root / relative / "pyproject.toml"
             )
-    for library in ("system/libs/app_schema", "system/libs/app_manifest"):
+    for library in (
+        "system/libs/app_schema",
+        "system/libs/app_manifest",
+        "system/libs/app_registration",
+    ):
         shutil.rmtree(root / library)
         shutil.copytree(
             _REPO_ROOT / library,

@@ -21,7 +21,8 @@ from app_manifest.manifest import (
     load_manifest,
 )
 from app_manifest.registry_location import registry_path
-from workspace_bare_scripts import forward_port, user_packages
+from app_registration import forward_port
+from workspace_bare_scripts import user_packages
 
 from update_app_skill.preview_app import (
     INNER_SERVICE_SUFFIX,

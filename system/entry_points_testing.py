@@ -75,15 +75,18 @@ BARE_SEARCH_PATHS = (
     REPO_ROOT / "system" / "libs" / "tk_command_parsing" / "src",
     REPO_ROOT / "system" / "services" / "oom_priority" / "src",
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src",
+    REPO_ROOT / "system" / "libs" / "app_registration" / "src",
 )
 
-# Bare scripts that are not package stubs: oom_priority's own entry scripts, a
-# stdlib-only maintenance script, and the Datalib app's launcher (the app is not a
-# workspace member, and the launcher is its supervisord program).
+# Bare scripts that are not stubs of a bare package: oom_priority's own entry scripts, a
+# stdlib-only maintenance script, the Datalib app's launcher (the app is not a
+# workspace member, and the launcher is its supervisord program), and the stub of the
+# stdlib-only app_registration library, which every supervisord program line runs.
 STANDALONE_BARE_DIRS = (REPO_ROOT / "system" / "services" / "oom_priority" / "bin",)
 STANDALONE_BARE_SCRIPTS = (
     REPO_ROOT / "catalog" / "build_catalog_from_export.py",
     REPO_ROOT / "system" / "apps" / "datalib" / "launch_datalib_http.py",
+    SYSTEM_SCRIPTS / "forward_port.py",
 )
 
 # ``python -c`` source taking an entry's path: imports the entry the way running it would (its

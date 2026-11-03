@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 import pytest
-from workspace_bare_scripts import forward_port
+from app_registration import forward_port
 
 from agents_shared import preview_wrapper_server as wrapper_mod
 from agents_shared import serve_isolated_instance as mod

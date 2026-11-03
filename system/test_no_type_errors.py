@@ -50,6 +50,7 @@ _OOM_PRIORITY_SRC = REPO_ROOT / "system" / "services" / "oom_priority" / "src"
 _CHAT_BACKGROUND_TASKS_SRC = (
     REPO_ROOT / "system" / "libs" / "chat_background_tasks" / "src"
 )
+_APP_REGISTRATION_SRC = REPO_ROOT / "system" / "libs" / "app_registration" / "src"
 
 # The first-party modules each bare runtime context has on sys.path. update-self runs as a
 # staged copy that puts only its own python/ there (and loads oom_priority off the target
@@ -61,6 +62,7 @@ _SYSTEM_IMPORTABLE = frozenset(
         "tk_command_parsing",
         "oom_priority",
         "chat_background_tasks",
+        "app_registration",
     }
 )
 
@@ -109,6 +111,7 @@ def _bare_files() -> list[Path]:
         _TK_COMMAND_PARSING_SRC,
         _OOM_PRIORITY_SRC,
         _CHAT_BACKGROUND_TASKS_SRC,
+        _APP_REGISTRATION_SRC,
     ]
     modules = [
         path

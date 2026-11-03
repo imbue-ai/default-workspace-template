@@ -5,6 +5,7 @@ description = "Scaffolds a new Flask app under system/apps/"
 requires-python = ">=3.12"
 dependencies = [
     "app-manifest",
+    "app-registration",
     "tomlkit>=0.12",
     "workspace-scripts",
 ]

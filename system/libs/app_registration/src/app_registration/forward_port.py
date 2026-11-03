@@ -1,7 +1,9 @@
 """Register or remove an app port in data/.state/apps.toml.
 
 Uses file locking to safely upsert or remove entries. Called by services
-on startup to declare the ports they expose.
+on startup to declare the ports they expose: a supervisord program line runs the
+``system/scripts/forward_port.py`` stub, and Python code imports this module and
+calls ``register_manifest``, ``register`` or ``remove``.
 
 Usage:
     python3 system/scripts/forward_port.py --manifest system/apps/files/app.toml --url http://localhost:8300
@@ -67,16 +69,18 @@ generic letter monogram -- it does not hide the entry (that is
 import argparse
 import contextlib
 import fcntl
+import logging
 import os
 import re
 import secrets
-import sys
 import tempfile
 import tomllib
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
 
 DEFAULT_APPS_FILE = "data/.state/apps.toml"
 ENV_APPS_FILE = "MINDS_APPS_FILE"
@@ -565,10 +569,9 @@ def _save_apps(path: Path, apps: list[dict[str, object]]) -> None:
         with os.fdopen(tmp_fd, "w", encoding="utf-8") as f:
             f.write(rendered)
         os.replace(tmp_path, path)
-    except Exception:
+    finally:
         if os.path.exists(tmp_path):
             os.unlink(tmp_path)
-        raise
 
 
 def _read_manifest(
@@ -639,7 +642,11 @@ def _read_manifest(
     if theming is not None:
         mode = theming.get("mode", "tokens") if isinstance(theming, dict) else None
         if not isinstance(mode, str):
-            return {}, None, f"manifest {str(path)!r}: theming must be a table whose mode is a string"
+            return (
+                {},
+                None,
+                f"manifest {str(path)!r}: theming must be a table whose mode is a string",
+            )
         fields["theming_mode"] = mode
 
     for key, copy_entry in _MANIFEST_TABLE_ARRAY_COPIERS:
@@ -1062,7 +1069,7 @@ def register(
         if icon_error is not None:
             if is_new_pickable:
                 raise RegistrationError(icon_error)
-            sys.stderr.write(f"warning: {icon_error}; registering without an icon\n")
+            _LOGGER.warning("%s; registering without an icon", icon_error)
         if icon is None and not is_icon_declined and is_new_pickable:
             raise RegistrationError(
                 f"app {name!r} is new and has no icon: pass --icon-file with a tile icon "
@@ -1082,6 +1089,21 @@ def register(
         )
 
 
+def register_manifest(path: Path, manifest_path: Path, url: str) -> None:
+    """Register the app ``manifest_path`` describes at ``url`` in the registry at ``path``, as
+    ``--manifest`` does; raises RegistrationError when the manifest or the registration is refused."""
+    manifest_fields, icon_path, manifest_error = _read_manifest(manifest_path, None)
+    if manifest_error is not None:
+        raise RegistrationError(manifest_error)
+    register(
+        path,
+        str(manifest_fields["name"]),
+        url,
+        icon_path=icon_path,
+        manifest_fields=manifest_fields,
+    )
+
+
 def remove(path: Path, name: str) -> None:
     """Remove ``name`` from the registry at ``path``; a name with no entry is a no-op."""
     name_error = validate_service_name(name)
@@ -1092,6 +1114,7 @@ def remove(path: Path, name: str) -> None:
 
 
 def main() -> None:
+    logging.basicConfig(format="%(levelname)s: %(message)s")
     parser = argparse.ArgumentParser(description="Register or remove an app port")
     parser.add_argument(
         "--name",

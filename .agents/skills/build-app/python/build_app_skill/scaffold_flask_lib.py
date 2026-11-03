@@ -43,7 +43,8 @@ from pathlib import Path
 from typing import Callable, Iterable
 
 import tomlkit
-from workspace_bare_scripts import forward_port, venv_links
+from app_registration import forward_port
+from workspace_bare_scripts import venv_links
 
 # The template's own app and service names, which forward_port.py has no reason
 # to know about: it refuses names that can never be an origin label, while these
