@@ -11,8 +11,8 @@ waits on finished early. A sleep is judged wherever it runs as a command of its 
 after a `cd`, alone, or in a loop or `if` body -- and is allowed when it is shorter than 5 seconds,
 so a condition poll such as `until curl -sf URL; do sleep 1; done` passes. A sleep in a list the
 command sends to the background with `&` (`(sleep 900 | mcpc login URL > f &)`) holds no turn and
-is allowed; a `;` inside a backgrounded group or loop still reads as the end of a foreground list,
-so `{ sleep 30; } &` is blocked. A sleep that is only an argument (the command handed to
+is allowed; a `;` or newline inside a backgrounded group, loop or list still reads as the end of
+a foreground list, so `{ sleep 30; } &` and `sleep 30 &&<newline>cmd &` are blocked. A sleep that is only an argument (the command handed to
 `run_in_background.py`, a `bash -c` script) is not a command of this one and is never judged.
 Neither is a sleep whose duration is not a literal number.
 
