@@ -119,6 +119,28 @@ def test_only_an_unreadable_registry_is_reported_as_a_problem(
     assert problem is not None and "not an array" in problem
 
 
+def test_the_deadline_line_names_the_apps_down_and_an_unreadable_registry(
+    tmp_path: Path, listening_url: str
+) -> None:
+    healthy = tmp_path / "apps.toml"
+    _write_registry(healthy, {"system_interface": listening_url})
+    assert (
+        wait_for_critical_path._deadline_message(healthy, ["chat"])
+        == "wait_for_critical_path: chat not serving after 30s; starting anyway"
+    )
+
+    unparseable = tmp_path / "unparseable.toml"
+    unparseable.write_text("[[apps]\nname = ")
+    message = wait_for_critical_path._deadline_message(
+        unparseable, ["system_interface", "chat"]
+    )
+    assert message.startswith(
+        "wait_for_critical_path: system_interface, chat not serving after 30s ("
+    )
+    assert "not valid TOML" in message
+    assert message.endswith("); starting anyway")
+
+
 def test_a_url_with_an_unparseable_port_is_waited_on_rather_than_raised(
     tmp_path: Path, listening_url: str
 ) -> None:
