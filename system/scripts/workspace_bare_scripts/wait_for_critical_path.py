@@ -57,10 +57,15 @@ def _registered_url_by_name(registry: Path) -> dict[str, str]:
 
 
 def _accepts_connections(url: str) -> bool:
-    parts = urlsplit(url)
+    """Whether ``url``'s host accepts a TCP connection; a url naming no reachable address never does."""
+    try:
+        parts = urlsplit(url)
+        explicit_port = parts.port
+    except ValueError:
+        return False
     if parts.hostname is None:
         return False
-    port = parts.port or (443 if parts.scheme == "https" else 80)
+    port = explicit_port or (443 if parts.scheme == "https" else 80)
     try:
         with socket.create_connection(
             (parts.hostname, port), timeout=_CONNECT_TIMEOUT_SECONDS

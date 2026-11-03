@@ -100,6 +100,20 @@ def test_an_unparseable_registry_is_waited_on_rather_than_raised(
     ) == ["system_interface"]
 
 
+def test_a_url_with_an_unparseable_port_is_waited_on_rather_than_raised(
+    tmp_path: Path, listening_url: str
+) -> None:
+    registry = tmp_path / "apps.toml"
+    _write_registry(
+        registry,
+        {"system_interface": listening_url, "chat": "http://127.0.0.1:notaport"},
+    )
+
+    assert wait_for_critical_path.wait_for_apps(
+        registry, ("system_interface", "chat"), 0.2, 0.05
+    ) == ["chat"]
+
+
 def test_returns_once_a_late_app_registers_and_listens(
     tmp_path: Path, listening_url: str
 ) -> None:
