@@ -43,8 +43,8 @@ lease):
 
 - **`acquire` answers at once.** Exit 0 means the Screen is yours; 2 means a human holds it and you
   are queued to resume (tell the user, end your turn, and you will be messaged when it frees); 3
-  means another agent holds it or the Screen is still starting (retry in a few seconds; for another
-  agent you are queued and will be messaged).
+  means another agent holds it or the Screen is still starting (retry with a short sleep, a second
+  or two, between tries; for another agent you are queued and will be messaged).
 - **Any human can take control at any moment**, from the strip above the Screen in their window or
   simply by using the Screen when nobody holds it. They always win: you are preempted, your lease is
   gone, and the Screen's input from you is no longer theirs to expect. **Stop, tell the user the
