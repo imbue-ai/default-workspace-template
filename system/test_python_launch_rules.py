@@ -918,7 +918,7 @@ def _tracked_python_files(repo_root: Path) -> list[str]:
 _PYTEST_CONFIG_NAMES = frozenset(
     {"pyproject.toml", "pytest.ini", "setup.cfg", "tox.ini"}
 )
-_PYTHONPATH_SETTING_RE = re.compile(r"^\s*pythonpath\s*=", re.MULTILINE)
+_PYTHONPATH_SETTING_RE = re.compile(r"^\s*pythonpath\s*=")
 
 
 # A shell line that sets ``PYTHONPATH`` to something (an empty value clears it).
