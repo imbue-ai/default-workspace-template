@@ -41,6 +41,9 @@ def _run(command: str, run_in_background: bool | None = None) -> int:
         "while pgrep -f recapture.py >/dev/null; do sleep 15; done",
         "{ sleep 30; cat /tmp/out.txt; }",
         "time sleep 30",
+        # A subshell or command substitution runs in the foreground unless sent to the background.
+        "(sleep 30); cat /tmp/out.txt",
+        'out=$(sleep 30); echo "$out"',
         # Only the list a `&` ends goes to the background.
         "sleep 30 & sleep 40",
         "{ sleep 30; cat /tmp/out.txt; } &",
@@ -69,6 +72,7 @@ def test_a_foreground_sleep_of_five_seconds_or_more_is_blocked(command: str) -> 
         "mkdir -p data/.tasks/mcp-login\n(sleep 900 | mcpc login https://mcp.example.com/mcp > data/.tasks/mcp-login/example.out 2>&1 &)",
         "sleep 600 &",
         "sleep infinity &",
+        "(sleep 30) &",
         "sleep 30 && echo done &",
         # A list carries on across a newline after `&&`, `||` or `|`, up to the `&` that ends it.
         "sleep 30 &&\n  curl -s localhost:8000/ > /tmp/out.txt &",
