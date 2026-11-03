@@ -32,6 +32,7 @@ import re
 import shlex
 import subprocess
 import tomllib
+from collections.abc import Collection
 from pathlib import Path, PurePosixPath
 from typing import NamedTuple
 
@@ -1486,19 +1487,30 @@ def _joined_path(node: ast.BinOp) -> str:
     return "/".join(parts)
 
 
-def _command_word(words: list[object]) -> str | None:
-    """The program an argv runs: its first word, or the command ``uv run`` runs past its options."""
-    if not words or not isinstance(words[0], str):
-        return None
-    if words[:2] != ["uv", "run"]:
-        return words[0]
-    index = 2
+def _past_options(
+    words: list[object], index: int, options_with_values: Collection[str]
+) -> int:
+    """The index of the first word from ``index`` on that is not an option or an option's value."""
     while (
         index < len(words)
         and isinstance(words[index], str)
         and str(words[index]).startswith("-")
     ):
-        index += 2 if words[index] in _OPTIONS_WITH_VALUES else 1
+        index += 2 if words[index] in options_with_values else 1
+    return index
+
+
+def _command_word(words: list[object]) -> str | None:
+    """The program an argv runs: its first word, or the command ``uv run`` runs past uv's and
+    run's options."""
+    if not words or not isinstance(words[0], str):
+        return None
+    if words[0] != "uv":
+        return words[0]
+    index = _past_options(words, 1, _UV_GLOBAL_OPTIONS_WITH_VALUES)
+    if index >= len(words) or words[index] != "run":
+        return words[0]
+    index = _past_options(words, index + 1, _OPTIONS_WITH_VALUES)
     command = words[index] if index < len(words) else None
     return command if isinstance(command, str) else None
 
@@ -1723,6 +1735,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
                 'ROUTES = [("tool-cmd", handler, ("GET",))]',
                 'IS_ROOT = (ROOT / "pkg" / "tool.py").exists()',
                 'SOURCE = Path("pkg/tool.py").read_text()',
+                'subprocess.run(["uv", "--project", "pkg", "run", "--no-sync", "tool-cmd"])',
             ]
         )
     )
@@ -1742,6 +1755,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
         "pkg/caller.py:7",
         "pkg/caller.py:8",
         "pkg/caller.py:16",
+        "pkg/caller.py:21",
     ]
 
 
