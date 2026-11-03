@@ -50,6 +50,38 @@ SHARE_IDENTITIES_FILE_VERSION: Final[int] = 1
 GrantedAppsReader = Callable[[], AbstractSet[str]]
 
 
+class _OncePerVersionWarning(MutableModel):
+    """Warns about one version (mtime) of a file once, not on every read until its writer rewrites it."""
+
+    model_config = {"extra": "forbid", "frozen": False}
+
+    consequence: str = Field(frozen=True, description="What the shell does without the file, appended to each warning")
+
+    _warned_version: int | None = PrivateAttr(default=None)
+
+    def warn(self, version: int, message: str) -> None:
+        if self._warned_version == version:
+            return
+        self._warned_version = version
+        logger.warning("{}; {}", message, self.consequence)
+
+    def forget(self) -> None:
+        """A good read: the next bad version is warned about again."""
+        self._warned_version = None
+
+
+def _readable_version(path: Path, what: str) -> int | None:
+    """The version (mtime) of a file about to be read: None while it is absent, and None with a warning while it
+    cannot even be stat-ed."""
+    try:
+        return path.stat().st_mtime_ns
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        logger.warning("Could not stat the {} at {}: {}", what, path, e)
+        return None
+
+
 class ShareGrantsReader(MutableModel):
     """Reads the people's grants document the minds desktop writes while sharing, warning once per version of a
     document the gateway would refuse."""
@@ -61,7 +93,11 @@ class ShareGrantsReader(MutableModel):
     )
     share_grants_path: Path = Field(frozen=True, description="The grants document beside them")
 
-    _warned_grants_mtime_ns: int | None = PrivateAttr(default=None)
+    _warning: _OncePerVersionWarning = PrivateAttr(
+        default_factory=lambda: _OncePerVersionWarning(
+            consequence="nobody counts as granted until the file is rewritten"
+        )
+    )
 
     def document_version(self) -> int | None:
         """What version of the document is on disk (its mtime), so a reader can say something about it once per
@@ -74,37 +110,26 @@ class ShareGrantsReader(MutableModel):
         version of the file."""
         if not self.share_env_path.exists():
             return None
-        try:
-            grants_mtime_ns = self.share_grants_path.stat().st_mtime_ns
-        except FileNotFoundError:
-            return None
-        except OSError as e:
-            logger.warning("Could not stat the share grants at {}: {}", self.share_grants_path, e)
+        version = _readable_version(self.share_grants_path, "share grants")
+        if version is None:
             return None
         try:
             grants_text = self.share_grants_path.read_text(encoding="utf-8")
         except OSError as e:
-            self._warn_once(grants_mtime_ns, f"Could not read the share grants at {self.share_grants_path}: {e}")
+            self._warning.warn(version, f"Could not read the share grants at {self.share_grants_path}: {e}")
             return None
         try:
             grants = parse_grants(grants_text)
         except GrantsError as e:
-            self._warn_once(grants_mtime_ns, f"Ignored the share grants at {self.share_grants_path}: {e}")
+            self._warning.warn(version, f"Ignored the share grants at {self.share_grants_path}: {e}")
             return None
-        self._warned_grants_mtime_ns = None
+        self._warning.forget()
         return grants
 
     def granted_app_names(self) -> AbstractSet[str]:
         """The apps with a per-app grant; none while the document cannot be read."""
         grants = self.read_grants()
         return grants.granted_app_names() if grants is not None else set()
-
-    def _warn_once(self, grants_mtime_ns: int, message: str) -> None:
-        """Warn about a version of the document once, not on every read until the owner rewrites it."""
-        if self._warned_grants_mtime_ns == grants_mtime_ns:
-            return
-        self._warned_grants_mtime_ns = grants_mtime_ns
-        logger.warning("{}; nobody counts as granted until the file is rewritten", message)
 
 
 class AgentGrantsReader(MutableModel):
@@ -114,7 +139,11 @@ class AgentGrantsReader(MutableModel):
 
     agent_grants_path: Path = Field(frozen=True, description="The gateway's agent grants document")
 
-    _warned_grants_mtime_ns: int | None = PrivateAttr(default=None)
+    _warning: _OncePerVersionWarning = PrivateAttr(
+        default_factory=lambda: _OncePerVersionWarning(
+            consequence="no visiting agent counts as granted until the file is rewritten"
+        )
+    )
 
     def document_version(self) -> int | None:
         """What version of the document is on disk (its mtime); None while there is none."""
@@ -122,21 +151,15 @@ class AgentGrantsReader(MutableModel):
 
     def read_active_grants(self, now: datetime) -> list[AgentGrant]:
         """Every unexpired grant, in file order; none while the file is absent or one the gateway refuses."""
-        try:
-            grants_mtime_ns = self.agent_grants_path.stat().st_mtime_ns
-        except FileNotFoundError:
-            return []
-        except OSError as e:
-            logger.warning("Could not stat the agent grants at {}: {}", self.agent_grants_path, e)
+        version = _readable_version(self.agent_grants_path, "agent grants")
+        if version is None:
             return []
         try:
             grants = load_active_agent_grants(self.agent_grants_path, now)
         except AgentGrantsError as e:
-            if self._warned_grants_mtime_ns != grants_mtime_ns:
-                self._warned_grants_mtime_ns = grants_mtime_ns
-                logger.warning("Ignored the agent grants at {}: {}", self.agent_grants_path, e)
+            self._warning.warn(version, f"Ignored the agent grants at {self.agent_grants_path}: {e}")
             return []
-        self._warned_grants_mtime_ns = None
+        self._warning.forget()
         return grants
 
 
@@ -157,45 +180,37 @@ class ShareIdentitiesReader(MutableModel):
 
     share_identities_path: Path = Field(frozen=True, description="The sidecar beside the people's grants")
 
-    _warned_version: int | None = PrivateAttr(default=None)
+    _warning: _OncePerVersionWarning = PrivateAttr(
+        default_factory=lambda: _OncePerVersionWarning(
+            consequence="granted accounts that have not arrived are named by their id until it is rewritten"
+        )
+    )
 
     def read_identities(self) -> dict[str, GrantedIdentity]:
         """What the desktop recorded of each granted account, by user id; nothing while the file is absent, or
         while it is one this shell cannot read, which is warned about once per version of the file."""
-        try:
-            version = self.share_identities_path.stat().st_mtime_ns
-        except FileNotFoundError:
-            return {}
-        except OSError as e:
-            logger.warning("Could not stat the share identities at {}: {}", self.share_identities_path, e)
+        version = _readable_version(self.share_identities_path, "share identities")
+        if version is None:
             return {}
         try:
             raw = json.loads(self.share_identities_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as e:
-            self._warn_once(version, f"Could not read the share identities at {self.share_identities_path}: {e}")
+            self._warning.warn(version, f"Could not read the share identities at {self.share_identities_path}: {e}")
             return {}
         try:
             document = _ShareIdentitiesDocument.model_validate(raw)
         except ValidationError as e:
-            self._warn_once(version, f"Ignored the share identities at {self.share_identities_path}: {e}")
+            self._warning.warn(version, f"Ignored the share identities at {self.share_identities_path}: {e}")
             return {}
         if document.version != SHARE_IDENTITIES_FILE_VERSION:
-            self._warn_once(
+            self._warning.warn(
                 version,
                 f"Ignored the share identities at {self.share_identities_path}: version {document.version} is not "
                 f"{SHARE_IDENTITIES_FILE_VERSION}",
             )
             return {}
-        self._warned_version = None
+        self._warning.forget()
         return dict(document.identities)
-
-    def _warn_once(self, version: int, message: str) -> None:
-        if self._warned_version == version:
-            return
-        self._warned_version = version
-        logger.warning(
-            "{}; granted accounts that have not arrived are named by their id until it is rewritten", message
-        )
 
 
 def _file_version(path: Path) -> int | None:
