@@ -40,8 +40,6 @@ from pathlib import Path
 
 from agents_shared import preview_wrapper_server, serve_isolated_instance
 from app_manifest.errors import ManifestLoadError, RegistryReadError
-from app_manifest.manifest import load_manifest
-from app_manifest.registry import read_registry
 from workspace_bare_scripts import forward_port
 from workspace_layout.cli import context_from_environment, run_layout_cli
 
@@ -130,6 +128,10 @@ def frame_display_name(display_name: str) -> str:
 
 def find_app(app_name: str, repo_root: Path) -> FramedApp:
     """The registered app scaffolded as ``app_name``; raises MockFrameError when there is none."""
+    # Imported here: both load pydantic, which a refused or --help call need not pay for.
+    from app_manifest.manifest import load_manifest
+    from app_manifest.registry import read_registry
+
     manifest_path = (
         repo_root / "system" / "apps" / app_name.replace("-", "_") / "app.toml"
     )
