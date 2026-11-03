@@ -57,7 +57,7 @@ interpreted the way a shell would.
   segment whose `command_words` run `sleep`, and uses `terminator` to tell a list sent to the
   background with `&` from one that runs in the foreground.
 
-All four gates import this package under a bare `python3` (no virtualenv) via an
+These gates, and the secrets guard above, import this package under a bare `python3` (no virtualenv) via an
 explicit `sys.path` entry, which is why this package is **stdlib-only** and must
 stay that way.
 
