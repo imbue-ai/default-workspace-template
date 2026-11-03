@@ -1,5 +1,8 @@
 """The background tasks chats are waiting on, and whether a chat is busy.
 
+Imbue Studio runs this script: its path, arguments, output and exit codes are the app's workspace
+command contract, which ``system/test_studio_command_contract.py`` checks; change them upstream only.
+
     python3 system/scripts/background_tasks.py list [--chat <chat-id>] [--format json|tsv]
     python3 system/scripts/background_tasks.py is-busy <chat-id>    # exit 0 busy, 1 not
 

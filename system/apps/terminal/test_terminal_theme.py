@@ -110,8 +110,10 @@ def _pty_frame(context: BrowserContext) -> tuple[Frame, Frame]:
     wrapper.wait_for_load_state()
     # The pty frame is pointed once the contract module is up and has greeted the page, after the wrapper's load.
     wrapper.wait_for_function("document.getElementById('pty').src !== ''", timeout=5000)
-    pty = page.frame(url=BROWSER_PTY_URL)
+    # The src is set before the iframe navigates, so a lookup by URL can still miss the frame.
+    pty = wrapper.locator("#pty").element_handle().content_frame()
     assert pty is not None
+    pty.wait_for_url(BROWSER_PTY_URL, timeout=5000)
     pty.wait_for_load_state()
     return page.main_frame, pty
 
