@@ -67,6 +67,11 @@ needs a directory put on `sys.path`, and each stub says which. See
   wired in `.claude/settings.json`, that record Claude's own background tasks as
   markers; the Claude-specific logic lives in this script, over the same
   library's markers),
+  `wait_for_critical_path.py` (the command prefix of the supervisord programs
+  nobody waits on at boot: it execs its command once the system interface and
+  the chat app accept connections, or after 30 seconds, so their cold starts do
+  not compete with those two; a stub because its module imports
+  `workspace_bare_scripts`),
   `with_secrets.py` (run a
   command with one `data/.secrets/<name>.env` file's variables in its
   environment; the one sanctioned reader of that directory, which
