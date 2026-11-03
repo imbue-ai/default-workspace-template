@@ -2,7 +2,9 @@
 the owner session the owner token opens, on every route, the WebSockets and the neko proxy included."""
 
 import hashlib
+import http.client
 import json
+import logging
 from typing import Final
 from uuid import uuid4
 
@@ -24,7 +26,9 @@ from screen.owner_gate import location_without_owner_token
 from screen.owner_gate import merge_frame_ancestors
 from screen.owner_gate import owner_gate_from_environ
 from screen.owner_gate import owner_session_cookie_value
+from screen.owner_gate import request_target_with_owner_token_redacted
 from screen.service import ScreenService
+from screen.serving import serve_in_background
 from testing import start_service_stack
 
 # What a Modal tunnel's traffic arrives from inside the sandbox: not loopback, and with no forwarding headers.
@@ -240,3 +244,29 @@ def test_location_without_owner_token_keeps_the_rest_of_the_query() -> None:
     assert location_without_owner_token("/", (("owner_token", "t"),)) == "/"
     assert location_without_owner_token("/a b", (("x", "1"), ("owner_token", "t"), ("x", "2"))) == "/a%20b?x=1&x=2"
     assert location_without_owner_token("///evil.example", ()) == "/evil.example"
+
+
+def test_request_target_with_owner_token_redacted_keeps_everything_but_the_token() -> None:
+    assert request_target_with_owner_token_redacted("/a?x=1") == "/a?x=1"
+    assert request_target_with_owner_token_redacted("/") == "/"
+    assert (
+        request_target_with_owner_token_redacted("/a?x=1&owner_token=t%2B1&owner_token=t2")
+        == "/a?x=1&owner_token=REDACTED&owner_token=REDACTED"
+    )
+
+
+def test_the_access_log_never_shows_the_owner_token(
+    gated_app: Flask, owner_token: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="werkzeug")
+    with serve_in_background("127.0.0.1", 0, gated_app) as server:
+        connection = http.client.HTTPConnection("127.0.0.1", server.socket.getsockname()[1], timeout=5)
+        try:
+            connection.request("GET", f"/?owner_token={owner_token}&x=1")
+            response = connection.getresponse()
+            response.read()
+        finally:
+            connection.close()
+    assert response.status == 302
+    assert "GET /?owner_token=REDACTED&x=1 HTTP/1.1" in caplog.text
+    assert owner_token not in caplog.text

@@ -64,6 +64,7 @@ _CONTENT_SECURITY_POLICY_HEADER: Final[str] = "Content-Security-Policy"
 _FRAME_ANCESTORS_DIRECTIVE: Final[str] = "frame-ancestors"
 # Every character a path may carry unescaped (RFC 3986 pchar and the segment separator).
 _PATH_SAFE_CHARACTERS: Final[str] = "/:@!$&'()*+,;=-._~"
+_REDACTED_OWNER_TOKEN: Final[str] = "REDACTED"
 
 
 class OwnerGate(FrozenModel):
@@ -140,6 +141,20 @@ def location_without_owner_token(path: str, query_pairs: tuple[tuple[str, str], 
     location = urllib.parse.quote("/" + path.lstrip("/"), safe=_PATH_SAFE_CHARACTERS)
     kept = [(name, value) for name, value in query_pairs if name != OWNER_TOKEN_QUERY_PARAMETER]
     return f"{location}?{urllib.parse.urlencode(kept)}" if kept else location
+
+
+@pure
+def request_target_with_owner_token_redacted(target: str) -> str:
+    """A request target as the access log may show it: every ``owner_token`` value replaced, since the token admits
+    its bearer for the sandbox's whole life. A target without one is returned unchanged."""
+    split_target = urllib.parse.urlsplit(target)
+    query_pairs = urllib.parse.parse_qsl(split_target.query, keep_blank_values=True)
+    if all(name != OWNER_TOKEN_QUERY_PARAMETER for name, _ in query_pairs):
+        return target
+    redacted_pairs = [
+        (name, _REDACTED_OWNER_TOKEN if name == OWNER_TOKEN_QUERY_PARAMETER else value) for name, value in query_pairs
+    ]
+    return urllib.parse.urlunsplit(split_target._replace(query=urllib.parse.urlencode(redacted_pairs)))
 
 
 def _set_owner_session_cookies(response: Response, gate: OwnerGate) -> None:
