@@ -72,6 +72,7 @@ def test_broadcast_chats_updated() -> None:
         is_permission_pending=False,
         shoulder_tap_available=False,
         is_connecting=False,
+        is_resending_after_sign_in=False,
         last_messaged_at=None,
         background_tasks=(),
         compaction_cause=None,
