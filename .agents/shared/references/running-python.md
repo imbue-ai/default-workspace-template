@@ -145,6 +145,10 @@ venv:
 command=python3 system/services/oom_priority/bin/oom_tag_service.py host-backup python3 system/scripts/wait_for_critical_path.py bash -c "uv sync --all-packages --frozen && exec .venv/bin/host-backup"
 ```
 
+Its `wait_for_critical_path.py` prefix only holds the start at boot until the
+system interface and the chat app serve (see `system/scripts/README.md`); it
+does not change how the entry point runs.
+
 Under `uv run`, a `uv` process would stay resident as the program's parent
 for its whole life (about 19 MB each), sit between supervisord and the
 program, and could relock the workspace on every restart. The `--frozen`
