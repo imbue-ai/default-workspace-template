@@ -31,6 +31,7 @@ from tk_command_parsing.parser import command_words, parse_command
 _MIN_BLOCKED_SECONDS = 5.0
 _DURATION = re.compile(r"^(\d*\.?\d+)([smhd]?)$")
 _UNIT_SECONDS = {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}
+_LIST_JOINER = re.compile(r"(?:&&|\|\||\|&?);*")
 
 _REFUSAL = (
     "Do not wait with a foreground `sleep` of 5 seconds or more. A timed sleep is a guess at how "
@@ -75,12 +76,14 @@ def is_blocked(command: str) -> bool:
 
 
 def _list_operators(terminator: str) -> str:
-    """`terminator` without the operators that join commands into one list (`&&`, `||`, `|&`).
+    """`terminator` without the operators that join commands into one list (`&&`, `||`, `|`,
+    `|&`), each with any `;` right after it: the parser turns a newline into `;`, and bash carries
+    a list on across a newline that follows one of these, so `&&;` is still `&&`.
 
     The lexer returns a run of operators as one token (`&)`, or `&;` for a `&` before a newline),
     so what is left is tested for the operator it holds rather than compared whole.
     """
-    return terminator.replace("&&", "").replace("||", "").replace("|&", "")
+    return _LIST_JOINER.sub("", terminator)
 
 
 def _seconds(args: list[str]) -> float:
