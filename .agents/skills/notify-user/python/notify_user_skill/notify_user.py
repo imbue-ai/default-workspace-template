@@ -96,9 +96,11 @@ _WATCHERS_TIMEOUT_SECONDS = 2.0
 # The shell posts to each device in turn, so this covers a few of them.
 _PUSH_TIMEOUT_SECONDS = 12.0
 
-# The longest title a device notification takes; a longer message without a
-# title is cut there and carried whole in the body.
+# The longest title and body the shell's send route takes; a longer message
+# without a title is cut for the title and carried in the body, itself cut at
+# its own bound.
 _PUSH_TITLE_MAX_LENGTH = 120
+_PUSH_BODY_MAX_LENGTH = 1000
 
 # This module sits five directories below the repo root
 # (.agents/skills/notify-user/python/notify_user_skill/).
@@ -236,11 +238,18 @@ def post_to_studio_app(
     return False
 
 
+def _cut(text: str, limit: int) -> str:
+    """``text`` when it fits in ``limit`` characters, else its start and an ellipsis within them."""
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
+
+
 def device_notification(
     message: str, title: str | None, environ: dict[str, str]
 ) -> dict[str, str]:
     """The notification the devices show: the title over the message, or the message as the title (cut, and then
-    carried whole in the body) when there is none; tapping it opens this chat."""
+    carried in the body) when there is none, each cut to what the shell takes; tapping it opens this chat."""
     chat_id = environ.get(ENV_CHAT_ID, "") or environ.get(ENV_AGENT_ID, "")
     path = (
         "/?" + urllib.parse.urlencode({"open": f"chat:/?chat={chat_id}"})
@@ -249,12 +258,15 @@ def device_notification(
     )
     stripped_title = (title or "").strip()
     if stripped_title:
-        heading, body = stripped_title[:_PUSH_TITLE_MAX_LENGTH], message
-    elif len(message) <= _PUSH_TITLE_MAX_LENGTH:
-        heading, body = message, ""
+        heading, body = stripped_title, message
     else:
-        heading, body = message[: _PUSH_TITLE_MAX_LENGTH - 3].rstrip() + "...", message
-    notification = {"title": heading, "body": body, "path": path}
+        heading = message
+        body = "" if len(message) <= _PUSH_TITLE_MAX_LENGTH else message
+    notification = {
+        "title": _cut(heading, _PUSH_TITLE_MAX_LENGTH),
+        "body": _cut(body, _PUSH_BODY_MAX_LENGTH),
+        "path": path,
+    }
     # One notification per chat on a device: a newer one from the same chat replaces it.
     if chat_id:
         notification["tag"] = f"chat-{chat_id}"

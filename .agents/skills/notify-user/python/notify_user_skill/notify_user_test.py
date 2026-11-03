@@ -396,6 +396,15 @@ def test_a_long_message_without_a_title_is_cut_for_the_title_and_kept_whole_in_t
     assert "tag" not in notification
 
 
+def test_a_long_title_and_message_are_cut_to_what_the_shell_takes() -> None:
+    notification = notify_user.device_notification("x" * 1500, "t" * 200, {})
+
+    assert len(notification["title"]) == 120
+    assert notification["title"].endswith("...")
+    assert len(notification["body"]) == 1000
+    assert notification["body"].endswith("...")
+
+
 def test_does_not_push_while_a_page_is_watching_the_chat(
     environ: dict[str, str],
 ) -> None:
