@@ -944,6 +944,20 @@ def _shell_pythonpath_lines(lines: list[str]) -> list[int]:
     ]
 
 
+def _shell_statement_spans(lines: list[str]) -> list[tuple[int, int]]:
+    """The line spans of commands continued over several lines by a trailing backslash."""
+    spans: list[tuple[int, int]] = []
+    start: int | None = None
+    for number, line in enumerate(lines, start=1):
+        if start is None:
+            start = number
+        if not line.rstrip().endswith("\\"):
+            if number > start:
+                spans.append((start, number))
+            start = None
+    return spans
+
+
 def _import_path_sites(repo_root: Path) -> list[_Site]:
     """Every import-path edit: in the template's Python, its pytest configs' ``pythonpath``
     settings (which add to the path for every test under them), and its shell scripts."""
@@ -972,7 +986,11 @@ def _import_path_sites(repo_root: Path) -> list[_Site]:
         lines = (repo_root / relative).read_text(errors="replace").splitlines()
         sites.extend(
             _sites(
-                relative, lines, _shell_pythonpath_lines(lines), [], _IMPORT_PATH_MARKER
+                relative,
+                lines,
+                _shell_pythonpath_lines(lines),
+                _shell_statement_spans(lines),
+                _IMPORT_PATH_MARKER,
             )
         )
     return sites
@@ -1748,6 +1766,9 @@ def test_import_path_edits_count_per_file_and_a_marker_keeps_one(
                 [
                     "# import-path: other-tree -- the target release's copy, found at run time",
                     'export PYTHONPATH="$TARGET/lib"',
+                    "# import-path: other-tree -- the same copy, set on a continued line",
+                    "env LANG=C \\",
+                    '    PYTHONPATH="$TARGET/lib" python3 -m tool',
                 ]
             ),
             "app/pyproject.toml": '[tool.pytest.ini_options]\npythonpath = ["src"]\n',
