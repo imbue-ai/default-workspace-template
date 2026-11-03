@@ -32,9 +32,9 @@ service.
    bytes, base64) and `LATCHKEY_DISABLE_COUNTING=1` to that file, and adds
    the three to the environment it launches supervisord with, so every
    supervised service inherits them (later chat agents read them from the
-   file). The password exists in the container and
-   nowhere else until the Imbue Studio web chrome reads it over owner-exec to
-   provision the VM's gateway. A file that already names a gateway is left
+   file). The password lives in the container, and in the workspace's backups
+   of its host dir as every host env value does, until the Imbue Studio web
+   chrome reads it over owner-exec to provision the VM's gateway. A file that already names a gateway is left
    untouched; a bare dev run with no host dir skips the step.
 4. **Launch supervisord** - `exec supervisord -n -c system/supervisord.conf`. Running
    via `exec` keeps the bootstrap tmux window alive as supervisord and lets the
