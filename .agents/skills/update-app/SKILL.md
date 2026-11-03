@@ -102,8 +102,11 @@ changes in one message is several requests, so each change in the list gets its
 own subagent. Start each subagent with `model: "sonnet"`, and leave its
 `isolation` unset, so every subagent edits the live app directly. Subagents run in the background, so starting one returns
 at once and you stay free to read the next message. They work under your service
-lease (below) and do not take their own. This is separate from `launch-task`,
-which starts a background worker on its own branch.
+lease (below) and do not take their own. Subagents only build their change and
+report back; they do not test it in a browser or wait for each other. Once they
+have all reported, have one subagent verify every change together, or verify them
+yourself. This is separate from `launch-task`, which starts a background worker on
+its own branch.
 
 ## One editor at a time: the service lease
 
