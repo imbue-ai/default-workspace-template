@@ -43,7 +43,7 @@ Everything user-specific lives under `/run/auth-sandbox/`, which dies with the s
 
 The connector creates the sandbox with no secrets, only these variables, which the boot script and the commands read from the process environment:
 
-- `AUTH_SANDBOX_HOST_ID` (required): the host id the connector minted for the sandbox; owner-exec's audience is `container:<this>`.
+- `AUTH_SANDBOX_HOST_ID` (required): the host id the connector minted for the sandbox, `host-` and 32 lower-case hex digits; owner-exec's audience is `container:<this>`.
 - `AUTH_SANDBOX_AUTHORIZED_KEY` (required): the user's OpenSSH public key line, which the boot script writes as the whole of `/home/user/.ssh/authorized_keys`, the key owner-exec verifies every request against.
 - `AUTH_SANDBOX_CHROME_ORIGIN` (required): the hosted chrome's origin, with no trailing slash.
   The boot script writes `export SHARE_CHROME_ORIGIN=<origin>` to `/home/user/workspace/data/.secrets/share.env`, where owner-exec reads its CORS origin, and passes it to the Screen as `SCREEN_FRAME_ANCESTORS`.
@@ -56,7 +56,7 @@ The connector creates the sandbox with no secrets, only these variables, which t
 - `AUTH_SANDBOX_WORKSPACE_HOST_ID`: the workspace being signed in; the launcher's fingerprint seed (`TILION_SEED`) is derived from it, so a service sees one device across that workspace's sign-ins.
 - `AUTH_SANDBOX_LATCHKEY_BINARY` (optional): which `latchkey` the commands run; the npm global on `PATH` otherwise.
 
-The boot script refuses to start when a required variable is missing or malformed (a key with a line break, an origin with a path, a digest that is not 64 lower-case hex digits).
+The boot script refuses to start when a required variable is missing or malformed (a key with a line break, an origin with a path, a host id or a digest of another shape).
 
 The sign-in also sets `TILION_NO_ACTIVATE=1`, `DISPLAY=:99`, the Screen's `XDG_RUNTIME_DIR` and `PULSE_SERVER`, `LATCHKEY_DISABLE_COUNTING=1`, and drops any `LATCHKEY_GATEWAY` from its environment.
 

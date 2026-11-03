@@ -167,6 +167,11 @@ _VALID_BOOT_ENVIRONMENT = {
             "must be a bare origin",
         ),
         (SCREEN_TOKEN_SHA256_ENV_VAR, "A" * 64, "must be 64 lower-case hex digits"),
+        (
+            HOST_ID_ENV_VAR,
+            'host-1"\nlisten = "0',
+            "must be host- and 32 lower-case hex digits",
+        ),
     ],
 )
 def test_boot_script_refuses_a_missing_or_malformed_setting_before_writing_anything(

@@ -28,13 +28,17 @@ readonly SCREEN_READY_TIMEOUT_SECONDS=120
 : "${AUTH_SANDBOX_CHROME_ORIGIN:?AUTH_SANDBOX_CHROME_ORIGIN must carry the hosted chrome origin}"
 : "${AUTH_SANDBOX_SCREEN_TOKEN_SHA256:?AUTH_SANDBOX_SCREEN_TOKEN_SHA256 must carry the SHA-256 of the Screen owner token}"
 # Each lands in a file or a header, so a stray line break or separator would add a key, a share.env
-# line or a policy directive the connector never sent.
+# line, an owner-exec config key or a policy directive the connector never sent.
 if [[ "$AUTH_SANDBOX_AUTHORIZED_KEY" == *$'\n'* || "$AUTH_SANDBOX_AUTHORIZED_KEY" == *$'\r'* ]]; then
     echo "auth-sandbox boot: AUTH_SANDBOX_AUTHORIZED_KEY must be one line" >&2
     exit 1
 fi
 if [[ ! "$AUTH_SANDBOX_CHROME_ORIGIN" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]]; then
     echo "auth-sandbox boot: AUTH_SANDBOX_CHROME_ORIGIN must be a bare origin, with no path or trailing slash" >&2
+    exit 1
+fi
+if [[ ! "$AUTH_SANDBOX_HOST_ID" =~ ^host-[0-9a-f]{32}$ ]]; then
+    echo "auth-sandbox boot: AUTH_SANDBOX_HOST_ID must be host- and 32 lower-case hex digits" >&2
     exit 1
 fi
 if [[ ! "$AUTH_SANDBOX_SCREEN_TOKEN_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
