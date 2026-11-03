@@ -144,7 +144,9 @@ def test_clients_unseen_for_the_retention_period_are_pruned(tmp_path: Path) -> N
     assert store.prune_unseen(TEST_NOW) == []
 
 
-def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_at_version_three(tmp_path: Path) -> None:
+def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_at_version_three(
+    tmp_path: Path,
+) -> None:
     """The tabbed shell's file carried a device kind and a view per client; a client that reported a desktop keeps
     it, one that never did lands on the desktop of its view's id (or the first desktop, when none has it)."""
     legacy = {
@@ -183,18 +185,26 @@ def test_a_version_one_file_is_read_with_the_view_as_the_desktop_and_rewritten_a
     }
 
 
-def test_a_version_two_file_docks_every_clients_avatar_once_and_a_later_floating_choice_sticks(tmp_path: Path) -> None:
-    """A version-2 shell saved the avatar's then-default floating mode on any drag, so reading one puts the chat entry
-    in the taskbar and forgets its position; other pinned entries keep theirs, and a choice made after it is kept."""
-    floating_avatar = {"mode": "floating", "style": "avatar", "position": {"x": 0.9, "y": 0.85}, "is_window_shown": False}
-    floating_other = {"mode": "floating", "style": "plain", "position": {"x": 0.1, "y": 0.2}}
+def test_a_version_two_file_moves_every_pinned_entry_into_the_taskbar_once_and_a_later_choice_sticks(
+    tmp_path: Path,
+) -> None:
+    """A version-2 shell saved a pinned entry's then-default floating mode on any drag, so reading one puts every
+    entry in the taskbar with no position, keeping its style and shown flag; a choice made after it is kept."""
     earlier = {
         "version": 2,
         "clients": {
             "laptop": {
                 "active_desktop": "home",
                 "last_seen": "2026-10-20T00:00:00+00:00",
-                "entries": {"chat": floating_avatar, "notes": floating_other},
+                "entries": {
+                    "chat": {
+                        "mode": "floating",
+                        "style": "avatar",
+                        "position": {"x": 0.9, "y": 0.85},
+                        "is_window_shown": False,
+                    },
+                    "notes": {"mode": "floating", "style": "plain", "position": None},
+                },
             },
             "monitor": {"active_desktop": "home", "last_seen": "2026-10-21T00:00:00+00:00", "entries": {}},
         },
@@ -206,14 +216,12 @@ def test_a_version_two_file_docks_every_clients_avatar_once_and_a_later_floating
     assert laptop is not None
     assert laptop.entries == {
         "chat": EntryPresentation(mode=EntryMode.BAR, style=PinStyle.AVATAR, position=None, is_window_shown=False),
-        "notes": EntryPresentation(
-            mode=EntryMode.FLOATING, style=PinStyle.PLAIN, position=FloatingPosition(x=0.1, y=0.2)
-        ),
+        "notes": EntryPresentation(mode=EntryMode.BAR, style=PinStyle.PLAIN, position=None),
     }
     monitor = store.get_client("monitor")
     assert monitor is not None and monitor.entries == {}
 
-    # The first write saves the docked entries at version 3; floating the avatar again then survives fresh reads.
+    # The first write saves the taskbar entries at version 3; floating the avatar again then survives fresh reads.
     store.record_report(client_report("monitor", "home"), TEST_NOW, is_redirected=False)
     written = json.loads((tmp_path / CLIENTS_FILENAME).read_text())
     assert written["version"] == 3

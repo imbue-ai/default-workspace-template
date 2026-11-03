@@ -1,1 +1,1 @@
-The desktop interface contract (`docs/system/blueprint/desktop-interface/contracts.md`, section 4.3) records `clients.json` version 3: a version-2 file is read with each client's chat entry docked in the taskbar with no floating position, and rewritten at version 3 on the next write.
+The desktop interface contract (`docs/system/blueprint/desktop-interface/contracts.md`, section 4.3) records `clients.json` version 3: a version-2 file is read with every client's pinned entries in the taskbar with no floating position, and rewritten at version 3 on the next write.
