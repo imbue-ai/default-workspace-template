@@ -24,6 +24,7 @@ import {
   participantName,
 } from "../models/Participants";
 import type { UserMessageEvent } from "../models/Response";
+import { AGENT_TEXT_EDGE_CLASS } from "./machine-bubbles";
 import { FACE_COLUMN_CLASS, TURN_FACE_SIZE_PX, participantPicture } from "./participant-picture";
 import { classifyUserMessage, isHiddenUserMessage } from "./message-classification";
 import type { UserMessageClass } from "./message-classification";
@@ -104,9 +105,12 @@ export function renderNotice(label: string, body: string): m.Vnode {
   ]);
 }
 
-/** A notice that is not on the transcript yet, as a row of its own. */
+/** A notice that is not on the transcript yet, as a row of its own on the agent bubble's text edge, where the
+ *  notice it becomes sits inside the bubble. */
 export function renderNoticeRow(key: string, rowClass: string, cls: UserMessageClass): m.Vnode {
-  return m("div", { class: rowClass, key }, [renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body)]);
+  return m("div", { class: `${rowClass} ${AGENT_TEXT_EDGE_CLASS}`, key }, [
+    renderNotice(cls.label ?? NOTICE_FALLBACK_LABEL, cls.body),
+  ]);
 }
 
 export function StableUserMessage(): m.Component<{ event: UserMessageEvent }> {
