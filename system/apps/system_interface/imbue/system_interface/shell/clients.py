@@ -44,7 +44,7 @@ CLIENTS_FILE_VERSION: Final[int] = 3
 # The tabbed shell's file: each client carried ``device_kind`` and ``active_view`` beside ``active_desktop``.
 # CLEANUP: drop ``_LEGACY_CLIENTS_FILE_VERSION``, ``_fold_legacy_client``, ``_folded_if_legacy`` (reading the
 # file through ``_folded_if_floating_default`` alone), and clients_test's version-one test around late October
-# 2026, once every workspace has written a version-2 clients.json (the first write after this release does).
+# 2026, once every workspace has written a version-2 or later clients.json (the first write after this release does).
 _LEGACY_CLIENTS_FILE_VERSION: Final[int] = 1
 # The file from when pinned entries floated by default: dragging one saved its whole presentation, the default
 # floating mode included, so a stored mode there is no sign the user chose it.
