@@ -260,9 +260,10 @@ When a rule changes, update every harness that carries it:
 - **Safety 1–4, 9, 10 and workflow 6, 11** (`agent_prevent_commit_rewrite.sh`,
   `agent_block_pipe_tail_head.sh`, `agent_block_foreground_sleep.sh`,
   `agent_latchkey_request_standalone.sh`, `agent_secrets_guard.sh`, `agent_tk_standalone.sh`,
-  `agent_rewrite_bash_command.py`): the scripts alone. claude and codex run them as hooks, and agy's shim and pi's
-  `policy_guards.ts` feed them the same payload. `agent_secrets_guard.sh` is the one guard pi
-  also runs on its file tools, because P9 covers a `read` of a secret file as much as a `cat`.
+  `agent_rewrite_bash_command.py`): the scripts alone. claude and codex run them as hooks, and
+  agy's shim and pi's `policy_guards.ts` feed them the same payload. `agent_secrets_guard.sh` is
+  the one guard pi also runs on its file tools, because P9 covers a `read` of a secret file as
+  much as a `cat`.
   Keep the rewrite **last** in both hook configs and in pi's handler — a blocker that
   inspects the rewritten command refuses everything (see "Which command a guard sees" above).
 - **Workflow 5 and 7** (`agent_require_steps_pretool.sh`, `agent_open_tickets_reminder.sh`,
