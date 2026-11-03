@@ -168,6 +168,48 @@ def _anonymous_owner_entry(presence: ParticipantPresence | None) -> _Entry:
 
 
 @pure
+def _person_entry(
+    key: ParticipantKey,
+    presence: ParticipantPresence | None,
+    profile: UserProfile | None,
+    known: UserRecord | None,
+    identity: GrantedIdentity | None,
+    is_owner: bool,
+    is_admitted_by_domain: bool,
+) -> _Entry:
+    """One account's entry: named from its profile, else what its last arrival recorded, else what the desktop
+    recorded when it granted them, else its email's local part, else its id; the email read the same way."""
+    user_id = str(key).removeprefix("user:")
+    email = _first_known(
+        presence.email if presence is not None else None,
+        known.email if known is not None else None,
+        identity.email if identity is not None else None,
+    )
+    known_name = _first_known(
+        known.display_name if known is not None else None,
+        identity.display_name if identity is not None else None,
+    )
+    display_name = _person_name(profile, known_name, email, user_id)
+    return _Entry(
+        key=key,
+        kind=ParticipantKind.PERSON,
+        display_name=display_name,
+        handle_name=display_name,
+        profile_picture_url=(
+            participant_picture_route(key, profile.profile_picture_url)
+            if profile is not None and profile.profile_picture_url is not None
+            else None
+        ),
+        email=email,
+        is_owner=is_owner,
+        is_connected=presence.is_connected if presence is not None else False,
+        last_seen=presence.last_seen if presence is not None else None,
+        last_input_at=presence.last_input_at if presence is not None else None,
+        is_admitted_by_domain=is_admitted_by_domain,
+    )
+
+
+@pure
 def _with_handles(entries: list[_Entry]) -> list[RosterParticipant]:
     """The entries as the wire carries them: handles assigned in order, the agent's reserved, each with its colour."""
     people = [entry for entry in entries if entry.kind is not ParticipantKind.WORKSPACE_AGENT]
@@ -267,7 +309,7 @@ class RosterSource(MutableModel):
                 continue
             user_id = str(key).removeprefix("user:")
             entries.append(
-                self._person(
+                _person_entry(
                     key,
                     presence,
                     profile_by_user_id.get(user_id),
@@ -278,47 +320,6 @@ class RosterSource(MutableModel):
                 )
             )
         return entries
-
-    def _person(
-        self,
-        key: ParticipantKey,
-        presence: ParticipantPresence | None,
-        profile: UserProfile | None,
-        known: UserRecord | None,
-        identity: GrantedIdentity | None,
-        is_owner: bool,
-        is_admitted_by_domain: bool,
-    ) -> _Entry:
-        """One account's entry: named from its profile, else what its last arrival recorded, else what the desktop
-        recorded when it granted them, else its email's local part, else its id; the email read the same way."""
-        user_id = str(key).removeprefix("user:")
-        email = _first_known(
-            presence.email if presence is not None else None,
-            known.email if known is not None else None,
-            identity.email if identity is not None else None,
-        )
-        known_name = _first_known(
-            known.display_name if known is not None else None,
-            identity.display_name if identity is not None else None,
-        )
-        display_name = _person_name(profile, known_name, email, user_id)
-        return _Entry(
-            key=key,
-            kind=ParticipantKind.PERSON,
-            display_name=display_name,
-            handle_name=display_name,
-            profile_picture_url=(
-                participant_picture_route(key, profile.profile_picture_url)
-                if profile is not None and profile.profile_picture_url is not None
-                else None
-            ),
-            email=email,
-            is_owner=is_owner,
-            is_connected=presence.is_connected if presence is not None else False,
-            last_seen=presence.last_seen if presence is not None else None,
-            last_input_at=presence.last_input_at if presence is not None else None,
-            is_admitted_by_domain=is_admitted_by_domain,
-        )
 
     def _owner_key(self, presence_by_key: dict[ParticipantKey, ParticipantPresence]) -> ParticipantKey:
         """The owner's key: the account whose heartbeats say it owns the workspace, else the synthetic one."""
