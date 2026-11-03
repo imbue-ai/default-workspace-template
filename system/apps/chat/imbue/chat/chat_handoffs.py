@@ -417,7 +417,7 @@ class HandoffDeps(FrozenModel):
     # Replace the record's handoff entry under the manager's lock, given the current record;
     # raises ``HandoffCancelledError`` when the record no longer carries this handoff.
     update_record: Callable[[ChatId, str, Callable[[ChatRecord], ChatRecord]], ChatRecord]
-    # Pop the next held send, or clear the handoff and return None when none remain; atomic
+    # Move the next held send onto the delivered list, or clear the handoff and return None when none remain; atomic
     # with the message route's hold, so a send can never be appended to a handoff that just
     # finished. Raises ``HandoffCancelledError`` for another handoff.
     take_next_held_send: Callable[[ChatId, str], HeldSend | None]

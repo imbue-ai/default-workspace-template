@@ -126,7 +126,7 @@ class RebindDeps(FrozenModel):
     # Replace the record under the manager's lock, given the current record; raises
     # ``RebindCancelledError`` when the record no longer carries this rebind.
     update_record: Callable[[ChatId, str, Callable[[ChatRecord], ChatRecord]], ChatRecord]
-    # Pop the next held send, or clear the rebind and return None when none remain; atomic with
+    # Move the next held send onto the delivered list, or clear the rebind and return None when none remain; atomic with
     # the message route's hold. Raises ``RebindCancelledError`` for another rebind.
     take_next_held_send: Callable[[ChatId, str], HeldSend | None]
     get_agent_state: Callable[[str], AgentStateItem | None]
