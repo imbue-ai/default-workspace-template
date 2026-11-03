@@ -67,6 +67,10 @@ def is_blocked(command: str) -> bool:
             list_sleeps = list_sleeps or _seconds(args) >= _MIN_BLOCKED_SECONDS
         if segment.terminator is None:
             return list_sleeps
+        if not segment.words and not segment.terminator.strip(";"):
+            # Only a newline leaves a bare `;` with no command before it (after trailing blanks or
+            # a comment that follows `&&`, say), and bash carries the list on across it.
+            continue
         # `|`, `&&`, `||` and a parenthesis carry the list on; `;` (a newline included) ends it
         # in the foreground, a lone `&` in the background.
         list_ends = _list_operators(segment.terminator)
