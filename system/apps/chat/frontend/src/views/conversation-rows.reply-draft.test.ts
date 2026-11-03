@@ -2,7 +2,7 @@
 import m from "mithril";
 import { describe, expect, it } from "vitest";
 import type { AssistantMessageEvent, ToolResultEvent, TranscriptEvent, UserMessageEvent } from "../models/Response";
-import { buildConversationView, type RowDescriptor } from "./conversation-rows";
+import { buildConversationView, type ConversationView, type RowDescriptor } from "./conversation-rows";
 import { toggleBlockExpanded } from "./expansion-state";
 
 function userMsg(ts: string, content: string): UserMessageEvent {
@@ -53,28 +53,44 @@ function work(ts: string): AssistantMessageEvent {
 
 const DRAFT = assistant("draft", "reply-draft-agent-1", "Looking inside the cache now.", []);
 
+/** A turn whose step s1 is open, with work done in it. */
+const STEP_OPEN_EVENTS: TranscriptEvent[] = [
+  userMsg("t0", "go"),
+  ...tkStart("t1", "s1", "Find what's using disk space"),
+  work("t2"),
+];
+
 function renderRow(row: RowDescriptor): HTMLElement {
   const root = document.createElement("div");
   m.render(root, row.render());
   return root;
 }
 
+function progressRow(view: ConversationView): RowDescriptor {
+  const row = view.rows.find((candidate) => candidate.key.startsWith("progress-"));
+  if (row === undefined) throw new Error("the view has no progress row");
+  return row;
+}
+
 describe("the reply draft", () => {
   it("shows as the live step's caption, where its words will land", () => {
-    const events = [userMsg("t0", "go"), ...tkStart("t1", "s1", "Find what's using disk space"), work("t2")];
-    const view = buildConversationView("agent-1", events, /* isTailSettled */ false, null, null, () => DRAFT);
+    const view = buildConversationView(
+      "agent-1",
+      STEP_OPEN_EVENTS,
+      /* isTailSettled */ false,
+      null,
+      null,
+      () => DRAFT,
+    );
 
     expect(view.isReplyDraftInStep).toBe(true);
-    const block = view.rows.find((row) => row.key.startsWith("progress-"));
-    expect(block).toBeDefined();
-    const caption = renderRow(block!).querySelector(".pv-tl-narration");
+    const caption = renderRow(progressRow(view)).querySelector(".pv-tl-narration");
     expect(caption?.textContent).toContain("Looking inside the cache now.");
   });
 
   it("follows the live step's work when the step is opened", () => {
-    const events = [userMsg("t0", "go"), ...tkStart("t1", "s1", "Find what's using disk space"), work("t2")];
-    const view = buildConversationView("agent-1", events, false, null, null, () => DRAFT);
-    const block = view.rows.find((row) => row.key.startsWith("progress-"))!;
+    const view = buildConversationView("agent-1", STEP_OPEN_EVENTS, false, null, null, () => DRAFT);
+    const block = progressRow(view);
     toggleBlockExpanded(`step:${block.key}:s1`);
     try {
       const expanded = renderRow(block).querySelector(".pv-tl-expanded");
@@ -95,11 +111,9 @@ describe("the reply draft", () => {
   });
 
   it("stays out of a settled turn's open step", () => {
-    const events = [userMsg("t0", "go"), ...tkStart("t1", "s1", "Find what's using disk space"), work("t2")];
-    const view = buildConversationView("agent-1", events, /* isTailSettled */ true, null, null, () => DRAFT);
+    const view = buildConversationView("agent-1", STEP_OPEN_EVENTS, /* isTailSettled */ true, null, null, () => DRAFT);
 
     expect(view.isReplyDraftInStep).toBe(false);
-    const block = view.rows.find((row) => row.key.startsWith("progress-"))!;
-    expect(renderRow(block).textContent).not.toContain("Looking inside the cache now.");
+    expect(renderRow(progressRow(view)).textContent).not.toContain("Looking inside the cache now.");
   });
 });
