@@ -344,8 +344,8 @@ export function prependToComposer(chatId: string, block: string): void {
  *
  *  Once the text outgrows the cap the textarea scrolls, and collapsing it to measure must not lose
  *  where it was scrolled to: a redraw (every streamed event) would otherwise move the draft under the
- *  reader. Typing at the end of the draft (``isTyping``) scrolls it all the way down instead, since
- *  the browser scrolls the caret into view without the padding under the last line. */
+ *  reader. Typing (``isTyping``) with the caret at the end of the draft scrolls it all the way down
+ *  instead, since the browser scrolls the caret into view without the padding under the last line. */
 function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement, isTyping: boolean): void {
   const scrollTopPx = textarea.scrollTop;
   const isTypingAtEnd = isTyping && textarea.selectionEnd === textarea.value.length;
