@@ -146,7 +146,8 @@ is why `acquire` is worth running before a long stretch of driving.
   says so, start over with `new` and a fresh slug.
 - **The browser persists across a workspace restart** -- tabs, order, and cookies/logins all come
   back, so a site you logged into earlier is probably still logged in. Right after a restart the
-  Screen may still be starting; `ls` works, driving may need a few seconds.
+  Screen may still be starting; `ls` works at once, so run it until the browser is up, with a short
+  sleep (a second or two) between tries, before you drive it.
 
 ## Long lists: "not found" is not the same as "not there"
 
