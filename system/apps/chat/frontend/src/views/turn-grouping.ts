@@ -786,10 +786,10 @@ export function buildSections(
       // the step that was already open (or renders inline if none was).
       const stepTransitions = parsed.transitions.filter((t) => isStepId(t.id) || knownSteps.has(t.id));
       if (current.dormant_step_id !== null) {
-        if (stepTransitions.length > 0) {
-          current.dormant_step_id = null;
-        } else if (parsed.render !== null && isWork(parsed.render)) {
+        if (parsed.render !== null && isWork(parsed.render)) {
           current.current_step_id = current.dormant_step_id;
+          current.dormant_step_id = null;
+        } else if (stepTransitions.length > 0) {
           current.dormant_step_id = null;
         }
       }

@@ -665,6 +665,31 @@ describe("narration and close-time ejection", () => {
     expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
   });
 
+  // Work batched with the carried-over step's close is work done while it was open: it stays in
+  // the step, as it does in the turn that opened it.
+  it("keeps work batched with a carried-over step's close inside the step", () => {
+    const closeWithWork: AssistantMessageEvent = {
+      ...tkMsg("t4", "tk close s1", "c1"),
+      tool_calls: [
+        { tool_call_id: "w2", tool_name: "Edit", input_chars: 12 },
+        { tool_call_id: "c1", tool_name: "Bash", input_chars: 26, tk_command: "tk close s1", display: "hidden" },
+      ],
+    };
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "finish up and tell me what's RAM"),
+      closeWithWork,
+      result("t4", "w2", "ok"),
+      result("t4", "c1", closeOut("s1", "Check overall disk usage", "Cleared the cache")),
+      assistantText("t5", "RAM is short-term memory.", "ans"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(stepItems(sections[1].items)[0].events.map((e) => e.event_id)).toEqual(["a-c1"]);
+    expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+  });
+
   // A chip landing before the agent took the step up does not hand it the agent's next words.
   it("keeps a carried-over step out of the turn across a chip", () => {
     const events = [
