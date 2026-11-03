@@ -212,7 +212,8 @@ export const KIND_SPEC: Record<UserMessageKind, KindSpec> = {
     boundary: true,
     isTurn: false,
     netVisual:
-      "A left-aligned single line at the point it arrived, breaking the timeline " +
+      "A single line at the point it arrived, inside the agent's bubble on its " +
+      "text edge as part of the stretch it lands in, breaking the timeline " +
       "like a SystemChip: a tick, the lead in medium weight ('Background task " +
       "completed:'), then the summary in plain secondary text. Nothing to expand " +
       "-- the summary is the whole of it.",
