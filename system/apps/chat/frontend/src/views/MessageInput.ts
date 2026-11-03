@@ -342,12 +342,10 @@ export function prependToComposer(chatId: string, block: string): void {
  *  scroll position to fit it: a tall composer would pull the transcript off its bottom on every
  *  redraw.
  *
- *  Once the text outgrows the cap the textarea scrolls, and collapsing it to measure must not lose
- *  where it was scrolled to: a redraw (every streamed event) would otherwise move the draft under the
- *  reader. Typing (``isTyping``) with the caret at the end of the draft scrolls it all the way down
- *  instead, since the browser scrolls the caret into view without the padding under the last line. */
+ *  Once the text outgrows the cap the textarea scrolls. Typing (``isTyping``) with the caret at the
+ *  end of the draft scrolls it all the way down, since the browser scrolls the caret into view
+ *  without the padding under the last line. */
 function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement, isTyping: boolean): void {
-  const scrollTopPx = textarea.scrollTop;
   const isTypingAtEnd = isTyping && textarea.selectionEnd === textarea.value.length;
   row.style.height = `${row.getBoundingClientRect().height}px`;
   row.removeAttribute("data-stacked");
@@ -360,7 +358,9 @@ function fitComposer(row: HTMLElement, textarea: HTMLTextAreaElement, isTyping: 
   textarea.style.height = `${Math.min(textarea.scrollHeight, MAX_TEXTAREA_HEIGHT_PX)}px`;
   const isOverflowing = textarea.scrollHeight > MAX_TEXTAREA_HEIGHT_PX;
   textarea.style.overflowY = isOverflowing ? "auto" : "hidden";
-  textarea.scrollTop = isOverflowing && isTypingAtEnd ? textarea.scrollHeight : scrollTopPx;
+  if (isOverflowing && isTypingAtEnd) {
+    textarea.scrollTop = textarea.scrollHeight;
+  }
   row.style.height = "";
 }
 
