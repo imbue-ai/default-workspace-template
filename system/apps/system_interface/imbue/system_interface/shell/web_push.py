@@ -32,6 +32,8 @@ from pywebpush import webpush
 from imbue.imbue_common.frozen_model import FrozenModel
 from imbue.imbue_common.mutable_model import MutableModel
 from imbue.imbue_common.pure import pure
+from imbue.system_interface.shell.errors import InvalidShellValueError
+from imbue.system_interface.shell.errors import ShellError
 from imbue.system_interface.shell.state_files import STATE_FILES_LOCK
 from imbue.system_interface.shell.state_files import parse_versioned_document
 from imbue.system_interface.shell.state_files import read_json_object
@@ -67,6 +69,10 @@ _PUSH_SERVICE_NAME_BY_DOMAIN: Final[dict[str, str]] = {
 }
 
 
+class UnexpectedPushAnswerError(ShellError):
+    """``pywebpush`` answered something other than the push service's response."""
+
+
 class PushSubscriptionKeys(FrozenModel):
     """The keys a browser hands over with a subscription, which the message is encrypted to (RFC 8291)."""
 
@@ -90,7 +96,7 @@ class BrowserPushSubscription(FrozenModel):
     def _endpoint_is_https(cls, value: str) -> str:
         parts = urlsplit(value)
         if parts.scheme != "https" or not parts.hostname:
-            raise ValueError("a push endpoint is an https URL")
+            raise InvalidShellValueError("a push endpoint is an https URL")
         return value
 
 
@@ -161,7 +167,7 @@ class PushNotificationRequest(FrozenModel):
     @classmethod
     def _path_is_the_shells(cls, value: str) -> str:
         if not value.startswith("/") or value.startswith("//") or "\\" in value:
-            raise ValueError("the path is a path under the shell's root, starting with a single '/'")
+            raise InvalidShellValueError("the path is a path under the shell's root, starting with a single '/'")
         return value
 
 
@@ -277,7 +283,8 @@ class PywebpushTransport(PushTransportInterface):
             # No answer at all, or keys the browser handed over that do not decode.
             return PushServiceAnswer(status_code=None, detail=f"{type(e).__name__}: {e}")
         # webpush answers a string only when asked for a curl command, which this never does.
-        assert isinstance(response, requests.Response)
+        if isinstance(response, str):
+            raise UnexpectedPushAnswerError("webpush answered a curl command instead of posting")
         return PushServiceAnswer(status_code=response.status_code, detail=response.text[:_ANSWER_EXCERPT_LENGTH])
 
 
