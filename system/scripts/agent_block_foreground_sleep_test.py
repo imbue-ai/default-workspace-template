@@ -43,6 +43,8 @@ def _run(command: str, run_in_background: bool | None = None) -> int:
         "time sleep 30",
         # A subshell or command substitution runs in the foreground unless sent to the background.
         "(sleep 30); cat /tmp/out.txt",
+        "(sleep 30) ; cat /tmp/out.txt &",
+        "(sleep 30)  # let it settle\ncat /tmp/out.txt &",
         'out=$(sleep 30); echo "$out"',
         # Only the list a `&` ends goes to the background.
         "sleep 30 & sleep 40",
