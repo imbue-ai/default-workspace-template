@@ -32,8 +32,9 @@
  * A step still open when the next user message arrives carries over: it
  * re-renders at the top of the new turn, while the prior turn's node freezes at
  * its last-known state. It belongs to the earlier request, so the new turn's
- * prose does not join it until the agent works while it is open or moves a step. A turn the agent did nothing in (two boundaries back to
- * back) keeps no copy, so the step shows once, under the later boundary.
+ * prose does not join it until the agent works while it is open or moves a
+ * step. A turn the agent did nothing in (two boundaries back to back) keeps no
+ * copy, so the step shows once, under the later boundary.
  *
  * A system chip or notice (Stop-hook feedback, a browser-fleet nudge, a finished
  * background task, a bash-mode command and its output) breaks the timeline the
