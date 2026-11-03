@@ -21,7 +21,7 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
-from script_modules_testing import load_script_module
+from workspace_bare_scripts import agent_grok_policy_guards as _grok_dispatcher
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SCRIPTS_DIR = _REPO_ROOT / "system" / "scripts"
@@ -31,9 +31,6 @@ _CODEX_HOOKS = _REPO_ROOT / ".codex" / "hooks.json"
 _PI_POLICY_GUARDS = _REPO_ROOT / ".pi" / "extensions" / "policy_guards.ts"
 _GROK_HOOKS = _REPO_ROOT / ".grok" / "hooks" / "policy.json"
 _GROK_DISPATCHER_NAME = "agent_grok_policy_guards.py"
-_grok_dispatcher = load_script_module(
-    "agent_grok_policy_guards_for_wiring", _GROK_DISPATCHER_NAME
-)
 # grok's PreToolUse timeout when a handler sets none (or 0), after which the handler fails open.
 # Measured on grok 1.0.62: `timeout` is in seconds, any positive number loads, and a negative or
 # non-numeric one leaves the handler out with only a load error to show for it.

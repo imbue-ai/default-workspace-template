@@ -18,11 +18,8 @@ from chat_background_tasks import markers
 from chat_background_tasks.markers import BackgroundTask, TaskSource
 from imbue.chat.harnesses.harness_type import HarnessType
 from imbue.mngr_grok.api import read_grok_pid
-from script_modules_testing import load_script_module
 
-hooks = load_script_module(
-    "grok_background_task_hooks_for_tests", "grok_background_task_hooks.py"
-)
+from workspace_bare_scripts import grok_background_task_hooks as hooks
 
 _CHAT_ID = "agent-0123456789abcdef0123456789abcdef"
 _OTHER_CHAT_ID = "agent-fedcba9876543210fedcba9876543210"
@@ -32,7 +29,7 @@ _SHELL_ID = "01a167b6-080d-7853-8a83-7d57c21f0c32"
 _MONITOR_ID = "01a167be-406c-7360-8182-629a61d00cee"
 _SUBAGENT_ID = "01a167cc-243e-7c83-8c3b-dc345146fd5e"
 _SCRIPT_NAME = "grok_background_task_hooks.py"
-_REPO_ROOT = Path(__file__).resolve().parents[2]
+_REPO_ROOT = Path(__file__).resolve().parents[3]
 
 _SHELL_ENTRY = {
     "id": _SHELL_ID,

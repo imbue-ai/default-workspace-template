@@ -290,7 +290,7 @@ def test_file_tools_off_the_secret_files_pass(payload: dict[str, object]) -> Non
 )
 def test_a_subagent_started_inside_the_secrets_store_is_refused(cwd: str) -> None:
     """grok's subagent shell would then read a secret file by its bare name."""
-    payload = {
+    payload: dict[str, object] = {
         "tool_name": "spawn_subagent",
         "tool_input": {"prompt": "cat svc.env", "description": "x", "cwd": cwd},
     }
@@ -300,7 +300,7 @@ def test_a_subagent_started_inside_the_secrets_store_is_refused(cwd: str) -> Non
 
 
 def test_a_subagent_whose_prompt_only_mentions_the_secrets_store_passes() -> None:
-    payload = {
+    payload: dict[str, object] = {
         "tool_name": "spawn_subagent",
         "tool_input": {
             "prompt": "run it under with_secrets.py data/.secrets/svc.env",

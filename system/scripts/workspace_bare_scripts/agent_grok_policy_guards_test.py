@@ -1,10 +1,10 @@
 """Tests for agent_grok_policy_guards.py, grok's PreToolUse and UserPromptSubmit hook.
 
-The hook runs as grok runs it: a subprocess handed a grok payload on stdin, against the real guard
-scripts beside it. The payloads start from envelopes grok 1.0.62 sent its hooks (captured against a
-stub model, paths rewritten to the workspace's), with the tool fields set per test. Routing and
-fail-open tests run a copy of the hook beside stand-in guards, so they can see which guard was
-started and with what.
+The hook runs as grok runs it: its entry script in a subprocess handed a grok payload on stdin,
+against the real guard scripts in ``system/scripts``. The payloads start from envelopes grok 1.0.62
+sent its hooks (captured against a stub model, paths rewritten to the workspace's), with the tool
+fields set per test. Routing and fail-open tests run the hook against a scripts dir of stand-in
+guards, so they can see which guard was started and with what.
 """
 
 from __future__ import annotations
@@ -12,24 +12,21 @@ from __future__ import annotations
 import io
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, NamedTuple
 
 import pytest
 from oom_priority import bands
-from script_modules_testing import load_script_module
+
+from workspace_bare_scripts import agent_grok_policy_guards as hook
 
 _SUBPROCESS_TIMEOUT_SECONDS = 30
 
-_SCRIPTS_DIR = Path(__file__).parent
-_HOOK = _SCRIPTS_DIR / "agent_grok_policy_guards.py"
-hook = load_script_module(
-    "agent_grok_policy_guards_for_tests", "agent_grok_policy_guards.py"
-)
+_HOOK = Path(__file__).resolve().parents[1] / "agent_grok_policy_guards.py"
 
 _ROOT_SESSION = "01a156da-57b6-7c61-9b3e-59f3b802c4f5"
 _CHILD_SESSION = "01a156d7-6157-7851-87b0-49868470aa97"
@@ -193,10 +190,9 @@ def _run_hook(
     payload: dict[str, Any] | str,
     *,
     env: dict[str, str] | None = None,
-    hook_path: Path = _HOOK,
 ) -> HookRun:
     result = subprocess.run(
-        [sys.executable, str(hook_path), command],
+        [sys.executable, str(_HOOK), command],
         input=payload if isinstance(payload, str) else json.dumps(payload),
         capture_output=True,
         text=True,
@@ -256,15 +252,34 @@ def _one_open_step_env(tmp_path: Path) -> dict[str, str]:
     )
 
 
-def _hook_beside_stand_ins(tmp_path: Path, guards: dict[str, str]) -> Path:
-    """A copy of the hook in a scripts dir of its own, beside ``guards`` (script name to source)."""
+def _stand_in_context(
+    tmp_path: Path,
+    guards: dict[str, str],
+    *,
+    env: dict[str, str] | None = None,
+    build_shell_prefix: Callable[[], str] = hook.agent_shell_prefix,
+    budget_seconds: float = hook.PRE_TOOL_USE_BUDGET_SECONDS,
+) -> hook.DispatchContext:
+    """A hook run's context whose scripts dir holds only ``guards`` (script name to source)."""
     scripts_dir = tmp_path / "scripts"
     scripts_dir.mkdir()
-    copied = scripts_dir / _HOOK.name
-    shutil.copy(_HOOK, copied)
     for name, source in guards.items():
         (scripts_dir / name).write_text(source)
-    return copied
+    return hook.DispatchContext(
+        scripts_dir=scripts_dir,
+        state_dir=tmp_path / "state",
+        environ=_environment(tmp_path, env),
+        deadline=time.monotonic() + budget_seconds,
+        build_shell_prefix=build_shell_prefix,
+    )
+
+
+def _run_against(context: hook.DispatchContext, payload: dict[str, Any]) -> HookRun:
+    """What the PreToolUse hook answers ``payload`` with, run with ``context``."""
+    reply = hook.run_hook(
+        [hook.PRE_TOOL_USE_COMMAND], io.StringIO(json.dumps(payload)), context
+    )
+    return HookRun(exit_code=reply.exit_code, stdout=reply.stdout, stderr=reply.stderr)
 
 
 def _recorded(record: Path) -> list[dict[str, Any]]:
@@ -278,22 +293,15 @@ def _recorded(record: Path) -> list[dict[str, Any]]:
 def _run_beside_recording_guards(
     tmp_path: Path, payload: dict[str, Any]
 ) -> tuple[HookRun, list[dict[str, Any]]]:
-    """Run a PreToolUse through a copy of the hook whose every guard records the payload it was given."""
+    """Run a PreToolUse against guards that each record the payload they were given."""
     guards = {
         name: _RECORDING_GUARD
         for name in hook.PRETOOLUSE_SCRIPTS
         if name.endswith(".sh")
     }
-    copied = _hook_beside_stand_ins(tmp_path, guards)
     record = tmp_path / "record.jsonl"
-    run = _run_hook(
-        tmp_path,
-        hook.PRE_TOOL_USE_COMMAND,
-        payload,
-        env={"GUARD_RECORD": str(record)},
-        hook_path=copied,
-    )
-    return run, _recorded(record)
+    context = _stand_in_context(tmp_path, guards, env={"GUARD_RECORD": str(record)})
+    return _run_against(context, payload), _recorded(record)
 
 
 @pytest.mark.parametrize("tool_name", ["run_terminal_command", "monitor"])
@@ -572,19 +580,17 @@ def test_a_shell_call_reaches_the_guards_as_claudes_bash_and_only_those_its_text
 
 
 def test_a_stand_in_guards_refusal_is_the_one_grok_gets(tmp_path: Path) -> None:
-    copied = _hook_beside_stand_ins(
-        tmp_path, {"agent_secrets_guard.sh": _RECORDING_GUARD}
-    )
-    run = _run_hook(
+    context = _stand_in_context(
         tmp_path,
-        hook.PRE_TOOL_USE_COMMAND,
-        _pre_tool_use("list_dir", {"target_directory": "data/.secrets"}),
+        {"agent_secrets_guard.sh": _RECORDING_GUARD},
         env={
             "GUARD_RECORD": str(tmp_path / "record.jsonl"),
             "GUARD_EXIT": "2",
             "GUARD_STDERR": "NO\nNOT THIS ONE",
         },
-        hook_path=copied,
+    )
+    run = _run_against(
+        context, _pre_tool_use("list_dir", {"target_directory": "data/.secrets"})
     )
     _assert_denied(run, "NO\nNOT THIS ONE")
 
@@ -736,19 +742,19 @@ def test_a_truncated_file_write_is_judged_on_its_path_which_grok_never_cuts(
     _assert_denied(refused, "read only by with_secrets.py")
 
 
+def _broken_shell_prefix() -> str:
+    raise RuntimeError("rewriter broke")
+
+
 def test_a_broken_guard_or_rewrite_fails_open_and_is_logged(tmp_path: Path) -> None:
-    """Only exit 2 refuses. A guard that crashes, one that is missing and a missing rewriter let
+    """Only exit 2 refuses. A guard that crashes, one that is missing and a rewriter that fails let
     the command run as written, and each leaves a line in the state dir's log."""
-    copied = _hook_beside_stand_ins(
+    context = _stand_in_context(
         tmp_path,
         {"agent_prevent_commit_rewrite.sh": "echo 'guard crashed' >&2\nexit 1\n"},
+        build_shell_prefix=_broken_shell_prefix,
     )
-    run = _run_hook(
-        tmp_path,
-        hook.PRE_TOOL_USE_COMMAND,
-        _shell("git rebase -i HEAD~2 | " + "head -1"),
-        hook_path=copied,
-    )
+    run = _run_against(context, _shell("git rebase -i HEAD~2 | " + "head -1"))
     assert run.exit_code == 0
     assert run.stdout == ""
     log = _log(tmp_path)
@@ -756,25 +762,16 @@ def test_a_broken_guard_or_rewrite_fails_open_and_is_logged(tmp_path: Path) -> N
         "agent_prevent_commit_rewrite.sh exited 1: guard crashed; failing open" in log
     )
     assert "agent_block_pipe_tail_head.sh is missing; skipping it" in log
-    assert "agent_rewrite_bash_command.py failed" in log
+    assert "agent_rewrite_bash_command.py failed: RuntimeError('rewriter broke')" in log
 
 
 def test_a_guard_that_outruns_the_budget_fails_open_and_is_logged(
     tmp_path: Path,
 ) -> None:
-    scripts_dir = tmp_path / "scripts"
-    scripts_dir.mkdir()
-    (scripts_dir / "agent_prevent_commit_rewrite.sh").write_text("sleep 61729\n")
-    state_dir = tmp_path / "state"
-    state_dir.mkdir()
-    context = hook.DispatchContext(
-        scripts_dir=scripts_dir,
-        state_dir=state_dir,
-        environ={
-            "PATH": os.environ.get("PATH", ""),
-            "TICKETS_DIR": str(tmp_path / "no-tickets"),
-        },
-        deadline=time.monotonic() + 0.5,
+    context = _stand_in_context(
+        tmp_path,
+        {"agent_prevent_commit_rewrite.sh": "sleep 61729\n"},
+        budget_seconds=0.5,
     )
     started = time.monotonic()
     reply = hook.handle_pre_tool_use(_shell("git rebase -i HEAD~2"), context)
