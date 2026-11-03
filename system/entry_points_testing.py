@@ -78,10 +78,8 @@ BARE_SEARCH_PATHS = (
     REPO_ROOT / "system" / "libs" / "app_registration" / "src",
 )
 
-# Bare scripts that are not stubs of a bare package: oom_priority's own entry scripts, a
-# stdlib-only maintenance script, the Datalib app's launcher (the app is not a
-# workspace member, and the launcher is its supervisord program), and the stub of the
-# stdlib-only app_registration library, which every supervisord program line runs.
+# Bare scripts that are not stubs of a bare package: the system python3 runs each by its
+# path, and it imports only the standard library and the stdlib-only libraries.
 STANDALONE_BARE_DIRS = (REPO_ROOT / "system" / "services" / "oom_priority" / "bin",)
 STANDALONE_BARE_SCRIPTS = (
     REPO_ROOT / "catalog" / "build_catalog_from_export.py",

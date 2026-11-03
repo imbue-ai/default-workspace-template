@@ -1539,8 +1539,7 @@ def _names_own_program(node: ast.expr, programs: _OwnPrograms) -> bool:
 
 
 # Methods that only write, read or check a file: a path they are called on names that
-# file (a scaffolder writing a new skill's run.py, a probe for the repo root), not a
-# program to run.
+# file, not a program to run.
 _FILE_ONLY_METHODS = frozenset(
     {
         "write_text",
