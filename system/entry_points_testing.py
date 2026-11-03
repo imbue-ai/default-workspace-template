@@ -7,8 +7,8 @@ its package, kept where something outside the release calls a fixed path or the 
 no venv and imports its own package. An entry's tier is its package's -- an entry into a bare
 package runs under the system ``python3`` with no venv (stdlib only), any other runs from the
 root venv (``uv run --no-sync``) -- except for the bare modules of venv packages listed below,
-a bare skill's single script, and a few standalone stdlib scripts outside the scripts
-directories. See .agents/shared/references/running-python.md.
+a bare skill's single script, a few standalone stdlib scripts, and the stubs of stdlib-only
+libraries. See .agents/shared/references/running-python.md.
 """
 
 from __future__ import annotations
@@ -78,8 +78,9 @@ BARE_SEARCH_PATHS = (
     REPO_ROOT / "system" / "libs" / "app_registration" / "src",
 )
 
-# Bare scripts that are not stubs of a bare package: the system python3 runs each by its
-# path, and it imports only the standard library and the stdlib-only libraries.
+# Bare scripts outside the bare packages (standalone scripts, and stubs of stdlib-only
+# libraries): the system python3 runs each by its path, and it imports only the standard
+# library and the stdlib-only libraries.
 STANDALONE_BARE_DIRS = (REPO_ROOT / "system" / "services" / "oom_priority" / "bin",)
 STANDALONE_BARE_SCRIPTS = (
     REPO_ROOT / "catalog" / "build_catalog_from_export.py",
