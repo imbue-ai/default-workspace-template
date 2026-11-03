@@ -198,21 +198,28 @@ describe("the bubbles of a chat switching harness", () => {
     expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["Carry on in Codex", "and this"]);
   });
 
-  it("skips the confirming message when the switch was cancelled, since it returns to the composer", () => {
-    const chat = `a-${Math.random()}`;
-    const converging = chatSnapshotFixture(chat, {
-      active_agent: { agent_id: "agent-old" },
-      handoff: handoffStateFixture({
-        held_sends: [
-          { message_id: "trigger-1", text: "Carry on in Codex" },
-          { message_id: "m-2", text: "and this" },
-        ],
-      }),
-    });
-    push([converging]);
-    push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-old" } })]);
-    expect(getOutgoingMessages(chat).map((o) => o.content)).toEqual(["and this"]);
-  });
+  // A cancel delivers the others to the agent the chat stays on: they open its next turn only when it is not working.
+  it.each([
+    { activityState: null, opensTurn: true },
+    { activityState: "THINKING", opensTurn: false },
+  ])(
+    "skips the confirming message when the switch was cancelled, since it returns to the composer (agent $activityState)",
+    ({ activityState, opensTurn }) => {
+      const chat = `a-${Math.random()}`;
+      const converging = chatSnapshotFixture(chat, {
+        active_agent: { agent_id: "agent-old" },
+        handoff: handoffStateFixture({
+          held_sends: [
+            { message_id: "trigger-1", text: "Carry on in Codex" },
+            { message_id: "m-2", text: "and this" },
+          ],
+        }),
+      });
+      push([converging]);
+      push([chatSnapshotFixture(chat, { active_agent: { agent_id: "agent-old", activity_state: activityState } })]);
+      expect(getOutgoingMessages(chat).map((o) => [o.content, o.opensTurn])).toEqual([["and this", opensTurn]]);
+    },
+  );
 
   it("counts the same agent's arrivals during a rebind, since its held sends land in its own transcript", () => {
     // A rebind keeps the agent, so nothing names a successor; the held sends still reach the
