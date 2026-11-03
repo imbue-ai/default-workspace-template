@@ -400,6 +400,15 @@ describe("the agent's name and face over its stretches of output", () => {
 
     expect(rows.map((row) => row.key)).toEqual(["u-t1", "a-t2", "handoff-sw1", "a-t4"]);
     expect(headedKeys(rows)).toEqual(["a-t2", "a-t4"]);
+
+    // Before the new agent's first event lands, the reply it is writing past the rows opens its stretch.
+    const rowsBeforeReply = buildConversationRows(
+      "agent-1",
+      [userMsg("t1", "hello"), assistantText("t2", "from claude", "end_turn"), agentSwitch],
+      true,
+    );
+    expect(rowsBeforeReply.map((row) => row.key)).toEqual(["u-t1", "a-t2", "handoff-sw1"]);
+    expect(rowsBeforeReply[rowsBeforeReply.length - 1].isAgentHeaderShown).toBe(false);
   });
 
   it("heads a turn with steps once, over its timeline, and draws its prose and reply as bubbles", () => {
