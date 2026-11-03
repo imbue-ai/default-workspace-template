@@ -57,8 +57,8 @@ _REFUSAL = (
     "- A wait that really is about time (the user asked you to check back in N minutes, a service "
     "said to retry after N seconds, pacing calls to a rate-limited API): put the sleep inside the "
     "command you run in the background, and end your turn.\n"
-    "If you meant to background several commands, join them with `&&` before the final `&`, or run "
-    "them through `run_in_background.py`.\n"
+    "If you meant to background several commands, join them with `&&` on one line before the final "
+    "`&`, or run them through `run_in_background.py`.\n"
 )
 
 
