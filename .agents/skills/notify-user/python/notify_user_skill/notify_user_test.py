@@ -435,7 +435,7 @@ def test_a_device_that_took_it_counts_when_the_app_did_not(
     [
         (
             (None, "connection refused"),
-            "could not push the notification to your devices (the workspace connection",
+            "could not push the notification to your devices (the workspace was unreachable: connection",
         ),
         (
             (403, '{"detail": "no"}'),

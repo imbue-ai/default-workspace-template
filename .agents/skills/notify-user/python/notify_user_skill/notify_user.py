@@ -293,7 +293,11 @@ def push_to_devices(
         timeout=_PUSH_TIMEOUT_SECONDS,
     )
     if status != 200:
-        reason = text if status is None else f"answered {status}: {text.strip()[:200]}"
+        reason = (
+            f"was unreachable: {text}"
+            if status is None
+            else f"answered {status}: {text.strip()[:200]}"
+        )
         sys.stderr.write(
             f"notify-user: could not push the notification to your devices (the workspace {reason}).\n"
         )
