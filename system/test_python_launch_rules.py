@@ -995,11 +995,9 @@ def _import_path_sites(repo_root: Path) -> list[_Site]:
     ]
 
 
-def _sys_path_editors(repo_root: Path) -> list[str]:
+def _sys_path_editors(sites: list[_Site]) -> list[str]:
     """The files with an import-path edit no marker keeps; the count is of these."""
-    return sorted(
-        {site.relative for site in _import_path_sites(repo_root) if not site.is_kept()}
-    )
+    return sorted({site.relative for site in sites if not site.is_kept()})
 
 
 _IMPORT_PATH_GUIDE = """\
@@ -1030,12 +1028,12 @@ check: name every marker you add in your report. Never raise the count.
 
 
 def test_prevent_sys_path_edits() -> None:
-    unkept = [site for site in _import_path_sites(REPO_ROOT) if not site.is_kept()]
-    offenders = {site.relative for site in unkept}
+    sites = _import_path_sites(REPO_ROOT)
+    offenders = _sys_path_editors(sites)
     assert len(offenders) <= snapshot(22), (
         "These change where imports are looked up (sys.path, PYTHONPATH in Python or a shell "
         "script, or a pytest pythonpath setting):\n"
-        + "\n".join(site.describe() for site in unkept)
+        + "\n".join(site.describe() for site in sites if not site.is_kept())
         + "\n\n"
         + _IMPORT_PATH_GUIDE.format(
             reasons=", ".join(sorted(_REASONS_BY_MARKER[_IMPORT_PATH_MARKER]))
@@ -1064,7 +1062,7 @@ def test_a_listed_third_party_skill_is_not_counted_whatever_its_layout(
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
-    assert _sys_path_editors(tmp_path) == [
+    assert _sys_path_editors(_import_path_sites(tmp_path)) == [
         ".agents/skills/ours/scripts/run.py",
         "system/tool.py",
     ]
@@ -1109,7 +1107,7 @@ def test_a_pytest_pythonpath_setting_is_counted(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
     subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
 
-    assert _sys_path_editors(tmp_path) == ["app/pyproject.toml"]
+    assert _sys_path_editors(_import_path_sites(tmp_path)) == ["app/pyproject.toml"]
 
 
 # Files whose sys.path edit adds a directory outside the bare search paths, each for a reason
@@ -1788,7 +1786,7 @@ def test_import_path_edits_count_per_file_and_a_marker_keeps_one(
         },
     )
 
-    assert _sys_path_editors(tmp_path) == [
+    assert _sys_path_editors(_import_path_sites(tmp_path)) == [
         "app/pyproject.toml",
         "pipeline/refresh.sh",
         "tools/loose.py",
