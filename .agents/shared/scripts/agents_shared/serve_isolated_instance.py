@@ -1252,14 +1252,19 @@ def read_frame(name: str, repo_root: Path) -> FrameRecord | None:
         raise InstanceError(f"{state_path} records no frame to read: {exc!r}") from exc
 
 
-def _keep_frame_record(repo_root: Path, name: str, record: dict[str, object]) -> None:
+def _keep_frame_record(repo_root: Path, name: str, record: FrameRecord) -> None:
     """Leave a state for ``name`` holding only its frame record: nothing running, nothing registered."""
     state_path = _state_path(repo_root, name)
     try:
         state_path.parent.mkdir(parents=True, exist_ok=True)
         state_path.write_text(
             json.dumps(
-                {"name": name, "pids": [], "services": [], FRAME_STATE_KEY: record},
+                {
+                    "name": name,
+                    "pids": [],
+                    "services": [],
+                    FRAME_STATE_KEY: record._asdict(),
+                },
                 indent=2,
             )
         )
@@ -1359,7 +1364,7 @@ def frame(
         kind=kind,
         note=note,
         inner_path=inner_path,
-    )._asdict()
+    )
     pids: list[int] = []
     # Counted as registered from the start when re-framing: the row is already there,
     # and a failed re-boot must not leave it routing at a dead port.
@@ -1392,7 +1397,7 @@ def frame(
             "pids": pids,
             "services": services,
             "wrapper_log": str(wrapper_log_path),
-            FRAME_STATE_KEY: record,
+            FRAME_STATE_KEY: record._asdict(),
         }
         state_path.write_text(json.dumps(state, indent=2))
     except (InstanceError, OSError) as exc:
