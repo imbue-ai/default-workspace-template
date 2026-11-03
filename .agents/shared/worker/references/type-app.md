@@ -162,8 +162,8 @@ Cover each with a test through the test client, sending a person's header
 (`{"owner": false, "user_id": "...", "email": "..."}`) and a visiting agent's
 (`{"owner": false, "agent_id": "...", "agent_name": "...", "granter": "..."}`):
 an owner-only route answers both 403 and still works for the owner and for a
-request with no header, a change records the visitor's participant key, and
-the access log gains its line.
+request with no header, a header that does not parse answers 400, a change
+records the visitor's participant key, and the access log gains its line.
 
 ## Critical apps
 
