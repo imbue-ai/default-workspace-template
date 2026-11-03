@@ -417,6 +417,16 @@ def test_a_body_too_many_bytes_for_one_push_is_cut_until_the_shell_takes_it() ->
     assert notification["body"].endswith("...")
 
 
+def test_a_message_whose_bytes_are_not_utf8_still_makes_a_device_notification() -> None:
+    # What argv holds for a message whose bytes are not UTF-8: lone surrogates.
+    message = b"caf\xe9 is open".decode("utf-8", "surrogateescape")
+
+    notification = notify_user.device_notification(message, "Done", {})
+
+    assert (notification["title"], notification["body"]) == ("Done", "caf? is open")
+    assert len(json.dumps(notification, ensure_ascii=False).encode("utf-8")) <= 3993
+
+
 def test_does_not_push_while_a_page_is_watching_the_chat(
     environ: dict[str, str],
 ) -> None:

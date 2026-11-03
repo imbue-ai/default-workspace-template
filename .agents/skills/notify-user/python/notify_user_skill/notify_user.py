@@ -260,6 +260,12 @@ def _cut(text: str, limit: int) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
+def _utf8_text(text: str) -> str:
+    """``text`` with what UTF-8 cannot carry (the lone surrogates argv decodes bytes that are not UTF-8 into) shown as
+    ``?``, so the device notification's size can be measured and the shell can send it."""
+    return text.encode("utf-8", "replace").decode("utf-8")
+
+
 def _payload_size(notification: dict[str, str]) -> int:
     """The notification's size as the shell sends it: its JSON in plain UTF-8, an absent tag as null."""
     sent = {
@@ -283,7 +289,8 @@ def device_notification(
         if chat_id
         else "/"
     )
-    stripped_title = (title or "").strip()
+    message = _utf8_text(message)
+    stripped_title = _utf8_text((title or "").strip())
     if stripped_title:
         heading, body = stripped_title, message
     else:
