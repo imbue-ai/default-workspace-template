@@ -184,7 +184,7 @@ export function renderHandoffTailNode(chatId: string, hasOpenRequest: boolean): 
   const handoff = chat?.handoff ?? null;
   if (handoff === null || handoff.kind === "rebind" || handoff.is_fresh_start || hasOpenRequest) return null;
   const node: HandoffNode = { key: `live-${chatId}`, request: null, events: [], switch: null, prompt: null };
-  // Keyed like its siblings in the message list: a keyed list refuses an unkeyed member.
+  // Keyed like the parts beside it in a stretch's bubble: a keyed list refuses an unkeyed member.
   return renderHandoffRow(node, chatId, new Map(), {
     key: "handoff-tail",
     expansionKey: node.key,
