@@ -665,12 +665,11 @@ oldest dropped first).
   `/?open=chat:/?chat=<id>`); a later notification with the same `tag`
   replaces the earlier one and still alerts. A notification over the 3993
   bytes of JSON a push service takes is refused (400) before any post. It is
-  loopback-only and refuses a request a
-  share's proxy stamped, so only the workspace's own agents and apps send. It
-  answers each push service's status; a device whose service says the
-  subscription is gone (404, 410) is forgotten. The `notify-user` skill posts
-  here after it notifies the Imbue Studio app, unless a page is watching the
-  chat.
+  loopback-only and refuses a request a share's proxy stamped, so only the
+  workspace's own agents and apps send. It answers each push service's status;
+  a device whose service says the subscription is gone (404, 410) is
+  forgotten. The `notify-user` skill posts here after it notifies the Imbue
+  Studio app, unless a page is watching the chat.
 - **Showing.** The service worker shows every push it receives (a browser
   that sees a silent one withdraws the permission), with the avatar's icon,
   and on a tap focuses an open window of the workspace and navigates it to
