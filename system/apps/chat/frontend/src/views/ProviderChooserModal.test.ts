@@ -592,7 +592,7 @@ describe("a sign-in finished in the browser", () => {
     expect(note?.querySelector("a")?.getAttribute("href")).toBe("https://example.com/settings");
   });
 
-  it("shows no note on the one-time code, which does not need the setting", async () => {
+  it("shows no note on the one-time code, which carries none of its own", async () => {
     requestProviderRelay.mockResolvedValue(false);
     state.lanes = [CHATGPT_WITH_NOTE];
     state.flow = { ...(startedFlow("code_then_wait", null) as object), code: "ABCD-1234" };

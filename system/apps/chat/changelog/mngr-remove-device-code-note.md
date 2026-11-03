@@ -1,0 +1,1 @@
+ChatGPT's browser sign-in no longer tells you to turn on "Enable device code sign-in" in ChatGPT's security settings first: OpenAI removed that setting, and code sign-in now works for personal and organization accounts without it. A code sign-in that cannot start says so and suggests trying again or using an OpenAI API key, instead of pointing at the removed setting.

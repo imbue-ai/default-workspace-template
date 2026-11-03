@@ -116,8 +116,7 @@ _VERDICT_DEADLINE_SECONDS: Final = 120.0
 # finishing, and the chooser shows how it ends.
 _RELAYED_VERDICT_WAIT_SECONDS: Final = 20.0
 _DEVICE_LOGIN_REFUSED_DETAIL: Final = (
-    "ChatGPT couldn't start a sign-in with a code. Turn on device code sign-in for Codex in "
-    "ChatGPT's security settings, or use an OpenAI API key instead."
+    "ChatGPT couldn't start a sign-in with a code. Try again, or use an OpenAI API key instead."
 )
 # How still a screen has to be before we call it drawn, when the method names no anchor to
 # expect. Short enough that a fast CLI is not held up; `settle_s` is the overall budget.
@@ -443,8 +442,6 @@ class AuthFlowService:
                 login_id, url, code = device_login.login_id, device_login.verification_url, device_login.user_code
         except (CodexAppServerError, OSError) as e:
             logger.warning("Codex sign-in could not begin: {}", e)
-            # A code sign-in is refused when the ChatGPT account has device codes turned off, a
-            # setting the user can change.
             self._fail_locked(
                 session,
                 _DEVICE_LOGIN_REFUSED_DETAIL
