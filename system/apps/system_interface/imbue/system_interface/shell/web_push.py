@@ -14,6 +14,7 @@ import json
 import os
 from abc import ABC
 from abc import abstractmethod
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -50,7 +51,8 @@ VAPID_SUBJECT: Final[str] = "https://imbue.com"
 # How long a push service holds a message for a device that is off or asleep: a day, after which a "your report is
 # ready" has been overtaken by the user coming back on their own.
 PUSH_TTL_SECONDS: Final[int] = 24 * 60 * 60
-# Devices are posted to in turn: a push service that hangs delays the send by this much at most.
+# Devices are posted to at once, each waiting this long to connect and this long for each read, so a push service
+# that hangs delays the whole send by about this much.
 PUSH_POST_TIMEOUT_SECONDS: Final[float] = 5.0
 # How many devices the file keeps; registering one more forgets the one registered longest ago.
 MAX_REGISTERED_DEVICES: Final[int] = 20
@@ -361,9 +363,12 @@ class WebPushNotifier(MutableModel):
             return PushSendOutcome(deliveries=(), accepted_count=0)
         signing_key = self.signing_key()
         payload = push_payload(notification)
+        with ThreadPoolExecutor(max_workers=len(devices), thread_name_prefix="web-push") as executor:
+            answers = tuple(
+                executor.map(lambda device: self.transport.post(device.subscription, payload, signing_key), devices)
+            )
         deliveries: list[DeviceDelivery] = []
-        for device in devices:
-            answer = self.transport.post(device.subscription, payload, signing_key)
+        for device, answer in zip(devices, answers, strict=True):
             delivery = DeviceDelivery(
                 device_id=device.device_id,
                 label=device.label,

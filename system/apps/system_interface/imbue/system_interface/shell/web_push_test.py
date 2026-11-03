@@ -1,15 +1,22 @@
+import threading
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
 from pathlib import Path
 
 import pytest
+from py_vapid import Vapid
+from pydantic import ConfigDict
+from pydantic import Field
 from pydantic import ValidationError
 
+from imbue.system_interface.shell.web_push import BrowserPushSubscription
 from imbue.system_interface.shell.web_push import DEVICES_FILENAME
 from imbue.system_interface.shell.web_push import DeviceRegistrationRequest
 from imbue.system_interface.shell.web_push import MAX_REGISTERED_DEVICES
 from imbue.system_interface.shell.web_push import PushNotificationRequest
+from imbue.system_interface.shell.web_push import PushProviderAnswer
+from imbue.system_interface.shell.web_push import PushTransportInterface
 from imbue.system_interface.shell.web_push import WebPushNotifier
 from imbue.system_interface.shell.web_push import device_id_of
 from imbue.system_interface.shell.web_push import push_provider_name
@@ -94,6 +101,32 @@ def test_a_device_whose_push_service_did_not_answer_is_kept(tmp_path: Path) -> N
     ((delivery,),) = [outcome.deliveries]
     assert (delivery.is_accepted, delivery.is_forgotten, delivery.detail) == (False, False, "unreachable")
     assert len(service.list_devices()) == 1
+
+
+class _MeetingPushTransport(PushTransportInterface):
+    """Answers a post only once every expected post is in flight, so a send that posts one after another fails."""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    barrier: threading.Barrier = Field(description="Passed once every expected post has arrived")
+
+    def post(self, subscription: BrowserPushSubscription, payload: str, signing_key: Vapid) -> PushProviderAnswer:
+        self.barrier.wait()
+        return PushProviderAnswer(status_code=201, detail="")
+
+
+def test_every_device_is_posted_to_at_once(tmp_path: Path) -> None:
+    transport = _MeetingPushTransport(barrier=threading.Barrier(3, timeout=10))
+    service = WebPushNotifier(directory=tmp_path, transport=transport)
+    for index in range(3):
+        service.register(_registration(f"https://push.example.org/{index}"), _NOW)
+
+    outcome = service.send(PushNotificationRequest(title="Done"), None)
+
+    assert outcome.accepted_count == 3
+    assert [delivery.device_id for delivery in outcome.deliveries] == [
+        device_id_of(f"https://push.example.org/{index}") for index in range(3)
+    ]
 
 
 def test_a_notification_title_is_required_and_bounded() -> None:

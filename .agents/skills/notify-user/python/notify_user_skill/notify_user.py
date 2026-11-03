@@ -93,7 +93,8 @@ _TIMEOUT_SECONDS = 10.0
 # answer rather than wait on a slow chat app.
 _WATCHERS_TIMEOUT_SECONDS = 2.0
 
-# The shell posts to each device in turn, so this covers a few of them.
+# The shell posts to every device at once, each under its own shorter timeout,
+# so this covers a slow push service with room to spare.
 _PUSH_TIMEOUT_SECONDS = 12.0
 
 # The longest title and body the shell's send route takes; a longer message
