@@ -142,7 +142,7 @@ directly from a venv, never under `uv run`. A built-in one runs from the root
 venv:
 
 ```ini
-command=python3 system/services/oom_priority/bin/oom_tag_service.py host-backup bash -c "uv sync --all-packages --frozen && exec .venv/bin/host-backup"
+command=python3 system/services/oom_priority/bin/oom_tag_service.py host-backup python3 system/scripts/wait_for_critical_path.py bash -c "uv sync --all-packages --frozen && exec .venv/bin/host-backup"
 ```
 
 Under `uv run`, a `uv` process would stay resident as the program's parent
