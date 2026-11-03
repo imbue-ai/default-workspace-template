@@ -1,0 +1,1 @@
+The bootstrap's timezone docs now say that `data/.state/user_timezone` changes after create too: Imbue Studio rewrites it when the user changes the workspace's timezone, and the boot's `set_timezone` step applies whatever it names. The behavior is unchanged.
