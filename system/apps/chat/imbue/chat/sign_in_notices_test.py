@@ -40,7 +40,10 @@ def test_a_reply_that_was_not_refused_ends_the_episode() -> None:
 def test_a_batch_whose_failure_was_already_answered_is_not_news() -> None:
     notices = SignInFailureNotices()
 
-    assert notices.record_live_events(ChatId("agent-a1"), [_reply(is_auth_error=True), _reply(is_auth_error=False)]) is False
+    assert (
+        notices.record_live_events(ChatId("agent-a1"), [_reply(is_auth_error=True), _reply(is_auth_error=False)])
+        is False
+    )
 
 
 def test_batches_without_replies_change_nothing() -> None:

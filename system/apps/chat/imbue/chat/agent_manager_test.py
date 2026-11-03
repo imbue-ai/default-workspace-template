@@ -143,9 +143,9 @@ from imbue.chat.oom_prioritizer import ChatOomPrioritizer
 from imbue.chat.presence import PresenceReport
 from imbue.chat.presence import PresenceState
 from imbue.chat.primitives import ChatId
-from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
+from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
 from imbue.chat.state import ChatAppState
 from imbue.chat.testing import CONTINUE_CHAT_TEMPLATE_PATH
 from imbue.chat.testing import RecordingGateway
@@ -9326,7 +9326,11 @@ def test_a_chat_refusing_turns_for_sign_in_notifies_the_app_once_per_run_naming_
             manager.record_presence(
                 chat_id,
                 PresenceReport(
-                    instance_id="page-7", client_id="client-1", state=PresenceState.VISIBLE, is_focused=True, sequence=1
+                    instance_id="page-7",
+                    client_id="client-1",
+                    state=PresenceState.VISIBLE,
+                    is_focused=True,
+                    sequence=1,
                 ),
             )
             manager.report_sign_in_failures(chat_id, refused)

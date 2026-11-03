@@ -153,9 +153,6 @@ from imbue.chat.harnesses.session_watcher import TRANSCRIPT_CLOCK_SLACK_SECONDS
 from imbue.chat.harnesses.session_watcher import TranscriptReader
 from imbue.chat.harnesses.startup_readiness import is_harness_starting_up
 from imbue.chat.imbue_studio_notifications import ImbueStudioNotificationsClient
-from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
-from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_TITLE
-from imbue.chat.sign_in_notices import SignInFailureNotices
 from imbue.chat.main_chat import MAIN_CHAT_INTRODUCTION
 from imbue.chat.main_chat import MAIN_CHAT_NAME
 from imbue.chat.main_chat import MainChatCandidate
@@ -206,6 +203,9 @@ from imbue.chat.primitives import ChatId
 from imbue.chat.primitives import ChatKind
 from imbue.chat.primitives import ChatStatus
 from imbue.chat.primitives import parse_chat_ref
+from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_MESSAGE
+from imbue.chat.sign_in_notices import SIGN_IN_NEEDED_TITLE
+from imbue.chat.sign_in_notices import SignInFailureNotices
 from imbue.chat.ws_broadcaster import WebSocketBroadcaster
 from imbue.concurrency_group.concurrency_group import ConcurrencyGroup
 from imbue.concurrency_group.errors import ConcurrencyGroupError

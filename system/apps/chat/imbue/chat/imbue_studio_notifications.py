@@ -59,7 +59,12 @@ class ImbueStudioNotificationsClient(MutableModel):
         """Queue a notification that the owner was mentioned in ``mentioned_in`` (the multiplayer spec, section
         7.4), posted as that chat's own agent, so a click opens that chat; a chat with no agent sends none."""
         return self._executor.submit(
-            self._post_notification, mentioned_in, title, message, (), f"notifying the owner of a mention in {mentioned_in}"
+            self._post_notification,
+            mentioned_in,
+            title,
+            message,
+            (),
+            f"notifying the owner of a mention in {mentioned_in}",
         )
 
     def notify_sign_in_needed(
