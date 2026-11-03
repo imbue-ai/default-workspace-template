@@ -28,7 +28,11 @@ import tomllib
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from workspace_bare_scripts.forward_port import apps_file
+from workspace_bare_scripts.forward_port import (
+    MalformedRegistryError,
+    apps_file,
+    load_apps,
+)
 
 CRITICAL_PATH_APPS = ("system_interface", "chat")
 
@@ -42,26 +46,20 @@ class UnreadableRegistryError(Exception):
     """The registry exists but holds no readable ``[[apps]]`` array."""
 
 
-def _read_registry_rows(registry: Path) -> list[object]:
+def _read_registry_rows(registry: Path) -> list[dict[str, object]]:
     """The registry's ``[[apps]]`` rows; empty while it does not exist yet (a new workspace's first boot)."""
     try:
-        text = registry.read_text(encoding="utf-8")
+        return load_apps(registry)
     except FileNotFoundError:
         return []
-    except (OSError, UnicodeDecodeError) as error:
-        raise UnreadableRegistryError(f"cannot read {registry}: {error}") from error
-    try:
-        document = tomllib.loads(text)
     except tomllib.TOMLDecodeError as error:
         raise UnreadableRegistryError(
             f"{registry} is not valid TOML: {error}"
         ) from error
-    rows = document.get("apps", [])
-    if not isinstance(rows, list):
-        raise UnreadableRegistryError(
-            f"{registry} has an 'apps' key that is not an array of tables"
-        )
-    return rows
+    except MalformedRegistryError as error:
+        raise UnreadableRegistryError(str(error)) from error
+    except (OSError, UnicodeDecodeError) as error:
+        raise UnreadableRegistryError(f"cannot read {registry}: {error}") from error
 
 
 def _registry_problem(registry: Path) -> str | None:
@@ -83,13 +81,12 @@ def _registered_url_by_name(registry: Path) -> dict[str, str]:
         rows = _read_registry_rows(registry)
     except UnreadableRegistryError:
         return {}
-    return {
-        row["name"]: row["url"]
-        for row in rows
-        if isinstance(row, dict)
-        and isinstance(row.get("name"), str)
-        and isinstance(row.get("url"), str)
-    }
+    url_by_name: dict[str, str] = {}
+    for row in rows:
+        name, url = row.get("name"), row.get("url")
+        if isinstance(name, str) and isinstance(url, str):
+            url_by_name[name] = url
+    return url_by_name
 
 
 def _accepts_connections(url: str) -> bool:
