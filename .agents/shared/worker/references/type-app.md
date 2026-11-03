@@ -137,8 +137,9 @@ the shell and the chat app do. The scaffold gives an app only `app-schema`, so
 when the app lacks it, add `workspace-layout` as an editable path dependency
 in the app's own directory (`.agents/shared/references/running-python.md`,
 "User packages are standalone projects"). Use `parse_identity_header` (it
-raises `InvalidIdentityHeaderError` for a header that does not parse: answer
-that with a 400, never read it as the owner's), `is_owner_participant`, and
+raises `workspace_layout.errors.InvalidIdentityHeaderError` for a header that
+does not parse: answer that with a 400, never read it as the owner's),
+`is_owner_participant`, and
 `participant_key_of`, which names the requester `user:<id>`, `agent:<id>`, or
 `owner`. Locally the header looks the same, so the test client exercises all
 of this without turning sharing on.
