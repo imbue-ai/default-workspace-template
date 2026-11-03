@@ -350,10 +350,11 @@ def test_stop_chats_pauses_a_named_agent_for_memory_and_refuses_one_it_may_not(
     assert [entry.id for entry in _record(tmp_path).stopped_agents] == ["agent-idle"]
 
 
-def test_stop_chats_leaves_the_main_chat_running_and_refuses_to_pause_it_by_name(
+def test_the_main_chat_is_interrupted_for_the_apply_and_never_paused_for_memory(
     tmp_path: Path, fake_agents: FakeAgents, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The chat app starts the main chat again as soon as it stops, so a pause would not hold."""
+    """The chat app starts the main chat again as soon as it stops, idle, so a stop interrupts it
+    rather than holding it: the resume tells it what happened without starting it."""
     fake_agents.set_agents(
         [
             *_workspace_agents(),
@@ -367,11 +368,7 @@ def test_stop_chats_leaves_the_main_chat_running_and_refuses_to_pause_it_by_name
     )
     assert _main(tmp_path, "run-status", "start") == 0
 
-    assert _main(tmp_path, "run-status", "stop-chats") == 0
-    assert fake_agents.states()["Main"] == "RUNNING"
-    assert fake_agents.states()["Fix-the-login"] == "STOPPED"
-
-    fake_agents.clear_calls()
+    # Named to free memory, it is refused along with everything named beside it.
     capsys.readouterr()
     assert (
         _main(
@@ -387,9 +384,27 @@ def test_stop_chats_leaves_the_main_chat_running_and_refuses_to_pause_it_by_name
     )
     assert "Main is the main chat" in capsys.readouterr().err
     assert fake_agents.mngr_verbs() == []
-    assert "agent-main-2" not in [
-        entry.id for entry in _record(tmp_path).stopped_agents
-    ]
+
+    assert _main(tmp_path, "run-status", "stop-chats") == 0
+    assert "Interrupted the main chat Main" in capsys.readouterr().out
+    assert fake_agents.states()["Main"] == "STOPPED"
+    assert fake_agents.states()["Fix-the-login"] == "STOPPED"
+
+    fake_agents.clear_calls()
+    assert (
+        _main(tmp_path, "run-status", "resume-chats", "--landed", "minds-v0.9.0") == 0
+    )
+    assert ["start", "agent-main-2"] not in fake_agents.mngr_verbs()
+    assert ["start", "agent-busy"] in fake_agents.mngr_verbs()
+    assert fake_agents.notes()[
+        "agent-main-1"
+    ] == update_resume_note.compose_resume_note(
+        landed_ref="minds-v0.9.0",
+        is_chat_paused=True,
+        wip_commit="",
+        interrupted_tasks=[],
+        restarted_workers=[],
+    )
 
 
 def test_stop_chats_warns_when_it_cannot_read_which_chat_is_the_main_chat(
