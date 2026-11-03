@@ -142,10 +142,9 @@ in the app's own directory (`.agents/shared/references/running-python.md`,
 "User packages are standalone projects"). Use `parse_identity_header` (it
 raises `workspace_layout.errors.InvalidIdentityHeaderError` for a header that
 does not parse: answer that with a 400, never read it as the owner's),
-`is_owner_participant`, and
-`participant_key_of`, which names the requester `user:<id>`, `agent:<id>`, or
-`owner`. Locally the header looks the same, so the test client exercises all
-of this without turning sharing on.
+`is_owner_participant`, and `participant_key_of`, which names the requester
+`user:<id>`, `agent:<id>`, or `owner`. Locally the header looks the same, so
+the test client exercises all of this without turning sharing on.
 
 - **The API.** Go through every route the app's API document lists and decide
   what a visitor may do with it. Reading what the app shows is usually what
