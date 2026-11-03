@@ -12,7 +12,7 @@
    with `@source inline("...")`. */
 @source "./**/*.ts";
 
-/* The agent's face (24px) and the gap beside it: the agent's column starts this far in, so its bubbles, tool rows
+/* The agent's face and the gap beside it: the agent's column starts this far in, so its bubbles, tool rows
    and timeline share one edge (views/machine-bubbles.ts). */
 :root {
   --width-agent-face: 2rem;

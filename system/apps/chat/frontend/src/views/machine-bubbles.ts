@@ -1,11 +1,10 @@
 /**
  * Machine bubbles (the multiplayer spec, section 5.4): the agent's prose drawn as the agent speaking, one bubble per
- * reply, laid out the way another person's turn is -- the name above, the face in a 24px gutter -- so a turn reads
+ * reply, laid out the way another person's turn is -- the name above, the face in the gutter -- so a turn reads
  * beside the people's bubbles rather than as a block of text.
  *
- * The gutter belongs to the agent's column, not to a bubble: everything the agent produces (bubbles, tool chips,
- * cards, the step timeline, its status line) starts one face-and-gap in, and the name and face head only the first
- * row of each stretch of the agent's output, whatever that row holds. Tool chips, cards, and step timelines are not
+ * The gutter belongs to the agent's column, not to a bubble: everything the agent produces starts one face-and-gap
+ * in, and the name and face head only the first row of each stretch of the agent's output, whatever that row holds. Tool chips, cards, and step timelines are not
  * prose and stay outside the bubbles, so a turn that interleaves prose and tool calls reads as several bubbles with
  * the tool work between them, all on one edge.
  */

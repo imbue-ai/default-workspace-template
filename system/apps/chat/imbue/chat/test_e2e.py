@@ -594,8 +594,7 @@ def _tool_result_line(uuid: str, timestamp: str, tool_use_id: str, output: str) 
     }
 
 
-# A turn shaped like the ones the agent column was drawn for: a line of intent, a tool call, a finished step, and
-# the closing reply below the timeline.
+# A line of intent, a tool call, a finished step, and the closing reply below the timeline.
 _STEPPED_TURN_SESSION_EVENTS: list[dict[str, Any]] = [
     {
         "type": "user",

@@ -146,7 +146,7 @@ function buildRows(
   for (const section of sections) {
     if (section.is_after_switch) {
       // The new agent's stretch is open past the last row even before it has a row of its own, so the reply it is
-      // still writing (ChatPanel's tail) wears the header.
+      // still writing wears the header.
       isAgentHeaderShown = false;
       if (rows.length > 0) rows[rows.length - 1].isAgentHeaderShown = false;
     }
