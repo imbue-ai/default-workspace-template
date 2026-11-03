@@ -11,7 +11,7 @@ on sys.path, so run it as ``python3 <path>``, never with -I, -P or PYTHONSAFEPAT
 import sys
 from pathlib import Path
 
-# import-path: no-venv -- the system python3 runs this with no venv, so it finds its stdlib-only packages by path
+# import-path: no-venv -- every harness's hook config runs it before each Bash command, so a broken or unsynced venv must not break the agent's commands
 sys.path.insert(
     0, str(Path(__file__).resolve().parents[1] / "services" / "oom_priority" / "src")
 )

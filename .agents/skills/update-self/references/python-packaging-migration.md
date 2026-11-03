@@ -222,7 +222,7 @@ later update has to reconcile. The goal is code that imports what it uses;
 passing the test is how you know you got there, not the goal itself. You may
 change the caller, the code it reaches for, and their `pyproject.toml` files,
 even though they are not what the update came to change. The failure message
-lists every site and how each kind becomes an import. The common ones:
+lists every site. The common ones:
 
 - **A user skill's script puts its own directory on `sys.path` to import a
   sibling module**: package the skill and import the sibling from the package

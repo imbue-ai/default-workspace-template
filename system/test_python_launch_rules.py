@@ -1030,30 +1030,13 @@ def _sys_path_editors(sites: list[_Site]) -> list[str]:
 
 
 _IMPORT_PATH_GUIDE = """\
-What this check is for: every package the workspace's code uses is found because a venv
-installed it, so what runs is what the lock and the type check describe, and code can be
-moved or renamed without a path written somewhere else breaking. Getting this test to
-pass is not the goal; removing each edit above is. That is worth real work: you may
-restructure the code involved -- the file with the edit, the package it reaches for, the
-pyproject.toml files and scripts around them -- even when it is not the code you came to
-change, and even when the task you are on would finish sooner without it.
-
-How each kind of edit goes away (.agents/shared/references/running-python.md):
-- Code or a test puts a package's source on the path to import it: install the package
-  instead. Its own project installs it in its own venv; another project that uses it
-  declares it in its pyproject.toml (a workspace package as an editable path source).
-- A shell script runs python3 with PYTHONPATH to reach a package: run the package's
-  command from a venv that has it (`uv run --no-sync --project <package> <command>`, or
-  its .venv/bin entry point), and give the package that command if it has none.
-- A test re-creates such a run to check it works: fix the run, and the test checks the
-  venv run instead.
-
-An edit that has to stay -- the code runs with no venv to install its packages, or loads
-code from a tree known only at run time -- keeps it: put
-`# import-path: <reason> -- <why this edit has to stay>` among the comment lines directly
-above its statement, with <reason> one of: {reasons}. A marker is a claim a reviewer will
-check: name every marker you add in your report. Never edit this test to let a site
-through.
+Remove each edit by installing the package it reaches for in the venv that runs the code,
+and run a shell script's python through that venv. You may restructure the code involved,
+even when it is not the code you came to change (.agents/shared/references/running-python.md).
+An edit that has to stay takes `# import-path: <reason> -- <why>` in the comment lines
+directly above it, with <reason> one of: {reasons}, and a <why> naming what runs this
+code and what would break if it ran from a venv. Name every marker you add in your report.
+Never edit this test to let a site through.
 """
 
 
@@ -1685,29 +1668,13 @@ def _program_launch_sites(repo_root: Path) -> list[str]:
 
 
 _LAUNCH_GUIDE = """\
-What this check is for: code that needs another part of the workspace imports it, so
-the call is type-checked, costs no interpreter start, and moves with the code it calls.
-Getting this test to pass is not the goal; turning each site above into an import is.
-That is worth real work: you may restructure the code involved -- the caller, the code it
-runs, and their pyproject.toml files -- even when it is not the code you came to change,
-and even when the task you are on would finish sooner without it.
-
-How each kind of site becomes an import (.agents/shared/references/running-python.md,
-"Calling workspace code from Python"):
-- It runs another venv's interpreter, or a file of its own package, because its own
-  project lacks a package the code needs: declare that package in the caller's
-  pyproject.toml (a workspace package as an editable path source) and import the module.
-- It runs a skill's or a library's script to get its result: depend on that skill's
-  python/ project or that library, and call its functions.
-- It runs a process to put a deadline on work made of network or subprocess calls that
-  are each already bounded: pass the deadline in and check it between calls. A process of
-  its own is for work that can hang where no timeout reaches.
-
-A site that needs a process of its own, for one of the reasons that section gives, keeps
-it: put `# own-process: <reason> -- <why this site needs it>` among the comment lines
-directly above its statement, with <reason> one of: {reasons}. A marker is a claim a
-reviewer will check: name every marker you add in your report. Never edit this test to let
-a site through.
+Turn each site into an import: declare the package it runs in the caller's pyproject.toml
+and call its functions. You may restructure the caller and the code it runs, even when it
+is not the code you came to change (.agents/shared/references/running-python.md, "Calling
+workspace code from Python"). A site that needs a process of its own takes
+`# own-process: <reason> -- <why>` in the comment lines directly above it, with <reason>
+one of: {reasons}, and a <why> naming what about this site an import cannot do. Name
+every marker you add in your report. Never edit this test to let a site through.
 """
 
 

@@ -109,9 +109,9 @@ from typing import Callable, NamedTuple, Sequence
 # Run by its path, the module puts the bare packages' directories on sys.path; imported as
 # part of its package, the venv already has them.
 if not __package__:
-    # import-path: no-venv -- the system python3 runs this with no venv, so it finds its stdlib-only packages by path
+    # import-path: no-venv -- update-app runs it as `python3 <path>`, and it imports nothing a venv installs
     sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "system" / "scripts"))
-    # import-path: no-venv -- the system python3 runs this with no venv, so it finds its stdlib-only packages by path
+    # import-path: no-venv -- update-app runs it as `python3 <path>`, and it imports nothing a venv installs
     sys.path.insert(
         0,
         str(
