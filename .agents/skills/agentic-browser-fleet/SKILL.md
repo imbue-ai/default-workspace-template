@@ -39,7 +39,8 @@ first time (starting the Screen too when it is down), and after that it answers 
 starting it again if it was stopped. The browser is addressed by name everywhere.
 
 - `new` returns as soon as the browser is registered; **the Screen and Chromium may still be
-  starting**. If the attach line says it is still starting, wait a few seconds and run `ls`.
+  starting**. If the attach line says it is still starting, run `ls` until it is up, with a short
+  sleep (a second or two) between tries.
 - `new` also opens the Screen's window on the user's desktop, **minimized**: it waits in their
   taskbar, and they do not see it until they click it or you show it (see "Live view" below).
   That is right while you browse on your own; show it once they should watch. `handoff` shows
@@ -260,7 +261,7 @@ These are the **fleet's** exit codes. `playwright-cli` has its own and they are 
 | `0` | ok | Carry on. |
 | `1` | error | Read the message. |
 | `2` | preempted (human took control, or you ran `handoff`) | **Stop and end your turn.** You'll be messaged to resume; re-`snapshot` first. |
-| `3` | busy (another agent holds the Screen, or the Screen / Chromium is still starting) | Wait a few seconds and retry; for another agent, you are queued and will be messaged. |
+| `3` | busy (another agent holds the Screen, or the Screen / Chromium is still starting) | Retry with a short sleep (a second or two) between tries; for another agent, you are queued and will be messaged. |
 | `4` | timed out waiting for another agent | Try later. |
 | `64` | usage (no chat id: `MINDS_CHAT_ID` and `MNGR_AGENT_ID` both unset / bad arguments / invalid name) | Run from inside an agent shell; fix the command. |
 | `69` | no service (can't reach the Screen service) | The service isn't running -- report it; don't blindly retry. |
