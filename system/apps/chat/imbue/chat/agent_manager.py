@@ -3539,13 +3539,8 @@ class AgentManager:
             transition = record.converging
             assert transition is not None, "_require_transition_locked returned a record with a switch"
             if transition.held_sends:
-                held = transition.held_sends[0]
-                remaining = transition.model_copy_update(
-                    to_update(transition.field_ref().held_sends, transition.held_sends[1:]),
-                    to_update(transition.field_ref().delivered_sends, (*transition.delivered_sends, held)),
-                )
-                self._write_record_locked(record.with_converging(remaining))
-                return held
+                self._write_record_locked(record.with_converging(transition.with_oldest_held_send_delivered()))
+                return transition.held_sends[0]
             if isinstance(transition, ChatRebindRecord) and len(record.agents) == 1:
                 self._delete_record_locked(chat_id)
             else:

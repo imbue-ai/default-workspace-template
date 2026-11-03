@@ -169,6 +169,14 @@ class ChatTransitionRecord(FrozenModel):
             held for held in (*self.delivered_sends, *self.held_sends) if held.message_id != self.trigger_message_id
         )
 
+    def with_oldest_held_send_delivered(self) -> Self:
+        """This switch with its oldest held send moved onto the delivered list, as it is taken to be delivered."""
+        assert self.held_sends, "a switch with no held sends has none to deliver"
+        return self.model_copy_update(
+            to_update(self.field_ref().held_sends, self.held_sends[1:]),
+            to_update(self.field_ref().delivered_sends, (*self.delivered_sends, self.held_sends[0])),
+        )
+
     def without_delivered_send(self, message_id: str) -> Self:
         """This switch with the delivered send ``message_id`` taken off its delivered list: it did not land."""
         return self.model_copy_update(
