@@ -1,9 +1,5 @@
 """The workspace session: one HS256 JWT, delivered as two cookies scoped ``Domain=<workspace-domain>``.
 
-On an auth sandbox (``SHARE_COOKIE_HOST_ONLY=1`` in ``share.env``) the two cookies carry no ``Domain``
-attribute at all, so each belongs to the one service host that set it: every sandbox of a region shares
-one workspace domain, and a domain-wide cookie would let one user's sandbox overwrite another's session.
-
 Set once by the login callback, verified (and its identity re-checked against the
 grants) on every request. 30 days, fixed. The signing secret is generated in
 the workspace and never leaves it, so a relay or connector compromise cannot
@@ -103,8 +99,8 @@ def verify_session_from_cookies(
 ) -> "RequesterIdentity | None":
     """The identity of the first session cookie value that verifies, or None when none does.
 
-    Every value sent under a name is tried: a cookie set for a parent domain under the same name (one user's auth
-    sandbox can set one for the whole region's auth domain) is sent beside this host's own, and ahead of it.
+    Every value sent under a name is tried: a same-named cookie set for a parent domain is sent beside this
+    workspace's own, and may come first.
     """
     for cookie_name in _SESSION_COOKIE_NAMES:
         for cookie_value in cookies.getlist(cookie_name):
@@ -114,21 +110,15 @@ def verify_session_from_cookies(
     return None
 
 
-def set_session_cookie(
-    response: Response, cookie_value: str, workspace_domain: str, *, is_host_only: bool = False
-) -> None:
-    """Attach both copies of the workspace session cookie (see the module docstring).
-
-    ``is_host_only`` leaves the ``Domain`` attribute off both copies, so the browser scopes them to the
-    host that set them rather than to the whole workspace domain.
-    """
+def set_session_cookie(response: Response, cookie_value: str, workspace_domain: str) -> None:
+    """Attach both copies of the workspace session cookie (see the module docstring)."""
     for cookie_name in _SESSION_COOKIE_NAMES:
         is_partitioned = cookie_name == PARTITIONED_SESSION_COOKIE_NAME
         response.set_cookie(
             cookie_name,
             cookie_value,
             max_age=SESSION_LIFETIME_SECONDS,
-            domain=None if is_host_only else workspace_domain,
+            domain=workspace_domain,
             path="/",
             secure=True,
             httponly=True,
