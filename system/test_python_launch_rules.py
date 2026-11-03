@@ -1673,8 +1673,8 @@ and call its functions. You may restructure the caller and the code it runs, eve
 is not the code you came to change (.agents/shared/references/running-python.md, "Calling
 workspace code from Python"). A site that needs a process of its own takes
 `# own-process: <reason> -- <why>` in the comment lines directly above it, with <reason>
-one of: {reasons}, and a <why> naming what about this site an import cannot do. Name
-every marker you add in your report. Never edit this test to let a site through.
+one of: {reasons}, and a <why> naming what runs this site and what an import would break.
+Name every marker you add in your report. Never edit this test to let a site through.
 """
 
 
