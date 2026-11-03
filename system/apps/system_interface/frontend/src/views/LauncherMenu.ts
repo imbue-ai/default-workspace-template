@@ -1,15 +1,16 @@
 /**
  * The launcher menu (launcher-and-getting-started plan section 4.2): the card above the taskbar's
  * field, a column of rows in which one is always highlighted. The launch-path rows come first,
- * then a divider and the window rows while typing, then a divider and the free-text rows; a
- * section with no rows draws nothing. The rows themselves come from ``reducers/launcherRows``;
- * this draws them and reports a hover (which moves the highlight) and a click (which runs a row).
+ * with the tour's and the notifications page's rows after them, then a divider and the window rows
+ * while typing, then a divider and the free-text rows; a section with no rows draws nothing. The
+ * rows themselves come from ``reducers/launcherRows``; this draws them and reports a hover (which
+ * moves the highlight) and a click (which runs a row).
  * The highlighted row, whatever its kind, carries the ``Enter`` caption; the secondary text row
  * carries its chord's. A right-click on the row of an app's own desktop shortcut reports it, for the
  * menu that adds it to the desktop or takes it off.
  * Markers the tests use are data attributes (plan section 6.2): ``data-launcher-overlay`` on
  * the card, and on each row ``data-launcher-row``, ``data-launch``, ``data-launcher-window``,
- * ``data-text-action``, ``data-highlighted``, and ``data-disabled``.
+ * ``data-text-action``, ``data-notifications-row``, ``data-highlighted``, and ``data-disabled``.
  * The phone's start sheet draws the same sections (``LauncherSections``) with rows sized for a
  * finger and no key captions, since its rows are tapped rather than chosen from a keyboard.
  */
@@ -219,7 +220,8 @@ function rowView(row: LauncherRow, index: number, attrs: LauncherSectionsAttrs):
   }
 }
 
-/** The menu's sections, launch-path rows then window rows then free-text rows, each after a divider. */
+/** The menu's sections: launch-path rows (then the tour's and the notifications page's), then window rows, then
+ *  free-text rows, each after a divider. */
 function launcherSections(attrs: LauncherSectionsAttrs): m.Children {
   const { launchRows, tourRows, notificationsRows, windowRows, textRows, rows, isNoMatch } = attrs.menu;
   // The flat index of each section's first row, so hover and highlight speak of one list.
