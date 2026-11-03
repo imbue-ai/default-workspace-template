@@ -563,6 +563,7 @@ Data attributes, never classes, so restyling cannot break a test:
 | `data-toast` | each toast, on both layouts |
 | `data-tour-card="<id>"`, `data-tour-badge`, `data-tour-paused`, `data-tour-exit`, `data-tour-back`, `data-tour-next`, `data-tour-link` | the show-around tour's card (naming the card shown), its exit badge, or its pause notice, and the card's Exit walkthrough, Go back, Next or Done (Got it on the badge, OK on the notice), and link button |
 | `data-tour-row` | the launcher's "Show me around" row |
+| `data-notifications-row` | the launcher's "Notifications on this device" row, on both layouts |
 
 ## 13. Where data lives
 
