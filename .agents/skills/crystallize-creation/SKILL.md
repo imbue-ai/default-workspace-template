@@ -246,7 +246,10 @@ sub-workers it split its pass across are already gone with it):
   separate commit.
 - **app**: refresh its window so the user sees the merged build
   (`uv run --no-sync workspace-layout refresh --app <app-name>`), then close
-  the ticket.
+  the ticket. While `build-app`'s mock frame is still up, the user's window is
+  the frame's: reload it with `uv run --no-sync
+  .agents/skills/build-app/python/build_app_skill/mock_frame.py up --app
+  <app-name> --note "<what is not real yet>" --refresh` instead.
 - **service**: it has no window -- restart its programs (`supervisorctl
   restart <program>`): the one named after the package (`host_backup` runs as
   `host-backup`) and any `<program>-<role>` ones. Then close the ticket.
