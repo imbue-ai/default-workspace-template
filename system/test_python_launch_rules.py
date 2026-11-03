@@ -958,42 +958,41 @@ def _shell_statement_spans(lines: list[str]) -> list[tuple[int, int]]:
     return spans
 
 
-def _import_path_sites(repo_root: Path) -> list[_Site]:
-    """Every import-path edit: in the template's Python, its pytest configs' ``pythonpath``
-    settings (which add to the path for every test under them), and its shell scripts."""
-    sites: list[_Site] = []
-    for relative in _tracked_python_files(repo_root):
-        source = (repo_root / relative).read_text()
-        tree = ast.parse(source)
-        sites.extend(
-            _sites(
-                relative,
-                source.splitlines(),
-                _sys_path_edit_lines(tree),
-                _statement_spans(tree),
-                _IMPORT_PATH_MARKER,
-            )
-        )
-    for relative in _tracked_pytest_configs(repo_root):
-        lines = (repo_root / relative).read_text(errors="replace").splitlines()
+def _import_path_files(repo_root: Path) -> list[str]:
+    """The files an import-path edit, or a marker, can be in: the template's Python, its pytest
+    configs (whose ``pythonpath`` adds to the path for every test under them), and its shell
+    scripts."""
+    return [
+        *_tracked_python_files(repo_root),
+        *_tracked_pytest_configs(repo_root),
+        *_tracked_paths(repo_root, "*.sh"),
+    ]
+
+
+def _import_path_sites_in(repo_root: Path, relative: str) -> list[_Site]:
+    text = (repo_root / relative).read_text(errors="replace")
+    lines = text.splitlines()
+    if relative.endswith(".py"):
+        tree = ast.parse(text)
+        flagged, spans = _sys_path_edit_lines(tree), _statement_spans(tree)
+    elif relative.endswith(".sh"):
+        flagged, spans = _shell_pythonpath_lines(lines), _shell_statement_spans(lines)
+    else:
         flagged = [
             number
             for number, line in enumerate(lines, start=1)
             if _PYTHONPATH_SETTING_RE.match(line)
         ]
-        sites.extend(_sites(relative, lines, flagged, [], _IMPORT_PATH_MARKER))
-    for relative in _tracked_paths(repo_root, "*.sh"):
-        lines = (repo_root / relative).read_text(errors="replace").splitlines()
-        sites.extend(
-            _sites(
-                relative,
-                lines,
-                _shell_pythonpath_lines(lines),
-                _shell_statement_spans(lines),
-                _IMPORT_PATH_MARKER,
-            )
-        )
-    return sites
+        spans = []
+    return _sites(relative, lines, flagged, spans, _IMPORT_PATH_MARKER)
+
+
+def _import_path_sites(repo_root: Path) -> list[_Site]:
+    return [
+        site
+        for relative in _import_path_files(repo_root)
+        for site in _import_path_sites_in(repo_root, relative)
+    ]
 
 
 def _sys_path_editors(repo_root: Path) -> list[str]:
@@ -1031,15 +1030,12 @@ check: name every marker you add in your report. Never raise the count.
 
 
 def test_prevent_sys_path_edits() -> None:
-    offenders = _sys_path_editors(REPO_ROOT)
+    unkept = [site for site in _import_path_sites(REPO_ROOT) if not site.is_kept()]
+    offenders = {site.relative for site in unkept}
     assert len(offenders) <= snapshot(22), (
         "These change where imports are looked up (sys.path, PYTHONPATH in Python or a shell "
         "script, or a pytest pythonpath setting):\n"
-        + "\n".join(
-            site.describe()
-            for site in _import_path_sites(REPO_ROOT)
-            if not site.is_kept()
-        )
+        + "\n".join(site.describe() for site in unkept)
         + "\n\n"
         + _IMPORT_PATH_GUIDE.format(
             reasons=", ".join(sorted(_REASONS_BY_MARKER[_IMPORT_PATH_MARKER]))
@@ -1208,6 +1204,8 @@ def _sys_path_edits_outside_the_bare_search_paths(
             for line, target in _sys_path_insert_targets(source, repo_root / relative)
             if target not in resolved_allowed
         ]
+        if not outside:
+            continue
         kept = {
             site.line
             for site in _sites(
@@ -1536,24 +1534,28 @@ def _is_test_support(relative: str) -> bool:
     )
 
 
+def _launch_sites_in(
+    repo_root: Path, relative: str, programs: _OwnPrograms
+) -> list[_Site]:
+    source = (repo_root / relative).read_text()
+    tree = ast.parse(source)
+    return _sites(
+        relative,
+        source.splitlines(),
+        _program_launch_lines(tree, programs),
+        _statement_spans(tree),
+        _OWN_PROCESS_MARKER,
+    )
+
+
 def _launch_sites(repo_root: Path) -> list[_Site]:
     programs = _own_programs(repo_root)
-    sites: list[_Site] = []
-    for relative in _tracked_python_files(repo_root):
-        if _is_test_support(relative):
-            continue
-        source = (repo_root / relative).read_text()
-        tree = ast.parse(source)
-        sites.extend(
-            _sites(
-                relative,
-                source.splitlines(),
-                _program_launch_lines(tree, programs),
-                _statement_spans(tree),
-                _OWN_PROCESS_MARKER,
-            )
-        )
-    return sites
+    return [
+        site
+        for relative in _tracked_python_files(repo_root)
+        if not _is_test_support(relative)
+        for site in _launch_sites_in(repo_root, relative, programs)
+    ]
 
 
 def _program_launch_sites(repo_root: Path) -> list[str]:
@@ -1601,28 +1603,32 @@ def test_prevent_running_the_workspaces_own_code_as_a_process() -> None:
 
 
 def _marker_problems(repo_root: Path) -> list[str]:
-    """Markers that keep nothing: an unknown reason, no why, or no site of their kind below."""
-    attached = {
-        (site.relative, marker.line)
-        for site in [*_launch_sites(repo_root), *_import_path_sites(repo_root)]
-        for marker in site.markers
-    }
-    files = [
-        *_tracked_python_files(repo_root),
-        *_tracked_pytest_configs(repo_root),
-        *_tracked_paths(repo_root, "*.sh"),
-    ]
+    """Markers that keep nothing: an unknown reason, no why, or no site of their kind below.
+
+    Only a file holding a marker has its sites read, so a tree with few markers costs a text scan.
+    """
+    programs: _OwnPrograms | None = None
     problems: list[str] = []
-    for relative in files:
-        lines = (repo_root / relative).read_text(errors="replace").splitlines()
-        for marker in _markers(lines):
+    for relative in _import_path_files(repo_root):
+        markers = _markers(
+            (repo_root / relative).read_text(errors="replace").splitlines()
+        )
+        if not markers:
+            continue
+        sites = _import_path_sites_in(repo_root, relative)
+        if relative.endswith(".py") and not _is_test_support(relative):
+            if programs is None:
+                programs = _own_programs(repo_root)
+            sites += _launch_sites_in(repo_root, relative, programs)
+        attached = {marker.line for site in sites for marker in site.markers}
+        for marker in markers:
             where = f"{relative}:{marker.line}: {marker.kind}"
             if not marker.is_valid():
                 problems.append(
                     f"{where}: needs `<reason> -- <why>`, <reason> one of "
                     + ", ".join(sorted(_REASONS_BY_MARKER[marker.kind]))
                 )
-            elif (relative, marker.line) not in attached:
+            elif marker.line not in attached:
                 problems.append(
                     f"{where}: keeps nothing; it belongs in the comment lines directly "
                     "above the statement it keeps"
