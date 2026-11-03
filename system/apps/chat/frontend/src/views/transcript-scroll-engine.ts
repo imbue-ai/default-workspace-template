@@ -568,12 +568,10 @@ export function createTranscriptScrollEngine(config: TranscriptScrollEngineConfi
   }
 
   /**
-   * Re-pin FOLLOW to the bottom when the viewport got shorter (the composer
-   * grew a line). Runs from the ResizeObserver, which the browser calls after
-   * layout and before paint, so the shrunk viewport is never painted short of
-   * the bottom. Left to the redraw it schedules, the gap shows for a frame and
-   * the pin then glides it shut: the transcript jumps up a line each time the
-   * draft wraps.
+   * Re-pin FOLLOW to the bottom when the viewport gets shorter (the composer
+   * grows a line). Runs from the ResizeObserver, which the browser calls after
+   * layout and before paint, so the shorter viewport is never painted short of
+   * the bottom; the redraw it schedules would only pin a frame later.
    */
   function pinFollowAfterViewportResize(element: HTMLElement): void {
     if (positionState.kind !== "FOLLOW" || isPointerDown) {
