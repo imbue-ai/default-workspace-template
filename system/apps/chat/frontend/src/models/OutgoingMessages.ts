@@ -66,8 +66,9 @@ const sentAtByArrivalId = new Map<string, number>();
 let nextId = 0;
 
 /** Record a just-sent message as an optimistic "Sending…" bubble; returns its id
- *  so the caller can drop it on failure. A message sent while the chat is busy waits behind what it
- *  is doing, so it opens no turn unless ``opensTurn`` says otherwise. */
+ *  so the caller can drop it on failure. A message sent while the chat is busy, or behind an earlier
+ *  send still on its way that opens the turn, waits behind that turn, so it opens none unless
+ *  ``opensTurn`` says otherwise. */
 export function addOutgoing(
   chatId: string,
   content: string,
@@ -78,11 +79,13 @@ export function addOutgoing(
   const id = `outgoing-${nextId++}`;
   const sentAt = Date.now();
   const chat = getChatById(chatId);
-  (byChat[chatId] ??= []).push({
+  const pending = (byChat[chatId] ??= []);
+  const isTurnOpenedAhead = (chat !== undefined && isChatBusyWithTurn(chat)) || pending.some((sent) => sent.opensTurn);
+  pending.push({
     id,
     content,
     sentAt,
-    opensTurn: opensTurn ?? (chat === undefined || !isChatBusyWithTurn(chat)),
+    opensTurn: opensTurn ?? !isTurnOpenedAhead,
     ...(messageId === undefined ? {} : { messageId }),
     ...(displayDecision === undefined ? {} : { displayDecision }),
   });
