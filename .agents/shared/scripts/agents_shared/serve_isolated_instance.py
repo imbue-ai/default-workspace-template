@@ -1395,8 +1395,8 @@ def frame(
         inner_path=inner_path,
     )
     pids: list[int] = []
-    # Counted as registered from the start when re-framing: the row is already there,
-    # and a failed re-boot must not leave it routing at a dead port.
+    # Counted as registered from the start when re-framing a frame that had a port: its
+    # row is already there, and a failed re-boot must not leave it routing at a dead port.
     services: list[str] = [frame_service_name] if previous_port is not None else []
     try:
         wrapper_port = _boot_wrapper(
