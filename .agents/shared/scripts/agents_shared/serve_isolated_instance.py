@@ -1,6 +1,6 @@
 """Spin up an isolated, throwaway instance of a service on a spare port.
 
-This is the shared substrate under two service flows:
+This is the shared substrate under three service flows:
 
 - ``update-app`` boots a copy of a service against a *copy* of its data
   (``DATA_DIR`` pointed at a scratch dir) so an edit can be exercised -- writes,
@@ -10,15 +10,17 @@ This is the shared substrate under two service flows:
   worktree (the lead's editing worktree during its live loop, or a worker's
   work_dir for a final pre-merge check) as a *preview* the user clicks around,
   through ``preview_app.py``, and ``refresh``-es it in place as the lead edits.
+- ``build-app`` shows a new app that is still a mock inside the labeled frame,
+  around the app's own live program, through ``mock_frame.py``.
 
-Both are the same motion: launch the service on a free port, with environment
+The two ``update-app`` flows are the same motion: launch the service on a free port, with environment
 overrides that isolate its writable state, wait until it is healthy, and
 (optionally) surface it to the user as a labeled "preview" window. The only thing
 that differs is *what* is launched and *how* its state is isolated -- so this
 script is deliberately unopinionated and takes all of that as parameters. The
 calling skill supplies the specifics.
 
-The two shapes:
+The shapes:
 
 - **Bare instance (own testing).** Given just ``--name``, ``--cwd``,
   ``--port-env`` and the launch argv, it picks a free port, injects it into the
