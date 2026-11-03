@@ -153,11 +153,12 @@ workspace.
 Before you decide to go down this route: you do not need a connection to make
 requests to URLs that require no credentials; latchkey is not necessary at all.
 And a custom service covers only what the gateway can inject: a request header,
-or a cookie or token captured from a browser sign-in. A key that goes in the
-query string or a signature scheme is not one of them (row 5). A documented API
-that needs a registered OAuth app is not one either, but that does not rule the
-service out: its website's own sign-in may be (row 4, "Signing in instead of a
-key" below).
+a cookie or token captured from a browser sign-in, or the OAuth token of a
+remote MCP server. A key that goes in the query string or a signature scheme is
+not one of them (row 5). A documented API that needs a registered OAuth app is
+not one either, but that does not rule the service out: its website's own
+sign-in may be (row 4, "Signing in instead of a key" below), and so may its own
+MCP server (row 3, `references/mcp.md`).
 
 This asks the user to create a connection to one domain and let this machine
 use it:
@@ -225,6 +226,10 @@ performance.getEntriesByType('resource').map(e => e.name)"`).
   fetches from an endpoint of its own (`tokenUrl`, with the token at
   `tokenField`). The token expires and cannot be refreshed, so the user signs
   in again now and then; say so.
+- **`remote-mcp`** when the service's own hosted MCP server is the thing to
+  connect (row 3, not this row): latchkey registers an OAuth client with the
+  server, sends the user through its consent page, and refreshes the token
+  itself. `references/mcp.md` has the request and how to call the server.
 - **Neither** when every request also needs a value the page computes, such as
   a CSRF header that must echo a cookie: row 4 is out, go on to row 5.
 
@@ -239,10 +244,11 @@ the next one when `latchkey curl` actually comes back refused.
 `--login-url`, `--login-flow` and `--login-flow-params` flags documented in
 `latchkey services register --help` (run it to see each flow's parameters), but
 use this API rather than the `latchkey services register` CLI directly. All three
-are required inside `login`: a flow needs a login URL and its parameters. The
-parameters are checked against the flow's schema, so an unknown key is refused,
-and every URL in them (`url`, `cookieUrl`, `tokenUrl`) must be on `domain` or a
-subdomain of it.
+are required inside `login`: a flow needs a login URL and its parameters (for
+`remote-mcp`, the login URL is the authorization endpoint). The parameters are
+checked against the flow's schema, so an unknown key is refused, and every URL
+in them (`url`, `cookieUrl`, `tokenUrl`, the MCP and OAuth endpoints) must be
+on `domain` or a subdomain of it.
 
 ## When the gateway is unreachable
 
