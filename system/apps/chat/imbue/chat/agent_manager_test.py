@@ -9318,10 +9318,7 @@ def test_a_chat_refusing_turns_for_sign_in_notifies_the_app_once_per_run_naming_
                 base_url=served.http_url, password=SecretStr("gateway-password-6170"), permissions_override=None
             ),
         )
-        with manager._lock:
-            manager._agents[str(chat_id)] = AgentStateItem(
-                id=str(chat_id), name="Trip planning", state="RUNNING", labels={"user_created": "true"}, work_dir=None
-            )
+        seed_agent_state(manager, str(chat_id), name="Trip planning", labels={"user_created": "true"})
         try:
             manager.record_presence(
                 chat_id,
