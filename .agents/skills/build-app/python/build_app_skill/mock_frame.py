@@ -265,9 +265,16 @@ def refresh(app_name: str, repo_root: Path, *, frames: Frames, layout: Layout) -
     app hidden again, so this is also what puts both back after the app restarts or the
     workspace reboots.
     """
-    if frames.recorded(app_name, repo_root) is not None:
+    recorded = frames.recorded(app_name, repo_root)
+    if recorded is not None:
         return up(
-            app_name, None, repo_root, surface="refresh", frames=frames, layout=layout
+            app_name,
+            recorded.note,
+            repo_root,
+            inner_path=recorded.inner_path,
+            surface="refresh",
+            frames=frames,
+            layout=layout,
         )
     argv = ["refresh", "--app", app_name]
     if layout.run(argv) != 0:
