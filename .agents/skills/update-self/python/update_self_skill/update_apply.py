@@ -158,8 +158,7 @@ _FRONTEND_BUILD_TIMEOUT_SECONDS = 1200.0
 _RESTART_TIMEOUT_SECONDS = 600.0
 
 _ENV_CONVERGE_TIMEOUT_SECONDS = 1200.0
-# own-process: other-tier -- update-self runs on the bare tier, and env-converge is the merged
-# tree's venv-tier command
+# own-process: other-tier -- update-self runs on the bare tier, and env-converge is the merged tree's venv-tier command
 _ENV_CONVERGE_UPGRADE_ARGV = ("uv", "run", "--no-sync", "env-converge", "upgrade")
 
 # The services restart a moment earlier re-runs the one-shot env-converge program,
