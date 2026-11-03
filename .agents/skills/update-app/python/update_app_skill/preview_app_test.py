@@ -182,6 +182,7 @@ def test_up_hands_the_manifests_table_to_the_shared_script_with_its_own_placehol
         preview_title="Chat (worktree)",
         inner_path="/?chat=agent-1",
         theming_mode=None,
+        project=None,
     )
 
 
@@ -648,7 +649,9 @@ def test_a_user_built_app_previews_from_its_own_projects_venv(tmp_path: Path) ->
         == 0
     )
 
-    assert instances.up_spec("notes-preview").command == [
+    spec = instances.up_spec("notes-preview")
+    assert spec.command == [
         *serve_isolated_instance.project_launcher("system/apps/notes"),
         "notes",
     ]
+    assert spec.project == "system/apps/notes"

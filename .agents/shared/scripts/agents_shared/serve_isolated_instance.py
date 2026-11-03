@@ -123,6 +123,7 @@ if not __package__:
     )
 
 from app_registration import forward_port
+from workspace_bare_scripts import venv_links
 
 # State (detached pids, ports, registered service names) lives under the caller's
 # ``data/`` so it is gitignored and survives between the separate ``up`` and
@@ -456,6 +457,30 @@ class HttpClient:
             return ProbeResult(None, "")
 
 
+class VenvLinker:
+    """Indirection over linking a standalone project's venv beside the uv cache, so tests can intercept it."""
+
+    def link_project(self, project_dir: Path) -> None:
+        """Make ``project_dir``'s ``.venv`` a link to a target beside the uv cache, as its
+        program's start does; raises OSError or RuntimeError when it cannot."""
+        venv_links.ensure(None, [project_dir])
+
+
+def _link_project_venv(
+    linker: VenvLinker, cwd: str, project: str | None, verb: str
+) -> bool:
+    """Link the standalone ``project``'s venv (relative to ``cwd``) when there is one; False
+    after saying why on stderr when it could not be linked."""
+    if project is None:
+        return True
+    try:
+        linker.link_project(Path(cwd) / project)
+    except (OSError, RuntimeError) as exc:
+        sys.stderr.write(f"{verb}: could not link the venv of {project}: {exc}\n")
+        return False
+    return True
+
+
 class Spawner:
     """Indirection over ``subprocess.Popen`` for detached servers.
 
@@ -487,21 +512,18 @@ class Spawner:
 
 
 # How a standalone project (a user package under system/, with its own uv.lock and
-# .venv) is booted: like its supervisord program, it links the project's venv and syncs it
-# from the project's own lock; it then execs the command with that venv first on PATH, so
-# a bare console-script name in the launch argv resolves to the project's own install.
-VENV_LINKS_SCRIPT = "system/scripts/workspace_bare_scripts/venv_links.py"
-
-
+# .venv) is booted: like its supervisord program, its venv is linked beside the uv cache
+# (``VenvLinker``, before each boot) and synced from the project's own lock; the command is
+# then exec'd with that venv first on PATH, so a bare console-script name in the launch
+# argv resolves to the project's own install.
 def project_launcher(project: str) -> list[str]:
     """The argv prefix that boots a command from the standalone ``project``'s own venv,
-    ``project`` relative to the instance's working directory."""
+    ``project`` relative to the instance's working directory, once ``VenvLinker`` has linked it."""
     quoted = shlex.quote(project)
     return [
         "bash",
         "-c",
-        f"python3 {VENV_LINKS_SCRIPT} ensure-project {quoted}"
-        f" && uv sync --locked --project {quoted}"
+        f"uv sync --locked --project {quoted}"
         f' && export VIRTUAL_ENV="$PWD/"{quoted}/.venv PATH="$PWD/"{quoted}/.venv/bin:"$PATH"'
         ' && exec "$@"',
         "bash",
@@ -901,10 +923,12 @@ def up(
     preview_title: str | None = None,
     inner_path: str = "/",
     theming_mode: str | None = None,
+    project: str | None = None,
     runner: Runner,
     registry: Registry,
     http: HttpClient,
     spawner: Spawner,
+    venv_linker: VenvLinker = VenvLinker(),
     sleeper: Callable[[float], None] = time.sleep,
     free_space: Callable[[Path], int] = free_bytes,
 ) -> int:
@@ -920,7 +944,8 @@ def up(
     title it additionally boots the labeled wrapper frame, opening the inner
     service at ``inner_path``. ``theming_mode`` is the served app's ``[theming]``
     mode, recorded on the inner service's row so the workspace themes it as it
-    would the app.
+    would the app. ``project`` names the standalone project ``command`` boots from
+    (``project_launcher``), relative to ``cwd``; its venv is linked before each boot.
 
     On any failure the partial state is torn down and 1 is returned. On success a
     state file records the servers + services so ``down`` can find them later.
@@ -944,6 +969,8 @@ def up(
         # The wrapper refuses such a path at once, and the health wait would
         # spend its whole budget on the dead wrapper before saying so.
         sys.stderr.write(f"up: --inner-path must start with '/', got {inner_path!r}.\n")
+        return 1
+    if not _link_project_venv(venv_linker, cwd, project, "up"):
         return 1
 
     # Clear any stale instance for this name first so a re-run is clean. Booting
@@ -1112,6 +1139,7 @@ def up(
                 "env_overrides": dict(env_overrides or {}),
                 "unset_env": list(unset_env),
                 "health_path": health_path,
+                "project": project,
             },
         }
         _state_path(repo_root, name).write_text(json.dumps(state, indent=2))
@@ -1223,6 +1251,7 @@ def refresh(
     runner: Runner,
     http: HttpClient,
     spawner: Spawner,
+    venv_linker: VenvLinker = VenvLinker(),
     sleeper: Callable[[float], None] = time.sleep,
 ) -> int:
     """Re-boot the inner server of instance ``name`` on its existing port.
@@ -1274,6 +1303,10 @@ def refresh(
         state.get("scratch") or _state_dir(repo_root, name) / SCRATCH_DIRNAME
     )
     inner_log = str(state["inner_log"])
+    if not _link_project_venv(
+        venv_linker, str(state["cwd"]), inner.get("project"), "refresh"
+    ):
+        return 1
     # 1. Stop the old inner server and wait for it to release the port. A live
     #    listening socket cannot be rebound, so we must not respawn until it is
     #    gone -- otherwise the new process fails to bind.
@@ -1520,6 +1553,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             preview_title=args.preview_title,
             inner_path=args.inner_path,
             theming_mode=args.theming_mode,
+            project=args.project,
             runner=Runner(),
             registry=Registry(),
             http=HttpClient(),

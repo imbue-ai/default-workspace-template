@@ -161,6 +161,17 @@ class _FakeSpawner(mod.Spawner):
         return pid
 
 
+@dataclass
+class _RecordingVenvLinker(mod.VenvLinker):
+    linked: list[Path] = field(default_factory=list)
+    raises: OSError | None = None
+
+    def link_project(self, project_dir: Path) -> None:
+        if self.raises is not None:
+            raise self.raises
+        self.linked.append(project_dir)
+
+
 def _all_healthy(_url: str) -> int:
     return 200
 
@@ -759,6 +770,7 @@ def _refresh(
     runner: _RecordingRunner | None = None,
     http: _FakeHttp | None = None,
     spawner: _FakeSpawner | None = None,
+    venv_linker: _RecordingVenvLinker | None = None,
 ) -> int:
     return mod.refresh(
         _NAME,
@@ -766,8 +778,79 @@ def _refresh(
         runner=runner or _RecordingRunner(),
         http=http or _FakeHttp(_all_healthy),
         spawner=spawner or _FakeSpawner(),
+        venv_linker=venv_linker or _RecordingVenvLinker(),
         sleeper=lambda _seconds: None,
     )
+
+
+def test_a_project_instance_links_its_venv_before_every_boot(tmp_path: Path) -> None:
+    linker = _RecordingVenvLinker()
+    up_spawner = _FakeSpawner()
+
+    assert (
+        _up(
+            tmp_path,
+            project="system/apps/widget",
+            venv_linker=linker,
+            spawner=up_spawner,
+        )
+        == 0
+    )
+    assert linker.linked == [tmp_path / "system" / "apps" / "widget"]
+    assert len(up_spawner.detached_spawns) == 1
+
+    assert (
+        _refresh(tmp_path, spawner=_FakeSpawner(detached_pid=5555), venv_linker=linker)
+        == 0
+    )
+    assert linker.linked == [tmp_path / "system" / "apps" / "widget"] * 2
+
+
+def test_an_instance_of_no_project_links_nothing(tmp_path: Path) -> None:
+    linker = _RecordingVenvLinker()
+
+    assert _up(tmp_path, venv_linker=linker) == 0
+    assert (
+        _refresh(tmp_path, spawner=_FakeSpawner(detached_pid=5555), venv_linker=linker)
+        == 0
+    )
+
+    assert linker.linked == []
+
+
+def test_a_project_venv_that_cannot_be_linked_boots_nothing_and_keeps_the_running_server(
+    tmp_path: Path,
+) -> None:
+    spawner = _FakeSpawner()
+    unlinkable = _RecordingVenvLinker(raises=OSError("uv cache dir failed"))
+
+    assert (
+        _up(
+            tmp_path,
+            project="system/apps/widget",
+            venv_linker=unlinkable,
+            spawner=spawner,
+        )
+        == 1
+    )
+    assert spawner.detached_spawns == []
+    assert not _state_path(tmp_path).exists()
+
+    assert (
+        _up(tmp_path, project="system/apps/widget", venv_linker=_RecordingVenvLinker())
+        == 0
+    )
+    runner = _RecordingRunner()
+    refresh_spawner = _FakeSpawner(detached_pid=5555)
+
+    assert (
+        _refresh(
+            tmp_path, runner=runner, spawner=refresh_spawner, venv_linker=unlinkable
+        )
+        == 1
+    )
+    assert not runner.killed_pgroup(4242)
+    assert refresh_spawner.detached_spawns == []
 
 
 def test_refresh_reboots_inner_on_same_port_leaving_wrapper_and_services(
@@ -1293,23 +1376,18 @@ def test_a_boot_whose_health_says_the_frontend_is_not_built_is_not_up(
     assert mod.ProbeResult(200, "not json").is_healthy
 
 
-def test_a_project_launch_links_and_syncs_the_project_then_becomes_its_own_script(
+def test_a_project_launch_syncs_the_project_then_becomes_its_own_script(
     tmp_path: Path,
 ) -> None:
-    """A standalone project boots as its program does: its venv linked, synced from its
-    own lock, and the bare script name resolved from its own .venv/bin, with no uv
-    process left as the parent."""
+    """Once linked, a standalone project boots as its program does: synced from its own
+    lock, and the bare script name resolved from its own .venv/bin, with no uv process
+    left as the parent."""
     cwd = tmp_path / "workspace"
     project = "system/apps/widget"
     bin_dir = cwd / project / ".venv" / "bin"
     bin_dir.mkdir(parents=True)
     script = bin_dir / "widget-app"
     script.write_text('#!/bin/sh\necho "$$ $VIRTUAL_ENV $*"\n')
-    helper = cwd / mod.VENV_LINKS_SCRIPT
-    helper.parent.mkdir(parents=True)
-    helper.write_text(
-        f"import sys\nopen({str(tmp_path / 'links-args')!r}, 'w').write(' '.join(sys.argv[1:]))\n"
-    )
     fake_bin = tmp_path / "bin"
     fake_bin.mkdir()
     uv = fake_bin / "uv"
@@ -1327,7 +1405,6 @@ def test_a_project_launch_links_and_syncs_the_project_then_becomes_its_own_scrip
     stdout, _ = process.communicate(timeout=30)
 
     assert process.returncode == 0
-    assert (tmp_path / "links-args").read_text() == f"ensure-project {project}"
     assert (tmp_path / "uv-args").read_text().split() == [
         "sync",
         "--locked",

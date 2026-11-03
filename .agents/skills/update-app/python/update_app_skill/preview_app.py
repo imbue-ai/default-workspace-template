@@ -88,6 +88,7 @@ class InstanceSpec:
     preview_title: str
     inner_path: str
     theming_mode: str | None
+    project: str | None
 
 
 class Instances:
@@ -108,6 +109,7 @@ class Instances:
             preview_title=spec.preview_title,
             inner_path=spec.inner_path,
             theming_mode=spec.theming_mode,
+            project=spec.project,
             runner=serve_isolated_instance.Runner(),
             registry=serve_isolated_instance.Registry(),
             http=serve_isolated_instance.HttpClient(),

@@ -131,14 +131,12 @@ def _declared_theming_mode(worktree: Path, manifest: AppManifest) -> str | None:
     return mode if isinstance(mode, str) else None
 
 
-def _launcher(worktree: Path, manifest: AppManifest) -> tuple[str, ...]:
-    """A built-in app boots from the worktree's root venv; a user-built app, a standalone
-    project, from its own (``serve_isolated_instance.project_launcher``)."""
+def _standalone_project(worktree: Path, manifest: AppManifest) -> str | None:
+    """The app's directory, relative to ``worktree``, when it is a user-built app (a standalone
+    project that boots from its own venv); None for a built-in, which boots from the root venv."""
     manifest_path, _ = find_manifest(worktree, str(manifest.name))
     relative = manifest_path.parent.relative_to(worktree).as_posix()
-    if relative in user_packages.user_packages(worktree):
-        return tuple(serve_isolated_instance.project_launcher(relative))
-    return LAUNCHER
+    return relative if relative in user_packages.user_packages(worktree) else None
 
 
 def build_instance_spec(
@@ -159,10 +157,15 @@ def build_instance_spec(
         raise PreviewError(f"the [preview] table of {manifest.name!r}: {exc}") from exc
     command = list(preview.command) if preview.command else [str(manifest.program)]
     launch = _under_declared_secrets(manifest, repo_root, [*command, *preview.args])
+    project = _standalone_project(worktree, manifest)
     return InstanceSpec(
         name=instance_name(manifest.name),
         command=[
-            *_launcher(worktree, manifest),
+            *(
+                LAUNCHER
+                if project is None
+                else serve_isolated_instance.project_launcher(project)
+            ),
             *(resolve_own_placeholders(part, registry_copy) for part in launch),
         ],
         cwd=worktree,
@@ -178,6 +181,7 @@ def build_instance_spec(
         preview_title=title,
         inner_path=inner_path,
         theming_mode=_declared_theming_mode(worktree, manifest),
+        project=project,
     )
 
 
