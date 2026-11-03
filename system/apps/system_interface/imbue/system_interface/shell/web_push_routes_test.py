@@ -18,7 +18,7 @@ _ENDPOINT = "https://fcm.googleapis.com/fcm/send/device-one"
 _OTHER_ENDPOINT = "https://web.push.apple.com/device-two"
 _VISITOR = RequestIdentity(owner=False, user_id="user-visitor", email="visitor@example.com")
 _SHARED_OWNER = RequestIdentity(owner=True, user_id="user-owner", email="owner@example.com")
-# What a share's proxy connects from: never loopback.
+# A caller from outside the container.
 _REMOTE = {"REMOTE_ADDR": "203.0.113.7"}
 
 

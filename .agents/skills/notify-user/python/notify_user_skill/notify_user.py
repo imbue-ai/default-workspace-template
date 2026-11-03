@@ -93,8 +93,7 @@ _TIMEOUT_SECONDS = 10.0
 # answer rather than wait on a slow chat app.
 _WATCHERS_TIMEOUT_SECONDS = 2.0
 
-# The shell posts to each device's push service in turn, five seconds at most
-# apiece; a workspace has a few devices.
+# The shell posts to each device in turn, so this covers a few of them.
 _PUSH_TIMEOUT_SECONDS = 12.0
 
 # The longest title a device notification takes; a longer message without a
