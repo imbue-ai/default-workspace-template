@@ -667,6 +667,44 @@ describe("narration and close-time ejection", () => {
     expect(sections[1].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
   });
 
+  // Starting another step moves on without taking the carried-over one up, so the new turn draws
+  // only the step it works in.
+  it("draws only the new step when the agent starts another one in the next turn", () => {
+    const events = [
+      userMsg("t0", "free up disk"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      userMsg("t3", "do the photos instead"),
+      tkMsg("t4", "tk start s2", "t2"),
+      result("t4", "t2", startOut("s2", "Sort the photos")),
+      workMsg("t5", "Bash", "w2"),
+      result("t5", "w2", "ok"),
+    ];
+    const sections = run(events, /* idle */ false);
+    expect(stepItems(sections[0].items).map((step) => step.ticket_id)).toEqual(["s1"]);
+    expect(stepItems(sections[1].items).map((step) => step.ticket_id)).toEqual(["s2"]);
+    expect(sections[1].live_step_id).toBe("s2");
+  });
+
+  // An empty turn keeps no copy and the turn after it never took the step up: the step is drawn
+  // once, in the turn that opened it.
+  it("draws a step left open past back-to-back messages only in the turn that opened it", () => {
+    const events = [
+      userMsg("t0", "free up disk", "u1"),
+      tkMsg("t1", "tk start s1", "t1"),
+      result("t1", "t1", startOut("s1", "Check overall disk usage")),
+      workMsg("t2", "Bash", "w1"),
+      result("t2", "w1", "ok"),
+      userMsg("t3", "wait", "u2"),
+      userMsg("t4", "what's RAM?", "u3"),
+      assistantText("t5", "RAM is short-term memory.", "ans"),
+    ];
+    const sections = run(events, /* idle */ true);
+    expect(sections.map((s) => s.user_event?.event_id)).toEqual(["u1", "u2", "u3"]);
+    expect(sections.map((s) => stepItems(s.items).map((step) => step.ticket_id))).toEqual([["s1"], [], []]);
+    expect(sections[2].trailing_reply.map((e) => e.event_id)).toEqual(["ans"]);
+  });
+
   // Work batched with the carried-over step's close is work done while it was open: it stays in
   // the step, as it does in the turn that opened it.
   it("keeps work batched with a carried-over step's close inside the step", () => {
