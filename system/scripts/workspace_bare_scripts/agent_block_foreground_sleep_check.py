@@ -1,9 +1,9 @@
 """Decide whether a Bash command waits in the foreground on a `sleep` of 5 seconds or more.
 
 Takes the command as its only argument (passed by agent_block_foreground_sleep.sh, which calls
-this only when the raw text contains `sleep` followed by a number or `inf`, and never for a
-command the harness already runs in the background). Exits 0 to allow; exits 2 with the refusal on
-stderr to BLOCK.
+this only when the raw text contains `sleep` followed by a number or `inf`, quoted or not, and
+never for a command the harness already runs in the background). Exits 0 to allow; exits 2 with
+the refusal on stderr to BLOCK.
 
 A timed sleep is a guess at how long something else takes, and it holds the agent's turn for the
 whole guess: a message to the agent waits until it ends, and so does the agent when the thing it

@@ -28,6 +28,8 @@ def _run(command: str, run_in_background: bool | None = None) -> int:
         "sleep 30 > /dev/null 2>&1",
         "sleep infinity",
         "sleep inf; cat /tmp/out.txt",
+        'sleep "30"; cat /tmp/out.txt',
+        "sleep '30'",
         # Waiting out a service restart.
         "supervisorctl restart reading-room > /dev/null; sleep 8; supervisorctl status reading-room",
         "supervisorctl restart apartment-hunt > /tmp/rs.txt 2>&1\nsleep 8\ncurl -s localhost:8088/api/state",
