@@ -240,6 +240,14 @@
   cursor: zoom-in;
 }
 
+/* Keeps an image's space while it loads; its own size takes over once it has. */
+.markdown-content img.is-loading {
+  width: 240px;
+  aspect-ratio: 4 / 3;
+  border-radius: var(--radius-lg, 12px);
+  background: var(--c-fill-hover);
+}
+
 .markdown-content .tool-call-block {
   cursor: pointer;
   margin-top: 0.75em;

@@ -122,6 +122,44 @@ export function parseMessageAttachments(content: string): { visibleText: string;
   return { visibleText, attachmentBlock: match[1] };
 }
 
+/** An image this document uploaded, held locally so a message naming it draws at once and at its
+ *  own size instead of waiting on the served copy. */
+export interface LocalImage {
+  /** A blob URL of the picked file. */
+  url: string;
+  /** The decoded size, once known. */
+  width?: number;
+  height?: number;
+}
+
+const _localImagesByPath = new Map<string, LocalImage>();
+
+/** Hold ``url`` (a blob URL of the file uploaded to ``path``) for drawing that path, and read its size. */
+export function rememberLocalImage(path: string, url: string): void {
+  const local: LocalImage = { url };
+  _localImagesByPath.set(path, local);
+  if (typeof Image === "undefined") return;
+  const probe = new Image();
+  probe.onload = () => {
+    local.width = probe.naturalWidth;
+    local.height = probe.naturalHeight;
+  };
+  probe.src = url;
+}
+
+/** The local copy of the image uploaded to ``path``, when this document uploaded it. */
+export function localImageAt(path: string): LocalImage | undefined {
+  return _localImagesByPath.get(path);
+}
+
+/** Release the local copy of ``path`` (its upload was removed from the draft). */
+export function forgetLocalImage(path: string): void {
+  const local = _localImagesByPath.get(path);
+  if (local === undefined) return;
+  _localImagesByPath.delete(path);
+  URL.revokeObjectURL(local.url);
+}
+
 export function formatFileSize(bytes: number): string {
   if (bytes < 1024) {
     return `${bytes} B`;

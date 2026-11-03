@@ -4,6 +4,7 @@ import { Marked } from "marked";
 import { applyPartAttrs } from "@imbue/workspace-ui/src/themes/parts";
 import { classifyLink, fileUrl } from "@imbue/workspace-ui/src/links";
 import { openImageLightbox } from "./lightbox";
+import { localImageAt } from "./models/attachments";
 import { isBlockExpanded, setBlockExpanded } from "./views/expansion-state";
 import { TOOL_CALL_PART } from "./views/ToolCallBlock";
 
@@ -91,10 +92,36 @@ export function requestedAtUrl(value: string, requestedAt: string): string | nul
   return `${value}?requested_at=${encodeURIComponent(requestedAt)}`;
 }
 
-function appendRequestedAt(container: HTMLElement, requestedAt: string): void {
+const IMAGE_LOADING_CLASS = "is-loading";
+
+function clearImageLoading(event: Event): void {
+  (event.target as HTMLElement).classList.remove(IMAGE_LOADING_CLASS);
+}
+
+/**
+ * Point each image at what draws it soonest and keep its space while it loads. An image this document
+ * uploaded draws from its local copy at its own size; any other is tagged with ``requestedAt`` and
+ * holds a placeholder box until it loads, so a message that is only an image never shows as an empty bubble.
+ */
+function prepareImages(container: HTMLElement, requestedAt: string | undefined): void {
   for (const image of Array.from(container.querySelectorAll("img"))) {
-    const tagged = requestedAtUrl(image.getAttribute("src") ?? "", requestedAt);
-    if (tagged !== null) image.setAttribute("src", tagged);
+    const src = image.getAttribute("src") ?? "";
+    const local = localImageAt(src);
+    if (local !== undefined) {
+      image.setAttribute("src", local.url);
+      if (local.width !== undefined && local.height !== undefined) {
+        image.setAttribute("width", String(local.width));
+        image.setAttribute("height", String(local.height));
+        continue;
+      }
+    } else if (requestedAt !== undefined) {
+      const tagged = requestedAtUrl(src, requestedAt);
+      if (tagged !== null) image.setAttribute("src", tagged);
+    }
+    if (image.complete) continue;
+    image.classList.add(IMAGE_LOADING_CLASS);
+    image.addEventListener("load", clearImageLoading, { once: true });
+    image.addEventListener("error", clearImageLoading, { once: true });
   }
 }
 
@@ -185,9 +212,7 @@ export const MarkdownContent: m.Component<{ content: string; requestedAt?: strin
     const element = vnode.dom as HTMLElement;
     element.innerHTML = renderMarkdown(vnode.attrs.content);
     wrapToolCallBlocks(element, vnode.attrs.expansionKeyPrefix);
-    if (vnode.attrs.requestedAt) {
-      appendRequestedAt(element, vnode.attrs.requestedAt);
-    }
+    prepareImages(element, vnode.attrs.requestedAt || undefined);
     // Clicking an inline image opens it full-screen. The listener is delegated
     // on the container, which mithril reuses across redraws, so it survives the
     // innerHTML resets in onupdate without needing to be re-attached.
@@ -209,9 +234,7 @@ export const MarkdownContent: m.Component<{ content: string; requestedAt?: strin
     const expanded = saveExpandedState(element);
     element.innerHTML = renderMarkdown(vnode.attrs.content);
     wrapToolCallBlocks(element, vnode.attrs.expansionKeyPrefix);
-    if (vnode.attrs.requestedAt) {
-      appendRequestedAt(element, vnode.attrs.requestedAt);
-    }
+    prepareImages(element, vnode.attrs.requestedAt || undefined);
     restoreExpandedState(element, expanded);
   },
   view() {

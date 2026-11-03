@@ -20,6 +20,7 @@ import {
   USER_MESSAGE_PART,
   USER_MESSAGE_ROW_CLASS,
   renderNoticeRow,
+  renderUserBubbleContent,
 } from "./user-message-display";
 
 // The user rail's own recipes; the extra classes are bare markers for tests.
@@ -31,7 +32,8 @@ const STANDALONE_ROW_SPACING_CLASS = "mb-5";
 
 export interface NotYetRealBubble {
   key: string;
-  /** The message's text, shown verbatim unless ``displayDecision`` draws it as a notice. */
+  /** The message's text, shown verbatim (its attachments drawn as the delivered turn draws them) unless
+   *  ``displayDecision`` draws it as a notice. */
   content: string;
   /** True inside a group whose own gap spaces its bubbles (the queued group), so the row
    *  carries no bottom margin of its own. */
@@ -59,9 +61,7 @@ export function renderNotYetRealBubble(bubble: NotYetRealBubble): m.Vnode {
     return renderNoticeRow(bubble.key, rowClass, cls);
   }
   return m("div", { class: rowClass, key: bubble.key }, [
-    m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, [
-      m("div", { class: "message-content whitespace-pre-wrap" }, bubble.content),
-    ]),
+    m("div", { class: USER_BUBBLE_CLASS, ...USER_MESSAGE_PART }, renderUserBubbleContent(bubble.content)),
   ]);
 }
 
