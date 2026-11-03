@@ -1494,11 +1494,12 @@ _FILE_WRITING_METHODS = frozenset({"write_text", "write_bytes"})
 
 def _program_launch_lines(tree: ast.AST, programs: _OwnPrograms) -> list[int]:
     written = {
-        id(node.func.value)
+        id(part)
         for node in ast.walk(tree)
         if isinstance(node, ast.Call)
         and isinstance(node.func, ast.Attribute)
         and node.func.attr in _FILE_WRITING_METHODS
+        for part in ast.walk(node.func.value)
     }
     return sorted(
         {
@@ -1642,6 +1643,7 @@ def test_the_launch_scan_sees_each_way_of_naming_an_own_program(tmp_path: Path) 
                 'subprocess.run([sys.executable, "-m", "pytest"])',
                 'subprocess.run(["mngr", "list"])',
                 '(ROOT / "tool.py").write_text("")',
+                'Path("pkg/tool.py").write_bytes(b"")',
             ]
         )
     )
